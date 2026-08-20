@@ -57,6 +57,31 @@ impl Resource {
     pub fn display_path(&self, environment_root: &Path) -> String {
         self.capability.display_path(environment_root)
     }
+
+    /// A stable operational identity for a resource in one composed
+    /// environment. It deliberately retains the external standard payload at
+    /// its original path instead of creating a UZE-specific skill format.
+    pub fn identity(&self) -> String {
+        match &self.origin {
+            ResourceOrigin::Project { root } => format!(
+                "project:{}",
+                self.capability
+                    .path
+                    .strip_prefix(root)
+                    .unwrap_or(&self.capability.path)
+                    .display()
+            ),
+            ResourceOrigin::Package { id, root } => format!(
+                "package:{}:{}",
+                id.as_str(),
+                self.capability
+                    .path
+                    .strip_prefix(root)
+                    .unwrap_or(&self.capability.path)
+                    .display()
+            ),
+        }
+    }
 }
 
 pub fn resolve_project(root: impl AsRef<Path>) -> Result<EffectiveEnvironment> {
@@ -86,6 +111,13 @@ pub fn resolve_project(root: impl AsRef<Path>) -> Result<EffectiveEnvironment> {
             .map(|capability| Resource::from_project(root.clone(), capability))
             .collect(),
     })
+}
+
+/// Resolves only resources owned by a project. `UzeEngine` is responsible for
+/// combining this source with UZE-installed package resources into the one
+/// effective environment used by the product.
+pub fn resolve_project_resources(root: impl AsRef<Path>) -> Result<EffectiveEnvironment> {
+    resolve_project(root)
 }
 
 fn discover_instructions(root: &Path, items: &mut Vec<Capability>) -> Result<()> {

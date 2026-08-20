@@ -40,6 +40,24 @@ separate facts. A standard Agent Skill representation is not evidence that it
 has been exposed in a particular harness. ACP remains an optional Client ↔
 Agent runtime primitive under ADR-003, rather than an integration requirement.
 
+The UZE Store is authoritative only for packages installed by UZE. Project
+resources remain project-owned. `UzeEngine` composes both sources into one
+effective environment before routing it to peer integrations. Runtime sources
+remain empty in this increment.
+
+Normal harness invocation (`claude`, then `codex`, in the real project
+directory) is the target DX. A UZE launcher or per-session flag is not the
+product architecture. `--plugin-dir` is retained only as a Claude conformance
+exposure probe. Filesystem projection is an explicit compatibility fallback:
+it may create a minimal UZE-managed artifact in the real caller workspace,
+preserves that workspace as the process CWD, and must clean up its own artifact.
+It never creates a shadow copy of the project.
+
+Successful exposure is distinct from representation and compatibility. Real
+probes report `VERIFIED`, `NOT_EXPOSED`, `UNVERIFIED`, `FAILED`, or
+`BLOCKED_BY_ENVIRONMENT`; quota, authentication, missing executables, service
+failures, and timeouts are never capability incompatibility.
+
 Alternatives rejected: retaining the named-harness core matrix; treating
 Claude import as a canonical source pipeline; and requiring ACP or filesystem
 projection for every integration.
@@ -52,10 +70,10 @@ foreign formats without contaminating runtime integrations; and removal of an
 integration leaves UZE Core intact.
 
 Harder: each integration must publish evidence-backed capability descriptions
-and conformance tests before claiming verified exposure. The first increment
-does not prove real Claude Code or Codex exposure, does not add Cursor, and
-does not introduce filesystem projection, profiles, memory, marketplaces, or
-cloud state.
+and conformance tests before claiming verified exposure. Transparent integration
+for Claude, Codex, and OpenCode is not proven in this increment; a managed
+filesystem fallback is not equivalent to it. The increment does not add Cursor,
+profiles, memory, marketplaces, or cloud state.
 
 ## Implementation Plan
 
@@ -64,8 +82,9 @@ cloud state.
   Claude/Codex integration modules; move Claude plugin recognition from the
   generic bundle boundary; update report, tests, LikeC4, and OpenSpec tasks.
 - **Patterns to follow:** core accepts generic capability descriptions; foreign
-  importer and runtime integration are distinct modules; tests use fake
-  capabilities and integrations; CLI remains read-only.
+  importer and runtime integration are distinct modules; UzeHome is resolved in
+  the CLI composition root; the engine combines project and Store sources;
+  tests use fake capabilities and integrations; real harness probes are opt-in.
 - **Patterns to avoid:** named harness `match` branches in UZE domain routing,
   source/destination terminology, automatic vendor-directory scanning or
   projection, and ACP use without a concrete Client ↔ Agent boundary.
@@ -74,8 +93,8 @@ cloud state.
 
 - [ ] Core source contains no named Claude, Codex, Cursor, or OpenCode routing
       rules.
-- [ ] Claude and Codex peer integrations route one standard Agent Skill
-      through the same core model.
+- [ ] Claude and Codex peer integrations route one physical stored Agent Skill
+      through the same composed environment.
 - [ ] Router and contract tests pass without real harness executables.
 - [ ] Removing the Claude integration does not break compilation of UZE Core.
 - [ ] Adding a fake Cursor integration requires no core modification.
@@ -104,3 +123,25 @@ separate from an exposure mechanism: Claude selects its per-session
 filesystem fallback under `$UZE_HOME/runtime`. The Codex end-to-end flow
 package → store → engine → environment → integration → harness is verified;
 the equivalent Claude flow returned HTTP 429 and remains `UNVERIFIED`.
+
+2026-08-20: The composition correction made the Store authoritative only for
+UZE-installed packages, connected `UzeHome::from_env()` to `uze add` and
+`uze inspect`, and made the Engine merge project and registered package
+resources. A same-store peer probe records one PackageId/path/resource for
+Claude and Codex. Codex/OpenCode filesystem exposure now uses a managed
+symlink in the real project CWD and a `$UZE_HOME/runtime/.../managed-exposure.json`
+record, with explicit cleanup; it does not create a shadow workspace.
+`--plugin-dir` remains a Claude probe only. Local Claude CLI help confirms
+official plugin lifecycle commands and a global skills directory, so a
+one-time transparent connector is possible but unproven and deliberately not
+implemented as a workaround. Conformance now classifies environmental blocks
+separately from compatibility.
+
+2026-08-20: The opt-in same-store probe verified Codex 0.148.0 against the
+real caller project CWD: its managed `.agents/skills` symlink resolved the one
+stored Agent Plugin Skill and produced the behavioral proof token. Claude Code
+returned its explicit HTTP 429 session-limit response and was recorded as
+`BLOCKED_BY_ENVIRONMENT`. OpenCode's configured probe exceeded the five-second
+diagnostic timeout with no provider result and was likewise
+`BLOCKED_BY_ENVIRONMENT`. Neither result changes the integrations' compatibility
+routes or proves transparent normal invocation.

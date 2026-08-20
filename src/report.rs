@@ -6,14 +6,14 @@ use crate::{
     capability::{CapabilityKind, Representation},
     integration::{IntegrationPort, assess_environment},
     project::EffectiveEnvironment,
-    router::{CompatibilityRoute, ExposureState},
+    router::{CompatibilityRoute, VerificationStatus},
     runtime::{RuntimeIntegration, select_runtime_integration},
 };
 
 #[derive(Clone, Debug, Serialize)]
 pub struct CompatibilityReport {
     pub project_root: String,
-    pub project_resources: Vec<ReportItem>,
+    pub effective_resources: Vec<ReportItem>,
     pub integrations: BTreeMap<String, IntegrationReport>,
     pub standards_coverage: Vec<StandardsCoverage>,
 }
@@ -36,7 +36,7 @@ pub struct IntegrationReport {
 pub struct CapabilityRouteReport {
     pub capability_path: String,
     pub route: CompatibilityRoute,
-    pub exposure: ExposureState,
+    pub verification: VerificationStatus,
     pub rationale: String,
     pub evidence: String,
     pub exposure_plan: crate::exposure::ExposurePlan,
@@ -63,7 +63,7 @@ pub fn build_report(
                 .map(|assessment| CapabilityRouteReport {
                     capability_path: assessment.capability_path,
                     route: assessment.decision.route,
-                    exposure: assessment.decision.exposure,
+                    verification: assessment.decision.verification,
                     rationale: assessment.decision.rationale,
                     evidence: assessment.decision.evidence,
                     exposure_plan: assessment.exposure_plan,
@@ -81,7 +81,7 @@ pub fn build_report(
 
     CompatibilityReport {
         project_root: environment.root.to_string_lossy().into_owned(),
-        project_resources: environment
+        effective_resources: environment
             .resources
             .iter()
             .map(|resource| report_item(environment, resource))
@@ -93,13 +93,13 @@ pub fn build_report(
 
 pub fn render_text(report: &CompatibilityReport) -> String {
     let mut output = format!(
-        "UZE compatibility report\nProject: {}\n\nProject resources\n",
+        "UZE compatibility report\nProject: {}\n\nEffective resources\n",
         report.project_root
     );
-    if report.project_resources.is_empty() {
+    if report.effective_resources.is_empty() {
         output.push_str("- none discovered\n");
     }
-    for item in &report.project_resources {
+    for item in &report.effective_resources {
         output.push_str(&format!(
             "- {} ({:?}, {:?})\n",
             item.path, item.kind, item.representation
@@ -117,7 +117,7 @@ pub fn render_text(report: &CompatibilityReport) -> String {
                 "  - {}: {:?}, {:?}, {} — {}\n",
                 route.capability_path,
                 route.route,
-                route.exposure,
+                route.verification,
                 exposure_mechanism(&route.exposure_plan.mechanism),
                 route.rationale
             ));
@@ -298,7 +298,7 @@ mod tests {
             ExposurePlan {
                 representation: resource.capability.representation,
                 route: CompatibilityRoute::Native,
-                exposure: crate::router::ExposureState::Available,
+                verification: crate::router::VerificationStatus::Unverified,
                 mechanism: ExposureMechanism::DirectNative {
                     resource_path: resource.capability.path.clone(),
                 },

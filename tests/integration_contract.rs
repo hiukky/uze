@@ -10,7 +10,7 @@ use uze::{
     capability::{CapabilityKind, Representation},
     exposure::{ExposureMechanism, ExposurePlan},
     integration::{IntegrationPort, assess_environment},
-    router::{CompatibilityRoute, ExposureState, HarnessCapabilities},
+    router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus},
 };
 
 #[path = "../src/integrations/claude.rs"]
@@ -57,7 +57,10 @@ fn peer_integrations_choose_exposure_without_converting_one_standard_skill() {
 
     let claude_skill = assess_environment(&environment, &claude).pop().unwrap();
     assert_eq!(claude_skill.decision.route, CompatibilityRoute::Adaptable);
-    assert_eq!(claude_skill.decision.exposure, ExposureState::Unverified);
+    assert_eq!(
+        claude_skill.decision.verification,
+        VerificationStatus::Unverified
+    );
     assert!(matches!(
         claude_skill.exposure_plan.mechanism,
         ExposureMechanism::RuntimeBridge { .. }
@@ -65,7 +68,10 @@ fn peer_integrations_choose_exposure_without_converting_one_standard_skill() {
 
     let codex_skill = assess_environment(&environment, &codex).pop().unwrap();
     assert_eq!(codex_skill.decision.route, CompatibilityRoute::Adaptable);
-    assert_eq!(codex_skill.decision.exposure, ExposureState::Verified);
+    assert_eq!(
+        codex_skill.decision.verification,
+        VerificationStatus::Unverified
+    );
     assert!(matches!(
         codex_skill.exposure_plan.mechanism,
         ExposureMechanism::FilesystemProjection { .. }
@@ -102,7 +108,7 @@ impl IntegrationPort for FakeIntegration {
         ExposurePlan {
             representation: resource.capability.representation,
             route: CompatibilityRoute::Native,
-            exposure: ExposureState::Available,
+            verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::DirectNative {
                 resource_path: resource.capability.path.clone(),
             },

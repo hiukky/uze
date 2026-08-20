@@ -72,18 +72,35 @@ harness can discover that store path directly.
   filesystem projection, or `UNSUPPORTED`
 - **AND THEN** the Agent Skill remains an unchanged standard `SKILL.md`
 
-### Requirement: Keep filesystem fallback session-scoped
-When an integration selects `FILESYSTEM_PROJECTION`, the system SHALL create
-the projection only beneath `$UZE_HOME/runtime/<integration>/<session>`. It
-SHALL NOT write a harness configuration directory into the caller's original
-workspace, and SHALL identify the fallback in the ExposurePlan.
+### Requirement: Keep filesystem fallback explicit, managed, and project-CWD preserving
+When an integration selects `FILESYSTEM_PROJECTION`, it SHALL preserve the
+caller project as the harness working directory. It MAY create only the
+minimal required artifact in that workspace, SHALL record UZE ownership and
+lifecycle metadata under `$UZE_HOME/runtime/<integration>/<session>`, and
+SHALL remove only the artifact it created. It SHALL NOT copy or virtualize the
+caller project into a shadow workspace, and SHALL identify the fallback in the
+ExposurePlan.
 
 #### Scenario: Codex receives a stored skill through fallback
 - **WHEN** Codex receives a UZE-stored Agent Skill and selects its documented
   `.agents/skills` discovery path as a fallback
-- **THEN** the projection is created in a UZE runtime workspace
-- **AND THEN** the caller workspace remains free of `.agents`, `.claude`,
-  `.codex`, and equivalent manual configuration
+- **THEN** the projection is an explicitly UZE-managed temporary artifact for
+  the active real project workspace
+- **AND THEN** the harness runs with that original project as its CWD
+- **AND THEN** cleanup removes the managed artifact and does not remove
+  project-owned configuration
+
+### Requirement: Keep normal harness invocation separate from a conformance probe
+The system SHALL NOT represent an explicit flag such as Claude Code
+`--plugin-dir` as transparent integration. It MAY use that flag only in an
+opt-in conformance probe. A normal `claude` or `codex` invocation SHALL be
+reported as unproven until a one-time installed/configured integration has been
+verified without a UZE wrapper or manual flag.
+
+#### Scenario: Claude receives a package through `--plugin-dir`
+- **WHEN** an opt-in conformance probe supplies `--plugin-dir`
+- **THEN** the ExposurePlan reports `RUNTIME_BRIDGE`
+- **AND THEN** transparent normal Claude invocation remains `UNPROVEN`
 
 ### Requirement: Integrate peer harnesses through a contract
 The system SHALL expose an integration contract through which a harness

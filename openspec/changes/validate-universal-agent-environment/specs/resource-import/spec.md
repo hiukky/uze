@@ -22,12 +22,14 @@ UZE equivalent.
 - **AND THEN** their canonical contents remain the project-owned standard
   representations
 
-### Requirement: Resolve project resources into an extensible effective environment
-The system SHALL resolve project-owned standard resources into an effective
-environment before any optional enhancement is considered. The initial
-environment SHALL contain project resources and SHALL permit future global,
-user, package, and runtime layers without making them part of this increment.
-An optional enhancement SHALL NOT alter portable resource contents.
+### Requirement: Compose project and installed-package resources into one extensible effective environment
+The system SHALL resolve project-owned standard resources and UZE-installed
+package resources into one effective environment before any optional
+enhancement is considered. The UZE Store is authoritative only for installed
+packages; it SHALL NOT absorb or copy project resources merely to compose
+them. The model SHALL permit future global, user, package, and runtime layers
+without making them part of this increment. An optional enhancement SHALL NOT
+alter portable resource contents.
 
 #### Scenario: Project has portable resources
 - **WHEN** the project contains applicable instructions, a Skill, and MCP

@@ -40,8 +40,10 @@ pair, the system SHALL emit exactly one compatibility route of `NATIVE`,
 `ADAPTABLE`, `DEGRADED`, or `UNSUPPORTED` with a non-empty rationale. It SHALL
 also report an exposure or verification state when one is known. `ADAPTABLE`
 requires a safe explicit adapter; `DEGRADED` names preserved and missing
-semantics; `UNSUPPORTED` includes absent evidence and SHALL say `unverified`
-when that is the reason.
+semantics; `UNSUPPORTED` includes absent semantic equivalence. Lack of a real
+conformance run SHALL be `UNVERIFIED`, and an authentication, quota,
+executable, service, or timeout block SHALL be `BLOCKED_BY_ENVIRONMENT`;
+neither SHALL be promoted to `UNSUPPORTED`.
 
 #### Scenario: Standard skill has not yet been exposed
 - **WHEN** a `SKILL.md` Agent Skill is discovered and the selected harness
@@ -49,6 +51,11 @@ when that is the reason.
 - **THEN** the capability representation is `STANDARD`
 - **AND THEN** its route and exposure state are reported independently rather
   than inferred from the representation
+
+#### Scenario: Real harness is blocked by quota
+- **WHEN** a conformance probe receives a quota or session-limit response
+- **THEN** the capability route remains unchanged
+- **AND THEN** verification is `BLOCKED_BY_ENVIRONMENT`
 
 #### Scenario: Blocking hook lacks an equivalent
 - **WHEN** a project enhancement requires a hook that can veto execution and

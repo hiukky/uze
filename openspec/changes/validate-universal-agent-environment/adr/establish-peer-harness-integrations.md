@@ -40,6 +40,13 @@ separate facts. A standard Agent Skill representation is not evidence that it
 has been exposed in a particular harness. ACP remains an optional Client ↔
 Agent runtime primitive under ADR-003, rather than an integration requirement.
 
+The UZE Store is authoritative only for packages installed by UZE. Project
+resources remain project-owned and the Engine composes both sources into one
+effective environment. Normal `claude`/`codex` invocation is the target UX;
+`--plugin-dir` is only a Claude conformance probe. Filesystem projection is an
+explicit managed fallback that preserves the real project CWD, never a shadow
+workspace. Verification distinguishes environmental blocks from compatibility.
+
 Alternatives rejected: retaining the named-harness core matrix; treating
 Claude import as a canonical source pipeline; and requiring ACP or filesystem
 projection for every integration.
@@ -52,10 +59,9 @@ foreign formats without contaminating runtime integrations; and removal of an
 integration leaves UZE Core intact.
 
 Harder: each integration must publish evidence-backed capability descriptions
-and conformance tests before claiming verified exposure. The first increment
-does not prove real Claude Code or Codex exposure, does not add Cursor, and
-does not introduce filesystem projection, profiles, memory, marketplaces, or
-cloud state.
+and conformance tests before claiming verified exposure. Transparent normal
+integration for Claude, Codex, and OpenCode remains unproven. The increment
+does not add Cursor, profiles, memory, marketplaces, or cloud state.
 
 ## Implementation Plan
 
@@ -64,8 +70,9 @@ cloud state.
   Claude/Codex integration modules; move Claude plugin recognition from the
   generic bundle boundary; update report, tests, LikeC4, and OpenSpec tasks.
 - **Patterns to follow:** core accepts generic capability descriptions; foreign
-  importer and runtime integration are distinct modules; tests use fake
-  capabilities and integrations; CLI remains read-only.
+  importer and runtime integration are distinct modules; UzeHome is resolved in
+  the CLI composition root; Engine composes project and Store sources; tests
+  use fake capabilities and integrations; real-harness probes remain opt-in.
 - **Patterns to avoid:** named harness `match` branches in UZE domain routing,
   source/destination terminology, automatic vendor-directory scanning or
   projection, and ACP use without a concrete Client ↔ Agent boundary.

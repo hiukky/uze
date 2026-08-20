@@ -27,11 +27,11 @@ model {
       technology 'Rust CLI/library (ADR 004)'
 
       standardDiscovery = component 'Standards Discoverer' {
-        description 'Discovers project instructions through AGENTS.md, reusable Agent Skills, and MCP tool/resource/context configuration without converting their representations.'
+        description 'Discovers project-owned instructions through AGENTS.md, reusable Agent Skills, and MCP tool/resource/context configuration without converting their representations.'
       }
 
       environmentResolver = component 'Effective Environment Resolver' {
-        description 'Composes project resources and registered package resources into an extensible effective environment.'
+        description 'Composes project-owned and registered UZE Store package resources into one extensible effective environment. Runtime resources are reserved but empty.'
       }
 
       uzeHome = component 'UzeHome' {
@@ -51,16 +51,16 @@ model {
       }
 
       integrationContract = component 'Integration Contract' {
-        description 'Port through which peer integrations supply capabilities, choose an ExposurePlan, and consume effective environments.'
+        description 'Port through which peer integrations supply capabilities, choose an exposure strategy, and consume effective environments. Managed filesystem fallback preserves the real project CWD and is not a shadow workspace.'
       }
 
       reporter = component 'Compatibility Reporter' {
         description 'Explains representation provenance, compatibility route, exposure state, runtime path, and remaining standards gaps.'
       }
 
-      standardDiscovery -> environmentResolver 'project resources'
+      standardDiscovery -> environmentResolver 'project-owned resources'
       uzeHome -> uzeStore 'owned paths'
-      uzeStore -> environmentResolver 'registered package resources'
+      uzeStore -> environmentResolver 'UZE-installed package resources'
       environmentResolver -> capabilityRouter 'effective environment capabilities'
       integrationContract -> capabilityRouter 'harness capability description'
       integrationContract -> environmentResolver 'selected exposure mechanism'

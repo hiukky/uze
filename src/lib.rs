@@ -3,11 +3,13 @@
 
 pub mod bundle;
 pub mod capability;
+pub mod conformance;
 pub mod engine;
 pub mod error;
 pub mod exposure;
 pub mod home;
 pub mod importer;
+pub mod importers;
 pub mod integration;
 pub mod project;
 pub mod report;
@@ -22,6 +24,7 @@ pub use exposure::{ExposureMechanism, ExposurePlan, PreparedExposure};
 pub use home::UzeHome;
 pub use project::{
     EffectiveEnvironment, ResolvedProject, Resource, ResourceOrigin, resolve_project,
+    resolve_project_resources,
 };
 pub use report::{CompatibilityReport, build_report};
 pub use store::{PackageId, StoredPackage, UzeStore};

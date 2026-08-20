@@ -62,8 +62,8 @@
       an Agent Skill, MCP configuration, and one or more optional
       harness-specific enhancements.
 - [x] 5.4 Resolve and report that project through peer Claude Code and Codex
-      integrations; keep their Agent Skill exposure explicitly unverified
-      pending opt-in real-harness conformance tests.
+      integrations; keep verification evidence-specific pending opt-in
+      real-harness conformance tests rather than inferring it from discovery.
 - [x] 5.5 Confirm the PoC never requires per-vendor core configuration,
       never silently synchronizes vendor directories, and clearly identifies
       all standards gaps that remain unresolved.
@@ -111,9 +111,32 @@
       direct, runtime-bridge, filesystem-fallback, and unsupported mechanisms.
 - [x] 8.5 Add opt-in UZE integration conformance through
       package → store → engine → environment → integration → Codex. Codex is
-      verified through a session-scoped runtime projection; caller workspace
-      stays clean.
+      verified through an explicit UZE-managed temporary projection in the real
+      project CWD; cleanup returns the caller workspace to clean state.
 - [ ] 8.6 Run the equivalent Claude Code UZE integration probe after the CLI
       completes without an API/session-limit error. Claude remains unverified.
 - [ ] 8.7 Run the separate OpenCode native and UZE integration probes with a
-      configured provider; documentation is not real-harness evidence.
+      configured provider; the current UZE probe is `BLOCKED_BY_ENVIRONMENT`
+      by timeout and documentation is not real-harness evidence.
+
+## 9. Composition and transparent-integration boundary correction
+
+- [x] 9.1 Make the UZE Store authoritative only for UZE-installed packages;
+      compose those with project-owned standard resources in one
+      `EffectiveEnvironment`.
+- [x] 9.2 Connect `UzeHome::from_env()` to a minimal real CLI flow: `uze add`
+      installs a local Agent Plugin and `uze inspect` composes registered
+      packages with the selected project.
+- [x] 9.3 Refine `ExposurePlan` so strategy and verification are separate;
+      report `VERIFIED`, `NOT_EXPOSED`, `UNVERIFIED`, `FAILED`, and
+      `BLOCKED_BY_ENVIRONMENT` without treating environmental blocks as
+      incompatibility.
+- [x] 9.4 Replace the Codex/OpenCode shadow workspace with a minimal managed
+      artifact in the real caller workspace, preserve the process CWD, and
+      provide explicit/RAII cleanup plus runtime ownership metadata.
+- [x] 9.5 Add deterministic same-store peer contracts and an opt-in shared
+      Claude/Codex probe that records one home, PackageId, package path, skill
+      path, and resource identity.
+- [x] 9.6 Keep native conformance separate, move Claude Plugin recognition
+      behind an importer module boundary, and document that normal invocation
+      remains an unproven product requirement rather than a launcher feature.

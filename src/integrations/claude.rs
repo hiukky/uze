@@ -3,7 +3,7 @@ use uze::{
     exposure::{ExposureMechanism, ExposurePlan},
     integration::IntegrationPort,
     project::Resource,
-    router::{CompatibilityRoute, ExposureState, HarnessCapabilities},
+    router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus},
 };
 
 pub struct ClaudeIntegration;
@@ -16,7 +16,7 @@ impl IntegrationPort for ClaudeIntegration {
     fn capabilities(&self) -> HarnessCapabilities {
         HarnessCapabilities {
             adaptable: [CapabilityKind::AgentSkill].into_iter().collect(),
-            exposure: ExposureState::Unverified,
+            verification: VerificationStatus::Unverified,
             evidence: "Claude Code can receive a stored Agent Plugin through its explicit per-session --plugin-dir bridge; real UZE integration conformance remains unverified."
                 .to_owned(),
             ..HarnessCapabilities::default()
@@ -39,12 +39,12 @@ impl IntegrationPort for ClaudeIntegration {
         ExposurePlan {
             representation: resource.capability.representation,
             route: CompatibilityRoute::Adaptable,
-            exposure: ExposureState::Unverified,
+            verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::RuntimeBridge {
                 bridge: "Claude Code --plugin-dir".to_owned(),
                 arguments: vec!["--plugin-dir".to_owned(), package_root.display().to_string()],
             },
-            evidence: "Per-session plugin loading is explicit; the STANDARD skill is not assumed to be directly discoverable from UZE_HOME."
+            evidence: "Per-session --plugin-dir is a conformance exposure probe, not transparent normal Claude invocation. A supported globally installed UZE connector has not yet been proven."
                 .to_owned(),
         }
     }
@@ -54,7 +54,7 @@ fn unsupported(resource: &Resource, rationale: &str) -> ExposurePlan {
     ExposurePlan {
         representation: resource.capability.representation,
         route: CompatibilityRoute::Unsupported,
-        exposure: ExposureState::NotExposed,
+        verification: VerificationStatus::NotExposed,
         mechanism: ExposureMechanism::Unsupported {
             rationale: rationale.to_owned(),
         },

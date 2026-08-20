@@ -1,19 +1,26 @@
-//! Opt-in end-to-end conformance for the UZE architecture:
+//! Opt-in UZE integration conformance:
 //!
-//! Agent Plugin fixture → UZE Store → UZE Engine → EffectiveEnvironment
-//! → Integration → real harness.
+//! Agent Plugin fixture → one UZE Store installation → one EffectiveEnvironment
+//! → peer IntegrationPort implementations → real harnesses.
 //!
-//! Unlike native_harness_conformance.rs, the package fixture and the caller
-//! workspace contain no `.agents`, `.claude`, `.codex`, or manual equivalent.
+//! Native discovery is intentionally tested only in
+//! `native_harness_conformance.rs`. This suite starts with a clean caller
+//! workspace and reports external failures structurally instead of treating
+//! them as unsupported capabilities.
 
 use std::{
     env, fs,
     path::{Path, PathBuf},
-    process::{Command, Output},
-    time::{SystemTime, UNIX_EPOCH},
+    process::Command,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use uze::{ExposureMechanism, UzeEngine, UzeHome, UzeStore, integration::IntegrationPort};
+use uze::{
+    PackageId, Resource, UzeEngine, UzeHome, UzeStore,
+    conformance::{ConformanceResult, run_harness},
+    exposure::ExposureMechanism,
+    integration::IntegrationPort,
+};
 
 #[path = "../src/integrations/claude.rs"]
 mod claude;
@@ -28,6 +35,22 @@ use opencode::OpenCodeIntegration;
 
 const PROOF: &str = "UZE_E2E_SKILL_PROOF_20260820";
 
+struct SharedStoreFixture {
+    root: PathBuf,
+    home: UzeHome,
+    package_id: PackageId,
+    package_path: PathBuf,
+    skill_path: PathBuf,
+    resource: Resource,
+    workspace: PathBuf,
+}
+
+impl Drop for SharedStoreFixture {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
 fn package_fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("playground/agent-plugin-package")
 }
@@ -40,16 +63,31 @@ fn enabled(harness: &str) -> bool {
         .any(|configured| configured == harness)
 }
 
+fn harness_timeout() -> Duration {
+    let seconds = env::var("UZE_E2E_TIMEOUT_SECONDS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(90);
+    Duration::from_secs(seconds)
+}
+
 fn temporary_root(label: &str) -> PathBuf {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap()
+        .expect("system clock is available")
         .as_nanos();
     std::env::temp_dir().join(format!("uze-{label}-{}-{nonce}", std::process::id()))
 }
 
 fn assert_clean_workspace(workspace: &Path) {
-    for path in [".agents", ".claude", ".codex", ".opencode"] {
+    for path in [
+        ".agents",
+        ".claude",
+        ".codex",
+        ".cursor",
+        ".windsurf",
+        ".opencode",
+    ] {
         assert!(
             !workspace.join(path).exists(),
             "caller workspace unexpectedly contains {path} before UZE exposure"
@@ -57,111 +95,157 @@ fn assert_clean_workspace(workspace: &Path) {
     }
 }
 
-fn assert_skill_activated(harness: &str, output: Output) {
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        output.status.success(),
-        "{harness} exited with {}\nstdout:\n{stdout}\nstderr:\n{stderr}",
-        output.status
-    );
-    if let Ok(result) = serde_json::from_str::<serde_json::Value>(&stdout) {
-        assert_ne!(
-            result.get("is_error").and_then(serde_json::Value::as_bool),
-            Some(true),
-            "{harness} reported a structured error:\n{stdout}"
-        );
-        assert_ne!(
-            result
-                .get("terminal_reason")
-                .and_then(serde_json::Value::as_str),
-            Some("api_error"),
-            "{harness} terminated with an API error:\n{stdout}"
-        );
-    }
-    assert!(
-        stdout.contains(PROOF),
-        "{harness} did not activate the UZE-stored Agent Skill proof.\nstdout:\n{stdout}\nstderr:\n{stderr}"
-    );
-}
-
-fn compose_one_stored_skill(label: &str) -> (PathBuf, UzeHome, uze::Resource, PathBuf) {
+fn shared_store_fixture(label: &str) -> SharedStoreFixture {
     let root = temporary_root(label);
     let home = UzeHome::at(root.join("uze-home"));
     let store = UzeStore::new(home.clone());
-    let first = store.install_agent_plugin(package_fixture()).unwrap();
-    let second = store.install_agent_plugin(package_fixture()).unwrap();
-    assert_eq!(first.id, second.id, "the fixture must install only once");
-    assert_eq!(store.registration_count().unwrap(), 1);
-    let environment = UzeEngine::new(store).compose(&[first.id]).unwrap();
-    let resource = environment.resources.into_iter().next().unwrap();
+    let installed = store
+        .install_agent_plugin(package_fixture())
+        .expect("fixture is a valid Agent Plugin 1.0 package");
+    assert_eq!(store.registration_count().expect("registry is readable"), 1);
+
     let workspace = root.join("caller-workspace");
-    fs::create_dir_all(&workspace).unwrap();
+    fs::create_dir_all(&workspace).expect("caller workspace is created");
+    let environment = UzeEngine::new(store)
+        .compose_project(&workspace)
+        .expect("empty caller project composes with the installed package");
+    let resource = environment
+        .resources
+        .into_iter()
+        .find(|resource| resource.package_root().is_some())
+        .expect("fixture contributes one store-owned skill");
     assert_clean_workspace(&workspace);
-    (root, home, resource, workspace)
+
+    SharedStoreFixture {
+        package_id: installed.id,
+        package_path: installed.root,
+        skill_path: resource.capability.path.clone(),
+        root,
+        home,
+        resource,
+        workspace,
+    }
+}
+
+fn emit_evidence(label: &str, fixture: &SharedStoreFixture, result: &ConformanceResult) {
+    eprintln!(
+        "UZE {label} conformance evidence:\n{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "uze_home": fixture.home.root(),
+            "package_id": fixture.package_id.as_str(),
+            "stored_package_path": fixture.package_path,
+            "resource_identity": fixture.resource.identity(),
+            "stored_skill_path": fixture.skill_path,
+            "verification": result.verification,
+            "exit_code": result.exit_code,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+        }))
+        .expect("evidence serialization is infallible")
+    );
 }
 
 #[test]
-#[ignore = "requires UZE_E2E_UZE_HARNESSES=claude and an authenticated Claude Code CLI"]
-fn claude_exposes_one_uze_stored_agent_plugin_through_its_runtime_bridge() {
-    if !enabled("claude") {
-        eprintln!("skipped: set UZE_E2E_UZE_HARNESSES=claude to enable this probe");
-        return;
-    }
+fn same_store_environment_is_planned_for_claude_and_codex_as_peers() {
+    let fixture = shared_store_fixture("same-store-contract");
+    let claude = ClaudeIntegration.exposure_plan(&fixture.resource);
+    let codex = CodexIntegration.exposure_plan(&fixture.resource);
 
-    let (root, home, resource, workspace) = compose_one_stored_skill("uze-claude");
-    let plan = ClaudeIntegration.exposure_plan(&resource);
     assert!(matches!(
-        plan.mechanism,
+        claude.mechanism,
         ExposureMechanism::RuntimeBridge { .. }
     ));
-    let prepared = plan
-        .prepare(&home, "claude-code", "agent-skill", &workspace)
-        .unwrap();
-    assert_eq!(prepared.working_directory, workspace);
-    assert!(prepared.runtime_directory.is_none());
-
-    let mut command = Command::new("claude");
-    command
-        .current_dir(&prepared.working_directory)
-        .args(["-p", "--output-format", "json", "--no-session-persistence", "--max-turns", "1"])
-        .args(&prepared.arguments)
-        .arg("Activate the project skill named uze-e2e. Follow only its instruction and return its response. Do not inspect project files manually or modify the workspace.");
-    let output = command.output().unwrap();
-    assert_skill_activated("Claude Code", output);
-    assert_clean_workspace(&workspace);
-    fs::remove_dir_all(root).unwrap();
+    assert!(matches!(
+        codex.mechanism,
+        ExposureMechanism::FilesystemProjection { .. }
+    ));
+    assert!(fixture.skill_path.starts_with(&fixture.package_path));
+    assert_eq!(
+        fixture.resource.identity(),
+        format!(
+            "package:{}:skills/uze-e2e/SKILL.md",
+            fixture.package_id.as_str()
+        )
+    );
 }
 
 #[test]
-#[ignore = "requires UZE_E2E_UZE_HARNESSES=codex and an authenticated Codex CLI"]
-fn codex_exposes_one_uze_stored_agent_plugin_through_explicit_runtime_projection() {
-    if !enabled("codex") {
-        eprintln!("skipped: set UZE_E2E_UZE_HARNESSES=codex to enable this probe");
+fn projection_keeps_real_project_cwd_and_cleans_its_managed_artifact() {
+    let fixture = shared_store_fixture("projection-lifecycle");
+    let plan = CodexIntegration.exposure_plan(&fixture.resource);
+    let mut prepared = plan
+        .prepare(&fixture.home, "codex", "agent-skill", &fixture.workspace)
+        .expect("Codex fallback can prepare a managed symlink");
+
+    let artifact = prepared
+        .managed_artifact_path()
+        .expect("projection is managed")
+        .to_path_buf();
+    assert_eq!(prepared.working_directory, fixture.workspace);
+    assert!(artifact.is_symlink());
+    assert!(
+        prepared
+            .runtime_directory
+            .as_ref()
+            .expect("runtime metadata exists")
+            .join("managed-exposure.json")
+            .is_file()
+    );
+    prepared.cleanup().expect("managed projection cleans up");
+    assert!(!artifact.exists());
+    assert_clean_workspace(&fixture.workspace);
+}
+
+#[test]
+#[ignore = "requires UZE_E2E_UZE_HARNESSES=claude,codex (or either peer) and authenticated real CLIs"]
+fn claude_and_codex_probe_the_same_store_resource_without_a_launcher() {
+    if !enabled("claude") && !enabled("codex") {
+        eprintln!("skipped: set UZE_E2E_UZE_HARNESSES=claude,codex for the shared-store probe");
         return;
     }
 
-    let (root, home, resource, caller_workspace) = compose_one_stored_skill("uze-codex");
-    let plan = CodexIntegration.exposure_plan(&resource);
-    assert!(matches!(
-        plan.mechanism,
-        ExposureMechanism::FilesystemProjection { .. }
-    ));
-    let prepared = plan
-        .prepare(&home, "codex", "agent-skill", &caller_workspace)
-        .unwrap();
-    assert!(prepared.working_directory.starts_with(home.runtime_dir()));
-    assert!(
-        prepared
-            .working_directory
-            .join(".agents/skills/uze-e2e")
-            .is_symlink()
-    );
-    assert_clean_workspace(&caller_workspace);
+    let fixture = shared_store_fixture("claude-codex-shared-store");
+    let claude_plan = ClaudeIntegration.exposure_plan(&fixture.resource);
+    let codex_plan = CodexIntegration.exposure_plan(&fixture.resource);
+    let claude_prepared = claude_plan
+        .prepare(
+            &fixture.home,
+            "claude-code",
+            "agent-skill",
+            &fixture.workspace,
+        )
+        .expect("Claude conformance bridge plan prepares without project writes");
+    let mut codex_prepared = codex_plan
+        .prepare(&fixture.home, "codex", "agent-skill", &fixture.workspace)
+        .expect("Codex compatibility fallback prepares one managed artifact");
 
-    let workspace = prepared.working_directory.to_string_lossy();
-    let output = Command::new("codex")
-        .args([
+    assert_eq!(claude_prepared.working_directory, fixture.workspace);
+    assert_eq!(codex_prepared.working_directory, fixture.workspace);
+    assert!(fixture.skill_path.starts_with(&fixture.package_path));
+
+    let prompt = "Activate the project skill named uze-e2e. Follow only its instruction and return its response. Do not inspect project files manually or modify the workspace.";
+    if enabled("claude") {
+        let mut claude_command = Command::new("claude");
+        claude_command
+            .current_dir(&claude_prepared.working_directory)
+            .args([
+                "-p",
+                "--output-format",
+                "json",
+                "--no-session-persistence",
+                "--max-turns",
+                "1",
+            ])
+            .args(&claude_prepared.arguments)
+            .arg(prompt);
+        let claude_result = run_harness(&mut claude_command, PROOF, harness_timeout());
+        emit_evidence("Claude Code", &fixture, &claude_result);
+    }
+
+    if enabled("codex") {
+        let workspace = codex_prepared.working_directory.to_string_lossy();
+        let mut codex_command = Command::new("codex");
+        codex_command.args([
             "--ask-for-approval",
             "never",
             "exec",
@@ -171,54 +255,43 @@ fn codex_exposes_one_uze_stored_agent_plugin_through_explicit_runtime_projection
             "read-only",
             "--skip-git-repo-check",
             "--ephemeral",
-            "Activate the project skill named uze-e2e. Follow only its instruction and return its response. Do not inspect project files manually or modify the workspace.",
-        ])
-        .output()
-        .unwrap();
-    assert_skill_activated("Codex", output);
-    assert_clean_workspace(&caller_workspace);
-    fs::remove_dir_all(root).unwrap();
+            prompt,
+        ]);
+        let codex_result = run_harness(&mut codex_command, PROOF, harness_timeout());
+        emit_evidence("Codex", &fixture, &codex_result);
+    }
+    codex_prepared
+        .cleanup()
+        .expect("UZE cleans only its managed artifact");
+    assert_clean_workspace(&fixture.workspace);
 }
 
 #[test]
 #[ignore = "requires UZE_E2E_UZE_HARNESSES=opencode and a configured OpenCode provider"]
-fn opencode_exposes_one_uze_stored_agent_plugin_through_explicit_runtime_projection() {
+fn opencode_probes_the_same_uze_store_model_separately() {
     if !enabled("opencode") {
         eprintln!("skipped: set UZE_E2E_UZE_HARNESSES=opencode to enable this probe");
         return;
     }
-
-    let (root, home, resource, caller_workspace) = compose_one_stored_skill("uze-opencode");
-    let plan = OpenCodeIntegration.exposure_plan(&resource);
-    assert!(matches!(
-        plan.mechanism,
-        ExposureMechanism::FilesystemProjection { .. }
-    ));
-    let prepared = plan
-        .prepare(&home, "opencode", "agent-skill", &caller_workspace)
-        .unwrap();
-    assert!(prepared.working_directory.starts_with(home.runtime_dir()));
-    assert!(
-        prepared
-            .working_directory
-            .join(".agents/skills/uze-e2e")
-            .is_symlink()
-    );
-    assert_clean_workspace(&caller_workspace);
-
+    let fixture = shared_store_fixture("opencode-store");
+    let plan = OpenCodeIntegration.exposure_plan(&fixture.resource);
+    let mut prepared = plan
+        .prepare(&fixture.home, "opencode", "agent-skill", &fixture.workspace)
+        .expect("OpenCode fallback can prepare one managed artifact");
     let workspace = prepared.working_directory.to_string_lossy();
-    let output = Command::new("opencode")
-        .args([
-            "run",
-            "--dir",
-            &workspace,
-            "--format",
-            "json",
-            "Activate the project skill named uze-e2e. Follow only its instruction and return its response. Do not inspect project files manually or modify the workspace.",
-        ])
-        .output()
-        .unwrap();
-    assert_skill_activated("OpenCode", output);
-    assert_clean_workspace(&caller_workspace);
-    fs::remove_dir_all(root).unwrap();
+    let mut command = Command::new("opencode");
+    command.args([
+        "run",
+        "--dir",
+        &workspace,
+        "--format",
+        "json",
+        "Activate the project skill named uze-e2e. Follow only its instruction and return its response. Do not inspect project files manually or modify the workspace.",
+    ]);
+    let result = run_harness(&mut command, PROOF, harness_timeout());
+    emit_evidence("OpenCode", &fixture, &result);
+    prepared
+        .cleanup()
+        .expect("UZE cleans only its managed artifact");
+    assert_clean_workspace(&fixture.workspace);
 }

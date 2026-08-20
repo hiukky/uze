@@ -38,7 +38,7 @@ pub fn assess_environment(
             let exposure_plan = integration.exposure_plan(resource);
             let mut decision = route(&resource.capability, &capabilities);
             decision.route = exposure_plan.route;
-            decision.exposure = exposure_plan.exposure;
+            decision.verification = exposure_plan.verification.clone();
             decision.rationale = exposure_plan.evidence.clone();
             decision.evidence = exposure_plan.evidence.clone();
             IntegrationAssessment {
