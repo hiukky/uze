@@ -212,3 +212,42 @@ per-run rather than only asserted in prose. A future `uze doctor` can surface
 it (e.g. `strategy: user-skill-symlink, confidence: empirical`) without any
 design change here — the fact already exists, only the CLI surface is
 future work.
+
+2026-08-20: **Behavioral E2E closed for both harnesses, with real, explicit
+consent.** The automated isolated-home suite could not authenticate without
+either copying real credentials into a throwaway home or breaking isolation
+— both rejected. Instead, with the operator's explicit go-ahead, the real
+`uze` binary was run once, manually, outside the automated test suite,
+directly against the operator's real machine (`$HOME` and default
+`$UZE_HOME` — no overrides): `uze setup` then `uze add` on the same fixture
+package used everywhere else. Pre-flight check confirmed a clean baseline
+(`~/.claude/skills` and `~/.uze` did not exist yet; `~/.agents/skills` had
+23 pre-existing, unrelated entries and no `uze-` prefix — confirming the
+namespacing invariant holds against real ambient state, not just a
+contrived test fixture). Both attachments were created
+(`~/.claude/skills/uze-uze-agent-skill-conformance-uze-e2e`,
+`~/.agents/skills/uze-uze-agent-skill-conformance-uze-e2e`), and a plain
+invocation of each harness's real CLI, using the operator's real,
+already-authenticated OAuth session, with zero UZE arguments, in a fresh
+project workspace, returned the exact proof token:
+
+- `codex exec` (model `gpt-5.6-luna`, `--sandbox read-only`): resolved the
+  skill through `~/.agents/skills/...` → `UZE_E2E_SKILL_PROOF_20260820`.
+- `claude -p` (model `haiku`): resolved the skill through
+  `~/.claude/skills/...` → `"result":"UZE_E2E_SKILL_PROOF_20260820"`
+  (cost: $0.028).
+
+This is genuine `VERIFIED` status, not `BLOCKED_BY_ENVIRONMENT` — Agent
+Skills transparent attachment is proven end to end, behaviorally, for both
+reference harnesses, closing the one item the isolated automated suite
+could not reach. The automated suite's isolation discipline is unchanged
+going forward: this was a deliberate, one-time, explicitly-consented
+exception outside `cargo test`, not a new pattern the test suite itself
+adopts. Separately, `bootstrap_codex_api_key_login` was added to the
+automated opt-in suite as an always-available, zero-risk alternative for
+future runs: it only activates when `OPENAI_API_KEY` is present in the
+operator's own shell, and scopes `codex login --with-api-key` to the same
+isolated `$HOME` the suite already uses — never the real one. Claude Code
+needs no equivalent: it already falls back to `ANTHROPIC_API_KEY` from the
+inherited process environment when no OAuth session file exists in the
+isolated home.
