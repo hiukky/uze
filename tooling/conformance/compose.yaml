@@ -21,6 +21,14 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness', timeout=2)"
+      interval: 2s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
 
   harness:
     profiles: ["manual"]
@@ -32,7 +40,8 @@ services:
         CODEX_VERSION: ${CODEX_VERSION:-0.148.0}
         OPENCODE_VERSION: ${OPENCODE_VERSION:-1.18.19}
     depends_on:
-      - gateway
+      gateway:
+        condition: service_healthy
     environment:
       LITELLM_BASE_URL: http://gateway:4000
       HOME: /work/home
