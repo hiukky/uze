@@ -38,6 +38,18 @@ impl UzeHome {
         self.store_dir().join("packages")
     }
 
+    /// Root of the standard Codex local marketplace that UZE publishes from
+    /// its store. The catalog is a Codex marketplace file, never a UZE
+    /// package format.
+    pub fn codex_marketplace_root(&self) -> PathBuf {
+        self.store_dir()
+    }
+
+    pub fn codex_marketplace_path(&self) -> PathBuf {
+        self.codex_marketplace_root()
+            .join(".agents/plugins/marketplace.json")
+    }
+
     pub fn package_dir(&self, id: &PackageId) -> PathBuf {
         self.packages_dir().join(id.as_str())
     }

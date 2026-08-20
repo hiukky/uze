@@ -1,0 +1,202 @@
+//! One external plugin -> one store installation -> one effective environment
+//! -> peer and adversarial delivery plans. See ADR-008.
+
+use std::{
+    fs,
+    path::PathBuf,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+use uze::{
+    UzeEngine, UzeHome, UzeStore,
+    capability::CapabilityKind,
+    exposure::{ExposureMechanism, PackageExposureMechanism},
+    integration::IntegrationPort,
+    router::CompatibilityRoute,
+};
+
+use uze::integrations::{
+    claude::ClaudeIntegration, codex::CodexIntegration, opencode::OpenCodeIntegration,
+};
+
+fn fixture() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/packages/plugin-first-conformance")
+}
+fn temp(label: &str) -> PathBuf {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "uze-plugin-first-{label}-{}-{nonce}",
+        std::process::id()
+    ))
+}
+fn installed(home: &UzeHome) -> (uze::StoredPackage, uze::EffectiveEnvironment) {
+    let store = UzeStore::new(home.clone());
+    let package = store.install_agent_plugin(fixture()).unwrap();
+    let environment = UzeEngine::new(store)
+        .compose(std::slice::from_ref(&package.id))
+        .unwrap();
+    (package, environment)
+}
+fn mark_setup(home: &UzeHome, integration: &dyn IntegrationPort) {
+    uze::state::record(
+        home,
+        uze::state::IntegrationRecord {
+            harness: integration.id().to_owned(),
+            version: None,
+            strategy: "test".to_owned(),
+            installed: true,
+            managed_artifacts: Vec::new(),
+        },
+    )
+    .unwrap();
+}
+
+#[test]
+fn one_plugin_install_is_planned_once_for_native_and_decomposed_harnesses() {
+    let root = temp("shared-store");
+    let home = UzeHome::at(&root);
+    let (package, environment) = installed(&home);
+    assert_eq!(package.id.as_str(), "uze-plugin-first-conformance");
+    assert_eq!(UzeStore::new(home.clone()).registration_count().unwrap(), 1);
+    assert_eq!(environment.resources.len(), 2);
+    assert!(
+        environment
+            .resources
+            .iter()
+            .any(|r| r.capability.kind == CapabilityKind::AgentSkill)
+    );
+    assert!(
+        environment
+            .resources
+            .iter()
+            .any(|r| r.capability.kind == CapabilityKind::Mcp)
+    );
+    assert!(
+        environment
+            .resources
+            .iter()
+            .all(|r| r.package_root() == Some(package.root.as_path()))
+    );
+    assert!(
+        package.root.join(".codex-plugin/plugin.json").is_file(),
+        "original native envelope is preserved"
+    );
+    assert!(
+        package.root.join(".mcp.json").is_file(),
+        "original native MCP document is preserved"
+    );
+    assert!(
+        home.codex_marketplace_path().is_file(),
+        "only the documented Codex catalog is generated"
+    );
+
+    let claude = ClaudeIntegration::new(root.join("claude"), home.clone());
+    let codex = CodexIntegration::new(root.join("agents"), home.clone());
+    let opencode = OpenCodeIntegration::new(
+        root.join("agents"),
+        root.join("config/opencode/opencode.json"),
+        home.clone(),
+    );
+    mark_setup(&home, &claude);
+    mark_setup(&home, &opencode);
+
+    let resources: Vec<_> = environment.resources.iter().collect();
+    let codex_package = codex
+        .package_exposure_plan(&package, &resources)
+        .expect("Codex consumes source-provided native envelope");
+    assert_eq!(codex_package.route, CompatibilityRoute::Native);
+    assert_eq!(codex_package.provided_resource_identities.len(), 2);
+    assert!(matches!(
+        codex_package.mechanism,
+        PackageExposureMechanism::NativePluginMarketplace { .. }
+    ));
+    assert!(
+        resources
+            .iter()
+            .all(|resource| codex_package.provides(resource)),
+        "no capability is also individually attached for Codex"
+    );
+
+    assert!(
+        claude.package_exposure_plan(&package, &resources).is_none(),
+        "Agent Plugin/Codex envelope is not claimed native for Claude"
+    );
+    let claude_routes: Vec<_> = resources.iter().map(|r| claude.exposure_plan(r)).collect();
+    assert!(
+        claude_routes
+            .iter()
+            .all(|plan| plan.route == CompatibilityRoute::Adaptable)
+    );
+    assert!(matches!(
+        claude_routes
+            .iter()
+            .find(|p| matches!(
+                p.mechanism,
+                ExposureMechanism::ManagedUserScopeReference { .. }
+            ))
+            .unwrap()
+            .mechanism,
+        ExposureMechanism::ManagedUserScopeReference { .. }
+    ));
+    assert!(
+        claude_routes
+            .iter()
+            .any(|p| matches!(p.mechanism, ExposureMechanism::ManagedVendorConfig { .. }))
+    );
+
+    assert!(
+        opencode
+            .package_exposure_plan(&package, &resources)
+            .is_none(),
+        "OpenCode decomposes the unknown envelope"
+    );
+    let skill = resources
+        .iter()
+        .find(|r| r.capability.kind == CapabilityKind::AgentSkill)
+        .unwrap();
+    let mcp = resources
+        .iter()
+        .find(|r| r.capability.kind == CapabilityKind::Mcp)
+        .unwrap();
+    assert_eq!(
+        opencode.exposure_plan(skill).route,
+        CompatibilityRoute::Native
+    );
+    assert!(matches!(
+        opencode.exposure_plan(skill).mechanism,
+        ExposureMechanism::ManagedUserScopeReference { .. }
+    ));
+    assert_eq!(
+        opencode.exposure_plan(mcp).route,
+        CompatibilityRoute::Adaptable
+    );
+    assert!(matches!(
+        opencode.exposure_plan(mcp).mechanism,
+        ExposureMechanism::ManagedVendorConfig { .. }
+    ));
+
+    // Prove the adversarial delivery writes one native OpenCode config entry
+    // without materializing a proprietary OpenCode plugin.
+    opencode.attach(skill).unwrap();
+    opencode.attach(mcp).unwrap();
+    let config: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join("config/opencode/opencode.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        config["mcp"]["uze-uze-plugin-first-conformance"]["type"],
+        "local"
+    );
+    assert_eq!(
+        config["mcp"]["uze-uze-plugin-first-conformance"]["command"][0],
+        "__UZE_MCP_FIXTURE_BINARY__"
+    );
+    assert!(
+        root.join("agents/skills/uze-uze-plugin-first-conformance-uze-plugin-first")
+            .is_symlink()
+    );
+    fs::remove_dir_all(root).unwrap();
+}

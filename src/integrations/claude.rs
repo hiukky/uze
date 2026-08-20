@@ -4,12 +4,15 @@ use std::{
     process::Command,
 };
 
-use uze::{
+use crate::{
     Result, UzeError,
     capability::CapabilityKind,
     exposure::{ExposureMechanism, ExposurePlan},
     home::UzeHome,
-    integration::{HarnessDetection, IntegrationPort},
+    integration::{
+        AttachmentInspection, AttachmentReceipt, AttachmentState, HarnessDetection,
+        IntegrationPort, ManagedArtifact, detach_standard_receipt, inspect_standard_receipt,
+    },
     project::Resource,
     router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus},
     state,
@@ -139,6 +142,38 @@ impl IntegrationPort for ClaudeIntegration {
             _ => Ok(None),
         }
     }
+
+    fn inspect_receipt(&self, receipt: &AttachmentReceipt) -> AttachmentInspection {
+        let ManagedArtifact::VendorConfigEntry {
+            entry_name,
+            command,
+            args,
+        } = &receipt.artifact
+        else {
+            return inspect_standard_receipt(receipt);
+        };
+        inspect_claude_mcp(
+            &self.command_home.join(".claude.json"),
+            entry_name,
+            command,
+            args,
+        )
+    }
+
+    fn detach_receipt(&self, receipt: &AttachmentReceipt) -> Result<AttachmentInspection> {
+        let inspection = self.inspect_receipt(receipt);
+        if inspection.state != AttachmentState::Matched {
+            return Ok(inspection);
+        }
+        let ManagedArtifact::VendorConfigEntry { entry_name, .. } = &receipt.artifact else {
+            return detach_standard_receipt(receipt);
+        };
+        detach_mcp_entry(&self.command_home, entry_name)?;
+        Ok(AttachmentInspection {
+            state: AttachmentState::Missing,
+            reason: "Claude managed MCP entry detached via CLI".to_owned(),
+        })
+    }
 }
 
 impl ClaudeIntegration {
@@ -261,6 +296,75 @@ fn mcp_entry_exists(command_home: &Path, entry_name: &str) -> bool {
         .output()
         .map(|output| output.status.success())
         .unwrap_or(false)
+}
+
+/// Claude has no structured `mcp get` output. This is deliberately read-only:
+/// attachment/removal still go through the official CLI, while inspection
+/// reads only the one expected `mcpServers.<name>` entry.
+fn inspect_claude_mcp(
+    path: &Path,
+    entry_name: &str,
+    command: &Path,
+    args: &[String],
+) -> AttachmentInspection {
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return AttachmentInspection {
+                state: AttachmentState::Missing,
+                reason: "Claude config is missing".to_owned(),
+            };
+        }
+        Err(error) => {
+            return AttachmentInspection {
+                state: AttachmentState::Blocked,
+                reason: error.to_string(),
+            };
+        }
+    };
+    let config: serde_json::Value = match serde_json::from_slice(&bytes) {
+        Ok(value) => value,
+        Err(_) => {
+            return AttachmentInspection {
+                state: AttachmentState::Blocked,
+                reason: "Claude config is malformed".to_owned(),
+            };
+        }
+    };
+    let Some(entry) = config
+        .get("mcpServers")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|servers| servers.get(entry_name))
+    else {
+        return AttachmentInspection {
+            state: AttachmentState::Missing,
+            reason: "Claude MCP entry is missing".to_owned(),
+        };
+    };
+    let command_matches = entry.get("command").and_then(serde_json::Value::as_str)
+        == Some(command.to_string_lossy().as_ref());
+    let args_match = entry
+        .get("args")
+        .and_then(serde_json::Value::as_array)
+        .map(|actual| {
+            actual
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect::<Vec<_>>()
+                == args.iter().map(String::as_str).collect::<Vec<_>>()
+        })
+        .unwrap_or(args.is_empty());
+    if command_matches && args_match {
+        AttachmentInspection {
+            state: AttachmentState::Matched,
+            reason: "Claude MCP entry matches receipt".to_owned(),
+        }
+    } else {
+        AttachmentInspection {
+            state: AttachmentState::Drifted,
+            reason: "Claude MCP command or args differ from receipt".to_owned(),
+        }
+    }
 }
 
 /// Removes a UZE-registered MCP entry. Not wired to a CLI verb yet — same
@@ -393,5 +497,52 @@ fn unsupported(resource: &Resource, rationale: &str) -> ExposurePlan {
             rationale: rationale.to_owned(),
         },
         evidence: rationale.to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+    fn check(value: &str) -> AttachmentState {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("uze-claude-config-{}-{nonce}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join(".claude.json");
+        fs::write(&path, value).unwrap();
+        let state = inspect_claude_mcp(&path, "uze-x", Path::new("tool"), &["a".to_owned()]).state;
+        let _ = fs::remove_dir_all(root);
+        state
+    }
+    #[test]
+    fn intact_is_matched_and_unknown_fields_tolerated() {
+        assert_eq!(
+            check(
+                r#"{"mcpServers":{"uze-x":{"command":"tool","args":["a"],"extra":true},"other":{"command":"x"}},"unknown":1}"#
+            ),
+            AttachmentState::Matched
+        );
+    }
+    #[test]
+    fn absent_is_missing() {
+        assert_eq!(check(r#"{"mcpServers":{}}"#), AttachmentState::Missing);
+    }
+    #[test]
+    fn command_or_args_change_is_drifted() {
+        assert_eq!(
+            check(r#"{"mcpServers":{"uze-x":{"command":"other","args":["a"]}}}"#),
+            AttachmentState::Drifted
+        );
+        assert_eq!(
+            check(r#"{"mcpServers":{"uze-x":{"command":"tool","args":["b"]}}}"#),
+            AttachmentState::Drifted
+        );
+    }
+    #[test]
+    fn malformed_is_blocked() {
+        assert_eq!(check("{bad"), AttachmentState::Blocked);
     }
 }

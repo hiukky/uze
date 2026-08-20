@@ -1,0 +1,5 @@
+schema: adr-driven
+created: 2026-08-20
+# Research/design gate only. Product specifications remain unchanged until
+# the proposed vertical slice is implemented and behaviorally proven.
+skip_specs: true
