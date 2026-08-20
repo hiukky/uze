@@ -14,17 +14,19 @@ CODEX_VERSION=0.148.0
 OPENCODE_VERSION=1.18.19
 ```
 
-It contains the UZE release binary, Claude Code, Codex, OpenCode, Git and
-minimal runtime dependencies. The image build may access package registries;
+It contains the UZE release binary, Claude Code, Codex, OpenCode, Git,
+`ripgrep`, and minimal runtime dependencies. The image build may access package registries;
 runtime harness containers must not have host credentials, a host HOME, Docker
 socket, privileged mode, or direct internet access. The test-only gateway is
 the sole exception: it has limited provider egress and the provider credential.
+OpenCode's official runtime plugin dependency is also baked into the image so
+its first-run bootstrap does not need npm access from an isolated harness.
 
 Build it locally:
 
 ```bash
 docker build \
-  --file tooling/conformance/Dockerfile \
+  --file e2e/Dockerfile \
   --build-arg CLAUDE_VERSION=2.1.237 \
   --build-arg CODEX_VERSION=0.148.0 \
   --build-arg OPENCODE_VERSION=1.18.19 \
@@ -67,21 +69,21 @@ not know harness output schemas, Docker internals, UZE integrations or model
 protocols.
 
 ```bash
-cargo test --manifest-path tooling/conformance/Cargo.toml
+cargo test --manifest-path e2e/Cargo.toml
 ```
 
 ## Compose
 
 The default topology contains a harness service and a pinned LiteLLM gateway.
 The harness reaches the gateway on an internal network; only the gateway has
-egress and receives the provider key. The initial Groq route is described in
+egress and receives the provider key. The initial OpenAI route is described in
 [the provider contract](provider-contract.md). It does not download or bundle
 a model. Validate the configuration with:
 
 ```bash
-GROQ_API_KEY=provided-outside-the-repository \
-docker compose --env-file tooling/conformance/.env.example \
-  -f tooling/conformance/compose.yaml config
+OPENAI_API_KEY=provided-outside-the-repository \
+docker compose --env-file e2e/.env.example \
+  -f e2e/compose.yaml config
 ```
 
 ## Evidence tiers
@@ -96,4 +98,10 @@ docker compose --env-file tooling/conformance/.env.example \
 The selected first routed L2 behavioral route is OpenCode. Codex is a separate
 Responses-protocol spike; Claude's Anthropic gateway route is experimental and
 never replaces L3 vendor evidence. See the
-[ecosystem research](../../openspec/changes/establish-local-real-harness-conformance/research-notes.md).
+[ecosystem research](../openspec/changes/establish-local-real-harness-conformance/research-notes.md).
+
+OpenCode's first E2E route uses its built-in `openai` provider pointed at the
+internal gateway. It intentionally does not resolve an npm provider adapter at
+runtime and sets `OPENCODE_DISABLE_MODELS_FETCH=1`: the explicit test model
+uses the pinned minimal catalog at `opencode-models.json`, while the harness
+retains no direct egress by design.

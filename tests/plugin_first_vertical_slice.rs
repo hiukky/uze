@@ -21,7 +21,7 @@ use uze::integrations::{
 
 fn fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/packages/plugin-first-conformance")
+        .join("e2e/fixtures/plugin-first-conformance")
 }
 fn temp(label: &str) -> PathBuf {
     let nonce = SystemTime::now()

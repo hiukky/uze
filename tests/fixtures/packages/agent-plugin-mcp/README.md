@@ -16,7 +16,7 @@ store. Tests that only exercise resource discovery/composition can use the
 placeholder as-is.
 
 The fixture server itself
-(`tests/fixtures/bin/mcp_conformance_fixture.rs`) is a minimal, real stdio
+(`e2e/fixtures/bin/mcp_conformance_fixture.rs`) is a minimal, real stdio
 MCP server built with the official `rmcp` Rust SDK. Its one tool,
 `uze_conformance`, returns whatever `UZE_MCP_CONFORMANCE_PROOF` was set to
 at server-launch time — a value the *test* controls, not a hardcoded

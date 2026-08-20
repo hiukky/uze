@@ -10,7 +10,7 @@
 - [x] Build a pinned, disposable harness image and prove installation/headless
       invocation with isolated HOME for Claude Code 2.1.237, Codex 0.148.0
       and OpenCode 1.18.19. The non-privileged tmpfs ownership contract is
-      recorded in `tooling/conformance/README.md`.
+      recorded in `e2e/README.md`.
 - [ ] Prove each selected gateway-backed inference route and
       record protocol limitations independently from UZE compatibility.
       Groq was attempted on 2026-08-20 and is currently

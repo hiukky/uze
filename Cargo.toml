@@ -19,7 +19,8 @@ crossterm = "0.28"
 # `uze` library/binary source itself never imports these.
 rmcp = { version = "0.1", features = ["server", "transport-io", "macros"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std"] }
+schemars = "0.8"
 
 [[bin]]
 name = "uze-mcp-conformance-fixture"
-path = "tests/fixtures/bin/mcp_conformance_fixture.rs"
+path = "e2e/fixtures/bin/mcp_conformance_fixture.rs"
