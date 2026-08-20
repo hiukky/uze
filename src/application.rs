@@ -297,6 +297,10 @@ impl UzeApplication {
                 integration: integration.id().to_owned(),
                 detection: integration.detect(),
                 setup: integration_status(integration.status(&self.home)),
+                strategy: state::get(&self.home, integration.id())
+                    .ok()
+                    .flatten()
+                    .map(|record| record.strategy),
             })
             .collect();
         let attachments = plugins
@@ -453,6 +457,7 @@ pub struct HarnessHealth {
     pub integration: String,
     pub detection: HarnessDetection,
     pub setup: String,
+    pub strategy: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]

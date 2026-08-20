@@ -12,6 +12,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 toml = "0.9"
+ratatui = "0.29"
+crossterm = "0.28"
 
 # Used only by the MCP conformance fixture binary below (see ADR-007); the
 # `uze` library/binary source itself never imports these.

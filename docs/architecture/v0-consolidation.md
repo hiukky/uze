@@ -6,6 +6,7 @@ and ADR-009 remain the current invariants.
 | Surface | Classification | Current reason |
 |---|---|---|
 | `application.rs`, Store, Engine, Router, receipts, reconciliation | PRODUCT | Implements package-centric install, inspect, doctor, and safe removal. |
+| `tui.rs` | PRODUCT | Thin Ratatui view/controller over `UzeApplication`; it owns no lifecycle or harness logic. |
 | `integrations/{claude,codex,opencode}.rs` | PRODUCT | Peer harness delivery authority. |
 | `report.rs` / `CompatibilityReport` | REMOVED | Superseded by package-centric inspection DTOs in the application layer. |
 | `bundle.rs` / Agent Plugin importer evidence | PRODUCT INTERNAL | Store uses it to validate external Agent Plugin inputs without rewriting them. |
