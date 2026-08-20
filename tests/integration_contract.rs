@@ -47,8 +47,8 @@ fn stored_environment(label: &str) -> (PathBuf, uze::EffectiveEnvironment) {
 #[test]
 fn peer_integrations_choose_exposure_without_converting_one_standard_skill() {
     let (home_root, environment) = stored_environment("integration-contract");
-    let claude = ClaudeIntegration;
-    let codex = CodexIntegration;
+    let claude = ClaudeIntegration::new(home_root.join("claude-home"), UzeHome::at(&home_root));
+    let codex = CodexIntegration::new(home_root.join("agents-home"), UzeHome::at(&home_root));
     let opencode = OpenCodeIntegration;
 
     let resource = environment.resources.first().unwrap();
@@ -143,6 +143,116 @@ fn package_store_and_effective_environment_preserve_the_same_skill_bytes() {
         fs::read(&resource.capability.path).unwrap(),
         fs::read(packaged_skill).unwrap()
     );
+
+    fs::remove_dir_all(home_root).unwrap();
+}
+
+/// Exercises the real `ClaudeIntegration`/`CodexIntegration` transparent
+/// attachment logic end to end, purely through the filesystem and directly
+/// recorded integration state — no real `claude`/`codex` binary is spawned,
+/// keeping this deterministic per the project's TDD boundary. Real-harness
+/// behavioral verification is a separate opt-in conformance concern.
+#[test]
+fn claude_prefers_managed_attachment_once_setup_state_is_recorded() {
+    let (home_root, environment) = stored_environment("claude-managed-attachment");
+    let uze_home = UzeHome::at(&home_root);
+    let claude_home = home_root.join("claude-home");
+    let claude = ClaudeIntegration::new(claude_home.clone(), uze_home.clone());
+    let resource = environment.resources.first().unwrap();
+
+    // Before setup: the existing --plugin-dir conformance fallback.
+    assert!(matches!(
+        claude.exposure_plan(resource).mechanism,
+        ExposureMechanism::RuntimeBridge { .. }
+    ));
+    assert!(claude.attach(resource).unwrap().is_none());
+
+    // Simulate what `uze setup` records, without spawning a real `claude`
+    // process.
+    uze::state::record(
+        &uze_home,
+        uze::state::IntegrationRecord {
+            harness: claude.id().to_owned(),
+            version: Some("2.1.237".to_owned()),
+            strategy: "managed-user-scope-skills-dir".to_owned(),
+            installed: true,
+            managed_artifacts: vec![claude_home.join("skills")],
+        },
+    )
+    .unwrap();
+
+    assert!(matches!(
+        claude.exposure_plan(resource).mechanism,
+        ExposureMechanism::ManagedUserScopeReference { .. }
+    ));
+
+    let attached = claude
+        .attach(resource)
+        .unwrap()
+        .expect("managed attachment path");
+    assert!(attached.is_symlink());
+    assert_eq!(attached.parent().unwrap(), claude_home.join("skills"));
+
+    let shim_root = fs::read_link(&attached).unwrap();
+    assert!(shim_root.join(".claude-plugin/plugin.json").is_file());
+    let skill_link = shim_root.join("SKILL.md");
+    assert!(skill_link.is_symlink());
+    assert_eq!(
+        fs::read_link(&skill_link).unwrap(),
+        resource.capability.path.parent().unwrap().join("SKILL.md")
+    );
+
+    // Idempotent: attaching again resolves to the same entry, no error.
+    let attached_again = claude.attach(resource).unwrap().unwrap();
+    assert_eq!(attached, attached_again);
+
+    fs::remove_dir_all(home_root).unwrap();
+}
+
+#[test]
+fn codex_prefers_managed_attachment_once_setup_state_is_recorded() {
+    let (home_root, environment) = stored_environment("codex-managed-attachment");
+    let uze_home = UzeHome::at(&home_root);
+    let agents_home = home_root.join("agents-home");
+    let codex = CodexIntegration::new(agents_home.clone(), uze_home.clone());
+    let resource = environment.resources.first().unwrap();
+
+    assert!(matches!(
+        codex.exposure_plan(resource).mechanism,
+        ExposureMechanism::FilesystemProjection { .. }
+    ));
+
+    uze::state::record(
+        &uze_home,
+        uze::state::IntegrationRecord {
+            harness: codex.id().to_owned(),
+            version: Some("0.148.0".to_owned()),
+            strategy: "managed-user-scope-skills-dir".to_owned(),
+            installed: true,
+            managed_artifacts: vec![agents_home.join("skills")],
+        },
+    )
+    .unwrap();
+
+    assert!(matches!(
+        codex.exposure_plan(resource).mechanism,
+        ExposureMechanism::ManagedUserScopeReference { .. }
+    ));
+
+    let attached = codex
+        .attach(resource)
+        .unwrap()
+        .expect("managed attachment path");
+    assert!(attached.is_symlink());
+    assert_eq!(
+        fs::read_link(&attached).unwrap(),
+        resource.capability.path.parent().unwrap().to_path_buf()
+    );
+
+    // Idempotent, and independent of Claude's own attachment state.
+    let attached_again = codex.attach(resource).unwrap().unwrap();
+    assert_eq!(attached, attached_again);
+    assert!(!uze::state::is_installed(&uze_home, "claude-code"));
 
     fs::remove_dir_all(home_root).unwrap();
 }

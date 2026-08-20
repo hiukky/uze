@@ -47,6 +47,8 @@ pub enum UzeError {
     UnsupportedRuntimeProjection(PathBuf),
     #[error("no exposure route is available: {0}")]
     ExposureUnavailable(String),
+    #[error("a non-UZE managed entry already exists at {0}")]
+    ManagedEntryConflict(PathBuf),
 }
 
 pub type Result<T> = std::result::Result<T, UzeError>;

@@ -54,6 +54,19 @@ impl Resource {
         }
     }
 
+    /// A stable, namespaced entry name safe to place in a shared, ambient
+    /// harness discovery location (e.g. a global skills directory) without
+    /// colliding with unrelated pre-existing entries there. `None` for a
+    /// project-owned resource, which is not a UZE store package and has no
+    /// managed attachment.
+    pub fn attachment_entry_name(&self) -> Option<String> {
+        let ResourceOrigin::Package { id, .. } = &self.origin else {
+            return None;
+        };
+        let skill_name = self.capability.path.parent()?.file_name()?.to_str()?;
+        Some(format!("uze-{}-{}", id.as_str(), skill_name))
+    }
+
     pub fn display_path(&self, environment_root: &Path) -> String {
         self.capability.display_path(environment_root)
     }
@@ -208,4 +221,42 @@ pub(crate) fn push_file(
         path,
     });
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::PackageId;
+
+    fn skill_capability(path: &str) -> Capability {
+        Capability {
+            kind: CapabilityKind::AgentSkill,
+            representation: Representation::Standard,
+            path: PathBuf::from(path),
+            payload: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn package_resource_has_a_namespaced_attachment_entry_name() {
+        let id = PackageId::from_plugin_name("demo-package", Path::new("plugin.json")).unwrap();
+        let resource = Resource::from_package(
+            id,
+            PathBuf::from("/uze-home/store/packages/demo-package"),
+            skill_capability("/uze-home/store/packages/demo-package/skills/demo-skill/SKILL.md"),
+        );
+        assert_eq!(
+            resource.attachment_entry_name().as_deref(),
+            Some("uze-demo-package-demo-skill")
+        );
+    }
+
+    #[test]
+    fn project_resource_has_no_attachment_entry_name() {
+        let resource = Resource::from_project(
+            PathBuf::from("/project"),
+            skill_capability("/project/.agents/skills/demo-skill/SKILL.md"),
+        );
+        assert_eq!(resource.attachment_entry_name(), None);
+    }
 }

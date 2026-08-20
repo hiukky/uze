@@ -22,7 +22,7 @@ impl PackageId {
         &self.0
     }
 
-    fn from_plugin_name(name: &str, manifest: &Path) -> Result<Self> {
+    pub(crate) fn from_plugin_name(name: &str, manifest: &Path) -> Result<Self> {
         let valid = !name.is_empty()
             && name.chars().all(|character| {
                 character.is_ascii_alphanumeric() || character == '-' || character == '_'

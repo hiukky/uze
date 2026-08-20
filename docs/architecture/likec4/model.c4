@@ -54,6 +54,10 @@ model {
         description 'Port through which peer integrations supply capabilities, choose an exposure strategy, and consume effective environments. Managed filesystem fallback preserves the real project CWD and is not a shadow workspace.'
       }
 
+      integrationState = component 'Integration State' {
+        description 'Records per-harness machine setup: detection, strategy, whether setup completed, and managed attachment artifact paths, under $UZE_HOME/state. Never stores harness secrets.'
+      }
+
       reporter = component 'Compatibility Reporter' {
         description 'Explains representation provenance, compatibility route, exposure state, runtime path, and remaining standards gaps.'
       }
@@ -64,6 +68,7 @@ model {
       environmentResolver -> capabilityRouter 'effective environment capabilities'
       integrationContract -> capabilityRouter 'harness capability description'
       integrationContract -> environmentResolver 'selected exposure mechanism'
+      integrationContract -> integrationState 'setup and managed-attachment state'
       capabilityRouter -> runtimeSelector 'runtime integration need'
       environmentResolver -> reporter 'effective environment'
       capabilityRouter -> reporter 'routes and rationale'
@@ -90,8 +95,8 @@ model {
   uze.core -> uze.claudeIntegration 'effective environment via integration contract'
   uze.core -> uze.codexIntegration 'effective environment via integration contract'
   uze.core -> uze.opencodeIntegration 'effective environment via integration contract'
-  uze.claudeIntegration -> claudeCode 'works with the selected runtime'
-  uze.codexIntegration -> codex 'works with the selected runtime'
+  uze.claudeIntegration -> claudeCode 'installs/refreshes a persistent user-scope managed attachment once; developer runs claude directly'
+  uze.codexIntegration -> codex 'installs/refreshes a persistent user-scope managed attachment once; developer runs codex directly'
   uze.opencodeIntegration -> opencode 'works with the selected runtime'
 
   developer -> agentClient 'uses to work with a selected agent runtime'

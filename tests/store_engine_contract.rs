@@ -68,7 +68,7 @@ fn engine_composes_a_standard_resource_from_the_store() {
     let store = UzeStore::new(UzeHome::at(&root));
     let package = store.install_agent_plugin(package_fixture()).unwrap();
     let environment = UzeEngine::new(store)
-        .compose(&[package.id.clone()])
+        .compose(std::slice::from_ref(&package.id))
         .unwrap();
 
     assert_eq!(environment.resources.len(), 1);

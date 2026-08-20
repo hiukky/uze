@@ -111,6 +111,9 @@ fn is_environment_block(output: &str) -> bool {
         "authentication",
         "unauthorized",
         "temporarily unavailable",
+        "not logged in",
+        "please run /login",
+        "please log in",
     ]
     .iter()
     .any(|needle| output.contains(needle))
@@ -167,6 +170,24 @@ mod tests {
     fn successful_structured_output_with_an_api_error_field_is_not_blocked() {
         assert!(!structured_environment_block(
             r#"{"is_error":false,"api_error_status":null,"result":"proof"}"#
+        ));
+    }
+
+    /// Observed verbatim from a real, unauthenticated Claude Code CLI
+    /// response in an isolated conformance home: `is_error: true` with
+    /// `api_error_status: null`, so the structured JSON check alone does not
+    /// catch it — this is why the textual "not logged in" needle exists.
+    #[test]
+    fn not_logged_in_is_blocked_by_environment_not_failed() {
+        let mut command = Command::new("sh");
+        command.args([
+            "-c",
+            r#"printf '{"is_error":true,"api_error_status":null,"result":"Not logged in · Please run /login"}'; exit 1"#,
+        ]);
+        let result = run_harness(&mut command, "proof", Duration::from_secs(1));
+        assert!(matches!(
+            result.verification,
+            VerificationStatus::BlockedByEnvironment { .. }
         ));
     }
 }
