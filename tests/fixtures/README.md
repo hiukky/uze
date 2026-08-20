@@ -11,3 +11,8 @@ installs package fixtures into its temporary Store.
 
 The UZE integration conformance path starts from `packages/`, installs once,
 and then composes the stored package with a clean caller project.
+
+Opt-in real-harness probes use inexpensive defaults and accept explicit
+overrides: `UZE_E2E_CLAUDE_MODEL=haiku`,
+`UZE_E2E_CODEX_MODEL=gpt-5.6-luna`, and
+`UZE_E2E_OPENCODE_MODEL=opencode/deepseek-v4-flash-free`.

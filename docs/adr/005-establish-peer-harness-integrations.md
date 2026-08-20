@@ -145,3 +145,12 @@ returned its explicit HTTP 429 session-limit response and was recorded as
 diagnostic timeout with no provider result and was likewise
 `BLOCKED_BY_ENVIRONMENT`. Neither result changes the integrations' compatibility
 routes or proves transparent normal invocation.
+
+2026-08-20: Re-running the opt-in battery with explicit economical models
+verified the UZE Agent Skill exposure probe for all three peer integrations:
+Claude Code using `haiku`, Codex using `gpt-5.6-luna`, and OpenCode using
+`opencode/deepseek-v4-flash-free`. The native discovery probes for Codex and
+OpenCode also passed. This proves the current package → Store → Engine →
+Environment → Integration → harness path and its proof token; it does not
+prove one-time transparent integration for a normal `claude`, `codex`, or
+`opencode` invocation.

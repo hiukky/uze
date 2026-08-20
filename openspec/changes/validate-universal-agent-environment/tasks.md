@@ -113,11 +113,11 @@
       package → store → engine → environment → integration → Codex. Codex is
       verified through an explicit UZE-managed temporary projection in the real
       project CWD; cleanup returns the caller workspace to clean state.
-- [ ] 8.6 Run the equivalent Claude Code UZE integration probe after the CLI
-      completes without an API/session-limit error. Claude remains unverified.
-- [ ] 8.7 Run the separate OpenCode native and UZE integration probes with a
-      configured provider; the current UZE probe is `BLOCKED_BY_ENVIRONMENT`
-      by timeout and documentation is not real-harness evidence.
+- [x] 8.6 Run the equivalent Claude Code UZE integration probe with the
+      economical `haiku` model. The proof token verified the Store → Engine →
+      Integration path; this is not transparent normal invocation evidence.
+- [x] 8.7 Run the separate OpenCode native and UZE integration probes with
+      `opencode/deepseek-v4-flash-free`; both returned the proof token.
 
 ## 9. Composition and transparent-integration boundary correction
 
@@ -140,3 +140,6 @@
 - [x] 9.6 Keep native conformance separate, move Claude Plugin recognition
       behind an importer module boundary, and document that normal invocation
       remains an unproven product requirement rather than a launcher feature.
+- [x] 9.7 Configure inexpensive, overridable real-harness probe defaults:
+      Claude `haiku`, Codex `gpt-5.6-luna`, and OpenCode
+      `opencode/deepseek-v4-flash-free`.

@@ -22,6 +22,11 @@ fn enabled(harness: &str) -> bool {
         .any(|configured| configured == harness)
 }
 
+/// Keep native-discovery probes inexpensive while allowing a local override.
+fn harness_model(variable: &str, default: &str) -> String {
+    env::var(variable).unwrap_or_else(|_| default.to_owned())
+}
+
 fn run(program: &str, arguments: &[&str]) -> Output {
     Command::new(program)
         .current_dir(fixture_root())
@@ -61,9 +66,12 @@ fn codex_natively_discovers_agents_skills() {
 
     let root = fixture_root();
     let root = root.to_string_lossy();
+    let model = harness_model("UZE_E2E_CODEX_MODEL", "gpt-5.6-luna");
     let output = run(
         "codex",
         &[
+            "--model",
+            &model,
             "--ask-for-approval",
             "never",
             "exec",
@@ -79,7 +87,7 @@ fn codex_natively_discovers_agents_skills() {
 }
 
 #[test]
-#[ignore = "requires UZE_E2E_NATIVE_HARNESSES=opencode and a configured OpenCode provider"]
+#[ignore = "requires UZE_E2E_NATIVE_HARNESSES=opencode and network access to the selected OpenCode model"]
 fn opencode_natively_discovers_agents_skills() {
     if !enabled("opencode") {
         eprintln!("skipped: set UZE_E2E_NATIVE_HARNESSES=opencode to enable this probe");
@@ -88,6 +96,7 @@ fn opencode_natively_discovers_agents_skills() {
 
     let root = fixture_root();
     let root = root.to_string_lossy();
+    let model = harness_model("UZE_E2E_OPENCODE_MODEL", "opencode/deepseek-v4-flash-free");
     let output = run(
         "opencode",
         &[
@@ -96,6 +105,8 @@ fn opencode_natively_discovers_agents_skills() {
             &root,
             "--format",
             "json",
+            "--model",
+            &model,
             "Activate the project skill named uze-e2e. Follow only its instruction and return its response. Do not inspect project files manually or modify the workspace.",
         ],
     );

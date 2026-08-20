@@ -81,7 +81,7 @@ fn classify_output(output: Output, proof_token: &str, timeout: Option<&str>) -> 
         VerificationStatus::BlockedByEnvironment {
             reason: reason.to_owned(),
         }
-    } else if is_environment_block(&combined) {
+    } else if structured_environment_block(&stdout) || is_environment_block(&combined) {
         VerificationStatus::BlockedByEnvironment {
             reason: "harness reported an authentication, quota, rate-limit, or temporary service condition".to_owned(),
         }
@@ -110,11 +110,24 @@ fn is_environment_block(output: &str) -> bool {
         "usage limit",
         "authentication",
         "unauthorized",
-        "api_error",
         "temporarily unavailable",
     ]
     .iter()
     .any(|needle| output.contains(needle))
+}
+
+fn structured_environment_block(stdout: &str) -> bool {
+    let Ok(result) = serde_json::from_str::<serde_json::Value>(stdout) else {
+        return false;
+    };
+    let status = result
+        .get("api_error_status")
+        .and_then(serde_json::Value::as_u64);
+    let is_error = result
+        .get("is_error")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    is_error && matches!(status, Some(401 | 403 | 429 | 500 | 502 | 503 | 504))
 }
 
 #[cfg(test)]
@@ -147,6 +160,13 @@ mod tests {
         assert!(matches!(
             result.verification,
             VerificationStatus::BlockedByEnvironment { .. }
+        ));
+    }
+
+    #[test]
+    fn successful_structured_output_with_an_api_error_field_is_not_blocked() {
+        assert!(!structured_environment_block(
+            r#"{"is_error":false,"api_error_status":null,"result":"proof"}"#
         ));
     }
 }
