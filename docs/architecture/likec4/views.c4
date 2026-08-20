@@ -1,0 +1,11 @@
+views {
+  view index {
+    title 'UZE - Landscape'
+    include *
+  }
+
+  view composition of uze.composition {
+    title 'UZE - Project Composition Layer'
+    include *
+  }
+}
