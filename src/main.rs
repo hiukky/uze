@@ -1,24 +1,18 @@
-//! CLI composition root. See ADR-005 for the no-launcher, peer-integration boundary.
+//! Thin CLI presentation over `UzeApplication`.
 
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
-mod integrations;
 use uze::{
-    Result, UzeEngine, UzeHome, UzeStore, build_report, importer,
-    integration::{IntegrationPort, IntegrationStatus},
-    report::render_text,
-};
-
-use integrations::{
-    claude::ClaudeIntegration, codex::CodexIntegration, opencode::OpenCodeIntegration,
+    Result, UzeApplication, UzeHome,
+    application::{DoctorReport, PluginInspection, RemovePluginReport},
 };
 
 #[derive(Debug, Parser)]
 #[command(
     name = "uze",
     version,
-    about = "Resolve a standards-first agent project environment"
+    about = "Manage one local agent plugin environment"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -27,30 +21,36 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Resolve a project-owned portable core and report optional enhancements.
-    Inspect {
-        project: PathBuf,
-        #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
-        format: OutputFormat,
-    },
-    /// Install one local Agent Plugins 1.0 package into the UZE-owned store.
+    /// Install one local Agent Plugins package and expose it where safe.
     Add {
-        package: PathBuf,
+        source: PathBuf,
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
-    /// Explicitly import a declarative plugin bundle as a compatibility fallback.
-    ImportBundle {
-        bundle: PathBuf,
+    /// List locally installed plugins.
+    List {
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
-    /// Machine-level, idempotent integration setup. Omit `harness` to set up
-    /// every detected harness; pass `claude` or `codex` to set up one.
+    /// Inspect one installed plugin and its delivery facts.
+    Inspect {
+        plugin: String,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+        format: OutputFormat,
+    },
+    /// Prepare detected harness integrations.
     Setup { harness: Option<String> },
-    /// Read-only report of UZE_HOME/Store readiness and per-harness
-    /// integration state. Prints no credential material.
-    Doctor,
+    /// Safely detach a plugin only when its receipts still match.
+    Remove {
+        plugin: String,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+        format: OutputFormat,
+    },
+    /// Deterministic Store, harness, and attachment diagnostics.
+    Doctor {
+        #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+        format: OutputFormat,
+    },
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -67,138 +67,201 @@ fn main() {
 }
 
 fn run(cli: Cli) -> Result<()> {
+    let app = UzeApplication::from_env(UzeHome::from_env()?)?;
     match cli.command {
-        Command::Inspect { project, format } => {
-            let home = UzeHome::from_env()?;
-            let store = UzeStore::new(home.clone());
-            let environment = UzeEngine::new(store).compose_project(project)?;
-            let claude = ClaudeIntegration::from_env(home.clone())?;
-            let codex = CodexIntegration::from_env(home)?;
-            let opencode = OpenCodeIntegration;
-            let integrations: [&dyn IntegrationPort; 3] = [&claude, &codex, &opencode];
-            let report = build_report(&environment, &integrations);
-            match format {
-                OutputFormat::Text => print!("{}", render_text(&report)),
-                OutputFormat::Json => println!(
-                    "{}",
-                    serde_json::to_string_pretty(&report)
-                        .expect("report serialization is infallible")
-                ),
-            }
-        }
-        Command::Add { package, format } => {
-            let home = UzeHome::from_env()?;
-            let store = UzeStore::new(home.clone());
-            let installed = store.install_agent_plugin(package)?;
-            let environment = UzeEngine::new(store).compose(std::slice::from_ref(&installed.id))?;
-
-            let claude = ClaudeIntegration::from_env(home.clone())?;
-            let codex = CodexIntegration::from_env(home)?;
-            let integrations: [(&str, &dyn IntegrationPort); 2] =
-                [(claude.id(), &claude), (codex.id(), &codex)];
-            let mut attached = Vec::new();
-            for resource in &environment.resources {
-                for (label, integration) in integrations {
-                    if let Some(path) = integration.attach(resource)? {
-                        attached.push((label.to_owned(), path));
-                    }
-                }
-            }
-
+        Command::Add { source, format } => {
+            let report = app.add_plugin(source)?;
             match format {
                 OutputFormat::Text => {
-                    println!("Installed Agent Plugin package: {}", installed.id.as_str());
-                    println!("Store path: {}", installed.root.display());
-                    for (harness, path) in &attached {
-                        println!("Attached to {harness}: {}", path.display());
+                    println!("Installed plugin: {}", report.plugin.id);
+                    println!("Store path: {}", report.plugin.store_path.display());
+                    for (harness, plan) in &report.package_plans {
+                        println!(
+                            "Package delivery to {harness}: {:?} ({:?}; {} components)",
+                            plan.mechanism,
+                            plan.route,
+                            plan.provided_resource_identities.len()
+                        );
+                    }
+                    for attachment in &report.attachments {
+                        println!(
+                            "Attached to {}: {}",
+                            attachment.integration,
+                            attachment.location.display()
+                        );
                     }
                 }
-                OutputFormat::Json => println!(
-                    "{}",
-                    serde_json::to_string_pretty(&serde_json::json!({
-                        "package_id": installed.id.as_str(),
-                        "store_path": installed.root,
-                        "attached": attached.iter().map(|(harness, path)| serde_json::json!({
-                            "harness": harness,
-                            "path": path,
-                        })).collect::<Vec<_>>(),
-                    }))
-                    .expect("installation serialization is infallible")
-                ),
+                OutputFormat::Json => print_json(&report),
             }
         }
-        Command::ImportBundle { bundle, format } => {
-            let imported = importer::import_bundle(bundle)?;
+        Command::List { format } => {
+            let plugins = app.list_plugins()?;
             match format {
                 OutputFormat::Text => {
-                    println!("Compatibility fallback import: {}", imported.root.display());
-                    println!("Manifest: {}", imported.manifest.display());
-                    println!("Standard items: {}", imported.standard_items.len());
-                    println!(
-                        "Optional enhancements: {}",
-                        imported.optional_enhancements.len()
-                    );
+                    println!("Plugins");
+                    for plugin in plugins {
+                        println!("{}  {} capabilities", plugin.id, plugin.capability_count);
+                    }
                 }
-                OutputFormat::Json => println!(
-                    "{}",
-                    serde_json::to_string_pretty(&imported)
-                        .expect("bundle serialization is infallible")
-                ),
+                OutputFormat::Json => print_json(&plugins),
+            }
+        }
+        Command::Inspect { plugin, format } => {
+            let report = app.inspect_plugin(&plugin)?;
+            match format {
+                OutputFormat::Text => print!("{}", render_inspection(&report)),
+                OutputFormat::Json => print_json(&report),
             }
         }
         Command::Setup { harness } => {
-            let home = UzeHome::from_env()?;
-            home.ensure_layout()?;
-            let claude = ClaudeIntegration::from_env(home.clone())?;
-            let codex = CodexIntegration::from_env(home.clone())?;
-            let selected: Vec<(&str, &dyn IntegrationPort)> = match harness.as_deref() {
-                Some("claude") => vec![(claude.id(), &claude)],
-                Some("codex") => vec![(codex.id(), &codex)],
-                Some(other) => {
-                    eprintln!("uze: unknown harness `{other}` (expected `claude` or `codex`)");
-                    return Ok(());
+            for result in app.setup(harness.as_deref())? {
+                if result.configured {
+                    println!(
+                        "{}: ready (version {})",
+                        result.integration,
+                        result.detection.version.as_deref().unwrap_or("unknown")
+                    );
+                } else {
+                    println!("{}: not detected, skipping setup", result.integration);
                 }
-                None => vec![(claude.id(), &claude), (codex.id(), &codex)],
-            };
-            for (label, integration) in selected {
-                let detection = integration.detect();
-                if !detection.present {
-                    println!("{label}: not detected, skipping setup");
-                    continue;
-                }
-                integration.install(&home)?;
-                println!(
-                    "{label}: ready (version {})",
-                    detection.version.as_deref().unwrap_or("unknown")
-                );
             }
         }
-        Command::Doctor => {
-            let home = UzeHome::from_env()?;
-            println!("UZE_HOME       {}", home.root().display());
-            println!(
-                "Store          {}",
-                if home.registry_path().is_file() {
-                    "ready"
-                } else {
-                    "empty"
-                }
-            );
-            println!();
-            println!("Integrations");
-            let claude = ClaudeIntegration::from_env(home.clone())?;
-            let codex = CodexIntegration::from_env(home.clone())?;
-            let integrations: [(&str, &dyn IntegrationPort); 2] =
-                [(claude.id(), &claude), (codex.id(), &codex)];
-            for (label, integration) in integrations {
-                let status = match integration.status(&home) {
-                    IntegrationStatus::NotConfigured => "not configured",
-                    IntegrationStatus::InstalledUnverified => "installed / unverified",
-                    IntegrationStatus::InstalledVerified => "installed / verified",
-                };
-                println!("{label:<14} {status}");
+        Command::Remove { plugin, format } => {
+            let report = app.remove_plugin(&plugin)?;
+            match format {
+                OutputFormat::Text => print!("{}", render_remove(&report)),
+                OutputFormat::Json => print_json(&report),
+            }
+        }
+        Command::Doctor { format } => {
+            let report = app.doctor();
+            match format {
+                OutputFormat::Text => print!("{}", render_doctor(&report)),
+                OutputFormat::Json => print_json(&report),
             }
         }
     }
     Ok(())
+}
+
+fn print_json(value: &impl serde::Serialize) {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(value).expect("application report serializable")
+    );
+}
+
+fn render_inspection(report: &PluginInspection) -> String {
+    let mut text = format!(
+        "{}\n\nSource\n  {}\n\nCapabilities\n",
+        report.plugin.id,
+        report.plugin.source.display()
+    );
+    for capability in &report.capabilities {
+        text.push_str(&format!("  {:?}  {}\n", capability.kind, capability.name));
+    }
+    text.push_str("\nDelivery\n");
+    for delivery in &report.deliveries {
+        let package = delivery
+            .package_plan
+            .as_ref()
+            .map_or("decomposed".to_owned(), |plan| format!("{:?}", plan.route));
+        text.push_str(&format!(
+            "\n{}\n  Package  {package}\n",
+            delivery.integration
+        ));
+        for capability in &delivery.capabilities {
+            let status = if capability.provided_by_package {
+                "provided by package".to_owned()
+            } else {
+                capability
+                    .plan
+                    .as_ref()
+                    .map_or("not exposed".to_owned(), |plan| format!("{:?}", plan.route))
+            };
+            text.push_str(&format!("  {:?}  {status}\n", capability.kind));
+        }
+    }
+    let state = &report.managed_state;
+    text.push_str(&format!(
+        "\nManaged state\n  {} matched\n  {} missing\n  {} drifted\n  {} conflicts\n  {} blocked\n",
+        state.matched, state.missing, state.drifted, state.conflicts, state.blocked
+    ));
+    if let Some(error) = &state.ledger_error {
+        text.push_str(&format!("  ledger blocked: {error}\n"));
+    }
+    text
+}
+
+fn render_remove(report: &RemovePluginReport) -> String {
+    match report {
+        RemovePluginReport::Removed { plugin, .. } => format!("Removed {plugin}\n"),
+        RemovePluginReport::Blocked { report, plan } => format!(
+            "Removal blocked for {}: {:?}\n{}\n",
+            report.package_id,
+            plan,
+            render_managed_state(
+                &report
+                    .receipts
+                    .iter()
+                    .map(|receipt| receipt.inspection.state)
+                    .collect::<Vec<_>>(),
+            )
+        ),
+    }
+}
+
+fn render_doctor(report: &DoctorReport) -> String {
+    let mut text = format!(
+        "UZE Home\n  {}\n\nStore\n  {:?}\n\nPlugins\n  {} installed\n\nHarnesses\n",
+        report.uze_home.display(),
+        report.store,
+        report.plugins.len()
+    );
+    for harness in &report.harnesses {
+        text.push_str(&format!(
+            "  {}  detected: {}  setup: {}\n",
+            harness.integration, harness.detection.present, harness.setup
+        ));
+    }
+    text.push_str("\nAttachments\n");
+    for attachment in &report.attachments {
+        let state = &attachment.state;
+        text.push_str(&format!(
+            "  {}  {} matched, {} missing, {} drifted, {} conflicts, {} blocked\n",
+            attachment.plugin,
+            state.matched,
+            state.missing,
+            state.drifted,
+            state.conflicts,
+            state.blocked
+        ));
+    }
+    if let Some(error) = &report.ledger_error {
+        text.push_str(&format!("\nLedger\n  blocked: {error}\n"));
+    }
+    if let Some(error) = &report.integration_state_error {
+        text.push_str(&format!("\nIntegration state\n  blocked: {error}\n"));
+    }
+    text
+}
+
+fn render_managed_state(states: &[uze::integration::AttachmentState]) -> String {
+    let mut matched = 0;
+    let mut missing = 0;
+    let mut drifted = 0;
+    let mut conflict = 0;
+    let mut blocked = 0;
+    for state in states {
+        match state {
+            uze::integration::AttachmentState::Matched => matched += 1,
+            uze::integration::AttachmentState::Missing => missing += 1,
+            uze::integration::AttachmentState::Drifted => drifted += 1,
+            uze::integration::AttachmentState::Conflict => conflict += 1,
+            uze::integration::AttachmentState::Blocked => blocked += 1,
+        }
+    }
+    format!(
+        "{matched} matched, {missing} missing, {drifted} drifted, {conflict} conflicts, {blocked} blocked"
+    )
 }

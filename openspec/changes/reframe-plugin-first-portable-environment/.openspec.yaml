@@ -1,0 +1,5 @@
+schema: adr-driven
+created: 2026-08-20
+# This is a research/design gate. It intentionally makes no product-spec
+# change until the user reviews the evidence and an ADR is approved.
+skip_specs: true

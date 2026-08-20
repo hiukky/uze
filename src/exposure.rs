@@ -1,7 +1,10 @@
 use std::{
+    collections::BTreeSet,
     fs,
     path::{Path, PathBuf},
 };
+
+use crate::{project::Resource, store::PackageId};
 
 use serde::Serialize;
 
@@ -148,6 +151,40 @@ pub struct ExposurePlan {
     pub verification: VerificationStatus,
     pub mechanism: ExposureMechanism,
     pub evidence: String,
+}
+
+/// Package-level planning is intentionally separate from `ExposurePlan`:
+/// Plugin is the distribution unit; resources/capabilities remain the unit
+/// of compatibility. A native package plan declares exactly which resources
+/// it consumes so callers never also attach them individually.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PackageExposurePlan {
+    pub package_id: PackageId,
+    pub route: CompatibilityRoute,
+    pub verification: VerificationStatus,
+    pub mechanism: PackageExposureMechanism,
+    pub provided_resource_identities: BTreeSet<String>,
+    pub evidence: String,
+}
+
+impl PackageExposurePlan {
+    pub fn provides(&self, resource: &Resource) -> bool {
+        self.provided_resource_identities
+            .contains(&resource.identity())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum PackageExposureMechanism {
+    NativePluginMarketplace {
+        marketplace_root: PathBuf,
+        marketplace_name: String,
+        plugin_name: String,
+    },
+    DecomposeCapabilities {
+        rationale: String,
+    },
 }
 
 #[derive(Debug)]

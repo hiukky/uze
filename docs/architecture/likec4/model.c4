@@ -39,7 +39,7 @@ model {
       }
 
       uzeStore = component 'UZE Store' {
-        description 'Installs external Agent Plugin packages once and preserves plugin.json, skills, and mcp.json without a UZE package manifest.'
+        description 'Installs each external plugin once, preserves its complete source tree/provenance, and publishes only a standard local Codex marketplace catalog for source-provided native envelopes.'
       }
 
       capabilityRouter = component 'Capability Router' {
@@ -51,7 +51,7 @@ model {
       }
 
       integrationContract = component 'Integration Contract' {
-        description 'Port through which peer integrations supply capabilities, choose an exposure strategy, and consume effective environments. Managed filesystem fallback preserves the real project CWD and is not a shadow workspace.'
+        description 'Port through which integrations first choose native package delivery and consumed resource identities, then choose capability fallbacks. Managed filesystem fallback preserves the real project CWD and is not a shadow workspace.'
       }
 
       integrationState = component 'Integration State' {
@@ -60,6 +60,10 @@ model {
 
       reporter = component 'Compatibility Reporter' {
         description 'Explains representation provenance, compatibility route, exposure state, runtime path, and remaining standards gaps.'
+      }
+
+      application = component 'Application Layer' {
+        description 'Package-centric product facade. CLI and future TUI invoke setup, add, list, inspect, remove, and doctor here; it composes Store, Engine, plans, receipts, and reconciliation without duplicating lifecycle logic.'
       }
 
       standardDiscovery -> environmentResolver 'project-owned resources'
@@ -73,6 +77,10 @@ model {
       environmentResolver -> reporter 'effective environment'
       capabilityRouter -> reporter 'routes and rationale'
       runtimeSelector -> reporter 'selected runtime path'
+      application -> uzeStore 'package lifecycle'
+      application -> environmentResolver 'package composition'
+      application -> integrationContract 'delivery, inspection, and safe detach'
+      application -> integrationState 'receipt ledger and reconciliation'
     }
 
     claudeIntegration = container 'Claude Integration' {
@@ -91,13 +99,13 @@ model {
     }
   }
 
-  developer -> uze.core 'defines and resolves a project environment'
+  developer -> uze.core.application 'uses CLI now and future TUI later'
   uze.core -> uze.claudeIntegration 'effective environment via integration contract'
   uze.core -> uze.codexIntegration 'effective environment via integration contract'
   uze.core -> uze.opencodeIntegration 'effective environment via integration contract'
-  uze.claudeIntegration -> claudeCode 'installs/refreshes a persistent user-scope managed attachment once; developer runs claude directly'
-  uze.codexIntegration -> codex 'installs/refreshes a persistent user-scope managed attachment once; developer runs codex directly'
-  uze.opencodeIntegration -> opencode 'works with the selected runtime'
+  uze.claudeIntegration -> claudeCode 'falls back to managed Skill and MCP attachment when no exact native envelope exists'
+  uze.codexIntegration -> codex 'prefers standard local marketplace/native plugin delivery and skips consumed components'
+  uze.opencodeIntegration -> opencode 'decomposes unknown plugin envelopes into global Skill discovery and managed MCP config'
 
   developer -> agentClient 'uses to work with a selected agent runtime'
   agentClient -> claudeCode 'ACP when mutually supported; otherwise selected explicit integration'

@@ -43,3 +43,7 @@ never renumbered), using this structure (Michael Nygard style):
 - [003 — Compose effective agent environments and use ACP at the Client-Agent boundary](003-compose-effective-agent-environments-and-use-acp-at-the-client-agent-boundary.md)
 - [004 — Implement the UZE core in Rust](004-implement-the-uze-core-in-rust.md)
 - [005 — Establish peer harness integrations](005-establish-peer-harness-integrations.md)
+- [006 — Attach UZE packages through persistent user-scope skill references](006-attach-uze-packages-through-persistent-user-scope-skill-references.md)
+- [007 — Attach MCP servers through generated vendor configuration](007-attach-mcp-servers-through-generated-vendor-configuration.md)
+- [008 — Adopt Plugin First, Capability Aware delivery](008-adopt-plugin-first-capability-aware-delivery.md)
+- [009 — Manage harness attachments with receipts and safe reconciliation](009-manage-harness-attachments-with-receipts-and-safe-reconciliation.md)

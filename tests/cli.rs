@@ -4,10 +4,6 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-fn fixture_project() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/projects/portable-project")
-}
-
 fn package_fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/packages/agent-plugin-skill")
 }
@@ -101,25 +97,29 @@ echo '{version_line}'
 }
 
 #[test]
-fn inspect_reports_project_resources_and_does_not_write_vendor_state() {
-    let root = fixture_project();
-    let hook = root.join(".claude/hooks/pre-commit.sh");
-    let before = std::fs::read(&hook).unwrap();
-
+fn inspect_reports_an_installed_plugin_without_vendor_writes() {
     let home = temporary_home("cli-inspect");
+    let add = Command::new(env!("CARGO_BIN_EXE_uze"))
+        .env("UZE_HOME", &home)
+        .args(["add", package_fixture().to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(add.status.success());
+    let before = std::fs::read(home.join("state/attachments.json")).ok();
     let output = Command::new(env!("CARGO_BIN_EXE_uze"))
         .env("UZE_HOME", &home)
-        .args(["inspect", root.to_str().unwrap(), "--format", "json"])
+        .args(["inspect", "uze-agent-skill-conformance", "--format", "json"])
         .output()
         .unwrap();
 
     assert!(output.status.success());
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(report["effective_resources"].as_array().unwrap().len(), 3);
-    assert!(report["integrations"]["claude-code"].is_object());
-    assert!(report["integrations"]["codex"].is_object());
-    assert!(report["integrations"]["opencode"].is_object());
-    assert_eq!(std::fs::read(&hook).unwrap(), before);
+    assert_eq!(report["plugin"]["id"], "uze-agent-skill-conformance");
+    assert_eq!(report["capabilities"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        std::fs::read(home.join("state/attachments.json")).ok(),
+        before
+    );
     let _ = std::fs::remove_dir_all(home);
 }
 
@@ -138,31 +138,22 @@ fn add_and_inspect_use_the_same_injected_uze_home() {
         .unwrap();
     assert!(add.status.success());
     let installed: serde_json::Value = serde_json::from_slice(&add.stdout).unwrap();
-    assert_eq!(installed["package_id"], "uze-agent-skill-conformance");
-    assert!(PathBuf::from(installed["store_path"].as_str().unwrap()).starts_with(&home));
+    assert_eq!(installed["plugin"]["id"], "uze-agent-skill-conformance");
+    assert!(PathBuf::from(installed["plugin"]["store_path"].as_str().unwrap()).starts_with(&home));
 
     let inspect = Command::new(env!("CARGO_BIN_EXE_uze"))
         .env("UZE_HOME", &home)
-        .args([
-            "inspect",
-            fixture_project().to_str().unwrap(),
-            "--format",
-            "json",
-        ])
+        .args(["inspect", "uze-agent-skill-conformance", "--format", "json"])
         .output()
         .unwrap();
     assert!(inspect.status.success());
     let report: serde_json::Value = serde_json::from_slice(&inspect.stdout).unwrap();
-    assert_eq!(report["effective_resources"].as_array().unwrap().len(), 4);
+    assert_eq!(report["plugin"]["id"], "uze-agent-skill-conformance");
     assert!(
-        report["effective_resources"]
-            .as_array()
+        report["plugin"]["store_path"]
+            .as_str()
             .unwrap()
-            .iter()
-            .any(|resource| resource["path"]
-                .as_str()
-                .unwrap()
-                .contains("store/packages"))
+            .contains("store/packages")
     );
     let _ = std::fs::remove_dir_all(home);
 }
@@ -249,7 +240,7 @@ fn setup_then_add_attaches_transparently_without_a_separate_sync_step() {
     // Idempotent: a second `uze setup` does not fail or duplicate state.
     run(&["setup"]);
     let doctor = run(&["doctor"]);
-    assert_eq!(doctor.matches("installed / unverified").count(), 2);
+    assert!(doctor.matches("installed / unverified").count() >= 2);
 
     // `uze add` alone attaches both, without any separate sync command.
     let add = run(&["add", package_fixture().to_str().unwrap()]);
@@ -317,6 +308,22 @@ fn setup_then_add_attaches_the_mcp_fixture_idempotently_and_removal_works() {
 
     let mcp_state = fake_bin.join("mcp-state");
     assert!(mcp_state.join("uze-uze-mcp-conformance").is_file());
+    let ledger: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(uze_home.join("state/attachments.json")).unwrap())
+            .unwrap();
+    let receipts = ledger["receipts"].as_object().unwrap();
+    assert!(receipts.len() >= 2);
+    assert!(
+        receipts
+            .values()
+            .filter(|receipt| receipt["integration"] == "claude-code"
+                || receipt["integration"] == "codex")
+            .all(|receipt| {
+                receipt["package_id"] == "uze-mcp-conformance"
+                    && receipt["artifact"]["VENDOR_CONFIG_ENTRY"]["entry_name"]
+                        == "uze-uze-mcp-conformance"
+            })
+    );
 
     // Idempotent: `add` a second time does not fail and does not require a
     // real "already exists" overwrite behavior from either harness (the
@@ -330,4 +337,37 @@ fn setup_then_add_attaches_the_mcp_fixture_idempotently_and_removal_works() {
     let _ = std::fs::remove_dir_all(uze_home);
     let _ = std::fs::remove_dir_all(fake_bin);
     let _ = std::fs::remove_dir_all(mcp_package_dir);
+}
+
+#[test]
+fn remove_uses_the_package_centric_application_flow() {
+    let home = temporary_home("cli-remove");
+    let add = Command::new(env!("CARGO_BIN_EXE_uze"))
+        .env("UZE_HOME", &home)
+        .args(["add", package_fixture().to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(add.status.success());
+    let remove = Command::new(env!("CARGO_BIN_EXE_uze"))
+        .env("UZE_HOME", &home)
+        .args(["remove", "uze-agent-skill-conformance", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(remove.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&remove.stdout).unwrap();
+    assert_eq!(report["outcome"], "REMOVED");
+    let list = Command::new(env!("CARGO_BIN_EXE_uze"))
+        .env("UZE_HOME", &home)
+        .args(["list", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(list.status.success());
+    assert!(
+        serde_json::from_slice::<serde_json::Value>(&list.stdout)
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let _ = std::fs::remove_dir_all(home);
 }

@@ -70,9 +70,9 @@ impl UzeStore {
         &self.home
     }
 
-    /// Installs an Agent Plugins 1.0 package once. The store copies only the
-    /// external `plugin.json` and `skills/` tree; it never creates a UZE
-    /// manifest or rewrites SKILL.md payloads.
+    /// Installs an Agent Plugins 1.0 package once. The store preserves the
+    /// complete external package tree (including any vendor-native envelope)
+    /// and never creates a UZE plugin manifest or rewrites payloads.
     pub fn install_agent_plugin(&self, source: impl AsRef<Path>) -> Result<StoredPackage> {
         let source = checked_root(source.as_ref())?;
         let manifest = source.join("plugin.json");
@@ -100,6 +100,7 @@ impl UzeStore {
         let mut registry = self.load_registry()?;
         if let Some(existing) = registry.packages.get(&id) {
             if existing.source == source {
+                self.refresh_codex_marketplace(&registry)?;
                 return self.package(&id);
             }
             return Err(UzeError::PackageConflict {
@@ -114,15 +115,7 @@ impl UzeStore {
             path: destination.clone(),
             source: source_error,
         })?;
-        copy_file(&manifest, &destination.join("plugin.json"))?;
-        let source_skills = source.join("skills");
-        if source_skills.is_dir() {
-            copy_tree(&source_skills, &destination.join("skills"))?;
-        }
-        let source_mcp_manifest = source.join("mcp.json");
-        if source_mcp_manifest.is_file() {
-            copy_file(&source_mcp_manifest, &destination.join("mcp.json"))?;
-        }
+        copy_tree(&source, &destination)?;
 
         // The importer has already performed external-manifest safety checks.
         // Keeping this value live makes that boundary explicit and prevents an
@@ -135,6 +128,7 @@ impl UzeStore {
             },
         );
         self.save_registry(&registry)?;
+        self.refresh_codex_marketplace(&registry)?;
         self.package(&id)
     }
 
@@ -165,6 +159,22 @@ impl UzeStore {
         Ok(self.load_registry()?.packages.into_keys().collect())
     }
 
+    /// Removes only UZE-owned package bytes and its registry entry. Callers
+    /// must complete attachment reconciliation first; the Store deliberately
+    /// knows nothing about harness artifacts or their ownership.
+    pub fn remove_package(&self, id: &PackageId) -> Result<()> {
+        let mut registry = self.load_registry()?;
+        if registry.packages.remove(id).is_none() {
+            return Err(UzeError::UnknownPackage(id.as_str().to_owned()));
+        }
+        let root = self.home.package_dir(id);
+        if root.exists() {
+            fs::remove_dir_all(&root).map_err(|source| UzeError::Write { path: root, source })?;
+        }
+        self.save_registry(&registry)?;
+        self.refresh_codex_marketplace(&registry)
+    }
+
     fn load_registry(&self) -> Result<PackageRegistry> {
         let path = self.home.registry_path();
         if !path.exists() {
@@ -184,6 +194,46 @@ impl UzeStore {
         let payload =
             serde_json::to_vec_pretty(registry).expect("registry serialization is infallible");
         fs::write(&path, payload).map_err(|source| UzeError::Write { path, source })
+    }
+
+    /// Materializes only Codex's documented marketplace catalog, pointing at
+    /// already-preserved package directories. It carries no UZE semantics and
+    /// is regenerated from the installed-package registry.
+    fn refresh_codex_marketplace(&self, registry: &PackageRegistry) -> Result<()> {
+        let path = self.home.codex_marketplace_path();
+        let parent = path.parent().expect("marketplace path has a parent");
+        fs::create_dir_all(parent).map_err(|source| UzeError::Write {
+            path: parent.to_path_buf(),
+            source,
+        })?;
+        let plugins: Vec<serde_json::Value> = registry
+            .packages
+            .keys()
+            .filter(|id| {
+                self.home
+                    .package_dir(id)
+                    .join(".codex-plugin/plugin.json")
+                    .is_file()
+            })
+            .map(|id| {
+                serde_json::json!({
+                    "name": id.as_str(),
+                    "source": { "source": "local", "path": format!("./packages/{}", id.as_str()) },
+                    "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+                    "category": "Developer tools"
+                })
+            })
+            .collect();
+        let catalog = serde_json::json!({
+            "name": "uze-local",
+            "interface": { "displayName": "UZE Local" },
+            "plugins": plugins,
+        });
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(&catalog).expect("catalog is serializable"),
+        )
+        .map_err(|source| UzeError::Write { path, source })
     }
 }
 

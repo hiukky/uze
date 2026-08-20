@@ -13,16 +13,11 @@ use uze::{
     router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus},
 };
 
-#[path = "../src/integrations/claude.rs"]
-mod claude;
-#[path = "../src/integrations/codex.rs"]
-mod codex;
-#[path = "../src/integrations/opencode.rs"]
-mod opencode;
-
-use claude::ClaudeIntegration;
-use codex::CodexIntegration;
-use opencode::OpenCodeIntegration;
+use uze::integrations::{
+    claude::{self, ClaudeIntegration},
+    codex::{self, CodexIntegration},
+    opencode::OpenCodeIntegration,
+};
 
 fn package_fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/packages/agent-plugin-skill")
@@ -61,7 +56,11 @@ fn peer_integrations_choose_exposure_without_converting_one_standard_skill() {
     let (home_root, environment) = stored_environment("integration-contract");
     let claude = ClaudeIntegration::new(home_root.join("claude-home"), UzeHome::at(&home_root));
     let codex = CodexIntegration::new(home_root.join("agents-home"), UzeHome::at(&home_root));
-    let opencode = OpenCodeIntegration;
+    let opencode = OpenCodeIntegration::new(
+        home_root.join("opencode-agents"),
+        home_root.join("opencode-config/opencode.json"),
+        UzeHome::at(&home_root),
+    );
 
     let resource = environment.resources.first().unwrap();
     assert_eq!(resource.capability.representation, Representation::Standard);

@@ -22,16 +22,9 @@ use uze::{
     integration::IntegrationPort,
 };
 
-#[path = "../src/integrations/claude.rs"]
-mod claude;
-#[path = "../src/integrations/codex.rs"]
-mod codex;
-#[path = "../src/integrations/opencode.rs"]
-mod opencode;
-
-use claude::ClaudeIntegration;
-use codex::CodexIntegration;
-use opencode::OpenCodeIntegration;
+use uze::integrations::{
+    claude::ClaudeIntegration, codex::CodexIntegration, opencode::OpenCodeIntegration,
+};
 
 const PROOF: &str = "UZE_E2E_SKILL_PROOF_20260820";
 
@@ -822,7 +815,12 @@ fn opencode_probes_the_same_uze_store_model_separately() {
         return;
     }
     let fixture = shared_store_fixture("opencode-store");
-    let plan = OpenCodeIntegration.exposure_plan(&fixture.resource);
+    let integration = OpenCodeIntegration::new(
+        fixture.home.root().join("opencode-agents"),
+        fixture.home.root().join("opencode-config/opencode.json"),
+        fixture.home.clone(),
+    );
+    let plan = integration.exposure_plan(&fixture.resource);
     let mut prepared = plan
         .prepare(&fixture.home, "opencode", "agent-skill", &fixture.workspace)
         .expect("OpenCode fallback can prepare one managed artifact");
