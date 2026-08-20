@@ -77,6 +77,43 @@ fn harness_model(variable: &str, default: &str) -> String {
     env::var(variable).unwrap_or_else(|_| default.to_owned())
 }
 
+/// Explicit, opt-in authentication bootstrap for the Codex runtime-phase
+/// probe. Only runs when `OPENAI_API_KEY` is set in the operator's own
+/// shell; pipes it over stdin into `codex login --with-api-key`, scoped to
+/// the same isolated `$HOME` (and therefore `$CODEX_HOME`) the probe already
+/// uses. Writes an `auth.json` only inside that isolated home — the real
+/// `~/.codex` is never read or written. Never prints the key or any child
+/// output that might echo it. Absence of the env var (the common case) is
+/// not an error: the caller proceeds unauthenticated and the probe
+/// correctly falls through to `BLOCKED_BY_ENVIRONMENT`, same as before.
+///
+/// Claude Code needs no equivalent step: it falls back to `ANTHROPIC_API_KEY`
+/// from the process environment when no OAuth session exists, and this
+/// test's `Command`s already inherit the parent shell's environment (only
+/// `HOME` is overridden) — exporting the var before `cargo test` is enough.
+fn bootstrap_codex_api_key_login(isolated_home: &Path) -> bool {
+    use std::io::Write;
+
+    let Ok(api_key) = env::var("OPENAI_API_KEY") else {
+        return false;
+    };
+    let mut child = match Command::new("codex")
+        .env("HOME", isolated_home)
+        .args(["login", "--with-api-key"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => return false,
+    };
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(api_key.as_bytes());
+    }
+    child.wait().map(|status| status.success()).unwrap_or(false)
+}
+
 fn temporary_root(label: &str) -> PathBuf {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -411,6 +448,9 @@ fn runtime_phase_invokes_the_harness_plainly_after_setup_already_completed() {
         codex
             .attach(&fixture.resource)
             .expect("Codex managed attachment is created");
+        // Opt-in only: does nothing unless OPENAI_API_KEY is set in the
+        // operator's own shell. See `bootstrap_codex_api_key_login`.
+        bootstrap_codex_api_key_login(&isolated_home);
     }
 
     // Runtime phase: plain harness invocation, zero UZE-specific arguments,
