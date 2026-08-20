@@ -1,25 +1,22 @@
 services:
-  llama:
-    image: ${LLAMA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-b7728}
+  gateway:
+    image: ${LITELLM_IMAGE:-docker.litellm.ai/berriai/litellm@sha256:468c25f35f3e5ec4e414974f00deab93337b1b4d9953cabcfd3722e59415f834}
     command:
-      - -m
-      - /models/${UZE_CONFORMANCE_MODEL_FILE:?set UZE_CONFORMANCE_MODEL_FILE}
-      - --host
-      - 0.0.0.0
-      - --port
-      - "8080"
-      - -c
-      - ${UZE_CONFORMANCE_CONTEXT_SIZE:-8192}
-      - -n
-      - ${UZE_CONFORMANCE_PREDICT_TOKENS:-512}
-      - --jinja
+      - --config
+      - /app/uze-conformance-config.yaml
+    environment:
+      # Deliberately passed only to LiteLLM. Harness containers talk to the
+      # internal gateway and never receive provider credentials.
+      GROQ_API_KEY: ${GROQ_API_KEY:?set GROQ_API_KEY in the shell or CI secret}
+      UZE_CONFORMANCE_LITELLM_MODEL: ${UZE_CONFORMANCE_LITELLM_MODEL:-groq/llama-3.3-70b-versatile}
     volumes:
       - type: bind
-        source: ${UZE_CONFORMANCE_MODEL_DIR:?set UZE_CONFORMANCE_MODEL_DIR}
-        target: /models
+        source: ./litellm-config.yaml
+        target: /app/uze-conformance-config.yaml
         read_only: true
     networks:
       - conformance
+      - provider-egress
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -35,9 +32,9 @@ services:
         CODEX_VERSION: ${CODEX_VERSION:-0.148.0}
         OPENCODE_VERSION: ${OPENCODE_VERSION:-1.18.19}
     depends_on:
-      - llama
+      - gateway
     environment:
-      LLAMA_BASE_URL: http://llama:8080/v1
+      LITELLM_BASE_URL: http://gateway:4000
       HOME: /work/home
       UZE_HOME: /work/uze-home
     networks:
@@ -55,3 +52,5 @@ services:
 networks:
   conformance:
     internal: true
+  # Only LiteLLM joins this network. The harness has no direct Internet route.
+  provider-egress: {}

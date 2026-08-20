@@ -101,11 +101,11 @@ The full sources, capability semantics, provider routes and Core impact are in
 |---|---|---|
 | L0 — Unit | Pure Rust domain behavior | `cargo test`; no harness, model or network. |
 | L1 — Contract | Store, planning, receipts and vendor config contracts | Isolated filesystem; no LLM. |
-| L2 — Local real-harness E2E | Real CLI receives and exercises UZE-managed capability against local inference | Opt-in Docker/model tooling; under research. |
+| L2 — Isolated real-harness E2E | Real CLI receives and exercises UZE-managed capability against local or routed test inference | Opt-in Docker/provider tooling; under research. |
 | L3 — Vendor conformance | Real harness against official provider/model | Opt-in manual or release evidence. |
 
-L2 is test infrastructure, not a UZE product dependency. A local model failure
-must never be reported as an attachment incompatibility.
+L2 is test infrastructure, not a UZE product dependency. A local or routed
+model failure must never be reported as an attachment incompatibility.
 
 ## Architecture
 

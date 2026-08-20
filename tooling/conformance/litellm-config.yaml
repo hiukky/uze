@@ -1,0 +1,13 @@
+# Test infrastructure only. The symbolic model name is intentionally stable so
+# every harness can target the gateway without learning a provider-specific ID.
+# The actual provider model and key are supplied by the environment at runtime.
+model_list:
+  - model_name: uze-conformance
+    litellm_params:
+      model: os.environ/UZE_CONFORMANCE_LITELLM_MODEL
+      api_key: os.environ/GROQ_API_KEY
+
+# Do not configure callbacks, persistence, or a database: test prompts and
+# outputs must not be exported by the gateway.
+litellm_settings:
+  set_verbose: false
