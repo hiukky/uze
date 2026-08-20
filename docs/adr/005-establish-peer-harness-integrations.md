@@ -96,3 +96,11 @@ API session-limit response, so Claude remains `UNVERIFIED`; API failures are
 not capability evidence. OpenCode 1.18.18 is an additional peer integration:
 its documentation declares `.agents/skills` discovery, while its local
 real-harness probe remains `UNVERIFIED` until a provider is configured.
+
+2026-08-20: The next slice added `UzeHome`, a minimal store for external Agent
+Plugin packages, and `ExposurePlan`. `STANDARD` representation is explicitly
+separate from an exposure mechanism: Claude selects its per-session
+`--plugin-dir` runtime bridge, while Codex selects an explicit session-scoped
+filesystem fallback under `$UZE_HOME/runtime`. The Codex end-to-end flow
+package → store → engine → environment → integration → harness is verified;
+the equivalent Claude flow returned HTTP 429 and remains `UNVERIFIED`.

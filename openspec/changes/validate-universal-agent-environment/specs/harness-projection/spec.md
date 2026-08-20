@@ -56,6 +56,35 @@ SHALL never create a vendor artifact for an `UNSUPPORTED` enhancement.
 - **THEN** no target hook artifact is created
 - **AND THEN** the report explains the unsupported semantics
 
+### Requirement: Keep stored representation separate from exposure
+The system SHALL preserve a standard resource's representation independently
+from the mechanism by which an integration makes it available. An integration
+SHALL choose `DIRECT_NATIVE`, `RUNTIME_BRIDGE`, `FILESYSTEM_PROJECTION`, or
+`UNSUPPORTED` explicitly for each applicable resource. The existence of a
+`STANDARD` resource in the UZE store SHALL NOT be treated as evidence that a
+harness can discover that store path directly.
+
+#### Scenario: Stored Agent Plugin requires a runtime bridge
+- **WHEN** an Agent Plugin package is registered in the UZE store and composed
+  into an effective environment
+- **AND WHEN** a selected harness cannot consume the store location directly
+- **THEN** its integration selects an explicit runtime bridge, session-scoped
+  filesystem projection, or `UNSUPPORTED`
+- **AND THEN** the Agent Skill remains an unchanged standard `SKILL.md`
+
+### Requirement: Keep filesystem fallback session-scoped
+When an integration selects `FILESYSTEM_PROJECTION`, the system SHALL create
+the projection only beneath `$UZE_HOME/runtime/<integration>/<session>`. It
+SHALL NOT write a harness configuration directory into the caller's original
+workspace, and SHALL identify the fallback in the ExposurePlan.
+
+#### Scenario: Codex receives a stored skill through fallback
+- **WHEN** Codex receives a UZE-stored Agent Skill and selects its documented
+  `.agents/skills` discovery path as a fallback
+- **THEN** the projection is created in a UZE runtime workspace
+- **AND THEN** the caller workspace remains free of `.agents`, `.claude`,
+  `.codex`, and equivalent manual configuration
+
 ### Requirement: Integrate peer harnesses through a contract
 The system SHALL expose an integration contract through which a harness
 supplies its capability description and receives an effective environment.

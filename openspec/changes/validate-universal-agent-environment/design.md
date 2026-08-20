@@ -84,9 +84,11 @@ filesystem synchronizer as the primary product—were rejected because both
 would make vendor configuration, rather than portable project composition,
 the product's core abstraction. See ADR-001 and ADR-003.
 
-For the PoC, the effective environment contains only `project_resources`.
-The model reserves composition layers for global, user, package, and runtime
-resources without implementing them now.
+For the initial project-discovery path, the effective environment contains only
+project resources. The first UZE integration slice additionally composes one
+Agent Plugin package from the UZE store. The model reserves global, user, and
+other package layers without implementing profiles, cloud state, or a package
+graph.
 
 ### 1a. Keep the core harness-agnostic; make integrations peers
 
@@ -118,6 +120,38 @@ and produces core capabilities. `ClaudePluginImporter` may know
 `.claude-plugin/plugin.json`; `ClaudeIntegration` uses an effective
 environment to work with Claude Code. Neither is a source or destination in a
 conversion pipeline. See ADR-005.
+
+### 1b. Compose package resources through UZE_HOME before exposure
+
+`UZE_HOME` is the sole source of UZE-owned paths. It uses the `UZE_HOME`
+environment variable when set and otherwise resolves to `~/.uze`. The root
+contains operational state only; it is not a UZE replacement for Agent Plugin
+manifests:
+
+```text
+$UZE_HOME/
+  store/packages/<agent-plugin-name>/
+    plugin.json                 # preserved external Agent Plugins manifest
+    skills/<name>/SKILL.md      # preserved standard Agent Skill
+  state/packages.json           # UZE installation registry
+  cache/
+  runtime/<integration>/<session>/
+```
+
+The minimal composition flow is:
+
+```text
+Resource → Agent Plugin Package → UZE Store → UZE Engine
+        → EffectiveEnvironment → Capability Router → Integration
+```
+
+Representation and exposure are independent. A resource can remain
+`STANDARD` while an integration selects an explicit `RUNTIME_BRIDGE` or
+`FILESYSTEM_PROJECTION`; a standard representation is never evidence that a
+harness can discover a UZE store path directly. Integrations choose one of
+`DIRECT_NATIVE`, `RUNTIME_BRIDGE`, `FILESYSTEM_PROJECTION`, or `UNSUPPORTED`.
+Filesystem projection is permitted only as an explicit, session-scoped
+fallback under `$UZE_HOME/runtime`, never in the caller's project workspace.
 
 ### 2. Keep standards and runtime protocols at distinct boundaries
 

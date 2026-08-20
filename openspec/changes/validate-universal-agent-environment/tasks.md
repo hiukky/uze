@@ -99,11 +99,21 @@
 
 ## 8. Real-harness conformance
 
-- [x] 8.1 Add an isolated playground containing the single standard Agent
-      Skill measured by contract tests and opt-in Claude Code/Codex probes,
-      with no filesystem projection or mutation.
-- [ ] 8.2 Run the Claude Code and Codex probes against authenticated local
-      harnesses; record a result only when the harness completes without an
-      API or session-limit error. Codex is verified; Claude remains unverified.
-- [ ] 8.3 Run the OpenCode probe against a configured local provider and
-      record the result separately from its documentation-backed route.
+- [x] 8.1 Separate native-discovery fixtures from the Agent Plugin package
+      fixture. Native probes contain `.agents/skills` only to measure a
+      harness; UZE integration probes do not.
+- [x] 8.2 Introduce `UZE_HOME` with one path authority for store, state,
+      cache, and runtime; use an explicit temporary home in deterministic
+      tests.
+- [x] 8.3 Install/register the Agent Plugin once in the UZE store and compose
+      its standard skill into an effective environment without a UZE manifest.
+- [x] 8.4 Add `ExposurePlan`, keeping representation separate from concrete
+      direct, runtime-bridge, filesystem-fallback, and unsupported mechanisms.
+- [x] 8.5 Add opt-in UZE integration conformance through
+      package → store → engine → environment → integration → Codex. Codex is
+      verified through a session-scoped runtime projection; caller workspace
+      stays clean.
+- [ ] 8.6 Run the equivalent Claude Code UZE integration probe after the CLI
+      completes without an API/session-limit error. Claude remains unverified.
+- [ ] 8.7 Run the separate OpenCode native and UZE integration probes with a
+      configured provider; documentation is not real-harness evidence.
