@@ -16,7 +16,7 @@ use claude::ClaudeIntegration;
 use codex::CodexIntegration;
 
 fn fixture_project() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/portable-project")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("playground/agent-skill-conformance")
 }
 
 #[test]
@@ -25,15 +25,21 @@ fn peer_integrations_route_one_standard_skill_without_conversion() {
     let claude = ClaudeIntegration;
     let codex = CodexIntegration;
 
-    for integration in [&claude as &dyn IntegrationPort, &codex] {
-        let assessment = assess_environment(&environment, integration);
-        let skill = assessment
-            .iter()
-            .find(|item| item.capability_path.ends_with("SKILL.md"))
-            .unwrap();
-        assert_eq!(skill.decision.route, CompatibilityRoute::Native);
-        assert_eq!(skill.decision.exposure, ExposureState::Unverified);
-    }
+    let claude_assessment = assess_environment(&environment, &claude);
+    let claude_skill = claude_assessment
+        .iter()
+        .find(|item| item.capability_path.ends_with("SKILL.md"))
+        .unwrap();
+    assert_eq!(claude_skill.decision.route, CompatibilityRoute::Unsupported);
+    assert_eq!(claude_skill.decision.exposure, ExposureState::NotExposed);
+
+    let codex_assessment = assess_environment(&environment, &codex);
+    let codex_skill = codex_assessment
+        .iter()
+        .find(|item| item.capability_path.ends_with("SKILL.md"))
+        .unwrap();
+    assert_eq!(codex_skill.decision.route, CompatibilityRoute::Native);
+    assert_eq!(codex_skill.decision.exposure, ExposureState::Verified);
 
     assert_eq!(
         environment
@@ -84,4 +90,21 @@ fn a_new_peer_integration_needs_no_core_change() {
 
     assert_eq!(skill.decision.route, CompatibilityRoute::Native);
     assert_eq!(skill.integration_id, "cursor");
+}
+
+#[test]
+fn the_project_view_reuses_the_agent_plugin_skill_bytes() {
+    let root = fixture_project();
+    let environment = resolve_project(&root).unwrap();
+    let resolved_skill = environment
+        .project_resources
+        .iter()
+        .find(|resource| resource.kind == CapabilityKind::AgentSkill)
+        .unwrap()
+        .path
+        .canonicalize()
+        .unwrap();
+    let packaged_skill = root.join("skills/uze-e2e/SKILL.md").canonicalize().unwrap();
+
+    assert_eq!(resolved_skill, packaged_skill);
 }

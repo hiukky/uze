@@ -89,3 +89,8 @@ Source change: openspec/changes/validate-universal-agent-environment/
 Claude/Codex integration modules, an explicit Claude plugin importer, and
 unit/contract tests. `cargo test --lib` verifies the core without integration
 modules; real-harness conformance remains intentionally pending.
+
+2026-08-20: The opt-in Agent Skill playground probe found Codex CLI 0.148.0
+`VERIFIED` for `.agents/skills`, while Claude Code 2.1.237 was `NOT_EXPOSED`
+without filesystem projection. Both results are represented by their peer
+integration capability declarations.

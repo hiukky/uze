@@ -201,6 +201,27 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[test]
+    fn imports_the_same_skill_used_by_the_conformance_playground() {
+        let root =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("playground/agent-skill-conformance");
+        let imported = import_bundle(&root).unwrap();
+        let imported_skill = imported
+            .standard_items
+            .first()
+            .unwrap()
+            .path
+            .canonicalize()
+            .unwrap();
+        let project_skill = root
+            .join(".agents/skills/uze-e2e/SKILL.md")
+            .canonicalize()
+            .unwrap();
+
+        assert_eq!(imported.importer, "agent-plugin");
+        assert_eq!(imported_skill, project_skill);
+    }
+
     fn temp_bundle(label: &str) -> PathBuf {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)

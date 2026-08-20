@@ -13,12 +13,13 @@ pub enum CompatibilityRoute {
     Unsupported,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ExposureState {
     Available,
     NotExposed,
     Verified,
+    #[default]
     Unverified,
 }
 
@@ -28,6 +29,7 @@ pub struct HarnessCapabilities {
     pub native: BTreeSet<CapabilityKind>,
     pub adaptable: BTreeSet<CapabilityKind>,
     pub degraded: BTreeSet<CapabilityKind>,
+    pub exposure: ExposureState,
     pub evidence: String,
 }
 
@@ -72,7 +74,7 @@ pub fn route(capability: &Capability, harness: &HarnessCapabilities) -> RouteDec
 
     RouteDecision {
         route,
-        exposure: ExposureState::Unverified,
+        exposure: harness.exposure,
         rationale,
         evidence: harness.evidence.clone(),
     }
