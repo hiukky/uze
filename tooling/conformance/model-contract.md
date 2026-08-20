@@ -18,10 +18,12 @@ harness version
 PackageId, resource identities and exposure strategy
 ```
 
-The initial service uses the official pinned `server-b7728` image tag. Before
-calling a test reproducible across machines, record the resolved image digest
-as well. It enables `--jinja` because the selected model's chat template is
-part of tool-calling behavior.
+The initial service uses the official `server-b7728` image tag. The image
+resolved during the laboratory spike to
+`sha256:9945b5afed75c3f09a5ca73c1aadd277101922a243c09a91c4931a85312be805`.
+Record that digest (or a deliberately updated one) with every result. It
+enables `--jinja` because the selected model's chat template is part of
+tool-calling behavior.
 
 A model is acceptable for the first L2 only when it can reliably follow an
 explicit instruction, emit a structured tool call and return a deterministic
