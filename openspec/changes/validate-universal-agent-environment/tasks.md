@@ -8,6 +8,9 @@
 - [x] 1.3 Confirm `docs/adr/004-implement-the-uze-core-in-rust.md` exists
       and records Rust as the core implementation language without making ACP
       a required runtime dependency.
+- [x] 1.4 Create ADR 005 recording Claude Code and Codex as the first peer
+      harness integrations, and record that Claude plugin import is a foreign
+      importer concern rather than canonical UZE representation.
 
 ## 2. Portable project composition
 
@@ -23,14 +26,14 @@
 
 ## 3. Capability assessment
 
-- [x] 3.1 Encode evidence for project/harness discovery and optional
-      capabilities for Claude Code, Codex, Cursor, and OpenCode; exclude
-      Windsurf/Devin Desktop from the active matrix.
+- [x] 3.1 Keep named-harness evidence outside UZE domain rules; let the first
+      peer Claude Code and Codex integrations supply only the declarations
+      needed for the Agent Skill path.
 - [x] 3.2 Implement the domain split: ACP-negotiated protocol capabilities
       versus project/harness capabilities.
-- [x] 3.3 Implement `STANDARD`, `NATIVE`, `ADAPTABLE`, and `UNSUPPORTED`
-      outcomes with mandatory evidence-based rationale; represent missing
-      verification as `UNSUPPORTED` with an `unverified` rationale.
+- [x] 3.3 Separate representation provenance from `NATIVE`, `ADAPTABLE`,
+      `DEGRADED`, and `UNSUPPORTED` route outcomes, and represent exposure as
+      unverified until a real-harness conformance test exists.
 - [x] 3.4 Verify that incompatible hook, permission, command, and subagent
       semantics cannot be promoted by directory generation alone.
 
@@ -58,8 +61,9 @@
 - [x] 5.3 Build or select one representative project containing AGENTS.md,
       an Agent Skill, MCP configuration, and one or more optional
       harness-specific enhancements.
-- [x] 5.4 Resolve and report that project against Claude Code, Codex, Cursor,
-      and OpenCode; manually review every fallback and unsupported outcome.
+- [x] 5.4 Resolve and report that project through peer Claude Code and Codex
+      integrations; keep their Agent Skill exposure explicitly unverified
+      pending opt-in real-harness conformance tests.
 - [x] 5.5 Confirm the PoC never requires per-vendor core configuration,
       never silently synchronizes vendor directories, and clearly identifies
       all standards gaps that remain unresolved.
@@ -69,3 +73,25 @@
 - [x] 6.1 Run `bunx likec4@latest validate docs/architecture/likec4` (or the
       project's `arch:validate` script, once one exists) after implementation
       changes to the composition layer, runtime integration, or relationships.
+
+## 7. Peer-integration boundary correction
+
+- [x] 7.1 Extract a harness-agnostic core model for project resources,
+      effective environment, capability provenance, compatibility routing, and
+      exposure/verification.
+- [x] 7.2 Replace the fixed `Harness` enum and support matrix with an
+      integration-supplied harness capability description.
+- [x] 7.3 Move foreign Claude plugin recognition to a specialized importer;
+      preserve the explicit compatibility-import CLI behavior.
+- [x] 7.4 Make the project resolver discover standard project resources only;
+      do not scan named vendor directories in the core.
+- [x] 7.5 Add peer Claude and Codex integration implementations for the
+      standard Agent Skill validation path without a source/destination flow.
+- [x] 7.6 Add router unit tests and integration-contract tests using fake
+      harness capabilities; keep them independent of real executables.
+- [x] 7.7 Preserve and update CLI tests to confirm inspection remains
+      read-only and standard resources are not copied.
+- [x] 7.8 Update LikeC4 to show a harness-agnostic UZE Core and peer Claude /
+      Codex integrations; validate the model.
+- [x] 7.9 Run Rust, OpenSpec, and LikeC4 validation and document which claims
+      remain unverified until opt-in real-harness conformance tests exist.

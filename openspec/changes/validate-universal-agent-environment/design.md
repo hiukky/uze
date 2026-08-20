@@ -1,9 +1,10 @@
 ## Context
 
 See `proposal.md` for motivation and `research-notes.md` for the historical
-cross-harness evidence. The active targets are Claude Code, Codex, Cursor,
-and OpenCode. Windsurf/Devin Desktop is not an active target, and no new
-target is introduced by this change.
+cross-harness evidence. Claude Code and Codex are the first real integrations
+for this increment. Cursor, OpenCode, Windsurf/Devin Desktop, and future
+harnesses are peers in the architecture, but are not implementation targets
+in this increment.
 
 The preceding design correctly adopted AGENTS.md, Agent Skills, and MCP, but
 still centered UZE on importing a vendor bundle into a single capability graph
@@ -83,6 +84,41 @@ filesystem synchronizer as the primary product—were rejected because both
 would make vendor configuration, rather than portable project composition,
 the product's core abstraction. See ADR-001 and ADR-003.
 
+For the PoC, the effective environment contains only `project_resources`.
+The model reserves composition layers for global, user, package, and runtime
+resources without implementing them now.
+
+### 1a. Keep the core harness-agnostic; make integrations peers
+
+The UZE core SHALL operate on an effective environment, portable capabilities,
+and a capability description supplied by an integration. It SHALL not contain
+a named-harness support matrix, vendor-directory rules, or a source/target
+relationship between harnesses.
+
+```text
+                 UZE Core
+        Effective Environment + Router
+                     │
+             Integration Contract
+              ┌──────┴──────┐
+              ▼             ▼
+     Claude Integration   Codex Integration
+              │             │
+          Claude Code      Codex
+```
+
+An integration supplies its identifier and `HarnessCapabilities`; the router
+uses those inputs rather than branches over named harnesses. Removing a
+Claude integration therefore leaves the core meaningful. Adding Cursor is a
+new integration plus tests unless Cursor introduces a genuinely new capability
+kind.
+
+An **importer** is a separate boundary: it consumes a foreign representation
+and produces core capabilities. `ClaudePluginImporter` may know
+`.claude-plugin/plugin.json`; `ClaudeIntegration` uses an effective
+environment to work with Claude Code. Neither is a source or destination in a
+conversion pipeline. See ADR-005.
+
 ### 2. Keep standards and runtime protocols at distinct boundaries
 
 The conceptual architecture is:
@@ -133,21 +169,20 @@ of such proxies. Neither is inserted silently, used to transform portable
 project resources, nor required for a runtime that lacks ACP. This is a
 hard-to-reverse boundary; see ADR-003.
 
-### 4. Classify only the remaining project/harness capability gap
+### 4. Separate representation, route, and exposure
 
 The classifier distinguishes two domains:
 
 | Domain | Source of truth | Treatment by UZE |
 | --- | --- | --- |
 | Protocol capabilities | ACP negotiation, when ACP is selected | Preserve and report advertised support; do not re-discover or re-label it. |
-| Project/harness capabilities | Documented project conventions and runtime behavior | Classify as `STANDARD`, `NATIVE`, `ADAPTABLE`, or `UNSUPPORTED`, with evidence and a visible outcome. |
+| Capability representation | External standard, native source, or importer provenance | Record `STANDARD`, `NATIVE`, `UZE`, or `FOREIGN`; this does not claim availability in a harness. |
+| Compatibility route | Capability plus integration-supplied `HarnessCapabilities` | Report `NATIVE`, `ADAPTABLE`, `DEGRADED`, or `UNSUPPORTED`, with evidence. |
+| Exposure / verification | Integration result or conformance test | Report whether the route is `AVAILABLE`, `NOT_EXPOSED`, `VERIFIED`, or `UNVERIFIED` as applicable. |
 
-`STANDARD` means an open standard is directly usable without transformation;
-`NATIVE` means a harness-specific capability can enhance the selected runtime
-without changing the portable core; `ADAPTABLE` means a safe, explicit adapter
-exists; `UNSUPPORTED` means no safe equivalence is known. A lack of verified
-evidence yields `UNSUPPORTED` with an “unverified” rationale rather than a
-fictional fifth category or a guessed mapping.
+The initial implementation keeps only the fields necessary for the Agent Skill
+PoC, but preserves the separation. In particular, a standard representation
+does not by itself prove that a harness has discovered or exposed it.
 
 Hooks, custom commands, subagents, proprietary permission models, memory,
 and experimental lifecycle extensions remain potential harness/project gaps.
@@ -167,6 +202,13 @@ ACP-negotiated, explicit fallback, or unsupported. It never treats a generated
 file or proxy as evidence that semantics are equivalent. A compatibility import
 of a declarative plugin bundle remains available, but its contents are treated
 as evidence and optional enhancements—not as canonical UZE configuration.
+
+### 6. Keep importers and filesystem fallback outside normal composition
+
+Project discovery starts with standard project resources. Foreign formats are
+read only by explicit importers. Filesystem projection is not implemented in
+this increment and remains a fallback after standard, native integration, and
+explicit adaptation have been considered.
 
 ## Standards Coverage / Remaining Gap
 
@@ -198,10 +240,13 @@ as evidence and optional enhancements—not as canonical UZE configuration.
 
 ## Migration Plan
 
-This is a pre-implementation revision. No deployed data, wire protocol, or
-generated configuration must migrate. Future work replaces the planned
-universal capability-graph/projector PoC with the composition and runtime
-selection flow above.
+The inspector's static `Harness` enum, evidence matrix, and vendor-directory
+discovery move behind integration and importer boundaries. The CLI remains
+read-only. Existing bundle import remains available as explicit foreign-format
+import; its Claude-specific discovery moves to `ClaudePluginImporter`.
+
+The LikeC4 model is updated in the same increment to show the harness-agnostic
+core and peer Claude/Codex integration containers.
 
 ## Open Questions
 

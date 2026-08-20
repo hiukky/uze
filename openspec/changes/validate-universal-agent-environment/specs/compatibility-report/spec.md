@@ -30,11 +30,18 @@ classification labels to ACP-negotiated protocol capabilities.
 - **THEN** the report identifies them as ACP-negotiated protocol capabilities
 - **AND THEN** it does not recalculate support from a static harness matrix
 
-### Requirement: Explain every project/harness outcome
-For every assessed optional project/harness capability, the report SHALL show
-its `STANDARD`, `NATIVE`, `ADAPTABLE`, or `UNSUPPORTED` outcome, rationale,
-and any generated artifact or selected adapter. It SHALL distinguish
-unverified evidence from a confirmed lack of an equivalent.
+### Requirement: Explain representation, route, and exposure independently
+For every assessed project/harness capability, the report SHALL show its
+representation provenance, compatibility route, exposure or verification
+state, rationale, and any selected adapter. It SHALL distinguish unverified
+evidence from a confirmed lack of an equivalent and SHALL NOT use a standard
+representation as proof of exposure.
+
+#### Scenario: Standard capability is unverified for exposure
+- **WHEN** an Agent Skill has a standard representation but no conformance
+  test has verified its exposure in an integration
+- **THEN** the report identifies the standard representation and an
+  `UNVERIFIED` exposure state separately
 
 #### Scenario: Unsupported unverified enhancement
 - **WHEN** no primary documentation verifies a safe equivalent for an

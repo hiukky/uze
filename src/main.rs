@@ -1,7 +1,11 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use uze::{Result, build_report, import_bundle, project::resolve_project, report::render_text};
+mod importer;
+mod integrations;
+use uze::{Result, build_report, project::resolve_project, report::render_text};
+
+use integrations::{claude::ClaudeIntegration, codex::CodexIntegration};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -46,7 +50,10 @@ fn main() {
 fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Command::Inspect { project, format } => {
-            let report = build_report(&resolve_project(project)?);
+            let claude = ClaudeIntegration;
+            let codex = CodexIntegration;
+            let integrations: [&dyn uze::integration::IntegrationPort; 2] = [&claude, &codex];
+            let report = build_report(&resolve_project(project)?, &integrations);
             match format {
                 OutputFormat::Text => print!("{}", render_text(&report)),
                 OutputFormat::Json => println!(
@@ -57,7 +64,7 @@ fn run(cli: Cli) -> Result<()> {
             }
         }
         Command::ImportBundle { bundle, format } => {
-            let imported = import_bundle(bundle)?;
+            let imported = importer::import_bundle(bundle)?;
             match format {
                 OutputFormat::Text => {
                     println!("Compatibility fallback import: {}", imported.root.display());
