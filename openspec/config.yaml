@@ -1,0 +1,60 @@
+schema: adr-driven
+
+# Project context (optional)
+# This is shown to AI when creating artifacts.
+# Add your tech stack, conventions, style guides, domain knowledge, etc.
+# Example:
+#   context: |
+#     Tech stack: TypeScript, React, Node.js
+#     We use conventional commits
+#     Domain: e-commerce platform
+context: |
+  Architecture documentation: the system architecture is modeled in LikeC4
+  (C4 model DSL) under docs/architecture/likec4/ (specification + model +
+  views, `.c4` files) - this is the structured, diagrammable source of
+  truth. Validate with `<pkg-runner> arch:validate` (script name may differ
+  per project - check package.json/justfile/Makefile).
+
+  Architecture decisions: significant, hard-to-reverse decisions get a
+  numbered ADR under docs/adr/ (Nygard style: Context/Decision/
+  Consequences), generated via the `adr` artifact in the OpenSpec schema
+  (optional, only when a change's design.md contains a qualifying
+  decision) or recorded ad hoc with /std:adr.
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+# Example:
+#   rules:
+#     proposal:
+#       - Keep proposals under 500 words
+#       - Always include a "Non-goals" section
+#     tasks:
+#       - Break tasks into chunks of max 2 hours
+rules:
+  design:
+    - If this change adds/removes a container or component, adds an
+      external dependency, or changes a relationship between them, update
+      the LikeC4 model under docs/architecture/likec4/ as part of this
+      change (not a follow-up), and note the update in this design doc.
+    - If this change makes an architecturally significant, hard-to-reverse
+      decision (new external dependency, irreversible technology choice,
+      a pattern costly to change later), flag it here for the `adr`
+      artifact - don't duplicate the full write-up.
+  tasks:
+    - If design.md notes a required LikeC4 model update, include a task
+      for it that runs the project's arch-validate script before
+      considering the change done.
+    - If the `adr` artifact produced entries, include a task confirming
+      the matching docs/adr/NNN-*.md file(s) exist.
+
+# Per-operation guidance (optional)
+# Add advisory guidance for how apply and archive work should be conducted.
+# This is separate from artifact rules above.
+# Example:
+#   operations:
+#     apply:
+#       guidance:
+#         - Keep test summaries concise
+#     archive:
+#       guidance:
+#         - Summarize the archive outcome before finishing
