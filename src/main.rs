@@ -1,8 +1,8 @@
 //! Thin CLI presentation over `UzeApplication`.
 
-use std::path::PathBuf;
+use std::{io::IsTerminal, path::PathBuf};
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use uze::{
     Result, UzeApplication, UzeHome,
     application::{DoctorReport, PluginInspection, RemovePluginReport},
@@ -16,7 +16,7 @@ use uze::{
 )]
 struct Cli {
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -67,8 +67,22 @@ fn main() {
 }
 
 fn run(cli: Cli) -> Result<()> {
-    let app = UzeApplication::from_env(UzeHome::from_env()?)?;
-    match cli.command {
+    let home = UzeHome::from_env()?;
+    let Some(command) = cli.command else {
+        if std::io::stdout().is_terminal() && std::io::stdin().is_terminal() {
+            return uze::tui::run(home);
+        }
+        Cli::command()
+            .print_help()
+            .map_err(|source| uze::UzeError::Write {
+                path: PathBuf::from("stdout"),
+                source,
+            })?;
+        println!();
+        return Ok(());
+    };
+    let app = UzeApplication::from_env(home)?;
+    match command {
         Command::Add { source, format } => {
             let report = app.add_plugin(source)?;
             match format {

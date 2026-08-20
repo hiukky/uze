@@ -34,6 +34,15 @@ fn temporary_home(label: &str) -> PathBuf {
     std::env::temp_dir().join(format!("uze-{label}-{}-{nonce}", std::process::id()))
 }
 
+#[test]
+fn no_subcommand_stays_headless_when_stdout_is_not_a_terminal() {
+    let output = Command::new(env!("CARGO_BIN_EXE_uze")).output().unwrap();
+    assert!(output.status.success());
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("Manage one local agent plugin environment"));
+    assert!(text.contains("Usage:"));
+}
+
 /// Writes a fake `claude`/`codex` executable that understands `--version`
 /// and just enough of `mcp get`/`mcp add`/`mcp remove` (tracked via a
 /// sibling state directory of touched files, one per registered entry

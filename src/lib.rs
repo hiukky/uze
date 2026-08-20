@@ -20,6 +20,7 @@ pub mod router;
 pub mod runtime;
 pub mod state;
 pub mod store;
+pub mod tui;
 
 pub use application::UzeApplication;
 pub use bundle::ImportedBundle;

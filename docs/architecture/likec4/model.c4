@@ -62,6 +62,10 @@ model {
         description 'Package-centric product facade. CLI and future TUI invoke setup, add, list, inspect, remove, and doctor here; it composes Store, Engine, plans, receipts, and reconciliation without duplicating lifecycle logic.'
       }
 
+      terminalUi = component 'Terminal UI' {
+        description 'Keyboard-first Ratatui presentation. It owns only view state and terminal cleanup; short workers create the Application facade for product actions.'
+      }
+
       standardDiscovery -> environmentResolver 'standard resources'
       uzeHome -> uzeStore 'owned paths'
       uzeStore -> environmentResolver 'UZE-installed package resources'
@@ -73,6 +77,7 @@ model {
       application -> environmentResolver 'package composition'
       application -> integrationContract 'delivery, inspection, and safe detach'
       application -> integrationState 'receipt ledger and reconciliation'
+      terminalUi -> application 'list, inspect, doctor, add, setup, and remove'
     }
 
     claudeIntegration = container 'Claude Integration' {
