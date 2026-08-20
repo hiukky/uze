@@ -29,6 +29,16 @@ token. The lab deliberately does not choose or download a GGUF yet: behavior
 must be recorded against a concrete model hash, not an unpinned “latest”
 download.
 
+## First candidate, not an automatic download
+
+The first candidate is the official
+[`Qwen/Qwen3-8B-GGUF`](https://huggingface.co/Qwen/Qwen3-8B-GGUF) release,
+initially `Q4_K_M`. It is an 8.2B model with a llama.cpp/Jinja usage path and
+documented agent/function-calling capability. This is a starting hypothesis,
+not a compatibility result: the exact repository revision, file SHA256 and
+observed tool-call behavior must be written into L2 evidence before a test is
+accepted as reproducible.
+
 ## Compose topology
 
 ```text

@@ -16,12 +16,16 @@
 
 ## Tooling
 
-- [ ] Add the standalone Rust conformance runner and its deterministic process
+- [x] Add the standalone Rust conformance runner and deterministic process
       contract tests.
-- [ ] Add the minimal Docker Compose topology, read-only model mount contract,
+- [x] Add the minimal Docker Compose topology, read-only model mount contract,
       and security defaults.
-- [ ] Reuse the Plugin-First fixture for dynamic Skill and MCP proof tokens.
-- [ ] Add structured attachment/discovery/behavioral evidence and filters.
+- [x] Reuse the Plugin-First fixture through per-run materialization with
+      distinct dynamic Skill/MCP proof channels; canonical Store input is
+      immutable.
+- [x] Define structured attachment/discovery/behavior evidence states in the
+      test-only runner. Harness-specific output adapters and CLI filters remain
+      pending.
 
 ## Verification
 
