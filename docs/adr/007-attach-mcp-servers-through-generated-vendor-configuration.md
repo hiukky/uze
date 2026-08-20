@@ -196,3 +196,28 @@ mechanism, if either harness documents one) is future work, not required to
 consider this ADR's core claim — transparent, harness-generated MCP
 configuration — proven: `CONFIGURATION VERIFIED` and `DISCOVERY VERIFIED`
 (Claude) are both real and live on the operator's actual machine.
+
+2026-08-20: Follow-up, without any dangerous bypass, to characterize the
+approval gap precisely rather than leave it as a black box. Claude Code's
+non-interactive `--allowedTools=mcp__<server>__<tool>` (`=` syntax —
+`<tools...>` is variadic and swallows the prompt if given
+space-separated before it) genuinely resolves the approval step:
+`permission_denials` was empty on every subsequent run, confirmed across
+five real, paid API calls (~$0.20 total). The remaining obstacle is
+distinct and smaller than "approval": in short-lived, non-interactive
+`-p` sessions, the (economical `haiku`) model repeatedly either answered
+from the unrelated, still-installed `uze-e2e` Agent Skill instead of
+calling the MCP tool, or reported the MCP tool absent from its "deferred
+tools list" even with the server confirmed `✔ Connected` by `claude mcp
+get` moments earlier — suggesting MCP tool discovery in Claude's headless
+mode is not immediately queryable the same way it is in an interactive
+session, independent of the approval question. Codex's
+`--ask-for-approval never` gap was not re-attempted with a non-dangerous
+alternative in this pass. Not pursued further to avoid continuing to
+spend real, paid API calls chasing a secondary discovery quirk once the
+primary approval question was already answered; this is recorded as the
+precise, narrower remaining gap rather than left as the original, broader
+"approval blocks everything" characterization. Does not change the
+verdict: `CONFIGURATION VERIFIED` and `DISCOVERY VERIFIED` remain the
+real, live, proven claims; full `BEHAVIORAL VERIFIED` for MCP is future
+work with a now-narrower, better-understood cause.
