@@ -12,3 +12,12 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 toml = "0.9"
+
+# Used only by the MCP conformance fixture binary below (see ADR-007); the
+# `uze` library/binary source itself never imports these.
+rmcp = { version = "0.1", features = ["server", "transport-io", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std"] }
+
+[[bin]]
+name = "uze-mcp-conformance-fixture"
+path = "tests/fixtures/bin/mcp_conformance_fixture.rs"

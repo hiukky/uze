@@ -143,6 +143,7 @@ fn exposure_mechanism(mechanism: &crate::exposure::ExposureMechanism) -> &'stati
         crate::exposure::ExposureMechanism::ManagedUserScopeReference { .. } => {
             "MANAGED_USER_SCOPE_REFERENCE"
         }
+        crate::exposure::ExposureMechanism::ManagedVendorConfig { .. } => "MANAGED_VENDOR_CONFIG",
         crate::exposure::ExposureMechanism::Unsupported { .. } => "UNSUPPORTED",
     }
 }

@@ -39,7 +39,7 @@ model {
       }
 
       uzeStore = component 'UZE Store' {
-        description 'Installs external Agent Plugin packages once and preserves plugin.json plus skills without a UZE package manifest.'
+        description 'Installs external Agent Plugin packages once and preserves plugin.json, skills, and mcp.json without a UZE package manifest.'
       }
 
       capabilityRouter = component 'Capability Router' {

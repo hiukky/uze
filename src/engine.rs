@@ -1,7 +1,7 @@
 // ADR-005: the Engine composes peer-harness inputs without named harness rules.
 use crate::{
     capability::{Capability, CapabilityKind, Representation},
-    error::Result,
+    error::{Result, UzeError},
     project::{EffectiveEnvironment, Resource, resolve_project_resources},
     store::{PackageId, UzeStore},
 };
@@ -54,21 +54,70 @@ impl UzeEngine {
         for id in packages {
             let package = self.store.package(id)?;
             let skills_root = package.root.join("skills");
-            for path in crate::project::files_named(&skills_root, "SKILL.md")? {
-                let payload = crate::project::read_file(&path)?;
-                resources.push(Resource::from_package(
-                    package.id.clone(),
-                    package.root.clone(),
-                    Capability {
-                        kind: CapabilityKind::AgentSkill,
-                        representation: Representation::Standard,
-                        path,
-                        payload,
-                    },
-                ));
+            if skills_root.is_dir() {
+                for path in crate::project::files_named(&skills_root, "SKILL.md")? {
+                    let payload = crate::project::read_file(&path)?;
+                    resources.push(Resource::from_package(
+                        package.id.clone(),
+                        package.root.clone(),
+                        Capability {
+                            kind: CapabilityKind::AgentSkill,
+                            representation: Representation::Standard,
+                            path,
+                            payload,
+                        },
+                    ));
+                }
             }
+            resources.extend(mcp_resources(&package.id, &package.root)?);
         }
         resources.sort_by_key(|resource| resource.identity());
         Ok(resources)
     }
+}
+
+/// Discovers a package's optional root-level `mcp.json` (Agent Plugins 1.0
+/// shape: `{"mcpServers": {"<name>": {"command", "args", ...}}}`, the same
+/// convention Claude Code's and Codex's own plugin systems already expect —
+/// see ADR-007) into one `Resource` per declared server. A package
+/// declaring more than one server produces resources that share one
+/// `Resource::identity()` (they share the same `mcp.json` path) — an
+/// accepted limitation, not solved here; the tracer bullet needs exactly
+/// one server per package.
+fn mcp_resources(id: &PackageId, package_root: &std::path::Path) -> Result<Vec<Resource>> {
+    let manifest_path = package_root.join("mcp.json");
+    if !manifest_path.is_file() {
+        return Ok(Vec::new());
+    }
+    let payload = crate::project::read_file(&manifest_path)?;
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&payload).map_err(|source| UzeError::Json {
+            path: manifest_path.clone(),
+            source,
+        })?;
+    let servers = manifest
+        .get("mcpServers")
+        .and_then(serde_json::Value::as_object);
+    let Some(servers) = servers else {
+        return Ok(Vec::new());
+    };
+    let mut entries: Vec<(&String, &serde_json::Value)> = servers.iter().collect();
+    entries.sort_by_key(|(name, _)| name.as_str());
+    entries
+        .into_iter()
+        .map(|(_name, config)| {
+            let payload = serde_json::to_vec(config)
+                .expect("mcp server config re-serialization is infallible");
+            Ok(Resource::from_package(
+                id.clone(),
+                package_root.to_path_buf(),
+                Capability {
+                    kind: CapabilityKind::Mcp,
+                    representation: Representation::Standard,
+                    path: manifest_path.clone(),
+                    payload,
+                },
+            ))
+        })
+        .collect()
 }

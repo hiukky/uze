@@ -35,6 +35,10 @@ use opencode::OpenCodeIntegration;
 
 const PROOF: &str = "UZE_E2E_SKILL_PROOF_20260820";
 
+/// Deliberately independent of `PROOF` (see ADR-007) so the Agent Skills
+/// and MCP conformance suites stay separately verifiable.
+const MCP_PROOF: &str = "UZE_MCP_E2E_CONFORMANCE_PROOF_20260820";
+
 struct SharedStoreFixture {
     root: PathBuf,
     home: UzeHome,
@@ -167,6 +171,69 @@ fn shared_store_fixture(label: &str) -> SharedStoreFixture {
         home,
         resource,
         workspace,
+    }
+}
+
+fn mcp_package_fixture() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/packages/agent-plugin-mcp")
+}
+
+/// Copies the MCP fixture package into `dest_dir` with its `mcp.json`
+/// placeholder command rewritten to the real, test-build-resolved path of
+/// the fixture MCP server binary — see
+/// `tests/fixtures/packages/agent-plugin-mcp/README.md`. Duplicated in
+/// `tests/cli.rs`, which is a separate test binary; kept small enough that
+/// sharing it isn't worth a test-support module.
+fn mcp_package_fixture_with_resolved_binary(dest_dir: &Path) -> PathBuf {
+    fs::create_dir_all(dest_dir).expect("mcp fixture destination is created");
+    fs::copy(
+        mcp_package_fixture().join("plugin.json"),
+        dest_dir.join("plugin.json"),
+    )
+    .expect("plugin.json copies");
+    let manifest =
+        fs::read_to_string(mcp_package_fixture().join("mcp.json")).expect("mcp.json is readable");
+    let resolved = manifest.replace(
+        "__UZE_MCP_FIXTURE_BINARY__",
+        env!("CARGO_BIN_EXE_uze-mcp-conformance-fixture"),
+    );
+    fs::write(dest_dir.join("mcp.json"), resolved).expect("resolved mcp.json writes");
+    dest_dir.to_path_buf()
+}
+
+struct SharedMcpFixture {
+    root: PathBuf,
+    home: UzeHome,
+    resource: Resource,
+}
+
+impl Drop for SharedMcpFixture {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+fn shared_mcp_fixture(label: &str) -> SharedMcpFixture {
+    let root = temporary_root(label);
+    let home = UzeHome::at(root.join("uze-home"));
+    let store = UzeStore::new(home.clone());
+    let package_dir = mcp_package_fixture_with_resolved_binary(&root.join("mcp-package"));
+    let installed = store
+        .install_agent_plugin(package_dir)
+        .expect("mcp fixture is a valid Agent Plugin 1.0 package");
+    let environment = UzeEngine::new(store)
+        .compose(std::slice::from_ref(&installed.id))
+        .expect("mcp fixture composes into an effective environment");
+    let resource = environment
+        .resources
+        .into_iter()
+        .next()
+        .expect("fixture contributes one MCP resource");
+
+    SharedMcpFixture {
+        root,
+        home,
+        resource,
     }
 }
 
@@ -528,6 +595,223 @@ fn runtime_phase_invokes_the_harness_plainly_after_setup_already_completed() {
     // No UZE artifact was ever written into the real project workspace —
     // both attachments live entirely under the isolated home.
     assert_clean_workspace(&fixture.workspace);
+}
+
+/// `CONFIGURATION VERIFIED` and `DISCOVERY VERIFIED` tiers for MCP (see
+/// ADR-007 / spec "MCP verification is reported in distinct,
+/// non-conflatable tiers"): confirms the harness's own config listing
+/// shows the UZE-registered entry, and separately whether it reports live
+/// stdio connectivity — neither requires a real model turn. Structurally
+/// distinct from the behavioral probe below so a configuration-only pass
+/// can never be read as behaviorally verified.
+#[test]
+#[ignore = "requires UZE_E2E_UZE_HARNESSES=claude,codex and real CLIs in PATH; always targets an isolated HOME/UZE_HOME, never the operator's real configuration"]
+fn mcp_configuration_and_discovery_are_verified_after_setup_and_add() {
+    if !enabled("claude") && !enabled("codex") {
+        eprintln!(
+            "skipped: set UZE_E2E_UZE_HARNESSES=claude,codex for the MCP configuration/discovery probe"
+        );
+        return;
+    }
+    let fixture = shared_mcp_fixture("mcp-configuration-discovery");
+    let isolated_home = fixture.root.join("home");
+    let claude = ClaudeIntegration::new(isolated_home.join(".claude"), fixture.home.clone());
+    let codex = CodexIntegration::new(isolated_home.join(".agents"), fixture.home.clone());
+    let entry_name = fixture
+        .resource
+        .attachment_entry_name()
+        .expect("mcp resource has a derivable entry name");
+
+    if enabled("claude") && claude.detect().present {
+        claude
+            .install(&fixture.home)
+            .expect("Claude setup succeeds");
+        let attached = claude
+            .attach(&fixture.resource)
+            .expect("Claude MCP attach succeeds");
+        assert!(attached.is_some());
+
+        let get_output = Command::new("claude")
+            .env("HOME", &isolated_home)
+            .args(["mcp", "get", &entry_name])
+            .output()
+            .expect("claude mcp get runs");
+        assert!(
+            get_output.status.success(),
+            "CONFIGURATION VERIFIED (claude): `claude mcp get {entry_name}` should succeed, stderr={}",
+            String::from_utf8_lossy(&get_output.stderr)
+        );
+        eprintln!(
+            "CONFIGURATION VERIFIED (claude mcp get {entry_name}):\n{}",
+            String::from_utf8_lossy(&get_output.stdout)
+        );
+
+        let list_output = Command::new("claude")
+            .env("HOME", &isolated_home)
+            .args(["mcp", "list"])
+            .output()
+            .expect("claude mcp list runs");
+        let list_stdout = String::from_utf8_lossy(&list_output.stdout);
+        let discovery_verified =
+            list_stdout.contains(&entry_name) && list_stdout.to_lowercase().contains("connect");
+        eprintln!(
+            "{} (claude mcp list):\n{list_stdout}",
+            if discovery_verified {
+                "DISCOVERY VERIFIED"
+            } else {
+                "DISCOVERY inconclusive (entry present but live connectivity not confirmed textually)"
+            }
+        );
+    }
+
+    if enabled("codex") && codex.detect().present {
+        codex.install(&fixture.home).expect("Codex setup succeeds");
+        let attached = codex
+            .attach(&fixture.resource)
+            .expect("Codex MCP attach succeeds");
+        assert!(attached.is_some());
+
+        let list_output = Command::new("codex")
+            .env("HOME", &isolated_home)
+            .args(["mcp", "list", "--json"])
+            .output()
+            .expect("codex mcp list --json runs");
+        let list_stdout = String::from_utf8_lossy(&list_output.stdout);
+        assert!(
+            list_output.status.success() && list_stdout.contains(&entry_name),
+            "CONFIGURATION VERIFIED (codex): `codex mcp list --json` should list {entry_name}, stdout={list_stdout}"
+        );
+        eprintln!("CONFIGURATION VERIFIED (codex mcp list --json):\n{list_stdout}");
+        let discovery_verified = list_stdout.to_lowercase().contains("connect")
+            || list_stdout.to_lowercase().contains("\"status\"");
+        eprintln!(
+            "{} (codex mcp list --json status field)",
+            if discovery_verified {
+                "DISCOVERY VERIFIED"
+            } else {
+                "DISCOVERY inconclusive (entry present but a live connectivity field was not found)"
+            }
+        );
+    }
+}
+
+/// `BEHAVIORAL VERIFIED` tier for MCP: after setup already completed
+/// (mirroring what `uze setup` + `uze add` already do, not a
+/// same-invocation preparation hack — same discipline as the Agent Skills
+/// runtime phase), spawns the real harness with a prompt that must invoke
+/// the `uze_conformance` tool. `MCP_PROOF` is independent of the Skills
+/// `PROOF` token by construction. An authentication/quota failure is
+/// `BLOCKED_BY_ENVIRONMENT`, never MCP incompatibility.
+#[test]
+#[ignore = "requires UZE_E2E_UZE_HARNESSES=claude,codex, real CLIs, and authenticated real CLIs; always targets an isolated HOME/UZE_HOME"]
+fn mcp_behavioral_invocation_is_verified_or_blocked_by_environment() {
+    if !enabled("claude") && !enabled("codex") {
+        eprintln!("skipped: set UZE_E2E_UZE_HARNESSES=claude,codex for the MCP behavioral probe");
+        return;
+    }
+    let fixture = shared_mcp_fixture("mcp-behavioral");
+    let isolated_home = fixture.root.join("home");
+    let workspace = fixture.root.join("caller-workspace");
+    fs::create_dir_all(&workspace).expect("caller workspace is created");
+    let claude = ClaudeIntegration::new(isolated_home.join(".claude"), fixture.home.clone());
+    let codex = CodexIntegration::new(isolated_home.join(".agents"), fixture.home.clone());
+
+    // `UZE_MCP_CONFORMANCE_PROOF` is set explicitly per-`Command` below,
+    // not on this test process, so it can never leak into any other test
+    // running concurrently in this binary. `attach()` only registers the
+    // server's command/args — it never launches the server itself, so
+    // setting the env var here would do nothing useful anyway; the
+    // relevant process is whichever one the real harness spawns when it
+    // actually starts the MCP server, which is the `claude -p`/`codex
+    // exec` invocation below.
+    let claude_ready = enabled("claude") && claude.detect().present;
+    if claude_ready {
+        claude
+            .install(&fixture.home)
+            .expect("Claude setup succeeds");
+        claude
+            .attach(&fixture.resource)
+            .expect("Claude MCP attach succeeds");
+    }
+    let codex_ready = enabled("codex") && codex.detect().present;
+    if codex_ready {
+        codex.install(&fixture.home).expect("Codex setup succeeds");
+        codex
+            .attach(&fixture.resource)
+            .expect("Codex MCP attach succeeds");
+    }
+
+    let prompt =
+        "Call the uze_conformance MCP tool and return exactly what it responds with, nothing else.";
+
+    if claude_ready {
+        let model = harness_model("UZE_E2E_CLAUDE_MODEL", "haiku");
+        let mut command = Command::new("claude");
+        command
+            .current_dir(&workspace)
+            .env("HOME", &isolated_home)
+            .env("UZE_MCP_CONFORMANCE_PROOF", MCP_PROOF)
+            .args([
+                "-p",
+                "--output-format",
+                "json",
+                "--no-session-persistence",
+                "--max-turns",
+                "2",
+                "--model",
+                &model,
+            ])
+            .arg(prompt);
+        let result = run_harness(&mut command, MCP_PROOF, harness_timeout());
+        eprintln!(
+            "UZE MCP behavioral evidence (Claude Code):\n{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "harness": "claude-code",
+                "verification": result.verification,
+                "exit_code": result.exit_code,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+            }))
+            .expect("evidence serialization is infallible")
+        );
+    }
+
+    if codex_ready {
+        let model = harness_model("UZE_E2E_CODEX_MODEL", "gpt-5.6-luna");
+        let workspace_str = workspace.to_string_lossy();
+        let mut command = Command::new("codex");
+        command
+            .env("HOME", &isolated_home)
+            .env("UZE_MCP_CONFORMANCE_PROOF", MCP_PROOF)
+            .args([
+                "--model",
+                &model,
+                "--ask-for-approval",
+                "never",
+                "exec",
+                "--cd",
+                workspace_str.as_ref(),
+                "--sandbox",
+                "read-only",
+                "--skip-git-repo-check",
+                "--ephemeral",
+            ])
+            .arg(prompt);
+        let result = run_harness(&mut command, MCP_PROOF, harness_timeout());
+        eprintln!(
+            "UZE MCP behavioral evidence (Codex):\n{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "harness": "codex",
+                "verification": result.verification,
+                "exit_code": result.exit_code,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+            }))
+            .expect("evidence serialization is infallible")
+        );
+    }
+
+    let _ = fs::remove_dir_all(&workspace);
 }
 
 #[test]

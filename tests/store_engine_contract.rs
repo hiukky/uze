@@ -13,6 +13,10 @@ fn package_fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/packages/agent-plugin-skill")
 }
 
+fn mcp_package_fixture() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/packages/agent-plugin-mcp")
+}
+
 fn temporary_home(label: &str) -> PathBuf {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -105,6 +109,41 @@ fn engine_composes_project_and_store_sources_into_one_effective_environment() {
     assert!(environment.resources.iter().any(|resource| {
         matches!(resource.origin, ResourceOrigin::Package { ref id, .. } if id == &package.id)
     }));
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// A package with only `mcp.json` (no `skills/`) composes into one `Mcp`
+/// resource, independently of Skill discovery — the two code paths never
+/// interfere with each other (see ADR-007 / design.md Non-Goals on why this
+/// fixture is deliberately separate from `agent-plugin-skill`).
+#[test]
+fn store_and_engine_compose_an_mcp_only_package_into_one_mcp_resource() {
+    let root = temporary_home("mcp-store");
+    let store = UzeStore::new(UzeHome::at(&root));
+    let package = store.install_agent_plugin(mcp_package_fixture()).unwrap();
+
+    assert!(package.root.join("mcp.json").is_file());
+    assert!(!package.root.join("skills").exists());
+    assert_eq!(
+        fs::read(package.root.join("mcp.json")).unwrap(),
+        fs::read(mcp_package_fixture().join("mcp.json")).unwrap()
+    );
+
+    let environment = UzeEngine::new(store)
+        .compose(std::slice::from_ref(&package.id))
+        .unwrap();
+    assert_eq!(environment.resources.len(), 1);
+    let resource = &environment.resources[0];
+    assert_eq!(resource.capability.kind, CapabilityKind::Mcp);
+    assert_eq!(resource.capability.representation, Representation::Standard);
+    assert_eq!(resource.capability.path, package.root.join("mcp.json"));
+
+    let config: serde_json::Value = serde_json::from_slice(&resource.capability.payload).unwrap();
+    assert_eq!(
+        config.get("command").and_then(|value| value.as_str()),
+        Some("__UZE_MCP_FIXTURE_BINARY__")
+    );
 
     fs::remove_dir_all(root).unwrap();
 }
