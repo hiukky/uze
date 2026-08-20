@@ -8,20 +8,20 @@ The initial route is deliberately narrow:
 
 ```text
 Claude Code ─┐
-Codex       ─┼── internal LiteLLM ── Groq
+Codex       ─┼── internal LiteLLM ── OpenAI
 OpenCode    ─┘
 ```
 
 The first gateway image is
 `docker.litellm.ai/berriai/litellm@sha256:468c25f35f3e5ec4e414974f00deab93337b1b4d9953cabcfd3722e59415f834`
 (observed LiteLLM `1.97.0`). The model alias exposed to harnesses is
-`uze-conformance`; the actual Groq model is a runtime environment value.
-The current documented default is `groq/openai/gpt-oss-20b`; the runner records
+`uze-conformance`; the actual OpenAI model is a runtime environment value.
+The current documented default is `gpt-4o-mini`; the runner records
 the concrete selected model rather than inferring it from this default.
 
 ## Credential and network rules
 
-- `GROQ_API_KEY` is injected into the `gateway` service only, from a shell
+- `OPENAI_API_KEY` is injected into the `gateway` service only, from a shell
   environment or CI secret.
 - Harnesses receive no provider key and have no direct egress network.
 - The gateway has no published host port, database, callbacks or telemetry

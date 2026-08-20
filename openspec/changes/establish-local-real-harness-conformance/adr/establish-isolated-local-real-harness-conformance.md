@@ -14,7 +14,7 @@ Core.
 
 UZE conformance is classified into L0 unit, L1 product contract/integration,
 L2 local real-harness E2E, and L3 opt-in vendor conformance. L2 lives under
-`tooling/conformance`, uses disposable Docker environments, and invokes the
+`e2e`, uses disposable Docker environments, and invokes the
 actual UZE and selected harness CLIs. Its runner owns only process
 configuration and evidence classification. Harness selection follows the
 ecosystem/provider matrix, rather than the original tracer bullets.

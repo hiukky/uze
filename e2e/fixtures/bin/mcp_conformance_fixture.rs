@@ -6,17 +6,32 @@
 //! token, so the two conformance suites stay independently verifiable.
 //! No network, database, external API, credentials, or LLM involved.
 
-use rmcp::{ServerHandler, ServiceExt, model::ServerInfo, tool, transport::io::stdio};
+use rmcp::{
+    ServerHandler, ServiceExt,
+    model::{ServerCapabilities, ServerInfo},
+    tool,
+    transport::io::stdio,
+};
 
 #[derive(Debug, Clone)]
 struct ConformanceServer {
     proof: String,
 }
 
+/// No fields are read; the tool takes no meaningful input. A single optional
+/// field exists only so the generated JSON Schema has a normal `properties`
+/// object instead of the field-less shape some MCP clients drop tools for.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct NoArgs {
+    #[allow(dead_code)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    unused: Option<String>,
+}
+
 #[tool(tool_box)]
 impl ConformanceServer {
     #[tool(description = "Returns the UZE MCP conformance proof value")]
-    fn uze_conformance(&self) -> String {
+    fn uze_conformance(&self, #[tool(aggr)] _args: NoArgs) -> String {
         self.proof.clone()
     }
 }
@@ -25,6 +40,10 @@ impl ConformanceServer {
 impl ServerHandler for ConformanceServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
+            // Some MCP clients only attempt tool discovery when the server
+            // explicitly advertises tool support here, even though this
+            // server always answers `tools/list`/`tools/call` regardless.
+            capabilities: ServerCapabilities::builder().enable_tools().build(),
             instructions: Some("UZE MCP conformance fixture".into()),
             ..Default::default()
         }

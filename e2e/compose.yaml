@@ -7,8 +7,8 @@ services:
     environment:
       # Deliberately passed only to LiteLLM. Harness containers talk to the
       # internal gateway and never receive provider credentials.
-      GROQ_API_KEY: ${GROQ_API_KEY:?set GROQ_API_KEY in the shell or CI secret}
-      UZE_CONFORMANCE_LITELLM_MODEL: ${UZE_CONFORMANCE_LITELLM_MODEL:-groq/llama-3.3-70b-versatile}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY in the shell or CI secret}
+      UZE_CONFORMANCE_LITELLM_MODEL: ${UZE_CONFORMANCE_LITELLM_MODEL:-gpt-4o-mini}
     volumes:
       - type: bind
         source: ./litellm-config.yaml
@@ -33,8 +33,8 @@ services:
   harness:
     profiles: ["manual"]
     build:
-      context: ../..
-      dockerfile: tooling/conformance/Dockerfile
+      context: ..
+      dockerfile: e2e/Dockerfile
       args:
         CLAUDE_VERSION: ${CLAUDE_VERSION:-2.1.237}
         CODEX_VERSION: ${CODEX_VERSION:-0.148.0}

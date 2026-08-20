@@ -4,7 +4,7 @@ FROM rust:1.97-bookworm AS uze-build
 
 WORKDIR /src
 COPY . .
-RUN cargo build --locked --release --bin uze
+RUN cargo build --locked --release --bin uze --bin uze-mcp-conformance-fixture
 
 FROM node:22-bookworm-slim AS harness-lab
 
@@ -13,7 +13,7 @@ ARG CODEX_VERSION=0.148.0
 ARG OPENCODE_VERSION=1.18.19
 
 RUN apt-get update \
-    && apt-get install --no-install-recommends -y ca-certificates git tini \
+    && apt-get install --no-install-recommends -y ca-certificates git ripgrep tini \
     && rm -rf /var/lib/apt/lists/*
 
 # The image build may use the network to obtain pinned CLI releases. Runtime
@@ -24,11 +24,23 @@ RUN npm install --global --no-audit --no-fund \
     "@openai/codex@${CODEX_VERSION}" \
     "opencode-ai@${OPENCODE_VERSION}"
 
-COPY --from=uze-build /src/target/release/uze /usr/local/bin/uze
-COPY tooling/conformance/entrypoint.sh /usr/local/bin/uze-harness-entrypoint
+# OpenCode resolves its official runtime plugin package on first use. Bake it
+# into the disposable image so a harness with intentionally no egress does
+# not try to reach npm at test time.
+RUN npm install --prefix /opt/opencode-runtime --omit=dev --no-audit --no-fund \
+    @opencode-ai/plugin \
+    @ai-sdk/openai-compatible
 
-RUN chmod 0755 /usr/local/bin/uze-harness-entrypoint \
+COPY --from=uze-build /src/target/release/uze /usr/local/bin/uze
+COPY --from=uze-build /src/target/release/uze-mcp-conformance-fixture /usr/local/bin/uze-mcp-conformance-fixture
+COPY e2e/fixtures/plugin-first-conformance /opt/uze-fixtures/plugin-first-conformance
+COPY e2e/opencode-models.json /opt/uze-e2e/opencode-models.json
+COPY e2e/entrypoint.sh /usr/local/bin/uze-harness-entrypoint
+COPY e2e/run-opencode-e2e.sh /usr/local/bin/uze-run-opencode-e2e
+
+RUN chmod 0755 /usr/local/bin/uze-harness-entrypoint /usr/local/bin/uze-run-opencode-e2e \
     && mkdir -p /work \
+    && chown -R node:node /opt/uze-fixtures \
     && chown node:node /work
 
 # `node` is the non-privileged user supplied by node:22-bookworm-slim (UID
