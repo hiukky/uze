@@ -40,6 +40,21 @@ pub enum ExposureMechanism {
         entry_name: String,
         source: PathBuf,
     },
+    /// A generated entry in a harness's own global/user-scope vendor
+    /// configuration (e.g. `~/.claude.json`'s `mcpServers`,
+    /// `~/.codex/config.toml`'s `[mcp_servers.*]`), produced by shelling
+    /// out to that harness's own management CLI rather than by a
+    /// filesystem symlink. This is the "Runtime Attachment" category named
+    /// in ADR-006: unlike `ManagedUserScopeReference`, there is no shared
+    /// discovery directory to point at, so this variant carries no generic
+    /// attach/detach method — the registration command differs per
+    /// harness, and each integration's own `attach()` reads this data to
+    /// build its own invocation. See ADR-007.
+    ManagedVendorConfig {
+        entry_name: String,
+        command: PathBuf,
+        args: Vec<String>,
+    },
     Unsupported {
         rationale: String,
     },
@@ -249,6 +264,18 @@ impl ExposurePlan {
                 // managed artifact: it is created/refreshed once via
                 // `ExposureMechanism::attach`, not per invocation, and must
                 // not be torn down when a `PreparedExposure` is dropped.
+                Ok(PreparedExposure {
+                    working_directory: workspace.to_path_buf(),
+                    arguments: Vec::new(),
+                    runtime_directory: None,
+                    managed: None,
+                })
+            }
+            ExposureMechanism::ManagedVendorConfig { .. } => {
+                // Same rationale as `ManagedUserScopeReference` above: the
+                // real attachment path for generated vendor config is each
+                // integration's own `attach()`, called once at `uze add`
+                // time, not `prepare()`.
                 Ok(PreparedExposure {
                     working_directory: workspace.to_path_buf(),
                     arguments: Vec::new(),

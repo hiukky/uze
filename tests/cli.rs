@@ -12,6 +12,24 @@ fn package_fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/packages/agent-plugin-skill")
 }
 
+/// Copies the MCP fixture package into `dest_dir` with its `mcp.json`
+/// placeholder command rewritten to the real, test-build-resolved path of
+/// the fixture MCP server binary — see
+/// `tests/fixtures/packages/agent-plugin-mcp/README.md`.
+fn mcp_package_fixture_with_resolved_binary(dest_dir: &std::path::Path) -> PathBuf {
+    let source =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/packages/agent-plugin-mcp");
+    std::fs::create_dir_all(dest_dir).unwrap();
+    std::fs::copy(source.join("plugin.json"), dest_dir.join("plugin.json")).unwrap();
+    let manifest = std::fs::read_to_string(source.join("mcp.json")).unwrap();
+    let resolved = manifest.replace(
+        "__UZE_MCP_FIXTURE_BINARY__",
+        env!("CARGO_BIN_EXE_uze-mcp-conformance-fixture"),
+    );
+    std::fs::write(dest_dir.join("mcp.json"), resolved).unwrap();
+    dest_dir.to_path_buf()
+}
+
 fn temporary_home(label: &str) -> PathBuf {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -20,22 +38,61 @@ fn temporary_home(label: &str) -> PathBuf {
     std::env::temp_dir().join(format!("uze-{label}-{}-{nonce}", std::process::id()))
 }
 
-/// Writes a fake `claude`/`codex` executable that only understands
-/// `--version`. Used to exercise `uze setup`'s detection and attachment
-/// lifecycle deterministically, independent of whether real harness CLIs
-/// are installed on the machine running this test.
+/// Writes a fake `claude`/`codex` executable that understands `--version`
+/// and just enough of `mcp get`/`mcp add`/`mcp remove` (tracked via a
+/// sibling state directory of touched files, one per registered entry
+/// name) to exercise `uze setup`'s detection and the full attachment
+/// lifecycle — Skills and MCP alike — deterministically, independent of
+/// whether real harness CLIs are installed on the machine running this
+/// test. Claude's `mcp add` shape is `--scope user --transport stdio
+/// <name> -- <command> [args...]`; Codex's is `<name> -- <command>
+/// [args...]` — the script skips known flags and takes the first
+/// remaining token as the entry name, working for both shapes.
 #[cfg(unix)]
 fn fake_harness_bin_dir(label: &str) -> PathBuf {
     use std::{fs, os::unix::fs::PermissionsExt};
 
     let dir = temporary_home(label);
     fs::create_dir_all(&dir).unwrap();
+    let mcp_state_dir = dir.join("mcp-state");
+    fs::create_dir_all(&mcp_state_dir).unwrap();
     for (name, version_line) in [
         ("claude", "9.9.9 (Fake Claude)"),
         ("codex", "codex-cli 9.9.9"),
     ] {
         let path = dir.join(name);
-        fs::write(&path, format!("#!/bin/sh\necho '{version_line}'\n")).unwrap();
+        let script = format!(
+            r#"#!/bin/sh
+if [ "$1" = "mcp" ]; then
+  case "$2" in
+    get)
+      [ -f "{state}/$3" ] && exit 0 || exit 1
+      ;;
+    remove)
+      rm -f "{state}/$3"
+      exit 0
+      ;;
+    add)
+      shift 2
+      name=""
+      while [ "$#" -gt 0 ]; do
+        case "$1" in
+          --scope|--transport) shift 2 ;;
+          --) shift; break ;;
+          *) name="$1"; shift ;;
+        esac
+      done
+      touch "{state}/$name"
+      exit 0
+      ;;
+    *) exit 0 ;;
+  esac
+fi
+echo '{version_line}'
+"#,
+            state = mcp_state_dir.display(),
+        );
+        fs::write(&path, script).unwrap();
         let mut permissions = fs::metadata(&path).unwrap().permissions();
         permissions.set_mode(0o755);
         fs::set_permissions(&path, permissions).unwrap();
@@ -220,4 +277,57 @@ fn setup_then_add_attaches_transparently_without_a_separate_sync_step() {
     let _ = std::fs::remove_dir_all(home);
     let _ = std::fs::remove_dir_all(uze_home);
     let _ = std::fs::remove_dir_all(fake_bin);
+}
+
+/// Deterministic end-to-end for MCP (see ADR-007): fake, PATH-resolvable
+/// `claude`/`codex` scripts that understand `mcp get`/`mcp add`/`mcp
+/// remove` well enough to prove `uze setup` + `uze add` registers the MCP
+/// fixture for both, idempotently, without a real harness binary. No
+/// network, credentials, or LLM involved — this only proves the
+/// attach/idempotency/removal mechanics, not real harness behavior.
+#[test]
+fn setup_then_add_attaches_the_mcp_fixture_idempotently_and_removal_works() {
+    let home = temporary_home("cli-mcp-home");
+    let uze_home = temporary_home("cli-mcp-uze-home");
+    let fake_bin = fake_harness_bin_dir("cli-mcp-bin");
+    let mcp_package_dir = temporary_home("cli-mcp-package");
+    let package = mcp_package_fixture_with_resolved_binary(&mcp_package_dir);
+    let path = format!("{}:{}", fake_bin.display(), std::env::var("PATH").unwrap());
+
+    let run = |args: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_uze"))
+            .env("UZE_HOME", &uze_home)
+            .env("HOME", &home)
+            .env("PATH", &path)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "uze {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+
+    run(&["setup"]);
+    let add = run(&["add", package.to_str().unwrap()]);
+    assert!(add.contains("Attached to claude-code: mcp:uze-uze-mcp-conformance"));
+    assert!(add.contains("Attached to codex: mcp:uze-uze-mcp-conformance"));
+
+    let mcp_state = fake_bin.join("mcp-state");
+    assert!(mcp_state.join("uze-uze-mcp-conformance").is_file());
+
+    // Idempotent: `add` a second time does not fail and does not require a
+    // real "already exists" overwrite behavior from either harness (the
+    // fake script's `get` reports success, so `attach()` never re-invokes
+    // `add`).
+    let second_add = run(&["add", package.to_str().unwrap()]);
+    assert!(second_add.contains("Attached to claude-code: mcp:uze-uze-mcp-conformance"));
+    assert!(second_add.contains("Attached to codex: mcp:uze-uze-mcp-conformance"));
+
+    let _ = std::fs::remove_dir_all(home);
+    let _ = std::fs::remove_dir_all(uze_home);
+    let _ = std::fs::remove_dir_all(fake_bin);
+    let _ = std::fs::remove_dir_all(mcp_package_dir);
 }

@@ -119,6 +119,10 @@ impl UzeStore {
         if source_skills.is_dir() {
             copy_tree(&source_skills, &destination.join("skills"))?;
         }
+        let source_mcp_manifest = source.join("mcp.json");
+        if source_mcp_manifest.is_file() {
+            copy_file(&source_mcp_manifest, &destination.join("mcp.json"))?;
+        }
 
         // The importer has already performed external-manifest safety checks.
         // Keeping this value live makes that boundary explicit and prevents an

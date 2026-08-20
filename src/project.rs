@@ -63,8 +63,20 @@ impl Resource {
         let ResourceOrigin::Package { id, .. } = &self.origin else {
             return None;
         };
-        let skill_name = self.capability.path.parent()?.file_name()?.to_str()?;
-        Some(format!("uze-{}-{}", id.as_str(), skill_name))
+        match self.capability.kind {
+            // A skill's path is `skills/<skill-name>/SKILL.md`: the parent
+            // directory name distinguishes multiple skills in one package.
+            CapabilityKind::AgentSkill => {
+                let skill_name = self.capability.path.parent()?.file_name()?.to_str()?;
+                Some(format!("uze-{}-{}", id.as_str(), skill_name))
+            }
+            // `mcp.json` sits at the package root, so its parent is the
+            // package directory itself — using it would just repeat the
+            // package id. The package id alone is enough today, since a
+            // package declares at most one MCP resource (see ADR-007).
+            CapabilityKind::Mcp => Some(format!("uze-{}", id.as_str())),
+            _ => None,
+        }
     }
 
     pub fn display_path(&self, environment_root: &Path) -> String {
@@ -258,5 +270,24 @@ mod tests {
             skill_capability("/project/.agents/skills/demo-skill/SKILL.md"),
         );
         assert_eq!(resource.attachment_entry_name(), None);
+    }
+
+    #[test]
+    fn mcp_package_resource_uses_the_package_id_alone() {
+        let id = PackageId::from_plugin_name("demo-package", Path::new("plugin.json")).unwrap();
+        let resource = Resource::from_package(
+            id,
+            PathBuf::from("/uze-home/store/packages/demo-package"),
+            Capability {
+                kind: CapabilityKind::Mcp,
+                representation: Representation::Standard,
+                path: PathBuf::from("/uze-home/store/packages/demo-package/mcp.json"),
+                payload: Vec::new(),
+            },
+        );
+        assert_eq!(
+            resource.attachment_entry_name().as_deref(),
+            Some("uze-demo-package")
+        );
     }
 }
