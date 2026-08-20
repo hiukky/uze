@@ -1,0 +1,57 @@
+services:
+  llama:
+    image: ${LLAMA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-b7728}
+    command:
+      - -m
+      - /models/${UZE_CONFORMANCE_MODEL_FILE:?set UZE_CONFORMANCE_MODEL_FILE}
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - -c
+      - ${UZE_CONFORMANCE_CONTEXT_SIZE:-8192}
+      - -n
+      - ${UZE_CONFORMANCE_PREDICT_TOKENS:-512}
+      - --jinja
+    volumes:
+      - type: bind
+        source: ${UZE_CONFORMANCE_MODEL_DIR:?set UZE_CONFORMANCE_MODEL_DIR}
+        target: /models
+        read_only: true
+    networks:
+      - conformance
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  harness:
+    profiles: ["manual"]
+    build:
+      context: ../..
+      dockerfile: tooling/conformance/Dockerfile
+      args:
+        CLAUDE_VERSION: ${CLAUDE_VERSION:-2.1.237}
+        CODEX_VERSION: ${CODEX_VERSION:-0.148.0}
+        OPENCODE_VERSION: ${OPENCODE_VERSION:-1.18.19}
+    depends_on:
+      - llama
+    environment:
+      LLAMA_BASE_URL: http://llama:8080/v1
+      HOME: /work/home
+      UZE_HOME: /work/uze-home
+    networks:
+      - conformance
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=128m,uid=1000,gid=1000,mode=700
+      - /work:rw,noexec,nosuid,size=128m,uid=1000,gid=1000,mode=700
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    command: ["sh"]
+
+networks:
+  conformance:
+    internal: true
