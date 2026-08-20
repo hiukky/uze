@@ -11,6 +11,19 @@ UZE must not infer support from similar directory names.
 
 **UZE ARCHITECTURE GENERALIZES WITH MINOR EXTENSIONS.**
 
+## Routed-provider spike — 2026-08-20
+
+The first isolated LiteLLM/Groq smoke reached the gateway, but the current
+execution network received `HTTP 403` with provider error code `1010` while
+listing the Groq model catalog. The default model also returned unavailable for
+the supplied project before model behavior could be tested. No provider key,
+prompt, or response payload was recorded.
+
+This is **`BLOCKED_BY_ENVIRONMENT`** evidence: it establishes neither a UZE
+incompatibility nor a LiteLLM protocol failure. The next route must use a
+provider reachable from the conformance environment (for example OpenRouter)
+and begin again with a gateway-only catalog/protocol smoke.
+
 The broader ecosystem reinforces the existing separation:
 
 ```text

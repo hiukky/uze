@@ -13,6 +13,9 @@
       recorded in `tooling/conformance/README.md`.
 - [ ] Prove each selected gateway-backed inference route and
       record protocol limitations independently from UZE compatibility.
+      Groq was attempted on 2026-08-20 and is currently
+      `BLOCKED_BY_ENVIRONMENT` (provider HTTP 403/1010 before behavioral
+      evidence); select a reachable provider for the next spike.
 
 ## Tooling
 

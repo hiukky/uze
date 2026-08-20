@@ -1,2 +1,3 @@
 /target/
 /tooling/conformance/target/
+/tooling/conformance/.env
