@@ -15,14 +15,18 @@ UZE must not infer support from similar directory names.
 
 The first isolated LiteLLM/Groq smoke reached the gateway, but the current
 execution network received `HTTP 403` with provider error code `1010` while
-listing the Groq model catalog. The default model also returned unavailable for
-the supplied project before model behavior could be tested. No provider key,
-prompt, or response payload was recorded.
+listing the Groq model catalog. Subsequent direct comparison established that
+this was an undeclared HTTP-client signature: the same container request with
+the explicit `uze-conformance-lab/0.1` User-Agent returned the catalog. The
+initial default model had also left the catalog available to this project; the
+route now defaults to `openai/gpt-oss-20b`. No provider key was recorded.
 
-This is **`BLOCKED_BY_ENVIRONMENT`** evidence: it establishes neither a UZE
-incompatibility nor a LiteLLM protocol failure. The next route must use a
-provider reachable from the conformance environment (for example OpenRouter)
-and begin again with a gateway-only catalog/protocol smoke.
+This was initially classified **`BLOCKED_BY_ENVIRONMENT`** and establishes
+neither a UZE incompatibility nor a LiteLLM protocol failure. The explicit
+gateway identity resolves that environmental condition. A gateway-only Chat
+Completions smoke then succeeded from the isolated harness network using the
+`uze-conformance` alias and a valid OpenAI-shaped response. This is transport
+evidence only; it does not yet claim harness discovery or behavior.
 
 The broader ecosystem reinforces the existing separation:
 

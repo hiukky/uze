@@ -16,6 +16,8 @@ The first gateway image is
 `docker.litellm.ai/berriai/litellm@sha256:468c25f35f3e5ec4e414974f00deab93337b1b4d9953cabcfd3722e59415f834`
 (observed LiteLLM `1.97.0`). The model alias exposed to harnesses is
 `uze-conformance`; the actual Groq model is a runtime environment value.
+The current documented default is `groq/openai/gpt-oss-20b`; the runner records
+the concrete selected model rather than inferring it from this default.
 
 ## Credential and network rules
 
@@ -24,6 +26,11 @@ The first gateway image is
 - Harnesses receive no provider key and have no direct egress network.
 - The gateway has no published host port, database, callbacks or telemetry
   configuration.
+- Provider requests declare the stable `uze-conformance-lab/0.1` User-Agent.
+  It identifies this non-browser API client to edge protections and must not be
+  replaced with a browser fingerprint.
+- Compose waits for LiteLLM's liveness endpoint before starting the harness;
+  `depends_on` alone is not treated as provider readiness.
 - Do not write keys, prompts, tool payloads, or provider responses to the
   ledger, repository, or ordinary test logs.
 

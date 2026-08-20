@@ -6,6 +6,10 @@ model_list:
     litellm_params:
       model: os.environ/UZE_CONFORMANCE_LITELLM_MODEL
       api_key: os.environ/GROQ_API_KEY
+      # Identify the automated lab to provider edge protections. This is an
+      # explicit client identity, not an attempt to impersonate a browser.
+      extra_headers:
+        User-Agent: uze-conformance-lab/0.1 (+https://github.com/hiukky/uze)
 
 # Do not configure callbacks, persistence, or a database: test prompts and
 # outputs must not be exported by the gateway.
