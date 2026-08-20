@@ -10,7 +10,8 @@ use std::{
 const PROOF: &str = "UZE_E2E_SKILL_PROOF_20260820";
 
 fn fixture_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("playground/native-agent-skill-discovery")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/native-harness/agent-skill-discovery")
 }
 
 fn enabled(harness: &str) -> bool {

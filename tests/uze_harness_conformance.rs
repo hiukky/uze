@@ -52,7 +52,7 @@ impl Drop for SharedStoreFixture {
 }
 
 fn package_fixture() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("playground/agent-plugin-package")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/packages/agent-plugin-skill")
 }
 
 fn enabled(harness: &str) -> bool {
