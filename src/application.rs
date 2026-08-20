@@ -97,7 +97,7 @@ impl UzeApplication {
                 .iter()
                 .map(|resource| PluginCapability {
                     identity: resource.identity(),
-                    name: resource.capability.name(),
+                    name: resource.name(),
                     kind: resource.capability.kind,
                 })
                 .collect(),
@@ -110,6 +110,7 @@ impl UzeApplication {
     /// Installs once, chooses package-native delivery first, attaches only
     /// remaining resources, and records every persistent side effect.
     pub fn add_plugin(&self, source: impl Into<PathBuf>) -> Result<AddPluginReport> {
+        let _mutation = crate::persistence::MutationLock::acquire(&self.home)?;
         let installed = self.store.install_agent_plugin(source.into())?;
         let environment = self.engine().compose(std::slice::from_ref(&installed.id))?;
         let resources: Vec<_> = environment.resources.iter().collect();
@@ -160,6 +161,7 @@ impl UzeApplication {
     /// Runs only selected, detected setup routines. No integration knowledge
     /// leaks to the caller beyond stable ids and reported facts.
     pub fn setup(&self, requested: Option<&str>) -> Result<Vec<SetupResult>> {
+        let _mutation = crate::persistence::MutationLock::acquire(&self.home)?;
         self.home.ensure_layout()?;
         let wanted = requested.map(normalize_harness_name).transpose()?;
         self.integrations
@@ -184,7 +186,25 @@ impl UzeApplication {
     /// matched receipts, re-reconcile, forget resolved ledger records, then
     /// delete UZE-owned package bytes.
     pub fn remove_plugin(&self, id: &str) -> Result<RemovePluginReport> {
-        let package = self.package_by_name(id)?;
+        let _mutation = crate::persistence::MutationLock::acquire(&self.home)?;
+        let package = match self.package_by_name(id) {
+            Ok(package) => package,
+            Err(UzeError::UnknownPackage(_)) => {
+                // There is no tombstone, so UZE cannot claim this package was
+                // previously installed. It can still make repeated remove a
+                // safe no-op when no ownership evidence remains.
+                if state::receipts(&self.home, Some(id))?.is_empty() {
+                    return Ok(RemovePluginReport::AlreadyAbsent {
+                        plugin: id.to_owned(),
+                    });
+                }
+                return Ok(RemovePluginReport::Blocked {
+                    report: self.reconcile(id),
+                    plan: PackageRemovalPlan::BlockedByInspection,
+                });
+            }
+            Err(error) => return Err(error),
+        };
         let report = self.reconcile(package.id.as_str());
         let plan = plan_remove(&report);
         let (detached_receipts, already_missing_receipts) = match &plan {
@@ -407,6 +427,9 @@ pub struct SetupResult {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "outcome", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum RemovePluginReport {
+    /// No Store registration or attachment receipt remained. This is a safe
+    /// idempotent outcome, not historical evidence that the package existed.
+    AlreadyAbsent { plugin: String },
     Removed {
         plugin: String,
         detached_receipts: Vec<String>,
@@ -513,6 +536,7 @@ fn package_store_inconsistency(package: &StoredPackage) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use std::{
+        cell::Cell,
         fs,
         time::{SystemTime, UNIX_EPOCH},
     };
@@ -547,6 +571,113 @@ mod tests {
         }
     }
 
+    struct PartialIntegration {
+        root: PathBuf,
+        attached: Cell<bool>,
+    }
+
+    struct AllResourceSymlinkIntegration {
+        root: PathBuf,
+    }
+
+    impl IntegrationPort for AllResourceSymlinkIntegration {
+        fn id(&self) -> &'static str {
+            "all-resources"
+        }
+
+        fn capabilities(&self) -> HarnessCapabilities {
+            HarnessCapabilities::default()
+        }
+
+        fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+            ExposurePlan {
+                representation: resource.capability.representation,
+                route: CompatibilityRoute::Adaptable,
+                verification: VerificationStatus::Unverified,
+                mechanism: ExposureMechanism::Unsupported {
+                    rationale: "test attachment is implemented directly".to_owned(),
+                },
+                evidence: "test".to_owned(),
+            }
+        }
+
+        fn attach_receipt(&self, resource: &Resource) -> Result<Option<AttachmentReceipt>> {
+            let path = self.root.join(resource.name());
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&resource.capability.path, &path).map_err(|source| {
+                UzeError::Write {
+                    path: path.clone(),
+                    source,
+                }
+            })?;
+            Ok(Some(AttachmentReceipt {
+                package_id: match &resource.origin {
+                    crate::ResourceOrigin::Package { id, .. } => id.as_str().to_owned(),
+                    _ => unreachable!(),
+                },
+                resource_identity: Some(resource.identity()),
+                integration: self.id().to_owned(),
+                strategy: "test".to_owned(),
+                artifact: ManagedArtifact::SymlinkReference {
+                    path,
+                    target: resource.capability.path.clone(),
+                },
+            }))
+        }
+    }
+
+    impl IntegrationPort for PartialIntegration {
+        fn id(&self) -> &'static str {
+            "partial"
+        }
+
+        fn capabilities(&self) -> HarnessCapabilities {
+            HarnessCapabilities::default()
+        }
+
+        fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+            ExposurePlan {
+                representation: resource.capability.representation,
+                route: CompatibilityRoute::Adaptable,
+                verification: VerificationStatus::Unverified,
+                mechanism: ExposureMechanism::Unsupported {
+                    rationale: "test attachment is implemented directly".to_owned(),
+                },
+                evidence: "test".to_owned(),
+            }
+        }
+
+        fn attach_receipt(&self, resource: &Resource) -> Result<Option<AttachmentReceipt>> {
+            if resource.name() == "github" {
+                return Err(UzeError::ExposureUnavailable(
+                    "simulated second attachment failure".to_owned(),
+                ));
+            }
+            let path = self.root.join("first-managed-resource");
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&resource.capability.path, &path).map_err(|source| {
+                UzeError::Write {
+                    path: path.clone(),
+                    source,
+                }
+            })?;
+            self.attached.set(true);
+            Ok(Some(AttachmentReceipt {
+                package_id: match &resource.origin {
+                    crate::ResourceOrigin::Package { id, .. } => id.as_str().to_owned(),
+                    _ => unreachable!(),
+                },
+                resource_identity: Some(resource.identity()),
+                integration: self.id().to_owned(),
+                strategy: "test".to_owned(),
+                artifact: ManagedArtifact::SymlinkReference {
+                    path,
+                    target: resource.capability.path.clone(),
+                },
+            }))
+        }
+    }
+
     fn temp(label: &str) -> PathBuf {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -560,6 +691,10 @@ mod tests {
 
     fn fixture() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/packages/agent-plugin-skill")
+    }
+
+    fn multi_mcp_fixture() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/packages/multi-mcp-plugin")
     }
 
     #[test]
@@ -651,6 +786,78 @@ mod tests {
         let report = app.doctor();
         assert!(report.ledger_error.is_some());
         assert!(report.integration_state_error.is_some());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn add_failure_after_a_confirmed_attachment_leaves_reconcilable_ledger_evidence() {
+        let root = temp("partial-add");
+        let home = UzeHome::at(&root);
+        let integration = PartialIntegration {
+            root: root.clone(),
+            attached: Cell::new(false),
+        };
+        let app = UzeApplication::new(home.clone(), vec![Box::new(integration)]);
+        assert!(app.add_plugin(multi_mcp_fixture()).is_err());
+        assert!(
+            app.store
+                .package_ids()
+                .unwrap()
+                .iter()
+                .any(|id| id.as_str() == "multi-mcp-plugin")
+        );
+        let receipts = state::receipts(&home, Some("multi-mcp-plugin")).unwrap();
+        assert_eq!(receipts.len(), 1);
+        assert_eq!(app.doctor().attachments[0].state.matched, 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn remove_is_idempotent_without_claiming_history_for_absent_state() {
+        let root = temp("remove-twice");
+        let app = UzeApplication::new(UzeHome::at(&root), vec![Box::new(SymlinkIntegration)]);
+        let package = app.store.install_agent_plugin(fixture()).unwrap();
+        assert!(matches!(
+            app.remove_plugin(package.id.as_str()).unwrap(),
+            RemovePluginReport::Removed { .. }
+        ));
+        assert!(matches!(
+            app.remove_plugin(package.id.as_str()).unwrap(),
+            RemovePluginReport::AlreadyAbsent { .. }
+        ));
+        app.add_plugin(fixture()).unwrap();
+        assert_eq!(app.list_plugins().unwrap().len(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn multi_mcp_package_has_independent_receipts_through_safe_removal() {
+        let root = temp("multi-mcp-lifecycle");
+        let home = UzeHome::at(&root);
+        let app = UzeApplication::new(
+            home.clone(),
+            vec![Box::new(AllResourceSymlinkIntegration {
+                root: root.clone(),
+            })],
+        );
+        app.add_plugin(multi_mcp_fixture()).unwrap();
+        let receipts = state::receipts(&home, Some("multi-mcp-plugin")).unwrap();
+        assert_eq!(receipts.len(), 2);
+        assert_ne!(
+            receipts[0].1.resource_identity,
+            receipts[1].1.resource_identity
+        );
+        assert!(matches!(
+            app.remove_plugin("multi-mcp-plugin").unwrap(),
+            RemovePluginReport::Removed { .. }
+        ));
+        assert!(
+            state::receipts(&home, Some("multi-mcp-plugin"))
+                .unwrap()
+                .is_empty()
+        );
         fs::remove_dir_all(root).unwrap();
     }
 }

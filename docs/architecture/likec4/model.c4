@@ -1,6 +1,6 @@
 model {
   developer = actor 'Developer' {
-    description 'Defines a project-owned agent environment and selects the runtime that should use it.'
+    description 'Installs and manages a local portable agent-plugin environment.'
   }
 
   agentClient = system 'Agent Client' {
@@ -20,22 +20,22 @@ model {
   }
 
   uze = system 'UZE' {
-    description 'Standards-first project-composition layer. It resolves and explains an effective agent environment; it is not a universal harness or protocol bridge.'
+    description 'Package-centric compatibility and distribution layer for the agent-plugin ecosystem. It installs once, plans native delivery first, and falls back by capability without becoming a runtime proxy.'
 
     core = container 'UZE Core' {
-      description 'Harness-agnostic resolver, store-backed environment composer, and router for a project-owned effective environment.'
+      description 'Harness-agnostic Store-backed environment composer, package/capability planner, and safe managed-lifecycle core.'
       technology 'Rust CLI/library (ADR 004)'
 
       standardDiscovery = component 'Standards Discoverer' {
-        description 'Discovers project-owned instructions through AGENTS.md, reusable Agent Skills, and MCP tool/resource/context configuration without converting their representations.'
+        description 'Discovers standard resources while retaining their original representations; installed package resources are primary product inputs.'
       }
 
       environmentResolver = component 'Effective Environment Resolver' {
-        description 'Composes project-owned and registered UZE Store package resources into one extensible effective environment. Runtime resources are reserved but empty.'
+        description 'Composes installed plugin packages and, where requested by library callers, project resources into one effective environment.'
       }
 
       uzeHome = component 'UzeHome' {
-        description 'The sole authority for UZE_HOME and its store, state, cache, and runtime paths.'
+        description 'The sole authority for UZE_HOME Store, state, cache, and conformance-runtime paths.'
       }
 
       uzeStore = component 'UZE Store' {
@@ -55,28 +55,20 @@ model {
       }
 
       integrationState = component 'Integration State' {
-        description 'Records per-harness machine setup: detection, strategy, whether setup completed, and managed attachment artifact paths, under $UZE_HOME/state. Never stores harness secrets.'
-      }
-
-      reporter = component 'Compatibility Reporter' {
-        description 'Explains representation provenance, compatibility route, exposure state, runtime path, and remaining standards gaps.'
+        description 'Persists machine setup facts plus secret-free attachment receipts under $UZE_HOME/state. Receipts are ownership intent; integrations inspect actual harness state before detach.'
       }
 
       application = component 'Application Layer' {
         description 'Package-centric product facade. CLI and future TUI invoke setup, add, list, inspect, remove, and doctor here; it composes Store, Engine, plans, receipts, and reconciliation without duplicating lifecycle logic.'
       }
 
-      standardDiscovery -> environmentResolver 'project-owned resources'
+      standardDiscovery -> environmentResolver 'standard resources'
       uzeHome -> uzeStore 'owned paths'
       uzeStore -> environmentResolver 'UZE-installed package resources'
       environmentResolver -> capabilityRouter 'effective environment capabilities'
       integrationContract -> capabilityRouter 'harness capability description'
       integrationContract -> environmentResolver 'selected exposure mechanism'
       integrationContract -> integrationState 'setup and managed-attachment state'
-      capabilityRouter -> runtimeSelector 'runtime integration need'
-      environmentResolver -> reporter 'effective environment'
-      capabilityRouter -> reporter 'routes and rationale'
-      runtimeSelector -> reporter 'selected runtime path'
       application -> uzeStore 'package lifecycle'
       application -> environmentResolver 'package composition'
       application -> integrationContract 'delivery, inspection, and safe detach'
@@ -99,7 +91,7 @@ model {
     }
   }
 
-  developer -> uze.core.application 'uses CLI now and future TUI later'
+  developer -> uze.core.application 'uses package-centric CLI now and future TUI later'
   uze.core -> uze.claudeIntegration 'effective environment via integration contract'
   uze.core -> uze.codexIntegration 'effective environment via integration contract'
   uze.core -> uze.opencodeIntegration 'effective environment via integration contract'

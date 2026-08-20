@@ -303,11 +303,15 @@ fn setup_then_add_attaches_the_mcp_fixture_idempotently_and_removal_works() {
 
     run(&["setup"]);
     let add = run(&["add", package.to_str().unwrap()]);
-    assert!(add.contains("Attached to claude-code: mcp:uze-uze-mcp-conformance"));
-    assert!(add.contains("Attached to codex: mcp:uze-uze-mcp-conformance"));
+    assert!(add.contains("Attached to claude-code: mcp:uze-uze-mcp-conformance-uze-conformance"));
+    assert!(add.contains("Attached to codex: mcp:uze-uze-mcp-conformance-uze-conformance"));
 
     let mcp_state = fake_bin.join("mcp-state");
-    assert!(mcp_state.join("uze-uze-mcp-conformance").is_file());
+    assert!(
+        mcp_state
+            .join("uze-uze-mcp-conformance-uze-conformance")
+            .is_file()
+    );
     let ledger: serde_json::Value =
         serde_json::from_slice(&std::fs::read(uze_home.join("state/attachments.json")).unwrap())
             .unwrap();
@@ -321,7 +325,7 @@ fn setup_then_add_attaches_the_mcp_fixture_idempotently_and_removal_works() {
             .all(|receipt| {
                 receipt["package_id"] == "uze-mcp-conformance"
                     && receipt["artifact"]["VENDOR_CONFIG_ENTRY"]["entry_name"]
-                        == "uze-uze-mcp-conformance"
+                        == "uze-uze-mcp-conformance-uze-conformance"
             })
     );
 
@@ -330,8 +334,10 @@ fn setup_then_add_attaches_the_mcp_fixture_idempotently_and_removal_works() {
     // fake script's `get` reports success, so `attach()` never re-invokes
     // `add`).
     let second_add = run(&["add", package.to_str().unwrap()]);
-    assert!(second_add.contains("Attached to claude-code: mcp:uze-uze-mcp-conformance"));
-    assert!(second_add.contains("Attached to codex: mcp:uze-uze-mcp-conformance"));
+    assert!(
+        second_add.contains("Attached to claude-code: mcp:uze-uze-mcp-conformance-uze-conformance")
+    );
+    assert!(second_add.contains("Attached to codex: mcp:uze-uze-mcp-conformance-uze-conformance"));
 
     let _ = std::fs::remove_dir_all(home);
     let _ = std::fs::remove_dir_all(uze_home);

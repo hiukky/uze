@@ -147,3 +147,70 @@ fn store_and_engine_compose_an_mcp_only_package_into_one_mcp_resource() {
 
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn one_package_with_two_mcp_servers_produces_two_named_resources() {
+    let home = UzeHome::at(temporary_home("multi-mcp"));
+    let store = UzeStore::new(home.clone());
+    let fixture =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/packages/multi-mcp-plugin");
+    let package = store.install_agent_plugin(fixture).unwrap();
+    let environment = UzeEngine::new(store)
+        .compose(std::slice::from_ref(&package.id))
+        .unwrap();
+    assert_eq!(environment.resources.len(), 2);
+    let identities = environment
+        .resources
+        .iter()
+        .map(|resource| resource.identity())
+        .collect::<Vec<_>>();
+    assert_ne!(identities[0], identities[1]);
+    assert!(
+        identities
+            .iter()
+            .any(|identity| identity.ends_with(":filesystem"))
+    );
+    assert!(
+        identities
+            .iter()
+            .any(|identity| identity.ends_with(":github"))
+    );
+    let entries = environment
+        .resources
+        .iter()
+        .map(|resource| resource.attachment_entry_name().unwrap())
+        .collect::<Vec<_>>();
+    assert!(entries.contains(&"uze-multi-mcp-plugin-filesystem".to_owned()));
+    assert!(entries.contains(&"uze-multi-mcp-plugin-github".to_owned()));
+    fs::remove_dir_all(home.root()).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn store_preserves_plugin_symlinks_and_executable_permissions() {
+    use std::os::unix::{fs::PermissionsExt, fs::symlink};
+
+    let root = temporary_home("store-fidelity");
+    let source = root.join("source");
+    fs::create_dir_all(&source).unwrap();
+    fs::write(source.join("plugin.json"), r#"{"name":"fidelity"}"#).unwrap();
+    let executable = source.join("bin/run");
+    fs::create_dir_all(executable.parent().unwrap()).unwrap();
+    fs::write(&executable, "#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+    symlink("run", source.join("bin/current")).unwrap();
+
+    let store = UzeStore::new(UzeHome::at(root.join("uze")));
+    let package = store.install_agent_plugin(&source).unwrap();
+    let copied = package.root.join("bin/run");
+    assert!(package.root.join("bin/current").is_symlink());
+    assert_eq!(
+        fs::read_link(package.root.join("bin/current")).unwrap(),
+        PathBuf::from("run")
+    );
+    assert_ne!(
+        fs::metadata(copied).unwrap().permissions().mode() & 0o111,
+        0
+    );
+    fs::remove_dir_all(root).unwrap();
+}

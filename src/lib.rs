@@ -13,9 +13,9 @@ pub mod importer;
 pub mod importers;
 pub mod integration;
 pub mod integrations;
+pub mod persistence;
 pub mod project;
 pub mod reconciliation;
-pub mod report;
 pub mod router;
 pub mod runtime;
 pub mod state;
@@ -34,5 +34,4 @@ pub use project::{
     EffectiveEnvironment, ResolvedProject, Resource, ResourceOrigin, resolve_project,
     resolve_project_resources,
 };
-pub use report::{CompatibilityReport, build_report};
 pub use store::{PackageId, StoredPackage, UzeStore};

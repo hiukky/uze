@@ -1,0 +1,5 @@
+{
+  "name": "multi-mcp-plugin",
+  "version": "1.0.0",
+  "description": "Fixture proving named MCP resources remain independent."
+}

@@ -19,8 +19,8 @@
 
 ## 3. Deferred pending user approval
 
-- [ ] 3.1 Decide whether to accept, constrain, or reject Plugin First in an
+- [x] 3.1 Decide whether to accept, constrain, or reject Plugin First in an
       ADR after reviewing this research.
-- [ ] 3.2 Define and run one narrow native-plugin attachment tracer bullet.
-- [ ] 3.3 Only then design additive package-level planning and any local
+- [x] 3.2 Define and run one narrow native-plugin attachment tracer bullet.
+- [x] 3.3 Only then design additive package-level planning and any local
       marketplace source integration.

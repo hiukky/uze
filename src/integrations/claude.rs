@@ -97,7 +97,6 @@ impl IntegrationPort for ClaudeIntegration {
                 version: detected.version,
                 strategy: "managed-user-scope-skills-dir".to_owned(),
                 installed: true,
-                managed_artifacts: vec![self.skills_dir.clone()],
             },
         )
     }
@@ -138,6 +137,7 @@ impl IntegrationPort for ClaudeIntegration {
                 entry_name,
                 command,
                 args,
+                ..
             } => attach_mcp_entry(&self.command_home, entry_name, command, args),
             _ => Ok(None),
         }
@@ -148,6 +148,10 @@ impl IntegrationPort for ClaudeIntegration {
             entry_name,
             command,
             args,
+            transport,
+            cwd,
+            environment,
+            enabled,
         } = &receipt.artifact
         else {
             return inspect_standard_receipt(receipt);
@@ -155,8 +159,12 @@ impl IntegrationPort for ClaudeIntegration {
         inspect_claude_mcp(
             &self.command_home.join(".claude.json"),
             entry_name,
+            transport,
             command,
             args,
+            cwd.as_deref(),
+            environment,
+            *enabled,
         )
     }
 
@@ -166,7 +174,13 @@ impl IntegrationPort for ClaudeIntegration {
             return Ok(inspection);
         }
         let ManagedArtifact::VendorConfigEntry { entry_name, .. } = &receipt.artifact else {
-            return detach_standard_receipt(receipt);
+            let detached = detach_standard_receipt(receipt)?;
+            if detached.state == AttachmentState::Missing
+                && let ManagedArtifact::SymlinkReference { target, .. } = &receipt.artifact
+            {
+                self.cleanup_unused_shim(target)?;
+            }
+            return Ok(detached);
         };
         detach_mcp_entry(&self.command_home, entry_name)?;
         Ok(AttachmentInspection {
@@ -177,6 +191,32 @@ impl IntegrationPort for ClaudeIntegration {
 }
 
 impl ClaudeIntegration {
+    fn cleanup_unused_shim(&self, shim_root: &Path) -> Result<()> {
+        let managed_root = self.uze_home.state_dir().join("attachments").join("claude");
+        if !shim_root.starts_with(&managed_root) || !shim_root.is_dir() {
+            return Ok(());
+        }
+        let referenced = fs::read_dir(&self.skills_dir)
+            .map_err(|source| UzeError::Read {
+                path: self.skills_dir.clone(),
+                source,
+            })?
+            .filter_map(std::result::Result::ok)
+            .any(|entry| fs::read_link(entry.path()).ok().as_deref() == Some(shim_root));
+        if referenced {
+            return Ok(());
+        }
+        let manifest = shim_root.join(".claude-plugin/plugin.json");
+        let skill = shim_root.join("SKILL.md");
+        if manifest.is_file() && skill.is_symlink() {
+            fs::remove_dir_all(shim_root).map_err(|source| UzeError::Write {
+                path: shim_root.to_path_buf(),
+                source,
+            })?;
+        }
+        Ok(())
+    }
+
     fn skill_exposure_plan(&self, resource: &Resource) -> ExposurePlan {
         if state::is_installed(&self.uze_home, self.id())
             && let Some(entry_name) = resource.attachment_entry_name()
@@ -242,8 +282,12 @@ impl ClaudeIntegration {
             verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::ManagedVendorConfig {
                 entry_name,
+                transport: "stdio".to_owned(),
                 command,
                 args,
+                cwd: None,
+                environment: Vec::new(),
+                enabled: None,
             },
             evidence: "UZE registers the store-owned MCP server once via `claude mcp add --scope user --transport stdio`, writing to ~/.claude.json's mcpServers. Available to every future session in any project with no --plugin-dir-style flag."
                 .to_owned(),
@@ -301,12 +345,24 @@ fn mcp_entry_exists(command_home: &Path, entry_name: &str) -> bool {
 /// Claude has no structured `mcp get` output. This is deliberately read-only:
 /// attachment/removal still go through the official CLI, while inspection
 /// reads only the one expected `mcpServers.<name>` entry.
+#[allow(clippy::too_many_arguments)]
 fn inspect_claude_mcp(
     path: &Path,
     entry_name: &str,
+    transport: &str,
     command: &Path,
     args: &[String],
+    cwd: Option<&Path>,
+    environment: &[crate::exposure::McpEnvironmentReference],
+    enabled: Option<bool>,
 ) -> AttachmentInspection {
+    if transport != "stdio" || cwd.is_some() || !environment.is_empty() || enabled.is_some() {
+        return AttachmentInspection {
+            state: AttachmentState::Blocked,
+            reason: "Claude MCP receipt requests state this integration cannot verify safely"
+                .to_owned(),
+        };
+    }
     let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -513,7 +569,17 @@ mod lifecycle_tests {
         fs::create_dir_all(&root).unwrap();
         let path = root.join(".claude.json");
         fs::write(&path, value).unwrap();
-        let state = inspect_claude_mcp(&path, "uze-x", Path::new("tool"), &["a".to_owned()]).state;
+        let state = inspect_claude_mcp(
+            &path,
+            "uze-x",
+            "stdio",
+            Path::new("tool"),
+            &["a".to_owned()],
+            None,
+            &[],
+            None,
+        )
+        .state;
         let _ = fs::remove_dir_all(root);
         state
     }
@@ -544,5 +610,41 @@ mod lifecycle_tests {
     #[test]
     fn malformed_is_blocked() {
         assert_eq!(check("{bad"), AttachmentState::Blocked);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn detaching_a_skill_reference_cleans_an_unreferenced_owned_shim() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!("uze-claude-shim-{}", std::process::id()));
+        let uze_home = UzeHome::at(root.join("uze"));
+        let integration = ClaudeIntegration::new(root.join("claude"), uze_home.clone());
+        fs::create_dir_all(&integration.skills_dir).unwrap();
+        let shim = uze_home.state_dir().join("attachments/claude/uze-example");
+        fs::create_dir_all(shim.join(".claude-plugin")).unwrap();
+        fs::write(shim.join(".claude-plugin/plugin.json"), "{}").unwrap();
+        let source = root.join("source/SKILL.md");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::write(&source, "skill").unwrap();
+        symlink(&source, shim.join("SKILL.md")).unwrap();
+        let reference = integration.skills_dir.join("uze-example");
+        symlink(&shim, &reference).unwrap();
+        let receipt = AttachmentReceipt {
+            package_id: "example".to_owned(),
+            resource_identity: Some("skill:example".to_owned()),
+            integration: integration.id().to_owned(),
+            strategy: "managed-user-scope-reference".to_owned(),
+            artifact: ManagedArtifact::SymlinkReference {
+                path: reference,
+                target: shim.clone(),
+            },
+        };
+        assert_eq!(
+            integration.detach_receipt(&receipt).unwrap().state,
+            AttachmentState::Missing
+        );
+        assert!(!shim.exists());
+        let _ = fs::remove_dir_all(root);
     }
 }
