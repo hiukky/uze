@@ -1,4 +1,8 @@
-use uze::{capability::CapabilityKind, integration::IntegrationPort, router::HarnessCapabilities};
+use uze::{
+    capability::CapabilityKind,
+    integration::IntegrationPort,
+    router::{ExposureState, HarnessCapabilities},
+};
 
 pub struct CodexIntegration;
 
@@ -10,7 +14,8 @@ impl IntegrationPort for CodexIntegration {
     fn capabilities(&self) -> HarnessCapabilities {
         HarnessCapabilities {
             direct_standard: [CapabilityKind::AgentSkill].into_iter().collect(),
-            evidence: "Codex integration declaration; real-harness conformance is pending."
+            exposure: ExposureState::Verified,
+            evidence: "Codex CLI 0.148.0 conformance on 2026-08-20 activated the Agent Skill from .agents/skills."
                 .to_owned(),
             ..HarnessCapabilities::default()
         }

@@ -95,3 +95,11 @@
       Codex integrations; validate the model.
 - [x] 7.9 Run Rust, OpenSpec, and LikeC4 validation and document which claims
       remain unverified until opt-in real-harness conformance tests exist.
+
+## 8. Real-harness conformance
+
+- [x] 8.1 Add an isolated playground containing the single standard Agent
+      Skill measured by contract tests and opt-in Claude Code/Codex probes,
+      with no filesystem projection or mutation.
+- [x] 8.2 Run the Claude Code and Codex probes against authenticated local
+      harnesses; record each result as verified or not exposed.
