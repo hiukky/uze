@@ -16,8 +16,9 @@ OPENCODE_VERSION=1.18.19
 
 It contains the UZE release binary, Claude Code, Codex, OpenCode, Git and
 minimal runtime dependencies. The image build may access package registries;
-runtime conformance containers must not have host credentials, a host HOME,
-Docker socket, privileged mode, or general internet access.
+runtime harness containers must not have host credentials, a host HOME, Docker
+socket, privileged mode, or direct internet access. The test-only gateway is
+the sole exception: it has limited provider egress and the provider credential.
 
 Build it locally:
 
@@ -71,14 +72,14 @@ cargo test --manifest-path tooling/conformance/Cargo.toml
 
 ## Compose
 
-The default topology contains only a harness service and an official
-llama.cpp server on an internal Docker network. It has no gateway and no model
-downloader. See [the model contract](model-contract.md), then validate a local
-configuration with:
+The default topology contains a harness service and a pinned LiteLLM gateway.
+The harness reaches the gateway on an internal network; only the gateway has
+egress and receives the provider key. The initial Groq route is described in
+[the provider contract](provider-contract.md). It does not download or bundle
+a model. Validate the configuration with:
 
 ```bash
-UZE_CONFORMANCE_MODEL_DIR=/absolute/path/to/models \
-UZE_CONFORMANCE_MODEL_FILE=my-model.gguf \
+GROQ_API_KEY=provided-outside-the-repository \
 docker compose --env-file tooling/conformance/.env.example \
   -f tooling/conformance/compose.yaml config
 ```
@@ -89,10 +90,10 @@ docker compose --env-file tooling/conformance/.env.example \
 |---|---|
 | L0 | Pure Rust unit tests. |
 | L1 | Product contracts: Store, planning, receipts and filesystem/config. |
-| L2 | Opt-in Docker: real harness plus local model, no vendor quota. |
+| L2 | Opt-in Docker: real harness plus isolated local or routed inference. |
 | L3 | Opt-in real vendor/provider conformance. |
 
-The selected first L2 behavioral route is OpenCode. Codex is a separate
-Responses-protocol spike; Claude's non-Claude local gateway is experimental
-and never replaces L3 vendor evidence. See the
+The selected first routed L2 behavioral route is OpenCode. Codex is a separate
+Responses-protocol spike; Claude's Anthropic gateway route is experimental and
+never replaces L3 vendor evidence. See the
 [ecosystem research](../../openspec/changes/establish-local-real-harness-conformance/research-notes.md).

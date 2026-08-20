@@ -10,21 +10,24 @@ architectural limit; the selected L2 set must follow current evidence.
 ## What changes
 
 - Establish four explicit evidence tiers: L0 unit, L1 product contract, L2
-  local real-harness E2E, and opt-in L3 vendor conformance.
+  isolated real-harness E2E, and opt-in L3 vendor conformance. L2 may use a
+  local model or a separately authenticated, test-only gateway route; reports
+  identify which route produced the evidence.
 - First record an ecosystem/provider spike across the relevant harnesses and
-  select only those with an honest headless and local-model path.
+  select only those with an honest headless and protocol path.
 - Add test-only Docker and Rust process-runner tooling outside the UZE product
   crate after that gate. It creates disposable HOME, UZE_HOME, and project
   directories, then invokes real harness CLIs.
-- Pin a llama.cpp server and model contract as the L2 inference reference.
-  Direct protocol routes are preferred; a gateway is only a test-only fallback
-  when a pinned harness/server combination cannot interoperate directly.
+- Use a pinned LiteLLM gateway for the initial routed L2 reference. The
+  gateway is test-only, receives provider credentials alone, and may route to
+  a free-tier provider such as Groq. Direct/local routes remain possible, but
+  are not a prerequisite for this phase.
 - Reuse one installed Agent Plugin fixture containing both Skill and stdio MCP
   resources. The lab records package/store/exposure evidence separately from
   discovery and behavioral evidence.
 
 ## Non-goals
 
-No UZE product runtime dependency on Docker, llama.cpp, LiteLLM, or a test
+No UZE product runtime dependency on Docker, LiteLLM, or a test
 runner; no mock harnesses; no remote registry, model downloader, benchmark,
 TUI work, capability implementation, or CI pipeline configuration.

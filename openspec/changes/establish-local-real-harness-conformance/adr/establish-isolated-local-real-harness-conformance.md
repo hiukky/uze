@@ -37,3 +37,20 @@ The lab can reproduce a test from an empty machine state and preserve version,
 model, package, and exposure evidence. It adds Docker/image/model operational
 maintenance, and L2 remains opt-in because it requires a supplied GGUF and is
 not suitable for ordinary `cargo test`.
+
+## More Information
+
+### 2026-08-20 — Routed-provider refinement
+
+The initial L2 implementation changed from a developer-supplied GGUF to a
+pinned LiteLLM gateway with a separately supplied free-provider credential.
+This does not change the product boundary: LiteLLM remains test infrastructure
+only. It makes the evidence **routed L2**, not local-model evidence. The
+gateway is the only service with provider egress and credentials; every
+harness container retains an empty HOME/UZE_HOME and no direct provider key.
+
+Groq is the first deliberately narrow route because it provides both OpenAI
+Chat Completions and Responses surfaces. OpenCode is the first smoke target;
+Codex and Claude each require a route-specific protocol spike. OpenRouter and
+Gemini are not automatic fallbacks: each needs its own model alias, secret,
+and evidence before it is enabled.

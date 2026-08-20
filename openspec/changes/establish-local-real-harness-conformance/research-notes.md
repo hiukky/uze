@@ -113,19 +113,21 @@ run, transform or recreate their code while installing a portable package.
 | Harness | Headless / isolation | Provider route | Local-model result |
 |---|---|---|---|
 | Claude Code | `claude -p`, JSON; isolated HOME is viable. | `ANTHROPIC_BASE_URL`, Anthropic Messages protocol. | Possible lab spike via `/v1/messages`, but non-Claude gateway is unsupported vendor behavior. [Gateway](https://code.claude.com/docs/en/llm-gateway) |
-| Codex | `codex exec`; isolated HOME/config viable. | Responses API/provider configuration. | Candidate `/v1/responses`; current [llama.cpp server](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md) exposes it, but tools/streaming need spike. |
-| OpenCode | `opencode run`; config/home can be disposable. | OpenAI-compatible `/v1/chat/completions`. | Direct llama.cpp candidate and L2 ready. [Providers](https://opencode.ai/docs/providers) |
+| Codex | `codex exec`; isolated HOME/config viable. | Responses API/provider configuration. | Candidate LiteLLM `/v1/responses` route; tools/streaming need spike. |
+| OpenCode | `opencode run`; config/home can be disposable. | OpenAI-compatible `/v1/chat/completions`. | First LiteLLM/Groq route candidate. [Providers](https://opencode.ai/docs/providers) |
 | Cursor | `cursor-agent -p` documented. | BYOK cloud providers documented; generic local URL not established. | Possible only after a vendor/empirical route spike. [Headless](https://docs.cursor.com/en/cli/headless) |
 | Windsurf | No suitable headless harness CLI found. | No local provider contract found. | Contract-only; do not force IDE into Docker. |
 | Gemini CLI | `gemini -p`, JSON/JSONL; isolated home/container viable. | `GOOGLE_GEMINI_BASE_URL` speaks Gemini API. | No official direct llama/OpenAI route; local Gemma is routing, not agent inference. [Configuration](https://github.com/google-gemini/gemini-cli/blob/main/docs/reference/configuration.md) |
-| Copilot CLI | Programmatic/headless plus `COPILOT_HOME`. | BYOK supports local OpenAI Chat Completions and offline mode. | Direct llama.cpp candidate and L2 ready. [BYOK](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/use-byok-models) |
+| Copilot CLI | Programmatic/headless plus `COPILOT_HOME`. | BYOK supports local OpenAI Chat Completions and offline mode. | Future routed-provider candidate after a separately approved integration. [BYOK](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/use-byok-models) |
 | Cline | Headless/JSON CLI with `--data-dir`. | OpenAI-compatible provider. | Candidate after Docker install/isolation spike. [CLI](https://docs.cline.bot/cli/cli-reference) |
 | Roo Code | CLI/release surface insufficiently stable. | Compatible-provider docs are IDE-oriented. | Contract-only. |
 
-`LiteLLM` remains test infrastructure only. It is not a product dependency. A
-gateway is a fallback for an exact protocol mismatch, not assumed Compose
-topology. Gemini would require a Gemini-protocol gateway, which is too much
-unsupported machinery for first zero-vendor L2 evidence.
+`LiteLLM` remains test infrastructure only. It is not a product dependency.
+The initial Compose topology was subsequently refined to use an internal,
+pinned LiteLLM gateway with a free-provider route. This produces routed L2
+evidence, not zero-vendor local-model evidence. Gemini would still require a
+Gemini-protocol gateway, which is too much unsupported machinery for the first
+routed L2 route.
 
 ## Integration and Core impact
 
@@ -156,11 +158,12 @@ Use the lab first to test the **existing** product integrations, not to add an
 integration and a lab simultaneously:
 
 1. **OpenCode** first — existing integration, headless CLI and documented
-   direct OpenAI-compatible local inference.
-2. **Codex** second only after a small `/v1/responses` spike. It exercises the
+   OpenAI-compatible provider configuration.
+2. **Codex** second only after a small `/v1/responses` gateway spike. It exercises the
    current native-package path.
 3. **Claude Code** is optional experimental L2 after those two; L3 remains
-   authoritative because Anthropic does not support local non-Claude upstreams.
+   authoritative because its routed Anthropic endpoint cannot establish
+   official-provider conformance.
 
 **GitHub Copilot CLI** is the strongest next ecosystem expansion when a
 Copilot integration is separately approved: it offers native plugin lifecycle,
