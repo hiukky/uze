@@ -32,6 +32,19 @@ talks directly to integrations. The two bounded future extensions are:
 Neither is a Core redesign. Until an envelope is supported, UZE can preserve
 it as package bytes and only expose safely recognized portable capabilities.
 
+## Empirical spike — isolated real CLIs
+
+On 2026-08-20, a disposable Linux image built the real UZE binary and pinned
+Claude Code **2.1.237**, Codex **0.148.0** and OpenCode **1.18.19**. With
+`--network none`, a fresh tmpfs-mounted `/work`, and distinct
+`HOME=/work/fresh-home` / `UZE_HOME=/work/fresh-uze`, all three headless
+help surfaces executed successfully. The container runs unprivileged as UID
+1000; the tmpfs contract must explicitly set `uid=1000,gid=1000,mode=700`.
+
+This is **EMPIRICAL** installation/headless/isolation evidence only. It does
+not prove provider routing, Skill discovery, MCP discovery, tool invocation or
+behavioral conformance.
+
 ## Classification matrix
 
 These labels are research output, not Core enums. A `NATIVE_PLUGIN` harness

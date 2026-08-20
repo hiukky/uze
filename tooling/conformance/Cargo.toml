@@ -1,0 +1,12 @@
+[package]
+name = "uze-conformance"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "uze-conformance"
+path = "src/main.rs"

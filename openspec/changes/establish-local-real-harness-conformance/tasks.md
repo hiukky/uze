@@ -4,9 +4,13 @@
       for Claude Code, Codex, OpenCode, Cursor, Windsurf, Gemini CLI, GitHub
       Copilot CLI, Cline and Roo Code; record classifications in
       `research-notes.md`.
-- [ ] Select the first L2 harness set from the readiness matrix.
-- [ ] Build a pinned, disposable harness image and prove installation/headless
-      invocation with isolated HOME for every selected CLI.
+- [x] Select OpenCode as the first L2 behavioral route; retain Codex as a
+      Responses-protocol spike and Claude Code as an explicitly experimental
+      local-gateway route.
+- [x] Build a pinned, disposable harness image and prove installation/headless
+      invocation with isolated HOME for Claude Code 2.1.237, Codex 0.148.0
+      and OpenCode 1.18.19. The non-privileged tmpfs ownership contract is
+      recorded in `tooling/conformance/README.md`.
 - [ ] Prove each selected direct or gateway-backed local inference route and
       record protocol limitations independently from UZE compatibility.
 
