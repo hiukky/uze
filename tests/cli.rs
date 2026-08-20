@@ -20,5 +20,6 @@ fn inspect_reports_project_resources_and_does_not_write_vendor_state() {
     assert_eq!(report["project_resources"].as_array().unwrap().len(), 3);
     assert!(report["integrations"]["claude-code"].is_object());
     assert!(report["integrations"]["codex"].is_object());
+    assert!(report["integrations"]["opencode"].is_object());
     assert_eq!(std::fs::read(&hook).unwrap(), before);
 }

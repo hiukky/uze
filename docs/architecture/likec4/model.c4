@@ -15,6 +15,10 @@ model {
     description 'Active target coding-agent runtime. Its native project extensions are optional enhancements, not UZE core configuration.'
   }
 
+  opencode = system 'OpenCode' {
+    description 'Peer coding-agent runtime. It can discover compatible project Agent Skills without becoming UZE core configuration.'
+  }
+
   uze = system 'UZE' {
     description 'Standards-first project-composition layer. It resolves and explains an effective agent environment; it is not a universal harness or protocol bridge.'
 
@@ -64,15 +68,23 @@ model {
       description 'Peer harness integration. It is not a conversion destination.'
       technology 'Rust adapter'
     }
+
+    opencodeIntegration = container 'OpenCode Integration' {
+      description 'Peer harness integration. It declares standards-backed capability routes independently of UZE Core.'
+      technology 'Rust adapter'
+    }
   }
 
   developer -> uze.core 'defines and resolves a project environment'
   uze.core -> uze.claudeIntegration 'effective environment via integration contract'
   uze.core -> uze.codexIntegration 'effective environment via integration contract'
+  uze.core -> uze.opencodeIntegration 'effective environment via integration contract'
   uze.claudeIntegration -> claudeCode 'works with the selected runtime'
   uze.codexIntegration -> codex 'works with the selected runtime'
+  uze.opencodeIntegration -> opencode 'works with the selected runtime'
 
   developer -> agentClient 'uses to work with a selected agent runtime'
   agentClient -> claudeCode 'ACP when mutually supported; otherwise selected explicit integration'
   agentClient -> codex 'ACP when mutually supported; otherwise selected explicit integration'
+  agentClient -> opencode 'ACP when mutually supported; otherwise selected explicit integration'
 }
