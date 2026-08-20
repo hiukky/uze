@@ -195,6 +195,9 @@ fn render_inspection(report: &PluginInspection) -> String {
 
 fn render_remove(report: &RemovePluginReport) -> String {
     match report {
+        RemovePluginReport::AlreadyAbsent { plugin } => {
+            format!("No UZE state remains for {plugin}\n")
+        }
         RemovePluginReport::Removed { plugin, .. } => format!("Removed {plugin}\n"),
         RemovePluginReport::Blocked { report, plan } => format!(
             "Removal blocked for {}: {:?}\n{}\n",

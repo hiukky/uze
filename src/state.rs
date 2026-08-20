@@ -1,6 +1,6 @@
 //! Minimal, secret-free machine integration state. See ADR-006.
 
-use std::{collections::BTreeMap, fs, path::PathBuf};
+use std::{collections::BTreeMap, fs};
 
 use serde::{Deserialize, Serialize};
 
@@ -46,12 +46,11 @@ pub fn record_receipt(
         .into_iter()
         .collect::<BTreeMap<_, _>>();
     entries.insert(key, receipt);
-    fs::write(
+    crate::persistence::write_atomic(
         &path,
-        serde_json::to_vec_pretty(&AttachmentLedger { receipts: entries })
+        &serde_json::to_vec_pretty(&AttachmentLedger { receipts: entries })
             .expect("receipt ledger serializable"),
     )
-    .map_err(|source| UzeError::Write { path, source })
 }
 
 pub fn forget_receipt(home: &UzeHome, key: &str) -> Result<()> {
@@ -60,12 +59,11 @@ pub fn forget_receipt(home: &UzeHome, key: &str) -> Result<()> {
         .into_iter()
         .collect::<BTreeMap<_, _>>();
     entries.remove(key);
-    fs::write(
+    crate::persistence::write_atomic(
         &path,
-        serde_json::to_vec_pretty(&AttachmentLedger { receipts: entries })
+        &serde_json::to_vec_pretty(&AttachmentLedger { receipts: entries })
             .expect("receipt ledger serializable"),
     )
-    .map_err(|source| UzeError::Write { path, source })
 }
 
 /// Operational facts about one harness's machine-level UZE integration.
@@ -76,7 +74,6 @@ pub struct IntegrationRecord {
     pub version: Option<String>,
     pub strategy: String,
     pub installed: bool,
-    pub managed_artifacts: Vec<PathBuf>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -130,13 +127,14 @@ fn save_registry(home: &UzeHome, registry: &IntegrationRegistry) -> Result<()> {
     let path = home.integrations_state_path();
     let payload =
         serde_json::to_vec_pretty(registry).expect("integration state serialization is infallible");
-    fs::write(&path, payload).map_err(|source| UzeError::Write { path, source })
+    crate::persistence::write_atomic(&path, &payload)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::integration::{AttachmentReceipt, ManagedArtifact};
+    use std::path::PathBuf;
 
     fn temp_home(label: &str) -> UzeHome {
         let nonce = std::time::SystemTime::now()
@@ -154,7 +152,6 @@ mod tests {
             version: Some(version.to_owned()),
             strategy: "managed-user-scope-skills-dir".to_owned(),
             installed: true,
-            managed_artifacts: Vec::new(),
         }
     }
 
@@ -193,8 +190,12 @@ mod tests {
             strategy: "managed-vendor-config".to_owned(),
             artifact: ManagedArtifact::VendorConfigEntry {
                 entry_name: entry.to_owned(),
+                transport: "stdio".to_owned(),
                 command: PathBuf::from("/bin/example"),
                 args: vec!["--serve".to_owned()],
+                cwd: None,
+                environment: Vec::new(),
+                enabled: None,
             },
         }
     }

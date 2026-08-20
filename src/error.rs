@@ -49,6 +49,10 @@ pub enum UzeError {
     ExposureUnavailable(String),
     #[error("a non-UZE managed entry already exists at {0}")]
     ManagedEntryConflict(PathBuf),
+    #[error("a managed entry has drifted and was preserved at {0}")]
+    ManagedEntryDrift(PathBuf),
+    #[error("another UZE mutation is already in progress at {0}")]
+    MutationInProgress(PathBuf),
 }
 
 pub type Result<T> = std::result::Result<T, UzeError>;

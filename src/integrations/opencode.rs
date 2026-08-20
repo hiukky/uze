@@ -79,7 +79,6 @@ impl IntegrationPort for OpenCodeIntegration {
                 version: detected.version,
                 strategy: "native-user-scope-skills-plus-managed-mcp-config".to_owned(),
                 installed: true,
-                managed_artifacts: vec![self.skills_dir.clone(), self.config_path.clone()],
             },
         )
     }
@@ -106,6 +105,7 @@ impl IntegrationPort for OpenCodeIntegration {
                 entry_name,
                 command,
                 args,
+                ..
             } => attach_mcp_config(&self.config_path, entry_name, command, args),
             _ => Ok(None),
         }
@@ -116,6 +116,10 @@ impl IntegrationPort for OpenCodeIntegration {
             entry_name,
             command,
             args,
+            transport,
+            cwd,
+            environment,
+            enabled,
         } = &receipt.artifact
         else {
             return inspect_standard_receipt(receipt);
@@ -142,7 +146,15 @@ impl IntegrationPort for OpenCodeIntegration {
             };
         };
         match config.get("mcp").and_then(|m| m.get(entry_name)) {
-            Some(current) => inspect_opencode_mcp_value(current, command, args),
+            Some(current) => inspect_opencode_mcp_value(
+                current,
+                transport,
+                command,
+                args,
+                cwd.as_deref(),
+                environment,
+                *enabled,
+            ),
             None => AttachmentInspection {
                 state: AttachmentState::Missing,
                 reason: "OpenCode MCP entry is missing".to_owned(),
@@ -159,6 +171,10 @@ impl IntegrationPort for OpenCodeIntegration {
             entry_name,
             command,
             args,
+            transport,
+            cwd,
+            environment,
+            enabled,
         } = &receipt.artifact
         else {
             return detach_standard_receipt(receipt);
@@ -174,7 +190,15 @@ impl IntegrationPort for OpenCodeIntegration {
             })?;
         let current = config.get("mcp").and_then(|mcp| mcp.get(entry_name));
         let fresh = match current {
-            Some(current) => inspect_opencode_mcp_value(current, command, args),
+            Some(current) => inspect_opencode_mcp_value(
+                current,
+                transport,
+                command,
+                args,
+                cwd.as_deref(),
+                environment,
+                *enabled,
+            ),
             None => AttachmentInspection {
                 state: AttachmentState::Missing,
                 reason: "OpenCode MCP entry disappeared before detach".to_owned(),
@@ -205,14 +229,21 @@ impl IntegrationPort for OpenCodeIntegration {
 
 fn inspect_opencode_mcp_value(
     current: &serde_json::Value,
+    transport: &str,
     command: &Path,
     args: &[String],
+    cwd: Option<&Path>,
+    environment: &[crate::exposure::McpEnvironmentReference],
+    enabled: Option<bool>,
 ) -> AttachmentInspection {
     let expected_command = std::iter::once(command.to_string_lossy().into_owned())
         .chain(args.iter().cloned())
         .collect::<Vec<_>>();
-    let matches = current.get("type").and_then(serde_json::Value::as_str) == Some("local")
-        && current.get("enabled").and_then(serde_json::Value::as_bool) == Some(true)
+    let matches = transport == "stdio"
+        && current.get("type").and_then(serde_json::Value::as_str) == Some("local")
+        && enabled.is_none_or(|expected| {
+            current.get("enabled").and_then(serde_json::Value::as_bool) == Some(expected)
+        })
         && current
             .get("command")
             .and_then(serde_json::Value::as_array)
@@ -222,7 +253,20 @@ fn inspect_opencode_mcp_value(
                     .map(serde_json::Value::as_str)
                     .collect::<Option<Vec<_>>>()
             })
-            .is_some_and(|actual| actual == expected_command);
+            .is_some_and(|actual| actual == expected_command)
+        && cwd.is_none_or(|expected| {
+            current.get("cwd").and_then(serde_json::Value::as_str)
+                == Some(expected.to_string_lossy().as_ref())
+        })
+        && (environment.is_empty()
+            || current
+                .get("env")
+                .and_then(serde_json::Value::as_object)
+                .is_some_and(|env| {
+                    environment
+                        .iter()
+                        .all(|reference| env.contains_key(&reference.name))
+                }));
     if matches {
         AttachmentInspection {
             state: AttachmentState::Matched,
@@ -268,7 +312,7 @@ impl OpenCodeIntegration {
                 "mcp.json server entry is missing a usable `command` field.",
             );
         };
-        ExposurePlan { representation: resource.capability.representation, route: CompatibilityRoute::Adaptable, verification: VerificationStatus::Unverified, mechanism: ExposureMechanism::ManagedVendorConfig { entry_name, command, args }, evidence: "UZE adapts the standard stdio command/args into OpenCode's documented global `mcp.<name>.command` array in opencode.json; the OpenCode MCP runtime remains native.".to_owned() }
+        ExposurePlan { representation: resource.capability.representation, route: CompatibilityRoute::Adaptable, verification: VerificationStatus::Unverified, mechanism: ExposureMechanism::ManagedVendorConfig { entry_name, transport: "stdio".to_owned(), command, args, cwd: None, environment: Vec::new(), enabled: Some(true) }, evidence: "UZE adapts the standard stdio command/args into OpenCode's documented global `mcp.<name>.command` array in opencode.json; the OpenCode MCP runtime remains native.".to_owned() }
     }
 }
 
@@ -396,8 +440,12 @@ mod lifecycle_tests {
             strategy: "managed-vendor-config".to_owned(),
             artifact: ManagedArtifact::VendorConfigEntry {
                 entry_name: "uze-example".to_owned(),
+                transport: "stdio".to_owned(),
                 command: PathBuf::from("/bin/example"),
                 args: vec!["--serve".to_owned()],
+                cwd: None,
+                environment: Vec::new(),
+                enabled: Some(true),
             },
         }
     }
@@ -478,5 +526,33 @@ mod lifecycle_tests {
             AttachmentState::Blocked
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn managed_cwd_and_environment_reference_drift_are_detected() {
+        let expected = PathBuf::from("/bin/example");
+        let args = vec!["--serve".to_owned()];
+        let current = serde_json::json!({
+            "type": "local",
+            "command": ["/bin/example", "--serve"],
+            "enabled": true,
+            "cwd": "/other",
+            "env": {"OTHER": "opaque"}
+        });
+        assert_eq!(
+            inspect_opencode_mcp_value(
+                &current,
+                "stdio",
+                &expected,
+                &args,
+                Some(Path::new("/expected")),
+                &[crate::exposure::McpEnvironmentReference {
+                    name: "TOKEN".to_owned()
+                }],
+                Some(true),
+            )
+            .state,
+            AttachmentState::Drifted
+        );
     }
 }

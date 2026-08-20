@@ -4,7 +4,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     error::Result,
-    exposure::{ExposureMechanism, ExposurePlan, PackageExposureMechanism, PackageExposurePlan},
+    exposure::{
+        ExposureMechanism, ExposurePlan, McpEnvironmentReference, PackageExposureMechanism,
+        PackageExposurePlan,
+    },
     home::UzeHome,
     project::EffectiveEnvironment,
     router::{HarnessCapabilities, RouteDecision, route},
@@ -34,8 +37,12 @@ pub enum ManagedArtifact {
     },
     VendorConfigEntry {
         entry_name: String,
+        transport: String,
         command: PathBuf,
         args: Vec<String>,
+        cwd: Option<PathBuf>,
+        environment: Vec<McpEnvironmentReference>,
+        enabled: Option<bool>,
     },
     MarketplacePlugin {
         selector: String,
@@ -162,10 +169,7 @@ pub trait IntegrationPort {
             marketplace_root,
             marketplace_name,
             plugin_name,
-        } = &plan.mechanism
-        else {
-            return Ok(None);
-        };
+        } = &plan.mechanism;
         Ok(Some(AttachmentReceipt {
             package_id: package.id.as_str().to_owned(),
             resource_identity: None,
@@ -202,12 +206,20 @@ pub trait IntegrationPort {
             }
             ExposureMechanism::ManagedVendorConfig {
                 entry_name,
+                transport,
                 command,
                 args,
+                cwd,
+                environment,
+                enabled,
             } => ManagedArtifact::VendorConfigEntry {
                 entry_name,
+                transport,
                 command,
                 args,
+                cwd,
+                environment,
+                enabled,
             },
             _ => return Ok(None),
         };

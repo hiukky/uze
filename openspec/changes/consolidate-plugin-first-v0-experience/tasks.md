@@ -5,4 +5,4 @@
 - [x] Add package-centric application operations and CLI commands.
 - [x] Add deterministic doctor and package inspection reports.
 - [ ] Add minimal TUI using only the application facade.
-- [ ] Validate Rust, OpenSpec, LikeC4, and real isolated configuration paths.
+- [x] Validate Rust, OpenSpec, LikeC4, and real isolated configuration paths.

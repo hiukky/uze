@@ -6,7 +6,7 @@ use std::{
 
 use crate::{project::Resource, store::PackageId};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     capability::Representation,
@@ -14,6 +14,16 @@ use crate::{
     home::UzeHome,
     router::{CompatibilityRoute, VerificationStatus},
 };
+
+/// Secret-free declaration of a process environment value UZE may pass
+/// through to an MCP server. Values are intentionally never persisted in an
+/// attachment receipt; integrations can only report MATCHED when their
+/// vendor surface exposes an equivalent reference rather than an opaque
+/// literal.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct McpEnvironmentReference {
+    pub name: String,
+}
 
 /// How an integration makes a resource available. This is deliberately
 /// separate from `representation`: a STANDARD resource does not imply that a
@@ -55,8 +65,12 @@ pub enum ExposureMechanism {
     /// build its own invocation. See ADR-007.
     ManagedVendorConfig {
         entry_name: String,
+        transport: String,
         command: PathBuf,
         args: Vec<String>,
+        cwd: Option<PathBuf>,
+        environment: Vec<McpEnvironmentReference>,
+        enabled: Option<bool>,
     },
     Unsupported {
         rationale: String,
@@ -92,11 +106,9 @@ impl ExposureMechanism {
                     source: source_error,
                 })?;
                 if &current != source {
-                    fs::remove_file(&target).map_err(|source_error| UzeError::Write {
-                        path: target.clone(),
-                        source: source_error,
-                    })?;
-                    create_symlink(source, &target)?;
+                    // A managed-looking name is not ownership proof: users
+                    // may repoint an earlier UZE reference. Preserve it.
+                    return Err(UzeError::ManagedEntryDrift(target));
                 }
             }
             Ok(_) => return Err(UzeError::ManagedEntryConflict(target)),
@@ -181,9 +193,6 @@ pub enum PackageExposureMechanism {
         marketplace_root: PathBuf,
         marketplace_name: String,
         plugin_name: String,
-    },
-    DecomposeCapabilities {
-        rationale: String,
     },
 }
 

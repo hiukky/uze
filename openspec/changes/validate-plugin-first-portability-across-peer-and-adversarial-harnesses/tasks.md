@@ -29,4 +29,4 @@
 - [x] 3.6 Run a real isolated-home Codex native-plugin configuration/install
       probe; behavioral invocation remains an opt-in future check and
       auth/approval/quota stays BLOCKED_BY_ENVIRONMENT.
-- [ ] 3.7 Add package-level inspect/report data before any TUI renderer.
+- [x] 3.7 Add package-level inspect/report data before any TUI renderer.

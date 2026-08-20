@@ -1,3 +1,3 @@
 # validate-plugin-first-portability-across-peer-and-adversarial-harnesses
 
-Design and validate a multi-capability Agent Plugin vertical slice before implementation.
+**Completed.** The multi-capability Agent Plugin vertical slice was implemented and recorded by ADR-008. This change remains as historical design and conformance evidence.

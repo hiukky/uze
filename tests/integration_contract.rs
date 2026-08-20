@@ -187,7 +187,6 @@ fn claude_prefers_managed_attachment_once_setup_state_is_recorded() {
             version: Some("2.1.237".to_owned()),
             strategy: "managed-user-scope-skills-dir".to_owned(),
             installed: true,
-            managed_artifacts: vec![claude_home.join("skills")],
         },
     )
     .unwrap();
@@ -240,7 +239,6 @@ fn codex_prefers_managed_attachment_once_setup_state_is_recorded() {
             version: Some("0.148.0".to_owned()),
             strategy: "managed-user-scope-skills-dir".to_owned(),
             installed: true,
-            managed_artifacts: vec![agents_home.join("skills")],
         },
     )
     .unwrap();
@@ -310,7 +308,6 @@ fn mcp_resource_routes_to_managed_vendor_config_once_setup_state_is_recorded() {
                 version: Some("0.0.0".to_owned()),
                 strategy: "managed-user-scope-skills-dir".to_owned(),
                 installed: true,
-                managed_artifacts: Vec::new(),
             },
         )
         .unwrap();
@@ -321,6 +318,7 @@ fn mcp_resource_routes_to_managed_vendor_config_once_setup_state_is_recorded() {
         entry_name,
         command,
         args,
+        ..
     } = &claude_plan.mechanism
     else {
         panic!(
@@ -328,7 +326,7 @@ fn mcp_resource_routes_to_managed_vendor_config_once_setup_state_is_recorded() {
             claude_plan.mechanism
         );
     };
-    assert_eq!(entry_name, "uze-uze-mcp-conformance");
+    assert_eq!(entry_name, "uze-uze-mcp-conformance-uze-conformance");
     assert_eq!(command.to_str().unwrap(), "__UZE_MCP_FIXTURE_BINARY__");
     assert!(args.is_empty());
 

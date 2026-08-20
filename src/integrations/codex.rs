@@ -92,7 +92,6 @@ impl IntegrationPort for CodexIntegration {
                 version: detected.version,
                 strategy: "managed-user-scope-skills-dir".to_owned(),
                 installed: true,
-                managed_artifacts: vec![self.skills_dir.clone()],
             },
         )
     }
@@ -150,6 +149,7 @@ impl IntegrationPort for CodexIntegration {
                 entry_name,
                 command,
                 args,
+                ..
             } => attach_mcp_entry(&self.command_home, entry_name, command, args),
             _ => Ok(None),
         }
@@ -164,10 +164,7 @@ impl IntegrationPort for CodexIntegration {
             marketplace_root,
             marketplace_name,
             plugin_name,
-        } = &plan.mechanism
-        else {
-            return Ok(None);
-        };
+        } = &plan.mechanism;
         if !marketplace_exists(&self.command_home, marketplace_root) {
             run_codex(
                 &self.command_home,
@@ -197,7 +194,20 @@ impl IntegrationPort for CodexIntegration {
                 entry_name,
                 command,
                 args,
-            } => inspect_codex_mcp(&self.command_home, entry_name, command, args),
+                transport,
+                cwd,
+                environment,
+                enabled,
+            } => inspect_codex_mcp(
+                &self.command_home,
+                entry_name,
+                transport,
+                command,
+                args,
+                cwd.as_deref(),
+                environment,
+                *enabled,
+            ),
             ManagedArtifact::MarketplacePlugin {
                 selector,
                 marketplace_root,
@@ -334,8 +344,12 @@ impl CodexIntegration {
             verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::ManagedVendorConfig {
                 entry_name,
+                transport: "stdio".to_owned(),
                 command,
                 args,
+                cwd: None,
+                environment: Vec::new(),
+                enabled: None,
             },
             evidence: "UZE registers the store-owned MCP server once via `codex mcp add`, writing to ~/.codex/config.toml's [mcp_servers.*] (no --scope flag exists; global is the only destination). Available to every future session in any project."
                 .to_owned(),
@@ -384,11 +398,16 @@ fn mcp_entry_exists(command_home: &Path, entry_name: &str) -> bool {
 /// Inspects `codex mcp get --json`, the documented structured Codex surface.
 /// No TOML is read or written by UZE; an unavailable or malformed response is
 /// deliberately BLOCKED rather than interpreted as absence.
+#[allow(clippy::too_many_arguments)]
 fn inspect_codex_mcp(
     command_home: &Path,
     entry_name: &str,
+    transport: &str,
     command: &Path,
     args: &[String],
+    cwd: Option<&Path>,
+    environment: &[crate::exposure::McpEnvironmentReference],
+    enabled: Option<bool>,
 ) -> AttachmentInspection {
     let output = match Command::new("codex")
         .env("HOME", command_home)
@@ -421,14 +440,28 @@ fn inspect_codex_mcp(
         Ok(value) => value,
         Err(error) => return blocked(format!("Codex MCP JSON is invalid: {error}")),
     };
-    inspect_codex_mcp_value(&value, entry_name, command, args)
+    inspect_codex_mcp_value(
+        &value,
+        entry_name,
+        transport,
+        command,
+        args,
+        cwd,
+        environment,
+        enabled,
+    )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn inspect_codex_mcp_value(
     value: &serde_json::Value,
     entry_name: &str,
+    expected_transport: &str,
     command: &Path,
     args: &[String],
+    expected_cwd: Option<&Path>,
+    expected_environment: &[crate::exposure::McpEnvironmentReference],
+    expected_enabled: Option<bool>,
 ) -> AttachmentInspection {
     let object = value
         .as_object()
@@ -447,10 +480,8 @@ fn inspect_codex_mcp_value(
             reason: "Codex MCP JSON identifies a different entry".to_owned(),
         };
     }
-    if object
-        .get("enabled")
-        .and_then(serde_json::Value::as_bool)
-        .is_some_and(|enabled| !enabled)
+    if expected_enabled.is_some()
+        && object.get("enabled").and_then(serde_json::Value::as_bool) != expected_enabled
     {
         return AttachmentInspection {
             state: AttachmentState::Drifted,
@@ -464,7 +495,7 @@ fn inspect_codex_mcp_value(
     if transport
         .get("type")
         .and_then(serde_json::Value::as_str)
-        .is_some_and(|kind| kind != "stdio")
+        .is_some_and(|actual| actual != expected_transport)
     {
         return AttachmentInspection {
             state: AttachmentState::Drifted,
@@ -484,6 +515,36 @@ fn inspect_codex_mcp_value(
     let Some(actual_args) = actual_args else {
         return blocked("Codex MCP JSON args are not strings".to_owned());
     };
+    if let Some(expected_cwd) = expected_cwd
+        && transport.get("cwd").and_then(serde_json::Value::as_str)
+            != Some(expected_cwd.to_string_lossy().as_ref())
+    {
+        return AttachmentInspection {
+            state: AttachmentState::Drifted,
+            reason: "Codex MCP cwd differs from receipt".to_owned(),
+        };
+    }
+    if !expected_environment.is_empty() {
+        let actual = transport
+            .get("env_vars")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|values| {
+                values
+                    .iter()
+                    .map(serde_json::Value::as_str)
+                    .collect::<Option<Vec<_>>>()
+            });
+        let expected = expected_environment
+            .iter()
+            .map(|reference| reference.name.as_str())
+            .collect::<Vec<_>>();
+        if actual.as_deref() != Some(expected.as_slice()) {
+            return AttachmentInspection {
+                state: AttachmentState::Drifted,
+                reason: "Codex MCP environment references differ from receipt".to_owned(),
+            };
+        }
+    }
     if actual_command == command.to_string_lossy() && actual_args == args {
         AttachmentInspection {
             state: AttachmentState::Matched,
@@ -726,7 +787,17 @@ mod lifecycle_tests {
             "unrelated": {"future": true}
         });
         assert_eq!(
-            inspect_codex_mcp_value(&exact, "uze-example", &expected_command, &expected_args).state,
+            inspect_codex_mcp_value(
+                &exact,
+                "uze-example",
+                "stdio",
+                &expected_command,
+                &expected_args,
+                None,
+                &[],
+                None
+            )
+            .state,
             AttachmentState::Matched
         );
         let official_shape = serde_json::json!({
@@ -737,8 +808,12 @@ mod lifecycle_tests {
             inspect_codex_mcp_value(
                 &official_shape,
                 "uze-example",
+                "stdio",
                 &expected_command,
-                &expected_args
+                &expected_args,
+                None,
+                &[],
+                None,
             )
             .state,
             AttachmentState::Matched
@@ -746,23 +821,45 @@ mod lifecycle_tests {
         let changed =
             serde_json::json!({"name":"uze-example", "command":"/bin/changed", "args":["--serve"]});
         assert_eq!(
-            inspect_codex_mcp_value(&changed, "uze-example", &expected_command, &expected_args)
-                .state,
+            inspect_codex_mcp_value(
+                &changed,
+                "uze-example",
+                "stdio",
+                &expected_command,
+                &expected_args,
+                None,
+                &[],
+                None
+            )
+            .state,
             AttachmentState::Drifted
         );
         let foreign =
             serde_json::json!({"name":"foreign", "command":"/bin/example", "args":["--serve"]});
         assert_eq!(
-            inspect_codex_mcp_value(&foreign, "uze-example", &expected_command, &expected_args)
-                .state,
+            inspect_codex_mcp_value(
+                &foreign,
+                "uze-example",
+                "stdio",
+                &expected_command,
+                &expected_args,
+                None,
+                &[],
+                None
+            )
+            .state,
             AttachmentState::Conflict
         );
         assert_eq!(
             inspect_codex_mcp_value(
                 &serde_json::json!({}),
                 "uze-example",
+                "stdio",
                 &expected_command,
-                &expected_args
+                &expected_args,
+                None,
+                &[],
+                None,
             )
             .state,
             AttachmentState::Blocked

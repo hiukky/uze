@@ -80,10 +80,8 @@ impl UzeEngine {
 /// shape: `{"mcpServers": {"<name>": {"command", "args", ...}}}`, the same
 /// convention Claude Code's and Codex's own plugin systems already expect —
 /// see ADR-007) into one `Resource` per declared server. A package
-/// declaring more than one server produces resources that share one
-/// `Resource::identity()` (they share the same `mcp.json` path) — an
-/// accepted limitation, not solved here; the tracer bullet needs exactly
-/// one server per package.
+/// declaring more than one server produces distinct named resources while
+/// preserving the original `mcp.json` bytes only once in the Store.
 fn mcp_resources(id: &PackageId, package_root: &std::path::Path) -> Result<Vec<Resource>> {
     let manifest_path = package_root.join("mcp.json");
     if !manifest_path.is_file() {
@@ -105,10 +103,10 @@ fn mcp_resources(id: &PackageId, package_root: &std::path::Path) -> Result<Vec<R
     entries.sort_by_key(|(name, _)| name.as_str());
     entries
         .into_iter()
-        .map(|(_name, config)| {
+        .map(|(name, config)| {
             let payload = serde_json::to_vec(config)
                 .expect("mcp server config re-serialization is infallible");
-            Ok(Resource::from_package(
+            Ok(Resource::from_package_named(
                 id.clone(),
                 package_root.to_path_buf(),
                 Capability {
@@ -117,6 +115,7 @@ fn mcp_resources(id: &PackageId, package_root: &std::path::Path) -> Result<Vec<R
                     path: manifest_path.clone(),
                     payload,
                 },
+                name.to_owned(),
             ))
         })
         .collect()

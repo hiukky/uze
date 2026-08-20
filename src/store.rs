@@ -193,7 +193,7 @@ impl UzeStore {
         let path = self.home.registry_path();
         let payload =
             serde_json::to_vec_pretty(registry).expect("registry serialization is infallible");
-        fs::write(&path, payload).map_err(|source| UzeError::Write { path, source })
+        crate::persistence::write_atomic(&path, &payload)
     }
 
     /// Materializes only Codex's documented marketplace catalog, pointing at
@@ -229,11 +229,10 @@ impl UzeStore {
             "interface": { "displayName": "UZE Local" },
             "plugins": plugins,
         });
-        fs::write(
+        crate::persistence::write_atomic(
             &path,
-            serde_json::to_vec_pretty(&catalog).expect("catalog is serializable"),
+            &serde_json::to_vec_pretty(&catalog).expect("catalog is serializable"),
         )
-        .map_err(|source| UzeError::Write { path, source })
     }
 }
 
@@ -269,10 +268,22 @@ fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
     for entry in entries {
         let source_path = entry.path();
         let destination_path = destination.join(entry.file_name());
-        if source_path.is_dir() {
+        let metadata =
+            fs::symlink_metadata(&source_path).map_err(|source_error| UzeError::Read {
+                path: source_path.clone(),
+                source: source_error,
+            })?;
+        if metadata.file_type().is_symlink() {
+            copy_symlink(&source_path, &destination_path)?;
+        } else if metadata.is_dir() {
             copy_tree(&source_path, &destination_path)?;
-        } else if source_path.is_file() {
+        } else if metadata.is_file() {
             copy_file(&source_path, &destination_path)?;
+        } else {
+            return Err(UzeError::ExposureUnavailable(format!(
+                "plugin store cannot preserve special filesystem entry `{}`",
+                source_path.display()
+            )));
         }
     }
     Ok(())
@@ -283,5 +294,35 @@ fn copy_file(source: &Path, destination: &Path) -> Result<()> {
         path: destination.to_path_buf(),
         source: source_error,
     })?;
+    let permissions = fs::metadata(source)
+        .map_err(|source_error| UzeError::Read {
+            path: source.to_path_buf(),
+            source: source_error,
+        })?
+        .permissions();
+    fs::set_permissions(destination, permissions).map_err(|source_error| UzeError::Write {
+        path: destination.to_path_buf(),
+        source: source_error,
+    })?;
     Ok(())
+}
+
+#[cfg(unix)]
+fn copy_symlink(source: &Path, destination: &Path) -> Result<()> {
+    let target = fs::read_link(source).map_err(|source_error| UzeError::Read {
+        path: source.to_path_buf(),
+        source: source_error,
+    })?;
+    std::os::unix::fs::symlink(target, destination).map_err(|source_error| UzeError::Write {
+        path: destination.to_path_buf(),
+        source: source_error,
+    })
+}
+
+#[cfg(not(unix))]
+fn copy_symlink(source: &Path, _destination: &Path) -> Result<()> {
+    Err(UzeError::ExposureUnavailable(format!(
+        "plugin contains symlink `{}` which this platform cannot preserve",
+        source.display()
+    )))
 }

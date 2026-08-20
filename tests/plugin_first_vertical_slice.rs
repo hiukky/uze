@@ -49,7 +49,6 @@ fn mark_setup(home: &UzeHome, integration: &dyn IntegrationPort) {
             version: None,
             strategy: "test".to_owned(),
             installed: true,
-            managed_artifacts: Vec::new(),
         },
     )
     .unwrap();
@@ -187,11 +186,12 @@ fn one_plugin_install_is_planned_once_for_native_and_decomposed_harnesses() {
         serde_json::from_slice(&fs::read(root.join("config/opencode/opencode.json")).unwrap())
             .unwrap();
     assert_eq!(
-        config["mcp"]["uze-uze-plugin-first-conformance"]["type"],
+        config["mcp"]["uze-uze-plugin-first-conformance-uze-plugin-first-conformance"]["type"],
         "local"
     );
     assert_eq!(
-        config["mcp"]["uze-uze-plugin-first-conformance"]["command"][0],
+        config["mcp"]["uze-uze-plugin-first-conformance-uze-plugin-first-conformance"]["command"]
+            [0],
         "__UZE_MCP_FIXTURE_BINARY__"
     );
     assert!(

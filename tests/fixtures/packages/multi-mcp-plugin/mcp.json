@@ -1,0 +1,6 @@
+{
+  "mcpServers": {
+    "github": { "command": "/bin/github-mcp", "args": ["--stdio"] },
+    "filesystem": { "command": "/bin/filesystem-mcp", "args": ["/workspace"] }
+  }
+}

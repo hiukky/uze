@@ -30,6 +30,9 @@ pub enum ResourceOrigin {
 pub struct Resource {
     pub origin: ResourceOrigin,
     pub capability: Capability,
+    /// Standard-defined resource name when several resources share one
+    /// manifest path (for example, named MCP servers in `mcp.json`).
+    pub resource_name: Option<String>,
 }
 
 impl Resource {
@@ -37,6 +40,7 @@ impl Resource {
         Self {
             origin: ResourceOrigin::Project { root },
             capability,
+            resource_name: None,
         }
     }
 
@@ -44,7 +48,27 @@ impl Resource {
         Self {
             origin: ResourceOrigin::Package { id, root },
             capability,
+            resource_name: None,
         }
+    }
+
+    pub fn from_package_named(
+        id: PackageId,
+        root: PathBuf,
+        capability: Capability,
+        resource_name: String,
+    ) -> Self {
+        Self {
+            origin: ResourceOrigin::Package { id, root },
+            capability,
+            resource_name: Some(resource_name),
+        }
+    }
+
+    pub fn name(&self) -> String {
+        self.resource_name
+            .clone()
+            .unwrap_or_else(|| self.capability.name())
     }
 
     pub fn package_root(&self) -> Option<&Path> {
@@ -70,11 +94,10 @@ impl Resource {
                 let skill_name = self.capability.path.parent()?.file_name()?.to_str()?;
                 Some(format!("uze-{}-{}", id.as_str(), skill_name))
             }
-            // `mcp.json` sits at the package root, so its parent is the
-            // package directory itself — using it would just repeat the
-            // package id. The package id alone is enough today, since a
-            // package declares at most one MCP resource (see ADR-007).
-            CapabilityKind::Mcp => Some(format!("uze-{}", id.as_str())),
+            CapabilityKind::Mcp => self
+                .resource_name
+                .as_deref()
+                .map(|name| format!("uze-{}-{name}", id.as_str())),
             _ => None,
         }
     }
@@ -96,15 +119,17 @@ impl Resource {
                     .unwrap_or(&self.capability.path)
                     .display()
             ),
-            ResourceOrigin::Package { id, root } => format!(
-                "package:{}:{}",
-                id.as_str(),
-                self.capability
+            ResourceOrigin::Package { id, root } => {
+                let path = self
+                    .capability
                     .path
                     .strip_prefix(root)
-                    .unwrap_or(&self.capability.path)
-                    .display()
-            ),
+                    .unwrap_or(&self.capability.path);
+                match &self.resource_name {
+                    Some(name) => format!("package:{}:{}:{name}", id.as_str(), path.display()),
+                    None => format!("package:{}:{}", id.as_str(), path.display()),
+                }
+            }
         }
     }
 }
@@ -273,9 +298,9 @@ mod tests {
     }
 
     #[test]
-    fn mcp_package_resource_uses_the_package_id_alone() {
+    fn mcp_package_resource_is_namespaced_by_server_name() {
         let id = PackageId::from_plugin_name("demo-package", Path::new("plugin.json")).unwrap();
-        let resource = Resource::from_package(
+        let resource = Resource::from_package_named(
             id,
             PathBuf::from("/uze-home/store/packages/demo-package"),
             Capability {
@@ -284,10 +309,11 @@ mod tests {
                 path: PathBuf::from("/uze-home/store/packages/demo-package/mcp.json"),
                 payload: Vec::new(),
             },
+            "github".to_owned(),
         );
         assert_eq!(
             resource.attachment_entry_name().as_deref(),
-            Some("uze-demo-package")
+            Some("uze-demo-package-github")
         );
     }
 }
