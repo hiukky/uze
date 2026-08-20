@@ -85,8 +85,9 @@
       preserve the explicit compatibility-import CLI behavior.
 - [x] 7.4 Make the project resolver discover standard project resources only;
       do not scan named vendor directories in the core.
-- [x] 7.5 Add peer Claude and Codex integration implementations for the
-      standard Agent Skill validation path without a source/destination flow.
+- [x] 7.5 Add peer Claude, Codex, and OpenCode integration implementations
+      for the standard Agent Skill validation path without a source/destination
+      flow.
 - [x] 7.6 Add router unit tests and integration-contract tests using fake
       harness capabilities; keep them independent of real executables.
 - [x] 7.7 Preserve and update CLI tests to confirm inspection remains
@@ -101,5 +102,8 @@
 - [x] 8.1 Add an isolated playground containing the single standard Agent
       Skill measured by contract tests and opt-in Claude Code/Codex probes,
       with no filesystem projection or mutation.
-- [x] 8.2 Run the Claude Code and Codex probes against authenticated local
-      harnesses; record each result as verified or not exposed.
+- [ ] 8.2 Run the Claude Code and Codex probes against authenticated local
+      harnesses; record a result only when the harness completes without an
+      API or session-limit error. Codex is verified; Claude remains unverified.
+- [ ] 8.3 Run the OpenCode probe against a configured local provider and
+      record the result separately from its documentation-backed route.

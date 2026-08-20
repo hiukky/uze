@@ -5,7 +5,9 @@ mod importer;
 mod integrations;
 use uze::{Result, build_report, project::resolve_project, report::render_text};
 
-use integrations::{claude::ClaudeIntegration, codex::CodexIntegration};
+use integrations::{
+    claude::ClaudeIntegration, codex::CodexIntegration, opencode::OpenCodeIntegration,
+};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -52,7 +54,9 @@ fn run(cli: Cli) -> Result<()> {
         Command::Inspect { project, format } => {
             let claude = ClaudeIntegration;
             let codex = CodexIntegration;
-            let integrations: [&dyn uze::integration::IntegrationPort; 2] = [&claude, &codex];
+            let opencode = OpenCodeIntegration;
+            let integrations: [&dyn uze::integration::IntegrationPort; 3] =
+                [&claude, &codex, &opencode];
             let report = build_report(&resolve_project(project)?, &integrations);
             match format {
                 OutputFormat::Text => print!("{}", render_text(&report)),

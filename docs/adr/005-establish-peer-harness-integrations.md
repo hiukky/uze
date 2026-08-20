@@ -91,6 +91,8 @@ unit/contract tests. `cargo test --lib` verifies the core without integration
 modules; real-harness conformance remains intentionally pending.
 
 2026-08-20: The opt-in Agent Skill playground probe found Codex CLI 0.148.0
-`VERIFIED` for `.agents/skills`, while Claude Code 2.1.237 was `NOT_EXPOSED`
-without filesystem projection. Both results are represented by their peer
-integration capability declarations.
+`VERIFIED` for `.agents/skills`. A later Claude Code 2.1.237 probe returned an
+API session-limit response, so Claude remains `UNVERIFIED`; API failures are
+not capability evidence. OpenCode 1.18.18 is an additional peer integration:
+its documentation declares `.agents/skills` discovery, while its local
+real-harness probe remains `UNVERIFIED` until a provider is configured.

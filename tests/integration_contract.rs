@@ -11,9 +11,12 @@ use uze::{
 mod claude;
 #[path = "../src/integrations/codex.rs"]
 mod codex;
+#[path = "../src/integrations/opencode.rs"]
+mod opencode;
 
 use claude::ClaudeIntegration;
 use codex::CodexIntegration;
+use opencode::OpenCodeIntegration;
 
 fn fixture_project() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("playground/agent-skill-conformance")
@@ -24,6 +27,7 @@ fn peer_integrations_route_one_standard_skill_without_conversion() {
     let environment = resolve_project(fixture_project()).unwrap();
     let claude = ClaudeIntegration;
     let codex = CodexIntegration;
+    let opencode = OpenCodeIntegration;
 
     let claude_assessment = assess_environment(&environment, &claude);
     let claude_skill = claude_assessment
@@ -31,7 +35,7 @@ fn peer_integrations_route_one_standard_skill_without_conversion() {
         .find(|item| item.capability_path.ends_with("SKILL.md"))
         .unwrap();
     assert_eq!(claude_skill.decision.route, CompatibilityRoute::Unsupported);
-    assert_eq!(claude_skill.decision.exposure, ExposureState::NotExposed);
+    assert_eq!(claude_skill.decision.exposure, ExposureState::Unverified);
 
     let codex_assessment = assess_environment(&environment, &codex);
     let codex_skill = codex_assessment
@@ -40,6 +44,14 @@ fn peer_integrations_route_one_standard_skill_without_conversion() {
         .unwrap();
     assert_eq!(codex_skill.decision.route, CompatibilityRoute::Native);
     assert_eq!(codex_skill.decision.exposure, ExposureState::Verified);
+
+    let opencode_assessment = assess_environment(&environment, &opencode);
+    let opencode_skill = opencode_assessment
+        .iter()
+        .find(|item| item.capability_path.ends_with("SKILL.md"))
+        .unwrap();
+    assert_eq!(opencode_skill.decision.route, CompatibilityRoute::Native);
+    assert_eq!(opencode_skill.decision.exposure, ExposureState::Unverified);
 
     assert_eq!(
         environment

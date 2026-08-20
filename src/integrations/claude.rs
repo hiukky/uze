@@ -12,8 +12,8 @@ impl IntegrationPort for ClaudeIntegration {
 
     fn capabilities(&self) -> HarnessCapabilities {
         HarnessCapabilities {
-            exposure: ExposureState::NotExposed,
-            evidence: "Claude Code 2.1.237 conformance on 2026-08-20 did not expose the Agent Skill from .agents/skills without a vendor-specific path."
+            exposure: ExposureState::Unverified,
+            evidence: "Claude Code Agent Skill exposure from .agents/skills remains unverified: the latest opt-in probe was blocked by an API session-limit response and therefore produced no conformance evidence."
                 .to_owned(),
             ..HarnessCapabilities::default()
         }
