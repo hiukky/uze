@@ -29,9 +29,99 @@ pub enum ExposureMechanism {
         source: PathBuf,
         target_relative: PathBuf,
     },
+    /// A persistent, UZE-owned reference placed once in a harness's
+    /// user-scope discovery directory (e.g. `~/.claude/skills`,
+    /// `~/.agents/skills`), pointing at content inside the UZE store. Unlike
+    /// `FilesystemProjection`, it is not tied to any one project workspace
+    /// or session and is expected to outlive a single harness invocation.
+    /// See ADR-006.
+    ManagedUserScopeReference {
+        discovery_root: PathBuf,
+        entry_name: String,
+        source: PathBuf,
+    },
     Unsupported {
         rationale: String,
     },
+}
+
+impl ExposureMechanism {
+    /// Idempotently creates or refreshes a persistent, UZE-owned reference at
+    /// the harness's user-scope discovery location so a plain harness
+    /// invocation can resolve it without further action. Only valid for
+    /// `ManagedUserScopeReference`; returns the created/verified entry path.
+    /// Never touches an entry it does not already own.
+    pub fn attach(&self) -> Result<PathBuf> {
+        let ExposureMechanism::ManagedUserScopeReference {
+            discovery_root,
+            entry_name,
+            source,
+        } = self
+        else {
+            return Err(UzeError::ExposureUnavailable(
+                "this exposure mechanism does not support persistent attachment".to_owned(),
+            ));
+        };
+        fs::create_dir_all(discovery_root).map_err(|source_error| UzeError::Write {
+            path: discovery_root.clone(),
+            source: source_error,
+        })?;
+        let target = discovery_root.join(entry_name);
+        match fs::symlink_metadata(&target) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                let current = fs::read_link(&target).map_err(|source_error| UzeError::Read {
+                    path: target.clone(),
+                    source: source_error,
+                })?;
+                if &current != source {
+                    fs::remove_file(&target).map_err(|source_error| UzeError::Write {
+                        path: target.clone(),
+                        source: source_error,
+                    })?;
+                    create_symlink(source, &target)?;
+                }
+            }
+            Ok(_) => return Err(UzeError::ManagedEntryConflict(target)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                create_symlink(source, &target)?;
+            }
+            Err(error) => {
+                return Err(UzeError::Read {
+                    path: target,
+                    source: error,
+                });
+            }
+        }
+        Ok(target)
+    }
+
+    /// Removes only the UZE-owned reference this mechanism describes, and
+    /// only if it still points at `source`. Never removes an entry it did
+    /// not create, and never removes the shared discovery directory itself.
+    pub fn detach(&self) -> Result<()> {
+        let ExposureMechanism::ManagedUserScopeReference {
+            discovery_root,
+            entry_name,
+            source,
+        } = self
+        else {
+            return Ok(());
+        };
+        let target = discovery_root.join(entry_name);
+        let Ok(metadata) = fs::symlink_metadata(&target) else {
+            return Ok(());
+        };
+        if !metadata.file_type().is_symlink() {
+            return Ok(());
+        }
+        if fs::read_link(&target).ok().as_deref() != Some(source.as_path()) {
+            return Ok(());
+        }
+        fs::remove_file(&target).map_err(|source_error| UzeError::Write {
+            path: target,
+            source: source_error,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -154,6 +244,18 @@ impl ExposurePlan {
                     }),
                 })
             }
+            ExposureMechanism::ManagedUserScopeReference { .. } => {
+                // A persistent, user-scope reference is not a session-scoped
+                // managed artifact: it is created/refreshed once via
+                // `ExposureMechanism::attach`, not per invocation, and must
+                // not be torn down when a `PreparedExposure` is dropped.
+                Ok(PreparedExposure {
+                    working_directory: workspace.to_path_buf(),
+                    arguments: Vec::new(),
+                    runtime_directory: None,
+                    managed: None,
+                })
+            }
             ExposureMechanism::Unsupported { rationale } => {
                 Err(UzeError::ExposureUnavailable(rationale.clone()))
             }
@@ -214,4 +316,111 @@ fn create_symlink(source: &Path, target: &Path) -> Result<()> {
 #[cfg(not(unix))]
 fn create_symlink(_source: &Path, target: &Path) -> Result<()> {
     Err(UzeError::UnsupportedRuntimeProjection(target.to_path_buf()))
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    fn temp_dir(label: &str) -> PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "uze-exposure-{label}-{}-{nonce}",
+            std::process::id()
+        ))
+    }
+
+    fn managed_reference(discovery_root: &Path, source: &Path) -> ExposureMechanism {
+        ExposureMechanism::ManagedUserScopeReference {
+            discovery_root: discovery_root.to_path_buf(),
+            entry_name: "uze-example".to_owned(),
+            source: source.to_path_buf(),
+        }
+    }
+
+    #[test]
+    fn attach_creates_a_symlink_and_is_idempotent() {
+        let root = temp_dir("attach");
+        let discovery_root = root.join("skills");
+        let source = root.join("store-entry");
+        fs::create_dir_all(&source).unwrap();
+
+        let mechanism = managed_reference(&discovery_root, &source);
+        let target = mechanism.attach().unwrap();
+        assert_eq!(target, discovery_root.join("uze-example"));
+        assert!(target.is_symlink());
+        assert_eq!(fs::read_link(&target).unwrap(), source);
+
+        // Second attach is a no-op, not an error and not a re-link.
+        let target_again = mechanism.attach().unwrap();
+        assert_eq!(target_again, target);
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn attach_never_overwrites_an_entry_it_does_not_own() {
+        let root = temp_dir("conflict");
+        let discovery_root = root.join("skills");
+        fs::create_dir_all(&discovery_root).unwrap();
+        fs::create_dir_all(discovery_root.join("uze-example")).unwrap();
+        let source = root.join("store-entry");
+        fs::create_dir_all(&source).unwrap();
+
+        let mechanism = managed_reference(&discovery_root, &source);
+        let error = mechanism.attach().unwrap_err();
+        assert!(matches!(error, UzeError::ManagedEntryConflict(_)));
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn detach_removes_only_the_reference_it_owns() {
+        let root = temp_dir("detach");
+        let discovery_root = root.join("skills");
+        let source = root.join("store-entry");
+        fs::create_dir_all(&source).unwrap();
+
+        let mechanism = managed_reference(&discovery_root, &source);
+        let target = mechanism.attach().unwrap();
+        assert!(target.exists());
+
+        mechanism.detach().unwrap();
+        assert!(!target.exists());
+        assert!(
+            discovery_root.exists(),
+            "discovery root itself is preserved"
+        );
+
+        // Detaching again is a no-op, not an error.
+        mechanism.detach().unwrap();
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn detach_does_not_remove_an_entry_repointed_elsewhere() {
+        let root = temp_dir("repointed");
+        let discovery_root = root.join("skills");
+        let source = root.join("store-entry");
+        let other = root.join("unrelated-entry");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&other).unwrap();
+
+        let mechanism = managed_reference(&discovery_root, &source);
+        let target = mechanism.attach().unwrap();
+        fs::remove_file(&target).unwrap();
+        create_symlink(&other, &target).unwrap();
+
+        mechanism.detach().unwrap();
+        assert!(
+            target.exists(),
+            "entry no longer pointing at source is left alone"
+        );
+
+        fs::remove_dir_all(&root).unwrap();
+    }
 }

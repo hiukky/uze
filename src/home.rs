@@ -50,6 +50,12 @@ impl UzeHome {
         self.state_dir().join("packages.json")
     }
 
+    /// Per-harness machine integration state: detection, strategy, whether
+    /// setup completed, and managed artifact paths. Never harness secrets.
+    pub fn integrations_state_path(&self) -> PathBuf {
+        self.state_dir().join("integrations.json")
+    }
+
     pub fn cache_dir(&self) -> PathBuf {
         self.root.join("cache")
     }

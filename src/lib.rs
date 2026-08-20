@@ -15,6 +15,7 @@ pub mod project;
 pub mod report;
 pub mod router;
 pub mod runtime;
+pub mod state;
 pub mod store;
 
 pub use bundle::ImportedBundle;

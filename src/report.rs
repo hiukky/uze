@@ -140,6 +140,9 @@ fn exposure_mechanism(mechanism: &crate::exposure::ExposureMechanism) -> &'stati
         crate::exposure::ExposureMechanism::DirectNative { .. } => "DIRECT_NATIVE",
         crate::exposure::ExposureMechanism::RuntimeBridge { .. } => "RUNTIME_BRIDGE",
         crate::exposure::ExposureMechanism::FilesystemProjection { .. } => "FILESYSTEM_PROJECTION",
+        crate::exposure::ExposureMechanism::ManagedUserScopeReference { .. } => {
+            "MANAGED_USER_SCOPE_REFERENCE"
+        }
         crate::exposure::ExposureMechanism::Unsupported { .. } => "UNSUPPORTED",
     }
 }
