@@ -5,11 +5,11 @@ use std::{
 };
 
 fn fixture_project() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/portable-project")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/projects/portable-project")
 }
 
 fn package_fixture() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("playground/agent-plugin-package")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/packages/agent-plugin-skill")
 }
 
 fn temporary_home(label: &str) -> PathBuf {

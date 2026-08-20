@@ -1,4 +1,4 @@
-# Agent Plugin Store Fixture
+# Agent Plugin Package Fixture
 
 This is the clean external Agent Plugins 1.0 package used by the UZE store
 and integration conformance tests. It contains only `plugin.json` and

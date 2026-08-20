@@ -25,7 +25,7 @@ use codex::CodexIntegration;
 use opencode::OpenCodeIntegration;
 
 fn package_fixture() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("playground/agent-plugin-package")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/packages/agent-plugin-skill")
 }
 
 fn temporary_home(label: &str) -> PathBuf {
