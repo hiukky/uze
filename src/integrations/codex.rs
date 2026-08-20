@@ -3,7 +3,7 @@ use uze::{
     exposure::{ExposureMechanism, ExposurePlan},
     integration::IntegrationPort,
     project::Resource,
-    router::{CompatibilityRoute, ExposureState, HarnessCapabilities},
+    router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus},
 };
 
 pub struct CodexIntegration;
@@ -16,8 +16,8 @@ impl IntegrationPort for CodexIntegration {
     fn capabilities(&self) -> HarnessCapabilities {
         HarnessCapabilities {
             adaptable: [CapabilityKind::AgentSkill].into_iter().collect(),
-            exposure: ExposureState::Verified,
-            evidence: "Codex CLI conformance verified the UZE store → explicit session-scoped runtime projection → harness path for one Agent Skill. Native .agents/skills discovery is tracked separately."
+            verification: VerificationStatus::Unverified,
+            evidence: "Codex documents project Agent Skill discovery. UZE currently has only an explicit compatibility projection; successful exposure must be recorded by each real conformance run."
                 .to_owned(),
             ..HarnessCapabilities::default()
         }
@@ -43,12 +43,12 @@ impl IntegrationPort for CodexIntegration {
         ExposurePlan {
             representation: resource.capability.representation,
             route: CompatibilityRoute::Adaptable,
-            exposure: ExposureState::Verified,
+            verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::FilesystemProjection {
                 source: skill_directory.to_path_buf(),
                 target_relative: std::path::PathBuf::from(".agents/skills").join(skill_name),
             },
-            evidence: "Codex's native .agents/skills discovery is reused only through an explicit session-scoped projection under UZE_HOME/runtime."
+            evidence: "Codex's project .agents/skills discovery is reused only through an explicit UZE-managed projection in the real caller workspace. The project cwd is preserved; no shadow workspace is created."
                 .to_owned(),
         }
     }
@@ -58,7 +58,7 @@ fn unsupported(resource: &Resource, rationale: &str) -> ExposurePlan {
     ExposurePlan {
         representation: resource.capability.representation,
         route: CompatibilityRoute::Unsupported,
-        exposure: ExposureState::NotExposed,
+        verification: VerificationStatus::NotExposed,
         mechanism: ExposureMechanism::Unsupported {
             rationale: rationale.to_owned(),
         },

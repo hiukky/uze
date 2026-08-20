@@ -153,6 +153,14 @@ impl UzeStore {
         Ok(self.load_registry()?.packages.len())
     }
 
+    /// Lists installed package identities in deterministic order. Package
+    /// selection and dependency resolution are intentionally out of scope for
+    /// this PoC; the composed local environment currently includes every
+    /// locally installed package.
+    pub fn package_ids(&self) -> Result<Vec<PackageId>> {
+        Ok(self.load_registry()?.packages.into_keys().collect())
+    }
+
     fn load_registry(&self) -> Result<PackageRegistry> {
         let path = self.home.registry_path();
         if !path.exists() {

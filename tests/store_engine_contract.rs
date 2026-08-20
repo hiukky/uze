@@ -83,3 +83,28 @@ fn engine_composes_a_standard_resource_from_the_store() {
 
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn engine_composes_project_and_store_sources_into_one_effective_environment() {
+    let root = temporary_home("combined-environment");
+    let project = root.join("project");
+    fs::create_dir_all(&project).unwrap();
+    fs::write(project.join("AGENTS.md"), "# Project-owned instructions\n").unwrap();
+    let store = UzeStore::new(UzeHome::at(root.join("uze-home")));
+    let package = store.install_agent_plugin(package_fixture()).unwrap();
+
+    let environment = UzeEngine::new(store).compose_project(&project).unwrap();
+    assert_eq!(environment.root, project.canonicalize().unwrap());
+    assert_eq!(environment.resources.len(), 2);
+    assert!(
+        environment
+            .resources
+            .iter()
+            .any(|resource| matches!(resource.origin, ResourceOrigin::Project { .. }))
+    );
+    assert!(environment.resources.iter().any(|resource| {
+        matches!(resource.origin, ResourceOrigin::Package { ref id, .. } if id == &package.id)
+    }));
+
+    fs::remove_dir_all(root).unwrap();
+}

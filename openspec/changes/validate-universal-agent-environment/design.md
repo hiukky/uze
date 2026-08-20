@@ -84,11 +84,12 @@ filesystem synchronizer as the primary product—were rejected because both
 would make vendor configuration, rather than portable project composition,
 the product's core abstraction. See ADR-001 and ADR-003.
 
-For the initial project-discovery path, the effective environment contains only
-project resources. The first UZE integration slice additionally composes one
-Agent Plugin package from the UZE store. The model reserves global, user, and
-other package layers without implementing profiles, cloud state, or a package
-graph.
+The effective environment is composed from multiple resource sources: project
+resources remain at the project, and Agent Plugin packages installed by UZE
+remain in the UZE Store. The Engine merges those two sources before routing;
+runtime resources are intentionally empty in this increment. The model reserves
+global, user, and other package layers without implementing profiles, cloud
+state, or a package graph.
 
 ### 1a. Keep the core harness-agnostic; make integrations peers
 
@@ -124,7 +125,9 @@ conversion pipeline. See ADR-005.
 ### 1b. Compose package resources through UZE_HOME before exposure
 
 `UZE_HOME` is the sole source of UZE-owned paths. It uses the `UZE_HOME`
-environment variable when set and otherwise resolves to `~/.uze`. The root
+environment variable when set and otherwise resolves to `~/.uze`. The CLI
+composition root resolves it once for `uze add` and `uze inspect`; deterministic
+tests use `UzeHome::at`. The root
 contains operational state only; it is not a UZE replacement for Agent Plugin
 manifests:
 
@@ -150,8 +153,12 @@ Representation and exposure are independent. A resource can remain
 `FILESYSTEM_PROJECTION`; a standard representation is never evidence that a
 harness can discover a UZE store path directly. Integrations choose one of
 `DIRECT_NATIVE`, `RUNTIME_BRIDGE`, `FILESYSTEM_PROJECTION`, or `UNSUPPORTED`.
-Filesystem projection is permitted only as an explicit, session-scoped
-fallback under `$UZE_HOME/runtime`, never in the caller's project workspace.
+Filesystem projection is permitted only as an explicit compatibility fallback.
+It preserves the real caller project as the harness CWD and may create only the
+minimal UZE-managed artifact required by a documented discovery mechanism. Its
+runtime ownership metadata lives under `$UZE_HOME/runtime/<integration>/<session>`
+and it cleans up only the artifact it created; it never copies or virtualizes
+the project into a shadow workspace.
 
 ### 2. Keep standards and runtime protocols at distinct boundaries
 
@@ -212,7 +219,8 @@ The classifier distinguishes two domains:
 | Protocol capabilities | ACP negotiation, when ACP is selected | Preserve and report advertised support; do not re-discover or re-label it. |
 | Capability representation | External standard, native source, or importer provenance | Record `STANDARD`, `NATIVE`, `UZE`, or `FOREIGN`; this does not claim availability in a harness. |
 | Compatibility route | Capability plus integration-supplied `HarnessCapabilities` | Report `NATIVE`, `ADAPTABLE`, `DEGRADED`, or `UNSUPPORTED`, with evidence. |
-| Exposure / verification | Integration result or conformance test | Report whether the route is `AVAILABLE`, `NOT_EXPOSED`, `VERIFIED`, or `UNVERIFIED` as applicable. |
+| Exposure strategy | Integration-specific `ExposurePlan` | Report `DIRECT_NATIVE`, `RUNTIME_BRIDGE`, `FILESYSTEM_PROJECTION`, or `UNSUPPORTED`; strategy is not verification. |
+| Verification | Real conformance result | Report `VERIFIED`, `NOT_EXPOSED`, `UNVERIFIED`, `FAILED`, or `BLOCKED_BY_ENVIRONMENT`. Authentication, quota, executable, service, and timeout blocks are never compatibility failures. |
 
 The initial implementation keeps only the fields necessary for the Agent Skill
 PoC, but preserves the separation. In particular, a standard representation
@@ -240,9 +248,9 @@ as evidence and optional enhancements—not as canonical UZE configuration.
 ### 6. Keep importers and filesystem fallback outside normal composition
 
 Project discovery starts with standard project resources. Foreign formats are
-read only by explicit importers. Filesystem projection is not implemented in
-this increment and remains a fallback after standard, native integration, and
-explicit adaptation have been considered.
+read only by explicit importers. Filesystem projection is a managed fallback
+after standard, native integration, and explicit adaptation have been
+considered; it is not normal harness integration or project synchronization.
 
 ## Standards Coverage / Remaining Gap
 
@@ -275,9 +283,11 @@ explicit adaptation have been considered.
 ## Migration Plan
 
 The inspector's static `Harness` enum, evidence matrix, and vendor-directory
-discovery move behind integration and importer boundaries. The CLI remains
-read-only. Existing bundle import remains available as explicit foreign-format
-import; its Claude-specific discovery moves to `ClaudePluginImporter`.
+discovery move behind integration and importer boundaries. The CLI adds the
+minimal local `uze add` store operation and makes `uze inspect` resolve the
+actual composed environment; it is not a harness launcher. Existing bundle
+import remains available as explicit foreign-format import; its Claude-specific
+discovery moves to `ClaudePluginImporter`.
 
 The LikeC4 model is updated in the same increment to show the harness-agnostic
 core and peer Claude/Codex integration containers.

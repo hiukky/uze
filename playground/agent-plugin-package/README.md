@@ -6,5 +6,7 @@ and integration conformance tests. It contains only `plugin.json` and
 harness configuration.
 
 The UZE E2E installs this package once into a temporary `$UZE_HOME`, composes
-its `SKILL.md` through `UzeEngine`, and lets the selected integration choose an
-explicit exposure mechanism.
+its `SKILL.md` with project-owned resources through `UzeEngine`, and passes the
+same stored resource identity to peer integrations. The proof token is
+behavioral evidence that the skill was exposed and followed; it is not a
+cryptographic proof. Native discovery fixtures are deliberately separate.

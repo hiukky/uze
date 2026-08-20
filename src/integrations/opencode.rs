@@ -3,7 +3,7 @@ use uze::{
     exposure::{ExposureMechanism, ExposurePlan},
     integration::IntegrationPort,
     project::Resource,
-    router::{CompatibilityRoute, ExposureState, HarnessCapabilities},
+    router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus},
 };
 
 /// OpenCode's documentation declares `.agents/skills/*/SKILL.md` as a native
@@ -19,7 +19,7 @@ impl IntegrationPort for OpenCodeIntegration {
     fn capabilities(&self) -> HarnessCapabilities {
         HarnessCapabilities {
             adaptable: [CapabilityKind::AgentSkill].into_iter().collect(),
-            exposure: ExposureState::Unverified,
+            verification: VerificationStatus::Unverified,
             evidence: "OpenCode documents native .agents/skills discovery; UZE store exposure would use an explicit runtime filesystem fallback and remains unverified."
                 .to_owned(),
             ..HarnessCapabilities::default()
@@ -46,12 +46,12 @@ impl IntegrationPort for OpenCodeIntegration {
         ExposurePlan {
             representation: resource.capability.representation,
             route: CompatibilityRoute::Adaptable,
-            exposure: ExposureState::Unverified,
+            verification: VerificationStatus::Unverified,
             mechanism: ExposureMechanism::FilesystemProjection {
                 source: skill_directory.to_path_buf(),
                 target_relative: std::path::PathBuf::from(".agents/skills").join(skill_name),
             },
-            evidence: "OpenCode's native discovery path is used only through an explicit session-scoped UZE runtime projection."
+            evidence: "OpenCode's project discovery path is used only through an explicit UZE-managed projection in the real caller workspace; it remains unverified without a configured provider."
                 .to_owned(),
         }
     }
@@ -61,7 +61,7 @@ fn unsupported(resource: &Resource, rationale: &str) -> ExposurePlan {
     ExposurePlan {
         representation: resource.capability.representation,
         route: CompatibilityRoute::Unsupported,
-        exposure: ExposureState::NotExposed,
+        verification: VerificationStatus::NotExposed,
         mechanism: ExposureMechanism::Unsupported {
             rationale: rationale.to_owned(),
         },

@@ -34,6 +34,16 @@ configuration translator.
   discovery and resolution of a project-owned portable core; parsing a plugin
   bundle or writing a harness-specific directory is allowed only when it is
   necessary, safe, and visibly reported.
+- Makes UZE Store authoritative only for UZE-installed packages and composes
+  those resources with project-owned resources in one effective environment;
+  it does not copy project standards into the Store.
+- Records normal harness invocation as the UX target. Per-session flags and
+  filesystem projection are conformance/compatibility mechanisms, not a UZE
+  launcher architecture. Any projection preserves the real project CWD and is
+  owned and cleaned up explicitly by UZE.
+- Separates exposure strategy from real verification, including explicit
+  environment-blocked outcomes for quota, authentication, executables,
+  temporary service failures, and timeouts.
 - Separates protocol capabilities from harness/project capabilities. ACP
   advertises the former; UZE classifies the latter as `STANDARD`, `NATIVE`,
   `ADAPTABLE`, or `UNSUPPORTED` and never silently converts them.

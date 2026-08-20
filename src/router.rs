@@ -13,14 +13,22 @@ pub enum CompatibilityRoute {
     Unsupported,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+/// Evidence from an actual exposure attempt. This is intentionally distinct
+/// from representation and compatibility: an external quota or an absent
+/// executable cannot demonstrate that a capability is unsupported.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum ExposureState {
-    Available,
-    NotExposed,
-    Verified,
+pub enum VerificationStatus {
     #[default]
     Unverified,
+    NotExposed,
+    Verified,
+    Failed {
+        reason: String,
+    },
+    BlockedByEnvironment {
+        reason: String,
+    },
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -29,14 +37,14 @@ pub struct HarnessCapabilities {
     pub native: BTreeSet<CapabilityKind>,
     pub adaptable: BTreeSet<CapabilityKind>,
     pub degraded: BTreeSet<CapabilityKind>,
-    pub exposure: ExposureState,
+    pub verification: VerificationStatus,
     pub evidence: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct RouteDecision {
     pub route: CompatibilityRoute,
-    pub exposure: ExposureState,
+    pub verification: VerificationStatus,
     pub rationale: String,
     pub evidence: String,
 }
@@ -74,7 +82,7 @@ pub fn route(capability: &Capability, harness: &HarnessCapabilities) -> RouteDec
 
     RouteDecision {
         route,
-        exposure: harness.exposure,
+        verification: harness.verification.clone(),
         rationale,
         evidence: harness.evidence.clone(),
     }
@@ -102,6 +110,6 @@ mod tests {
 
         let decision = route(&capability, &capabilities);
         assert_eq!(decision.route, CompatibilityRoute::Native);
-        assert_eq!(decision.exposure, ExposureState::Unverified);
+        assert_eq!(decision.verification, VerificationStatus::Unverified);
     }
 }
