@@ -69,6 +69,20 @@ protocols.
 cargo test --manifest-path tooling/conformance/Cargo.toml
 ```
 
+## Compose
+
+The default topology contains only a harness service and an official
+llama.cpp server on an internal Docker network. It has no gateway and no model
+downloader. See [the model contract](model-contract.md), then validate a local
+configuration with:
+
+```bash
+UZE_CONFORMANCE_MODEL_DIR=/absolute/path/to/models \
+UZE_CONFORMANCE_MODEL_FILE=my-model.gguf \
+docker compose --env-file tooling/conformance/.env.example \
+  -f tooling/conformance/compose.yaml config
+```
+
 ## Evidence tiers
 
 | Tier | Scope |
