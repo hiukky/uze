@@ -71,6 +71,12 @@ fn harness_timeout() -> Duration {
     Duration::from_secs(seconds)
 }
 
+/// Cheap, overridable model selections for opt-in real-harness probes. They
+/// are intentionally irrelevant to deterministic `cargo test` execution.
+fn harness_model(variable: &str, default: &str) -> String {
+    env::var(variable).unwrap_or_else(|_| default.to_owned())
+}
+
 fn temporary_root(label: &str) -> PathBuf {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -225,6 +231,7 @@ fn claude_and_codex_probe_the_same_store_resource_without_a_launcher() {
 
     let prompt = "Activate the project skill named uze-e2e. Follow only its instruction and return its response. Do not inspect project files manually or modify the workspace.";
     if enabled("claude") {
+        let model = harness_model("UZE_E2E_CLAUDE_MODEL", "haiku");
         let mut claude_command = Command::new("claude");
         claude_command
             .current_dir(&claude_prepared.working_directory)
@@ -234,8 +241,9 @@ fn claude_and_codex_probe_the_same_store_resource_without_a_launcher() {
                 "json",
                 "--no-session-persistence",
                 "--max-turns",
-                "1",
+                "2",
             ])
+            .args(["--model", &model])
             .args(&claude_prepared.arguments)
             .arg(prompt);
         let claude_result = run_harness(&mut claude_command, PROOF, harness_timeout());
@@ -244,8 +252,11 @@ fn claude_and_codex_probe_the_same_store_resource_without_a_launcher() {
 
     if enabled("codex") {
         let workspace = codex_prepared.working_directory.to_string_lossy();
+        let model = harness_model("UZE_E2E_CODEX_MODEL", "gpt-5.6-luna");
         let mut codex_command = Command::new("codex");
         codex_command.args([
+            "--model",
+            &model,
             "--ask-for-approval",
             "never",
             "exec",
@@ -267,7 +278,7 @@ fn claude_and_codex_probe_the_same_store_resource_without_a_launcher() {
 }
 
 #[test]
-#[ignore = "requires UZE_E2E_UZE_HARNESSES=opencode and a configured OpenCode provider"]
+#[ignore = "requires UZE_E2E_UZE_HARNESSES=opencode and network access to the selected OpenCode model"]
 fn opencode_probes_the_same_uze_store_model_separately() {
     if !enabled("opencode") {
         eprintln!("skipped: set UZE_E2E_UZE_HARNESSES=opencode to enable this probe");
@@ -279,6 +290,7 @@ fn opencode_probes_the_same_uze_store_model_separately() {
         .prepare(&fixture.home, "opencode", "agent-skill", &fixture.workspace)
         .expect("OpenCode fallback can prepare one managed artifact");
     let workspace = prepared.working_directory.to_string_lossy();
+    let model = harness_model("UZE_E2E_OPENCODE_MODEL", "opencode/deepseek-v4-flash-free");
     let mut command = Command::new("opencode");
     command.args([
         "run",
@@ -286,6 +298,8 @@ fn opencode_probes_the_same_uze_store_model_separately() {
         &workspace,
         "--format",
         "json",
+        "--model",
+        &model,
         "Activate the project skill named uze-e2e. Follow only its instruction and return its response. Do not inspect project files manually or modify the workspace.",
     ]);
     let result = run_harness(&mut command, PROOF, harness_timeout());
