@@ -4,12 +4,19 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum UzeError {
+    #[error("could not determine the default home directory; set UZE_HOME")]
+    MissingHomeDirectory,
     #[error("project path does not exist: {0}")]
     MissingPath(PathBuf),
     #[error("expected a directory: {0}")]
     NotDirectory(PathBuf),
     #[error("failed to read {path}: {source}")]
     Read {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    #[error("failed to write {path}: {source}")]
+    Write {
         path: PathBuf,
         source: std::io::Error,
     },
@@ -22,6 +29,24 @@ pub enum UzeError {
     MissingManifest(PathBuf),
     #[error("unsafe path reference in {path}: {reference}")]
     UnsafePathReference { path: PathBuf, reference: String },
+    #[error("Agent Plugin manifest is missing a string name: {0}")]
+    MissingPackageName(PathBuf),
+    #[error("invalid Agent Plugin name `{name}` in {path}")]
+    InvalidPackageName { path: PathBuf, name: String },
+    #[error("package `{id}` is already registered from {existing}, not {requested}")]
+    PackageConflict {
+        id: String,
+        existing: PathBuf,
+        requested: PathBuf,
+    },
+    #[error("unknown UZE package `{0}`")]
+    UnknownPackage(String),
+    #[error("runtime projection target already exists: {0}")]
+    RuntimePathExists(PathBuf),
+    #[error("runtime filesystem projection is unavailable on this platform: {0}")]
+    UnsupportedRuntimeProjection(PathBuf),
+    #[error("no exposure route is available: {0}")]
+    ExposureUnavailable(String),
 }
 
 pub type Result<T> = std::result::Result<T, UzeError>;

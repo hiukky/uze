@@ -43,6 +43,12 @@ representation as proof of exposure.
 - **THEN** the report identifies the standard representation and an
   `UNVERIFIED` exposure state separately
 
+#### Scenario: Standard representation uses an explicit exposure plan
+- **WHEN** a standard Agent Skill is composed from the UZE store
+- **THEN** the report keeps `STANDARD` as its representation
+- **AND THEN** it identifies the selected `DIRECT_NATIVE`, `RUNTIME_BRIDGE`,
+  `FILESYSTEM_PROJECTION`, or `UNSUPPORTED` mechanism separately
+
 #### Scenario: Unsupported unverified enhancement
 - **WHEN** no primary documentation verifies a safe equivalent for an
   enhancement

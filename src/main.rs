@@ -1,9 +1,8 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
-mod importer;
 mod integrations;
-use uze::{Result, build_report, project::resolve_project, report::render_text};
+use uze::{Result, build_report, importer, project::resolve_project, report::render_text};
 
 use integrations::{
     claude::ClaudeIntegration, codex::CodexIntegration, opencode::OpenCodeIntegration,

@@ -23,7 +23,7 @@ model {
     description 'Standards-first project-composition layer. It resolves and explains an effective agent environment; it is not a universal harness or protocol bridge.'
 
     core = container 'UZE Core' {
-      description 'Harness-agnostic resolver and router for a project-owned effective environment.'
+      description 'Harness-agnostic resolver, store-backed environment composer, and router for a project-owned effective environment.'
       technology 'Rust CLI/library (ADR 004)'
 
       standardDiscovery = component 'Standards Discoverer' {
@@ -31,7 +31,15 @@ model {
       }
 
       environmentResolver = component 'Effective Environment Resolver' {
-        description 'Composes project resources into an extensible effective environment. Initial scope is project resources only.'
+        description 'Composes project resources and registered package resources into an extensible effective environment.'
+      }
+
+      uzeHome = component 'UzeHome' {
+        description 'The sole authority for UZE_HOME and its store, state, cache, and runtime paths.'
+      }
+
+      uzeStore = component 'UZE Store' {
+        description 'Installs external Agent Plugin packages once and preserves plugin.json plus skills without a UZE package manifest.'
       }
 
       capabilityRouter = component 'Capability Router' {
@@ -43,7 +51,7 @@ model {
       }
 
       integrationContract = component 'Integration Contract' {
-        description 'Port through which peer integrations supply capabilities and consume effective environments.'
+        description 'Port through which peer integrations supply capabilities, choose an ExposurePlan, and consume effective environments.'
       }
 
       reporter = component 'Compatibility Reporter' {
@@ -51,8 +59,11 @@ model {
       }
 
       standardDiscovery -> environmentResolver 'project resources'
+      uzeHome -> uzeStore 'owned paths'
+      uzeStore -> environmentResolver 'registered package resources'
       environmentResolver -> capabilityRouter 'effective environment capabilities'
       integrationContract -> capabilityRouter 'harness capability description'
+      integrationContract -> environmentResolver 'selected exposure mechanism'
       capabilityRouter -> runtimeSelector 'runtime integration need'
       environmentResolver -> reporter 'effective environment'
       capabilityRouter -> reporter 'routes and rationale'

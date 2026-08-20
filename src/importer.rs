@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use uze::{
+use crate::{
     bundle::{BundleItem, ImportedBundle},
     capability::{CapabilityKind, Representation},
     error::{Result, UzeError},
@@ -204,7 +204,7 @@ mod tests {
     #[test]
     fn imports_the_same_skill_used_by_the_conformance_playground() {
         let root =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("playground/agent-skill-conformance");
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("playground/agent-plugin-package");
         let imported = import_bundle(&root).unwrap();
         let imported_skill = imported
             .standard_items
@@ -213,13 +213,10 @@ mod tests {
             .path
             .canonicalize()
             .unwrap();
-        let project_skill = root
-            .join(".agents/skills/uze-e2e/SKILL.md")
-            .canonicalize()
-            .unwrap();
+        let packaged_skill = root.join("skills/uze-e2e/SKILL.md").canonicalize().unwrap();
 
         assert_eq!(imported.importer, "agent-plugin");
-        assert_eq!(imported_skill, project_skill);
+        assert_eq!(imported_skill, packaged_skill);
     }
 
     fn temp_bundle(label: &str) -> PathBuf {

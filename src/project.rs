@@ -6,15 +6,58 @@ use std::{
 use crate::{
     capability::{Capability, CapabilityKind, Representation},
     error::{Result, UzeError},
+    store::PackageId,
 };
 
 #[derive(Clone, Debug)]
 pub struct EffectiveEnvironment {
     pub root: PathBuf,
-    pub project_resources: Vec<Capability>,
+    pub resources: Vec<Resource>,
 }
 
 pub type ResolvedProject = EffectiveEnvironment;
+
+/// Origin is distinct from representation. A `STANDARD` SKILL.md can be
+/// project-owned or package-owned; that fact alone says nothing about how a
+/// harness will receive it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ResourceOrigin {
+    Project { root: PathBuf },
+    Package { id: PackageId, root: PathBuf },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Resource {
+    pub origin: ResourceOrigin,
+    pub capability: Capability,
+}
+
+impl Resource {
+    pub fn from_project(root: PathBuf, capability: Capability) -> Self {
+        Self {
+            origin: ResourceOrigin::Project { root },
+            capability,
+        }
+    }
+
+    pub fn from_package(id: PackageId, root: PathBuf, capability: Capability) -> Self {
+        Self {
+            origin: ResourceOrigin::Package { id, root },
+            capability,
+        }
+    }
+
+    pub fn package_root(&self) -> Option<&Path> {
+        match &self.origin {
+            ResourceOrigin::Package { root, .. } => Some(root),
+            ResourceOrigin::Project { .. } => None,
+        }
+    }
+
+    pub fn display_path(&self, environment_root: &Path) -> String {
+        self.capability.display_path(environment_root)
+    }
+}
 
 pub fn resolve_project(root: impl AsRef<Path>) -> Result<EffectiveEnvironment> {
     let root = root.as_ref();
@@ -37,8 +80,11 @@ pub fn resolve_project(root: impl AsRef<Path>) -> Result<EffectiveEnvironment> {
     project_resources.sort_by(|left, right| left.path.cmp(&right.path));
 
     Ok(EffectiveEnvironment {
-        root,
-        project_resources,
+        root: root.clone(),
+        resources: project_resources
+            .into_iter()
+            .map(|capability| Resource::from_project(root.clone(), capability))
+            .collect(),
     })
 }
 

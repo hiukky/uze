@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 
 use crate::{
-    capability::{Capability, CapabilityKind, Representation},
+    capability::{CapabilityKind, Representation},
     integration::{IntegrationPort, assess_environment},
     project::EffectiveEnvironment,
     router::{CompatibilityRoute, ExposureState},
@@ -39,6 +39,7 @@ pub struct CapabilityRouteReport {
     pub exposure: ExposureState,
     pub rationale: String,
     pub evidence: String,
+    pub exposure_plan: crate::exposure::ExposurePlan,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -65,6 +66,7 @@ pub fn build_report(
                     exposure: assessment.decision.exposure,
                     rationale: assessment.decision.rationale,
                     evidence: assessment.decision.evidence,
+                    exposure_plan: assessment.exposure_plan,
                 })
                 .collect();
             (
@@ -80,9 +82,9 @@ pub fn build_report(
     CompatibilityReport {
         project_root: environment.root.to_string_lossy().into_owned(),
         project_resources: environment
-            .project_resources
+            .resources
             .iter()
-            .map(|capability| report_item(environment, capability))
+            .map(|resource| report_item(environment, resource))
             .collect(),
         integrations,
         standards_coverage: standards_coverage(),
@@ -112,8 +114,12 @@ pub fn render_text(report: &CompatibilityReport) -> String {
         ));
         for route in &integration.routes {
             output.push_str(&format!(
-                "  - {}: {:?}, {:?} — {}\n",
-                route.capability_path, route.route, route.exposure, route.rationale
+                "  - {}: {:?}, {:?}, {} — {}\n",
+                route.capability_path,
+                route.route,
+                route.exposure,
+                exposure_mechanism(&route.exposure_plan.mechanism),
+                route.rationale
             ));
         }
     }
@@ -129,10 +135,23 @@ pub fn render_text(report: &CompatibilityReport) -> String {
     output
 }
 
-fn report_item(environment: &EffectiveEnvironment, capability: &Capability) -> ReportItem {
+fn exposure_mechanism(mechanism: &crate::exposure::ExposureMechanism) -> &'static str {
+    match mechanism {
+        crate::exposure::ExposureMechanism::DirectNative { .. } => "DIRECT_NATIVE",
+        crate::exposure::ExposureMechanism::RuntimeBridge { .. } => "RUNTIME_BRIDGE",
+        crate::exposure::ExposureMechanism::FilesystemProjection { .. } => "FILESYSTEM_PROJECTION",
+        crate::exposure::ExposureMechanism::Unsupported { .. } => "UNSUPPORTED",
+    }
+}
+
+fn report_item(
+    environment: &EffectiveEnvironment,
+    resource: &crate::project::Resource,
+) -> ReportItem {
+    let capability = &resource.capability;
     ReportItem {
         name: capability.name(),
-        path: capability.display_path(&environment.root),
+        path: resource.display_path(&environment.root),
         kind: capability.kind,
         representation: capability.representation,
     }
@@ -215,8 +234,11 @@ fn coverage(
 #[cfg(test)]
 mod tests {
     use crate::{
-        capability::CapabilityKind, integration::IntegrationPort, project::resolve_project,
-        router::HarnessCapabilities,
+        capability::CapabilityKind,
+        exposure::{ExposureMechanism, ExposurePlan},
+        integration::IntegrationPort,
+        project::resolve_project,
+        router::{CompatibilityRoute, HarnessCapabilities},
     };
     use std::{
         fs,
@@ -269,6 +291,18 @@ mod tests {
                 direct_standard: [CapabilityKind::AgentSkill].into_iter().collect(),
                 evidence: "test evidence".to_owned(),
                 ..HarnessCapabilities::default()
+            }
+        }
+
+        fn exposure_plan(&self, resource: &crate::project::Resource) -> ExposurePlan {
+            ExposurePlan {
+                representation: resource.capability.representation,
+                route: CompatibilityRoute::Native,
+                exposure: crate::router::ExposureState::Available,
+                mechanism: ExposureMechanism::DirectNative {
+                    resource_path: resource.capability.path.clone(),
+                },
+                evidence: "test exposure".to_owned(),
             }
         }
     }
