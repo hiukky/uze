@@ -1,7 +1,5 @@
 use serde::Serialize;
 
-use crate::capability::Harness;
-
 #[derive(Clone, Debug, Default)]
 pub struct RuntimeSupport {
     pub native_acp: bool,
@@ -36,7 +34,7 @@ pub fn select_runtime_integration(support: &RuntimeSupport) -> RuntimeIntegratio
     }
 }
 
-pub fn unverified_runtime_support(_harness: Harness) -> RuntimeSupport {
+pub fn unverified_runtime_support() -> RuntimeSupport {
     RuntimeSupport::default()
 }
 

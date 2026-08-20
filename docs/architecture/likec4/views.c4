@@ -4,8 +4,8 @@ views {
     include *
   }
 
-  view composition of uze.composition {
-    title 'UZE - Project Composition Layer'
+  view core of uze.core {
+    title 'UZE - Harness-agnostic Core'
     include *
   }
 }

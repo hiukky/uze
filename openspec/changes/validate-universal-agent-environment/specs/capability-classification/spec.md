@@ -28,24 +28,27 @@ derive, rename, or overwrite those capabilities with a UZE-local matrix.
   explicitly selected minimal adapter path
 - **AND THEN** it does not fabricate ACP capability results
 
-### Requirement: Classify project/harness capabilities with four outcomes
-For every relevant (project capability, selected harness) pair, the system
-SHALL emit exactly one of `STANDARD`, `NATIVE`, `ADAPTABLE`, or `UNSUPPORTED`
-with a non-empty rationale that names the documented evidence or missing safe
-equivalence.
+### Requirement: Separate representation from compatibility route and exposure
+For every relevant capability, the system SHALL record its representation
+provenance separately from its compatibility route and exposure state.
+`STANDARD`, `NATIVE`, `UZE`, and `FOREIGN` are representation/provenance facts;
+they SHALL NOT by themselves claim that a harness has discovered or exposed a
+capability.
 
-`STANDARD` SHALL mean an applicable open standard can be consumed directly
-without transformation. `NATIVE` SHALL mean a harness-specific feature can be
-used directly as an optional enhancement without changing the portable core.
-`ADAPTABLE` SHALL mean a safe, explicit adapter exists. `UNSUPPORTED` SHALL
-mean no verified safe equivalence exists, including when evidence is absent;
-its rationale SHALL say `unverified` when that is the reason.
+For every relevant (capability, integration-supplied harness capabilities)
+pair, the system SHALL emit exactly one compatibility route of `NATIVE`,
+`ADAPTABLE`, `DEGRADED`, or `UNSUPPORTED` with a non-empty rationale. It SHALL
+also report an exposure or verification state when one is known. `ADAPTABLE`
+requires a safe explicit adapter; `DEGRADED` names preserved and missing
+semantics; `UNSUPPORTED` includes absent evidence and SHALL say `unverified`
+when that is the reason.
 
-#### Scenario: Portable skill on a compatible harness
+#### Scenario: Standard skill has not yet been exposed
 - **WHEN** a `SKILL.md` Agent Skill is discovered and the selected harness
   documents direct Agent Skills consumption
-- **THEN** the result is `STANDARD` with the standard and documented location
-  or discovery behavior named in the rationale
+- **THEN** the capability representation is `STANDARD`
+- **AND THEN** its route and exposure state are reported independently rather
+  than inferred from the representation
 
 #### Scenario: Blocking hook lacks an equivalent
 - **WHEN** a project enhancement requires a hook that can veto execution and
@@ -65,3 +68,14 @@ report any user-visible behavior it cannot preserve.
   its required argument semantics are not supported by the target
 - **THEN** the result is `UNSUPPORTED`, unless a documented adapter preserves
   the required behavior and its explicit activation is recorded
+
+### Requirement: Route through harness-neutral capability descriptions
+The system SHALL route a capability using an integration-supplied harness
+capability description. UZE domain rules SHALL NOT branch on named harnesses
+or contain a fixed support matrix.
+
+#### Scenario: A peer integration supplies skill support
+- **WHEN** two integrations independently describe support for standard Agent
+  Skills
+- **THEN** the same core capability is routed for each integration without
+  converting it through either harness representation

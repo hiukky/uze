@@ -3,17 +3,18 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 
 use crate::{
-    capability::{Classification, Harness, ItemKind, ProjectItem, classify},
-    project::ResolvedProject,
-    runtime::{RuntimeIntegration, select_runtime_integration, unverified_runtime_support},
+    capability::{Capability, CapabilityKind, Representation},
+    integration::{IntegrationPort, assess_environment},
+    project::EffectiveEnvironment,
+    router::{CompatibilityRoute, ExposureState},
+    runtime::{RuntimeIntegration, select_runtime_integration},
 };
 
 #[derive(Clone, Debug, Serialize)]
 pub struct CompatibilityReport {
     pub project_root: String,
-    pub portable_core: Vec<ReportItem>,
-    pub optional_enhancements: Vec<ReportItem>,
-    pub runtime_integration: BTreeMap<Harness, RuntimeIntegration>,
+    pub project_resources: Vec<ReportItem>,
+    pub integrations: BTreeMap<String, IntegrationReport>,
     pub standards_coverage: Vec<StandardsCoverage>,
 }
 
@@ -21,15 +22,23 @@ pub struct CompatibilityReport {
 pub struct ReportItem {
     pub name: String,
     pub path: String,
-    pub kind: ItemKind,
-    pub outcomes: BTreeMap<Harness, Outcome>,
+    pub kind: CapabilityKind,
+    pub representation: Representation,
 }
 
 #[derive(Clone, Debug, Serialize)]
-pub struct Outcome {
-    pub classification: Classification,
+pub struct IntegrationReport {
+    pub routes: Vec<CapabilityRouteReport>,
+    pub runtime_integration: RuntimeIntegration,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CapabilityRouteReport {
+    pub capability_path: String,
+    pub route: CompatibilityRoute,
+    pub exposure: ExposureState,
     pub rationale: String,
-    pub evidence_source: String,
+    pub evidence: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -40,52 +49,75 @@ pub struct StandardsCoverage {
     pub remaining_gap: String,
 }
 
-pub fn build_report(project: &ResolvedProject) -> CompatibilityReport {
-    let runtime_integration = Harness::ALL
-        .into_iter()
-        .map(|harness| {
+pub fn build_report(
+    environment: &EffectiveEnvironment,
+    integrations: &[&dyn IntegrationPort],
+) -> CompatibilityReport {
+    let integrations = integrations
+        .iter()
+        .map(|integration| {
+            let assessment = assess_environment(environment, *integration);
+            let routes = assessment
+                .into_iter()
+                .map(|assessment| CapabilityRouteReport {
+                    capability_path: assessment.capability_path,
+                    route: assessment.decision.route,
+                    exposure: assessment.decision.exposure,
+                    rationale: assessment.decision.rationale,
+                    evidence: assessment.decision.evidence,
+                })
+                .collect();
             (
-                harness,
-                select_runtime_integration(&unverified_runtime_support(harness)),
+                integration.id().to_owned(),
+                IntegrationReport {
+                    routes,
+                    runtime_integration: select_runtime_integration(&integration.runtime_support()),
+                },
             )
         })
         .collect();
+
     CompatibilityReport {
-        project_root: project.root.to_string_lossy().into_owned(),
-        portable_core: project
-            .portable_core
+        project_root: environment.root.to_string_lossy().into_owned(),
+        project_resources: environment
+            .project_resources
             .iter()
-            .map(|item| report_item(project, item))
+            .map(|capability| report_item(environment, capability))
             .collect(),
-        optional_enhancements: project
-            .enhancements
-            .iter()
-            .map(|item| report_item(project, item))
-            .collect(),
-        runtime_integration,
+        integrations,
         standards_coverage: standards_coverage(),
     }
 }
 
 pub fn render_text(report: &CompatibilityReport) -> String {
     let mut output = format!(
-        "UZE compatibility report\nProject: {}\n\n",
+        "UZE compatibility report\nProject: {}\n\nProject resources\n",
         report.project_root
     );
-    append_items(&mut output, "Portable core", &report.portable_core);
-    append_items(
-        &mut output,
-        "Optional enhancements",
-        &report.optional_enhancements,
-    );
-    output.push_str("Runtime integration\n");
-    for (harness, integration) in &report.runtime_integration {
+    if report.project_resources.is_empty() {
+        output.push_str("- none discovered\n");
+    }
+    for item in &report.project_resources {
         output.push_str(&format!(
-            "- {}: {}\n",
-            harness.as_str(),
-            runtime_path(integration)
+            "- {} ({:?}, {:?})\n",
+            item.path, item.kind, item.representation
         ));
     }
+
+    output.push_str("\nIntegration routes\n");
+    for (id, integration) in &report.integrations {
+        output.push_str(&format!(
+            "- {id}: {}\n",
+            runtime_path(&integration.runtime_integration)
+        ));
+        for route in &integration.routes {
+            output.push_str(&format!(
+                "  - {}: {:?}, {:?} — {}\n",
+                route.capability_path, route.route, route.exposure, route.rationale
+            ));
+        }
+    }
+
     output.push_str("\nStandards Coverage / Remaining Gap\n");
     for row in &report.standards_coverage {
         let standard = row.standard.as_deref().unwrap_or("None");
@@ -97,48 +129,13 @@ pub fn render_text(report: &CompatibilityReport) -> String {
     output
 }
 
-fn report_item(project: &ResolvedProject, item: &ProjectItem) -> ReportItem {
-    let outcomes = Harness::ALL
-        .into_iter()
-        .map(|harness| {
-            let result = classify(item, harness);
-            (
-                harness,
-                Outcome {
-                    classification: result.classification,
-                    rationale: result.rationale,
-                    evidence_source: result.evidence_source.to_owned(),
-                },
-            )
-        })
-        .collect();
+fn report_item(environment: &EffectiveEnvironment, capability: &Capability) -> ReportItem {
     ReportItem {
-        name: item.name(),
-        path: item.display_path(&project.root),
-        kind: item.kind.clone(),
-        outcomes,
+        name: capability.name(),
+        path: capability.display_path(&environment.root),
+        kind: capability.kind,
+        representation: capability.representation,
     }
-}
-
-fn append_items(output: &mut String, heading: &str, items: &[ReportItem]) {
-    output.push_str(heading);
-    output.push('\n');
-    if items.is_empty() {
-        output.push_str("- none discovered\n\n");
-        return;
-    }
-    for item in items {
-        output.push_str(&format!("- {} ({})\n", item.path, item.name));
-        for (harness, outcome) in &item.outcomes {
-            output.push_str(&format!(
-                "  - {}: {:?} — {}\n",
-                harness.as_str(),
-                outcome.classification,
-                outcome.rationale
-            ));
-        }
-    }
-    output.push('\n');
 }
 
 fn runtime_path(integration: &RuntimeIntegration) -> String {
@@ -217,11 +214,16 @@ fn coverage(
 
 #[cfg(test)]
 mod tests {
-    use crate::{project::resolve_project, report::build_report};
+    use crate::{
+        capability::CapabilityKind, integration::IntegrationPort, project::resolve_project,
+        router::HarnessCapabilities,
+    };
     use std::{
         fs,
         time::{SystemTime, UNIX_EPOCH},
     };
+
+    use super::*;
 
     #[test]
     fn report_is_reproducible_for_unchanged_project() {
@@ -235,9 +237,12 @@ mod tests {
         .unwrap();
         fs::write(root.join("mcp.json"), "{\"mcpServers\":{}}\n").unwrap();
 
-        let project = resolve_project(&root).unwrap();
-        let first = serde_json::to_vec(&build_report(&project)).unwrap();
-        let second = serde_json::to_vec(&build_report(&project)).unwrap();
+        let environment = resolve_project(&root).unwrap();
+        let first = TestIntegration { id: "first" };
+        let second = TestIntegration { id: "second" };
+        let integrations: [&dyn IntegrationPort; 2] = [&first, &second];
+        let first = serde_json::to_vec(&build_report(&environment, &integrations)).unwrap();
+        let second = serde_json::to_vec(&build_report(&environment, &integrations)).unwrap();
         assert_eq!(first, second);
         fs::remove_dir_all(root).unwrap();
     }
@@ -248,5 +253,23 @@ mod tests {
             .unwrap()
             .as_nanos();
         std::env::temp_dir().join(format!("uze-{label}-{}-{nonce}", std::process::id()))
+    }
+
+    struct TestIntegration {
+        id: &'static str,
+    }
+
+    impl IntegrationPort for TestIntegration {
+        fn id(&self) -> &'static str {
+            self.id
+        }
+
+        fn capabilities(&self) -> HarnessCapabilities {
+            HarnessCapabilities {
+                direct_standard: [CapabilityKind::AgentSkill].into_iter().collect(),
+                evidence: "test evidence".to_owned(),
+                ..HarnessCapabilities::default()
+            }
+        }
     }
 }

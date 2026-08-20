@@ -55,3 +55,18 @@ SHALL never create a vendor artifact for an `UNSUPPORTED` enhancement.
   harness
 - **THEN** no target hook artifact is created
 - **AND THEN** the report explains the unsupported semantics
+
+### Requirement: Integrate peer harnesses through a contract
+The system SHALL expose an integration contract through which a harness
+supplies its capability description and receives an effective environment.
+The UZE core SHALL NOT name Claude Code, Codex, Cursor, Windsurf, or OpenCode
+in its routing rules. Adding a harness that uses existing capability kinds
+SHALL require an integration implementation and its tests, not changes to
+domain routing rules.
+
+#### Scenario: Claude and Codex assess one Agent Skill
+- **WHEN** Claude and Codex integrations receive the same effective
+  environment containing one standard Agent Skill
+- **THEN** each integration supplies its own capability description to the
+  shared router
+- **AND THEN** neither integration is treated as a source or destination

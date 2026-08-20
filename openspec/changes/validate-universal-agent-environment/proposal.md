@@ -37,6 +37,13 @@ configuration translator.
 - Separates protocol capabilities from harness/project capabilities. ACP
   advertises the former; UZE classifies the latter as `STANDARD`, `NATIVE`,
   `ADAPTABLE`, or `UNSUPPORTED` and never silently converts them.
+- Establishes Claude Code and Codex as the first **peer harness integrations**
+  for validation, never as source and destination. Claude plugins remain a
+  foreign format that a specialized importer may consume; they are not the
+  canonical representation of a UZE environment.
+- Moves named harness knowledge out of UZE domain rules. The core operates on
+  capabilities, an effective environment, and integration-supplied harness
+  capabilities; a new harness is primarily a new integration and its tests.
 - Makes progressive enhancement explicit: a portable core may gain optional
   Claude Code, Codex, Cursor, or OpenCode enhancements without contaminating
   the core. Windsurf/Devin Desktop remains outside the active matrix; no new
@@ -70,13 +77,14 @@ configuration translator.
 
 ## Impact
 
-- No implementation code is changed; this change remains planning and
-  architecture work only.
+- Refactors the Rust inspector boundary without adding runtime, filesystem,
+  memory, marketplace, or cloud features.
 - Supersedes the capability-graph boundary in `docs/adr/002-*.md` with a
   new permanent ADR that records standards-first composition, progressive
   enhancement, and ACP's limited-but-preferred role.
 - Revises the LikeC4 model from a universal projector to a project
   composition layer that sits beside—not in—the Client ↔ Agent ACP path.
-- Defines the future PoC around resolving one representative project across
-  Claude Code, Codex, Cursor, and OpenCode, with fallbacks and remaining gaps
-  reported explicitly.
+- Defines the first real PoC around one Agent Skill resolved once and assessed
+  through peer Claude Code and Codex integrations; Cursor and other harnesses
+  remain an extensibility test, not another implementation target in this
+  increment.

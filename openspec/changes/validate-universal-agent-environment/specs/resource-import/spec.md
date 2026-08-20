@@ -22,17 +22,18 @@ UZE equivalent.
 - **AND THEN** their canonical contents remain the project-owned standard
   representations
 
-### Requirement: Resolve the effective environment before optional enhancements
-The system SHALL resolve and report the portable core before examining
-harness-specific directories, hooks, commands, subagents, permissions, or
-other optional enhancements. An optional enhancement SHALL NOT alter the
-portable core's canonical contents.
+### Requirement: Resolve project resources into an extensible effective environment
+The system SHALL resolve project-owned standard resources into an effective
+environment before any optional enhancement is considered. The initial
+environment SHALL contain project resources and SHALL permit future global,
+user, package, and runtime layers without making them part of this increment.
+An optional enhancement SHALL NOT alter portable resource contents.
 
-#### Scenario: Project has a Claude-specific hook
-- **WHEN** the portable core and a Claude-specific hook are discovered
-- **THEN** the report presents the hook as a separate optional enhancement
-- **AND THEN** the `AGENTS.md`, Skill, and MCP items remain portable-core
-  items regardless of whether the hook is usable elsewhere
+#### Scenario: Project has portable resources
+- **WHEN** the project contains applicable instructions, a Skill, and MCP
+  configuration
+- **THEN** they are resolved as project resources in the effective environment
+- **AND THEN** no vendor directory is required to form the portable core
 
 ### Requirement: Import declarative bundles only as an explicit compatibility fallback
 The system MAY parse a declarative plugin bundle only after the caller selects
@@ -53,3 +54,16 @@ canonical project representation.
 - **THEN** import fails with an explicit diagnostic naming the offending
   reference
 - **AND THEN** no partial environment is returned
+
+### Requirement: Keep foreign importers separate from harness integrations
+The system SHALL use a specialized importer for a foreign format. An importer
+MAY know vendor-specific paths and manifests, but a harness integration SHALL
+consume the effective environment rather than act as a source or destination
+of a conversion.
+
+#### Scenario: Claude plugin is imported
+- **WHEN** a caller selects the Claude plugin importer for a Claude plugin
+- **THEN** the importer returns portable and optional capabilities with foreign
+  provenance
+- **AND THEN** Claude and Codex integrations remain peer consumers of the
+  resulting environment

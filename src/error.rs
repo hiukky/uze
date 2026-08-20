@@ -18,9 +18,7 @@ pub enum UzeError {
         path: PathBuf,
         source: serde_json::Error,
     },
-    #[error(
-        "bundle manifest is missing: expected .claude-plugin/plugin.json or plugin.json in {0}"
-    )]
+    #[error("bundle manifest is missing in {0}")]
     MissingManifest(PathBuf),
     #[error("unsafe path reference in {path}: {reference}")]
     UnsafePathReference { path: PathBuf, reference: String },

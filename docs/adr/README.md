@@ -35,3 +35,11 @@ never renumbered), using this structure (Michael Nygard style):
   decision) - see `openspec/config.yaml`. Use `/std:adr` to record one
   ad hoc (a decision made outside an OpenSpec change, or backfilling a
   decision that predates this convention).
+
+## Index
+
+- [001 — Adopt open standards over competing formats](001-adopt-open-standards-over-competing-formats.md)
+- [002 — Scope capability model to standards gap](002-scope-capability-model-to-standards-gap.md) — superseded
+- [003 — Compose effective agent environments and use ACP at the Client-Agent boundary](003-compose-effective-agent-environments-and-use-acp-at-the-client-agent-boundary.md)
+- [004 — Implement the UZE core in Rust](004-implement-the-uze-core-in-rust.md)
+- [005 — Establish peer harness integrations](005-establish-peer-harness-integrations.md)

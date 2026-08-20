@@ -15,19 +15,11 @@ model {
     description 'Active target coding-agent runtime. Its native project extensions are optional enhancements, not UZE core configuration.'
   }
 
-  cursor = system 'Cursor' {
-    description 'Active target coding-agent runtime. Its native project extensions are optional enhancements, not UZE core configuration.'
-  }
-
-  openCode = system 'OpenCode' {
-    description 'Active target coding-agent runtime. Its native project extensions are optional enhancements, not UZE core configuration.'
-  }
-
   uze = system 'UZE' {
     description 'Standards-first project-composition layer. It resolves and explains an effective agent environment; it is not a universal harness or protocol bridge.'
 
-    composition = container 'Project Composition Layer' {
-      description 'Local-first resolver for a portable project core and explicit optional enhancements. No implementation language is selected yet.'
+    core = container 'UZE Core' {
+      description 'Harness-agnostic resolver and router for a project-owned effective environment.'
       technology 'Rust CLI/library (ADR 004)'
 
       standardDiscovery = component 'Standards Discoverer' {
@@ -35,39 +27,52 @@ model {
       }
 
       environmentResolver = component 'Effective Environment Resolver' {
-        description 'Composes the portable core with selected-runtime optional enhancements. Keeps the portable core separate from native features.'
+        description 'Composes project resources into an extensible effective environment. Initial scope is project resources only.'
       }
 
-      capabilityAssessor = component 'Capability Assessor' {
-        description 'Reports project/harness capabilities as STANDARD, NATIVE, ADAPTABLE, or UNSUPPORTED. ACP protocol facts are not reclassified here.'
+      capabilityRouter = component 'Capability Router' {
+        description 'Routes capabilities from representation and an integration-supplied harness capability description. It contains no named-harness rules.'
       }
 
       runtimeSelector = component 'Runtime Integration Selector' {
         description 'At the Client-Agent boundary only, selects native ACP, a reliable ACP adapter, a minimal explicit adapter, or no integration.'
       }
 
-      reporter = component 'Compatibility Reporter' {
-        description 'Explains the portable core, selected runtime path, ACP-negotiated facts, optional enhancement outcomes, and remaining standards gaps.'
+      integrationContract = component 'Integration Contract' {
+        description 'Port through which peer integrations supply capabilities and consume effective environments.'
       }
 
-      standardDiscovery -> environmentResolver 'portable project core'
-      environmentResolver -> capabilityAssessor 'optional enhancements for selected runtime'
-      capabilityAssessor -> runtimeSelector 'runtime integration need'
+      reporter = component 'Compatibility Reporter' {
+        description 'Explains representation provenance, compatibility route, exposure state, runtime path, and remaining standards gaps.'
+      }
+
+      standardDiscovery -> environmentResolver 'project resources'
+      environmentResolver -> capabilityRouter 'effective environment capabilities'
+      integrationContract -> capabilityRouter 'harness capability description'
+      capabilityRouter -> runtimeSelector 'runtime integration need'
       environmentResolver -> reporter 'effective environment'
-      capabilityAssessor -> reporter 'outcomes and rationale'
+      capabilityRouter -> reporter 'routes and rationale'
       runtimeSelector -> reporter 'selected runtime path'
+    }
+
+    claudeIntegration = container 'Claude Integration' {
+      description 'Peer harness integration. It is not a canonical source representation; Claude plugin import is a separate foreign-format concern.'
+      technology 'Rust adapter'
+    }
+
+    codexIntegration = container 'Codex Integration' {
+      description 'Peer harness integration. It is not a conversion destination.'
+      technology 'Rust adapter'
     }
   }
 
-  developer -> uze.composition 'defines and resolves a project environment'
-  uze.composition -> claudeCode 'assesses optional project enhancements'
-  uze.composition -> codex 'assesses optional project enhancements'
-  uze.composition -> cursor 'assesses optional project enhancements'
-  uze.composition -> openCode 'assesses optional project enhancements'
+  developer -> uze.core 'defines and resolves a project environment'
+  uze.core -> uze.claudeIntegration 'effective environment via integration contract'
+  uze.core -> uze.codexIntegration 'effective environment via integration contract'
+  uze.claudeIntegration -> claudeCode 'works with the selected runtime'
+  uze.codexIntegration -> codex 'works with the selected runtime'
 
   developer -> agentClient 'uses to work with a selected agent runtime'
   agentClient -> claudeCode 'ACP when mutually supported; otherwise selected explicit integration'
   agentClient -> codex 'ACP when mutually supported; otherwise selected explicit integration'
-  agentClient -> cursor 'ACP when mutually supported; otherwise selected explicit integration'
-  agentClient -> openCode 'ACP when mutually supported; otherwise selected explicit integration'
 }

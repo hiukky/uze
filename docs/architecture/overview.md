@@ -6,9 +6,7 @@ This is the structured, diagrammable source of truth; keep it in sync with
 reality as containers/components/relationships change (see
 `openspec/config.yaml` rules).
 
-No project package manager is set up yet, so there are no `arch:*` scripts.
-Once one exists, add `arch:dev` / `arch:validate` / `arch:build` scripts
-(see `openspec/config.yaml` context). Until then, use the raw commands:
+The Rust package currently has no `arch:*` scripts. Use the raw commands:
 
 ```bash
 bunx likec4@latest start docs/architecture/likec4

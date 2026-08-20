@@ -5,7 +5,7 @@ fn fixture_project() -> PathBuf {
 }
 
 #[test]
-fn inspect_reports_portable_core_and_does_not_write_vendor_state() {
+fn inspect_reports_project_resources_and_does_not_write_vendor_state() {
     let root = fixture_project();
     let hook = root.join(".claude/hooks/pre-commit.sh");
     let before = std::fs::read(&hook).unwrap();
@@ -17,8 +17,8 @@ fn inspect_reports_portable_core_and_does_not_write_vendor_state() {
 
     assert!(output.status.success());
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(report["portable_core"].as_array().unwrap().len(), 3);
-    assert_eq!(report["optional_enhancements"].as_array().unwrap().len(), 1);
-    assert_eq!(report["optional_enhancements"][0]["kind"]["kind"], "hook");
+    assert_eq!(report["project_resources"].as_array().unwrap().len(), 3);
+    assert!(report["integrations"]["claude-code"].is_object());
+    assert!(report["integrations"]["codex"].is_object());
     assert_eq!(std::fs::read(&hook).unwrap(), before);
 }
