@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     error::{Result, UzeError},
     home::UzeHome,
+    provisioning::{ProvisionAction, ProvisionStatus, ProvisioningResult},
 };
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -128,6 +129,71 @@ fn save_registry(home: &UzeHome, registry: &IntegrationRegistry) -> Result<()> {
     let payload =
         serde_json::to_vec_pretty(registry).expect("integration state serialization is infallible");
     crate::persistence::write_atomic(&path, &payload)
+}
+
+/// Durable evidence of an explicit provisioning attempt. It grants no right
+/// to remove a harness executable; it is product history, not ownership.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ProvisioningRecord {
+    pub harness: String,
+    pub action: ProvisionAction,
+    pub status: ProvisionStatus,
+    pub method: String,
+    pub version: Option<String>,
+    pub recorded_at_unix_secs: u64,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct ProvisioningRegistry {
+    harnesses: BTreeMap<String, ProvisioningRecord>,
+}
+
+pub fn provisioning(home: &UzeHome, harness: &str) -> Result<Option<ProvisioningRecord>> {
+    Ok(load_provisioning_registry(home)?
+        .harnesses
+        .get(harness)
+        .cloned())
+}
+
+pub fn record_provisioning(
+    home: &UzeHome,
+    harness: impl Into<String>,
+    result: &ProvisioningResult,
+) -> Result<()> {
+    home.ensure_layout()?;
+    let harness = harness.into();
+    let mut registry = load_provisioning_registry(home)?;
+    let recorded_at_unix_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    registry.harnesses.insert(
+        harness.clone(),
+        ProvisioningRecord {
+            harness,
+            action: result.action,
+            status: result.status,
+            method: result.method.clone(),
+            version: result.detection.version.clone(),
+            recorded_at_unix_secs,
+        },
+    );
+    let path = home.provisioning_state_path();
+    let payload = serde_json::to_vec_pretty(&registry)
+        .expect("provisioning state serialization is infallible");
+    crate::persistence::write_atomic(&path, &payload)
+}
+
+fn load_provisioning_registry(home: &UzeHome) -> Result<ProvisioningRegistry> {
+    let path = home.provisioning_state_path();
+    if !path.exists() {
+        return Ok(ProvisioningRegistry::default());
+    }
+    let bytes = fs::read(&path).map_err(|source| UzeError::Read {
+        path: path.clone(),
+        source,
+    })?;
+    serde_json::from_slice(&bytes).map_err(|source| UzeError::Json { path, source })
 }
 
 #[cfg(test)]
@@ -275,6 +341,27 @@ mod tests {
         let stored = receipts(&home, Some("plugin-a")).unwrap();
         assert_eq!(stored.len(), 1);
         assert!(stored[0].1.resource_identity.is_none());
+        fs::remove_dir_all(home.root()).unwrap();
+    }
+
+    #[test]
+    fn provisioning_state_is_secret_free_and_separate_from_attachment_ownership() {
+        let home = temp_home("provisioning");
+        let result = ProvisioningResult::verified(
+            ProvisionAction::Install,
+            "official-install-script",
+            crate::integration::HarnessDetection {
+                present: true,
+                version: Some("1.2.3".to_owned()),
+            },
+        );
+        record_provisioning(&home, "opencode", &result).unwrap();
+        let record = provisioning(&home, "opencode").unwrap().unwrap();
+        assert_eq!(record.action, ProvisionAction::Install);
+        assert_eq!(record.version.as_deref(), Some("1.2.3"));
+        assert!(!home.state_dir().join("attachments.json").exists());
+        let raw = fs::read_to_string(home.provisioning_state_path()).unwrap();
+        assert!(!raw.contains("command"));
         fs::remove_dir_all(home.root()).unwrap();
     }
 }

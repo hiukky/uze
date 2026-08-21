@@ -14,6 +14,7 @@ use uze_core::{
         IntegrationPort, ManagedArtifact, detach_standard_receipt, inspect_standard_receipt,
     },
     project::Resource,
+    provisioning::{ProcessRunner, ProcessSpec, ProvisionAction, ProvisioningResult},
     router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus},
     state,
 };
@@ -88,6 +89,20 @@ impl IntegrationPort for ClaudeIntegration {
 
     fn detect(&self) -> HarnessDetection {
         detect_binary("claude")
+    }
+
+    fn provision(&self, runner: &dyn ProcessRunner) -> Result<ProvisioningResult> {
+        provision_cli(
+            runner,
+            "claude",
+            self.detect(),
+            ProcessSpec::new(
+                "sh",
+                ["-c", "curl -fsSL https://claude.ai/install.sh | bash"],
+            ),
+            ProcessSpec::new("claude", ["update"]),
+            "official-native-installer",
+        )
     }
 
     fn install(&self, home: &UzeHome) -> Result<()> {
@@ -194,6 +209,58 @@ impl IntegrationPort for ClaudeIntegration {
             reason: "Claude managed MCP entry detached via CLI".to_owned(),
         })
     }
+}
+
+fn provision_cli(
+    runner: &dyn ProcessRunner,
+    executable: &str,
+    before: HarnessDetection,
+    install: ProcessSpec,
+    update: ProcessSpec,
+    method: &str,
+) -> Result<ProvisioningResult> {
+    if !cfg!(unix) {
+        return Ok(ProvisioningResult::blocked(
+            "Claude Code automatic provisioning is currently supported on Unix and WSL only",
+        ));
+    }
+    let action = if before.present {
+        ProvisionAction::Update
+    } else {
+        ProvisionAction::Install
+    };
+    let command = if before.present { update } else { install };
+    let outcome = match runner.run(&command) {
+        Ok(outcome) => outcome,
+        Err(_) => {
+            return Ok(ProvisioningResult::failed(
+                action,
+                method,
+                "official installer could not be started",
+            ));
+        }
+    };
+    if !outcome.success {
+        let reason = if outcome.timed_out {
+            "official installer timed out"
+        } else {
+            "official installer exited unsuccessfully"
+        };
+        return Ok(ProvisioningResult::failed(action, method, reason));
+    }
+    let verified = runner.run(&ProcessSpec::new(executable, ["--version"]));
+    if !matches!(verified, Ok(output) if output.success) {
+        return Ok(ProvisioningResult::failed(
+            action,
+            method,
+            "installer finished but the executable could not be verified",
+        ));
+    }
+    Ok(ProvisioningResult::verified(
+        action,
+        method,
+        detect_binary(executable),
+    ))
 }
 
 impl ClaudeIntegration {
@@ -565,6 +632,49 @@ fn unsupported(resource: &Resource, rationale: &str) -> ExposurePlan {
 #[cfg(test)]
 mod lifecycle_tests {
     use super::*;
+    use std::sync::Mutex;
+    use uze_core::provisioning::{ProcessOutput, ProcessRunner};
+
+    struct RecordingRunner {
+        commands: Mutex<Vec<ProcessSpec>>,
+    }
+
+    impl ProcessRunner for RecordingRunner {
+        fn run(&self, spec: &ProcessSpec) -> Result<ProcessOutput> {
+            self.commands.lock().unwrap().push(spec.clone());
+            Ok(ProcessOutput {
+                success: true,
+                timed_out: false,
+            })
+        }
+    }
+
+    #[test]
+    fn missing_harness_uses_its_documented_official_install_route_then_verifies() {
+        let runner = RecordingRunner {
+            commands: Mutex::new(Vec::new()),
+        };
+        let result = provision_cli(
+            &runner,
+            "claude-test-does-not-exist",
+            HarnessDetection::default(),
+            ProcessSpec::new("sh", ["-c", "official-install"]),
+            ProcessSpec::new("claude", ["update"]),
+            "official-native-installer",
+        )
+        .unwrap();
+        if cfg!(unix) {
+            assert_eq!(result.action, ProvisionAction::Install);
+            assert_eq!(
+                result.status,
+                uze_core::provisioning::ProvisionStatus::Verified
+            );
+            let commands = runner.commands.lock().unwrap();
+            assert_eq!(commands[0].program, "sh");
+            assert_eq!(commands[1].program, "claude-test-does-not-exist");
+            assert_eq!(commands[1].arguments, ["--version"]);
+        }
+    }
     fn check(value: &str) -> AttachmentState {
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

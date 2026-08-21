@@ -87,7 +87,7 @@ pub struct AttachmentInspection {
 }
 
 /// Read-only detection of a harness binary. No side effects.
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct HarnessDetection {
     pub present: bool,
     pub version: Option<String>,
@@ -142,6 +142,27 @@ pub trait IntegrationPort {
     /// obtainable, its version. Read-only; performs no filesystem writes.
     fn detect(&self) -> HarnessDetection {
         HarnessDetection::default()
+    }
+
+    /// Explicitly provisions or updates the vendor executable through a
+    /// route owned by this integration. The default is conservative: an
+    /// integration that has not documented a route remains blocked rather
+    /// than inheriting another harness's installer.
+    fn provision(
+        &self,
+        _runner: &dyn crate::provisioning::ProcessRunner,
+    ) -> Result<crate::provisioning::ProvisioningResult> {
+        let detection = self.detect();
+        if detection.present {
+            return Ok(crate::provisioning::ProvisioningResult::verified(
+                crate::provisioning::ProvisionAction::None,
+                "existing-executable",
+                detection,
+            ));
+        }
+        Ok(crate::provisioning::ProvisioningResult::blocked(
+            "this harness has no supported official provisioning route",
+        ))
     }
 
     /// Idempotently ensures this integration's machine-level prerequisites

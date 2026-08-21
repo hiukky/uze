@@ -65,6 +65,7 @@ fn fake_harness_bin_dir(label: &str) -> PathBuf {
         ("claude", "9.9.9 (Fake Claude)"),
         ("codex", "codex-cli 9.9.9"),
         ("opencode", "opencode 9.9.9"),
+        ("gemini", "gemini 9.9.9"),
     ] {
         let path = dir.join(name);
         let script = format!(
@@ -176,10 +177,9 @@ fn add_and_inspect_use_the_same_injected_uze_home() {
     let _ = std::fs::remove_dir_all(home);
 }
 
-/// Deterministic: `PATH` is cleared so no real `claude`/`codex` binary can
-/// be resolved, regardless of what is installed on the machine running this
-/// test. `uze setup` must report both harnesses as not detected and must
-/// not write anything under the isolated `HOME`.
+/// Deterministic: `PATH` is cleared so no real harness binary or installer
+/// can be resolved. Explicit setup records a blocked provisioning attempt,
+/// but never creates harness-owned directories under the isolated `HOME`.
 #[test]
 fn setup_reports_absent_harnesses_without_failing_or_writing_state() {
     let home = temporary_home("cli-setup-absent");
@@ -193,8 +193,8 @@ fn setup_reports_absent_harnesses_without_failing_or_writing_state() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("claude-code: not detected, skipping setup"));
-    assert!(stdout.contains("codex: not detected, skipping setup"));
+    assert!(stdout.contains("claude-code: setup Failed"));
+    assert!(stdout.contains("codex: setup Failed"));
     assert!(!home.join(".claude/skills").exists());
     assert!(!home.join(".agents/skills").exists());
     let _ = std::fs::remove_dir_all(home);
@@ -250,8 +250,8 @@ fn setup_then_add_attaches_transparently_without_a_separate_sync_step() {
     };
 
     let setup_once = run(&["setup"]);
-    assert!(setup_once.contains("claude-code: ready (version 9.9.9"));
-    assert!(setup_once.contains("codex: ready (version"));
+    assert!(setup_once.contains("claude-code: ready (update; version 9.9.9"));
+    assert!(setup_once.contains("codex: ready (update; version"));
     assert!(home.join(".claude/skills").is_dir());
     assert!(home.join(".agents/skills").is_dir());
 

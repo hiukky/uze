@@ -14,6 +14,7 @@ use uze_core::{
         IntegrationPort, ManagedArtifact, detach_standard_receipt, inspect_standard_receipt,
     },
     project::Resource,
+    provisioning::{ProcessRunner, ProcessSpec, ProvisionAction, ProvisioningResult},
     router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus},
     state,
 };
@@ -65,6 +66,20 @@ impl IntegrationPort for OpenCodeIntegration {
     }
     fn detect(&self) -> HarnessDetection {
         detect_binary("opencode")
+    }
+
+    fn provision(&self, runner: &dyn ProcessRunner) -> Result<ProvisioningResult> {
+        provision_cli(
+            runner,
+            "opencode",
+            self.detect(),
+            ProcessSpec::new(
+                "sh",
+                ["-c", "curl -fsSL https://opencode.ai/install | bash"],
+            ),
+            ProcessSpec::new("opencode", ["upgrade"]),
+            "official-install-script",
+        )
     }
     fn install(&self, home: &UzeHome) -> Result<()> {
         fs::create_dir_all(&self.skills_dir).map_err(|source| UzeError::Write {
@@ -225,6 +240,58 @@ impl IntegrationPort for OpenCodeIntegration {
             reason: "OpenCode managed MCP entry detached".to_owned(),
         })
     }
+}
+
+fn provision_cli(
+    runner: &dyn ProcessRunner,
+    executable: &str,
+    before: HarnessDetection,
+    install: ProcessSpec,
+    update: ProcessSpec,
+    method: &str,
+) -> Result<ProvisioningResult> {
+    if !cfg!(unix) {
+        return Ok(ProvisioningResult::blocked(
+            "OpenCode automatic provisioning is currently supported on Unix and WSL only",
+        ));
+    }
+    let action = if before.present {
+        ProvisionAction::Update
+    } else {
+        ProvisionAction::Install
+    };
+    let command = if before.present { update } else { install };
+    let outcome = match runner.run(&command) {
+        Ok(outcome) => outcome,
+        Err(_) => {
+            return Ok(ProvisioningResult::failed(
+                action,
+                method,
+                "official installer could not be started",
+            ));
+        }
+    };
+    if !outcome.success {
+        let reason = if outcome.timed_out {
+            "official installer timed out"
+        } else {
+            "official installer exited unsuccessfully"
+        };
+        return Ok(ProvisioningResult::failed(action, method, reason));
+    }
+    let verified = runner.run(&ProcessSpec::new(executable, ["--version"]));
+    if !matches!(verified, Ok(output) if output.success) {
+        return Ok(ProvisioningResult::failed(
+            action,
+            method,
+            "installer finished but the executable could not be verified",
+        ));
+    }
+    Ok(ProvisioningResult::verified(
+        action,
+        method,
+        detect_binary(executable),
+    ))
 }
 
 fn inspect_opencode_mcp_value(

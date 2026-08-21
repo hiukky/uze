@@ -28,6 +28,7 @@ use uze_core::{
         IntegrationPort, ManagedArtifact, detach_standard_receipt, inspect_standard_receipt,
     },
     project::Resource,
+    provisioning::{ProcessRunner, ProcessSpec, ProvisionAction, ProvisioningResult},
     router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus},
     state,
     store::StoredPackage,
@@ -160,6 +161,53 @@ impl IntegrationPort for GeminiIntegration {
 
     fn detect(&self) -> HarnessDetection {
         detect_binary("gemini")
+    }
+
+    fn provision(&self, runner: &dyn ProcessRunner) -> Result<ProvisioningResult> {
+        if !cfg!(unix) {
+            return Ok(ProvisioningResult::blocked(
+                "Gemini automatic provisioning is currently supported on Unix and WSL only",
+            ));
+        }
+        let action = if self.detect().present {
+            ProvisionAction::Update
+        } else {
+            ProvisionAction::Install
+        };
+        let outcome = match runner.run(&ProcessSpec::new(
+            "npm",
+            ["install", "-g", "@google/gemini-cli@latest"],
+        )) {
+            Ok(outcome) => outcome,
+            Err(_) => {
+                return Ok(ProvisioningResult::failed(
+                    action,
+                    "official-npm",
+                    "official package installation could not be started",
+                ));
+            }
+        };
+        if !outcome.success {
+            let reason = if outcome.timed_out {
+                "official package installation timed out"
+            } else {
+                "official package installation exited unsuccessfully"
+            };
+            return Ok(ProvisioningResult::failed(action, "official-npm", reason));
+        }
+        let verified = runner.run(&ProcessSpec::new("gemini", ["--version"]));
+        if !matches!(verified, Ok(output) if output.success) {
+            return Ok(ProvisioningResult::failed(
+                action,
+                "official-npm",
+                "installation finished but the executable could not be verified",
+            ));
+        }
+        Ok(ProvisioningResult::verified(
+            action,
+            "official-npm",
+            detect_binary("gemini"),
+        ))
     }
 
     fn install(&self, home: &UzeHome) -> Result<()> {

@@ -15,6 +15,7 @@ use uze_core::{
         AttachmentState, HarnessDetection, IntegrationPort, IntegrationStatus, PublicationStatus,
         receipt_location,
     },
+    provisioning::{ProcessRunner, ProvisionStatus, ProvisioningResult, SystemProcessRunner},
     reconciliation::{PackageRemovalPlan, ReconciliationReport, plan_remove, reconcile_package},
     state,
     store::StoredPackage,
@@ -29,6 +30,7 @@ pub struct UzeApplication {
     home: UzeHome,
     store: UzeStore,
     integrations: Vec<Box<dyn IntegrationPort>>,
+    runner: Box<dyn ProcessRunner>,
 }
 
 impl UzeApplication {
@@ -52,10 +54,22 @@ impl UzeApplication {
     /// Dependency-injected constructor for deterministic contract tests or
     /// embedded clients. It has the same application behavior as `from_env`.
     pub fn new(home: UzeHome, integrations: Vec<Box<dyn IntegrationPort>>) -> Self {
+        Self::new_with_runner(home, integrations, Box::new(SystemProcessRunner))
+    }
+
+    /// Test and embedding composition point for the process runner used only
+    /// by explicit harness provisioning. Package lifecycle remains entirely
+    /// independent of process execution.
+    pub fn new_with_runner(
+        home: UzeHome,
+        integrations: Vec<Box<dyn IntegrationPort>>,
+        runner: Box<dyn ProcessRunner>,
+    ) -> Self {
         Self {
             store: UzeStore::new(home.clone()),
             home,
             integrations,
+            runner,
         }
     }
 
@@ -285,11 +299,43 @@ impl UzeApplication {
         let wanted = requested
             .map(|name| self.resolve_integration_id(name))
             .transpose()?;
-        let results = self.prepare_detected_integrations(wanted)?;
+        let results = self.provision_and_prepare(wanted)?;
         // `setup` is the documented way to repair a derived view that
         // failed to publish, so it always rebuilds them.
         let _ = self.republish_all();
+        for result in results.iter().filter(|result| result.configured) {
+            if let Some(integration) = self
+                .integrations
+                .iter()
+                .find(|integration| integration.id() == result.integration)
+            {
+                self.attach_stored_packages_to(integration.as_ref())?;
+            }
+        }
         Ok(results)
+    }
+
+    /// Explicit setup is the only path allowed to provision or update an
+    /// executable. `add` deliberately calls only `prepare_detected_*`.
+    fn provision_and_prepare(&self, requested: Option<&str>) -> Result<Vec<SetupResult>> {
+        self.integrations
+            .iter()
+            .filter(|integration| requested.is_none_or(|id| integration.id() == id))
+            .map(|integration| {
+                let provisioning = integration.provision(self.runner.as_ref())?;
+                state::record_provisioning(&self.home, integration.id(), &provisioning)?;
+                let configured = provisioning.status == ProvisionStatus::Verified;
+                if configured {
+                    integration.install(&self.home)?;
+                }
+                Ok(SetupResult {
+                    integration: integration.id().to_owned(),
+                    detection: provisioning.detection.clone(),
+                    configured,
+                    provisioning,
+                })
+            })
+            .collect()
     }
 
     /// Prepares integrations only when their real executable is present.
@@ -310,9 +356,49 @@ impl UzeApplication {
                     integration: integration.id().to_owned(),
                     detection,
                     configured,
+                    provisioning: ProvisioningResult::verified(
+                        uze_core::provisioning::ProvisionAction::None,
+                        "implicit-existing-executable",
+                        integration.detect(),
+                    ),
                 })
             })
             .collect()
+    }
+
+    /// Delivers packages which were installed before an explicit setup made
+    /// this integration available. This repeats the same package-first plan
+    /// as `add`, scoped to one integration, and ledger keys make it
+    /// idempotent without inventing a sync subsystem.
+    fn attach_stored_packages_to(&self, integration: &dyn IntegrationPort) -> Result<()> {
+        for package_id in self.store.package_ids()? {
+            let package = self.store.package(&package_id)?;
+            let environment = self.engine().compose(std::slice::from_ref(&package.id))?;
+            let resources: Vec<_> = environment.resources.iter().collect();
+            let mut provided = BTreeSet::new();
+            if let Some(plan) = integration.package_exposure_plan(&package, &resources)
+                && let Some(receipt) = integration.attach_package(&package, &plan)?
+            {
+                state::record_receipt(
+                    &self.home,
+                    package_receipt_key(package.id.as_str(), integration.id()),
+                    receipt,
+                )?;
+                provided = plan.provided_resource_identities;
+            }
+            for resource in resources {
+                if !provided.contains(&resource.identity())
+                    && let Some(receipt) = integration.attach_receipt(resource)?
+                {
+                    state::record_receipt(
+                        &self.home,
+                        resource_receipt_key(package.id.as_str(), integration.id(), resource),
+                        receipt,
+                    )?;
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Applies the approved lifecycle contract: reconcile, plan, detach only
@@ -443,6 +529,9 @@ impl UzeApplication {
                     .ok()
                     .flatten()
                     .map(|record| record.strategy),
+                provisioning: state::provisioning(&self.home, integration.id())
+                    .ok()
+                    .flatten(),
                 // Observed, not remembered. A package can be installed and
                 // reconciled while a harness still cannot see it, and that is
                 // exactly the state this field exists to surface.
@@ -460,6 +549,11 @@ impl UzeApplication {
             .err()
             .map(|error| error.to_string());
         let integration_state_error = state::load(&self.home).err().map(|error| error.to_string());
+        let provisioning_state_error = self
+            .integrations
+            .iter()
+            .find_map(|integration| state::provisioning(&self.home, integration.id()).err())
+            .map(|error| error.to_string());
         DoctorReport {
             uze_home: self.home.root().to_path_buf(),
             store,
@@ -468,6 +562,7 @@ impl UzeApplication {
             attachments,
             ledger_error,
             integration_state_error,
+            provisioning_state_error,
         }
     }
 
@@ -710,6 +805,7 @@ pub struct SetupResult {
     pub integration: String,
     pub detection: HarnessDetection,
     pub configured: bool,
+    pub provisioning: ProvisioningResult,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -742,6 +838,7 @@ pub struct HarnessHealth {
     pub detection: HarnessDetection,
     pub setup: String,
     pub strategy: Option<String>,
+    pub provisioning: Option<state::ProvisioningRecord>,
     pub publication: PublicationStatus,
 }
 
@@ -760,6 +857,7 @@ pub struct DoctorReport {
     pub attachments: Vec<PackageManagedState>,
     pub ledger_error: Option<String>,
     pub integration_state_error: Option<String>,
+    pub provisioning_state_error: Option<String>,
 }
 
 fn managed_state(report: &ReconciliationReport) -> ManagedStateSummary {

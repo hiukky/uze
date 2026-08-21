@@ -62,6 +62,13 @@ impl UzeHome {
         self.state_dir().join("integrations.json")
     }
 
+    /// Secret-free record of an explicit vendor executable provisioning
+    /// attempt. It is deliberately separate from integration preparation and
+    /// package attachment ownership.
+    pub fn provisioning_state_path(&self) -> PathBuf {
+        self.state_dir().join("provisioning.json")
+    }
+
     pub fn cache_dir(&self) -> PathBuf {
         self.root.join("cache")
     }
