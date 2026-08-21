@@ -26,7 +26,33 @@ detail lives in sibling documents; this file is the index and the synthesis.
   portability classification, generated-adapter assessment, trust implications.
 - [commands.md](commands.md)
 - [agents.md](agents.md)
-- [instructions.md](instructions.md)
+- [instructions.md](instructions.md) — the tracer bullet research and design.
+- [context-manager.md](context-manager.md) — **the implemented, tested
+  result**: the Context Manager boundary, `inspect`/`plan`/`reconcile`, and
+  the current portability evidence per harness.
+
+## Implementation status (2026-08-21)
+
+The research below stays as originally written — it is what justified each
+decision. This table is the one place status is kept current as
+capabilities actually ship, so it doesn't require re-reading the whole
+document to answer "is this real yet."
+
+| Capability | Status | Evidence |
+|---|---|---|
+| Skills | **IMPLEMENTED** | Real delivery to Claude Code, Codex, OpenCode, Gemini CLI. |
+| MCP | **IMPLEMENTED** | Real delivery to all four. |
+| Instructions | **IMPLEMENTED / Context Manager** | Codex: native, **empirically confirmed** (`codex debug prompt-input`, no credential). OpenCode: native, documented + L1-tested, not re-confirmed live this session — declared limitation, not inflated. Claude Code / Gemini CLI: bridge (`@AGENTS.md`) implemented and tested at the file level; model-level resolution **unverified** (would need credentials). See [context-manager.md](context-manager.md). |
+| Hooks | RESEARCHED | Partial portable subset justified for Claude↔Gemini only; not implemented. See [hooks.md](hooks.md). |
+| Commands | CONVERGING TO SKILLS | Not modeled as a UZE capability; Claude Code's own docs confirm the merge. See [commands.md](commands.md). |
+| Agents | RESEARCH | Real cross-vendor semantic gaps (isolation, nesting, package format); native pass-through only. See [agents.md](agents.md). |
+| Memory | FUTURE / Context Manager | Not researched or implemented; the Context Manager boundary is where it would land if pursued — see [context-manager.md](context-manager.md)'s future-`/uze` section. |
+
+None of the four harness legs for Instructions is claimed `PROVEN` in the
+sense of end-to-end, credentialed, real-model verification across all four
+— that would overstate what this session's evidence supports. Two legs
+(Codex confirmed, OpenCode documented) are load-bearing; two (Claude,
+Gemini) are implemented and unit/L1-tested but not model-verified.
 
 ---
 
