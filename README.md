@@ -69,8 +69,13 @@ without sharing either Linux home directory:
 
 ```bash
 make install-wsl-lab
-# or: ./scripts/install-wsl-distro.sh MyOtherDistro
+# or: ./playground/install-wsl-distro.sh MyOtherDistro
 ```
+
+The helper also deploys the evolving local test package to
+`~/uze-playground/default-plugin` in the target distro. See
+[`playground/README.md`](playground/README.md) for the safe, repeatable
+playground workflow.
 
 The script stages only `target/release/uze` in Windows `%TEMP%`, copies it to
 the target's `~/.local/bin/uze`, verifies `--version`, then removes staging.

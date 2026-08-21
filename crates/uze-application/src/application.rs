@@ -192,6 +192,13 @@ impl UzeApplication {
         let mut attachments = Vec::new();
         let mut package_plans = Vec::new();
         for integration in &self.integrations {
+            // A package must remain installable on a machine that has only a
+            // subset of UZE's peer harnesses. `add` prepares and attaches to
+            // detected harnesses; an absent executable is neither a package
+            // incompatibility nor a reason to invoke its vendor CLI.
+            if !integration.detect().present {
+                continue;
+            }
             let mut provided = BTreeSet::new();
             // Native delivery reads the view; attempting it against a view
             // that failed to publish would fail for a reason that has
@@ -922,7 +929,7 @@ mod tests {
     use uze_core::{
         capability::CapabilityKind,
         exposure::{ExposureMechanism, ExposurePlan},
-        integration::{AttachmentReceipt, ManagedArtifact},
+        integration::{AttachmentReceipt, HarnessDetection, ManagedArtifact},
         project::Resource,
         router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus},
     };
@@ -953,6 +960,10 @@ mod tests {
         attached: Cell<bool>,
     }
 
+    struct AbsentIntegration {
+        attach_attempted: Cell<bool>,
+    }
+
     struct AllResourceSymlinkIntegration {
         root: PathBuf,
     }
@@ -964,6 +975,13 @@ mod tests {
 
         fn capabilities(&self) -> HarnessCapabilities {
             HarnessCapabilities::default()
+        }
+
+        fn detect(&self) -> HarnessDetection {
+            HarnessDetection {
+                present: true,
+                version: None,
+            }
         }
 
         fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
@@ -1012,6 +1030,13 @@ mod tests {
             HarnessCapabilities::default()
         }
 
+        fn detect(&self) -> HarnessDetection {
+            HarnessDetection {
+                present: true,
+                version: None,
+            }
+        }
+
         fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
             ExposurePlan {
                 representation: resource.capability.representation,
@@ -1055,6 +1080,35 @@ mod tests {
         }
     }
 
+    impl IntegrationPort for AbsentIntegration {
+        fn id(&self) -> &'static str {
+            "absent"
+        }
+
+        fn capabilities(&self) -> HarnessCapabilities {
+            HarnessCapabilities::default()
+        }
+
+        fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+            ExposurePlan {
+                representation: resource.capability.representation,
+                route: CompatibilityRoute::Adaptable,
+                verification: VerificationStatus::Unverified,
+                mechanism: ExposureMechanism::Unsupported {
+                    rationale: "an absent integration must not attach".to_owned(),
+                },
+                evidence: "test".to_owned(),
+            }
+        }
+
+        fn attach_receipt(&self, _resource: &Resource) -> Result<Option<AttachmentReceipt>> {
+            self.attach_attempted.set(true);
+            Err(UzeError::ExposureUnavailable(
+                "absent integration was invoked".to_owned(),
+            ))
+        }
+    }
+
     fn temp(label: &str) -> PathBuf {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1091,6 +1145,22 @@ mod tests {
         assert_eq!(inspection.plugin.id, listed[0].id);
         assert_eq!(inspection.capabilities[0].kind, CapabilityKind::AgentSkill);
         assert_eq!(inspection.deliveries.len(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn add_installs_portable_package_without_invoking_absent_harnesses() {
+        let root = temp("absent-harness");
+        let absent = AbsentIntegration {
+            attach_attempted: Cell::new(false),
+        };
+        let app = UzeApplication::new(UzeHome::at(&root), vec![Box::new(absent)]);
+        app.add_plugin(
+            uze_core::PackageSource::local(fixture()),
+            &uze_core::trust::AlwaysTrust,
+        )
+        .unwrap();
+        assert_eq!(app.list_plugins().unwrap().len(), 1);
         fs::remove_dir_all(root).unwrap();
     }
 

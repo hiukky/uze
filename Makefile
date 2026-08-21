@@ -5,7 +5,7 @@ UZE_BIN ?= target/debug/uze
 RELEASE_BIN ?= target/release/uze
 INSTALL_ARGS ?= --force
 
-.PHONY: help build release install install-wsl-lab run test check fmt lint version clean
+.PHONY: help build release install install-wsl-lab playground-lab run test check fmt lint version clean
 
 help: ## Show the available local-development targets.
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z0-9_.-]+:.*##/ { printf "  %-12s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -23,7 +23,9 @@ install: ## Install/replace `uze` in Cargo's configured binary directory.
 	$(CARGO) install --path . --bin uze --locked $(INSTALL_ARGS)
 
 install-wsl-lab: ## Build release here and install it into the WSL distro named Lab.
-	./scripts/install-wsl-distro.sh Lab
+	./playground/install-wsl-distro.sh Lab
+
+playground-lab: install-wsl-lab ## Deploy the current binary and default plugin into Lab.
 
 run: build ## Run the debug binary; pass arguments with `ARGS="doctor"`.
 	$(UZE_BIN) $(ARGS)
