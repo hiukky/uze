@@ -169,12 +169,18 @@ pub struct ExposurePlan {
 /// Plugin is the distribution unit; resources/capabilities remain the unit
 /// of compatibility. A native package plan declares exactly which resources
 /// it consumes so callers never also attach them individually.
+///
+/// It deliberately carries no mechanism. The Core needs to know only *that*
+/// a harness consumes this package as a native unit and which resources that
+/// covers — never how. Every value an earlier `PackageExposureMechanism`
+/// held (catalog root, catalog name, plugin selector) was derivable by the
+/// owning integration from the package and UZE's own layout, so the enum
+/// carried vendor vocabulary rather than information.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct PackageExposurePlan {
     pub package_id: PackageId,
     pub route: CompatibilityRoute,
     pub verification: VerificationStatus,
-    pub mechanism: PackageExposureMechanism,
     pub provided_resource_identities: BTreeSet<String>,
     pub evidence: String,
 }
@@ -184,16 +190,6 @@ impl PackageExposurePlan {
         self.provided_resource_identities
             .contains(&resource.identity())
     }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum PackageExposureMechanism {
-    NativePluginMarketplace {
-        marketplace_root: PathBuf,
-        marketplace_name: String,
-        plugin_name: String,
-    },
 }
 
 #[derive(Debug)]

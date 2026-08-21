@@ -259,10 +259,15 @@ mod tests {
                 resource_identity: None,
                 integration: "codex".to_owned(),
                 strategy: "native-plugin-marketplace".to_owned(),
-                artifact: ManagedArtifact::MarketplacePlugin {
+                artifact: ManagedArtifact::IntegrationOwned {
+                    kind: "marketplace-plugin".to_owned(),
                     selector: "plugin-a@uze-local".to_owned(),
-                    marketplace_root: PathBuf::from("/uze/store"),
-                    package_root: PathBuf::from("/uze/store/packages/plugin-a"),
+                    detail: [(
+                        "marketplace_root".to_owned(),
+                        serde_json::json!("/uze/store"),
+                    )]
+                    .into_iter()
+                    .collect(),
                 },
             },
         )

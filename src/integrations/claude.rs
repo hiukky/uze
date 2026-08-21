@@ -68,6 +68,12 @@ impl IntegrationPort for ClaudeIntegration {
         "claude-code"
     }
 
+    /// `claude` is the name people type; `claude-code` is the stable id the
+    /// receipts and state records carry.
+    fn aliases(&self) -> &'static [&'static str] {
+        &["claude"]
+    }
+
     fn capabilities(&self) -> HarnessCapabilities {
         HarnessCapabilities {
             adaptable: [CapabilityKind::AgentSkill, CapabilityKind::Mcp]

@@ -19,6 +19,14 @@ use uze::integrations::{
     opencode::OpenCodeIntegration,
 };
 
+/// The acquisition pipeline every install now goes through: a source is
+/// acquired into a materialized package, and only then does the Store ingest
+/// it. Spelled out here rather than hidden behind a Store convenience,
+/// because the Store deliberately no longer accepts a path.
+fn install(store: &UzeStore, path: impl Into<std::path::PathBuf>) -> uze::Result<uze::StoredPackage> {
+    store.ingest(&uze::acquisition::acquire(&uze::PackageSource::local(path))?)
+}
+
 fn package_fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/packages/agent-plugin-skill")
 }
@@ -30,7 +38,7 @@ fn mcp_package_fixture() -> PathBuf {
 fn mcp_stored_environment(label: &str) -> (PathBuf, uze::EffectiveEnvironment) {
     let root = temporary_home(label);
     let store = UzeStore::new(UzeHome::at(&root));
-    let package = store.install_agent_plugin(mcp_package_fixture()).unwrap();
+    let package = install(&store, mcp_package_fixture()).unwrap();
     let environment = UzeEngine::new(store).compose(&[package.id]).unwrap();
     (root, environment)
 }
@@ -46,7 +54,7 @@ fn temporary_home(label: &str) -> PathBuf {
 fn stored_environment(label: &str) -> (PathBuf, uze::EffectiveEnvironment) {
     let root = temporary_home(label);
     let store = UzeStore::new(UzeHome::at(&root));
-    let package = store.install_agent_plugin(package_fixture()).unwrap();
+    let package = install(&store, package_fixture()).unwrap();
     let environment = UzeEngine::new(store).compose(&[package.id]).unwrap();
     (root, environment)
 }

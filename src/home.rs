@@ -30,24 +30,16 @@ impl UzeHome {
         &self.root
     }
 
+    /// Root the package tree is published under. Several harnesses resolve a
+    /// package path relative to the root of their own catalogue, so an
+    /// integration that maintains such a catalogue places it here — but the
+    /// layout stays UZE's, and this module names no harness.
     pub fn store_dir(&self) -> PathBuf {
         self.root.join("store")
     }
 
     pub fn packages_dir(&self) -> PathBuf {
         self.store_dir().join("packages")
-    }
-
-    /// Root of the standard Codex local marketplace that UZE publishes from
-    /// its store. The catalog is a Codex marketplace file, never a UZE
-    /// package format.
-    pub fn codex_marketplace_root(&self) -> PathBuf {
-        self.store_dir()
-    }
-
-    pub fn codex_marketplace_path(&self) -> PathBuf {
-        self.codex_marketplace_root()
-            .join(".agents/plugins/marketplace.json")
     }
 
     pub fn package_dir(&self, id: &PackageId) -> PathBuf {

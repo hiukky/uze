@@ -10,6 +10,18 @@ model_list:
       # explicit client identity, not an attempt to impersonate a browser.
       extra_headers:
         User-Agent: uze-conformance-lab/0.1 (+https://github.com/hiukky/uze)
+  # Claude Code sends a `reasoning.effort` field for any model name it does
+  # not recognize, which a plain chat model (the default alias above)
+  # rejects with a 400. A second alias backed by a reasoning-capable model
+  # keeps the cheap default for Codex/OpenCode, which have no such
+  # requirement, and isolates the extra reasoning-token cost to Claude's
+  # own conformance run. See e2e/run-claude-e2e.sh.
+  - model_name: uze-conformance-reasoning
+    litellm_params:
+      model: os.environ/UZE_CONFORMANCE_REASONING_MODEL
+      api_key: os.environ/OPENAI_API_KEY
+      extra_headers:
+        User-Agent: uze-conformance-lab/0.1 (+https://github.com/hiukky/uze)
 
 # Do not configure callbacks, persistence, or a database: test prompts and
 # outputs must not be exported by the gateway.

@@ -7,6 +7,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    acquisition::{MaterializedPackage, Provenance},
     error::{Result, UzeError},
     home::UzeHome,
     importer::{AgentPluginImporter, ForeignImporter},
@@ -43,7 +44,9 @@ pub struct StoredPackage {
     pub id: PackageId,
     pub root: PathBuf,
     pub manifest: PathBuf,
-    pub source: PathBuf,
+    /// Where this package came from. Carried for reporting and for a later
+    /// reinstall; the Store itself never reads inside it.
+    pub provenance: Provenance,
 }
 
 #[derive(Clone, Debug)]
@@ -56,9 +59,16 @@ struct PackageRegistry {
     packages: BTreeMap<PackageId, Registration>,
 }
 
+/// One registry entry.
+///
+/// `source` is the historical field name, kept so a ledger written before
+/// provenance existed still loads: a bare JSON string deserializes as a local
+/// source (see `Provenance`'s deserializer). Reading a legacy entry never
+/// rewrites it, and every new write emits the current shape.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct Registration {
-    source: PathBuf,
+    #[serde(rename = "source")]
+    provenance: Provenance,
 }
 
 impl UzeStore {
@@ -70,15 +80,23 @@ impl UzeStore {
         &self.home
     }
 
-    /// Installs an Agent Plugins 1.0 package once. The store preserves the
-    /// complete external package tree (including any vendor-native envelope)
-    /// and never creates a UZE plugin manifest or rewrites payloads.
-    pub fn install_agent_plugin(&self, source: impl AsRef<Path>) -> Result<StoredPackage> {
-        let source = checked_root(source.as_ref())?;
+    /// Ingests an already-materialized Agent Plugins 1.0 package once.
+    ///
+    /// The Store preserves the complete external package tree (including any
+    /// vendor-native envelope) and never creates a UZE plugin manifest or
+    /// rewrites payloads. It writes nothing a harness reads: a harness-owned
+    /// view of the installed set belongs to that harness's integration.
+    ///
+    /// It also knows nothing about where the bytes came from. Provenance
+    /// arrives attached to the materialized package, is persisted verbatim,
+    /// and is compared only through `Provenance::same_origin` — this module
+    /// never reads a field of it or matches a source mechanism.
+    pub fn ingest(&self, package: &MaterializedPackage) -> Result<StoredPackage> {
+        let source = package.root();
         let manifest = source.join("plugin.json");
         let imported = AgentPluginImporter
-            .import(&source)?
-            .ok_or_else(|| UzeError::MissingManifest(source.clone()))?;
+            .import(source)?
+            .ok_or_else(|| UzeError::MissingManifest(source.to_path_buf()))?;
         let manifest_value: serde_json::Value =
             serde_json::from_slice(&fs::read(&manifest).map_err(|source_error| {
                 UzeError::Read {
@@ -96,17 +114,21 @@ impl UzeStore {
             .ok_or_else(|| UzeError::MissingPackageName(manifest.clone()))?;
         let id = PackageId::from_plugin_name(name, &manifest)?;
 
+        // Every source passes through this one check, so a local package and
+        // a remote one are held to the same rule. It runs before any byte is
+        // written, so a rejected package leaves nothing behind.
+        assert_self_contained(source)?;
+
         self.home.ensure_layout()?;
         let mut registry = self.load_registry()?;
         if let Some(existing) = registry.packages.get(&id) {
-            if existing.source == source {
-                self.refresh_codex_marketplace(&registry)?;
+            if existing.provenance.same_origin(package.provenance()) {
                 return self.package(&id);
             }
             return Err(UzeError::PackageConflict {
                 id: id.as_str().to_owned(),
-                existing: existing.source.clone(),
-                requested: source,
+                existing: existing.provenance.requested.display(),
+                requested: package.provenance().requested.display(),
             });
         }
 
@@ -115,7 +137,7 @@ impl UzeStore {
             path: destination.clone(),
             source: source_error,
         })?;
-        copy_tree(&source, &destination)?;
+        copy_tree(source, &destination)?;
 
         // The importer has already performed external-manifest safety checks.
         // Keeping this value live makes that boundary explicit and prevents an
@@ -124,11 +146,10 @@ impl UzeStore {
         registry.packages.insert(
             id.clone(),
             Registration {
-                source: source.clone(),
+                provenance: package.provenance().clone(),
             },
         );
         self.save_registry(&registry)?;
-        self.refresh_codex_marketplace(&registry)?;
         self.package(&id)
     }
 
@@ -143,7 +164,7 @@ impl UzeStore {
             id: id.clone(),
             manifest: root.join("plugin.json"),
             root,
-            source: registration.source.clone(),
+            provenance: registration.provenance.clone(),
         })
     }
 
@@ -171,8 +192,7 @@ impl UzeStore {
         if root.exists() {
             fs::remove_dir_all(&root).map_err(|source| UzeError::Write { path: root, source })?;
         }
-        self.save_registry(&registry)?;
-        self.refresh_codex_marketplace(&registry)
+        self.save_registry(&registry)
     }
 
     fn load_registry(&self) -> Result<PackageRegistry> {
@@ -195,45 +215,6 @@ impl UzeStore {
             serde_json::to_vec_pretty(registry).expect("registry serialization is infallible");
         crate::persistence::write_atomic(&path, &payload)
     }
-
-    /// Materializes only Codex's documented marketplace catalog, pointing at
-    /// already-preserved package directories. It carries no UZE semantics and
-    /// is regenerated from the installed-package registry.
-    fn refresh_codex_marketplace(&self, registry: &PackageRegistry) -> Result<()> {
-        let path = self.home.codex_marketplace_path();
-        let parent = path.parent().expect("marketplace path has a parent");
-        fs::create_dir_all(parent).map_err(|source| UzeError::Write {
-            path: parent.to_path_buf(),
-            source,
-        })?;
-        let plugins: Vec<serde_json::Value> = registry
-            .packages
-            .keys()
-            .filter(|id| {
-                self.home
-                    .package_dir(id)
-                    .join(".codex-plugin/plugin.json")
-                    .is_file()
-            })
-            .map(|id| {
-                serde_json::json!({
-                    "name": id.as_str(),
-                    "source": { "source": "local", "path": format!("./packages/{}", id.as_str()) },
-                    "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
-                    "category": "Developer tools"
-                })
-            })
-            .collect();
-        let catalog = serde_json::json!({
-            "name": "uze-local",
-            "interface": { "displayName": "UZE Local" },
-            "plugins": plugins,
-        });
-        crate::persistence::write_atomic(
-            &path,
-            &serde_json::to_vec_pretty(&catalog).expect("catalog is serializable"),
-        )
-    }
 }
 
 fn checked_root(root: &Path) -> Result<PathBuf> {
@@ -247,6 +228,82 @@ fn checked_root(root: &Path) -> Result<PathBuf> {
         path: root.to_path_buf(),
         source,
     })
+}
+
+/// Enforces the invariant that an installed package is **self-contained**:
+/// no symlink the Store persists may resolve outside the package root.
+///
+/// This is not a rule about where a package came from. A local directory and
+/// a cloned repository are held to it identically, because it protects what
+/// happens *after* installation: an integration later points a harness at a
+/// path inside the store, and the harness follows whatever it finds there.
+///
+/// Every symlink is checked on its own and none is followed. That is
+/// deliberate and it is also what makes chains and cycles harmless: a chain
+/// can only leave the root if some individual link leaves it, and that link
+/// is checked like any other. Nothing here traverses a link, so there is no
+/// cycle to guard against.
+fn assert_self_contained(root: &Path) -> Result<()> {
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        let entries = fs::read_dir(&directory).map_err(|source| UzeError::Read {
+            path: directory.clone(),
+            source,
+        })?;
+        for entry in entries {
+            let entry = entry.map_err(|source| UzeError::Read {
+                path: directory.clone(),
+                source,
+            })?;
+            let path = entry.path();
+            let metadata = fs::symlink_metadata(&path).map_err(|source| UzeError::Read {
+                path: path.clone(),
+                source,
+            })?;
+            if metadata.file_type().is_symlink() {
+                let target = fs::read_link(&path).map_err(|source| UzeError::Read {
+                    path: path.clone(),
+                    source,
+                })?;
+                let resolved = resolve_lexically(&path, &target);
+                if !resolved.starts_with(root) {
+                    return Err(UzeError::PackageEscapesRoot {
+                        link: path,
+                        target: resolved,
+                    });
+                }
+            } else if metadata.is_dir() {
+                // A real directory only. Symlinked directories were rejected
+                // or accepted above and are never descended into, so this
+                // walk cannot be led outside the root either.
+                pending.push(path);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Resolves a symlink target against its own location **without touching the
+/// filesystem**, so `..` is normalized textually rather than by following
+/// whatever it currently points at. An absolute target resolves to itself and
+/// therefore fails the containment check unless it is already inside.
+fn resolve_lexically(link: &Path, target: &Path) -> PathBuf {
+    let base = if target.is_absolute() {
+        PathBuf::new()
+    } else {
+        link.parent().unwrap_or(Path::new("")).to_path_buf()
+    };
+    let mut resolved = base;
+    for component in target.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                resolved.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => resolved.push(other.as_os_str()),
+        }
+    }
+    resolved
 }
 
 fn copy_tree(source: &Path, destination: &Path) -> Result<()> {

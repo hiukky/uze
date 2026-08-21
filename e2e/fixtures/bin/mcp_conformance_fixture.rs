@@ -52,8 +52,23 @@ impl ServerHandler for ConformanceServer {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let proof = std::env::var("UZE_MCP_CONFORMANCE_PROOF")
-        .unwrap_or_else(|_| "UZE_MCP_CONFORMANCE_DEFAULT_PROOF".to_owned());
+    // `--proof <value>` is the primary channel and the environment variable
+    // is the fallback. Arguments are what survive every UZE delivery route:
+    // an `mcp.json` `env` block reaches Codex, which copies the manifest
+    // verbatim into its plugin cache, but UZE's vendor-config writers record
+    // `environment` as an empty, secret-free reference list, so Claude and
+    // OpenCode never receive it. `args` is persisted verbatim by all three.
+    // The proof is a per-run test token, never a credential.
+    let mut arguments = std::env::args().skip(1);
+    let mut proof = None;
+    while let Some(argument) = arguments.next() {
+        if argument == "--proof" {
+            proof = arguments.next();
+        }
+    }
+    let proof = proof
+        .or_else(|| std::env::var("UZE_MCP_CONFORMANCE_PROOF").ok())
+        .unwrap_or_else(|| "UZE_MCP_CONFORMANCE_DEFAULT_PROOF".to_owned());
     let server = ConformanceServer { proof }.serve(stdio()).await?;
     server.waiting().await?;
     Ok(())

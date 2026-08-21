@@ -21,10 +21,10 @@ use crossterm::{
 use ratatui::{
     Terminal,
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout},
-    style::{Modifier, Style},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph, Wrap},
 };
 
 use crate::{
@@ -36,6 +36,16 @@ use crate::{
 };
 
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+// The TUI deliberately uses a compact, low-chrome palette. The terminal's
+// background remains authoritative, while these colors establish hierarchy
+// and make real lifecycle states legible at a glance.
+const ACCENT: Color = Color::Cyan;
+const MUTED: Color = Color::DarkGray;
+const SUCCESS: Color = Color::Green;
+const WARNING: Color = Color::Yellow;
+const DANGER: Color = Color::Red;
+const PANEL: Color = Color::DarkGray;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum View {
@@ -270,8 +280,16 @@ fn dispatch(intent: Intent, home: &UzeHome, sender: &Sender<WorkerResult>, model
                 sender.clone(),
                 format!("Adding {source}…"),
                 move |app| {
-                    app.add_plugin(PathBuf::from(source))
-                        .map(|report| format!("Installed {}", report.plugin.id))
+                    // TUI v0 cannot render a trust prompt yet, so it declines to answer
+                    // rather than answering yes on the operator's behalf. The
+                    // structured `TRUST_REQUIRED` surfaces as an error in the UI,
+                    // and a future TUI will render the same `TrustRequest` the CLI
+                    // already receives.
+                    app.add_plugin(
+                        crate::PackageSource::local(source),
+                        &crate::trust::NoTrustAuthority,
+                    )
+                    .map(|report| format!("Installed {}", report.plugin.id))
                 },
             );
             model.notice = Notice::Working("Adding plugin…".to_owned());
@@ -410,27 +428,12 @@ fn render(frame: &mut ratatui::Frame<'_>, model: &TuiModel) {
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),
+            Constraint::Length(4),
             Constraint::Min(3),
-            Constraint::Length(2),
+            Constraint::Length(3),
         ])
         .split(frame.area());
-    let tabs = [
-        (View::Plugins, "1 Plugins"),
-        (View::Harnesses, "2 Harnesses"),
-        (View::Doctor, "3 Doctor"),
-    ]
-    .into_iter()
-    .map(|(view, label)| {
-        let style = if model.view == view {
-            Style::default().add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-        };
-        Span::styled(format!("{label}    "), style)
-    })
-    .collect::<Vec<_>>();
-    frame.render_widget(Paragraph::new(Line::from(tabs)), layout[0]);
+    render_header(frame, layout[0], model);
     match model.view {
         View::Plugins | View::Add | View::ConfirmRemove => render_plugins(frame, layout[1], model),
         View::Harnesses => render_harnesses(frame, layout[1], model),
@@ -438,110 +441,369 @@ fn render(frame: &mut ratatui::Frame<'_>, model: &TuiModel) {
         View::Inspect => render_inspect(frame, layout[1], model),
     }
     frame.render_widget(
-        Paragraph::new(footer(model)).wrap(Wrap { trim: true }),
+        Paragraph::new(footer(model))
+            .block(
+                Block::default()
+                    .borders(Borders::TOP)
+                    .border_style(Style::default().fg(PANEL)),
+            )
+            .wrap(Wrap { trim: true }),
         layout[2],
     );
 }
 
-fn render_plugins(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, model: &TuiModel) {
+fn render_header(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
+    let count = model.plugins.len();
+    let harnesses = model
+        .doctor
+        .as_ref()
+        .map(|report| report.harnesses.len())
+        .unwrap_or_default();
+    let tabs = [
+        (View::Plugins, "1  Plugins"),
+        (View::Harnesses, "2  Harnesses"),
+        (View::Doctor, "3  Doctor"),
+    ]
+    .into_iter()
+    .flat_map(|(view, label)| {
+        let selected = matches!(model.view, current if current == view)
+            || matches!(
+                (model.view, view),
+                (
+                    View::Inspect | View::Add | View::ConfirmRemove,
+                    View::Plugins
+                )
+            );
+        let style = if selected {
+            Style::default()
+                .fg(Color::Black)
+                .bg(ACCENT)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(MUTED)
+        };
+        [Span::styled(format!(" {label} "), style), Span::raw("  ")]
+    })
+    .collect::<Vec<_>>();
+    let header = vec![
+        Line::from(vec![
+            Span::styled(
+                " UZE",
+                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("  local agent environment", Style::default().fg(MUTED)),
+            Span::styled(
+                format!("{count} plugins · {harnesses} harnesses "),
+                Style::default().fg(MUTED),
+            ),
+        ]),
+        Line::from(tabs),
+    ];
+    frame.render_widget(
+        Paragraph::new(header).block(
+            Block::default()
+                .borders(Borders::BOTTOM)
+                .border_style(Style::default().fg(PANEL)),
+        ),
+        area,
+    );
+}
+
+fn render_plugins(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(48), Constraint::Percentage(52)])
+        .split(area);
     let items = model
         .plugins
         .iter()
         .enumerate()
         .map(|(index, plugin)| {
-            let marker = if index == model.selected { "> " } else { "  " };
+            let selected = index == model.selected;
             let health = plugin_health(model.doctor.as_ref(), &plugin.id);
-            ListItem::new(format!(
-                "{marker}{:<28} {:>2} capabilities  {:<12} {health}",
-                plugin.id,
-                plugin.capability_count,
-                short_source(&plugin.source),
-            ))
+            let marker = if selected { "› " } else { "  " };
+            let style = if selected {
+                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(marker, style),
+                Span::styled(format!("{}\n", plugin.id), style),
+                Span::raw("    "),
+                Span::styled(short_source(&plugin.source), Style::default().fg(MUTED)),
+                Span::styled(
+                    format!("  ·  {} capabilities", plugin.capability_count),
+                    Style::default().fg(MUTED),
+                ),
+                Span::styled(format!("  ·  {health}"), health_style(health)),
+            ]))
         })
         .collect::<Vec<_>>();
-    let title = match model.view {
-        View::Add => "Add plugin — enter a source path",
-        View::ConfirmRemove => "Remove selected plugin? enter/y confirm · esc/n cancel",
-        _ => "Plugins",
-    };
     frame.render_widget(
-        List::new(items).block(Block::default().title(title).borders(Borders::BOTTOM)),
-        area,
+        List::new(items).block(panel_block(format!(
+            " Plugins  {} installed ",
+            model.plugins.len()
+        ))),
+        columns[0],
     );
+    render_plugin_summary(frame, columns[1], model);
     if model.view == View::Add {
-        let prompt = format!("source: {}", model.input);
-        frame.render_widget(Paragraph::new(prompt), centered_line(area));
+        render_modal(
+            frame,
+            area,
+            "Add a plugin",
+            vec![
+                Line::from("Enter a local package path."),
+                Line::from(Span::styled(
+                    format!("› {}", model.input),
+                    Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                )),
+                Line::from(Span::styled(
+                    "enter install · esc cancel",
+                    Style::default().fg(MUTED),
+                )),
+            ],
+            WARNING,
+        );
+    }
+    if model.view == View::ConfirmRemove {
+        let plugin = model
+            .selected_plugin()
+            .map(|item| item.id.as_str())
+            .unwrap_or("this plugin");
+        render_modal(
+            frame,
+            area,
+            "Remove plugin?",
+            vec![
+                Line::from(vec![
+                    Span::raw("Remove "),
+                    Span::styled(
+                        plugin.to_owned(),
+                        Style::default().fg(DANGER).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(" from UZE?"),
+                ]),
+                Line::from(Span::styled(
+                    "Only artifacts that still match UZE ownership are detached.",
+                    Style::default().fg(MUTED),
+                )),
+                Line::from(Span::styled(
+                    "enter/y remove · esc/n preserve",
+                    Style::default().fg(MUTED),
+                )),
+            ],
+            DANGER,
+        );
     }
 }
 
-fn render_harnesses(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, model: &TuiModel) {
-    let mut lines = vec![Line::from(
-        "Harness                 Status                    Strategy",
-    )];
-    if let Some(doctor) = &model.doctor {
-        for harness in &doctor.harnesses {
-            lines.push(Line::from(format_harness(harness)));
-        }
-    } else {
-        lines.push(Line::from("Refreshing harness state…"));
-    }
-    frame.render_widget(
-        Paragraph::new(lines).block(Block::default().title("Harnesses").borders(Borders::BOTTOM)),
-        area,
-    );
-}
-
-fn render_doctor(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, model: &TuiModel) {
-    let mut lines = Vec::new();
-    if let Some(doctor) = &model.doctor {
-        lines.push(Line::from(format!(
-            "Store: {:?} · {} plugins",
-            doctor.store,
-            doctor.plugins.len()
-        )));
-        for package in &doctor.attachments {
-            let state = &package.state;
-            if state.drifted + state.conflicts + state.blocked + state.missing > 0 {
-                lines.push(Line::from(format!(
-                    "{}  {} missing · {} drifted · {} conflicts · {} blocked",
-                    package.plugin, state.missing, state.drifted, state.conflicts, state.blocked
-                )));
-            }
-        }
-        if let Some(error) = &doctor.ledger_error {
-            lines.push(Line::from(format!("Ledger blocked: {error}")));
-        }
-        if let Some(error) = &doctor.integration_state_error {
-            lines.push(Line::from(format!("Integration state blocked: {error}")));
-        }
-        if lines.len() == 1 {
-            lines.push(Line::from("No attachment problems detected."));
-        }
-    } else {
-        lines.push(Line::from("Refreshing doctor report…"));
-    }
+fn render_plugin_summary(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
+    let Some(plugin) = model.selected_plugin() else {
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::from(Span::styled(
+                    "No plugins installed",
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
+                Line::from(Span::styled(
+                    "Press a to add a local package.",
+                    Style::default().fg(MUTED),
+                )),
+            ])
+            .block(panel_block(" Overview "))
+            .alignment(Alignment::Center),
+            area,
+        );
+        return;
+    };
+    let health = plugin_health(model.doctor.as_ref(), &plugin.id);
+    let lines = vec![
+        Line::from(Span::styled(
+            &plugin.id,
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            plugin.source.clone(),
+            Style::default().fg(MUTED),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Capabilities  ", Style::default().fg(MUTED)),
+            Span::raw(plugin.capability_count.to_string()),
+        ]),
+        Line::from(vec![
+            Span::styled("Managed state ", Style::default().fg(MUTED)),
+            Span::styled(health, health_style(health)),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "enter  Inspect delivery",
+            Style::default().fg(ACCENT),
+        )),
+        Line::from(Span::styled(
+            "r      Remove safely",
+            Style::default().fg(MUTED),
+        )),
+    ];
     frame.render_widget(
         Paragraph::new(lines)
-            .block(Block::default().title("Doctor").borders(Borders::BOTTOM))
+            .block(panel_block(" Selected plugin "))
             .wrap(Wrap { trim: true }),
         area,
     );
 }
 
-fn render_inspect(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, model: &TuiModel) {
+fn render_harnesses(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
+    let mut lines = vec![Line::from(vec![
+        Span::styled(
+            "HARNESS",
+            Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("                 "),
+        Span::styled(
+            "STATE",
+            Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("                     "),
+        Span::styled(
+            "DELIVERY BASELINE",
+            Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
+        ),
+    ])];
+    if let Some(doctor) = &model.doctor {
+        for harness in &doctor.harnesses {
+            lines.push(format_harness(harness));
+        }
+    } else {
+        lines.push(Line::from(Span::styled(
+            "Refreshing harness state…",
+            Style::default().fg(MUTED),
+        )));
+    }
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(panel_block(" Harnesses "))
+            .wrap(Wrap { trim: true }),
+        area,
+    );
+}
+
+fn render_doctor(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
+    let mut lines = Vec::new();
+    if let Some(doctor) = &model.doctor {
+        let affected = doctor
+            .attachments
+            .iter()
+            .filter(|package| {
+                let state = &package.state;
+                state.drifted + state.conflicts + state.blocked + state.missing > 0
+            })
+            .count();
+        lines.push(Line::from(vec![
+            Span::styled(
+                if affected == 0 {
+                    "Healthy"
+                } else {
+                    "Needs attention"
+                },
+                if affected == 0 {
+                    Style::default().fg(SUCCESS).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(WARNING).add_modifier(Modifier::BOLD)
+                },
+            ),
+            Span::styled(
+                format!(
+                    "  ·  {} installed plugins  ·  {:?} store",
+                    doctor.plugins.len(),
+                    doctor.store
+                ),
+                Style::default().fg(MUTED),
+            ),
+        ]));
+        lines.push(Line::from(""));
+        for package in &doctor.attachments {
+            let state = &package.state;
+            if state.drifted + state.conflicts + state.blocked + state.missing > 0 {
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        "! ",
+                        Style::default().fg(WARNING).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        &package.plugin,
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!(
+                            "  {} missing · {} drifted · {} conflicts · {} blocked",
+                            state.missing, state.drifted, state.conflicts, state.blocked
+                        ),
+                        Style::default().fg(MUTED),
+                    ),
+                ]));
+            }
+        }
+        if let Some(error) = &doctor.ledger_error {
+            lines.push(Line::from(Span::styled(
+                format!("! Ledger blocked: {error}"),
+                Style::default().fg(DANGER),
+            )));
+        }
+        if let Some(error) = &doctor.integration_state_error {
+            lines.push(Line::from(Span::styled(
+                format!("! Integration state blocked: {error}"),
+                Style::default().fg(DANGER),
+            )));
+        }
+        if affected == 0
+            && doctor.ledger_error.is_none()
+            && doctor.integration_state_error.is_none()
+        {
+            lines.push(Line::from(Span::styled(
+                "No managed attachment problems detected.",
+                Style::default().fg(MUTED),
+            )));
+        }
+    } else {
+        lines.push(Line::from(Span::styled(
+            "Refreshing doctor report…",
+            Style::default().fg(MUTED),
+        )));
+    }
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(panel_block(" Doctor "))
+            .wrap(Wrap { trim: true }),
+        area,
+    );
+}
+
+fn render_inspect(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
     let Some(report) = &model.inspection else {
-        frame.render_widget(Paragraph::new("Inspecting plugin…"), area);
+        frame.render_widget(
+            Paragraph::new("Inspecting plugin…").block(panel_block(" Plugin delivery ")),
+            area,
+        );
         return;
     };
     let mut lines = vec![
         Line::from(Span::styled(
             &report.plugin.id,
-            Style::default().add_modifier(Modifier::BOLD),
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
         )),
-        Line::from(format!("Source  {}", report.plugin.source.display())),
-        Line::from(format!("Capabilities  {}", report.capabilities.len())),
+        Line::from(Span::styled(
+            format!("Source  {}", report.plugin.source),
+            Style::default().fg(MUTED),
+        )),
+        Line::from(format!("{} capabilities", report.capabilities.len())),
         Line::from(""),
-        Line::from("Delivery"),
+        Line::from(Span::styled(
+            "DELIVERY",
+            Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
+        )),
     ];
     for delivery in &report.deliveries {
         let package = delivery
@@ -555,24 +817,37 @@ fn render_inspect(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, m
             .map(delivery_status)
             .collect::<Vec<_>>()
             .join(", ");
-        lines.push(Line::from(format!(
-            "{:<12} {:<12} {capabilities}",
-            delivery.integration, package
-        )));
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{:<13}", delivery.integration),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(format!("{:<12}", package), route_style(package)),
+            Span::styled(capabilities, Style::default().fg(MUTED)),
+        ]));
     }
     let state = &report.managed_state;
     lines.push(Line::from(""));
-    lines.push(Line::from(format!(
-        "Managed  {} matched · {} missing · {} drifted · {} conflicts · {} blocked",
-        state.matched, state.missing, state.drifted, state.conflicts, state.blocked
-    )));
+    lines.push(Line::from(vec![
+        Span::styled(
+            "MANAGED  ",
+            Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("{} matched", state.matched),
+            Style::default().fg(SUCCESS),
+        ),
+        Span::styled(
+            format!(
+                " · {} missing · {} drifted · {} conflicts · {} blocked",
+                state.missing, state.drifted, state.conflicts, state.blocked
+            ),
+            Style::default().fg(MUTED),
+        ),
+    ]));
     frame.render_widget(
         Paragraph::new(lines)
-            .block(
-                Block::default()
-                    .title("Inspect · esc back")
-                    .borders(Borders::BOTTOM),
-            )
+            .block(panel_block(" Plugin delivery  ·  esc back "))
             .wrap(Wrap { trim: true }),
         area,
     );
@@ -588,12 +863,30 @@ fn footer(model: &TuiModel) -> Text<'static> {
         }
     };
     let notice = match &model.notice {
-        Notice::Idle => String::new(),
-        Notice::Working(value) | Notice::Success(value) | Notice::Error(value) => {
-            format!("\n{value}")
-        }
+        Notice::Idle => Text::from(Line::from(Span::styled(hint, Style::default().fg(MUTED)))),
+        Notice::Working(value) => Text::from(vec![
+            Line::from(Span::styled(
+                value.clone(),
+                Style::default().fg(WARNING).add_modifier(Modifier::BOLD),
+            )),
+            Line::from(Span::styled(hint, Style::default().fg(MUTED))),
+        ]),
+        Notice::Success(value) => Text::from(vec![
+            Line::from(Span::styled(
+                value.clone(),
+                Style::default().fg(SUCCESS).add_modifier(Modifier::BOLD),
+            )),
+            Line::from(Span::styled(hint, Style::default().fg(MUTED))),
+        ]),
+        Notice::Error(value) => Text::from(vec![
+            Line::from(Span::styled(
+                value.clone(),
+                Style::default().fg(DANGER).add_modifier(Modifier::BOLD),
+            )),
+            Line::from(Span::styled(hint, Style::default().fg(MUTED))),
+        ]),
     };
-    Text::from(format!("{hint}{notice}"))
+    notice
 }
 
 fn package_strategy(plan: &PackageExposurePlan) -> &'static str {
@@ -622,13 +915,22 @@ fn delivery_status(delivery: &crate::application::CapabilityDelivery) -> String 
     format!("{:?}: {state}", delivery.kind)
 }
 
-fn format_harness(harness: &HarnessHealth) -> String {
-    format!(
-        "{:<23} {:<25} {}",
-        harness.integration,
-        harness.setup,
-        harness.strategy.as_deref().unwrap_or("not configured")
-    )
+fn format_harness(harness: &HarnessHealth) -> Line<'static> {
+    let setup = harness.setup.as_str();
+    Line::from(vec![
+        Span::styled(
+            format!("{:<24}", harness.integration),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(format!("{:<28}", setup), setup_style(setup)),
+        Span::styled(
+            harness
+                .strategy
+                .clone()
+                .unwrap_or_else(|| "not configured".to_owned()),
+            Style::default().fg(MUTED),
+        ),
+    ])
 }
 
 fn plugin_health(doctor: Option<&DoctorReport>, plugin: &str) -> &'static str {
@@ -647,21 +949,71 @@ fn plugin_health(doctor: Option<&DoctorReport>, plugin: &str) -> &'static str {
     }
 }
 
-fn short_source(source: &std::path::Path) -> String {
-    source
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("local")
-        .to_owned()
+fn short_source(source: &str) -> String {
+    let path = std::path::Path::new(source);
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| source.to_owned())
 }
 
-fn centered_line(area: ratatui::layout::Rect) -> ratatui::layout::Rect {
-    ratatui::layout::Rect::new(
-        area.x + 2,
-        area.y + area.height.saturating_sub(2),
-        area.width.saturating_sub(4),
-        1,
-    )
+fn panel_block(title: impl Into<Line<'static>>) -> Block<'static> {
+    Block::default()
+        .title(title)
+        .title_style(Style::default().fg(ACCENT).add_modifier(Modifier::BOLD))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(PANEL))
+}
+
+fn render_modal(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    title: &str,
+    lines: Vec<Line<'static>>,
+    color: Color,
+) {
+    let width = area.width.min(72);
+    let height = (lines.len() as u16 + 4).min(area.height.saturating_sub(2));
+    let popup = Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    );
+    frame.render_widget(Clear, popup);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(panel_block(format!(" {title} ")).border_style(Style::default().fg(color)))
+            .wrap(Wrap { trim: true }),
+        popup,
+    );
+}
+
+fn health_style(health: &str) -> Style {
+    match health {
+        "ready" => Style::default().fg(SUCCESS),
+        "missing" | "unknown" => Style::default().fg(WARNING),
+        _ => Style::default().fg(DANGER),
+    }
+}
+
+fn setup_style(status: &str) -> Style {
+    if status.contains("verified") && !status.contains("unverified") {
+        Style::default().fg(SUCCESS)
+    } else if status.contains("unverified") {
+        Style::default().fg(WARNING)
+    } else {
+        Style::default().fg(MUTED)
+    }
+}
+
+fn route_style(route: &str) -> Style {
+    match route {
+        "native" => Style::default().fg(SUCCESS),
+        "adapted" | "decomposed" => Style::default().fg(ACCENT),
+        "degraded" => Style::default().fg(WARNING),
+        _ => Style::default().fg(DANGER),
+    }
 }
 
 fn io_error(source: io::Error) -> crate::UzeError {
@@ -678,7 +1030,7 @@ mod tests {
     fn plugin(id: &str) -> PluginSummary {
         PluginSummary {
             id: id.to_owned(),
-            source: PathBuf::from("/plugins/example"),
+            source: "/plugins/example".to_owned(),
             store_path: PathBuf::from("/store/example"),
             capability_count: 2,
         }

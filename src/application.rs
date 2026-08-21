@@ -8,14 +8,17 @@ use std::{collections::BTreeSet, path::PathBuf};
 use serde::Serialize;
 
 use crate::{
-    Result, UzeEngine, UzeError, UzeHome, UzeStore,
+    PackageSource, Result, UzeEngine, UzeError, UzeHome, UzeStore,
+    trust::{self, TrustAuthority, TrustOutcome, TrustRequest},
     capability::CapabilityKind,
     exposure::{ExposurePlan, PackageExposurePlan},
     integration::{
-        AttachmentState, HarnessDetection, IntegrationPort, IntegrationStatus, receipt_location,
+        AttachmentState, HarnessDetection, IntegrationPort, IntegrationStatus, PublicationStatus,
+        receipt_location,
     },
     integrations::{
-        claude::ClaudeIntegration, codex::CodexIntegration, opencode::OpenCodeIntegration,
+        claude::ClaudeIntegration, codex::CodexIntegration, gemini::GeminiIntegration,
+        opencode::OpenCodeIntegration,
     },
     reconciliation::{PackageRemovalPlan, ReconciliationReport, plan_remove, reconcile_package},
     state,
@@ -37,7 +40,11 @@ impl UzeApplication {
             vec![
                 Box::new(ClaudeIntegration::from_env(home.clone())?),
                 Box::new(CodexIntegration::from_env(home.clone())?),
-                Box::new(OpenCodeIntegration::from_env(home)?),
+                Box::new(OpenCodeIntegration::from_env(home.clone())?),
+                // EXPERIMENTAL / CONFORMANCE. Registered to exercise the
+                // vendor-neutral core against a fourth, differently shaped
+                // harness; not a v0 support claim. See integrations/gemini.rs.
+                Box::new(GeminiIntegration::from_env(home)?),
             ],
         ))
     }
@@ -109,18 +116,64 @@ impl UzeApplication {
 
     /// Installs once, chooses package-native delivery first, attaches only
     /// remaining resources, and records every persistent side effect.
-    pub fn add_plugin(&self, source: impl Into<PathBuf>) -> Result<AddPluginReport> {
+    pub fn add_plugin(
+        &self,
+        source: PackageSource,
+        authority: &dyn TrustAuthority,
+    ) -> Result<AddPluginReport> {
         let _mutation = crate::persistence::MutationLock::acquire(&self.home)?;
-        let installed = self.store.install_agent_plugin(source.into())?;
+        // Acquisition brings the bytes to a local directory and owns their
+        // cleanup; the Store only ever sees a materialized package.
+        let materialized = crate::acquisition::acquire(&source)?;
+        self.install_materialized(materialized, authority, &[], false)
+    }
+
+    /// The half of installation that runs once bytes exist locally.
+    ///
+    /// Deliberately takes no lock: both public entry points hold one already,
+    /// and `MutationLock` is not reentrant. Sharing this body is what lets
+    /// `update_plugin` reuse installation without re-entering it.
+    fn install_materialized(
+        &self,
+        materialized: crate::MaterializedPackage,
+        authority: &dyn TrustAuthority,
+        already_trusted: &[trust::ExecutableCapability],
+        replacing_installed: bool,
+    ) -> Result<AddPluginReport> {
+        // Trust is decided here — after the package is materialized and can
+        // be inspected honestly, and strictly before anything is written to
+        // the Store or shown to a harness. Neither the Store nor any
+        // integration knows this question exists.
+        self.authorize(&materialized, authority, already_trusted, replacing_installed)?;
+
+        let installed = self.store.ingest(&materialized)?;
+
+        // Derived views refresh before attachment: a native package delivery
+        // reads the view it was just given. A failure here is recorded, never
+        // propagated — the package is installed, and one integration's view
+        // being stale does not make the installation invalid.
+        let publications = self.republish_all();
+        let unpublished: BTreeSet<&str> = publications
+            .iter()
+            .filter(|outcome| outcome.error.is_some())
+            .map(|outcome| outcome.integration.as_str())
+            .collect();
+
         let environment = self.engine().compose(std::slice::from_ref(&installed.id))?;
         let resources: Vec<_> = environment.resources.iter().collect();
         let mut attachments = Vec::new();
         let mut package_plans = Vec::new();
         for integration in &self.integrations {
             let mut provided = BTreeSet::new();
-            if let Some(plan) = integration.package_exposure_plan(&installed, &resources) {
+            // Native delivery reads the view; attempting it against a view
+            // that failed to publish would fail for a reason that has
+            // nothing to do with this package.
+            if let Some(plan) = integration
+                .package_exposure_plan(&installed, &resources)
+                .filter(|_| !unpublished.contains(integration.id()))
+            {
                 package_plans.push((integration.id().to_owned(), plan.clone()));
-                if let Some(receipt) = integration.attach_package_receipt(&installed, &plan)? {
+                if let Some(receipt) = integration.attach_package(&installed, &plan)? {
                     let location = receipt_location(&receipt);
                     state::record_receipt(
                         &self.home,
@@ -155,6 +208,58 @@ impl UzeApplication {
             plugin: self.plugin_summary(&installed)?,
             package_plans,
             attachments,
+            publications,
+        })
+    }
+
+    /// Re-resolves a package's original request and replaces the installed
+    /// copy with the result.
+    ///
+    /// The order is the whole safety story. Everything that can fail without
+    /// consequence happens first — re-resolve, materialize, validate, and ask
+    /// about any execution the installed revision did not already have — and
+    /// only then is the current package detached. A network failure, an
+    /// invalid package or a refused trust question therefore mutates nothing
+    /// at all.
+    ///
+    /// There is deliberately no rollback across integrations. If one fails to
+    /// re-attach, the Store stays consistent, the others keep what they got,
+    /// and the partial state is reported rather than papered over — `doctor`
+    /// reconciles it and a repeat `update` finishes the job. Blind rollback
+    /// would mean detaching artifacts UZE had just proven it owns, on the
+    /// word of an unrelated failure.
+    pub fn update_plugin(
+        &self,
+        id: &str,
+        authority: &dyn TrustAuthority,
+    ) -> Result<UpdatePluginReport> {
+        let _mutation = crate::persistence::MutationLock::acquire(&self.home)?;
+        let installed = self.package_by_name(id)?;
+
+        // Re-resolve the *request*, not the resolution: that is what makes a
+        // branch move forward while a pinned commit stays put.
+        let materialized = crate::acquisition::acquire(&installed.provenance.requested)?;
+
+        let previous = {
+            let environment = self.engine().compose(std::slice::from_ref(&installed.id))?;
+            let resources: Vec<&crate::Resource> = environment.resources.iter().collect();
+            trust::executable_capabilities(&resources)
+        };
+        self.authorize(&materialized, authority, &previous, true)?;
+
+        // Nothing destructive has happened yet. From here the current package
+        // is removed under the same ownership rules any removal obeys.
+        let removal = self.detach_and_remove(id)?;
+        if let RemovePluginReport::Blocked { report, plan } = removal {
+            return Ok(UpdatePluginReport::Blocked { report, plan });
+        }
+        // Trust was already settled above against the previous capabilities,
+        // so installation must not ask a second time for the same answer.
+        let report = self.install_materialized(materialized, &trust::AlwaysTrust, &[], true)?;
+        Ok(UpdatePluginReport::Updated {
+            plugin: report.plugin,
+            attachments: report.attachments,
+            publications: report.publications,
         })
     }
 
@@ -163,7 +268,9 @@ impl UzeApplication {
     pub fn setup(&self, requested: Option<&str>) -> Result<Vec<SetupResult>> {
         let _mutation = crate::persistence::MutationLock::acquire(&self.home)?;
         self.home.ensure_layout()?;
-        let wanted = requested.map(normalize_harness_name).transpose()?;
+        let wanted = requested
+            .map(|name| self.resolve_integration_id(name))
+            .transpose()?;
         self.integrations
             .iter()
             .filter(|integration| wanted.is_none_or(|id| integration.id() == id))
@@ -179,7 +286,12 @@ impl UzeApplication {
                     configured,
                 })
             })
-            .collect()
+            .collect::<Result<Vec<_>>>()
+            .inspect(|_| {
+                // `setup` is the documented way to repair a derived view that
+                // failed to publish, so it always rebuilds them.
+                let _ = self.republish_all();
+            })
     }
 
     /// Applies the approved lifecycle contract: reconcile, plan, detach only
@@ -187,6 +299,11 @@ impl UzeApplication {
     /// delete UZE-owned package bytes.
     pub fn remove_plugin(&self, id: &str) -> Result<RemovePluginReport> {
         let _mutation = crate::persistence::MutationLock::acquire(&self.home)?;
+        self.detach_and_remove(id)
+    }
+
+    /// Removal without taking the lock; see `install_materialized`.
+    fn detach_and_remove(&self, id: &str) -> Result<RemovePluginReport> {
         let package = match self.package_by_name(id) {
             Ok(package) => package,
             Err(UzeError::UnknownPackage(_)) => {
@@ -254,6 +371,9 @@ impl UzeApplication {
             state::forget_receipt(&self.home, &reconciled.ledger_key)?;
         }
         self.store.remove_package(&package.id)?;
+        // The package set changed, so every derived view is now stale. A
+        // failure to rebuild one does not un-remove the package.
+        let _ = self.republish_all();
         Ok(RemovePluginReport::Removed {
             plugin: package.id.as_str().to_owned(),
             detached_receipts,
@@ -290,6 +410,7 @@ impl UzeApplication {
             }
             Err(error) => (StoreHealth::Blocked(error.to_string()), Vec::new()),
         };
+        let installed = self.installed_packages();
         let harnesses = self
             .integrations
             .iter()
@@ -301,6 +422,10 @@ impl UzeApplication {
                     .ok()
                     .flatten()
                     .map(|record| record.strategy),
+                // Observed, not remembered. A package can be installed and
+                // reconciled while a harness still cannot see it, and that is
+                // exactly the state this field exists to surface.
+                publication: integration.publication(&installed),
             })
             .collect();
         let attachments = plugins
@@ -339,10 +464,119 @@ impl UzeApplication {
         let environment = self.engine().compose(std::slice::from_ref(&package.id))?;
         Ok(PluginSummary {
             id: package.id.as_str().to_owned(),
-            source: package.source.clone(),
+            source: package.provenance.requested.display(),
             store_path: package.root.clone(),
             capability_count: environment.resources.len(),
         })
+    }
+
+    /// Refreshes every integration's derived view of the installed package
+    /// set. Collects failures instead of propagating them: publication is not
+    /// part of package ownership, so one harness failing to rebuild its view
+    /// leaves the package installed and the other harnesses unaffected.
+    fn republish_all(&self) -> Vec<PublicationOutcome> {
+        let packages = self.installed_packages();
+        self.integrations
+            .iter()
+            .map(|integration| PublicationOutcome {
+                integration: integration.id().to_owned(),
+                error: integration
+                    .republish_packages(&packages)
+                    .err()
+                    .map(|error| error.to_string()),
+            })
+            .collect()
+    }
+
+    fn installed_packages(&self) -> Vec<StoredPackage> {
+        self.store
+            .package_ids()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|id| self.store.package(&id).ok())
+            .collect()
+    }
+
+    /// Resolves a requested harness name against the integrations actually
+    /// registered in this composition root. There is deliberately no central
+    /// list of vendors: an integration declares its own id and aliases, so
+    /// registering one is the only step needed to make it selectable.
+    fn resolve_integration_id(&self, requested: &str) -> Result<&'static str> {
+        self.integrations
+            .iter()
+            .find(|integration| {
+                integration.id() == requested || integration.aliases().contains(&requested)
+            })
+            .map(|integration| integration.id())
+            .ok_or_else(|| {
+                let known = self
+                    .integrations
+                    .iter()
+                    .map(|integration| integration.id())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                UzeError::ExposureUnavailable(format!(
+                    "unknown harness `{requested}` (registered: {known})"
+                ))
+            })
+    }
+
+    /// Asks the supplied authority about any capability that would introduce
+    /// process execution, and refuses to proceed without a grant.
+    ///
+    /// Returns `Ok(())` immediately when the package declares nothing
+    /// executable: a purely declarative package needs no consent beyond the
+    /// decision to install it.
+    fn authorize(
+        &self,
+        materialized: &crate::MaterializedPackage,
+        authority: &dyn TrustAuthority,
+        already_trusted: &[trust::ExecutableCapability],
+        replacing_installed: bool,
+    ) -> Result<()> {
+        let provenance = materialized.provenance();
+        if !provenance.requested.crosses_trust_boundary() {
+            return Ok(());
+        }
+        let inspected = crate::acquisition::inspect_capabilities(materialized)?;
+        let resources: Vec<&crate::Resource> = inspected.resources.iter().collect();
+        let executable = trust::executable_capabilities(&resources);
+        if executable.is_empty() || !trust::introduces_new_execution(already_trusted, &executable) {
+            return Ok(());
+        }
+        let request = TrustRequest {
+            package_id: inspected.package_id.clone(),
+            requested_source: provenance.requested.display(),
+            resolved_source: provenance.resolved.display(),
+            executable,
+            // The operator is being asked about a *change* to something they
+            // already have, not about a first install. Derived from the fact
+            // of an existing installation rather than from whether the
+            // previous revision happened to execute anything — a declarative
+            // package gaining an MCP server is exactly the case that must
+            // read as a change.
+            previously_trusted: replacing_installed,
+        };
+        match authority.authorize(&request) {
+            TrustOutcome::Granted => Ok(()),
+            TrustOutcome::Denied => Err(UzeError::TrustDenied(request.package_id)),
+            TrustOutcome::Unavailable => Err(UzeError::TrustRequired {
+                package: request.package_id.clone(),
+                detail: request
+                    .executable
+                    .iter()
+                    .map(|capability| {
+                        format!(
+                            "{} -> {} {}",
+                            capability.name,
+                            capability.command,
+                            capability.arguments.join(" ")
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            }),
+        }
     }
 
     fn engine(&self) -> UzeEngine {
@@ -362,7 +596,10 @@ impl UzeApplication {
 #[derive(Clone, Debug, Serialize)]
 pub struct PluginSummary {
     pub id: String,
-    pub source: PathBuf,
+    /// Human-facing description of where this package came from. Display
+    /// only: the typed provenance stays in the registry, and nothing parses
+    /// this back.
+    pub source: String,
     pub store_path: PathBuf,
     pub capability_count: usize,
 }
@@ -415,10 +652,36 @@ pub struct AttachmentSummary {
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub struct PublicationOutcome {
+    pub integration: String,
+    /// `None` when the derived view refreshed cleanly. A message here is
+    /// actionable on its own: the package is installed and only the view
+    /// needs rebuilding.
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct AddPluginReport {
     pub plugin: PluginSummary,
     pub package_plans: Vec<(String, PackageExposurePlan)>,
     pub attachments: Vec<AttachmentSummary>,
+    pub publications: Vec<PublicationOutcome>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub enum UpdatePluginReport {
+    Updated {
+        plugin: PluginSummary,
+        attachments: Vec<AttachmentSummary>,
+        publications: Vec<PublicationOutcome>,
+    },
+    /// The installed package could not be safely detached, so nothing was
+    /// replaced. The newly resolved revision is discarded with its scratch
+    /// directory.
+    Blocked {
+        report: ReconciliationReport,
+        plan: PackageRemovalPlan,
+    },
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -458,6 +721,7 @@ pub struct HarnessHealth {
     pub detection: HarnessDetection,
     pub setup: String,
     pub strategy: Option<String>,
+    pub publication: PublicationStatus,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -501,17 +765,6 @@ fn integration_status(status: IntegrationStatus) -> String {
         IntegrationStatus::InstalledVerified => "installed / verified",
     }
     .to_owned()
-}
-
-fn normalize_harness_name(value: &str) -> Result<&'static str> {
-    match value {
-        "claude" | "claude-code" => Ok("claude-code"),
-        "codex" => Ok("codex"),
-        "opencode" => Ok("opencode"),
-        other => Err(UzeError::ExposureUnavailable(format!(
-            "unknown harness `{other}` (expected `claude`, `codex`, or `opencode`)"
-        ))),
-    }
 }
 
 fn package_receipt_key(package: &str, integration: &str) -> String {
@@ -706,7 +959,7 @@ mod tests {
     fn list_and_inspect_are_package_centric() {
         let root = temp("inspect");
         let app = UzeApplication::new(UzeHome::at(&root), vec![Box::new(SymlinkIntegration)]);
-        app.add_plugin(fixture()).unwrap();
+        app.add_plugin(crate::PackageSource::local(fixture()), &crate::trust::AlwaysTrust).unwrap();
         let listed = app.list_plugins().unwrap();
         assert_eq!(listed.len(), 1);
         let inspection = app.inspect_plugin(&listed[0].id).unwrap();
@@ -723,7 +976,7 @@ mod tests {
         let root = temp("remove");
         let home = UzeHome::at(&root);
         let app = UzeApplication::new(home.clone(), vec![Box::new(SymlinkIntegration)]);
-        let package = app.store.install_agent_plugin(fixture()).unwrap();
+        let package = app.store.ingest(&crate::acquisition::acquire(&crate::PackageSource::local(fixture())).unwrap()).unwrap();
         let expected = package.root.join("skills/uze-e2e");
         let managed = root.join("managed");
         symlink(&expected, &managed).unwrap();
@@ -749,7 +1002,7 @@ mod tests {
         assert!(!managed.exists());
         assert!(app.store.package(&package.id).is_err());
 
-        let package = app.store.install_agent_plugin(fixture()).unwrap();
+        let package = app.store.ingest(&crate::acquisition::acquire(&crate::PackageSource::local(fixture())).unwrap()).unwrap();
         let foreign = root.join("foreign");
         fs::create_dir_all(&foreign).unwrap();
         symlink(&foreign, &managed).unwrap();
@@ -804,7 +1057,7 @@ mod tests {
             attached: Cell::new(false),
         };
         let app = UzeApplication::new(home.clone(), vec![Box::new(integration)]);
-        assert!(app.add_plugin(multi_mcp_fixture()).is_err());
+        assert!(app.add_plugin(crate::PackageSource::local(multi_mcp_fixture()), &crate::trust::AlwaysTrust).is_err());
         assert!(
             app.store
                 .package_ids()
@@ -822,7 +1075,7 @@ mod tests {
     fn remove_is_idempotent_without_claiming_history_for_absent_state() {
         let root = temp("remove-twice");
         let app = UzeApplication::new(UzeHome::at(&root), vec![Box::new(SymlinkIntegration)]);
-        let package = app.store.install_agent_plugin(fixture()).unwrap();
+        let package = app.store.ingest(&crate::acquisition::acquire(&crate::PackageSource::local(fixture())).unwrap()).unwrap();
         assert!(matches!(
             app.remove_plugin(package.id.as_str()).unwrap(),
             RemovePluginReport::Removed { .. }
@@ -831,7 +1084,7 @@ mod tests {
             app.remove_plugin(package.id.as_str()).unwrap(),
             RemovePluginReport::AlreadyAbsent { .. }
         ));
-        app.add_plugin(fixture()).unwrap();
+        app.add_plugin(crate::PackageSource::local(fixture()), &crate::trust::AlwaysTrust).unwrap();
         assert_eq!(app.list_plugins().unwrap().len(), 1);
         fs::remove_dir_all(root).unwrap();
     }
@@ -847,7 +1100,7 @@ mod tests {
                 root: root.clone(),
             })],
         );
-        app.add_plugin(multi_mcp_fixture()).unwrap();
+        app.add_plugin(crate::PackageSource::local(multi_mcp_fixture()), &crate::trust::AlwaysTrust).unwrap();
         let receipts = state::receipts(&home, Some("multi-mcp-plugin")).unwrap();
         assert_eq!(receipts.len(), 2);
         assert_ne!(
