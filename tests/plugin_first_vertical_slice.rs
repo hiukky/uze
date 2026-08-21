@@ -19,6 +19,14 @@ use uze::integrations::{
     claude::ClaudeIntegration, codex::CodexIntegration, opencode::OpenCodeIntegration,
 };
 
+/// The acquisition pipeline every install now goes through: a source is
+/// acquired into a materialized package, and only then does the Store ingest
+/// it. Spelled out here rather than hidden behind a Store convenience,
+/// because the Store deliberately no longer accepts a path.
+fn install(store: &UzeStore, path: impl Into<std::path::PathBuf>) -> uze::Result<uze::StoredPackage> {
+    store.ingest(&uze::acquisition::acquire(&uze::PackageSource::local(path))?)
+}
+
 fn fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("e2e/fixtures/plugin-first-conformance")
@@ -35,7 +43,7 @@ fn temp(label: &str) -> PathBuf {
 }
 fn installed(home: &UzeHome) -> (uze::StoredPackage, uze::EffectiveEnvironment) {
     let store = UzeStore::new(home.clone());
-    let package = store.install_agent_plugin(fixture()).unwrap();
+    let package = install(&store, fixture()).unwrap();
     let environment = UzeEngine::new(store)
         .compose(std::slice::from_ref(&package.id))
         .unwrap();

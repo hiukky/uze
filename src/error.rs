@@ -36,9 +36,31 @@ pub enum UzeError {
     #[error("package `{id}` is already registered from {existing}, not {requested}")]
     PackageConflict {
         id: String,
-        existing: PathBuf,
-        requested: PathBuf,
+        existing: String,
+        requested: String,
     },
+    #[error(
+        "package is not self-contained: `{link}` resolves to `{target}`, outside the package root"
+    )]
+    PackageEscapesRoot { link: PathBuf, target: PathBuf },
+    #[error(
+        "refusing a URL carrying inline credentials; UZE never stores a secret, \
+         and authenticated Git is a separate mechanism"
+    )]
+    CredentialBearingUrl,
+    #[error("could not acquire package: {0}")]
+    AcquisitionFailed(String),
+    /// The operator declined. Distinct from `TrustRequired`: a decision was
+    /// made, and repeating the command unchanged should not change it.
+    #[error("trust denied for `{0}`; nothing was installed")]
+    TrustDenied(String),
+    /// Nobody could be asked — a non-interactive process. Structured so a
+    /// pipeline can act on it instead of guessing.
+    #[error(
+        "TRUST_REQUIRED: `{package}` declares an executable capability and this process cannot \
+         prompt. Re-run with an explicit trust flag after reviewing: {detail}"
+    )]
+    TrustRequired { package: String, detail: String },
     #[error("unknown UZE package `{0}`")]
     UnknownPackage(String),
     #[error("runtime projection target already exists: {0}")]

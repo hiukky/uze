@@ -23,7 +23,12 @@ struct Cli {
 enum Command {
     /// Install one local Agent Plugins package and expose it where safe.
     Add {
-        source: PathBuf,
+        source: String,
+        /// Authorize any executable capability the package declares without
+        /// prompting. Named for what it grants rather than as a generic
+        /// `--yes`, because it answers one specific security question.
+        #[arg(long)]
+        trust: bool,
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
@@ -83,8 +88,13 @@ fn run(cli: Cli) -> Result<()> {
     };
     let app = UzeApplication::from_env(home)?;
     match command {
-        Command::Add { source, format } => {
-            let report = app.add_plugin(source)?;
+        Command::Add {
+            source,
+            trust,
+            format,
+        } => {
+            let authority = trust_authority(trust);
+            let report = app.add_plugin(parse_source(&source), authority.as_ref())?;
             match format {
                 OutputFormat::Text => {
                     println!("Installed plugin: {}", report.plugin.id);
@@ -166,6 +176,96 @@ fn run(cli: Cli) -> Result<()> {
     Ok(())
 }
 
+/// Interprets an `uze add` argument.
+///
+/// A path is a path and a URL is a URL; the distinction is the mechanism, not
+/// the host, so nothing here knows what a GitHub is. `<url>@<ref>` pins a
+/// branch, tag or commit, and `#<subdir>` selects a package root inside the
+/// repository.
+fn parse_source(spec: &str) -> uze::PackageSource {
+    let looks_remote = spec.starts_with("https://")
+        || spec.starts_with("http://")
+        || spec.starts_with("git://")
+        || spec.starts_with("ssh://")
+        || spec.starts_with("file://");
+    if !looks_remote {
+        return uze::PackageSource::local(spec);
+    }
+    let (locator, subdirectory) = match spec.split_once('#') {
+        Some((locator, subdirectory)) => (locator, Some(PathBuf::from(subdirectory))),
+        None => (spec, None),
+    };
+    // Split on the last `@` only when it follows the authority, so a URL
+    // whose path legitimately contains `@` is not mistaken for a pin.
+    let scheme_end = locator.find("://").map(|at| at + 3).unwrap_or(0);
+    let (url, reference) = match locator[scheme_end..].rfind('@') {
+        Some(at) => {
+            let at = scheme_end + at;
+            (&locator[..at], Some(locator[at + 1..].to_owned()))
+        }
+        None => (locator, None),
+    };
+    uze::PackageSource::Git {
+        url: url.to_owned(),
+        reference,
+        subdirectory,
+    }
+}
+
+/// Chooses who answers a trust question.
+///
+/// Without `--trust`, an interactive terminal prompts and anything else
+/// refuses to answer — a pipeline gets `TRUST_REQUIRED` rather than a silent
+/// yes.
+fn trust_authority(trusted: bool) -> Box<dyn uze::trust::TrustAuthority> {
+    if trusted {
+        return Box::new(uze::trust::AlwaysTrust);
+    }
+    if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
+        return Box::new(PromptingAuthority);
+    }
+    Box::new(uze::trust::NoTrustAuthority)
+}
+
+struct PromptingAuthority;
+
+impl uze::trust::TrustAuthority for PromptingAuthority {
+    fn authorize(&self, request: &uze::trust::TrustRequest) -> uze::trust::TrustOutcome {
+        use std::io::Write;
+
+        println!();
+        if request.previously_trusted {
+            println!("This update introduces an executable capability the installed package did not have");
+        } else {
+            println!("This package requests an executable capability");
+        }
+        println!("\nSource\n  {}", request.requested_source);
+        if request.resolved_source != request.requested_source {
+            println!("\nResolved\n  {}", request.resolved_source);
+        }
+        println!("\nPackage\n  {}", request.package_id);
+        println!("\nMCP");
+        for capability in &request.executable {
+            println!(
+                "  {} → {} {}",
+                capability.name,
+                capability.command,
+                capability.arguments.join(" ")
+            );
+        }
+        print!("\nTrust and install? [y/N] ");
+        let _ = std::io::stdout().flush();
+        let mut answer = String::new();
+        if std::io::stdin().read_line(&mut answer).is_err() {
+            return uze::trust::TrustOutcome::Unavailable;
+        }
+        match answer.trim() {
+            "y" | "Y" | "yes" => uze::trust::TrustOutcome::Granted,
+            _ => uze::trust::TrustOutcome::Denied,
+        }
+    }
+}
+
 fn print_json(value: &impl serde::Serialize) {
     println!(
         "{}",
@@ -177,7 +277,7 @@ fn render_inspection(report: &PluginInspection) -> String {
     let mut text = format!(
         "{}\n\nSource\n  {}\n\nCapabilities\n",
         report.plugin.id,
-        report.plugin.source.display()
+        report.plugin.source
     );
     for capability in &report.capabilities {
         text.push_str(&format!("  {:?}  {}\n", capability.kind, capability.name));

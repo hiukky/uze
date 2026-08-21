@@ -1,6 +1,7 @@
 //! UZE resolves a standards-first agent project into an explainable effective
 //! agent environment. See docs/adr/003 and docs/adr/004.
 
+pub mod acquisition;
 pub mod application;
 pub mod bundle;
 pub mod capability;
@@ -19,8 +20,10 @@ pub mod router;
 pub mod runtime;
 pub mod state;
 pub mod store;
+pub mod trust;
 pub mod tui;
 
+pub use acquisition::{MaterializedPackage, PackageSource, Provenance, ResolvedSource};
 pub use application::UzeApplication;
 pub use bundle::ImportedBundle;
 pub use engine::UzeEngine;

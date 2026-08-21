@@ -211,6 +211,24 @@ fn discover_mcp(root: &Path, items: &mut Vec<Capability>) -> Result<()> {
     Ok(())
 }
 
+/// Walks `root` for files with an exact name, **never descending into a
+/// symlinked directory**.
+///
+/// That single rule is what makes this traversal cycle-free by construction:
+/// a directory cycle needs at least one symlink in the loop, and no symlink
+/// is ever entered. It costs nothing and needs no visited-set or repeated
+/// canonicalization.
+///
+/// The rule matters because discovery runs over package content. A package
+/// is already required to be self-contained, but self-contained is not the
+/// same as acyclic — `a -> b`, `b -> a` never leaves the package root and
+/// would still spin here forever. With remote acquisition that stops being a
+/// strange local package and becomes a repository able to hang the Engine.
+///
+/// Consequence worth stating: a file reachable *only* through a symlinked
+/// directory is not discovered. The symlink itself is still preserved
+/// verbatim in the Store as package content — this changes what discovery
+/// walks, not what a package may contain.
 pub fn files_named(root: &Path, expected_name: &str) -> Result<Vec<PathBuf>> {
     let mut pending = vec![root.to_path_buf()];
     let mut matches = Vec::new();
@@ -228,7 +246,16 @@ pub fn files_named(root: &Path, expected_name: &str) -> Result<Vec<PathBuf>> {
         entries.sort_by_key(|entry| entry.file_name());
         for entry in entries {
             let path = entry.path();
-            if path.is_dir() {
+            // `symlink_metadata` deliberately, not `is_dir()`: the latter
+            // follows the link and is exactly how a cycle gets entered.
+            let metadata = fs::symlink_metadata(&path).map_err(|source| UzeError::Read {
+                path: path.clone(),
+                source,
+            })?;
+            if metadata.file_type().is_symlink() {
+                continue;
+            }
+            if metadata.is_dir() {
                 pending.push(path);
             } else if path.file_name().and_then(|name| name.to_str()) == Some(expected_name) {
                 matches.push(path);

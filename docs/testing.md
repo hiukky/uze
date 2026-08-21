@@ -11,16 +11,17 @@ fail for two unrelated reasons cannot tell you which one happened.
 | **L2 — Conformance** | `e2e/` | UZE, a harness, or a model | Docker (+ a credential for some tiers) | opt-in |
 | **L3 — Vendor** | manual / release | a real vendor route changed | vendor account | manual |
 
-`cargo test` runs L0 and L1 completely: **71 tests, nothing behind `#[ignore]`,
-nothing behind an opt-in environment variable.** If it passes, the product
-contract holds.
+`cargo test` runs L0 and L1 completely: **139 tests, nothing behind
+`#[ignore]`, nothing behind an opt-in environment variable.** If it passes, the
+product contract holds. The properties those tests defend are listed in
+[architecture invariants](architecture/invariants.md).
 
 ---
 
 ## L0 — Unit
 
 Ordinary Rust unit tests in a `#[cfg(test)]` module next to the code they
-cover. 42 of them across `src/`.
+cover. 70 of them across `src/`.
 
 ```bash
 cargo test --lib
@@ -28,7 +29,7 @@ cargo test --lib
 
 ## L1 — Contract
 
-`tests/` holds five integration-test binaries. Each covers one seam of the
+`tests/` holds seven integration-test binaries. Each covers one seam of the
 product, through its public API or its CLI — never through a harness.
 
 | File | Covers | Tests |
@@ -38,6 +39,8 @@ product, through its public API or its CLI — never through a harness.
 | `managed_exposure_lifecycle.rs` | What a peer actually writes and removes: prepare → managed artifact → cleanup, and that the caller's project is untouched throughout. Also that two peers sharing a projection path refuse to clobber each other. | 5 |
 | `plugin_first_vertical_slice.rs` | End to end through the library: one install planned once for a native harness and a decomposed one, without a harness-specific copy. | 1 |
 | `cli.rs` | The `uze` binary's own surface — commands, output formats, exit codes. Spawns `uze`, never a harness. | 8 |
+| `package_containment.rs` | An installed package is self-contained: no persisted symlink resolves outside its root, and discovery terminates on any tree containment allows. | 10 |
+| `git_acquisition.rs` | Git acquisition against **local bare repositories only** — ref resolution, pinning, reinstall/update semantics, subdirectory containment, credential rejection — plus the remote consent boundary. | 20 |
 
 ### The rule for `tests/`
 

@@ -53,27 +53,40 @@ impl UzeEngine {
         let mut resources = Vec::new();
         for id in packages {
             let package = self.store.package(id)?;
-            let skills_root = package.root.join("skills");
-            if skills_root.is_dir() {
-                for path in crate::project::files_named(&skills_root, "SKILL.md")? {
-                    let payload = crate::project::read_file(&path)?;
-                    resources.push(Resource::from_package(
-                        package.id.clone(),
-                        package.root.clone(),
-                        Capability {
-                            kind: CapabilityKind::AgentSkill,
-                            representation: Representation::Standard,
-                            path,
-                            payload,
-                        },
-                    ));
-                }
-            }
-            resources.extend(mcp_resources(&package.id, &package.root)?);
+            resources.extend(package_resources_at(&package.id, &package.root)?);
         }
         resources.sort_by_key(|resource| resource.identity());
         Ok(resources)
     }
+}
+
+/// Discovers a package's capabilities from a directory on disk.
+///
+/// Shared with acquisition, which needs the same reading *before* a package
+/// is installed in order to decide trust. Deliberately the same code path, so
+/// what an operator authorizes cannot drift from what the Engine later
+/// composes.
+pub fn package_resources_at(id: &PackageId, root: &std::path::Path) -> Result<Vec<Resource>> {
+    let mut resources = Vec::new();
+    let skills_root = root.join("skills");
+    if skills_root.is_dir() {
+        for path in crate::project::files_named(&skills_root, "SKILL.md")? {
+            let payload = crate::project::read_file(&path)?;
+            resources.push(Resource::from_package(
+                id.clone(),
+                root.to_path_buf(),
+                Capability {
+                    kind: CapabilityKind::AgentSkill,
+                    representation: Representation::Standard,
+                    path,
+                    payload,
+                },
+            ));
+        }
+    }
+    resources.extend(mcp_resources(id, root)?);
+    resources.sort_by_key(|resource| resource.identity());
+    Ok(resources)
 }
 
 /// Discovers a package's optional root-level `mcp.json` (Agent Plugins 1.0
