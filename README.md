@@ -142,6 +142,7 @@ execute arbitrary plugin scripts or vendor extension code.
 
 ## Documentation
 
+- [Testing](docs/testing.md)
 - [Architecture decisions](docs/adr/README.md)
 - [Plugin-first research](openspec/changes/reframe-plugin-first-portable-environment/research-notes.md)
 - [Lifecycle consolidation](openspec/changes/consolidate-plugin-first-v0-experience/README.md)
