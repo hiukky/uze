@@ -47,3 +47,4 @@ never renumbered), using this structure (Michael Nygard style):
 - [007 — Attach MCP servers through generated vendor configuration](007-attach-mcp-servers-through-generated-vendor-configuration.md)
 - [008 — Adopt Plugin First, Capability Aware delivery](008-adopt-plugin-first-capability-aware-delivery.md)
 - [009 — Manage harness attachments with receipts and safe reconciliation](009-manage-harness-attachments-with-receipts-and-safe-reconciliation.md)
+- [010 — Provision supported harnesses through official, integration-owned routes](010-provision-supported-harnesses-through-official-routes.md)
