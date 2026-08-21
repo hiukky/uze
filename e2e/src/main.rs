@@ -225,7 +225,7 @@ fn prepare_environment(
     environment.insert("TERM".to_owned(), "dumb".to_owned());
 
     if with_provider {
-        if let Some(config) = harness.behavior.provider_config {
+        if let Some(config) = harness.behavior.and_then(|spec| spec.provider_config) {
             for (from, to) in config.seed {
                 copy_tree(Path::new(from), &home.join(to))?;
             }

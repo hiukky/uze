@@ -478,22 +478,31 @@ pub fn behavior(
         probes: Vec::new(),
         detail: None,
     };
+    let Some(behavior) = harness.behavior else {
+        // Recorded, never silently skipped: this harness has no routable
+        // behavioral tier, which is a known gap rather than a pass.
+        report.state = EvidenceState::Unverified;
+        report.detail = Some(format!(
+            "{} declares no gateway-routable behavioral tier; deterministic tiers cover it",
+            harness.id
+        ));
+        return report;
+    };
     let workspace = environment.workspace.to_string_lossy().into_owned();
     let substitute = |value: &str| {
         value
-            .replace("{model}", harness.behavior.model)
+            .replace("{model}", behavior.model)
             .replace("{gateway}", gateway)
             .replace("{workspace}", &workspace)
             .replace("{prompt}", prompt)
     };
-    let arguments: Vec<String> = harness
-        .behavior
+    let arguments: Vec<String> = behavior
         .arguments
         .iter()
         .map(|value| substitute(value))
         .collect();
     let mut spec = environment.spec(harness.executable, arguments);
-    for (name, value) in harness.behavior.environment {
+    for (name, value) in behavior.environment {
         spec.environment
             .insert((*name).to_owned(), substitute(value));
     }

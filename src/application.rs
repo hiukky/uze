@@ -16,7 +16,8 @@ use crate::{
         receipt_location,
     },
     integrations::{
-        claude::ClaudeIntegration, codex::CodexIntegration, opencode::OpenCodeIntegration,
+        claude::ClaudeIntegration, codex::CodexIntegration, gemini::GeminiIntegration,
+        opencode::OpenCodeIntegration,
     },
     reconciliation::{PackageRemovalPlan, ReconciliationReport, plan_remove, reconcile_package},
     state,
@@ -38,7 +39,11 @@ impl UzeApplication {
             vec![
                 Box::new(ClaudeIntegration::from_env(home.clone())?),
                 Box::new(CodexIntegration::from_env(home.clone())?),
-                Box::new(OpenCodeIntegration::from_env(home)?),
+                Box::new(OpenCodeIntegration::from_env(home.clone())?),
+                // EXPERIMENTAL / CONFORMANCE. Registered to exercise the
+                // vendor-neutral core against a fourth, differently shaped
+                // harness; not a v0 support claim. See integrations/gemini.rs.
+                Box::new(GeminiIntegration::from_env(home)?),
             ],
         ))
     }

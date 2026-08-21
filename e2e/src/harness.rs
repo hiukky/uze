@@ -105,7 +105,10 @@ pub struct HarnessSpec {
     /// harness offers no non-model way to report that kind; the tier records
     /// it as unavailable rather than inventing evidence.
     pub probes: &'static [(ArtifactKind, Probe)],
-    pub behavior: BehaviorSpec,
+    /// `None` for a harness with no routable behavioral tier — its provider
+    /// protocol has no gateway-compatible route, so a model turn would need
+    /// a real vendor account. Deterministic tiers still cover it fully.
+    pub behavior: Option<BehaviorSpec>,
 }
 
 impl HarnessSpec {
@@ -143,7 +146,7 @@ pub const HARNESSES: &[HarnessSpec] = &[
                 },
             ),
         ],
-        behavior: BehaviorSpec {
+        behavior: Some(BehaviorSpec {
             // `--permission-mode bypassPermissions` is required, not
             // convenience: Claude Code's default mode denies every MCP tool
             // call when no interactive approver exists, which burns turns and
@@ -173,7 +176,7 @@ pub const HARNESSES: &[HarnessSpec] = &[
             // not recognize, which a plain chat model rejects with a 400.
             model: "uze-conformance-reasoning",
             provider_config: None,
-        },
+        }),
     },
     HarnessSpec {
         id: "codex",
@@ -213,7 +216,7 @@ pub const HARNESSES: &[HarnessSpec] = &[
                 claim: "Codex decomposed the plugin envelope into an enabled MCP server registration (registration only: Codex runs no health check)",
             },
         )],
-        behavior: BehaviorSpec {
+        behavior: Some(BehaviorSpec {
             // Codex 0.148.0 removed `wire_api = "chat"` for custom model
             // providers, so the gateway route only resolves declared as
             // "responses". `model_reasoning_summary="none"` avoids a provider
@@ -250,7 +253,7 @@ pub const HARNESSES: &[HarnessSpec] = &[
             environment: &[("UZE_GATEWAY_KEY", "not-required-inside-isolated-lab")],
             model: "uze-conformance-reasoning",
             provider_config: None,
-        },
+        }),
     },
     HarnessSpec {
         id: "opencode",
@@ -279,7 +282,7 @@ pub const HARNESSES: &[HarnessSpec] = &[
                 },
             ),
         ],
-        behavior: BehaviorSpec {
+        behavior: Some(BehaviorSpec {
             // The selected model is fully declared in the per-run config the
             // caller writes. `OPENCODE_DISABLE_MODELS_FETCH` keeps OpenCode
             // from refreshing its optional models.dev catalog, which no tier
@@ -314,7 +317,48 @@ pub const HARNESSES: &[HarnessSpec] = &[
 }"#,
                 seed: &[("/opt/opencode-runtime", ".config/opencode")],
             }),
-        },
+        }),
+    },
+    HarnessSpec {
+        // EXPERIMENTAL / CONFORMANCE fourth harness. Present to exercise the
+        // vendor-neutral core against a differently shaped native delivery:
+        // Gemini is linked straight at the stored package and needs no
+        // catalogue, so its integration leaves `republish_packages` at the
+        // default. Not a v0 support claim.
+        id: "gemini",
+        uze_name: "gemini",
+        executable: "gemini",
+        probes: &[
+            (
+                ArtifactKind::IntegrationOwned,
+                Probe {
+                    // Emits its JSON payload on stderr in 0.56.0; the tier
+                    // reads combined output, so this stays correct either way.
+                    arguments: &["extensions", "list", "--output-format=json"],
+                    required: &["\"type\": \"link\"", "\"isActive\": true"],
+                    matches_attached_name: true,
+                    claim: "Gemini reports the UZE-linked extension as active and installed by link, pointing at the UZE store",
+                },
+            ),
+            (
+                ArtifactKind::VendorConfigEntry,
+                Probe {
+                    // `gemini mcp list` has no machine-readable output, and a
+                    // server's connection state additionally depends on
+                    // folder trust — so this is registration evidence, not
+                    // connectivity evidence, and says so.
+                    arguments: &["mcp", "list"],
+                    required: &["stdio"],
+                    matches_attached_name: true,
+                    claim: "Gemini lists the UZE-registered MCP server in its user scope (registration only: `gemini mcp list` emits no machine-readable state)",
+                },
+            ),
+            // No probe is declared for SYMLINK_REFERENCE: Gemini offers no
+            // model-free way to list skills discovered outside an extension.
+            // The tier records that as Unverified rather than inventing
+            // evidence for it.
+        ],
+        behavior: None,
     },
 ];
 
@@ -389,7 +433,7 @@ mod tests {
     #[test]
     fn behavior_specs_carry_no_provider_credential() {
         for harness in HARNESSES {
-            for (name, value) in harness.behavior.environment {
+            for (name, value) in harness.behavior.iter().flat_map(|spec| spec.environment) {
                 assert!(
                     !value.starts_with("sk-"),
                     "{} would ship a literal provider key in {name}",

@@ -43,6 +43,7 @@ services:
         CLAUDE_VERSION: ${CLAUDE_VERSION:-2.1.237}
         CODEX_VERSION: ${CODEX_VERSION:-0.148.0}
         OPENCODE_VERSION: ${OPENCODE_VERSION:-1.18.19}
+        GEMINI_VERSION: ${GEMINI_VERSION:-0.56.0}
     depends_on:
       gateway:
         condition: service_healthy
