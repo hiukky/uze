@@ -46,6 +46,13 @@ pub struct Resource {
     /// which is correct for informational/preview calls that never attach
     /// anything (`uze inspect`, tests, `assess_environment`).
     pub resolved_exposure_name: Option<String>,
+    /// The artifact target (e.g., shim directory path) from an existing
+    /// receipt, when `resolved_exposure_name` is set via existing-receipt
+    /// reuse. This allows the integration's `exposure_plan` to reuse the
+    /// exact same artifact rather than materializing a new one at a
+    /// different path. Only populated for `ManagedArtifact::SymlinkReference`
+    /// receipts; `None` otherwise.
+    pub resolved_artifact_target: Option<PathBuf>,
 }
 
 impl Resource {
@@ -55,6 +62,7 @@ impl Resource {
             capability,
             resource_name: None,
             resolved_exposure_name: None,
+            resolved_artifact_target: None,
         }
     }
 
@@ -64,6 +72,7 @@ impl Resource {
             capability,
             resource_name: None,
             resolved_exposure_name: None,
+            resolved_artifact_target: None,
         }
     }
 
@@ -78,6 +87,7 @@ impl Resource {
             capability,
             resource_name: Some(resource_name),
             resolved_exposure_name: None,
+            resolved_artifact_target: None,
         }
     }
 

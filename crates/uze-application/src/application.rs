@@ -29,6 +29,8 @@ use uze_integrations::{
     opencode::OpenCodeIntegration,
 };
 
+use crate::builtin;
+
 /// Harnesses that read a project's shared `AGENTS.md` only through an
 /// explicit bridge region in their own native file, rather than natively —
 /// see `docs/capabilities/instructions-design.md` Fase 4. Codex and OpenCode
@@ -102,6 +104,90 @@ impl UzeApplication {
             integrations,
             runner,
         }
+    }
+
+    /// Ensure the builtin `uze` package (`packages/uze`) is present in the
+    /// Store and attached to every detected harness, using the same
+    /// `Store::ingest` + `IntegrationPort::attach` path any normal package
+    /// uses. Idempotent: if the package is already installed and current, and
+    /// its attachments are already `Matched`, this is a no-op. Returns `true`
+    /// if it installed or updated the Store entry.
+    ///
+    /// This is deliberately not called from `from_env`/`new` so contract tests
+    /// can construct isolated worlds without the builtin. The CLI (`src/main.rs`)
+    /// and `setup` call this explicitly; `add`/`remove` do not need to because
+    /// `setup` already covers the attach path.
+    pub fn ensure_builtin_plugins(&self) -> Result<bool> {
+        // 1. Seed/update the Store entry itself.
+        let installed = builtin::ensure_builtin_uze_store(&self.home, &self.store)?;
+        // 2. Ensure attachments for the builtin package, if it now exists.
+        //    This mirrors `attach_stored_packages_to` but scoped to the single
+        //    builtin package to avoid surprising side-effects on other packages.
+        //    It is also responsible for preparing detected harnesses (creating
+        //    `~/.claude/skills` etc.) so a fresh `UZE_HOME` gets the skill
+        //    without a prior `uze setup`.
+        let builtin_id = match self.store.package_ids() {
+            Ok(ids) => ids.into_iter().find(|id| id.as_str() == "uze"),
+            Err(_) => None,
+        };
+        if let Some(package_id) = builtin_id {
+            if let Ok(package) = self.store.package(&package_id) {
+                // Prepare every detected harness' discovery directory. This is
+                // the same preparation `add_plugin` does, but without requiring
+                // an explicit `add`.
+                let _ = self.prepare_detected_integrations(None);
+                let environment = self.engine().compose(std::slice::from_ref(&package.id))?;
+                let resources: Vec<_> = environment.resources.iter().collect();
+                for integration in &self.integrations {
+                    if !integration.detect().present {
+                        continue;
+                    }
+                    // The builtin `uze` package is Skill-only, so package-level
+                    // native delivery does not apply; attach each resource via
+                    // the normal per-resource path and record receipts.
+                    if let Some(plan) = integration.package_exposure_plan(&package, &resources) {
+                        if let Some(receipt) = integration.attach_package(&package, &plan)? {
+                            let _ = state::record_receipt(
+                                &self.home,
+                                package_receipt_key(package.id.as_str(), integration.id()),
+                                receipt,
+                            );
+                        }
+                        // If the package plan covers all resources, skip
+                        // per-resource attach to avoid duplicates.
+                        let provided = plan.provided_resource_identities.clone();
+                        for resource in &resources {
+                            if provided.contains(&resource.identity()) {
+                                continue;
+                            }
+                            let resolved = self.resolve_exposure_name(resource, integration.as_ref());
+                            if let Some(receipt) = integration.attach_receipt(&resolved)? {
+                                let _ = state::record_receipt(
+                                    &self.home,
+                                    resource_receipt_key(package.id.as_str(), integration.id(), resource),
+                                    receipt,
+                                );
+                            }
+                        }
+                    } else {
+                        for resource in &resources {
+                            let resolved = self.resolve_exposure_name(resource, integration.as_ref());
+                            if let Some(receipt) = integration.attach_receipt(&resolved)? {
+                                let _ = state::record_receipt(
+                                    &self.home,
+                                    resource_receipt_key(package.id.as_str(), integration.id(), resource),
+                                    receipt,
+                                );
+                            }
+                        }
+                    }
+                }
+                // Refresh derived views (e.g. Codex/OpenCode catalogues) so the
+                // newly seeded package is visible there too — same as `add`.
+                let _ = self.republish_all();
+            }
+        }
+        Ok(installed)
     }
 
     pub fn list_plugins(&self) -> Result<Vec<PluginSummary>> {
@@ -335,6 +421,10 @@ impl UzeApplication {
     pub fn setup(&self, requested: Option<&str>) -> Result<Vec<SetupResult>> {
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.home)?;
         self.home.ensure_layout()?;
+        // Seed the builtin `uze` package before any provisioning, so a fresh
+        // `UZE_HOME` gets the Skill without a manual `uze add` and so an
+        // updated binary heals its attachment on next `setup`.
+        let _ = self.ensure_builtin_plugins();
         let wanted = requested
             .map(|name| self.resolve_integration_id(name))
             .transpose()?;
@@ -940,6 +1030,12 @@ impl UzeApplication {
                 && receipt.resource_identity.as_deref() == Some(resource_id.as_str())
         }) {
             resolved.resolved_exposure_name = managed_artifact_exposure_name(&existing.artifact);
+            resolved.resolved_artifact_target = match &existing.artifact {
+                uze_core::integration::ManagedArtifact::SymlinkReference { target, .. } => {
+                    Some(target.clone())
+                }
+                _ => None,
+            };
             return resolved;
         }
         let claimed: BTreeSet<String> = all_receipts
