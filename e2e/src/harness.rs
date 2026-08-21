@@ -19,7 +19,7 @@
 pub enum ArtifactKind {
     VendorConfigEntry,
     SymlinkReference,
-    MarketplacePlugin,
+    IntegrationOwned,
 }
 
 impl ArtifactKind {
@@ -28,7 +28,7 @@ impl ArtifactKind {
         match self {
             Self::VendorConfigEntry => "VENDOR_CONFIG_ENTRY",
             Self::SymlinkReference => "SYMLINK_REFERENCE",
-            Self::MarketplacePlugin => "MARKETPLACE_PLUGIN",
+            Self::IntegrationOwned => "INTEGRATION_OWNED",
         }
     }
 
@@ -36,7 +36,7 @@ impl ArtifactKind {
         match tag {
             "VENDOR_CONFIG_ENTRY" => Some(Self::VendorConfigEntry),
             "SYMLINK_REFERENCE" => Some(Self::SymlinkReference),
-            "MARKETPLACE_PLUGIN" => Some(Self::MarketplacePlugin),
+            "INTEGRATION_OWNED" => Some(Self::IntegrationOwned),
             _ => None,
         }
     }
@@ -179,12 +179,13 @@ pub const HARNESSES: &[HarnessSpec] = &[
         id: "codex",
         uze_name: "codex",
         executable: "codex",
-        // Codex receives the whole package through its own marketplace, so
-        // UZE names the package and Codex derives capability names from the
-        // installed envelope. There is no UZE-named vendor-config entry to
-        // probe for, which is why only the marketplace kind is declared.
+        // Codex receives the whole package natively, so its receipt is an
+        // integration-owned artifact the Core does not interpret. UZE names
+        // the package and Codex derives capability names from the installed
+        // envelope, which is why no UZE-named vendor-config entry exists to
+        // probe for.
         probes: &[(
-            ArtifactKind::MarketplacePlugin,
+            ArtifactKind::IntegrationOwned,
             Probe {
                 arguments: &["plugin", "list"],
                 required: &["installed", "enabled"],
@@ -204,7 +205,7 @@ pub const HARNESSES: &[HarnessSpec] = &[
             // evidence, not connectivity evidence — Claude and OpenCode are
             // probed one level deeper. That asymmetry is a real coverage
             // gap, recorded rather than papered over.
-            ArtifactKind::MarketplacePlugin,
+            ArtifactKind::IntegrationOwned,
             Probe {
                 arguments: &["mcp", "list", "--json"],
                 required: &["{mcp_binary}", "\"enabled\": true"],
@@ -403,7 +404,7 @@ mod tests {
         for kind in [
             ArtifactKind::VendorConfigEntry,
             ArtifactKind::SymlinkReference,
-            ArtifactKind::MarketplacePlugin,
+            ArtifactKind::IntegrationOwned,
         ] {
             assert_eq!(ArtifactKind::from_tag(kind.tag()), Some(kind));
         }

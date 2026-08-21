@@ -321,7 +321,7 @@ fn attachment_name(tag: &str, body: &serde_json::Value) -> Option<String> {
             .get("path")
             .and_then(serde_json::Value::as_str)
             .and_then(|path| Path::new(path).file_name().map(|name| name.to_string_lossy().into_owned())),
-        ArtifactKind::MarketplacePlugin => body
+        ArtifactKind::IntegrationOwned => body
             .get("selector")
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned),
@@ -555,7 +555,7 @@ mod tests {
             Some("uze-x".to_owned())
         );
         assert_eq!(
-            attachment_name("MARKETPLACE_PLUGIN", &json!({"selector": "pkg@market"})),
+            attachment_name("INTEGRATION_OWNED", &json!({"selector": "pkg@market"})),
             Some("pkg@market".to_owned())
         );
         assert_eq!(attachment_name("UNKNOWN_SHAPE", &json!({})), None);
@@ -596,9 +596,9 @@ mod tests {
 
     #[test]
     fn the_budget_only_constrains_names_uze_itself_composes() {
-        // A marketplace selector never becomes a tool-call function name.
+        // An integration-owned selector never becomes a tool-call function name.
         let over_long = "uze-uze-plugin-first-conformance-uze-plugin-first-conformance";
-        assert!(exceeds_tool_name_budget("MARKETPLACE_PLUGIN", over_long).is_none());
+        assert!(exceeds_tool_name_budget("INTEGRATION_OWNED", over_long).is_none());
         assert!(exceeds_tool_name_budget("SYMLINK_REFERENCE", over_long).is_none());
     }
 

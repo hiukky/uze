@@ -10,7 +10,7 @@ use std::{
 use uze::{
     UzeEngine, UzeHome, UzeStore,
     capability::CapabilityKind,
-    exposure::{ExposureMechanism, PackageExposureMechanism},
+    exposure::ExposureMechanism,
     integration::IntegrationPort,
     router::CompatibilityRoute,
 };
@@ -89,8 +89,8 @@ fn one_plugin_install_is_planned_once_for_native_and_decomposed_harnesses() {
         "original native MCP document is preserved"
     );
     assert!(
-        home.codex_marketplace_path().is_file(),
-        "only the documented Codex catalog is generated"
+        !home.store_dir().join(".agents/plugins/marketplace.json").exists(),
+        "the Store publishes no harness-owned view of its own accord"
     );
 
     let claude = ClaudeIntegration::new(root.join("claude"), home.clone());
@@ -109,10 +109,6 @@ fn one_plugin_install_is_planned_once_for_native_and_decomposed_harnesses() {
         .expect("Codex consumes source-provided native envelope");
     assert_eq!(codex_package.route, CompatibilityRoute::Native);
     assert_eq!(codex_package.provided_resource_identities.len(), 2);
-    assert!(matches!(
-        codex_package.mechanism,
-        PackageExposureMechanism::NativePluginMarketplace { .. }
-    ));
     assert!(
         resources
             .iter()

@@ -25,10 +25,7 @@ pub use application::UzeApplication;
 pub use bundle::ImportedBundle;
 pub use engine::UzeEngine;
 pub use error::{Result, UzeError};
-pub use exposure::{
-    ExposureMechanism, ExposurePlan, PackageExposureMechanism, PackageExposurePlan,
-    PreparedExposure,
-};
+pub use exposure::{ExposureMechanism, ExposurePlan, PackageExposurePlan, PreparedExposure};
 pub use home::UzeHome;
 pub use project::{
     EffectiveEnvironment, ResolvedProject, Resource, ResourceOrigin, resolve_project,
