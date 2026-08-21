@@ -43,13 +43,7 @@ pub const DEFAULT_PLUGIN_IDS: &[&str] = &["uze"];
 /// marketplace root would. `Err(UnknownPackage)` if the snapshot's manifest
 /// does not list `plugin_name`.
 pub fn materialize(plugin_name: &str) -> Result<MaterializedPackage> {
-    let root = extract_embedded_snapshot()?;
-    let manifest_path = root.join("marketplace.json");
-    let manifest_bytes = fs::read(&manifest_path).map_err(|source| UzeError::Read {
-        path: manifest_path,
-        source,
-    })?;
-    let manifest = marketplace::parse_manifest(&manifest_bytes)?;
+    let (root, manifest) = extract_and_parse()?;
     let plugin_root = marketplace::resolve_plugin_source(&manifest, plugin_name, &root)?;
 
     let provenance = |resolved| Provenance {
@@ -82,6 +76,32 @@ pub fn materialize(plugin_name: &str) -> Result<MaterializedPackage> {
 pub fn has_update(plugin_name: &str, stored_root: &Path) -> Result<bool> {
     let current = materialize(plugin_name)?;
     Ok(!trees_match(current.root(), stored_root)?)
+}
+
+/// The official embedded marketplace's own declared name (`marketplace.json`'s
+/// `name` field) and every plugin entry it lists — a pure, read-only parse of
+/// the manifest. This is the one place `uze-application` reads
+/// `marketplace.json` structure directly; the Application facade turns this
+/// into product-facing read models, and nothing below `uze-core::acquisition`
+/// ever sees it.
+pub fn entries() -> Result<(String, Vec<marketplace::MarketplacePluginEntry>)> {
+    let (root, manifest) = extract_and_parse()?;
+    let _ = fs::remove_dir_all(&root);
+    Ok((manifest.name, manifest.plugins))
+}
+
+/// Extracts a fresh copy of the embedded snapshot and parses its
+/// `marketplace.json`. The returned root is the scratch directory the
+/// manifest and every plugin subtree live under.
+fn extract_and_parse() -> Result<(PathBuf, marketplace::MarketplaceManifest)> {
+    let root = extract_embedded_snapshot()?;
+    let manifest_path = root.join("marketplace.json");
+    let manifest_bytes = fs::read(&manifest_path).map_err(|source| UzeError::Read {
+        path: manifest_path,
+        source,
+    })?;
+    let manifest = marketplace::parse_manifest(&manifest_bytes)?;
+    Ok((root, manifest))
 }
 
 fn extract_embedded_snapshot() -> Result<PathBuf> {

@@ -247,6 +247,89 @@ impl UzeApplication {
         })
     }
 
+    /// Every marketplace this composition root knows how to read from.
+    /// Exactly one today — the official embedded snapshot — but the return
+    /// shape does not assume that stays true. Read-only; parses no product
+    /// content beyond `marketplace.json`'s own name and plugin count.
+    pub fn list_marketplaces(&self) -> Result<Vec<MarketplaceSummary>> {
+        let (name, entries) = bootstrap::entries()?;
+        Ok(vec![MarketplaceSummary {
+            name,
+            plugin_count: entries.len(),
+        }])
+    }
+
+    /// Every plugin the official marketplace lists, cross-referenced against
+    /// what's actually installed. `update_available` is computed the same
+    /// pure, offline way `PluginSummary`'s is — never re-applied here.
+    pub fn list_marketplace_plugins(&self) -> Result<Vec<MarketplacePluginSummary>> {
+        let (_name, entries) = bootstrap::entries()?;
+        let installed_packages = self.installed_packages();
+        let installed: std::collections::BTreeMap<&str, &StoredPackage> = installed_packages
+            .iter()
+            .map(|package| (package.id.as_str(), package))
+            .collect();
+        Ok(entries
+            .into_iter()
+            .map(|entry| {
+                let installed_package = installed.get(entry.name.as_str());
+                let update_available = installed_package
+                    .and_then(|package| bootstrap::has_update(&entry.name, &package.root).ok());
+                MarketplacePluginSummary {
+                    name: entry.name.clone(),
+                    description: entry.description,
+                    keywords: entry.keywords,
+                    installed: installed_package.is_some(),
+                    update_available,
+                    is_default: bootstrap::DEFAULT_PLUGIN_IDS.contains(&entry.name.as_str()),
+                }
+            })
+            .collect())
+    }
+
+    /// One marketplace plugin's full detail, including capabilities read
+    /// straight off the manifest snapshot — no install required. Capability
+    /// inspection materializes a scratch copy that is discarded before this
+    /// returns; nothing is written to the Store.
+    pub fn inspect_marketplace_plugin(&self, name: &str) -> Result<MarketplacePluginDetail> {
+        let summary = self
+            .list_marketplace_plugins()?
+            .into_iter()
+            .find(|plugin| plugin.name == name)
+            .ok_or_else(|| UzeError::UnknownPackage(name.to_owned()))?;
+        let materialized = bootstrap::materialize(name)?;
+        let inspected = uze_core::acquisition::inspect_capabilities(&materialized)?;
+        Ok(MarketplacePluginDetail {
+            capabilities: inspected
+                .resources
+                .iter()
+                .map(|resource| PluginCapability {
+                    identity: resource.identity(),
+                    name: resource.name(),
+                    kind: resource.capability.kind,
+                })
+                .collect(),
+            summary,
+        })
+    }
+
+    /// Installs a marketplace plugin by name through the exact same
+    /// lifecycle any other `add` uses — trust included. A thin, named
+    /// convenience over `add_plugin(PackageSource::Embedded { .. })` so
+    /// callers never need to know `Embedded` is the mechanism.
+    pub fn install_from_marketplace(
+        &self,
+        name: &str,
+        authority: &dyn TrustAuthority,
+    ) -> Result<AddPluginReport> {
+        self.add_plugin(
+            PackageSource::Embedded {
+                id: name.to_owned(),
+            },
+            authority,
+        )
+    }
+
     /// Installs once, chooses package-native delivery first, attaches only
     /// remaining resources, and records every persistent side effect.
     pub fn add_plugin(
@@ -1262,6 +1345,32 @@ pub struct PluginCapability {
     pub identity: String,
     pub name: String,
     pub kind: CapabilityKind,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct MarketplaceSummary {
+    pub name: String,
+    pub plugin_count: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct MarketplacePluginSummary {
+    pub name: String,
+    pub description: Option<String>,
+    pub keywords: Vec<String>,
+    pub installed: bool,
+    /// `None` when not installed (nothing to compare against) or when the
+    /// comparison could not be made — never a guess.
+    pub update_available: Option<bool>,
+    /// Whether `bootstrap::DEFAULT_PLUGIN_IDS` installs this plugin on a
+    /// fresh `UZE_HOME` — product policy, not a marketplace fact.
+    pub is_default: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct MarketplacePluginDetail {
+    pub summary: MarketplacePluginSummary,
+    pub capabilities: Vec<PluginCapability>,
 }
 
 #[derive(Clone, Debug, Serialize)]
