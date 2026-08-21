@@ -12,6 +12,8 @@ FROM node:22-bookworm-slim AS harness-lab
 ARG CLAUDE_VERSION=2.1.237
 ARG CODEX_VERSION=0.148.0
 ARG OPENCODE_VERSION=1.18.19
+# EXPERIMENTAL / CONFORMANCE — see src/integrations/gemini.rs.
+ARG GEMINI_VERSION=0.56.0
 
 RUN apt-get update \
     && apt-get install --no-install-recommends -y ca-certificates git ripgrep tini \
@@ -23,7 +25,8 @@ RUN apt-get update \
 RUN npm install --global --no-audit --no-fund \
     "@anthropic-ai/claude-code@${CLAUDE_VERSION}" \
     "@openai/codex@${CODEX_VERSION}" \
-    "opencode-ai@${OPENCODE_VERSION}"
+    "opencode-ai@${OPENCODE_VERSION}" \
+    "@google/gemini-cli@${GEMINI_VERSION}"
 
 # OpenCode resolves its official runtime plugin package on first use. Bake it
 # into the disposable image so a harness with intentionally no egress does
@@ -37,6 +40,7 @@ COPY --from=uze-build /src/target/release/uze-mcp-conformance-fixture /usr/local
 COPY --from=uze-build /src/e2e/target/release/uze-conformance /usr/local/bin/uze-conformance
 COPY e2e/fixtures/plugin-first-conformance /opt/uze-fixtures/plugin-first-conformance
 COPY e2e/fixtures/native-skill-discovery /opt/uze-fixtures/native-skill-discovery
+COPY e2e/fixtures/gemini-native-conformance /opt/uze-fixtures/gemini-native-conformance
 COPY e2e/opencode-models.json /opt/uze-e2e/opencode-models.json
 COPY e2e/entrypoint.sh /usr/local/bin/uze-harness-entrypoint
 

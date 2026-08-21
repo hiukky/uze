@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "conformance": {
+      "command": "__UZE_MCP_FIXTURE_BINARY__",
+      "args": []
+    }
+  }
+}

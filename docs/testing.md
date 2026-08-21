@@ -55,7 +55,7 @@ from its public API purely to serve those tests. Both are gone.
 ## L2 — Conformance
 
 `e2e/` is a separate crate and a disposable Docker image. It runs the real
-Claude Code, Codex and OpenCode CLIs against a real UZE installation. Full
+Claude Code, Codex, OpenCode and Gemini CLIs against a real UZE installation. Full
 detail in [`e2e/README.md`](../e2e/README.md).
 
 It is itself split by determinism:
