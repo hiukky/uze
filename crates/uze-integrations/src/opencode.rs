@@ -350,7 +350,11 @@ fn inspect_opencode_mcp_value(
 
 impl OpenCodeIntegration {
     fn skill_plan(&self, resource: &Resource) -> ExposurePlan {
-        let Some(entry_name) = resource.attachment_entry_name() else {
+        let Some(entry_name) = resource
+            .resolved_exposure_name
+            .clone()
+            .or_else(|| self.exposure_name_candidates(resource).into_iter().next())
+        else {
             return unsupported(resource, "Resource has no derivable attachment entry name.");
         };
         let source = resource
@@ -371,7 +375,11 @@ impl OpenCodeIntegration {
                 "OpenCode has not completed `uze setup`; its managed global MCP config is not yet enabled.",
             );
         }
-        let Some(entry_name) = resource.attachment_entry_name() else {
+        let Some(entry_name) = resource
+            .resolved_exposure_name
+            .clone()
+            .or_else(|| self.exposure_name_candidates(resource).into_iter().next())
+        else {
             return unsupported(resource, "Resource has no derivable attachment entry name.");
         };
         let Some((command, args)) = parse_mcp(&resource.capability.payload) else {

@@ -35,6 +35,17 @@ pub struct Resource {
     /// Standard-defined resource name when several resources share one
     /// manifest path (for example, named MCP servers in `mcp.json`).
     pub resource_name: Option<String>,
+    /// A physical exposure name an Application-layer naming resolution has
+    /// already chosen for this resource on one specific integration —
+    /// existing-receipt reuse or fresh collision resolution against the
+    /// ledger, neither of which `Resource`/`uze-core` performs itself. Set
+    /// once, immediately before an attach call, on a short-lived clone of
+    /// the resource; never persisted, never read back. `None` means "no
+    /// resolution has happened yet" — an integration's `exposure_plan` then
+    /// falls back to its own first-choice `exposure_name_candidates` entry,
+    /// which is correct for informational/preview calls that never attach
+    /// anything (`uze inspect`, tests, `assess_environment`).
+    pub resolved_exposure_name: Option<String>,
 }
 
 impl Resource {
@@ -43,6 +54,7 @@ impl Resource {
             origin: ResourceOrigin::Project { root },
             capability,
             resource_name: None,
+            resolved_exposure_name: None,
         }
     }
 
@@ -51,6 +63,7 @@ impl Resource {
             origin: ResourceOrigin::Package { id, root },
             capability,
             resource_name: None,
+            resolved_exposure_name: None,
         }
     }
 
@@ -64,6 +77,7 @@ impl Resource {
             origin: ResourceOrigin::Package { id, root },
             capability,
             resource_name: Some(resource_name),
+            resolved_exposure_name: None,
         }
     }
 
@@ -80,26 +94,27 @@ impl Resource {
         }
     }
 
-    /// A stable, namespaced entry name safe to place in a shared, ambient
-    /// harness discovery location (e.g. a global skills directory) without
-    /// colliding with unrelated pre-existing entries there. `None` for a
-    /// project-owned resource, which is not a UZE store package and has no
-    /// managed attachment.
-    pub fn attachment_entry_name(&self) -> Option<String> {
-        let ResourceOrigin::Package { id, .. } = &self.origin else {
+    /// The bare, harness-agnostic logical name of this capability within
+    /// its package — a Skill's directory name, or a named MCP server's
+    /// name. This carries no vendor exposure semantics of its own: no
+    /// package qualification, no collision-avoidance prefix, nothing a
+    /// harness would see. What a harness's shared discovery location
+    /// actually gets called is `IntegrationPort::exposure_name_candidates`'
+    /// decision, built from this name — never computed here. `None` for a
+    /// project-owned resource (no managed attachment at all) or a
+    /// capability kind with no logical name of its own.
+    pub fn logical_capability_name(&self) -> Option<String> {
+        let ResourceOrigin::Package { .. } = &self.origin else {
             return None;
         };
         match self.capability.kind {
             // A skill's path is `skills/<skill-name>/SKILL.md`: the parent
-            // directory name distinguishes multiple skills in one package.
+            // directory name is the skill's own logical name.
             CapabilityKind::AgentSkill => {
                 let skill_name = self.capability.path.parent()?.file_name()?.to_str()?;
-                Some(format!("uze-{}-{}", id.as_str(), skill_name))
+                Some(skill_name.to_owned())
             }
-            CapabilityKind::Mcp => self
-                .resource_name
-                .as_deref()
-                .map(|name| format!("uze-{}-{name}", id.as_str())),
+            CapabilityKind::Mcp => self.resource_name.clone(),
             _ => None,
         }
     }
@@ -304,30 +319,33 @@ mod tests {
     }
 
     #[test]
-    fn package_resource_has_a_namespaced_attachment_entry_name() {
+    fn package_skill_resource_has_a_bare_logical_capability_name() {
         let id = PackageId::from_plugin_name("demo-package", Path::new("plugin.json")).unwrap();
         let resource = Resource::from_package(
             id,
             PathBuf::from("/uze-home/store/packages/demo-package"),
             skill_capability("/uze-home/store/packages/demo-package/skills/demo-skill/SKILL.md"),
         );
+        // Bare — no package qualification, no "uze-" prefix. Physical
+        // exposure naming (with qualification when needed) is decided by
+        // `IntegrationPort::exposure_name_candidates`, not here.
         assert_eq!(
-            resource.attachment_entry_name().as_deref(),
-            Some("uze-demo-package-demo-skill")
+            resource.logical_capability_name().as_deref(),
+            Some("demo-skill")
         );
     }
 
     #[test]
-    fn project_resource_has_no_attachment_entry_name() {
+    fn project_resource_has_no_logical_capability_name() {
         let resource = Resource::from_project(
             PathBuf::from("/project"),
             skill_capability("/project/.agents/skills/demo-skill/SKILL.md"),
         );
-        assert_eq!(resource.attachment_entry_name(), None);
+        assert_eq!(resource.logical_capability_name(), None);
     }
 
     #[test]
-    fn mcp_package_resource_is_namespaced_by_server_name() {
+    fn mcp_package_resource_logical_name_is_the_server_name() {
         let id = PackageId::from_plugin_name("demo-package", Path::new("plugin.json")).unwrap();
         let resource = Resource::from_package_named(
             id,
@@ -340,9 +358,6 @@ mod tests {
             },
             "github".to_owned(),
         );
-        assert_eq!(
-            resource.attachment_entry_name().as_deref(),
-            Some("uze-demo-package-github")
-        );
+        assert_eq!(resource.logical_capability_name().as_deref(), Some("github"));
     }
 }

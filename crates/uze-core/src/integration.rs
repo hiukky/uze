@@ -137,6 +137,26 @@ pub trait IntegrationPort {
     /// harness receives a capability from a composed UZE environment.
     fn exposure_plan(&self, resource: &crate::project::Resource) -> ExposurePlan;
 
+    /// Ordered, harness-appropriate candidates for `resource`'s physical
+    /// exposure name — most preferred first. This method only *proposes*:
+    /// it reads no filesystem, reads no ledger, decides no ownership, and
+    /// mutates nothing. Resolving a candidate against what's already
+    /// claimed by other UZE-managed resources (via the ledger) and against
+    /// what already exists on disk (via `attach`'s own structural checks)
+    /// happens entirely outside this method — see
+    /// `UzeApplication`'s naming resolution and `ExposureMechanism::attach`.
+    ///
+    /// The default suits every integration that has no naming policy of
+    /// its own: one candidate, fully package-qualified, with **no**
+    /// collision-avoidance prefix — the prefix was never part of ownership
+    /// (see `AttachmentReceipt`'s doc comment) and this default drops it.
+    /// An integration overrides this only when its own harness's UX
+    /// genuinely depends on the physical name (Claude Code's decomposed
+    /// Skill delivery is the one case today).
+    fn exposure_name_candidates(&self, resource: &crate::project::Resource) -> Vec<String> {
+        default_exposure_name_candidates(resource)
+    }
+
     /// Optional preferred delivery of an external package as a whole. The
     /// returned plan owns only the listed resources; remaining resources are
     /// still routed capability-by-capability.
@@ -325,6 +345,42 @@ pub trait IntegrationPort {
 
     fn detach_receipt(&self, receipt: &AttachmentReceipt) -> Result<AttachmentInspection> {
         detach_standard_receipt(receipt)
+    }
+}
+
+/// The naming default every integration inherits unless it overrides
+/// `exposure_name_candidates`: one candidate, fully package-qualified,
+/// with no collision-avoidance prefix. A free function (not inlined into
+/// the trait default) so an integration that overrides the method for one
+/// capability kind (e.g. Claude's Skills) can still fall through to this
+/// exact same computation for another (e.g. Claude's MCP, which the
+/// milestone brief explicitly keeps on the default policy — "não misture
+/// Skill e MCP só porque ambos são Resources").
+pub fn default_exposure_name_candidates(resource: &crate::project::Resource) -> Vec<String> {
+    let crate::project::ResourceOrigin::Package { id, .. } = &resource.origin else {
+        return Vec::new();
+    };
+    let Some(logical) = resource.logical_capability_name() else {
+        return Vec::new();
+    };
+    vec![format!("{}-{}", id.as_str(), logical)]
+}
+
+/// Extracts the physical exposure name a receipt's artifact already claims,
+/// generically — no artifact variant here knows or cares what kind of
+/// capability it represents. `None` for an artifact shape with no single
+/// physical name of its own (a text region spans a *portion* of a shared
+/// file, not a dedicated entry; an integration-owned artifact's naming is
+/// opaque to the Core by design).
+pub fn managed_artifact_exposure_name(artifact: &ManagedArtifact) -> Option<String> {
+    match artifact {
+        ManagedArtifact::SymlinkReference { path, .. } => {
+            path.file_name()?.to_str().map(str::to_owned)
+        }
+        ManagedArtifact::VendorConfigEntry { entry_name, .. } => Some(entry_name.clone()),
+        ManagedArtifact::ManagedTextRegion { .. } | ManagedArtifact::IntegrationOwned { .. } => {
+            None
+        }
     }
 }
 

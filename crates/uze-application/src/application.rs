@@ -14,8 +14,9 @@ use uze_core::{
     exposure::{ExposurePlan, PackageExposurePlan},
     integration::{
         AttachmentState, HarnessDetection, IntegrationPort, IntegrationStatus, PublicationStatus,
-        receipt_location,
+        managed_artifact_exposure_name, receipt_location,
     },
+    project::Resource,
     provisioning::{ProcessRunner, ProvisionStatus, ProvisioningResult, SystemProcessRunner},
     reconciliation::{PackageRemovalPlan, ReconciliationReport, plan_remove, reconcile_package},
     state,
@@ -253,19 +254,20 @@ impl UzeApplication {
                 }
             }
             for resource in &resources {
-                if !provided.contains(&resource.identity())
-                    && let Some(receipt) = integration.attach_receipt(resource)?
-                {
-                    let location = receipt_location(&receipt);
-                    state::record_receipt(
-                        &self.home,
-                        resource_receipt_key(installed.id.as_str(), integration.id(), resource),
-                        receipt,
-                    )?;
-                    attachments.push(AttachmentSummary {
-                        integration: integration.id().to_owned(),
-                        location,
-                    });
+                if !provided.contains(&resource.identity()) {
+                    let resolved = self.resolve_exposure_name(resource, integration.as_ref());
+                    if let Some(receipt) = integration.attach_receipt(&resolved)? {
+                        let location = receipt_location(&receipt);
+                        state::record_receipt(
+                            &self.home,
+                            resource_receipt_key(installed.id.as_str(), integration.id(), resource),
+                            receipt,
+                        )?;
+                        attachments.push(AttachmentSummary {
+                            integration: integration.id().to_owned(),
+                            location,
+                        });
+                    }
                 }
             }
         }
@@ -423,15 +425,16 @@ impl UzeApplication {
                 )?;
                 provided = plan.provided_resource_identities;
             }
-            for resource in resources {
-                if !provided.contains(&resource.identity())
-                    && let Some(receipt) = integration.attach_receipt(resource)?
-                {
-                    state::record_receipt(
-                        &self.home,
-                        resource_receipt_key(package.id.as_str(), integration.id(), resource),
-                        receipt,
-                    )?;
+            for resource in &resources {
+                if !provided.contains(&resource.identity()) {
+                    let resolved = self.resolve_exposure_name(resource, integration);
+                    if let Some(receipt) = integration.attach_receipt(&resolved)? {
+                        state::record_receipt(
+                            &self.home,
+                            resource_receipt_key(package.id.as_str(), integration.id(), resource),
+                            receipt,
+                        )?;
+                    }
                 }
             }
         }
@@ -898,6 +901,59 @@ impl UzeApplication {
             blocked_orphans: agents_md_report.blocked_orphans,
             bridges,
         })
+    }
+
+    /// Resolves `resource`'s physical exposure name for `integration`,
+    /// immediately before an attach call — the one place a naming decision
+    /// happens. Returns a clone of `resource` with `resolved_exposure_name`
+    /// set; `resource` itself is never mutated.
+    ///
+    /// "Existing receipt wins": if a receipt for this exact
+    /// `resource.identity()` already exists for this integration — on any
+    /// naming scheme, including the legacy `uze-<package>-<skill>` shape —
+    /// its already-recorded physical name is reused verbatim. No naming
+    /// policy ever recomputes, moves, or renames an already-attached
+    /// resource; this is what makes re-add/setup idempotent and legacy
+    /// installs safe without any migration step.
+    ///
+    /// Only for a brand new resource does this ask the integration for
+    /// ordered candidates (`exposure_name_candidates`) and pick the first
+    /// one not already claimed by a *different* resource this integration
+    /// manages. This resolves purely from the ledger — no filesystem
+    /// access — so it can never itself decide a foreign-artifact conflict;
+    /// `attach`'s own structural check (unchanged) remains the last word on
+    /// that.
+    fn resolve_exposure_name(&self, resource: &Resource, integration: &dyn IntegrationPort) -> Resource {
+        if !matches!(
+            resource.capability.kind,
+            CapabilityKind::AgentSkill | CapabilityKind::Mcp
+        ) {
+            return resource.clone();
+        }
+        let mut resolved = resource.clone();
+        let Ok(all_receipts) = state::receipts(&self.home, None) else {
+            return resolved;
+        };
+        let resource_id = resource.identity();
+        if let Some((_, existing)) = all_receipts.iter().find(|(_, receipt)| {
+            receipt.integration == integration.id()
+                && receipt.resource_identity.as_deref() == Some(resource_id.as_str())
+        }) {
+            resolved.resolved_exposure_name = managed_artifact_exposure_name(&existing.artifact);
+            return resolved;
+        }
+        let claimed: BTreeSet<String> = all_receipts
+            .iter()
+            .filter(|(_, receipt)| receipt.integration == integration.id())
+            .filter_map(|(_, receipt)| managed_artifact_exposure_name(&receipt.artifact))
+            .collect();
+        let candidates = integration.exposure_name_candidates(resource);
+        resolved.resolved_exposure_name = candidates
+            .iter()
+            .find(|candidate| !claimed.contains(*candidate))
+            .cloned()
+            .or_else(|| candidates.last().cloned());
+        resolved
     }
 
     fn instruction_contributions(&self) -> Result<Vec<InstructionContribution>> {

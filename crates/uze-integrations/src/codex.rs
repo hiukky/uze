@@ -421,7 +421,10 @@ fn run_codex(command_home: &Path, prefix: [&str; 3], path: Option<&Path>) -> Res
 impl CodexIntegration {
     fn skill_exposure_plan(&self, resource: &Resource) -> ExposurePlan {
         if state::is_installed(&self.uze_home, self.id())
-            && let Some(entry_name) = resource.attachment_entry_name()
+            && let Some(entry_name) = resource
+                .resolved_exposure_name
+                .clone()
+                .or_else(|| self.exposure_name_candidates(resource).into_iter().next())
         {
             let skill_directory = resource
                 .capability
@@ -469,7 +472,11 @@ impl CodexIntegration {
                 "Codex has not completed `uze setup`; MCP attachment has no per-session conformance-probe fallback (see ADR-007).",
             );
         }
-        let Some(entry_name) = resource.attachment_entry_name() else {
+        let Some(entry_name) = resource
+            .resolved_exposure_name
+            .clone()
+            .or_else(|| self.exposure_name_candidates(resource).into_iter().next())
+        else {
             return unsupported(resource, "Resource has no derivable attachment entry name.");
         };
         let Some((command, args)) = parse_mcp_server_config(&resource.capability.payload) else {
