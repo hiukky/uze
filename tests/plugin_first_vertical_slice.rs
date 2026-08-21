@@ -186,11 +186,11 @@ fn one_plugin_install_is_planned_once_for_native_and_decomposed_harnesses() {
         serde_json::from_slice(&fs::read(root.join("config/opencode/opencode.json")).unwrap())
             .unwrap();
     assert_eq!(
-        config["mcp"]["uze-uze-plugin-first-conformance-uze-plugin-first-conformance"]["type"],
+        config["mcp"]["uze-uze-plugin-first-conformance-conformance"]["type"],
         "local"
     );
     assert_eq!(
-        config["mcp"]["uze-uze-plugin-first-conformance-uze-plugin-first-conformance"]["command"]
+        config["mcp"]["uze-uze-plugin-first-conformance-conformance"]["command"]
             [0],
         "__UZE_MCP_FIXTURE_BINARY__"
     );
