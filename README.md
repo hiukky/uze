@@ -44,6 +44,22 @@ and [ADR-009](docs/adr/009-manage-harness-attachments-with-receipts-and-safe-rec
 
 ## Local workflow
 
+For local development and a real machine installation, the repository also
+ships a small Makefile:
+
+```bash
+make build
+make test
+make check
+make install
+```
+
+`make install` invokes `cargo install --path . --bin uze --locked --force` and
+therefore installs only the product binary into Cargo's configured binary
+directory (usually `~/.cargo/bin`). It does not run `uze setup` or mutate any
+harness configuration. Set `CARGO_INSTALL_ROOT` to select another install
+location.
+
 ```bash
 uze setup
 uze add ./my-agent-plugin
