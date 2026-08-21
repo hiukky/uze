@@ -916,12 +916,20 @@ fn delivery_status(delivery: &crate::application::CapabilityDelivery) -> String 
 
 fn format_harness(harness: &HarnessHealth) -> Line<'static> {
     let setup = harness.setup.as_str();
+    let provisioning = harness
+        .provisioning
+        .as_ref()
+        .map(|record| format!(" / {:?}", record.status).to_lowercase())
+        .unwrap_or_default();
     Line::from(vec![
         Span::styled(
             format!("{:<24}", harness.integration),
             Style::default().add_modifier(Modifier::BOLD),
         ),
-        Span::styled(format!("{:<28}", setup), setup_style(setup)),
+        Span::styled(
+            format!("{:<28}", format!("{setup}{provisioning}")),
+            setup_style(setup),
+        ),
         Span::styled(
             harness
                 .strategy

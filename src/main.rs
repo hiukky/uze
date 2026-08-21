@@ -149,12 +149,22 @@ fn run(cli: Cli) -> Result<()> {
             for result in app.setup(harness.as_deref())? {
                 if result.configured {
                     println!(
-                        "{}: ready (version {})",
+                        "{}: ready ({}; version {})",
                         result.integration,
+                        format!("{:?}", result.provisioning.action).to_lowercase(),
                         result.detection.version.as_deref().unwrap_or("unknown")
                     );
                 } else {
-                    println!("{}: not detected, skipping setup", result.integration);
+                    println!(
+                        "{}: setup {:?}: {}",
+                        result.integration,
+                        result.provisioning.status,
+                        result
+                            .provisioning
+                            .reason
+                            .as_deref()
+                            .unwrap_or("executable was not verified")
+                    );
                 }
             }
         }
@@ -349,6 +359,12 @@ fn render_doctor(report: &DoctorReport) -> String {
             "  {}  detected: {}  setup: {}\n",
             harness.integration, harness.detection.present, harness.setup
         ));
+        if let Some(provisioning) = &harness.provisioning {
+            text.push_str(&format!(
+                "    provisioning: {:?} via {} ({:?})\n",
+                provisioning.status, provisioning.method, provisioning.action
+            ));
+        }
         if let uze::integration::PublicationStatus::Unpublished(reason) = &harness.publication {
             text.push_str(&format!("    package view not published: {reason}\n"));
         }
@@ -371,6 +387,9 @@ fn render_doctor(report: &DoctorReport) -> String {
     }
     if let Some(error) = &report.integration_state_error {
         text.push_str(&format!("\nIntegration state\n  blocked: {error}\n"));
+    }
+    if let Some(error) = &report.provisioning_state_error {
+        text.push_str(&format!("\nProvisioning state\n  blocked: {error}\n"));
     }
     text
 }

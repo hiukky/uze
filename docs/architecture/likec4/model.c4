@@ -63,7 +63,7 @@ model {
       }
 
       application = component 'Application Layer' {
-        description 'Rust crate: uze-application. Package-centric product facade that composes Store, Engine, plans, receipts, reconciliation, and peer integrations without duplicating lifecycle logic.'
+        description 'Rust crate: uze-application. Package-centric product facade that composes Store, Engine, plans, receipts, reconciliation, and peer integrations without duplicating lifecycle logic. Explicit setup coordinates an integration-owned official executable provision path.'
       }
 
       terminalUi = component 'Terminal UI' {
@@ -79,7 +79,7 @@ model {
       integrationContract -> integrationState 'setup and managed-attachment state'
       application -> uzeStore 'package lifecycle'
       application -> environmentResolver 'package composition'
-      application -> integrationContract 'delivery, inspection, and safe detach'
+      application -> integrationContract 'delivery, inspection, safe detach, and optional official provision'
       application -> integrationState 'receipt ledger and reconciliation'
       terminalUi -> application 'list, inspect, doctor, add, setup, and remove'
     }

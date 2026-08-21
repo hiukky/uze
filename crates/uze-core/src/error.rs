@@ -77,6 +77,11 @@ pub enum UzeError {
     ManagedEntryDrift(PathBuf),
     #[error("another UZE mutation is already in progress at {0}")]
     MutationInProgress(PathBuf),
+    #[error("failed to run `{program}`: {source}")]
+    Process {
+        program: String,
+        source: std::io::Error,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, UzeError>;

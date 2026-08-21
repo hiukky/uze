@@ -1,21 +1,21 @@
 ## Decision and research
 
-- [ ] Record ADR-010 for official, integration-owned harness provisioning.
-- [ ] Record the official install/update/verification routes and platform
+- [x] Record ADR-010 for official, integration-owned harness provisioning.
+- [x] Record the official install/update/verification routes and platform
       restrictions for Claude Code, Codex, OpenCode, and Gemini CLI; include
       source links and do not infer missing Windows routes.
 
 ## Provisioning boundary
 
-- [ ] Add typed, integration-owned provision/detect/verify results and an
+- [x] Add typed, integration-owned provision/detect/verify results and an
       injectable process runner; keep vendor commands out of Core and the
       Application.
-- [ ] Add atomic, secret-free provisioning state under `$UZE_HOME/state`,
+- [x] Add atomic, secret-free provisioning state under `$UZE_HOME/state`,
       separate from `attachments.json` and integration setup state.
-- [ ] Evolve application setup orchestration: provision selected harness,
+- [x] Evolve application setup orchestration: provision selected harness,
       verify, prepare, republish, then deliver already stored packages to only
       that integration.
-- [ ] Preserve `add` as an offline/no-provision operation that only prepares
+- [x] Preserve `add` as an offline/no-provision operation that only prepares
       detected harnesses.
 
 ## Peer implementations
