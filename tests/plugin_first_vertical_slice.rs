@@ -193,16 +193,20 @@ fn one_plugin_install_is_planned_once_for_native_and_decomposed_harnesses() {
     let config: serde_json::Value =
         serde_json::from_slice(&fs::read(root.join("config/opencode/opencode.json")).unwrap())
             .unwrap();
+    // No "uze-" collision-avoidance prefix any more (it never participated
+    // in ownership) — just the package id and the capability's own logical
+    // name, fully qualified since OpenCode's presentation never depends on
+    // the physical name.
     assert_eq!(
-        config["mcp"]["uze-uze-plugin-first-conformance-conformance"]["type"],
+        config["mcp"]["uze-plugin-first-conformance-conformance"]["type"],
         "local"
     );
     assert_eq!(
-        config["mcp"]["uze-uze-plugin-first-conformance-conformance"]["command"][0],
+        config["mcp"]["uze-plugin-first-conformance-conformance"]["command"][0],
         "__UZE_MCP_FIXTURE_BINARY__"
     );
     assert!(
-        root.join("agents/skills/uze-uze-plugin-first-conformance-uze-plugin-first")
+        root.join("agents/skills/uze-plugin-first-conformance-uze-plugin-first")
             .is_symlink()
     );
     fs::remove_dir_all(root).unwrap();

@@ -188,13 +188,17 @@ fn one_package_with_two_mcp_servers_produces_two_named_resources() {
             .iter()
             .any(|identity| identity.ends_with(":github"))
     );
-    let entries = environment
+    // Logical capability names are bare — no package prefix, no "uze-"
+    // collision-avoidance prefix. Physical exposure naming (with
+    // qualification when needed) is an Integration/Application decision
+    // now, not something a Resource computes for itself.
+    let names = environment
         .resources
         .iter()
-        .map(|resource| resource.attachment_entry_name().unwrap())
+        .map(|resource| resource.logical_capability_name().unwrap())
         .collect::<Vec<_>>();
-    assert!(entries.contains(&"uze-multi-mcp-plugin-filesystem".to_owned()));
-    assert!(entries.contains(&"uze-multi-mcp-plugin-github".to_owned()));
+    assert!(names.contains(&"filesystem".to_owned()));
+    assert!(names.contains(&"github".to_owned()));
     fs::remove_dir_all(home.root()).unwrap();
 }
 

@@ -339,7 +339,7 @@ fn mcp_resource_routes_to_managed_vendor_config_once_setup_state_is_recorded() {
             claude_plan.mechanism
         );
     };
-    assert_eq!(entry_name, "uze-uze-mcp-conformance-uze-conformance");
+    assert_eq!(entry_name, "uze-mcp-conformance-uze-conformance");
     assert_eq!(command.to_str().unwrap(), "__UZE_MCP_FIXTURE_BINARY__");
     assert!(args.is_empty());
 

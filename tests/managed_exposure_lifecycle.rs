@@ -21,7 +21,7 @@ use std::{
 
 use uze::{
     PackageId, Resource, UzeEngine, UzeHome, UzeStore, exposure::ExposureMechanism,
-    integration::IntegrationPort,
+    integration::{IntegrationPort, default_exposure_name_candidates},
 };
 
 use uze::integrations::{
@@ -283,9 +283,10 @@ fn a_derived_mcp_entry_name_leaves_room_for_a_tool_name() {
         .find(|resource| resource.package_root().is_some())
         .expect("fixture contributes one store-owned MCP resource");
 
-    let entry_name = resource
-        .attachment_entry_name()
-        .expect("an MCP resource has a derivable entry name");
+    let entry_name = default_exposure_name_candidates(&resource)
+        .into_iter()
+        .next()
+        .expect("an MCP resource has a derivable exposure name candidate");
     let budget = PROVIDER_LIMIT - TOOL_NAME_RESERVE;
     assert!(
         entry_name.len() <= budget,

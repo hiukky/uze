@@ -11,9 +11,10 @@ use uze_core::{
     home::UzeHome,
     integration::{
         AttachmentInspection, AttachmentReceipt, AttachmentState, HarnessDetection,
-        IntegrationPort, ManagedArtifact, detach_standard_receipt, inspect_standard_receipt,
+        IntegrationPort, ManagedArtifact, default_exposure_name_candidates,
+        detach_standard_receipt, inspect_standard_receipt,
     },
-    project::Resource,
+    project::{Resource, ResourceOrigin},
     provisioning::{ProcessRunner, ProcessSpec, ProvisionAction, ProvisioningResult},
     router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus},
     state,
@@ -140,19 +141,43 @@ impl IntegrationPort for ClaudeIntegration {
         }
     }
 
+    /// Claude Code is the one integration where a decomposed Skill's
+    /// physical directory name is what the user actually types
+    /// (`/<name>` — see `docs/capabilities/uze-skill.md`), so it alone
+    /// tries the bare logical name first. MCP deliberately stays on the
+    /// shared default (fully qualified only): its physical name never
+    /// reaches the terminal UX the same way, and mixing the two policies
+    /// just because both are `Resource`s would be exactly the "não
+    /// misture Skill e MCP" mistake the design explicitly rules out.
+    fn exposure_name_candidates(&self, resource: &Resource) -> Vec<String> {
+        if resource.capability.kind != CapabilityKind::AgentSkill {
+            return default_exposure_name_candidates(resource);
+        }
+        let ResourceOrigin::Package { id, .. } = &resource.origin else {
+            return Vec::new();
+        };
+        let Some(logical) = resource.logical_capability_name() else {
+            return Vec::new();
+        };
+        vec![logical.clone(), format!("{}-{}", id.as_str(), logical)]
+    }
+
     fn attach(&self, resource: &Resource) -> Result<Option<PathBuf>> {
         let plan = self.exposure_plan(resource);
         match &plan.mechanism {
-            ExposureMechanism::ManagedUserScopeReference { source, .. } => {
+            ExposureMechanism::ManagedUserScopeReference {
+                source, entry_name, ..
+            } => {
                 let skill_source_dir = resource
                     .capability
                     .path
                     .parent()
                     .expect("SKILL.md has a parent");
-                let entry_name = resource
-                    .attachment_entry_name()
-                    .expect("plan construction already required a valid entry name");
-                materialize_shim(source, skill_source_dir, &entry_name)?;
+                // Read directly from the plan just built, rather than
+                // recomputing: the materialized shim's name must match
+                // exactly what the mechanism is about to place at, and the
+                // plan is already the single source of truth for that.
+                materialize_shim(source, skill_source_dir, entry_name)?;
                 Ok(Some(plan.mechanism.attach()?))
             }
             ExposureMechanism::ManagedVendorConfig {
@@ -293,7 +318,10 @@ impl ClaudeIntegration {
 
     fn skill_exposure_plan(&self, resource: &Resource) -> ExposurePlan {
         if state::is_installed(&self.uze_home, self.id())
-            && let Some(entry_name) = resource.attachment_entry_name()
+            && let Some(entry_name) = resource
+                .resolved_exposure_name
+                .clone()
+                .or_else(|| self.exposure_name_candidates(resource).into_iter().next())
         {
             let shim_root = self
                 .uze_home
@@ -341,7 +369,11 @@ impl ClaudeIntegration {
                 "Claude Code has not completed `uze setup`; MCP attachment has no per-session conformance-probe fallback (see ADR-007).",
             );
         }
-        let Some(entry_name) = resource.attachment_entry_name() else {
+        let Some(entry_name) = resource
+            .resolved_exposure_name
+            .clone()
+            .or_else(|| self.exposure_name_candidates(resource).into_iter().next())
+        else {
             return unsupported(resource, "Resource has no derivable attachment entry name.");
         };
         let Some((command, args)) = parse_mcp_server_config(&resource.capability.payload) else {

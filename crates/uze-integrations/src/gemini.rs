@@ -76,7 +76,10 @@ impl GeminiIntegration {
 
     fn skill_exposure_plan(&self, resource: &Resource) -> ExposurePlan {
         if state::is_installed(&self.uze_home, self.id())
-            && let Some(entry_name) = resource.attachment_entry_name()
+            && let Some(entry_name) = resource
+                .resolved_exposure_name
+                .clone()
+                .or_else(|| self.exposure_name_candidates(resource).into_iter().next())
         {
             let skill_directory = resource
                 .capability
@@ -106,7 +109,11 @@ impl GeminiIntegration {
     }
 
     fn mcp_exposure_plan(&self, resource: &Resource) -> ExposurePlan {
-        let Some(entry_name) = resource.attachment_entry_name() else {
+        let Some(entry_name) = resource
+            .resolved_exposure_name
+            .clone()
+            .or_else(|| self.exposure_name_candidates(resource).into_iter().next())
+        else {
             return unsupported(resource, "MCP resource has no derivable entry name.");
         };
         if !state::is_installed(&self.uze_home, self.id()) {
