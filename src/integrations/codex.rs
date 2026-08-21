@@ -8,11 +8,12 @@ use std::{
 use crate::{
     Result, UzeError,
     capability::CapabilityKind,
-    exposure::{ExposureMechanism, ExposurePlan, PackageExposureMechanism, PackageExposurePlan},
+    exposure::{ExposureMechanism, ExposurePlan, PackageExposurePlan},
     home::UzeHome,
     integration::{
         AttachmentInspection, AttachmentReceipt, AttachmentState, HarnessDetection,
-        IntegrationPort, ManagedArtifact, detach_standard_receipt, inspect_standard_receipt,
+        IntegrationPort, ManagedArtifact, PublicationStatus, detach_standard_receipt,
+        inspect_standard_receipt,
     },
     project::Resource,
     router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus},
@@ -35,7 +36,25 @@ pub struct CodexIntegration {
     uze_home: UzeHome,
 }
 
+/// Name of the local catalogue this integration publishes. A Codex identity,
+/// held by the Codex integration.
+const MARKETPLACE_NAME: &str = "uze-local";
+
 impl CodexIntegration {
+    /// Root Codex is pointed at. It must contain the package tree: Codex
+    /// resolves a catalogue entry's `source.path` relative to this root and
+    /// rejects both absolute paths and relative paths escaping it —
+    /// confirmed empirically against Codex 0.148.0. That constraint is why
+    /// the catalogue sits beside the packages rather than in a directory of
+    /// its own; the layout is UZE's, the file is Codex's.
+    fn catalogue_root(&self) -> PathBuf {
+        self.uze_home.store_dir()
+    }
+
+    fn catalogue_path(&self) -> PathBuf {
+        self.catalogue_root().join(".agents/plugins/marketplace.json")
+    }
+
     pub fn new(agents_home: PathBuf, uze_home: UzeHome) -> Self {
         let command_home = agents_home
             .parent()
@@ -121,16 +140,10 @@ impl IntegrationPort for CodexIntegration {
         if !package.root.join(".codex-plugin/plugin.json").is_file() {
             return None;
         }
-        let marketplace_root = package.root.parent()?.parent()?.to_path_buf();
         Some(PackageExposurePlan {
             package_id: package.id.clone(),
             route: CompatibilityRoute::Native,
             verification: VerificationStatus::Unverified,
-            mechanism: PackageExposureMechanism::NativePluginMarketplace {
-                marketplace_root,
-                marketplace_name: "uze-local".to_owned(),
-                plugin_name: package.id.as_str().to_owned(),
-            },
             provided_resource_identities: resources
                 .iter()
                 .map(|resource| resource.identity())
@@ -157,34 +170,77 @@ impl IntegrationPort for CodexIntegration {
 
     fn attach_package(
         &self,
-        _package: &StoredPackage,
-        plan: &PackageExposurePlan,
-    ) -> Result<Option<PathBuf>> {
-        let PackageExposureMechanism::NativePluginMarketplace {
-            marketplace_root,
-            marketplace_name,
-            plugin_name,
-        } = &plan.mechanism;
-        if !marketplace_exists(&self.command_home, marketplace_root) {
+        package: &StoredPackage,
+        _plan: &PackageExposurePlan,
+    ) -> Result<Option<AttachmentReceipt>> {
+        let catalogue_root = self.catalogue_root();
+        if !marketplace_exists(&self.command_home, &catalogue_root) {
             run_codex(
                 &self.command_home,
                 ["plugin", "marketplace", "add"],
-                Some(marketplace_root),
+                Some(&catalogue_root),
             )?;
         }
-        let selector = format!("{plugin_name}@{marketplace_name}");
+        let selector = format!("{}@{MARKETPLACE_NAME}", package.id.as_str());
         match Command::new("codex")
             .env("HOME", &self.command_home)
             .args(["plugin", "add", &selector])
             .status()
         {
-            Ok(status) if status.success() => Ok(Some(PathBuf::from(format!("plugin:{selector}")))),
+            Ok(status) if status.success() => Ok(Some(AttachmentReceipt {
+                package_id: package.id.as_str().to_owned(),
+                resource_identity: None,
+                integration: self.id().to_owned(),
+                strategy: "native-plugin-marketplace".to_owned(),
+                artifact: ManagedArtifact::IntegrationOwned {
+                    kind: "marketplace-plugin".to_owned(),
+                    selector,
+                    detail: [
+                        (
+                            "marketplace_root".to_owned(),
+                            serde_json::json!(catalogue_root),
+                        ),
+                        ("package_root".to_owned(), serde_json::json!(package.root)),
+                    ]
+                    .into_iter()
+                    .collect(),
+                },
+            })),
             Ok(status) => Err(UzeError::ExposureUnavailable(format!(
                 "`codex plugin add` exited with {status} for `{selector}`"
             ))),
             Err(error) => Err(UzeError::ExposureUnavailable(format!(
                 "failed to run `codex plugin add` for `{selector}`: {error}"
             ))),
+        }
+    }
+
+    fn republish_packages(&self, packages: &[StoredPackage]) -> Result<()> {
+        write_catalogue(&self.catalogue_path(), packages)
+    }
+
+    fn publication(&self, packages: &[StoredPackage]) -> PublicationStatus {
+        let expected = catalogue_document(packages);
+        match fs::read(self.catalogue_path()) {
+            Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
+                Ok(actual) if actual == expected => PublicationStatus::Published,
+                Ok(_) => PublicationStatus::Unpublished(
+                    "the Codex catalogue does not match the installed package set; re-run `uze setup codex`".to_owned(),
+                ),
+                Err(error) => PublicationStatus::Unpublished(format!(
+                    "the Codex catalogue is unreadable ({error}); re-run `uze setup codex`"
+                )),
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if publishable(packages).is_empty() {
+                    PublicationStatus::Published
+                } else {
+                    PublicationStatus::Unpublished(
+                        "no Codex catalogue has been written for the installed packages; re-run `uze setup codex`".to_owned(),
+                    )
+                }
+            }
+            Err(error) => PublicationStatus::Unpublished(error.to_string()),
         }
     }
 
@@ -208,11 +264,24 @@ impl IntegrationPort for CodexIntegration {
                 environment,
                 *enabled,
             ),
-            ManagedArtifact::MarketplacePlugin {
+            ManagedArtifact::IntegrationOwned {
+                kind,
                 selector,
-                marketplace_root,
-                package_root,
-            } => inspect_codex_plugin(&self.command_home, selector, marketplace_root, package_root),
+                detail,
+            } if kind == "marketplace-plugin" => {
+                let Some(marketplace_root) = detail_path(detail, "marketplace_root") else {
+                    return blocked("plugin receipt has no marketplace root".to_owned());
+                };
+                let Some(package_root) = detail_path(detail, "package_root") else {
+                    return blocked("plugin receipt has no package root".to_owned());
+                };
+                inspect_codex_plugin(
+                    &self.command_home,
+                    selector,
+                    &marketplace_root,
+                    &package_root,
+                )
+            }
             _ => inspect_standard_receipt(receipt),
         }
     }
@@ -226,7 +295,9 @@ impl IntegrationPort for CodexIntegration {
             ManagedArtifact::VendorConfigEntry { entry_name, .. } => {
                 detach_mcp_entry(&self.command_home, entry_name)?;
             }
-            ManagedArtifact::MarketplacePlugin { selector, .. } => {
+            ManagedArtifact::IntegrationOwned { kind, selector, .. }
+                if kind == "marketplace-plugin" =>
+            {
                 remove_plugin(&self.command_home, selector)?;
             }
             _ => return detach_standard_receipt(receipt),
@@ -889,4 +960,63 @@ mod lifecycle_tests {
             AttachmentState::Missing
         );
     }
+}
+
+/// Packages carrying the Codex-native envelope. Deciding which packages
+/// belong in the catalogue is Codex policy, so it lives here rather than in
+/// the Store.
+fn publishable(packages: &[StoredPackage]) -> Vec<&StoredPackage> {
+    packages
+        .iter()
+        .filter(|package| package.root.join(".codex-plugin/plugin.json").is_file())
+        .collect()
+}
+
+/// The catalogue document, derived purely from the installed package set.
+/// Nothing here exists only in the catalogue: delete the file and this
+/// rebuilds it byte for byte from the Store.
+fn catalogue_document(packages: &[StoredPackage]) -> serde_json::Value {
+    let plugins: Vec<serde_json::Value> = publishable(packages)
+        .into_iter()
+        .map(|package| {
+            serde_json::json!({
+                "name": package.id.as_str(),
+                // Relative to the catalogue root by necessity — see
+                // `CodexIntegration::catalogue_root`.
+                "source": { "source": "local", "path": format!("./packages/{}", package.id.as_str()) },
+                "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+                "category": "Developer tools"
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "name": MARKETPLACE_NAME,
+        "interface": { "displayName": "UZE Local" },
+        "plugins": plugins,
+    })
+}
+
+fn write_catalogue(path: &Path, packages: &[StoredPackage]) -> Result<()> {
+    let parent = path.parent().expect("catalogue path has a parent");
+    fs::create_dir_all(parent).map_err(|source| UzeError::Write {
+        path: parent.to_path_buf(),
+        source,
+    })?;
+    crate::persistence::write_atomic(
+        path,
+        &serde_json::to_vec_pretty(&catalogue_document(packages))
+            .expect("catalogue is serializable"),
+    )
+}
+
+/// Reads one integration-defined detail out of an opaque receipt payload.
+/// Only this integration interprets these keys.
+fn detail_path(
+    detail: &std::collections::BTreeMap<String, serde_json::Value>,
+    key: &str,
+) -> Option<PathBuf> {
+    detail
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(PathBuf::from)
 }

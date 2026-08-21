@@ -1,0 +1,11 @@
+{
+  "name": "uze-gemini-conformance",
+  "version": "1.0.0",
+  "description": "Gemini-native envelope over the preserved portable package",
+  "mcpServers": {
+    "conformance": {
+      "command": "__UZE_MCP_FIXTURE_BINARY__",
+      "args": []
+    }
+  }
+}

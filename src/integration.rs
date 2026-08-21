@@ -1,12 +1,11 @@
-use std::{fs, path::PathBuf};
+use std::{collections::BTreeMap, fs, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use crate::{
     error::Result,
     exposure::{
-        ExposureMechanism, ExposurePlan, McpEnvironmentReference, PackageExposureMechanism,
-        PackageExposurePlan,
+        ExposureMechanism, ExposurePlan, McpEnvironmentReference, PackageExposurePlan,
     },
     home::UzeHome,
     project::EffectiveEnvironment,
@@ -44,11 +43,31 @@ pub enum ManagedArtifact {
         environment: Vec<McpEnvironmentReference>,
         enabled: Option<bool>,
     },
-    MarketplacePlugin {
+    /// A delivery whose ownership proof only the owning integration can
+    /// interpret. The Core routes it by `receipt.integration`, never reads
+    /// `detail`, and refuses to inspect or detach it generically.
+    ///
+    /// `MARKETPLACE_PLUGIN` is accepted on read so a ledger written before
+    /// this variant existed stays interpretable. Its `marketplace_root` and
+    /// `package_root` land in `detail` through the flattened capture, and
+    /// `kind` falls back to the name that artifact had. Reading a legacy
+    /// receipt never rewrites it; only a genuinely new attachment writes,
+    /// and a new write always emits this representation.
+    #[serde(alias = "MARKETPLACE_PLUGIN")]
+    IntegrationOwned {
+        #[serde(default = "legacy_artifact_kind")]
+        kind: String,
         selector: String,
-        marketplace_root: PathBuf,
-        package_root: PathBuf,
+        #[serde(flatten, default)]
+        detail: BTreeMap<String, serde_json::Value>,
     },
+}
+
+/// The `kind` a receipt predating [`ManagedArtifact::IntegrationOwned`]
+/// implicitly had. Deliberately not a schema version: it is one default for
+/// one superseded variant, not a migration framework.
+fn legacy_artifact_kind() -> String {
+    "marketplace-plugin".to_owned()
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -81,6 +100,19 @@ pub enum IntegrationStatus {
     NotConfigured,
     InstalledUnverified,
     InstalledVerified,
+}
+
+/// Whether an integration's derived view of the installed package set is
+/// currently in place. `NotApplicable` is the honest default: most
+/// integrations publish no such view at all.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE", tag = "state", content = "reason")]
+pub enum PublicationStatus {
+    NotApplicable,
+    Published,
+    /// The package set is installed but the harness cannot see it. Actionable
+    /// by re-running the publication, never by reinstalling the package.
+    Unpublished(String),
 }
 
 pub trait IntegrationPort {
@@ -145,42 +177,54 @@ pub trait IntegrationPort {
         }
     }
 
+    /// Performs a package-level native delivery and returns its own ownership
+    /// receipt. Deliberately one method: a native delivery may cover several
+    /// resources and must not manufacture one receipt per capability, and
+    /// only the integration can describe the artifact it just created. The
+    /// Core supplies no default because it has no vocabulary for one.
     fn attach_package(
         &self,
         _package: &StoredPackage,
         _plan: &PackageExposurePlan,
-    ) -> Result<Option<PathBuf>> {
+    ) -> Result<Option<AttachmentReceipt>> {
         Ok(None)
     }
 
-    /// Returns a receipt for a package-level native delivery. This is
-    /// intentionally separate from `attach_receipt`: a native package may
-    /// provide several resources and must not manufacture one receipt per
-    /// capability.
-    fn attach_package_receipt(
-        &self,
-        package: &StoredPackage,
-        plan: &PackageExposurePlan,
-    ) -> Result<Option<AttachmentReceipt>> {
-        let Some(_location) = self.attach_package(package, plan)? else {
-            return Ok(None);
-        };
-        let PackageExposureMechanism::NativePluginMarketplace {
-            marketplace_root,
-            marketplace_name,
-            plugin_name,
-        } = &plan.mechanism;
-        Ok(Some(AttachmentReceipt {
-            package_id: package.id.as_str().to_owned(),
-            resource_identity: None,
-            integration: self.id().to_owned(),
-            strategy: "native-plugin-marketplace".to_owned(),
-            artifact: ManagedArtifact::MarketplacePlugin {
-                selector: format!("{plugin_name}@{marketplace_name}"),
-                marketplace_root: marketplace_root.clone(),
-                package_root: package.root.clone(),
-            },
-        }))
+    /// Additional names `uze setup <harness>` accepts for this integration.
+    /// Kept beside the integration so the Application never holds a manual
+    /// catalogue of vendors.
+    fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// Rebuilds any derived, harness-owned view of the installed package set
+    /// that this integration maintains — for example a catalogue a harness
+    /// reads to discover locally installable packages.
+    ///
+    /// **This is not part of package ownership.** The Store stays the sole
+    /// authority for which packages exist; whatever this writes must be
+    /// reconstructible from `packages` alone, must hold nothing that exists
+    /// only there, and must be safe to delete and regenerate at any moment.
+    /// No receipt is produced and nothing here is reconciled: a derived view
+    /// cannot drift, it can only be stale, and staleness is repaired by
+    /// calling this again.
+    ///
+    /// A failure here never invalidates an installation. The package stays
+    /// installed and the integration reports itself unpublished through
+    /// [`IntegrationPort::publication`].
+    fn republish_packages(&self, packages: &[StoredPackage]) -> Result<()> {
+        let _ = packages;
+        Ok(())
+    }
+
+    /// Observed health of the derived view [`republish_packages`] maintains.
+    ///
+    /// Read at diagnosis time rather than recorded at write time, precisely
+    /// because the view is derived: remembering its state would create the
+    /// second source of truth the derivation exists to avoid.
+    fn publication(&self, packages: &[StoredPackage]) -> PublicationStatus {
+        let _ = packages;
+        PublicationStatus::NotApplicable
     }
 
     /// Returns a typed ownership receipt after a successful resource attach.
@@ -313,9 +357,95 @@ pub fn receipt_location(receipt: &AttachmentReceipt) -> PathBuf {
         ManagedArtifact::VendorConfigEntry { entry_name, .. } => {
             PathBuf::from(format!("mcp:{entry_name}"))
         }
-        ManagedArtifact::MarketplacePlugin { selector, .. } => {
-            PathBuf::from(format!("plugin:{selector}"))
+        ManagedArtifact::IntegrationOwned { kind, selector, .. } => {
+            PathBuf::from(format!("{kind}:{selector}"))
         }
+    }
+}
+
+#[cfg(test)]
+mod artifact_compatibility_tests {
+    use super::*;
+
+    /// A ledger written before `IntegrationOwned` existed must stay readable,
+    /// because an unreadable receipt blocks removal — safe, but it strands the
+    /// user with external state UZE can no longer identify.
+    #[test]
+    fn legacy_marketplace_receipt_still_deserializes() {
+        let legacy = r#"{
+            "package_id": "plugin-a",
+            "resource_identity": null,
+            "integration": "codex",
+            "strategy": "native-plugin-marketplace",
+            "artifact": {
+                "MARKETPLACE_PLUGIN": {
+                    "selector": "plugin-a@uze-local",
+                    "marketplace_root": "/uze/store",
+                    "package_root": "/uze/store/packages/plugin-a"
+                }
+            }
+        }"#;
+        let receipt: AttachmentReceipt = serde_json::from_str(legacy).expect("legacy receipt reads");
+        let ManagedArtifact::IntegrationOwned {
+            kind,
+            selector,
+            detail,
+        } = &receipt.artifact
+        else {
+            panic!("legacy artifact did not map onto the integration-owned variant");
+        };
+        assert_eq!(kind, "marketplace-plugin");
+        assert_eq!(selector, "plugin-a@uze-local");
+        // The superseded fields survive as opaque detail, so the owning
+        // integration can still prove ownership and detach safely.
+        assert_eq!(detail["marketplace_root"], "/uze/store");
+        assert_eq!(detail["package_root"], "/uze/store/packages/plugin-a");
+    }
+
+    /// Reading a legacy receipt must not silently rewrite the ledger, but any
+    /// genuinely new write emits only the current representation.
+    #[test]
+    fn a_new_write_uses_only_the_current_representation() {
+        let receipt = AttachmentReceipt {
+            package_id: "plugin-a".to_owned(),
+            resource_identity: None,
+            integration: "codex".to_owned(),
+            strategy: "native-plugin-marketplace".to_owned(),
+            artifact: ManagedArtifact::IntegrationOwned {
+                kind: "marketplace-plugin".to_owned(),
+                selector: "plugin-a@uze-local".to_owned(),
+                detail: BTreeMap::new(),
+            },
+        };
+        let encoded = serde_json::to_string(&receipt).unwrap();
+        assert!(encoded.contains("INTEGRATION_OWNED"));
+        assert!(!encoded.contains("MARKETPLACE_PLUGIN"));
+    }
+
+    /// The Core routes an integration-owned artifact by `receipt.integration`
+    /// and must never guess at its ownership itself.
+    #[test]
+    fn an_integration_owned_receipt_is_never_inspected_generically() {
+        let receipt = AttachmentReceipt {
+            package_id: "plugin-a".to_owned(),
+            resource_identity: None,
+            integration: "codex".to_owned(),
+            strategy: "native-plugin-marketplace".to_owned(),
+            artifact: ManagedArtifact::IntegrationOwned {
+                kind: "marketplace-plugin".to_owned(),
+                selector: "plugin-a@uze-local".to_owned(),
+                detail: BTreeMap::new(),
+            },
+        };
+        assert_eq!(
+            inspect_standard_receipt(&receipt).state,
+            AttachmentState::Blocked
+        );
+        // And a blocked inspection can never become a destructive operation.
+        assert_eq!(
+            detach_standard_receipt(&receipt).unwrap().state,
+            AttachmentState::Blocked
+        );
     }
 }
 

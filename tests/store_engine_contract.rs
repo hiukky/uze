@@ -9,6 +9,14 @@ use uze::{
     capability::{CapabilityKind, Representation},
 };
 
+/// The acquisition pipeline every install now goes through: a source is
+/// acquired into a materialized package, and only then does the Store ingest
+/// it. Spelled out here rather than hidden behind a Store convenience,
+/// because the Store deliberately no longer accepts a path.
+fn install(store: &UzeStore, path: impl Into<std::path::PathBuf>) -> uze::Result<uze::StoredPackage> {
+    store.ingest(&uze::acquisition::acquire(&uze::PackageSource::local(path))?)
+}
+
 fn package_fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/packages/agent-plugin-skill")
 }
@@ -47,8 +55,8 @@ fn store_installs_one_agent_plugin_once_without_a_uze_manifest() {
     let root = temporary_home("store");
     let home = UzeHome::at(&root);
     let store = UzeStore::new(home.clone());
-    let first = store.install_agent_plugin(package_fixture()).unwrap();
-    let second = store.install_agent_plugin(package_fixture()).unwrap();
+    let first = install(&store, package_fixture()).unwrap();
+    let second = install(&store, package_fixture()).unwrap();
 
     assert_eq!(first.id, second.id);
     assert_eq!(store.registration_count().unwrap(), 1);
@@ -70,7 +78,7 @@ fn store_installs_one_agent_plugin_once_without_a_uze_manifest() {
 fn engine_composes_a_standard_resource_from_the_store() {
     let root = temporary_home("engine");
     let store = UzeStore::new(UzeHome::at(&root));
-    let package = store.install_agent_plugin(package_fixture()).unwrap();
+    let package = install(&store, package_fixture()).unwrap();
     let environment = UzeEngine::new(store)
         .compose(std::slice::from_ref(&package.id))
         .unwrap();
@@ -95,7 +103,7 @@ fn engine_composes_project_and_store_sources_into_one_effective_environment() {
     fs::create_dir_all(&project).unwrap();
     fs::write(project.join("AGENTS.md"), "# Project-owned instructions\n").unwrap();
     let store = UzeStore::new(UzeHome::at(root.join("uze-home")));
-    let package = store.install_agent_plugin(package_fixture()).unwrap();
+    let package = install(&store, package_fixture()).unwrap();
 
     let environment = UzeEngine::new(store).compose_project(&project).unwrap();
     assert_eq!(environment.root, project.canonicalize().unwrap());
@@ -121,7 +129,7 @@ fn engine_composes_project_and_store_sources_into_one_effective_environment() {
 fn store_and_engine_compose_an_mcp_only_package_into_one_mcp_resource() {
     let root = temporary_home("mcp-store");
     let store = UzeStore::new(UzeHome::at(&root));
-    let package = store.install_agent_plugin(mcp_package_fixture()).unwrap();
+    let package = install(&store, mcp_package_fixture()).unwrap();
 
     assert!(package.root.join("mcp.json").is_file());
     assert!(!package.root.join("skills").exists());
@@ -154,7 +162,7 @@ fn one_package_with_two_mcp_servers_produces_two_named_resources() {
     let store = UzeStore::new(home.clone());
     let fixture =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/packages/multi-mcp-plugin");
-    let package = store.install_agent_plugin(fixture).unwrap();
+    let package = install(&store, fixture).unwrap();
     let environment = UzeEngine::new(store)
         .compose(std::slice::from_ref(&package.id))
         .unwrap();
@@ -201,7 +209,7 @@ fn store_preserves_plugin_symlinks_and_executable_permissions() {
     symlink("run", source.join("bin/current")).unwrap();
 
     let store = UzeStore::new(UzeHome::at(root.join("uze")));
-    let package = store.install_agent_plugin(&source).unwrap();
+    let package = install(&store, &source).unwrap();
     let copied = package.root.join("bin/run");
     assert!(package.root.join("bin/current").is_symlink());
     assert_eq!(
