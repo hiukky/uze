@@ -4,7 +4,6 @@
 pub mod application;
 pub mod bundle;
 pub mod capability;
-pub mod conformance;
 pub mod engine;
 pub mod error;
 pub mod exposure;
