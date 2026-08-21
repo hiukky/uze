@@ -21,6 +21,57 @@ use uze::{
     router::HarnessCapabilities,
 };
 
+// --- uze status: thin composition, distinct scope from doctor -------------
+
+#[test]
+fn status_reports_healthy_with_zero_issues_once_reconciled() {
+    let root = temp("status-healthy");
+    let application = app(&root, true, true);
+    install(&application, fixture_a());
+    let project = root.join("project");
+    fs::create_dir_all(&project).unwrap();
+    application.context_reconcile(&project).unwrap();
+
+    let status = application.status(&project).unwrap();
+    assert!(matches!(status.portability, Portability::Portable));
+    assert_eq!(status.packages_installed, 1);
+    assert_eq!(status.packages_contributing_here, 1);
+    assert!(status.issues.is_empty());
+}
+
+#[test]
+fn status_surfaces_a_missing_bridge_as_an_issue_before_reconcile() {
+    let root = temp("status-issue");
+    let application = app(&root, true, false);
+    install(&application, fixture_a());
+    let project = root.join("project");
+    fs::create_dir_all(&project).unwrap();
+
+    let status = application.status(&project).unwrap();
+    assert!(!status.issues.is_empty());
+    assert!(status.issues.iter().any(|issue| issue.contains("Missing")));
+}
+
+#[test]
+fn status_distinguishes_installed_from_contributing_here() {
+    let root = temp("status-counts");
+    let application = app(&root, false, false);
+    install(&application, fixture_a());
+    // A second, Skill-only package: installed globally, but contributes no
+    // Instruction resource, so it must not count as "contributing here".
+    install(
+        &application,
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("packages/uze"),
+    );
+    let project = root.join("project");
+    fs::create_dir_all(&project).unwrap();
+    application.context_reconcile(&project).unwrap();
+
+    let status = application.status(&project).unwrap();
+    assert_eq!(status.packages_installed, 2);
+    assert_eq!(status.packages_contributing_here, 1);
+}
+
 fn temp(label: &str) -> PathBuf {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)

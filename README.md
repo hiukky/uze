@@ -8,16 +8,33 @@ representation, identifies the capabilities it can safely understand, and
 delivers them through the best surface each harness supports.
 
 ```text
-External package
-       |
-       v
-UZE Store
-       |
-       v
-Package + capability planning
-       |
-       v
-Claude Code · Codex · OpenCode · future peer integrations
+                         UZE
+                          |
+       +------------------+------------------+
+       |                  |                  |
+ Harness Manager     Plugin Manager     Context Manager
+       |                  |                  |
+ install/update      packages/store      instructions
+ harnesses           skills/MCP/...      AGENTS.md reconciliation
+                          |                  |
+                    ~/.uze/store       <project>/AGENTS.md
+```
+
+Three pillars, two interfaces. The pillars above are deterministic Rust —
+no LLM, no network call, fully tested without one. On top of them sits an
+agentic UX layer: the `uze` Skill (`packages/uze/`, installed the same way
+as any other package), which most people should use directly inside their
+harness rather than learning the pillars' own CLI:
+
+```text
+                       /uze Skill
+                    agentic UX layer
+                          |
+                    deterministic
+                          |
+       +------------------+------------------+
+       |                  |                  |
+ Harness Manager     Plugin Manager     Context Manager
 ```
 
 UZE is not a vendor-to-vendor converter, a filesystem synchronizer, a runtime
@@ -92,6 +109,38 @@ uze remove my-agent-plugin
 Running `uze` in an interactive terminal opens the minimal TUI. Explicit
 subcommands remain the scriptable interface.
 
+### Making a project's context portable
+
+Install the official `uze` Skill once (it's an ordinary package — no special
+Store treatment):
+
+```bash
+uze add ./packages/uze --trust
+uze setup
+```
+
+Then, inside any project, the primary experience is invoking the Skill from
+*within* your harness — `/uze` in Claude Code, `$uze` or a matching prompt
+in Codex, a natural-language request ("check if my project's context is
+portable") in OpenCode or Gemini CLI. See
+[`docs/capabilities/uze-skill.md`](docs/capabilities/uze-skill.md) for the
+exact invocation per harness — it genuinely differs, and that document says
+so rather than pretending one syntax is universal.
+
+The Skill is agentic (it reasons about your project) but never mutates
+anything itself — it only ever calls the deterministic commands below, the
+same ones you can run directly for scripting, CI, or debugging:
+
+```bash
+uze status                  # is this project's UZE-managed context healthy?
+uze context inspect         # read-only: what's here, and is it portable?
+uze context plan            # read-only: what would reconcile change?
+uze context reconcile       # writes: compose AGENTS.md and its harness bridges
+```
+
+See [`docs/capabilities/context-manager.md`](docs/capabilities/context-manager.md)
+for the model behind these.
+
 Packages are currently local-path Agent Plugins with root `plugin.json`. UZE
 preserves the full source tree, including vendor-native envelopes; it does not
 write a UZE plugin manifest. Remote registries and marketplaces are not part
@@ -139,16 +188,10 @@ converge.
 The full capability landscape — format matrices, semantic matrices,
 portability classification, trust implications, and the tracer-bullet
 rationale — lives in [`docs/capabilities/`](docs/capabilities/landscape.md).
-Instructions delivery is now a real, dogfoodable command:
-
-```bash
-uze context inspect     # read-only: what's here, and is it portable?
-uze context plan        # read-only: what would reconcile change?
-uze context reconcile   # writes: compose AGENTS.md and its harness bridges
-```
-
-See [`docs/capabilities/context-manager.md`](docs/capabilities/context-manager.md)
-for the model behind it.
+Instructions delivery — the `/uze` Skill and the deterministic `uze
+context`/`uze status` commands underneath it — is covered in
+["Making a project's context portable"](#making-a-projects-context-portable)
+above.
 
 ## Ecosystem watchlist
 
@@ -200,6 +243,8 @@ TUI ─┘            |               |
 | Store | Authoritative local installation/provenance, never harness artifacts. |
 | Ledger | Expected ownership receipts, never live vendor state. |
 | Application | Package-centric API shared by CLI and TUI. |
+| Context Manager | Project-scoped `inspect`/`plan`/`reconcile` over the shared `AGENTS.md` baseline. Independent of Package Manager: `uze add` never touches a project, `uze context`/`uze status` never touch the Store. Deterministic — no LLM dependency, ever. |
+| `/uze` Skill | The agentic layer, distributed as an ordinary package (`packages/uze/`). Reasons and proposes; only the Context Manager's own commands ever write. |
 
 ## Safety
 

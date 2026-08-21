@@ -7,7 +7,7 @@ use uze::{
     Result, UzeApplication, UzeHome,
     application::{
         ContextPlan, ContextReconciliationReport, DoctorReport, HarnessContextDelivery,
-        PluginInspection, Portability, ProjectContextStatus, RemovePluginReport,
+        PluginInspection, Portability, ProjectContextStatus, RemovePluginReport, StatusReport,
     },
     context::PlannedAction,
 };
@@ -57,6 +57,14 @@ enum Command {
     },
     /// Deterministic Store, harness, and attachment diagnostics.
     Doctor {
+        #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+        format: OutputFormat,
+    },
+    /// Short, project-scoped health summary: is this project's context
+    /// portable, and does anything need attention? For installation/
+    /// environment health independent of any project, see `doctor`.
+    Status {
+        path: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
@@ -218,6 +226,13 @@ fn run(cli: Cli) -> Result<()> {
             let report = app.doctor();
             match format {
                 OutputFormat::Text => print!("{}", render_doctor(&report)),
+                OutputFormat::Json => print_json(&report),
+            }
+        }
+        Command::Status { path, format } => {
+            let report = app.status(&context_path(path))?;
+            match format {
+                OutputFormat::Text => print!("{}", render_status(&report)),
                 OutputFormat::Json => print_json(&report),
             }
         }
@@ -458,6 +473,34 @@ fn render_doctor(report: &DoctorReport) -> String {
     }
     if let Some(error) = &report.provisioning_state_error {
         text.push_str(&format!("\nProvisioning state\n  blocked: {error}\n"));
+    }
+    text
+}
+
+fn render_status(report: &StatusReport) -> String {
+    let mut text = format!(
+        "Project\n  Context       {}\n\nHarnesses\n",
+        render_portability(&report.portability)
+    );
+    for harness in &report.harnesses {
+        let delivery = match &harness.delivery {
+            HarnessContextDelivery::Native => "native".to_owned(),
+            HarnessContextDelivery::NotDetected => "not installed".to_owned(),
+            HarnessContextDelivery::Bridge { state, .. } => format!("bridged ({state:?})"),
+        };
+        text.push_str(&format!("  {}  {delivery}\n", harness.integration));
+    }
+    text.push_str(&format!(
+        "\nPackages\n  {} installed\n  {} contributing here\n",
+        report.packages_installed, report.packages_contributing_here
+    ));
+    if report.issues.is_empty() {
+        text.push_str("\nHealth\n  no issues\n");
+    } else {
+        text.push_str("\nHealth\n");
+        for issue in &report.issues {
+            text.push_str(&format!("  {issue}\n"));
+        }
     }
     text
 }
