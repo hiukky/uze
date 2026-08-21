@@ -8,7 +8,11 @@
 //! router or integration hardcodes the id; the builtin is just the one
 //! package the composition root knows how to materialize.
 
-use std::{fs, path::PathBuf, time::{SystemTime, UNIX_EPOCH}};
+use std::{
+    fs,
+    path::PathBuf,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use uze_core::{
     MaterializedPackage, PackageSource, Provenance, ResolvedSource, Result, UzeError, UzeHome,
@@ -36,8 +40,6 @@ fn builtin_provenance() -> Provenance {
     }
 }
 
-
-
 /// Materialize the builtin package into a temporary directory and return a
 /// `MaterializedPackage` that `UzeStore::ingest` can consume. The temp dir is
 /// owned by the `MaterializedPackage` (via `owned`) so it is cleaned up
@@ -48,31 +50,38 @@ fn materialize_builtin() -> Result<MaterializedPackage> {
         .duration_since(UNIX_EPOCH)
         .expect("clock after epoch")
         .as_nanos();
-    let scratch = std::env::temp_dir().join(format!("uze-builtin-uze-{}-{nonce}", std::process::id()));
+    let scratch =
+        std::env::temp_dir().join(format!("uze-builtin-uze-{}-{nonce}", std::process::id()));
     fs::create_dir_all(scratch.join("skills/uze")).map_err(|source| UzeError::Write {
         path: scratch.clone(),
         source,
     })?;
-    fs::write(scratch.join("plugin.json"), BUILTIN_PLUGIN_JSON).map_err(|source| UzeError::Write {
-        path: scratch.join("plugin.json"),
-        source,
+    fs::write(scratch.join("plugin.json"), BUILTIN_PLUGIN_JSON).map_err(|source| {
+        UzeError::Write {
+            path: scratch.join("plugin.json"),
+            source,
+        }
     })?;
-    fs::write(scratch.join("skills/uze/SKILL.md"), BUILTIN_SKILL_MD).map_err(|source| UzeError::Write {
-        path: scratch.join("skills/uze/SKILL.md"),
-        source,
+    fs::write(scratch.join("skills/uze/SKILL.md"), BUILTIN_SKILL_MD).map_err(|source| {
+        UzeError::Write {
+            path: scratch.join("skills/uze/SKILL.md"),
+            source,
+        }
     })?;
-    Ok(MaterializedPackage::owned(scratch.clone(), builtin_provenance()))
+    Ok(MaterializedPackage::owned(
+        scratch.clone(),
+        builtin_provenance(),
+    ))
 }
 
 /// Returns whether the on-disk installed `uze` package matches the embedded
 /// bytes. If the package is not installed at all, returns false.
 fn builtin_is_current(home: &UzeHome) -> bool {
-    let pkg_dir = home.package_dir(&uze_core::store::PackageId::from_plugin_name("uze", &PathBuf::from("plugin.json")).unwrap_or_else(|_| {
-        // Fallback: construct directly if validation ever changes. The id is
-        // known to be valid, so this branch is unreachable.
-        panic!("builtin id 'uze' is valid")
-    }));
-    // Alternative: look up via store; but we can read directly for cheap check.
+    let Ok(id) = uze_core::store::PackageId::from_plugin_name("uze", &PathBuf::from("plugin.json"))
+    else {
+        return false;
+    };
+    let pkg_dir = home.package_dir(&id);
     let skill_path = pkg_dir.join("skills/uze/SKILL.md");
     let manifest_path = pkg_dir.join("plugin.json");
     if !skill_path.is_file() || !manifest_path.is_file() {
@@ -98,25 +107,21 @@ pub fn ensure_builtin_uze_store(home: &UzeHome, store: &UzeStore) -> Result<bool
     // vs. the embedded bytes. A different origin (manual `uze add`) is
     // intentionally not overwritten here — the builtin is a default, not a
     // forced override.
-    let existing = store.package_ids().ok().and_then(|ids| {
-        ids.into_iter().find(|id| id.as_str() == "uze")
-    });
+    let existing = store
+        .package_ids()
+        .ok()
+        .and_then(|ids| ids.into_iter().find(|id| id.as_str() == "uze"));
     if let Some(id) = existing {
         if builtin_is_current(home) {
             return Ok(false);
         }
-        // Content differs — the embedded builtin is newer than the installed
-        // copy (e.g. binary was updated). Replace it. We remove the stale
-        // package first so `ingest` can succeed; receipts will be reconciled
-        // by the caller after this.
-        // If the package was user-installed from a different provenance we
-        // still update — the builtin is the canonical source once the feature
-        // is enabled. To allow users to keep a divergent `uze` id, they can
-        // remove the builtin via `uze remove uze` and we will not re-seed
-        // until next `ensure` that finds no `uze` at all. For now we treat
-        // content drift as an update signal.
+        // Content differs from the embedded bytes (e.g. the binary was
+        // upgraded) — remove the stale package so `ingest` below can
+        // reinstall it; receipts are reconciled by the caller afterward. A
+        // failed removal is not fatal: `ingest` then hits `PackageConflict`
+        // and this call reports `false`, which is honest — no update
+        // happened — rather than silently pretending one did.
         let _ = store.remove_package(&id);
-        // Fall through to ingest below.
     }
 
     // Need to install/refresh the builtin.

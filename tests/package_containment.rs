@@ -16,7 +16,7 @@
 use std::{
     fs,
     os::unix::fs::symlink,
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -35,7 +35,7 @@ fn temporary(label: &str) -> PathBuf {
 
 /// A minimal valid Agent Plugin, so every rejection below is about
 /// containment and never about a malformed package.
-fn package_at(root: &PathBuf) {
+fn package_at(root: &Path) {
     fs::create_dir_all(root.join("skills/example")).unwrap();
     fs::write(
         root.join("plugin.json"),
@@ -49,7 +49,7 @@ fn package_at(root: &PathBuf) {
     .unwrap();
 }
 
-fn install(root: &PathBuf) -> (UzeHome, uze::Result<uze::StoredPackage>) {
+fn install(root: &Path) -> (UzeHome, uze::Result<uze::StoredPackage>) {
     let home = UzeHome::at(root.join("uze-home"));
     let store = UzeStore::new(home.clone());
     let package = root.join("package");

@@ -191,8 +191,10 @@ impl UzeStore {
             return Err(UzeError::UnknownPackage(id.as_str().to_owned()));
         }
         let root = self.home.package_dir(id);
-        if root.exists() {
-            fs::remove_dir_all(&root).map_err(|source| UzeError::Write { path: root, source })?;
+        if let Err(source) = fs::remove_dir_all(&root)
+            && source.kind() != std::io::ErrorKind::NotFound
+        {
+            return Err(UzeError::Write { path: root, source });
         }
         self.save_registry(&registry)
     }

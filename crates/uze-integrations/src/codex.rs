@@ -899,6 +899,7 @@ fn detect_binary(program: &str) -> HarnessDetection {
     let Ok(output) = Command::new(program).arg("--version").output() else {
         return HarnessDetection::default();
     };
+    // `codex --version` prints "codex-cli 0.148.0" — the version trails.
     let stdout = String::from_utf8_lossy(&output.stdout);
     let version = stdout.split_whitespace().last().map(str::to_owned);
     HarnessDetection {
@@ -917,6 +918,65 @@ fn unsupported(resource: &Resource, rationale: &str) -> ExposurePlan {
         },
         evidence: rationale.to_owned(),
     }
+}
+
+/// Packages carrying the Codex-native envelope. Deciding which packages
+/// belong in the catalogue is Codex policy, so it lives here rather than in
+/// the Store.
+fn publishable(packages: &[StoredPackage]) -> Vec<&StoredPackage> {
+    packages
+        .iter()
+        .filter(|package| package.root.join(".codex-plugin/plugin.json").is_file())
+        .collect()
+}
+
+/// The catalogue document, derived purely from the installed package set.
+/// Nothing here exists only in the catalogue: delete the file and this
+/// rebuilds it byte for byte from the Store.
+fn catalogue_document(packages: &[StoredPackage]) -> serde_json::Value {
+    let plugins: Vec<serde_json::Value> = publishable(packages)
+        .into_iter()
+        .map(|package| {
+            serde_json::json!({
+                "name": package.id.as_str(),
+                // Relative to the catalogue root by necessity — see
+                // `CodexIntegration::catalogue_root`.
+                "source": { "source": "local", "path": format!("./packages/{}", package.id.as_str()) },
+                "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+                "category": "Developer tools"
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "name": MARKETPLACE_NAME,
+        "interface": { "displayName": "UZE Local" },
+        "plugins": plugins,
+    })
+}
+
+fn write_catalogue(path: &Path, packages: &[StoredPackage]) -> Result<()> {
+    let parent = path.parent().expect("catalogue path has a parent");
+    fs::create_dir_all(parent).map_err(|source| UzeError::Write {
+        path: parent.to_path_buf(),
+        source,
+    })?;
+    uze_core::persistence::write_atomic(
+        path,
+        &serde_json::to_vec_pretty(&catalogue_document(packages))
+            .expect("catalogue is serializable"),
+    )
+}
+
+/// Reads one integration-defined detail out of an opaque receipt payload.
+/// Only this integration interprets these keys.
+fn detail_path(
+    detail: &std::collections::BTreeMap<String, serde_json::Value>,
+    key: &str,
+) -> Option<PathBuf> {
+    detail
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(PathBuf::from)
 }
 
 #[cfg(test)]
@@ -1036,63 +1096,4 @@ mod lifecycle_tests {
             AttachmentState::Missing
         );
     }
-}
-
-/// Packages carrying the Codex-native envelope. Deciding which packages
-/// belong in the catalogue is Codex policy, so it lives here rather than in
-/// the Store.
-fn publishable(packages: &[StoredPackage]) -> Vec<&StoredPackage> {
-    packages
-        .iter()
-        .filter(|package| package.root.join(".codex-plugin/plugin.json").is_file())
-        .collect()
-}
-
-/// The catalogue document, derived purely from the installed package set.
-/// Nothing here exists only in the catalogue: delete the file and this
-/// rebuilds it byte for byte from the Store.
-fn catalogue_document(packages: &[StoredPackage]) -> serde_json::Value {
-    let plugins: Vec<serde_json::Value> = publishable(packages)
-        .into_iter()
-        .map(|package| {
-            serde_json::json!({
-                "name": package.id.as_str(),
-                // Relative to the catalogue root by necessity — see
-                // `CodexIntegration::catalogue_root`.
-                "source": { "source": "local", "path": format!("./packages/{}", package.id.as_str()) },
-                "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
-                "category": "Developer tools"
-            })
-        })
-        .collect();
-    serde_json::json!({
-        "name": MARKETPLACE_NAME,
-        "interface": { "displayName": "UZE Local" },
-        "plugins": plugins,
-    })
-}
-
-fn write_catalogue(path: &Path, packages: &[StoredPackage]) -> Result<()> {
-    let parent = path.parent().expect("catalogue path has a parent");
-    fs::create_dir_all(parent).map_err(|source| UzeError::Write {
-        path: parent.to_path_buf(),
-        source,
-    })?;
-    uze_core::persistence::write_atomic(
-        path,
-        &serde_json::to_vec_pretty(&catalogue_document(packages))
-            .expect("catalogue is serializable"),
-    )
-}
-
-/// Reads one integration-defined detail out of an opaque receipt payload.
-/// Only this integration interprets these keys.
-fn detail_path(
-    detail: &std::collections::BTreeMap<String, serde_json::Value>,
-    key: &str,
-) -> Option<PathBuf> {
-    detail
-        .get(key)
-        .and_then(serde_json::Value::as_str)
-        .map(PathBuf::from)
 }

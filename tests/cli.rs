@@ -278,7 +278,10 @@ fn setup_then_add_attaches_transparently_without_a_separate_sync_step() {
         .collect();
     // With the builtin `uze` seeded, each harness has the builtin plus the
     // freshly added fixture.
-    assert!(claude_entries.len() >= 2, "claude should have builtin + fixture");
+    assert!(
+        claude_entries.len() >= 2,
+        "claude should have builtin + fixture"
+    );
     assert!(claude_entries.iter().any(|p| p.is_symlink()));
     // The fixture skill for Claude is exposed via a shim, so its symlink
     // points at the shim dir, not directly at the store. Check presence by
@@ -297,7 +300,10 @@ fn setup_then_add_attaches_transparently_without_a_separate_sync_step() {
         .unwrap()
         .map(|entry| entry.unwrap().path())
         .collect();
-    assert!(codex_entries.len() >= 2, "codex/opencode should have builtin + fixture");
+    assert!(
+        codex_entries.len() >= 2,
+        "codex/opencode should have builtin + fixture"
+    );
     assert!(codex_entries.iter().any(|p| p.is_symlink()));
     assert!(
         codex_entries.iter().any(|p| {
@@ -342,7 +348,10 @@ fn add_prepares_a_detected_opencode_and_attaches_without_prior_setup() {
         .map(|entry| entry.unwrap().path())
         .collect();
     // Builtin `uze` (`uze-uze`) plus the fixture.
-    assert!(entries.len() >= 2, "should have builtin + fixture, got {entries:?}");
+    assert!(
+        entries.len() >= 2,
+        "should have builtin + fixture, got {entries:?}"
+    );
     assert!(entries.iter().any(|p| p.is_symlink()));
     assert!(
         entries.iter().any(|p| {
@@ -419,10 +428,10 @@ fn setup_then_add_attaches_the_mcp_fixture_idempotently_and_removal_works() {
         "expected at least 2 MCP receipts, got {mcp_receipts:?}"
     );
     assert!(
-        mcp_receipts
-            .iter()
-            .all(|receipt| receipt["artifact"]["VENDOR_CONFIG_ENTRY"]["entry_name"]
-                == "uze-mcp-conformance-uze-conformance"),
+        mcp_receipts.iter().all(
+            |receipt| receipt["artifact"]["VENDOR_CONFIG_ENTRY"]["entry_name"]
+                == "uze-mcp-conformance-uze-conformance"
+        ),
         "MCP receipts had unexpected entry_name: {mcp_receipts:?}"
     );
     // At least claude and codex must be among the MCP deliveries; gemini/
@@ -489,10 +498,7 @@ fn remove_uses_the_package_centric_application_flow() {
         .as_array()
         .unwrap()
         .clone();
-    let non_builtin: Vec<_> = plugins
-        .iter()
-        .filter(|p| p["id"] != "uze")
-        .collect();
+    let non_builtin: Vec<_> = plugins.iter().filter(|p| p["id"] != "uze").collect();
     assert!(
         non_builtin.is_empty(),
         "expected no non-builtin plugins after remove, got {plugins:?}"

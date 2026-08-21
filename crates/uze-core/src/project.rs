@@ -368,6 +368,9 @@ mod tests {
             },
             "github".to_owned(),
         );
-        assert_eq!(resource.logical_capability_name().as_deref(), Some("github"));
+        assert_eq!(
+            resource.logical_capability_name().as_deref(),
+            Some("github")
+        );
     }
 }

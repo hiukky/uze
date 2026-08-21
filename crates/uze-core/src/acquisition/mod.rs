@@ -357,6 +357,43 @@ fn checked_directory(root: &Path) -> Result<PathBuf> {
     })
 }
 
+/// What a materialized package declares, read **before** the Store has
+/// accepted it.
+///
+/// Trust has to be decided on a package that is not installed yet: asking
+/// after ingestion would mean the answer "no" still left bytes behind. This
+/// reads the same manifests the Engine reads later, from the materialized
+/// directory rather than the store.
+///
+/// It parses declarations. It never executes anything the package contains.
+pub struct InspectedPackage {
+    pub package_id: String,
+    pub resources: Vec<crate::Resource>,
+}
+
+pub fn inspect_capabilities(package: &MaterializedPackage) -> Result<InspectedPackage> {
+    let manifest = package.root().join("plugin.json");
+    let bytes = fs::read(&manifest).map_err(|source| UzeError::Read {
+        path: manifest.clone(),
+        source,
+    })?;
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|source| UzeError::Json {
+            path: manifest.clone(),
+            source,
+        })?;
+    let package_id = parsed
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| UzeError::MissingPackageName(manifest.clone()))?
+        .to_owned();
+    let id = crate::store::PackageId::from_plugin_name(&package_id, &manifest)?;
+    Ok(InspectedPackage {
+        package_id,
+        resources: crate::engine::package_resources_at(&id, package.root())?,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -501,41 +538,4 @@ mod tests {
             provenance
         );
     }
-}
-
-/// What a materialized package declares, read **before** the Store has
-/// accepted it.
-///
-/// Trust has to be decided on a package that is not installed yet: asking
-/// after ingestion would mean the answer "no" still left bytes behind. This
-/// reads the same manifests the Engine reads later, from the materialized
-/// directory rather than the store.
-///
-/// It parses declarations. It never executes anything the package contains.
-pub struct InspectedPackage {
-    pub package_id: String,
-    pub resources: Vec<crate::Resource>,
-}
-
-pub fn inspect_capabilities(package: &MaterializedPackage) -> Result<InspectedPackage> {
-    let manifest = package.root().join("plugin.json");
-    let bytes = fs::read(&manifest).map_err(|source| UzeError::Read {
-        path: manifest.clone(),
-        source,
-    })?;
-    let parsed: serde_json::Value =
-        serde_json::from_slice(&bytes).map_err(|source| UzeError::Json {
-            path: manifest.clone(),
-            source,
-        })?;
-    let package_id = parsed
-        .get("name")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| UzeError::MissingPackageName(manifest.clone()))?
-        .to_owned();
-    let id = crate::store::PackageId::from_plugin_name(&package_id, &manifest)?;
-    Ok(InspectedPackage {
-        package_id,
-        resources: crate::engine::package_resources_at(&id, package.root())?,
-    })
 }
