@@ -323,12 +323,16 @@ impl ClaudeIntegration {
                 .clone()
                 .or_else(|| self.exposure_name_candidates(resource).into_iter().next())
         {
-            let shim_root = self
-                .uze_home
-                .state_dir()
-                .join("attachments")
-                .join("claude")
-                .join(&entry_name);
+            let shim_root = resource
+                .resolved_artifact_target
+                .clone()
+                .unwrap_or_else(|| {
+                    self.uze_home
+                        .state_dir()
+                        .join("attachments")
+                        .join("claude")
+                        .join(&entry_name)
+                });
             return ExposurePlan {
                 representation: resource.capability.representation,
                 route: CompatibilityRoute::Adaptable,

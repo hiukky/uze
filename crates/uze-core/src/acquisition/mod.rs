@@ -226,7 +226,7 @@ pub struct MaterializedPackage {
 
 impl MaterializedPackage {
     /// A directory UZE created and must remove once the Store has ingested it.
-    pub(crate) fn owned(root: PathBuf, provenance: Provenance) -> Self {
+    pub fn owned(root: PathBuf, provenance: Provenance) -> Self {
         Self {
             owned_scratch: Some(root.clone()),
             root,
@@ -235,7 +235,7 @@ impl MaterializedPackage {
     }
 
     /// A directory the caller already owns. UZE reads it and never deletes it.
-    pub(crate) fn borrowed(root: PathBuf, provenance: Provenance) -> Self {
+    pub fn borrowed(root: PathBuf, provenance: Provenance) -> Self {
         Self {
             root,
             provenance,

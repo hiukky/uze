@@ -200,14 +200,19 @@ fn setup_reports_absent_harnesses_without_failing_or_writing_state() {
     let _ = std::fs::remove_dir_all(home);
 }
 
-/// Deterministic: no setup has run, so `uze doctor` must report both
-/// harnesses as not configured without printing any credential material.
+/// Deterministic: `uze doctor` is headless and must not print credential
+/// material. With the builtin `uze` seed, a fresh home on a machine where
+/// harnesses are detected will already show them as prepared (builtin
+/// auto-prepares), so this test is deterministic by clearing `PATH` — no
+/// harness is detected, therefore both remain "not configured" even after
+/// the builtin store entry is seeded.
 #[test]
 fn doctor_reports_not_configured_before_any_setup() {
     let home = temporary_home("cli-doctor-before-setup");
     let output = Command::new(env!("CARGO_BIN_EXE_uze"))
         .env("UZE_HOME", &home)
         .env("HOME", &home)
+        .env("PATH", "")
         .arg("doctor")
         .output()
         .unwrap();
@@ -217,6 +222,8 @@ fn doctor_reports_not_configured_before_any_setup() {
     assert!(stdout.contains("claude-code"));
     assert!(stdout.contains("codex"));
     assert!(stdout.matches("not configured").count() >= 2);
+    // Builtin `uze` is seeded even when no harness is present.
+    assert!(stdout.contains("uze"));
     let _ = std::fs::remove_dir_all(home);
 }
 
@@ -269,18 +276,35 @@ fn setup_then_add_attaches_transparently_without_a_separate_sync_step() {
         .unwrap()
         .map(|entry| entry.unwrap().path())
         .collect();
-    assert_eq!(claude_entries.len(), 1);
-    assert!(claude_entries[0].is_symlink());
+    // With the builtin `uze` seeded, each harness has the builtin plus the
+    // freshly added fixture.
+    assert!(claude_entries.len() >= 2, "claude should have builtin + fixture");
+    assert!(claude_entries.iter().any(|p| p.is_symlink()));
+    // The fixture skill for Claude is exposed via a shim, so its symlink
+    // points at the shim dir, not directly at the store. Check presence by
+    // listing, not by exact target.
+    let claude_names: Vec<_> = claude_entries
+        .iter()
+        .map(|p| p.file_name().unwrap().to_str().unwrap().to_owned())
+        .collect();
+    assert!(
+        claude_names.contains(&"uze-e2e".to_owned())
+            || claude_names.contains(&"uze-agent-skill-conformance-uze-e2e".to_owned()),
+        "claude should contain the fixture skill, got {claude_names:?}"
+    );
 
     let codex_entries: Vec<_> = std::fs::read_dir(home.join(".agents/skills"))
         .unwrap()
         .map(|entry| entry.unwrap().path())
         .collect();
-    assert_eq!(codex_entries.len(), 1);
-    assert!(codex_entries[0].is_symlink());
-    assert_eq!(
-        std::fs::read_link(&codex_entries[0]).unwrap(),
-        uze_home.join("store/packages/uze-agent-skill-conformance/skills/uze-e2e")
+    assert!(codex_entries.len() >= 2, "codex/opencode should have builtin + fixture");
+    assert!(codex_entries.iter().any(|p| p.is_symlink()));
+    assert!(
+        codex_entries.iter().any(|p| {
+            std::fs::read_link(p).ok()
+                == Some(uze_home.join("store/packages/uze-agent-skill-conformance/skills/uze-e2e"))
+        }),
+        "codex should contain the fixture skill symlink"
     );
 
     let _ = std::fs::remove_dir_all(home);
@@ -317,11 +341,15 @@ fn add_prepares_a_detected_opencode_and_attaches_without_prior_setup() {
         .expect("detected OpenCode should have a prepared global skills dir")
         .map(|entry| entry.unwrap().path())
         .collect();
-    assert_eq!(entries.len(), 1);
-    assert!(entries[0].is_symlink());
-    assert_eq!(
-        std::fs::read_link(&entries[0]).unwrap(),
-        uze_home.join("store/packages/uze-agent-skill-conformance/skills/uze-e2e")
+    // Builtin `uze` (`uze-uze`) plus the fixture.
+    assert!(entries.len() >= 2, "should have builtin + fixture, got {entries:?}");
+    assert!(entries.iter().any(|p| p.is_symlink()));
+    assert!(
+        entries.iter().any(|p| {
+            std::fs::read_link(p).ok()
+                == Some(uze_home.join("store/packages/uze-agent-skill-conformance/skills/uze-e2e"))
+        }),
+        "fixture skill should be present alongside builtin"
     );
 
     let integrations = std::fs::read_to_string(uze_home.join("state/integrations.json")).unwrap();
@@ -380,16 +408,34 @@ fn setup_then_add_attaches_the_mcp_fixture_idempotently_and_removal_works() {
             .unwrap();
     let receipts = ledger["receipts"].as_object().unwrap();
     assert!(receipts.len() >= 2);
+    // With builtin `uze` seeded, attachments also contain its 4 skill receipts;
+    // filter to the MCP package's receipts before asserting their shape.
+    let mcp_receipts: Vec<_> = receipts
+        .values()
+        .filter(|receipt| receipt["package_id"] == "uze-mcp-conformance")
+        .collect();
     assert!(
-        receipts
-            .values()
-            .filter(|receipt| receipt["integration"] == "claude-code"
-                || receipt["integration"] == "codex")
-            .all(|receipt| {
-                receipt["package_id"] == "uze-mcp-conformance"
-                    && receipt["artifact"]["VENDOR_CONFIG_ENTRY"]["entry_name"]
-                        == "uze-mcp-conformance-uze-conformance"
-            })
+        mcp_receipts.len() >= 2,
+        "expected at least 2 MCP receipts, got {mcp_receipts:?}"
+    );
+    assert!(
+        mcp_receipts
+            .iter()
+            .all(|receipt| receipt["artifact"]["VENDOR_CONFIG_ENTRY"]["entry_name"]
+                == "uze-mcp-conformance-uze-conformance"),
+        "MCP receipts had unexpected entry_name: {mcp_receipts:?}"
+    );
+    // At least claude and codex must be among the MCP deliveries; gemini/
+    // opencode may also be present depending on integration support.
+    assert!(
+        mcp_receipts
+            .iter()
+            .any(|r| r["integration"] == "claude-code"),
+        "claude MCP receipt missing"
+    );
+    assert!(
+        mcp_receipts.iter().any(|r| r["integration"] == "codex"),
+        "codex MCP receipt missing"
     );
 
     // Idempotent: `add` a second time does not fail and does not require a
@@ -435,12 +481,21 @@ fn remove_uses_the_package_centric_application_flow() {
         .output()
         .unwrap();
     assert!(list.status.success());
+    // With builtin `uze` seeded, `list` is not empty after removing the
+    // fixture — the builtin remains. Filter it out for this test's original
+    // assertion that the user-added package is gone.
+    let plugins = serde_json::from_slice::<serde_json::Value>(&list.stdout)
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .clone();
+    let non_builtin: Vec<_> = plugins
+        .iter()
+        .filter(|p| p["id"] != "uze")
+        .collect();
     assert!(
-        serde_json::from_slice::<serde_json::Value>(&list.stdout)
-            .unwrap()
-            .as_array()
-            .unwrap()
-            .is_empty()
+        non_builtin.is_empty(),
+        "expected no non-builtin plugins after remove, got {plugins:?}"
     );
     let _ = std::fs::remove_dir_all(home);
 }
