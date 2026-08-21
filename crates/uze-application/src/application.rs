@@ -603,6 +603,58 @@ impl UzeApplication {
         }
     }
 
+    /// A short, project-scoped health summary — the single high-level
+    /// question most callers actually want answered: "is everything UZE
+    /// touches, here, in order?"
+    ///
+    /// Deliberately **not** a merge with `doctor`: `doctor` has no
+    /// `project_root` concept at all and never will — it answers "is my
+    /// UZE *installation* healthy," global, independent of any project.
+    /// `status` answers "is *this project's* context healthy," and is
+    /// built almost entirely by composing `context_inspect` (already
+    /// read-only) with the Store's own package count. It duplicates no
+    /// health logic doctor already owns; a genuine installation problem
+    /// (corrupt ledger, missing executable) stays doctor's to report.
+    pub fn status(&self, project_root: &std::path::Path) -> Result<StatusReport> {
+        let context = self.context_inspect(project_root)?;
+        let installed = self.store.package_ids()?.len();
+        let contributing = context.contributions.len();
+        let issues: Vec<String> = context
+            .contributions
+            .iter()
+            .filter(|contribution| !matches!(contribution.state, AttachmentState::Matched))
+            .map(|contribution| format!("{}: {:?}", contribution.package_id, contribution.state))
+            .chain(
+                context
+                    .harnesses
+                    .iter()
+                    .filter_map(|harness| match &harness.delivery {
+                        HarnessContextDelivery::Bridge {
+                            needed: true,
+                            state,
+                        } if *state != AttachmentState::Matched => {
+                            Some(format!("{}: bridge {:?}", harness.integration, state))
+                        }
+                        _ => None,
+                    }),
+            )
+            .chain(
+                context
+                    .malformed_regions
+                    .iter()
+                    .map(|region| format!("{region}: malformed")),
+            )
+            .collect();
+        Ok(StatusReport {
+            root: context.canonical.clone(),
+            portability: context.portability,
+            harnesses: context.harnesses,
+            packages_installed: installed,
+            packages_contributing_here: contributing,
+            issues,
+        })
+    }
+
     /// Read-only observation of one project's context — genuinely zero-
     /// write, whatever state the project is in. Never calls `attach`,
     /// `detach`, `reconcile`, or `remove_unconditionally`; every fact here
@@ -1343,6 +1395,22 @@ fn plan_action_for_bridge(
             PlannedAction::Blocked("bridge region ownership is ambiguous".to_owned())
         }
     }
+}
+
+/// A project-scoped health summary. See `UzeApplication::status` for why
+/// this is deliberately not folded into `doctor`.
+#[derive(Clone, Debug, Serialize)]
+pub struct StatusReport {
+    pub root: PathBuf,
+    pub portability: Portability,
+    pub harnesses: Vec<HarnessContextStatus>,
+    pub packages_installed: usize,
+    pub packages_contributing_here: usize,
+    /// Human-readable, one-line-each context problems: a non-matched
+    /// contribution, a bridge gap, a malformed or blocked orphan region.
+    /// Empty means healthy. Never a substitute for `context inspect`'s
+    /// full detail — this is the "does anything need my attention" view.
+    pub issues: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
