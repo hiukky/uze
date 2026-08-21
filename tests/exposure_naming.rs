@@ -124,7 +124,10 @@ fn store_resource(root: &Path, package_dir: PathBuf) -> Resource {
 #[test]
 fn resource_identity_is_unaffected_by_resolved_exposure_name() {
     let root = temp("identity-invariance");
-    let resource = store_resource(&root, skill_fixture(&root.join("fixtures"), "acme", "review"));
+    let resource = store_resource(
+        &root,
+        skill_fixture(&root.join("fixtures"), "acme", "review"),
+    );
     let before = resource.identity();
 
     let mut resolved = resource.clone();
@@ -271,8 +274,14 @@ fn two_packages_with_the_same_skill_name_coexist_deterministically() {
     let (application, claude_home) = app_with_claude(&root);
     let fixture_root = root.join("fixtures");
 
-    install(&application, skill_fixture(&fixture_root, "frontend", "review"));
-    install(&application, skill_fixture(&fixture_root, "security", "review"));
+    install(
+        &application,
+        skill_fixture(&fixture_root, "frontend", "review"),
+    );
+    install(
+        &application,
+        skill_fixture(&fixture_root, "security", "review"),
+    );
 
     let mut names: Vec<String> = fs::read_dir(claude_home.join("skills"))
         .unwrap()
@@ -331,7 +340,10 @@ fn a_foreign_artifact_occupying_the_short_name_is_never_overwritten() {
 fn inspect_matched_missing_drifted_and_detach_all_still_work_under_new_naming() {
     let root = temp("lifecycle");
     let (application, claude_home) = app_with_claude(&root);
-    install(&application, skill_fixture(&root.join("fixtures"), "acme", "review"));
+    install(
+        &application,
+        skill_fixture(&root.join("fixtures"), "acme", "review"),
+    );
 
     let inspection = application.inspect_plugin("acme").unwrap();
     assert_eq!(inspection.managed_state.matched, 1);
@@ -418,7 +430,10 @@ fn no_source_special_cases_the_official_uze_package_or_skill_name() {
     let mut offenders = Vec::new();
     for root in scan_roots {
         for entry in walk_rs_files(&root) {
-            if allowed_files.iter().any(|name| entry.file_name().and_then(|f| f.to_str()) == Some(name)) {
+            if allowed_files
+                .iter()
+                .any(|name| entry.file_name().and_then(|f| f.to_str()) == Some(name))
+            {
                 continue;
             }
             // Allow the single `ensure_builtin_plugins` call site in application.rs
@@ -429,7 +444,8 @@ fn no_source_special_cases_the_official_uze_package_or_skill_name() {
                 if content.contains(pattern) {
                     // Whitelist the exactly one allowed occurrence in application.rs
                     if entry.file_name().and_then(|f| f.to_str()) == Some("application.rs")
-                        && content.contains("ensure_builtin") {
+                        && content.contains("ensure_builtin")
+                    {
                         // Count occurrences; allow one, forbid additional
                         let count = content.matches(pattern).count();
                         if count <= 1 {

@@ -10,3 +10,6 @@ license = "MIT"
 uze-core = { path = "../uze-core" }
 uze-integrations = { path = "../uze-integrations" }
 serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"

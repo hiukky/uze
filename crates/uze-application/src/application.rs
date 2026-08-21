@@ -121,72 +121,31 @@ impl UzeApplication {
         // 1. Seed/update the Store entry itself.
         let installed = builtin::ensure_builtin_uze_store(&self.home, &self.store)?;
         // 2. Ensure attachments for the builtin package, if it now exists.
-        //    This mirrors `attach_stored_packages_to` but scoped to the single
-        //    builtin package to avoid surprising side-effects on other packages.
-        //    It is also responsible for preparing detected harnesses (creating
-        //    `~/.claude/skills` etc.) so a fresh `UZE_HOME` gets the skill
-        //    without a prior `uze setup`.
-        let builtin_id = match self.store.package_ids() {
-            Ok(ids) => ids.into_iter().find(|id| id.as_str() == "uze"),
-            Err(_) => None,
+        //    Scoped to the single builtin package (not every stored package,
+        //    unlike `attach_stored_packages_to`) since this runs on every CLI
+        //    invocation and must stay cheap. Also prepares detected harnesses
+        //    (creating `~/.claude/skills` etc.) so a fresh `UZE_HOME` gets the
+        //    skill without a prior `uze setup`.
+        let builtin_id = self
+            .store
+            .package_ids()
+            .ok()
+            .and_then(|ids| ids.into_iter().find(|id| id.as_str() == "uze"));
+        let Some(package_id) = builtin_id else {
+            return Ok(installed);
         };
-        if let Some(package_id) = builtin_id {
-            if let Ok(package) = self.store.package(&package_id) {
-                // Prepare every detected harness' discovery directory. This is
-                // the same preparation `add_plugin` does, but without requiring
-                // an explicit `add`.
-                let _ = self.prepare_detected_integrations(None);
-                let environment = self.engine().compose(std::slice::from_ref(&package.id))?;
-                let resources: Vec<_> = environment.resources.iter().collect();
-                for integration in &self.integrations {
-                    if !integration.detect().present {
-                        continue;
-                    }
-                    // The builtin `uze` package is Skill-only, so package-level
-                    // native delivery does not apply; attach each resource via
-                    // the normal per-resource path and record receipts.
-                    if let Some(plan) = integration.package_exposure_plan(&package, &resources) {
-                        if let Some(receipt) = integration.attach_package(&package, &plan)? {
-                            let _ = state::record_receipt(
-                                &self.home,
-                                package_receipt_key(package.id.as_str(), integration.id()),
-                                receipt,
-                            );
-                        }
-                        // If the package plan covers all resources, skip
-                        // per-resource attach to avoid duplicates.
-                        let provided = plan.provided_resource_identities.clone();
-                        for resource in &resources {
-                            if provided.contains(&resource.identity()) {
-                                continue;
-                            }
-                            let resolved = self.resolve_exposure_name(resource, integration.as_ref());
-                            if let Some(receipt) = integration.attach_receipt(&resolved)? {
-                                let _ = state::record_receipt(
-                                    &self.home,
-                                    resource_receipt_key(package.id.as_str(), integration.id(), resource),
-                                    receipt,
-                                );
-                            }
-                        }
-                    } else {
-                        for resource in &resources {
-                            let resolved = self.resolve_exposure_name(resource, integration.as_ref());
-                            if let Some(receipt) = integration.attach_receipt(&resolved)? {
-                                let _ = state::record_receipt(
-                                    &self.home,
-                                    resource_receipt_key(package.id.as_str(), integration.id(), resource),
-                                    receipt,
-                                );
-                            }
-                        }
-                    }
-                }
-                // Refresh derived views (e.g. Codex/OpenCode catalogues) so the
-                // newly seeded package is visible there too — same as `add`.
-                let _ = self.republish_all();
+        let Ok(package) = self.store.package(&package_id) else {
+            return Ok(installed);
+        };
+        let _ = self.prepare_detected_integrations(None);
+        for integration in &self.integrations {
+            if integration.detect().present {
+                self.attach_package_to(&package, integration.as_ref())?;
             }
         }
+        // Refresh derived views (e.g. Codex/OpenCode catalogues) so the
+        // newly seeded package is visible there too — same as `add`.
+        let _ = self.republish_all();
         Ok(installed)
     }
 
@@ -502,29 +461,43 @@ impl UzeApplication {
     fn attach_stored_packages_to(&self, integration: &dyn IntegrationPort) -> Result<()> {
         for package_id in self.store.package_ids()? {
             let package = self.store.package(&package_id)?;
-            let environment = self.engine().compose(std::slice::from_ref(&package.id))?;
-            let resources: Vec<_> = environment.resources.iter().collect();
-            let mut provided = BTreeSet::new();
-            if let Some(plan) = integration.package_exposure_plan(&package, &resources)
-                && let Some(receipt) = integration.attach_package(&package, &plan)?
-            {
-                state::record_receipt(
-                    &self.home,
-                    package_receipt_key(package.id.as_str(), integration.id()),
-                    receipt,
-                )?;
-                provided = plan.provided_resource_identities;
-            }
-            for resource in &resources {
-                if !provided.contains(&resource.identity()) {
-                    let resolved = self.resolve_exposure_name(resource, integration);
-                    if let Some(receipt) = integration.attach_receipt(&resolved)? {
-                        state::record_receipt(
-                            &self.home,
-                            resource_receipt_key(package.id.as_str(), integration.id(), resource),
-                            receipt,
-                        )?;
-                    }
+            self.attach_package_to(&package, integration)?;
+        }
+        Ok(())
+    }
+
+    /// Attaches one already-stored `package` to `integration`: a package-level
+    /// native delivery when the integration offers one, then per-resource
+    /// attachment for whatever it doesn't cover. Idempotent via the ledger's
+    /// receipt keys. Shared by `attach_stored_packages_to` (every package) and
+    /// `ensure_builtin_plugins` (the single builtin package).
+    fn attach_package_to(
+        &self,
+        package: &StoredPackage,
+        integration: &dyn IntegrationPort,
+    ) -> Result<()> {
+        let environment = self.engine().compose(std::slice::from_ref(&package.id))?;
+        let resources: Vec<_> = environment.resources.iter().collect();
+        let mut provided = BTreeSet::new();
+        if let Some(plan) = integration.package_exposure_plan(package, &resources)
+            && let Some(receipt) = integration.attach_package(package, &plan)?
+        {
+            state::record_receipt(
+                &self.home,
+                package_receipt_key(package.id.as_str(), integration.id()),
+                receipt,
+            )?;
+            provided = plan.provided_resource_identities;
+        }
+        for resource in &resources {
+            if !provided.contains(&resource.identity()) {
+                let resolved = self.resolve_exposure_name(resource, integration);
+                if let Some(receipt) = integration.attach_receipt(&resolved)? {
+                    state::record_receipt(
+                        &self.home,
+                        resource_receipt_key(package.id.as_str(), integration.id(), resource),
+                        receipt,
+                    )?;
                 }
             }
         }
@@ -1013,7 +986,11 @@ impl UzeApplication {
     /// access — so it can never itself decide a foreign-artifact conflict;
     /// `attach`'s own structural check (unchanged) remains the last word on
     /// that.
-    fn resolve_exposure_name(&self, resource: &Resource, integration: &dyn IntegrationPort) -> Resource {
+    fn resolve_exposure_name(
+        &self,
+        resource: &Resource,
+        integration: &dyn IntegrationPort,
+    ) -> Resource {
         if !matches!(
             resource.capability.kind,
             CapabilityKind::AgentSkill | CapabilityKind::Mcp

@@ -13,8 +13,9 @@ use uze_core::{
         AttachmentInspection, AttachmentReceipt, AttachmentState, HarnessDetection,
         IntegrationPort, ManagedArtifact, default_exposure_name_candidates,
         detach_standard_receipt, inspect_standard_receipt,
+        short_then_qualified_exposure_name_candidates,
     },
-    project::{Resource, ResourceOrigin},
+    project::Resource,
     provisioning::{ProcessRunner, ProcessSpec, ProvisionAction, ProvisioningResult},
     router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus},
     state,
@@ -153,13 +154,7 @@ impl IntegrationPort for ClaudeIntegration {
         if resource.capability.kind != CapabilityKind::AgentSkill {
             return default_exposure_name_candidates(resource);
         }
-        let ResourceOrigin::Package { id, .. } = &resource.origin else {
-            return Vec::new();
-        };
-        let Some(logical) = resource.logical_capability_name() else {
-            return Vec::new();
-        };
-        vec![logical.clone(), format!("{}-{}", id.as_str(), logical)]
+        short_then_qualified_exposure_name_candidates(resource)
     }
 
     fn attach(&self, resource: &Resource) -> Result<Option<PathBuf>> {
@@ -633,6 +628,7 @@ fn detect_binary(program: &str) -> HarnessDetection {
     let Ok(output) = Command::new(program).arg("--version").output() else {
         return HarnessDetection::default();
     };
+    // `claude --version` prints "2.1.239 (Claude Code)" — the version leads.
     let stdout = String::from_utf8_lossy(&output.stdout);
     let version = stdout.split_whitespace().next().map(str::to_owned);
     HarnessDetection {

@@ -20,7 +20,8 @@ use std::{
 };
 
 use uze::{
-    PackageId, Resource, UzeEngine, UzeHome, UzeStore, exposure::ExposureMechanism,
+    PackageId, Resource, UzeEngine, UzeHome, UzeStore,
+    exposure::ExposureMechanism,
     integration::{IntegrationPort, default_exposure_name_candidates},
 };
 

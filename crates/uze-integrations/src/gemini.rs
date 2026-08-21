@@ -763,6 +763,7 @@ fn detail_path(
 
 fn detect_binary(program: &str) -> HarnessDetection {
     match Command::new(program).arg("--version").output() {
+        // `gemini --version` prints a bare "0.56.0" — one token either way.
         Ok(output) if output.status.success() => HarnessDetection {
             present: true,
             version: String::from_utf8_lossy(&output.stdout)

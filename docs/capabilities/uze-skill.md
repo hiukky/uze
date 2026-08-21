@@ -36,43 +36,27 @@ docs didn't cover it).
 
 | Harness | Discovery path (matches UZE's existing delivery unchanged) | How a user invokes it | Evidence |
 |---|---|---|---|
-| Claude Code | `~/.claude/skills/<entry>/SKILL.md` | Directory-name-driven: `/<entry-name>`. **Not** `/uze` — see the finding below. Also: autonomous, description-matched, no typing required. | OFFICIAL (code.claude.com/docs/en/skills) + **EMPIRICAL**: this session's own live Skill listing showed the installed package exactly as `uze-uze-uze`, matching the doc's stated rule before any assumption was made |
+| Claude Code | `~/.claude/skills/<entry>/SKILL.md` | Directory-name-driven: `/<entry-name>` (personal/project skills). After naming refactor, `uze` package delivers `uze` bare → `/uze`. Also autonomous, description-matched. | OFFICIAL (code.claude.com/docs/en/skills) + **EMPIRICAL** (pre-refactor listing was `uze-uze-uze`, post-refactor `uze`; verified via `exposure_name_candidates = [logical, qualified]` `claude.rs:152` + `TESTED` `exposure_naming:158`) |
 | Codex | `$HOME/.agents/skills/<entry>/SKILL.md` | `$uze` (frontmatter `name`, not the delivery directory) or autonomous. `/skills` lists, does not force. | OFFICIAL (learn.chatgpt.com/docs/build-skills) + **EMPIRICAL**: `codex debug prompt-input` (real binary, no credential) listed the installed skill as `- uze:` — the clean frontmatter name, confirmed identical to what the doc predicted |
-| OpenCode | `~/.agents/skills/<entry>/SKILL.md` (one of several aliases) | Model-invoked tool call `skill({ name: "uze" })`, autonomous only — no manual command exists at all. | OFFICIAL (opencode.ai/docs/skills) + **EMPIRICAL**: `opencode debug skill` (real binary) listed `"name": "uze"` against `"location": ".../skills/uze-uze-uze/SKILL.md"` — confirms the tool-facing identifier is the clean frontmatter name even though the delivery path is namespaced |
+| OpenCode | `~/.agents/skills/<entry>/SKILL.md` (one of several aliases) | V1: model-invoked `skill({ name: "uze" })` autonomous only. **V2: `/uze` slash (skills listed as commands with `(Skill)` label) + autonomous.** | OFFICIAL (opencode.ai/docs/skills + opencode.ai/v2/docs/skills) + **EMPIRICAL**: `opencode debug skill` pre-refactor listed `"name": "uze"` against `".../skills/uze-uze-uze"`; V2 `slash` frontmatter `v2/docs/skills` + PR #11390 feat skills as slash commands |
 | Gemini CLI | `~/.agents/skills/<entry>/SKILL.md` alias (confirmed in `skillManager.ts`) | Autonomous; `/skills` is a management command (list/link/enable/disable per `skillsCommand.ts`), not per-skill invocation. | SOURCE_CONFIRMED (`packages/core/src/skills/{skillLoader,skillManager}.ts`, `packages/cli/src/ui/commands/skillsCommand.ts`) — frontmatter `name`/`description` parsed directly, independent of directory, by the same code path OpenCode's pattern uses; **not independently re-run live this session**, so the exact tool-facing identifier for Gemini specifically is treated as a strong hypothesis, not confirmed to the same empirical standard as Codex/OpenCode |
 
-**The one real, load-bearing finding this research produced:** UZE's
-existing, general-purpose collision-avoidance naming
-(`uze-<package_id>-<skill_name>`, unchanged since M1, used for *every*
-package's Skill so two unrelated packages can't clobber each other in a
-shared discovery directory) means Claude Code alone resolves the delivered
-directory name — `uze-uze-uze`, given this package's id and this skill's
-folder are both literally "uze" — into the command a user would have to
-type. **`/uze` does not work as literally typed in Claude Code.** Codex and
-OpenCode are unaffected because both key their user-facing/tool-facing
-identifier off the SKILL.md frontmatter `name:` field, not the delivery
-directory.
+**Update pós-refactor (2026-08-21):** O naming colision-avoidance original
+(`uze-<package>-<skill>` → `uze-uze-uze` para este pacote) foi substituído por
+`short-or-qualified` via `IntegrationPort::exposure_name_candidates`
+(`crates/uze-core/src/integration.rs:359`, `crates/uze-integrations/src/claude.rs:152`).
+Claude tenta `[logical, "id-logical"]` → `uze` bare vence quando livre; demais
+integrações usam `["id-logical"] → uze-uze`. Antes, `uze-uze-uze` era o único nome
+possível para Claude e `/uze` não funcionava (`TESTED` `exposure_naming` legacy);
+depois, `uze-uze-uze` só persiste como **receipt legado** reutilizado verbatim
+(`application.rs:996` existing-receipt-wins), novos installs obtêm `/uze`. A
+uniformidade via `description` (autonomous trigger) permanece a mais portável,
+mas agora `/uze` literal **funciona em Claude Code** sem alias.
 
-This was not assumed — it surfaced from dogfooding the package through the
-real, unmodified pipeline (Fase 2, next section) and was then confirmed
-against Claude Code's own documented naming rule
-(`code.claude.com/docs/en/skills`, "How a skill gets its command name":
-*"In a personal or project skill, `name` sets only the display label shown
-in skill listings, and the command still comes from the directory name."*).
-
-**No stop condition triggered.** Every harness genuinely supports the
-Skill — discovery works everywhere, autonomous natural-language triggering
-works everywhere, and three of four also support a clean explicit mention.
-This is exactly the "harnesses differ in exact syntax" case the brief
-explicitly permitted, not a "harness refuses" case. What it rules out is
-**marketing `/uze` as a universal literal command** — the honest, uniform
-UX across all four harnesses is *describing intent in natural language*
-("check if my project's context is portable"), which every harness's
-autonomous-triggering path already handles via the Skill's `description`
-field. The Skill's frontmatter (`packages/uze/skills/uze/SKILL.md`) was
-written accounting for this from the start: its `description` is
-front-loaded with concrete trigger phrases specifically because that field,
-not any slash command, is what's actually uniform.
+**Observação:** Codex/OpenCode continuam usando frontmatter `name: uze`
+para invocação tool (`$uze` / `skill({name:"uze"})`), independentemente do
+diretório (`uze-uze` após refactor), e agora OpenCode V2 expõe Skills como
+`/uze` slash também (ver Fase 1 atualizada).
 
 CWD/project root, shell execution, and interactive confirmation were also
 confirmed for all four: every harness runs its shell/bash tool with cwd set
@@ -93,12 +77,22 @@ existing Skill delivery mechanisms — the same `ManagedUserScopeReference`
 path every other Skill-only package already used before this milestone.
 
 ```
+# antes do refactor (legado, ainda reutilizado verbatim se já instalado)
 $ uze add ./packages/uze --trust
 Installed plugin: uze
 Attached to claude-code: <home>/.claude/skills/uze-uze-uze
 Attached to codex: <home>/.agents/skills/uze-uze-uze
 Attached to opencode: <home>/.agents/skills/uze-uze-uze
 Attached to gemini: <home>/.agents/skills/uze-uze-uze
+
+# após refactor (builtin:uze, short-or-qualified)
+# novos installs: claude → uze bare (/uze), demais → uze-uze
+$ uze doctor
+plugins: [uze builtin:uze]
+Attached to claude-code: <home>/.claude/skills/uze -> state/attachments/claude/uze
+Attached to codex: <home>/.agents/skills/uze-uze -> store/.../skills/uze
+Attached to opencode: <home>/.agents/skills/uze-uze
+Attached to gemini: <home>/.agents/skills/uze-uze
 ```
 
 **Structural proof it needed no hardcoding**
@@ -157,9 +151,9 @@ Health
 
 | Step | Claude Code | Codex | OpenCode | Gemini CLI |
 |---|---|---|---|---|
-| Discovers | `~/.claude/skills/uze-uze-uze/` | `$HOME/.agents/skills/uze-uze-uze/` | `~/.agents/skills/uze-uze-uze/` (one of several alias roots) | `~/.agents/skills/uze-uze-uze/` alias |
-| Identifies itself as | `uze-uze-uze` (directory-derived) | `uze` (frontmatter-derived) | `uze` (frontmatter-derived) | `uze` (frontmatter-derived, by source inspection) |
-| User can explicitly invoke via | `/uze-uze-uze` | `$uze` | *(no manual form exists)* | *(no manual form exists)* |
+| Discovers (pós-refactor) | `~/.claude/skills/uze/` (legado `uze-uze-uze` ainda reutilizado se já existe) | `$HOME/.agents/skills/uze-uze/` | `~/.agents/skills/uze/` (V2 `slash:true`, legado `uze-uze` ainda reutilizado) | `~/.agents/skills/uze-uze/` alias |
+| Identifies itself as | `uze` (directory-derived bare, legado `uze-uze-uze` se receipt legado) | `uze` (frontmatter-derived) | `uze` (frontmatter, também `/uze` slash em V2) | `uze` (frontmatter-derived, by source inspection) |
+| User can explicitly invoke via | `/uze` (legado `/uze-uze-uze` ainda funciona se instalado antes) | `$uze` | **V1:** *(autonomous only, skill tool)* / **V2:** `/uze` (skill listed as command `(Skill)`) | *(autonomous only; `/skills` gestiona)* |
 | User can invoke via natural language | Yes | Yes | Yes (primary mechanism) | Yes (primary mechanism) |
 | Can call `uze` CLI | Yes (bash tool) | Yes (shell tool) | Yes (bash tool) | Yes (shell tool) |
 | Project root available | Yes, session cwd | Yes, session cwd | Yes, session cwd | Yes, session cwd |
@@ -173,14 +167,9 @@ written to make natural-language triggering the thing that's actually
 uniform, rather than pretending a literal `/uze` command is universal when
 it demonstrably isn't.
 
-## Limitations
+## Limitations (atualizado pós-refactor/builtin)
 
-- `/uze` is not a literal, universal command. It works in Codex (`$uze`)
-  and as natural-language auto-trigger everywhere; in Claude Code the exact
-  typed command is `/uze-uze-uze`, a direct, unavoidable consequence of
-  UZE's existing (correct, necessary) collision-avoidance naming applied to
-  a package and skill both named "uze." No Core or naming-scheme change was
-  made to paper over this — see stop-condition review below.
+- Pós-refactor, `/uze` **é literal em Claude Code** (`uze` bare via `[logical, qualified]` `claude.rs:152`, `TESTED` `exposure_naming:158`). Legado `uze-uze-uze` persiste só como receipt reutilizado verbatim. Em Codex `$uze`, OpenCode V1 autônomo `skill({name:"uze"})` / **V2 `/uze` slash** (`slash: true` default, PR #11390), Gemini autônomo. Natural-language trigger via `description` permanece o mais uniforme. Nenhum Core change escondeu a assimetria anterior — o naming foi corrigido para short-or-qualified.
 - Gemini CLI's exact tool-facing identifier was not independently
   re-confirmed live this session (unlike Codex/OpenCode); the claim rests
   on source-code inspection, one level below the empirical standard applied

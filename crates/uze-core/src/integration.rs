@@ -366,6 +366,26 @@ pub fn default_exposure_name_candidates(resource: &crate::project::Resource) -> 
     vec![format!("{}-{}", id.as_str(), logical)]
 }
 
+/// Shared by every integration whose harness UX genuinely depends on a
+/// Skill's physical name (Claude Code and OpenCode V2 both resolve a
+/// directory-derived command, e.g. `/uze`): the bare logical name first,
+/// falling back to the fully package-qualified name for collision
+/// avoidance. Non-Skill capabilities (e.g. MCP) stay on
+/// [`default_exposure_name_candidates`] — see each caller's own doc comment
+/// for why the two policies are never mixed just because both are
+/// `Resource`s.
+pub fn short_then_qualified_exposure_name_candidates(
+    resource: &crate::project::Resource,
+) -> Vec<String> {
+    let crate::project::ResourceOrigin::Package { id, .. } = &resource.origin else {
+        return Vec::new();
+    };
+    let Some(logical) = resource.logical_capability_name() else {
+        return Vec::new();
+    };
+    vec![logical.clone(), format!("{}-{}", id.as_str(), logical)]
+}
+
 /// Extracts the physical exposure name a receipt's artifact already claims,
 /// generically — no artifact variant here knows or cares what kind of
 /// capability it represents. `None` for an artifact shape with no single
