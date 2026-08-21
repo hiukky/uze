@@ -84,9 +84,34 @@ pub fn package_resources_at(id: &PackageId, root: &std::path::Path) -> Result<Ve
             ));
         }
     }
+    resources.extend(instruction_resources(id, root)?);
     resources.extend(mcp_resources(id, root)?);
     resources.sort_by_key(|resource| resource.identity());
     Ok(resources)
+}
+
+/// Discovers a package's optional root-level `AGENTS.md` — the same
+/// standard convention `resolve_project` already recognizes at project
+/// scope (see `project::discover_instructions`), read here at package scope
+/// instead. A package does not ship a whole project instructions file; it
+/// ships the portable content a project's own `AGENTS.md` later composes,
+/// one delimited region per contributing package.
+fn instruction_resources(id: &PackageId, package_root: &std::path::Path) -> Result<Vec<Resource>> {
+    let path = package_root.join("AGENTS.md");
+    if !path.is_file() {
+        return Ok(Vec::new());
+    }
+    let payload = crate::project::read_file(&path)?;
+    Ok(vec![Resource::from_package(
+        id.clone(),
+        package_root.to_path_buf(),
+        Capability {
+            kind: CapabilityKind::Instruction,
+            representation: Representation::Standard,
+            path,
+            payload,
+        },
+    )])
 }
 
 /// Discovers a package's optional root-level `mcp.json` (Agent Plugins 1.0

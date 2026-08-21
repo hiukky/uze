@@ -74,6 +74,18 @@ pub enum ExposureMechanism {
         environment: Vec<McpEnvironmentReference>,
         enabled: Option<bool>,
     },
+    /// UZE owns a delimited region inside a shared text file it does not
+    /// otherwise own — never the whole file. `target_file` and
+    /// `region_identity` name the artifact; `expected_content` is what
+    /// belongs between its markers. See `crate::text_region`, which this
+    /// variant's `attach`/`detach` methods delegate to; that module carries
+    /// no knowledge of what `target_file` is or why `region_identity` was
+    /// chosen — both are supplied entirely by the caller.
+    ManagedTextRegion {
+        target_file: PathBuf,
+        region_identity: String,
+        expected_content: String,
+    },
     Unsupported {
         rationale: String,
     },
@@ -125,6 +137,24 @@ impl ExposureMechanism {
             }
         }
         Ok(target)
+    }
+
+    /// Idempotently creates or verifies the region a `ManagedTextRegion`
+    /// mechanism describes. Only valid for that variant; delegates entirely
+    /// to `crate::text_region`, which owns every safety rule.
+    pub fn attach_text_region(&self) -> Result<PathBuf> {
+        let ExposureMechanism::ManagedTextRegion {
+            target_file,
+            region_identity,
+            expected_content,
+        } = self
+        else {
+            return Err(UzeError::ExposureUnavailable(
+                "this exposure mechanism is not a managed text region".to_owned(),
+            ));
+        };
+        crate::text_region::attach(target_file, region_identity, expected_content)?;
+        Ok(target_file.clone())
     }
 
     /// Removes only the UZE-owned reference this mechanism describes, and
@@ -320,6 +350,18 @@ impl ExposurePlan {
                 // real attachment path for generated vendor config is each
                 // integration's own `attach()`, called once at `uze add`
                 // time, not `prepare()`.
+                Ok(PreparedExposure {
+                    working_directory: workspace.to_path_buf(),
+                    arguments: Vec::new(),
+                    runtime_directory: None,
+                    managed: None,
+                })
+            }
+            ExposureMechanism::ManagedTextRegion { .. } => {
+                // Same rationale again: a managed text region is a
+                // persistent, package-lifecycle artifact created once via
+                // `attach_text_region`/`IntegrationPort::attach`, not a
+                // per-session projection this type prepares or tears down.
                 Ok(PreparedExposure {
                     working_directory: workspace.to_path_buf(),
                     arguments: Vec::new(),
