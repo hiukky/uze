@@ -20,28 +20,33 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use uze::{PackageSource, UzeApplication};
 use uze::{
     Result, UzeError, UzeHome,
     application::{BridgeStatus, ContextReconciliationReport},
     integration::{AttachmentReceipt, AttachmentState, HarnessDetection, IntegrationPort},
     router::HarnessCapabilities,
 };
-use uze::{PackageSource, UzeApplication};
 
 fn temp(label: &str) -> PathBuf {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    std::env::temp_dir().join(format!("uze-context-e2e-{label}-{}-{nonce}", std::process::id()))
+    std::env::temp_dir().join(format!(
+        "uze-context-e2e-{label}-{}-{nonce}",
+        std::process::id()
+    ))
 }
 
 fn fixture_a() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/packages/agent-plugin-instructions-a")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/packages/agent-plugin-instructions-a")
 }
 
 fn fixture_b() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/packages/agent-plugin-instructions-b")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/packages/agent-plugin-instructions-b")
 }
 
 /// A deterministic stand-in for a bridge-capable harness (Claude Code /
@@ -153,7 +158,10 @@ fn a_single_package_composes_agents_md_and_bridges_only_present_harnesses() {
 
     // Both bridge-capable harnesses were "present" in this test, so both get
     // a real bridge, matched.
-    assert_eq!(bridge(&report, "claude-code").state, AttachmentState::Matched);
+    assert_eq!(
+        bridge(&report, "claude-code").state,
+        AttachmentState::Matched
+    );
     assert_eq!(bridge(&report, "gemini").state, AttachmentState::Matched);
     let claude_md = fs::read_to_string(project.join("CLAUDE.md")).unwrap();
     assert!(claude_md.contains("@AGENTS.md"));
@@ -173,7 +181,10 @@ fn an_absent_bridge_harness_receives_no_bridge_file_at_all() {
     fs::create_dir_all(&project).unwrap();
 
     let report = application.context_reconcile(&project).unwrap();
-    assert_eq!(bridge(&report, "claude-code").state, AttachmentState::Matched);
+    assert_eq!(
+        bridge(&report, "claude-code").state,
+        AttachmentState::Matched
+    );
     assert!(project.join("CLAUDE.md").exists());
     assert!(
         !project.join("GEMINI.md").exists(),
@@ -205,12 +216,17 @@ fn editing_outside_the_managed_region_stays_matched_editing_inside_becomes_drift
         AttachmentState::Matched,
         "editing outside the managed region must not be reported as drift"
     );
-    assert!(fs::read_to_string(&agents_md).unwrap().contains("More of my own notes."));
+    assert!(
+        fs::read_to_string(&agents_md)
+            .unwrap()
+            .contains("More of my own notes.")
+    );
 
     // G: user edits text INSIDE the managed region.
-    let tampered = fs::read_to_string(&agents_md)
-        .unwrap()
-        .replace("Fixture A conformance marker", "TAMPERED conformance marker");
+    let tampered = fs::read_to_string(&agents_md).unwrap().replace(
+        "Fixture A conformance marker",
+        "TAMPERED conformance marker",
+    );
     fs::write(&agents_md, &tampered).unwrap();
 
     let report = application.context_reconcile(&project).unwrap();
@@ -239,7 +255,9 @@ fn a_matched_region_can_be_cleanly_removed_preserving_user_content() {
     // Package A is no longer installed: reconciling with an empty desired
     // set (simulated here by removing the package from the store first)
     // must remove exactly its region.
-    application.remove_plugin("uze-instructions-fixture-a").unwrap();
+    application
+        .remove_plugin("uze-instructions-fixture-a")
+        .unwrap();
     let report = application.context_reconcile(&project).unwrap();
     assert!(report.packages.is_empty());
     assert_eq!(report.removed_orphans.len(), 1);
@@ -282,7 +300,7 @@ fn a_still_installed_packages_drifted_region_is_reported_and_never_rewritten() {
 /// malformed/duplicated marker shape still refuses, exactly like `detach`.
 #[test]
 fn an_orphaned_regions_cleanup_is_structural_not_content_verified_but_still_refuses_malformed_markers()
-{
+ {
     let root = temp("orphan-cleanup-shape");
     let application = app(&root, false, false);
     install(&application, fixture_a());
@@ -299,11 +317,17 @@ fn an_orphaned_regions_cleanup_is_structural_not_content_verified_but_still_refu
         .replace("Fixture A conformance marker", "edited before removal");
     fs::write(&agents_md, &edited).unwrap();
 
-    application.remove_plugin("uze-instructions-fixture-a").unwrap();
+    application
+        .remove_plugin("uze-instructions-fixture-a")
+        .unwrap();
     let report = application.context_reconcile(&project).unwrap();
     assert_eq!(report.removed_orphans.len(), 1);
     assert!(report.blocked_orphans.is_empty());
-    assert!(!fs::read_to_string(&agents_md).unwrap().contains("edited before removal"));
+    assert!(
+        !fs::read_to_string(&agents_md)
+            .unwrap()
+            .contains("edited before removal")
+    );
 
     fs::remove_dir_all(root).unwrap();
 }
@@ -328,9 +352,14 @@ fn a_drifted_bridge_line_blocks_its_own_removal_even_after_the_last_package_is_g
         .replace("@AGENTS.md", "@SOMETHING-ELSE.md");
     fs::write(&claude_md, &tampered_bridge).unwrap();
 
-    application.remove_plugin("uze-instructions-fixture-a").unwrap();
+    application
+        .remove_plugin("uze-instructions-fixture-a")
+        .unwrap();
     let report = application.context_reconcile(&project).unwrap();
-    assert_eq!(bridge(&report, "claude-code").state, AttachmentState::Drifted);
+    assert_eq!(
+        bridge(&report, "claude-code").state,
+        AttachmentState::Drifted
+    );
     assert_eq!(fs::read_to_string(&claude_md).unwrap(), tampered_bridge);
     fs::remove_dir_all(root).unwrap();
 }
@@ -364,7 +393,9 @@ fn two_packages_share_one_agents_md_and_exactly_one_bridge_per_harness() {
     assert_eq!(claude_md.matches("@AGENTS.md").count(), 1);
 
     // Removing package A leaves B's region and the bridge intact.
-    application.remove_plugin("uze-instructions-fixture-a").unwrap();
+    application
+        .remove_plugin("uze-instructions-fixture-a")
+        .unwrap();
     let report = application.context_reconcile(&project).unwrap();
     assert_eq!(report.packages.len(), 1);
     assert_eq!(report.packages[0].package_id, "uze-instructions-fixture-b");
@@ -372,8 +403,14 @@ fn two_packages_share_one_agents_md_and_exactly_one_bridge_per_harness() {
     let content = agents_md_content(&project);
     assert!(!content.contains("uze-instructions-fixture-a"));
     assert!(content.contains("uze-instructions-fixture-b"));
-    assert_eq!(bridge(&report, "claude-code").state, AttachmentState::Matched);
-    assert!(project.join("CLAUDE.md").exists(), "bridge must survive while B is still installed");
+    assert_eq!(
+        bridge(&report, "claude-code").state,
+        AttachmentState::Matched
+    );
+    assert!(
+        project.join("CLAUDE.md").exists(),
+        "bridge must survive while B is still installed"
+    );
 
     // Removing package B leaves AGENTS.md empty of managed content and
     // removes the now-unneeded bridge region — Fase C.5's core claim. The
@@ -383,11 +420,16 @@ fn two_packages_share_one_agents_md_and_exactly_one_bridge_per_harness() {
     // `detach_leaves_an_empty_file_rather_than_deleting_a_preexisting_file`)
     // — it cannot tell "UZE created this file from nothing" apart from "the
     // user's own file happened to end up empty," so it treats both alike.
-    application.remove_plugin("uze-instructions-fixture-b").unwrap();
+    application
+        .remove_plugin("uze-instructions-fixture-b")
+        .unwrap();
     let report = application.context_reconcile(&project).unwrap();
     assert!(report.packages.is_empty());
     assert_eq!(report.removed_orphans.len(), 1);
-    assert_eq!(bridge(&report, "claude-code").state, AttachmentState::Missing);
+    assert_eq!(
+        bridge(&report, "claude-code").state,
+        AttachmentState::Missing
+    );
     assert_eq!(bridge(&report, "gemini").state, AttachmentState::Missing);
     assert_eq!(
         fs::read_to_string(project.join("CLAUDE.md")).unwrap(),
@@ -417,7 +459,10 @@ fn reconciling_repeatedly_never_duplicates_regions_or_bridges() {
     let after_repeat = fs::read_to_string(project.join("AGENTS.md")).unwrap();
     let bridge_after_repeat = fs::read_to_string(project.join("CLAUDE.md")).unwrap();
 
-    assert_eq!(after_first, after_repeat, "repeated reconcile must be byte-idempotent");
+    assert_eq!(
+        after_first, after_repeat,
+        "repeated reconcile must be byte-idempotent"
+    );
     assert_eq!(bridge_after_first, bridge_after_repeat);
     assert_eq!(after_repeat.matches("uze:begin").count(), 1);
     fs::remove_dir_all(root).unwrap();

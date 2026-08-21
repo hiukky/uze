@@ -5,7 +5,11 @@ use std::{io::IsTerminal, path::PathBuf};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use uze::{
     Result, UzeApplication, UzeHome,
-    application::{DoctorReport, PluginInspection, RemovePluginReport},
+    application::{
+        ContextPlan, ContextReconciliationReport, DoctorReport, HarnessContextDelivery,
+        PluginInspection, Portability, ProjectContextStatus, RemovePluginReport,
+    },
+    context::PlannedAction,
 };
 
 #[derive(Debug, Parser)]
@@ -53,6 +57,40 @@ enum Command {
     },
     /// Deterministic Store, harness, and attachment diagnostics.
     Doctor {
+        #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+        format: OutputFormat,
+    },
+    /// Observe and reconcile one project's shared instructions context
+    /// (AGENTS.md and its harness bridges). Entirely separate from package
+    /// installation: `uze add`/`uze remove` never touch a project's files,
+    /// and `uze context` never touches the installed package set.
+    Context {
+        #[command(subcommand)]
+        action: ContextAction,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ContextAction {
+    /// Read-only: what does this project's context currently look like?
+    /// Never writes anything, in any state.
+    Inspect {
+        /// Project directory. Defaults to the current directory.
+        path: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+        format: OutputFormat,
+    },
+    /// Read-only: exactly what would `reconcile` change here? Never writes
+    /// anything.
+    Plan {
+        path: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+        format: OutputFormat,
+    },
+    /// Writes: composes every installed package's contribution into this
+    /// project's AGENTS.md, and reconciles the harness bridges it implies.
+    Reconcile {
+        path: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
@@ -183,8 +221,37 @@ fn run(cli: Cli) -> Result<()> {
                 OutputFormat::Json => print_json(&report),
             }
         }
+        Command::Context { action } => match action {
+            ContextAction::Inspect { path, format } => {
+                let status = app.context_inspect(&context_path(path))?;
+                match format {
+                    OutputFormat::Text => print!("{}", render_context_status(&status)),
+                    OutputFormat::Json => print_json(&status),
+                }
+            }
+            ContextAction::Plan { path, format } => {
+                let plan = app.context_plan(&context_path(path))?;
+                match format {
+                    OutputFormat::Text => print!("{}", render_context_plan(&plan)),
+                    OutputFormat::Json => print_json(&plan),
+                }
+            }
+            ContextAction::Reconcile { path, format } => {
+                let report = app.context_reconcile(&context_path(path))?;
+                match format {
+                    OutputFormat::Text => print!("{}", render_context_reconciliation(&report)),
+                    OutputFormat::Json => print_json(&report),
+                }
+            }
+        },
     }
     Ok(())
+}
+
+/// `uze context` defaults to the current directory; an explicit path is
+/// otherwise used exactly as given.
+fn context_path(path: Option<PathBuf>) -> PathBuf {
+    path.unwrap_or_else(|| PathBuf::from("."))
 }
 
 /// Interprets an `uze add` argument.
@@ -391,6 +458,161 @@ fn render_doctor(report: &DoctorReport) -> String {
     }
     if let Some(error) = &report.provisioning_state_error {
         text.push_str(&format!("\nProvisioning state\n  blocked: {error}\n"));
+    }
+    text
+}
+
+fn render_context_status(status: &ProjectContextStatus) -> String {
+    let mut text = format!("Context for {}\n\nSources\n", status.canonical.display());
+    for source in &status.sources {
+        if !source.exists {
+            text.push_str(&format!("  {}  absent\n", source.file_name));
+            continue;
+        }
+        text.push_str(&format!(
+            "  {}  {} managed region(s), user content: {}\n",
+            source.file_name,
+            source.managed_region_identities.len(),
+            if source.has_user_content { "yes" } else { "no" }
+        ));
+    }
+    if !status.contributions.is_empty()
+        || !status.orphaned_regions.is_empty()
+        || !status.malformed_regions.is_empty()
+    {
+        text.push_str("\nContributions\n");
+        for contribution in &status.contributions {
+            text.push_str(&format!(
+                "  {}  {:?}\n",
+                contribution.package_id, contribution.state
+            ));
+        }
+        for orphan in &status.orphaned_regions {
+            text.push_str(&format!(
+                "  {orphan}  ORPHANED (no installed package claims it)\n"
+            ));
+        }
+        for malformed in &status.malformed_regions {
+            text.push_str(&format!(
+                "  {malformed}  MALFORMED (markers cannot be trusted)\n"
+            ));
+        }
+    }
+    text.push_str("\nHarnesses\n");
+    for harness in &status.harnesses {
+        let delivery = match &harness.delivery {
+            HarnessContextDelivery::Native => "native".to_owned(),
+            HarnessContextDelivery::NotDetected => "not detected".to_owned(),
+            HarnessContextDelivery::Bridge { needed, state } => {
+                format!(
+                    "bridge {:?}{}",
+                    state,
+                    if *needed {
+                        ""
+                    } else {
+                        " (not currently needed)"
+                    }
+                )
+            }
+        };
+        text.push_str(&format!("  {}  {delivery}\n", harness.integration));
+    }
+    text.push_str(&format!(
+        "\nPortability: {}\n",
+        render_portability(&status.portability)
+    ));
+    if !status.warnings.is_empty() {
+        text.push_str("\nWarnings\n");
+        for warning in &status.warnings {
+            text.push_str(&format!("  {warning}\n"));
+        }
+    }
+    text
+}
+
+fn render_portability(portability: &Portability) -> String {
+    match portability {
+        Portability::NoContext => "NO_CONTEXT (no recognized instructions file exists)".to_owned(),
+        Portability::Portable => "PORTABLE".to_owned(),
+        Portability::PartiallyPortable { gaps } => {
+            format!("PARTIALLY_PORTABLE ({})", gaps.join("; "))
+        }
+        Portability::VendorLocked { files } => format!(
+            "VENDOR_LOCKED ({})",
+            files
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
+}
+
+fn render_action(action: &PlannedAction) -> String {
+    match action {
+        PlannedAction::Attach => "ATTACH".to_owned(),
+        PlannedAction::NoChange => "NO_CHANGE".to_owned(),
+        PlannedAction::Remove => "REMOVE".to_owned(),
+        PlannedAction::Blocked(reason) => format!("BLOCKED ({reason})"),
+    }
+}
+
+fn render_context_plan(plan: &ContextPlan) -> String {
+    let mut text = format!("Plan for {}\n", plan.agents_md.display());
+    for contribution in &plan.agents_md_plan.contributions {
+        text.push_str(&format!(
+            "  {}  {}\n",
+            contribution.package_id.as_str(),
+            render_action(&contribution.action)
+        ));
+    }
+    for orphan in &plan.agents_md_plan.orphans {
+        text.push_str(&format!(
+            "  {}  {}\n",
+            orphan.region_identity,
+            render_action(&orphan.action)
+        ));
+    }
+    if !plan.bridges.is_empty() {
+        text.push_str("\nBridges\n");
+        for bridge in &plan.bridges {
+            text.push_str(&format!(
+                "  {}  {}  {}\n",
+                bridge.integration,
+                bridge.file.display(),
+                render_action(&bridge.action)
+            ));
+        }
+    }
+    if plan.has_changes() {
+        text.push_str("\nRun `uze context reconcile` to apply.\n");
+    } else {
+        text.push_str("\nNo changes: context is already reconciled.\n");
+    }
+    text
+}
+
+fn render_context_reconciliation(report: &ContextReconciliationReport) -> String {
+    let mut text = format!("Reconciled {}\n\n", report.agents_md.display());
+    for package in &report.packages {
+        text.push_str(&format!("  {}  {:?}\n", package.package_id, package.state));
+    }
+    for orphan in &report.removed_orphans {
+        text.push_str(&format!("  {orphan}  REMOVED (orphaned)\n"));
+    }
+    for (orphan, reason) in &report.blocked_orphans {
+        text.push_str(&format!("  {orphan}  BLOCKED: {reason}\n"));
+    }
+    if !report.bridges.is_empty() {
+        text.push_str("\nBridges\n");
+        for bridge in &report.bridges {
+            text.push_str(&format!(
+                "  {}  {}  {:?}\n",
+                bridge.integration,
+                bridge.file.display(),
+                bridge.state
+            ));
+        }
     }
     text
 }

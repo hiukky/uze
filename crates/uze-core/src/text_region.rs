@@ -77,8 +77,8 @@ fn read_lines(path: &Path) -> Result<Option<(Vec<String>, Newline)>> {
             });
         }
     };
-    let content = String::from_utf8(bytes)
-        .map_err(|_| UzeError::InvalidTextEncoding(path.to_path_buf()))?;
+    let content =
+        String::from_utf8(bytes).map_err(|_| UzeError::InvalidTextEncoding(path.to_path_buf()))?;
     let style = if content.contains("\r\n") {
         Newline::Crlf
     } else {
@@ -153,9 +153,15 @@ fn blocked(reason: impl Into<String>) -> AttachmentInspection {
 
 /// Ownership state of one region, scoped to exactly that region — never the
 /// rest of the file.
-pub fn inspect(target_file: &Path, region_identity: &str, expected_content: &str) -> AttachmentInspection {
+pub fn inspect(
+    target_file: &Path,
+    region_identity: &str,
+    expected_content: &str,
+) -> AttachmentInspection {
     if !identity_is_valid(region_identity) {
-        return blocked(format!("invalid managed-region identity `{region_identity}`"));
+        return blocked(format!(
+            "invalid managed-region identity `{region_identity}`"
+        ));
     }
     let (begin_marker, end_marker) = markers(region_identity);
     let lines = match read_lines(target_file) {
@@ -231,7 +237,11 @@ pub fn attach(target_file: &Path, region_identity: &str, expected_content: &str)
 /// destructively when the freshly re-inspected state is not `Matched` —
 /// `Missing` is a safe no-op (already gone), `Drifted`/`Blocked` refuse per
 /// ADR-009.
-pub fn detach(target_file: &Path, region_identity: &str, expected_content: &str) -> Result<AttachmentInspection> {
+pub fn detach(
+    target_file: &Path,
+    region_identity: &str,
+    expected_content: &str,
+) -> Result<AttachmentInspection> {
     let inspection = inspect(target_file, region_identity, expected_content);
     if inspection.state != AttachmentState::Matched {
         return Ok(inspection);
@@ -245,9 +255,8 @@ pub fn detach(target_file: &Path, region_identity: &str, expected_content: &str)
         return Ok(fresh);
     }
     let (begin_marker, end_marker) = markers(region_identity);
-    let (mut lines, style) = read_lines(target_file)?.ok_or_else(|| {
-        UzeError::ManagedRegionConflict(target_file.to_path_buf())
-    })?;
+    let (mut lines, style) = read_lines(target_file)?
+        .ok_or_else(|| UzeError::ManagedRegionConflict(target_file.to_path_buf()))?;
     let Scan::WellFormed { begin, end } = scan(&lines, &begin_marker, &end_marker) else {
         return Ok(blocked(
             "managed text region changed shape between inspection and detach".to_owned(),
@@ -281,6 +290,43 @@ pub fn reconcile(
     inspect(target_file, region_identity, expected_content)
 }
 
+/// Structural well-formedness of a region's markers, independent of any
+/// content comparison. This is the same proof `remove_unconditionally`
+/// relies on to act, exposed here so a caller can **preview** a structural-
+/// only removal — e.g. for a read-only report — without performing it and
+/// without needing `expected_content`, which content-verified `inspect`
+/// requires.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RegionShape {
+    /// The target file does not exist, or has no marker lines for this
+    /// identity at all.
+    Absent,
+    /// Exactly one well-formed begin/end pair — removable by
+    /// `remove_unconditionally`, inspectable by `inspect` if a caller has
+    /// `expected_content`.
+    WellFormed,
+    /// Duplicated, out of order, or only half present — refuses any
+    /// destructive operation, the same way `inspect`/`detach` do.
+    Malformed,
+}
+
+/// Previews what `remove_unconditionally` would find, without touching the
+/// file. See `RegionShape` for what each outcome means.
+pub fn region_shape(target_file: &Path, region_identity: &str) -> RegionShape {
+    if !identity_is_valid(region_identity) {
+        return RegionShape::Malformed;
+    }
+    let (begin_marker, end_marker) = markers(region_identity);
+    let Ok(Some((lines, _style))) = read_lines(target_file) else {
+        return RegionShape::Absent;
+    };
+    match scan(&lines, &begin_marker, &end_marker) {
+        Scan::Missing => RegionShape::Absent,
+        Scan::WellFormed { .. } => RegionShape::WellFormed,
+        Scan::Malformed => RegionShape::Malformed,
+    }
+}
+
 /// Removes a region identified by structure alone — exactly one well-formed
 /// begin/end pair for `region_identity` — without comparing its content to
 /// anything. This is deliberately **weaker** than `detach`: it exists only
@@ -291,30 +337,33 @@ pub fn reconcile(
 /// exact marker match, never a guess — but content drift *inside* an
 /// already-orphaned region cannot be detected here, because there is no
 /// longer anything to compare it to. Callers should prefer `detach` whenever
-/// `expected_content` is available.
-pub fn remove_unconditionally(target_file: &Path, region_identity: &str) -> Result<AttachmentInspection> {
-    if !identity_is_valid(region_identity) {
-        return Ok(blocked(format!(
-            "invalid managed-region identity `{region_identity}`"
-        )));
-    }
-    let (begin_marker, end_marker) = markers(region_identity);
-    let Some((mut lines, style)) = read_lines(target_file)? else {
-        return Ok(AttachmentInspection {
-            state: AttachmentState::Missing,
-            reason: "managed text region's target file does not exist".to_owned(),
-        });
-    };
-    match scan(&lines, &begin_marker, &end_marker) {
-        Scan::Missing => Ok(AttachmentInspection {
+/// `expected_content` is available. See `region_shape` to preview this
+/// function's outcome read-only.
+pub fn remove_unconditionally(
+    target_file: &Path,
+    region_identity: &str,
+) -> Result<AttachmentInspection> {
+    match region_shape(target_file, region_identity) {
+        RegionShape::Absent => Ok(AttachmentInspection {
             state: AttachmentState::Missing,
             reason: "managed text region markers are absent".to_owned(),
         }),
-        Scan::Malformed => Ok(blocked(
+        RegionShape::Malformed => Ok(blocked(
             "managed text region markers are duplicated, out of order, or only half present"
                 .to_owned(),
         )),
-        Scan::WellFormed { begin, end } => {
+        RegionShape::WellFormed => {
+            let (begin_marker, end_marker) = markers(region_identity);
+            // Absence and validity were already established by
+            // `region_shape`; re-reading is cheap and keeps this function
+            // free of unsafe unwraps on that already-proven state.
+            let (mut lines, style) =
+                read_lines(target_file)?.expect("region_shape proved the file exists");
+            let Scan::WellFormed { begin, end } = scan(&lines, &begin_marker, &end_marker) else {
+                return Ok(blocked(
+                    "managed text region changed shape between preview and removal".to_owned(),
+                ));
+            };
             lines.drain(begin..=end);
             write_lines(target_file, &lines, style)?;
             Ok(AttachmentInspection {
@@ -341,6 +390,30 @@ pub fn region_identities_present(target_file: &Path) -> Vec<String> {
         })
         .map(str::to_owned)
         .collect()
+}
+
+/// Whether `target_file` holds any content that is not part of a
+/// well-formed UZE-managed region — i.e. whether a user (or anything other
+/// than UZE) wrote something into it independently. A missing file, or one
+/// containing only managed regions and blank lines, reports `false`. A
+/// malformed region's lines count as content *outside* any region, since
+/// ownership of them cannot be proven — the same fail-closed default every
+/// other function in this module applies.
+pub fn has_content_outside_managed_regions(target_file: &Path) -> bool {
+    let Ok(Some((lines, _style))) = read_lines(target_file) else {
+        return false;
+    };
+    let mut owned = std::collections::BTreeSet::new();
+    for identity in region_identities_present(target_file) {
+        let (begin_marker, end_marker) = markers(&identity);
+        if let Scan::WellFormed { begin, end } = scan(&lines, &begin_marker, &end_marker) {
+            owned.extend(begin..=end);
+        }
+    }
+    lines
+        .iter()
+        .enumerate()
+        .any(|(index, line)| !owned.contains(&index) && !line.trim().is_empty())
 }
 
 /// Whether `target_file` currently holds *any* UZE-managed region at all,
@@ -536,7 +609,10 @@ mod tests {
 
         let result = detach(&file, "pkg/resource", "managed content").unwrap();
         assert_eq!(result.state, AttachmentState::Missing);
-        assert_eq!(fs::read_to_string(&file).unwrap(), "user text A\nuser text B\n");
+        assert_eq!(
+            fs::read_to_string(&file).unwrap(),
+            "user text A\nuser text B\n"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -557,7 +633,9 @@ mod tests {
         let root = temp("detach-drifted");
         let file = root.join("NOTES.md");
         attach(&file, "id", "original").unwrap();
-        let tampered = fs::read_to_string(&file).unwrap().replace("original", "user-edited");
+        let tampered = fs::read_to_string(&file)
+            .unwrap()
+            .replace("original", "user-edited");
         fs::write(&file, &tampered).unwrap();
 
         let result = detach(&file, "id", "original").unwrap();
@@ -578,7 +656,10 @@ mod tests {
         fs::write(&file, "").unwrap(); // pre-existing, empty, user-owned file
         attach(&file, "id", "content").unwrap();
         detach(&file, "id", "content").unwrap();
-        assert!(file.exists(), "detach never deletes a file it found pre-existing");
+        assert!(
+            file.exists(),
+            "detach never deletes a file it found pre-existing"
+        );
         assert_eq!(fs::read_to_string(&file).unwrap(), "");
         fs::remove_dir_all(root).unwrap();
     }
@@ -656,6 +737,58 @@ mod tests {
     }
 
     #[test]
+    fn region_shape_previews_remove_unconditionally_without_writing() {
+        let root = temp("shape-preview");
+        fs::create_dir_all(&root).unwrap();
+        let file = root.join("NOTES.md");
+        assert_eq!(region_shape(&file, "id"), RegionShape::Absent);
+
+        attach(&file, "id", "content").unwrap();
+        let before = fs::read_to_string(&file).unwrap();
+        assert_eq!(region_shape(&file, "id"), RegionShape::WellFormed);
+        let after = fs::read_to_string(&file).unwrap();
+        assert_eq!(before, after, "region_shape must never write");
+
+        fs::write(
+            &file,
+            "<!-- uze:begin dup -->\na\n<!-- uze:end dup -->\n<!-- uze:begin dup -->\nb\n<!-- uze:end dup -->\n",
+        )
+        .unwrap();
+        assert_eq!(region_shape(&file, "dup"), RegionShape::Malformed);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn has_content_outside_managed_regions_distinguishes_user_content_from_pure_regions() {
+        let root = temp("outside-content");
+        let file = root.join("NOTES.md");
+        assert!(
+            !has_content_outside_managed_regions(&file),
+            "missing file has no content"
+        );
+
+        attach(&file, "id", "managed only").unwrap();
+        assert!(
+            !has_content_outside_managed_regions(&file),
+            "a file holding only a well-formed region has no *outside* content"
+        );
+
+        let mut content = fs::read_to_string(&file).unwrap();
+        content = format!("user note\n{content}");
+        fs::write(&file, &content).unwrap();
+        assert!(has_content_outside_managed_regions(&file));
+
+        // A malformed region's own lines count as unattributable content.
+        fs::write(
+            &file,
+            "<!-- uze:begin dup -->\na\n<!-- uze:end dup -->\n<!-- uze:begin dup -->\nb\n<!-- uze:end dup -->\n",
+        )
+        .unwrap();
+        assert!(has_content_outside_managed_regions(&file));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn any_region_present_detects_regardless_of_identity() {
         let root = temp("any-present");
         let file = root.join("NOTES.md");
@@ -697,7 +830,9 @@ mod tests {
         let root = temp("reconcile-drift");
         let file = root.join("NOTES.md");
         attach(&file, "id", "original").unwrap();
-        let tampered = fs::read_to_string(&file).unwrap().replace("original", "user-edited");
+        let tampered = fs::read_to_string(&file)
+            .unwrap()
+            .replace("original", "user-edited");
         fs::write(&file, &tampered).unwrap();
         let result = reconcile(&file, "id", "original", false);
         assert_eq!(result.state, AttachmentState::Drifted);
@@ -735,7 +870,10 @@ mod tests {
 
         let result = remove_unconditionally(&file, "package:gone:instructions").unwrap();
         assert_eq!(result.state, AttachmentState::Missing);
-        assert_eq!(fs::read_to_string(&file).unwrap(), "user text A\nuser text B\n");
+        assert_eq!(
+            fs::read_to_string(&file).unwrap(),
+            "user text A\nuser text B\n"
+        );
 
         // A malformed/duplicated shape still refuses, exactly like detach.
         fs::write(
@@ -756,6 +894,9 @@ mod tests {
         let file = root.join("NOTES.md");
         assert!(attach(&file, "has spaces", "x").is_err());
         assert!(attach(&file, "has\nnewline", "x").is_err());
-        assert_eq!(inspect(&file, "has spaces", "x").state, AttachmentState::Blocked);
+        assert_eq!(
+            inspect(&file, "has spaces", "x").state,
+            AttachmentState::Blocked
+        );
     }
 }

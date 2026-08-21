@@ -139,6 +139,16 @@ converge.
 The full capability landscape — format matrices, semantic matrices,
 portability classification, trust implications, and the tracer-bullet
 rationale — lives in [`docs/capabilities/`](docs/capabilities/landscape.md).
+Instructions delivery is now a real, dogfoodable command:
+
+```bash
+uze context inspect     # read-only: what's here, and is it portable?
+uze context plan        # read-only: what would reconcile change?
+uze context reconcile   # writes: compose AGENTS.md and its harness bridges
+```
+
+See [`docs/capabilities/context-manager.md`](docs/capabilities/context-manager.md)
+for the model behind it.
 
 ## Ecosystem watchlist
 
