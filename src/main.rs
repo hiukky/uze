@@ -55,6 +55,18 @@ enum Command {
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
+    /// Re-resolve an installed plugin's source and replace it — always
+    /// explicit. Nothing installs a newer revision on its own; `doctor`/
+    /// `list`/`inspect` only ever report that one is available.
+    Update {
+        plugin: String,
+        /// Authorize any *newly* introduced executable capability without
+        /// prompting. Same meaning as `add --trust`.
+        #[arg(long)]
+        trust: bool,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+        format: OutputFormat,
+    },
     /// Deterministic Store, harness, and attachment diagnostics.
     Doctor {
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
@@ -229,6 +241,18 @@ fn run(cli: Cli) -> Result<()> {
             let report = app.remove_plugin(&plugin)?;
             match format {
                 OutputFormat::Text => print!("{}", render_remove(&report)),
+                OutputFormat::Json => print_json(&report),
+            }
+        }
+        Command::Update {
+            plugin,
+            trust,
+            format,
+        } => {
+            let authority = trust_authority(trust);
+            let report = app.update_plugin(&plugin, authority.as_ref())?;
+            match format {
+                OutputFormat::Text => print!("{}", render_update(&report)),
                 OutputFormat::Json => print_json(&report),
             }
         }
@@ -417,6 +441,25 @@ fn render_inspection(report: &PluginInspection) -> String {
         text.push_str(&format!("  ledger blocked: {error}\n"));
     }
     text
+}
+
+fn render_update(report: &uze::application::UpdatePluginReport) -> String {
+    use uze::application::UpdatePluginReport;
+    match report {
+        UpdatePluginReport::Updated { plugin, .. } => format!("Updated {}\n", plugin.id),
+        UpdatePluginReport::Blocked { report, plan } => format!(
+            "Update blocked for {}: {:?}\n{}\n",
+            report.package_id,
+            plan,
+            render_managed_state(
+                &report
+                    .receipts
+                    .iter()
+                    .map(|receipt| receipt.inspection.state)
+                    .collect::<Vec<_>>(),
+            )
+        ),
+    }
 }
 
 fn render_remove(report: &RemovePluginReport) -> String {
