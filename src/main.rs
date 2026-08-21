@@ -91,8 +91,7 @@ fn run(cli: Cli) -> Result<()> {
                     println!("Store path: {}", report.plugin.store_path.display());
                     for (harness, plan) in &report.package_plans {
                         println!(
-                            "Package delivery to {harness}: {:?} ({:?}; {} components)",
-                            plan.mechanism,
+                            "Package delivery to {harness}: {:?} ({} components)",
                             plan.route,
                             plan.provided_resource_identities.len()
                         );
@@ -103,6 +102,15 @@ fn run(cli: Cli) -> Result<()> {
                             attachment.integration,
                             attachment.location.display()
                         );
+                    }
+                    for publication in &report.publications {
+                        if let Some(error) = &publication.error {
+                            println!(
+                                "Warning: {} could not publish its package view: {error}\n  \
+                                 The package is installed. Re-run `uze setup {}` to rebuild it.",
+                                publication.integration, publication.integration
+                            );
+                        }
                     }
                 }
                 OutputFormat::Json => print_json(&report),
@@ -240,6 +248,9 @@ fn render_doctor(report: &DoctorReport) -> String {
             "  {}  detected: {}  setup: {}\n",
             harness.integration, harness.detection.present, harness.setup
         ));
+        if let uze::integration::PublicationStatus::Unpublished(reason) = &harness.publication {
+            text.push_str(&format!("    package view not published: {reason}\n"));
+        }
     }
     text.push_str("\nAttachments\n");
     for attachment in &report.attachments {

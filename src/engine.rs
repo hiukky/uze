@@ -77,11 +77,14 @@ impl UzeEngine {
 }
 
 /// Discovers a package's optional root-level `mcp.json` (Agent Plugins 1.0
-/// shape: `{"mcpServers": {"<name>": {"command", "args", ...}}}`, the same
-/// convention Claude Code's and Codex's own plugin systems already expect —
-/// see ADR-007) into one `Resource` per declared server. A package
-/// declaring more than one server produces distinct named resources while
-/// preserving the original `mcp.json` bytes only once in the Store.
+/// shape: `{"mcpServers": {"<name>": {"command", "args", ...}}}`) into one
+/// `Resource` per declared server. A package declaring more than one server
+/// produces distinct named resources while preserving the original
+/// `mcp.json` bytes only once in the Store.
+///
+/// This module reads the standard, never a harness. Which harnesses already
+/// consume that shape is evidence recorded in ADR-007, not a fact the Engine
+/// needs or holds.
 fn mcp_resources(id: &PackageId, package_root: &std::path::Path) -> Result<Vec<Resource>> {
     let manifest_path = package_root.join("mcp.json");
     if !manifest_path.is_file() {

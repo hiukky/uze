@@ -73,6 +73,10 @@ impl UzeStore {
     /// Installs an Agent Plugins 1.0 package once. The store preserves the
     /// complete external package tree (including any vendor-native envelope)
     /// and never creates a UZE plugin manifest or rewrites payloads.
+    ///
+    /// It writes nothing a harness reads. Any harness-owned view of the
+    /// installed set is a derived artifact belonging to that harness's
+    /// integration, refreshed through `IntegrationPort::republish_packages`.
     pub fn install_agent_plugin(&self, source: impl AsRef<Path>) -> Result<StoredPackage> {
         let source = checked_root(source.as_ref())?;
         let manifest = source.join("plugin.json");
@@ -100,7 +104,6 @@ impl UzeStore {
         let mut registry = self.load_registry()?;
         if let Some(existing) = registry.packages.get(&id) {
             if existing.source == source {
-                self.refresh_codex_marketplace(&registry)?;
                 return self.package(&id);
             }
             return Err(UzeError::PackageConflict {
@@ -128,7 +131,6 @@ impl UzeStore {
             },
         );
         self.save_registry(&registry)?;
-        self.refresh_codex_marketplace(&registry)?;
         self.package(&id)
     }
 
@@ -171,8 +173,7 @@ impl UzeStore {
         if root.exists() {
             fs::remove_dir_all(&root).map_err(|source| UzeError::Write { path: root, source })?;
         }
-        self.save_registry(&registry)?;
-        self.refresh_codex_marketplace(&registry)
+        self.save_registry(&registry)
     }
 
     fn load_registry(&self) -> Result<PackageRegistry> {
@@ -194,45 +195,6 @@ impl UzeStore {
         let payload =
             serde_json::to_vec_pretty(registry).expect("registry serialization is infallible");
         crate::persistence::write_atomic(&path, &payload)
-    }
-
-    /// Materializes only Codex's documented marketplace catalog, pointing at
-    /// already-preserved package directories. It carries no UZE semantics and
-    /// is regenerated from the installed-package registry.
-    fn refresh_codex_marketplace(&self, registry: &PackageRegistry) -> Result<()> {
-        let path = self.home.codex_marketplace_path();
-        let parent = path.parent().expect("marketplace path has a parent");
-        fs::create_dir_all(parent).map_err(|source| UzeError::Write {
-            path: parent.to_path_buf(),
-            source,
-        })?;
-        let plugins: Vec<serde_json::Value> = registry
-            .packages
-            .keys()
-            .filter(|id| {
-                self.home
-                    .package_dir(id)
-                    .join(".codex-plugin/plugin.json")
-                    .is_file()
-            })
-            .map(|id| {
-                serde_json::json!({
-                    "name": id.as_str(),
-                    "source": { "source": "local", "path": format!("./packages/{}", id.as_str()) },
-                    "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
-                    "category": "Developer tools"
-                })
-            })
-            .collect();
-        let catalog = serde_json::json!({
-            "name": "uze-local",
-            "interface": { "displayName": "UZE Local" },
-            "plugins": plugins,
-        });
-        crate::persistence::write_atomic(
-            &path,
-            &serde_json::to_vec_pretty(&catalog).expect("catalog is serializable"),
-        )
     }
 }
 

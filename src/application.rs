@@ -12,7 +12,8 @@ use crate::{
     capability::CapabilityKind,
     exposure::{ExposurePlan, PackageExposurePlan},
     integration::{
-        AttachmentState, HarnessDetection, IntegrationPort, IntegrationStatus, receipt_location,
+        AttachmentState, HarnessDetection, IntegrationPort, IntegrationStatus, PublicationStatus,
+        receipt_location,
     },
     integrations::{
         claude::ClaudeIntegration, codex::CodexIntegration, opencode::OpenCodeIntegration,
@@ -112,15 +113,33 @@ impl UzeApplication {
     pub fn add_plugin(&self, source: impl Into<PathBuf>) -> Result<AddPluginReport> {
         let _mutation = crate::persistence::MutationLock::acquire(&self.home)?;
         let installed = self.store.install_agent_plugin(source.into())?;
+
+        // Derived views refresh before attachment: a native package delivery
+        // reads the view it was just given. A failure here is recorded, never
+        // propagated — the package is installed, and one integration's view
+        // being stale does not make the installation invalid.
+        let publications = self.republish_all();
+        let unpublished: BTreeSet<&str> = publications
+            .iter()
+            .filter(|outcome| outcome.error.is_some())
+            .map(|outcome| outcome.integration.as_str())
+            .collect();
+
         let environment = self.engine().compose(std::slice::from_ref(&installed.id))?;
         let resources: Vec<_> = environment.resources.iter().collect();
         let mut attachments = Vec::new();
         let mut package_plans = Vec::new();
         for integration in &self.integrations {
             let mut provided = BTreeSet::new();
-            if let Some(plan) = integration.package_exposure_plan(&installed, &resources) {
+            // Native delivery reads the view; attempting it against a view
+            // that failed to publish would fail for a reason that has
+            // nothing to do with this package.
+            if let Some(plan) = integration
+                .package_exposure_plan(&installed, &resources)
+                .filter(|_| !unpublished.contains(integration.id()))
+            {
                 package_plans.push((integration.id().to_owned(), plan.clone()));
-                if let Some(receipt) = integration.attach_package_receipt(&installed, &plan)? {
+                if let Some(receipt) = integration.attach_package(&installed, &plan)? {
                     let location = receipt_location(&receipt);
                     state::record_receipt(
                         &self.home,
@@ -155,6 +174,7 @@ impl UzeApplication {
             plugin: self.plugin_summary(&installed)?,
             package_plans,
             attachments,
+            publications,
         })
     }
 
@@ -163,7 +183,9 @@ impl UzeApplication {
     pub fn setup(&self, requested: Option<&str>) -> Result<Vec<SetupResult>> {
         let _mutation = crate::persistence::MutationLock::acquire(&self.home)?;
         self.home.ensure_layout()?;
-        let wanted = requested.map(normalize_harness_name).transpose()?;
+        let wanted = requested
+            .map(|name| self.resolve_integration_id(name))
+            .transpose()?;
         self.integrations
             .iter()
             .filter(|integration| wanted.is_none_or(|id| integration.id() == id))
@@ -179,7 +201,12 @@ impl UzeApplication {
                     configured,
                 })
             })
-            .collect()
+            .collect::<Result<Vec<_>>>()
+            .inspect(|_| {
+                // `setup` is the documented way to repair a derived view that
+                // failed to publish, so it always rebuilds them.
+                let _ = self.republish_all();
+            })
     }
 
     /// Applies the approved lifecycle contract: reconcile, plan, detach only
@@ -254,6 +281,9 @@ impl UzeApplication {
             state::forget_receipt(&self.home, &reconciled.ledger_key)?;
         }
         self.store.remove_package(&package.id)?;
+        // The package set changed, so every derived view is now stale. A
+        // failure to rebuild one does not un-remove the package.
+        let _ = self.republish_all();
         Ok(RemovePluginReport::Removed {
             plugin: package.id.as_str().to_owned(),
             detached_receipts,
@@ -290,6 +320,7 @@ impl UzeApplication {
             }
             Err(error) => (StoreHealth::Blocked(error.to_string()), Vec::new()),
         };
+        let installed = self.installed_packages();
         let harnesses = self
             .integrations
             .iter()
@@ -301,6 +332,10 @@ impl UzeApplication {
                     .ok()
                     .flatten()
                     .map(|record| record.strategy),
+                // Observed, not remembered. A package can be installed and
+                // reconciled while a harness still cannot see it, and that is
+                // exactly the state this field exists to surface.
+                publication: integration.publication(&installed),
             })
             .collect();
         let attachments = plugins
@@ -343,6 +378,57 @@ impl UzeApplication {
             store_path: package.root.clone(),
             capability_count: environment.resources.len(),
         })
+    }
+
+    /// Refreshes every integration's derived view of the installed package
+    /// set. Collects failures instead of propagating them: publication is not
+    /// part of package ownership, so one harness failing to rebuild its view
+    /// leaves the package installed and the other harnesses unaffected.
+    fn republish_all(&self) -> Vec<PublicationOutcome> {
+        let packages = self.installed_packages();
+        self.integrations
+            .iter()
+            .map(|integration| PublicationOutcome {
+                integration: integration.id().to_owned(),
+                error: integration
+                    .republish_packages(&packages)
+                    .err()
+                    .map(|error| error.to_string()),
+            })
+            .collect()
+    }
+
+    fn installed_packages(&self) -> Vec<StoredPackage> {
+        self.store
+            .package_ids()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|id| self.store.package(&id).ok())
+            .collect()
+    }
+
+    /// Resolves a requested harness name against the integrations actually
+    /// registered in this composition root. There is deliberately no central
+    /// list of vendors: an integration declares its own id and aliases, so
+    /// registering one is the only step needed to make it selectable.
+    fn resolve_integration_id(&self, requested: &str) -> Result<&'static str> {
+        self.integrations
+            .iter()
+            .find(|integration| {
+                integration.id() == requested || integration.aliases().contains(&requested)
+            })
+            .map(|integration| integration.id())
+            .ok_or_else(|| {
+                let known = self
+                    .integrations
+                    .iter()
+                    .map(|integration| integration.id())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                UzeError::ExposureUnavailable(format!(
+                    "unknown harness `{requested}` (registered: {known})"
+                ))
+            })
     }
 
     fn engine(&self) -> UzeEngine {
@@ -415,10 +501,20 @@ pub struct AttachmentSummary {
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub struct PublicationOutcome {
+    pub integration: String,
+    /// `None` when the derived view refreshed cleanly. A message here is
+    /// actionable on its own: the package is installed and only the view
+    /// needs rebuilding.
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct AddPluginReport {
     pub plugin: PluginSummary,
     pub package_plans: Vec<(String, PackageExposurePlan)>,
     pub attachments: Vec<AttachmentSummary>,
+    pub publications: Vec<PublicationOutcome>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -458,6 +554,7 @@ pub struct HarnessHealth {
     pub detection: HarnessDetection,
     pub setup: String,
     pub strategy: Option<String>,
+    pub publication: PublicationStatus,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -501,17 +598,6 @@ fn integration_status(status: IntegrationStatus) -> String {
         IntegrationStatus::InstalledVerified => "installed / verified",
     }
     .to_owned()
-}
-
-fn normalize_harness_name(value: &str) -> Result<&'static str> {
-    match value {
-        "claude" | "claude-code" => Ok("claude-code"),
-        "codex" => Ok("codex"),
-        "opencode" => Ok("opencode"),
-        other => Err(UzeError::ExposureUnavailable(format!(
-            "unknown harness `{other}` (expected `claude`, `codex`, or `opencode`)"
-        ))),
-    }
 }
 
 fn package_receipt_key(package: &str, integration: &str) -> String {
