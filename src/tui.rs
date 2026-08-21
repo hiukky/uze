@@ -307,7 +307,7 @@ fn dispatch(intent: Intent, home: &UzeHome, sender: &Sender<WorkerResult>, model
             spawn_mutation(
                 home.clone(),
                 sender.clone(),
-                "Preparing harnesses…".to_owned(),
+                "Provisioning harnesses…".to_owned(),
                 |app| {
                     app.setup(None).map(|results| {
                         let configured = results.iter().filter(|result| result.configured).count();
@@ -315,7 +315,7 @@ fn dispatch(intent: Intent, home: &UzeHome, sender: &Sender<WorkerResult>, model
                     })
                 },
             );
-            model.notice = Notice::Working("Preparing harnesses…".to_owned());
+            model.notice = Notice::Working("Provisioning harnesses…".to_owned());
         }
         Intent::None | Intent::Quit => {}
     }

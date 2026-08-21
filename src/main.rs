@@ -146,6 +146,7 @@ fn run(cli: Cli) -> Result<()> {
             }
         }
         Command::Setup { harness } => {
+            println!("Provisioning harnesses through official routes…");
             for result in app.setup(harness.as_deref())? {
                 if result.configured {
                     println!(

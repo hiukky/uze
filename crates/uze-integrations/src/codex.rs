@@ -108,8 +108,9 @@ impl IntegrationPort for CodexIntegration {
             ProcessSpec::new(
                 "sh",
                 ["-c", "curl -fsSL https://chatgpt.com/codex/install.sh | sh"],
-            ),
-            ProcessSpec::new("codex", ["--upgrade"]),
+            )
+            .with_inherited_output(),
+            ProcessSpec::new("codex", ["--upgrade"]).with_inherited_output(),
             "official-native-installer",
         )
     }
