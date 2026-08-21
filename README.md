@@ -64,6 +64,17 @@ directory (usually `~/.cargo/bin`). It does not run `uze setup` or mutate any
 harness configuration. Set `CARGO_INSTALL_ROOT` to select another install
 location.
 
+From one WSL distro, deploy a release build into another isolated distro
+without sharing either Linux home directory:
+
+```bash
+make install-wsl-lab
+# or: ./scripts/install-wsl-distro.sh MyOtherDistro
+```
+
+The script stages only `target/release/uze` in Windows `%TEMP%`, copies it to
+the target's `~/.local/bin/uze`, verifies `--version`, then removes staging.
+
 ```bash
 uze setup
 uze add ./my-agent-plugin
