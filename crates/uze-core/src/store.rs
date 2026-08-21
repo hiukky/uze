@@ -1,3 +1,5 @@
+//! Install-once package Store.
+
 use std::{
     collections::BTreeMap,
     fs,

@@ -1,3 +1,5 @@
+//! UZE-owned local paths.
+
 use std::{
     env, fs,
     path::{Path, PathBuf},

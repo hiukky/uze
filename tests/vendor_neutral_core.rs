@@ -391,7 +391,7 @@ fn native_package_delivery_still_suppresses_individual_attachment() {
 #[test]
 fn the_store_contains_no_source_mechanism_semantics() {
     let store = fs::read_to_string(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/store.rs"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("crates/uze-core/src/store.rs"),
     )
     .expect("store source is readable");
 
@@ -423,11 +423,11 @@ fn the_store_contains_no_source_mechanism_semantics() {
 #[test]
 fn no_core_module_depends_on_acquisition() {
     for module in [
-        "src/engine.rs",
-        "src/router.rs",
-        "src/capability.rs",
-        "src/project.rs",
-        "src/store.rs",
+        "crates/uze-core/src/engine.rs",
+        "crates/uze-core/src/router.rs",
+        "crates/uze-core/src/capability.rs",
+        "crates/uze-core/src/project.rs",
+        "crates/uze-core/src/store.rs",
     ] {
         let text = fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(module))
             .expect("core source is readable");

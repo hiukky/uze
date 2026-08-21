@@ -1,37 +1,16 @@
-//! UZE resolves a standards-first agent project into an explainable effective
-//! agent environment. See docs/adr/003 and docs/adr/004.
+//! Compatibility facade for the `uze` binary and existing library callers.
+//!
+//! The harness-agnostic model now lives in `uze-core`; this crate preserves
+//! the established public imports while application, integrations, and
+//! presentation complete their own extraction.
 
-pub mod acquisition;
-pub mod application;
-pub mod bundle;
-pub mod capability;
-pub mod engine;
-pub mod error;
-pub mod exposure;
-pub mod home;
-pub mod importer;
-pub mod importers;
-pub mod integration;
-pub mod integrations;
-pub mod persistence;
-pub mod project;
-pub mod reconciliation;
-pub mod router;
-pub mod runtime;
-pub mod state;
-pub mod store;
-pub mod trust;
-pub mod tui;
-
-pub use acquisition::{MaterializedPackage, PackageSource, Provenance, ResolvedSource};
-pub use application::UzeApplication;
-pub use bundle::ImportedBundle;
-pub use engine::UzeEngine;
-pub use error::{Result, UzeError};
-pub use exposure::{ExposureMechanism, ExposurePlan, PackageExposurePlan, PreparedExposure};
-pub use home::UzeHome;
-pub use project::{
-    EffectiveEnvironment, ResolvedProject, Resource, ResourceOrigin, resolve_project,
-    resolve_project_resources,
+pub use uze_core::{
+    acquisition, bundle, capability, engine, error, exposure, home, importer, importers,
+    integration, persistence, project, reconciliation, router, runtime, state, store, trust,
 };
-pub use store::{PackageId, StoredPackage, UzeStore};
+pub use uze_core::*;
+
+pub mod application;
+pub mod integrations;
+pub mod tui;
+pub use application::UzeApplication;

@@ -1,4 +1,4 @@
-//! The one question acquisition made necessary: *should this package be
+//! Core trust boundary: the one question acquisition made necessary: *should this package be
 //! allowed to introduce code a harness will execute?*
 //!
 //! `uze add ./plugin` has always been able to register an MCP server, but the

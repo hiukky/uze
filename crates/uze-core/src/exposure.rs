@@ -1,3 +1,5 @@
+//! Package and capability delivery plans.
+
 use std::{
     collections::BTreeSet,
     fs,

@@ -1,3 +1,5 @@
+//! Imported standard bundle representation.
+
 use std::path::PathBuf;
 
 use serde::Serialize;

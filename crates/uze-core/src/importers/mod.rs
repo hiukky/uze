@@ -1,3 +1,5 @@
+//! Registry of standard and recognized foreign importers.
+
 use std::path::{Path, PathBuf};
 
 use crate::{

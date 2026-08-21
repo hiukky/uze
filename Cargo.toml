@@ -6,7 +6,13 @@ rust-version = "1.97"
 description = "Standards-first agent project composition"
 license = "MIT"
 
+[workspace]
+members = [".", "crates/uze-core", "e2e"]
+default-members = ["."]
+resolver = "3"
+
 [dependencies]
+uze-core = { path = "crates/uze-core" }
 clap = { version = "4.5", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -15,8 +21,8 @@ toml = "0.9"
 ratatui = "0.29"
 crossterm = "0.28"
 
-# Used only by the MCP conformance fixture binary below (see ADR-007); the
-# `uze` library/binary source itself never imports these.
+# Temporary compatibility placement for the MCP fixture binary. It moves into
+# the `e2e` workspace member in the next extraction step.
 rmcp = { version = "0.1", features = ["server", "transport-io", "macros"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std"] }
 schemars = "0.8"

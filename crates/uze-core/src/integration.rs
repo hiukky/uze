@@ -1,3 +1,5 @@
+//! Harness-agnostic integration and managed-attachment contracts.
+
 use std::{collections::BTreeMap, fs, path::PathBuf};
 
 use serde::{Deserialize, Serialize};

@@ -1,4 +1,4 @@
-//! Read-only comparison of persisted attachment intent with the live harness
+//! Core read-only comparison of persisted attachment intent with the live harness
 //! state. Reconciliation intentionally never repairs or detaches anything.
 
 use serde::Serialize;

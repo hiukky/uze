@@ -1106,6 +1106,25 @@ dependencies = [
  "thiserror",
  "tokio",
  "toml",
+ "uze-core",
+]
+
+[[package]]
+name = "uze-conformance"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "uze-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+ "toml",
 ]
 
 [[package]]

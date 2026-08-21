@@ -1,3 +1,5 @@
+//! Canonical capability identities and preserved representations.
+
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;

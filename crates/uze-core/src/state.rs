@@ -1,4 +1,4 @@
-//! Minimal, secret-free machine integration state. See ADR-006.
+//! Core minimal, secret-free machine integration state. See ADR-006.
 
 use std::{collections::BTreeMap, fs};
 

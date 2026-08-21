@@ -1,3 +1,5 @@
+//! Effective environment resource model.
+
 use std::{
     fs,
     path::{Path, PathBuf},

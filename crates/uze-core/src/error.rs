@@ -1,3 +1,5 @@
+//! Shared product error model.
+
 use std::path::PathBuf;
 
 use thiserror::Error;
