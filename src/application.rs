@@ -146,6 +146,15 @@ impl UzeApplication {
         // integration knows this question exists.
         self.authorize(&materialized, authority, already_trusted, replacing_installed)?;
 
+        // `uze add` is deliberately enough for a harness the user already
+        // has.  Preparing a detected integration only creates UZE's own
+        // prerequisites (such as a user-scope discovery directory) and
+        // records its setup state; it never installs, upgrades, or launches
+        // the vendor executable.  Do it before ingesting so a preparation
+        // failure cannot leave a newly installed package with no reported
+        // delivery attempt.
+        self.prepare_detected_integrations(None)?;
+
         let installed = self.store.ingest(&materialized)?;
 
         // Derived views refresh before attachment: a native package delivery
@@ -271,9 +280,24 @@ impl UzeApplication {
         let wanted = requested
             .map(|name| self.resolve_integration_id(name))
             .transpose()?;
+        let results = self.prepare_detected_integrations(wanted.as_deref())?;
+        // `setup` is the documented way to repair a derived view that
+        // failed to publish, so it always rebuilds them.
+        let _ = self.republish_all();
+        Ok(results)
+    }
+
+    /// Prepares integrations only when their real executable is present.
+    /// This is the shared bridge between explicit `setup` and implicit
+    /// preparation during `add`; neither presentation layer needs to know
+    /// which directories/configuration an integration owns.
+    fn prepare_detected_integrations(
+        &self,
+        requested: Option<&str>,
+    ) -> Result<Vec<SetupResult>> {
         self.integrations
             .iter()
-            .filter(|integration| wanted.is_none_or(|id| integration.id() == id))
+            .filter(|integration| requested.is_none_or(|id| integration.id() == id))
             .map(|integration| {
                 let detection = integration.detect();
                 let configured = detection.present;
@@ -286,12 +310,7 @@ impl UzeApplication {
                     configured,
                 })
             })
-            .collect::<Result<Vec<_>>>()
-            .inspect(|_| {
-                // `setup` is the documented way to repair a derived view that
-                // failed to publish, so it always rebuilds them.
-                let _ = self.republish_all();
-            })
+            .collect()
     }
 
     /// Applies the approved lifecycle contract: reconcile, plan, detach only
