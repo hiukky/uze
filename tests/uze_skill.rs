@@ -1,5 +1,5 @@
 //! Deterministic contract tests for the official `uze` Skill package
-//! (`packages/uze/`).
+//! (`plugins/uze/`).
 //!
 //! These are the non-probabilistic half of Fase 12: does the package
 //! install through the exact same pipeline as any other package, does it
@@ -35,7 +35,7 @@ fn temp(label: &str) -> PathBuf {
 }
 
 fn official_package() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("packages/uze")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("plugins/uze")
 }
 
 /// Mirrors the real integrations only in `id()`/`detect()` — proves the

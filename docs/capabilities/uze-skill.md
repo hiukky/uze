@@ -5,7 +5,7 @@ Status: **first vertical slice, implemented, 2026-08-21.** Companion to
 top of and never bypasses.
 
 ```
-              /uze (this Skill — packages/uze/skills/uze/SKILL.md)
+              /uze (this Skill — plugins/uze/skills/uze/SKILL.md)
                  reasoning / orchestration
         ┌────────────────┼────────────────┐
         ▼                ▼                ▼
@@ -21,7 +21,7 @@ top of and never bypasses.
 ```
 
 The Skill reasons. `uze` mutates. That boundary is enforced by the Skill's
-own instructions (`packages/uze/skills/uze/SKILL.md`'s "Hard boundaries"
+own instructions (`plugins/uze/skills/uze/SKILL.md`'s "Hard boundaries"
 section), not by anything in `uze-core` — the Core has no idea this Skill
 exists, and never will (see the vendor-neutrality/no-hardcoding proof
 below).
@@ -69,7 +69,7 @@ questions in ordinary conversation (OpenCode additionally has a dedicated
 
 ## Fase 2 — dogfooding proof: no special treatment anywhere
 
-`packages/uze/` is an ordinary Agent Plugins 1.0 package: `plugin.json` +
+`plugins/uze/` is an ordinary Agent Plugins 1.0 package: `plugin.json` +
 `skills/uze/SKILL.md`. It was installed with the exact same `uze add`
 command as any other package, in a fully isolated `$HOME`/`$UZE_HOME`, and
 delivered identically to Claude Code, Codex, OpenCode, and Gemini CLI's
@@ -78,7 +78,7 @@ path every other Skill-only package already used before this milestone.
 
 ```
 # antes do refactor (legado, ainda reutilizado verbatim se já instalado)
-$ uze add ./packages/uze --trust
+$ uze add ./plugins/uze --trust
 Installed plugin: uze
 Attached to claude-code: <home>/.claude/skills/uze-uze-uze
 Attached to codex: <home>/.agents/skills/uze-uze-uze
@@ -109,7 +109,7 @@ $ grep -rn '"uze"' crates/uze-core/src/store.rs crates/uze-core/src/engine.rs cr
 
 ## Fase 3 — responsibilities (enforced in the Skill's own text, not in code)
 
-The full boundary lives in `packages/uze/skills/uze/SKILL.md`'s "Hard
+The full boundary lives in `plugins/uze/skills/uze/SKILL.md`'s "Hard
 boundaries" section. Summary: the Skill may read files, analyze the
 project, propose content, ask questions, and write *user-owned* content
 (new `AGENTS.md` prose before it exists, content moved within a vendor file

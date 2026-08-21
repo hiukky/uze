@@ -29,7 +29,7 @@ use uze_integrations::{
     opencode::OpenCodeIntegration,
 };
 
-use crate::builtin;
+use crate::bootstrap;
 
 /// Harnesses that read a project's shared `AGENTS.md` only through an
 /// explicit bridge region in their own native file, rather than natively —
@@ -106,47 +106,90 @@ impl UzeApplication {
         }
     }
 
-    /// Ensure the builtin `uze` package (`packages/uze`) is present in the
-    /// Store and attached to every detected harness, using the same
-    /// `Store::ingest` + `IntegrationPort::attach` path any normal package
-    /// uses. Idempotent: if the package is already installed and current, and
-    /// its attachments are already `Matched`, this is a no-op. Returns `true`
-    /// if it installed or updated the Store entry.
+    /// Ensures every plugin `bootstrap::DEFAULT_PLUGIN_IDS` names is present
+    /// in the Store, then attached to every detected harness. Each default
+    /// plugin's *first install* goes through the exact same lifecycle a
+    /// normal `uze add` would (`install_materialized`), so Store, Engine,
+    /// Router and every `IntegrationPort` stay unaware any of this is a
+    /// "default" rather than an ordinary installed plugin.
     ///
-    /// This is deliberately not called from `from_env`/`new` so contract tests
-    /// can construct isolated worlds without the builtin. The CLI (`src/main.rs`)
-    /// and `setup` call this explicitly; `add`/`remove` do not need to because
-    /// `setup` already covers the attach path.
-    pub fn ensure_builtin_plugins(&self) -> Result<bool> {
-        // 1. Seed/update the Store entry itself.
-        let installed = builtin::ensure_builtin_uze_store(&self.home, &self.store)?;
-        // 2. Ensure attachments for the builtin package, if it now exists.
-        //    Scoped to the single builtin package (not every stored package,
-        //    unlike `attach_stored_packages_to`) since this runs on every CLI
-        //    invocation and must stay cheap. Also prepares detected harnesses
-        //    (creating `~/.claude/skills` etc.) so a fresh `UZE_HOME` gets the
-        //    skill without a prior `uze setup`.
-        let builtin_id = self
-            .store
-            .package_ids()
-            .ok()
-            .and_then(|ids| ids.into_iter().find(|id| id.as_str() == "uze"));
-        let Some(package_id) = builtin_id else {
-            return Ok(installed);
-        };
-        let Ok(package) = self.store.package(&package_id) else {
-            return Ok(installed);
-        };
+    /// This is BOOTSTRAP, not UPDATE: an already-installed default plugin is
+    /// never touched here, no matter how its content compares to the
+    /// embedded marketplace snapshot — this runs on every CLI invocation
+    /// (including read-only ones like `doctor`/`list`), and an observational
+    /// command must not mutate installed plugin content. A newer snapshot is
+    /// surfaced as `PluginSummary::update_available` (a pure read) for an
+    /// explicit `update_plugin` to act on later, not applied silently. See
+    /// `docs/architecture/overview.md`'s Marketplace section.
+    ///
+    /// Idempotent: nothing changes on a repeat call once every default
+    /// plugin is installed and attached. Returns `true` if it installed at
+    /// least one Store entry.
+    ///
+    /// This is deliberately not called from `from_env`/`new` so contract
+    /// tests can construct isolated worlds with no default plugins. The CLI
+    /// (`src/main.rs`) and `setup` call this explicitly; `add`/`remove` do
+    /// not need to because `setup` already covers the attach path.
+    pub fn ensure_default_plugins(&self) -> Result<bool> {
+        let mut installed_any = false;
+        for &id in bootstrap::DEFAULT_PLUGIN_IDS {
+            installed_any |= self.ensure_default_plugin_installed(id)?;
+        }
+        // Attach every default plugin — freshly installed or already
+        // present — to every currently detected harness. Kept as its own
+        // pass, unconditional, because a harness detected since the last
+        // run should not wait for an explicit `uze setup` before seeing the
+        // fallback delivery; also prepares detected harnesses (creating
+        // `~/.claude/skills` etc.) so a fresh `UZE_HOME` gets the plugin
+        // without a prior `uze setup`. Idempotent via ledger receipt keys,
+        // so re-attaching a plugin `install_materialized` just attached is
+        // harmless. This does not touch plugin *content*, only exposure —
+        // distinct from the update question above.
         let _ = self.prepare_detected_integrations(None);
-        for integration in &self.integrations {
-            if integration.detect().present {
-                self.attach_package_to(&package, integration.as_ref())?;
+        let installed_ids: BTreeSet<&str> = bootstrap::DEFAULT_PLUGIN_IDS.iter().copied().collect();
+        for package_id in self.store.package_ids().unwrap_or_default() {
+            if !installed_ids.contains(package_id.as_str()) {
+                continue;
+            }
+            let Ok(package) = self.store.package(&package_id) else {
+                continue;
+            };
+            for integration in &self.integrations {
+                if integration.detect().present {
+                    self.attach_package_to(&package, integration.as_ref())?;
+                }
             }
         }
-        // Refresh derived views (e.g. Codex/OpenCode catalogues) so the
-        // newly seeded package is visible there too — same as `add`.
         let _ = self.republish_all();
-        Ok(installed)
+        Ok(installed_any)
+    }
+
+    /// Installs default plugin `id` if it is not already in the Store.
+    /// Never touches an already-installed copy — see `ensure_default_plugins`.
+    fn ensure_default_plugin_installed(&self, id: &str) -> Result<bool> {
+        let already_installed = self
+            .store
+            .package_ids()?
+            .iter()
+            .any(|package_id| package_id.as_str() == id);
+        if already_installed {
+            return Ok(false);
+        }
+        let materialized = bootstrap::materialize(id)?;
+        self.install_materialized(materialized, &trust::NoTrustAuthority, &[], false)?;
+        Ok(true)
+    }
+
+    /// Resolves a `PackageSource` into local bytes. `Embedded` sources are
+    /// resolved through the embedded default marketplace snapshot this
+    /// composition root carries (`uze-core`'s generic acquisition cannot
+    /// reach bytes `include_str!` compiled a layer up); every other source
+    /// goes through the normal acquisition mechanism.
+    fn acquire(&self, source: &PackageSource) -> Result<uze_core::MaterializedPackage> {
+        match source {
+            PackageSource::Embedded { id } => bootstrap::materialize(id),
+            _ => uze_core::acquisition::acquire(source),
+        }
     }
 
     pub fn list_plugins(&self) -> Result<Vec<PluginSummary>> {
@@ -214,7 +257,7 @@ impl UzeApplication {
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.home)?;
         // Acquisition brings the bytes to a local directory and owns their
         // cleanup; the Store only ever sees a materialized package.
-        let materialized = uze_core::acquisition::acquire(&source)?;
+        let materialized = self.acquire(&source)?;
         self.install_materialized(materialized, authority, &[], false)
     }
 
@@ -350,7 +393,7 @@ impl UzeApplication {
 
         // Re-resolve the *request*, not the resolution: that is what makes a
         // branch move forward while a pinned commit stays put.
-        let materialized = uze_core::acquisition::acquire(&installed.provenance.requested)?;
+        let materialized = self.acquire(&installed.provenance.requested)?;
 
         let previous = {
             let environment = self.engine().compose(std::slice::from_ref(&installed.id))?;
@@ -380,10 +423,10 @@ impl UzeApplication {
     pub fn setup(&self, requested: Option<&str>) -> Result<Vec<SetupResult>> {
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.home)?;
         self.home.ensure_layout()?;
-        // Seed the builtin `uze` package before any provisioning, so a fresh
-        // `UZE_HOME` gets the Skill without a manual `uze add` and so an
-        // updated binary heals its attachment on next `setup`.
-        let _ = self.ensure_builtin_plugins();
+        // Seed the default marketplace plugins before any provisioning, so a
+        // fresh `UZE_HOME` gets the Skill without a manual `uze add` and so
+        // an updated binary heals its attachment on next `setup`.
+        let _ = self.ensure_default_plugins();
         let wanted = requested
             .map(|name| self.resolve_integration_id(name))
             .transpose()?;
@@ -470,7 +513,7 @@ impl UzeApplication {
     /// native delivery when the integration offers one, then per-resource
     /// attachment for whatever it doesn't cover. Idempotent via the ledger's
     /// receipt keys. Shared by `attach_stored_packages_to` (every package) and
-    /// `ensure_builtin_plugins` (the single builtin package).
+    /// `ensure_default_plugins` (only the default marketplace plugins).
     fn attach_package_to(
         &self,
         package: &StoredPackage,
@@ -1059,11 +1102,16 @@ impl UzeApplication {
 
     fn plugin_summary(&self, package: &StoredPackage) -> Result<PluginSummary> {
         let environment = self.engine().compose(std::slice::from_ref(&package.id))?;
+        let update_available = match &package.provenance.requested {
+            PackageSource::Embedded { id } => bootstrap::has_update(id, &package.root).ok(),
+            _ => None,
+        };
         Ok(PluginSummary {
             id: package.id.as_str().to_owned(),
             source: package.provenance.requested.display(),
             store_path: package.root.clone(),
             capability_count: environment.resources.len(),
+            update_available,
         })
     }
 
@@ -1199,6 +1247,14 @@ pub struct PluginSummary {
     pub source: String,
     pub store_path: PathBuf,
     pub capability_count: usize,
+    /// Whether the official marketplace snapshot currently carries
+    /// different content than what's installed — a pure read, computed by
+    /// comparing directory trees, never re-applied automatically (see
+    /// `ensure_default_plugins`). `None` for any package this composition
+    /// root has no offline way to compare (anything not sourced from the
+    /// embedded marketplace) — never re-acquired over the network or from
+    /// a mutable local path just to answer this question.
+    pub update_available: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1722,12 +1778,25 @@ mod tests {
         fn attach_receipt(&self, resource: &Resource) -> Result<Option<AttachmentReceipt>> {
             let path = self.root.join(resource.name());
             #[cfg(unix)]
-            std::os::unix::fs::symlink(&resource.capability.path, &path).map_err(|source| {
-                UzeError::Write {
-                    path: path.clone(),
-                    source,
+            {
+                let already_correct = fs::read_link(&path)
+                    .map(|target| target == resource.capability.path)
+                    .unwrap_or(false);
+                if !already_correct {
+                    if path.symlink_metadata().is_ok() {
+                        fs::remove_file(&path).map_err(|source| UzeError::Write {
+                            path: path.clone(),
+                            source,
+                        })?;
+                    }
+                    std::os::unix::fs::symlink(&resource.capability.path, &path).map_err(
+                        |source| UzeError::Write {
+                            path: path.clone(),
+                            source,
+                        },
+                    )?;
                 }
-            })?;
+            }
             Ok(Some(AttachmentReceipt {
                 package_id: match &resource.origin {
                     uze_core::ResourceOrigin::Package { id, .. } => id.as_str().to_owned(),
@@ -2066,6 +2135,155 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn mcp_fixture() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/packages/agent-plugin-mcp")
+    }
+
+    // --- Marketplace bootstrap: install-only, never silent-update --------
+
+    #[test]
+    fn bootstrap_installs_exactly_the_default_policy_and_is_idempotent() {
+        let root = temp("bootstrap-default");
+        let app = UzeApplication::new(UzeHome::at(&root), Vec::new());
+
+        assert!(app.ensure_default_plugins().unwrap(), "first call installs");
+        let installed: Vec<String> = app
+            .list_plugins()
+            .unwrap()
+            .into_iter()
+            .map(|p| p.id)
+            .collect();
+        assert_eq!(installed, bootstrap::DEFAULT_PLUGIN_IDS);
+
+        assert!(
+            !app.ensure_default_plugins().unwrap(),
+            "second call installs nothing new"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bootstrap_never_mutates_an_already_installed_default_plugin() {
+        let root = temp("bootstrap-no-silent-update");
+        let app = UzeApplication::new(UzeHome::at(&root), Vec::new());
+        app.ensure_default_plugins().unwrap();
+
+        let package = app.package_by_name("uze").unwrap();
+        let manifest_path = package.root.join("plugin.json");
+        fs::write(&manifest_path, "{\"name\":\"uze\",\"tampered\":true}").unwrap();
+        let tampered = fs::read_to_string(&manifest_path).unwrap();
+
+        // A read-only-shaped call (every CLI command runs this) must not
+        // touch the tampered content, even though it clearly differs from
+        // the embedded snapshot.
+        assert!(!app.ensure_default_plugins().unwrap());
+        assert_eq!(fs::read_to_string(&manifest_path).unwrap(), tampered);
+
+        // The drift is still visible — read-only, informational.
+        let summary = app
+            .plugin_summary(&app.package_by_name("uze").unwrap())
+            .unwrap();
+        assert_eq!(summary.update_available, Some(true));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn read_only_bootstrap_leaves_store_state_byte_identical_on_repeat() {
+        let root = temp("bootstrap-snapshot");
+        let home = UzeHome::at(&root);
+        let app = UzeApplication::new(home.clone(), Vec::new());
+        app.ensure_default_plugins().unwrap();
+
+        let packages_before = fs::read(home.registry_path()).unwrap();
+        let attachments_path = home.state_dir().join("attachments.json");
+        let attachments_before = fs::read(&attachments_path).ok();
+
+        app.ensure_default_plugins().unwrap();
+        app.list_plugins().unwrap();
+        app.doctor();
+
+        assert_eq!(fs::read(home.registry_path()).unwrap(), packages_before);
+        assert_eq!(fs::read(&attachments_path).ok(), attachments_before);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn existing_receipts_survive_repeated_bootstrap_unchanged() {
+        let root = temp("bootstrap-receipts");
+        let home = UzeHome::at(&root);
+        let app = UzeApplication::new(
+            home.clone(),
+            vec![Box::new(AllResourceSymlinkIntegration {
+                root: root.clone(),
+            })],
+        );
+        app.ensure_default_plugins().unwrap();
+        let before = state::receipts(&home, Some("uze")).unwrap();
+        assert!(!before.is_empty());
+
+        app.ensure_default_plugins().unwrap();
+        let after = state::receipts(&home, Some("uze")).unwrap();
+        assert_eq!(before, after);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_default_plugin_that_would_cross_the_trust_boundary_is_not_installed_silently() {
+        let root = temp("bootstrap-trust");
+        let app = UzeApplication::new(UzeHome::at(&root), Vec::new());
+
+        // Simulate a hypothetical embedded snapshot revision that declares
+        // an MCP server — exactly the scenario Fase I describes. `Embedded`
+        // sources cross the trust boundary (see `crosses_trust_boundary`),
+        // so a non-interactive authority must refuse, not install.
+        let mut materialized =
+            uze_core::acquisition::acquire(&uze_core::PackageSource::local(mcp_fixture())).unwrap();
+        let fixture_root = materialized.root().to_path_buf();
+        materialized.retarget(
+            fixture_root,
+            uze_core::Provenance {
+                requested: uze_core::PackageSource::Embedded {
+                    id: "uze-mcp-conformance".to_owned(),
+                },
+                resolved: uze_core::ResolvedSource::Embedded {
+                    id: "uze-mcp-conformance".to_owned(),
+                },
+            },
+        );
+
+        let result =
+            app.install_materialized(materialized, &uze_core::trust::NoTrustAuthority, &[], false);
+        assert!(matches!(result, Err(UzeError::TrustRequired { .. })));
+        assert!(
+            app.list_plugins().unwrap().is_empty(),
+            "nothing was installed"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_corrupted_stored_copy_reports_unknown_update_status_without_panicking() {
+        let root = temp("bootstrap-corrupt");
+        let app = UzeApplication::new(UzeHome::at(&root), Vec::new());
+        app.ensure_default_plugins().unwrap();
+
+        let package = app.package_by_name("uze").unwrap();
+        fs::remove_file(package.root.join("plugin.json")).unwrap();
+
+        let summary = app
+            .plugin_summary(&app.package_by_name("uze").unwrap())
+            .unwrap();
+        assert_eq!(summary.update_available, Some(true));
+
+        fs::remove_dir_all(&package.root).unwrap();
+        let summary = app
+            .plugin_summary(&app.package_by_name("uze").unwrap())
+            .unwrap();
+        assert_eq!(summary.update_available, None);
         fs::remove_dir_all(root).unwrap();
     }
 }

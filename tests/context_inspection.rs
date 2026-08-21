@@ -61,7 +61,7 @@ fn status_distinguishes_installed_from_contributing_here() {
     // Instruction resource, so it must not count as "contributing here".
     install(
         &application,
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("packages/uze"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("plugins/uze"),
     );
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();

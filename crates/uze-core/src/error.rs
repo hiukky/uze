@@ -65,6 +65,8 @@ pub enum UzeError {
     TrustRequired { package: String, detail: String },
     #[error("unknown UZE package `{0}`")]
     UnknownPackage(String),
+    #[error("marketplace declares plugin `{0}` more than once")]
+    DuplicateMarketplacePlugin(String),
     #[error("runtime projection target already exists: {0}")]
     RuntimePathExists(PathBuf),
     #[error("runtime filesystem projection is unavailable on this platform: {0}")]

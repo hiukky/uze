@@ -22,7 +22,7 @@ delivers them through the best surface each harness supports.
 
 Three pillars, two interfaces. The pillars above are deterministic Rust —
 no LLM, no network call, fully tested without one. On top of them sits an
-agentic UX layer: the `uze` Skill (`packages/uze/`, installed the same way
+agentic UX layer: the `uze` Skill (`plugins/uze/`, installed the same way
 as any other package), which most people should use directly inside their
 harness rather than learning the pillars' own CLI:
 
@@ -115,7 +115,7 @@ Install the official `uze` Skill once (it's an ordinary package — no special
 Store treatment):
 
 ```bash
-uze add ./packages/uze --trust
+uze add ./plugins/uze --trust
 uze setup
 ```
 
@@ -244,7 +244,7 @@ TUI ─┘            |               |
 | Ledger | Expected ownership receipts, never live vendor state. |
 | Application | Package-centric API shared by CLI and TUI. |
 | Context Manager | Project-scoped `inspect`/`plan`/`reconcile` over the shared `AGENTS.md` baseline. Independent of Package Manager: `uze add` never touches a project, `uze context`/`uze status` never touch the Store. Deterministic — no LLM dependency, ever. |
-| `/uze` Skill | The agentic layer, distributed as an ordinary package (`packages/uze/`). Reasons and proposes; only the Context Manager's own commands ever write. |
+| `/uze` Skill | The agentic layer, distributed as an ordinary package (`plugins/uze/`). Reasons and proposes; only the Context Manager's own commands ever write. |
 
 ## Safety
 
