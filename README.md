@@ -54,6 +54,10 @@ make check
 make install
 ```
 
+Releases use a single workspace SemVer pre-release version (currently the
+`0.y.z-alpha.N` line). See [versioning](docs/versioning.md); increment it
+before distributing or installing a new binary.
+
 `make install` invokes `cargo install --path . --bin uze --locked --force` and
 therefore installs only the product binary into Cargo's configured binary
 directory (usually `~/.cargo/bin`). It does not run `uze setup` or mutate any

@@ -1,6 +1,6 @@
 [package]
 name = "uze"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 rust-version = "1.97"
 description = "Standards-first agent project composition"
@@ -16,6 +16,11 @@ members = [
 ]
 default-members = ["."]
 resolver = "3"
+
+[workspace.package]
+# UZE v0 is released as SemVer pre-releases. Increment this value before
+# producing any distributable binary; every workspace crate inherits it.
+version = "0.1.0-alpha.1"
 
 [dependencies]
 uze-core = { path = "crates/uze-core" }

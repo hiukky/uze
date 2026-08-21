@@ -5,7 +5,7 @@ UZE_BIN ?= target/debug/uze
 RELEASE_BIN ?= target/release/uze
 INSTALL_ARGS ?= --force
 
-.PHONY: help build release install run test check fmt lint clean
+.PHONY: help build release install run test check fmt lint version clean
 
 help: ## Show the available local-development targets.
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z0-9_.-]+:.*##/ { printf "  %-12s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -15,6 +15,9 @@ build: ## Build the debug UZE binary for local development.
 
 release: ## Build the optimized UZE binary for a real local installation.
 	$(CARGO) build --locked --release --bin uze
+
+version: ## Print the single workspace version carried by the UZE binary.
+	$(CARGO) run --quiet --bin uze -- --version
 
 install: ## Install/replace `uze` in Cargo's configured binary directory.
 	$(CARGO) install --path . --bin uze --locked $(INSTALL_ARGS)
