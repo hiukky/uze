@@ -43,6 +43,16 @@ pub enum ManagedArtifact {
         environment: Vec<McpEnvironmentReference>,
         enabled: Option<bool>,
     },
+    /// UZE owns a delimited region inside a shared text file, never the
+    /// whole file. See `ExposureMechanism::ManagedTextRegion` and
+    /// `crate::text_region`, which every safety rule for this variant lives
+    /// in — this receipt shape carries no knowledge of what kind of file
+    /// `target_file` is or why.
+    ManagedTextRegion {
+        target_file: PathBuf,
+        region_identity: String,
+        expected_content: String,
+    },
     /// A delivery whose ownership proof only the owning integration can
     /// interpret. The Core routes it by `receipt.integration`, never reads
     /// `detail`, and refuses to inspect or detach it generically.
@@ -194,6 +204,9 @@ pub trait IntegrationPort {
             ExposureMechanism::ManagedUserScopeReference { .. } => {
                 Ok(Some(plan.mechanism.attach()?))
             }
+            ExposureMechanism::ManagedTextRegion { .. } => {
+                Ok(Some(plan.mechanism.attach_text_region()?))
+            }
             _ => Ok(None),
         }
     }
@@ -286,6 +299,15 @@ pub trait IntegrationPort {
                 environment,
                 enabled,
             },
+            ExposureMechanism::ManagedTextRegion {
+                target_file,
+                region_identity,
+                expected_content,
+            } => ManagedArtifact::ManagedTextRegion {
+                target_file,
+                region_identity,
+                expected_content,
+            },
             _ => return Ok(None),
         };
         Ok(Some(AttachmentReceipt {
@@ -335,6 +357,11 @@ pub fn inspect_standard_receipt(receipt: &AttachmentReceipt) -> AttachmentInspec
                 reason: error.to_string(),
             },
         },
+        ManagedArtifact::ManagedTextRegion {
+            target_file,
+            region_identity,
+            expected_content,
+        } => crate::text_region::inspect(target_file, region_identity, expected_content),
         _ => AttachmentInspection {
             state: AttachmentState::Blocked,
             reason: "integration must inspect this vendor artifact".to_owned(),
@@ -346,6 +373,17 @@ pub fn inspect_standard_receipt(receipt: &AttachmentReceipt) -> AttachmentInspec
 /// non-matched inspection unchanged, so drift never turns into a destructive
 /// operation.
 pub fn detach_standard_receipt(receipt: &AttachmentReceipt) -> Result<AttachmentInspection> {
+    if let ManagedArtifact::ManagedTextRegion {
+        target_file,
+        region_identity,
+        expected_content,
+    } = &receipt.artifact
+    {
+        // `text_region::detach` already re-inspects immediately before its
+        // own destructive write, per the same ADR-009 discipline the rest of
+        // this function applies below for a symlink.
+        return crate::text_region::detach(target_file, region_identity, expected_content);
+    }
     let inspection = inspect_standard_receipt(receipt);
     if inspection.state != AttachmentState::Matched {
         return Ok(inspection);
@@ -378,6 +416,11 @@ pub fn receipt_location(receipt: &AttachmentReceipt) -> PathBuf {
         ManagedArtifact::VendorConfigEntry { entry_name, .. } => {
             PathBuf::from(format!("mcp:{entry_name}"))
         }
+        ManagedArtifact::ManagedTextRegion {
+            target_file,
+            region_identity,
+            ..
+        } => PathBuf::from(format!("{}#{region_identity}", target_file.display())),
         ManagedArtifact::IntegrationOwned { kind, selector, .. } => {
             PathBuf::from(format!("{kind}:{selector}"))
         }

@@ -10,6 +10,7 @@ use serde::Serialize;
 use uze_core::{
     PackageSource, Result, UzeEngine, UzeError, UzeHome, UzeStore,
     capability::CapabilityKind,
+    context::{self as instruction_context, InstructionContribution},
     exposure::{ExposurePlan, PackageExposurePlan},
     integration::{
         AttachmentState, HarnessDetection, IntegrationPort, IntegrationStatus, PublicationStatus,
@@ -19,12 +20,34 @@ use uze_core::{
     reconciliation::{PackageRemovalPlan, ReconciliationReport, plan_remove, reconcile_package},
     state,
     store::StoredPackage,
+    text_region,
     trust::{self, TrustAuthority, TrustOutcome, TrustRequest},
 };
 use uze_integrations::{
     claude::ClaudeIntegration, codex::CodexIntegration, gemini::GeminiIntegration,
     opencode::OpenCodeIntegration,
 };
+
+/// Harnesses that read a project's shared `AGENTS.md` only through an
+/// explicit bridge region in their own native file, rather than natively —
+/// see `docs/capabilities/instructions-design.md` Fase 4. Codex and OpenCode
+/// are deliberately absent: both read `AGENTS.md` directly, so
+/// `context_reconcile` never needs to write anything into a Codex- or
+/// OpenCode-specific file at all. This list is explicit, hardcoded vendor
+/// knowledge — appropriate here, in the composition root that already names
+/// every concrete integration by type, and not something `uze-core` or
+/// `IntegrationPort` needs to know.
+const BRIDGE_INTEGRATIONS: &[(&str, &str)] = &[("claude-code", "CLAUDE.md"), ("gemini", "GEMINI.md")];
+
+/// Fixed, package-independent region identity: the bridge is shared
+/// infrastructure for however many packages currently contribute to
+/// `AGENTS.md`, never owned by one of them (see Fase C.5 of the design).
+const INSTRUCTION_BRIDGE_IDENTITY: &str = "instruction-bridge";
+
+/// The vendor-documented import syntax both Claude Code and Gemini CLI
+/// share for pulling another Markdown file's content into their own native
+/// instructions file (`@AGENTS.md`).
+const INSTRUCTION_BRIDGE_CONTENT: &str = "@AGENTS.md";
 
 pub struct UzeApplication {
     home: UzeHome,
@@ -573,6 +596,86 @@ impl UzeApplication {
         }
     }
 
+    /// Reconciles one project's shared `AGENTS.md` against every currently
+    /// (globally) installed package that contributes Instructions, then
+    /// reconciles the small set of harnesses that need a bridge into it
+    /// rather than reading it natively.
+    ///
+    /// Deliberately independent of `add_plugin`/`remove_plugin`: package
+    /// installation stays global and project-agnostic. `project_root` is
+    /// ordinary input to this one explicit, idempotent, re-runnable
+    /// operation — never a persisted concept. Calling this is the only way
+    /// a project's `AGENTS.md` changes; nothing here happens implicitly
+    /// during `add`/`remove`.
+    pub fn context_reconcile(&self, project_root: &std::path::Path) -> Result<ContextReconciliationReport> {
+        if !project_root.is_dir() {
+            return Err(UzeError::NotDirectory(project_root.to_path_buf()));
+        }
+        let agents_md = project_root.join("AGENTS.md");
+        let contributions = self.instruction_contributions()?;
+        let agents_md_report = instruction_context::reconcile_agents_md(&agents_md, &contributions);
+
+        let bridges = BRIDGE_INTEGRATIONS
+            .iter()
+            .filter_map(|(integration_id, file_name)| {
+                let integration = self
+                    .integrations
+                    .iter()
+                    .find(|integration| integration.id() == *integration_id)?;
+                if !integration.detect().present {
+                    return None;
+                }
+                let bridge_file = project_root.join(file_name);
+                let inspection = text_region::reconcile(
+                    &bridge_file,
+                    INSTRUCTION_BRIDGE_IDENTITY,
+                    INSTRUCTION_BRIDGE_CONTENT,
+                    agents_md_report.has_any_matched_contribution(),
+                );
+                Some(BridgeStatus {
+                    integration: (*integration_id).to_owned(),
+                    file: bridge_file,
+                    state: inspection.state,
+                    reason: inspection.reason,
+                })
+            })
+            .collect();
+
+        Ok(ContextReconciliationReport {
+            agents_md,
+            packages: agents_md_report
+                .packages
+                .into_iter()
+                .map(|(package_id, inspection)| PackageInstructionStatus {
+                    package_id: package_id.as_str().to_owned(),
+                    state: inspection.state,
+                    reason: inspection.reason,
+                })
+                .collect(),
+            removed_orphans: agents_md_report.removed_orphans,
+            blocked_orphans: agents_md_report.blocked_orphans,
+            bridges,
+        })
+    }
+
+    fn instruction_contributions(&self) -> Result<Vec<InstructionContribution>> {
+        let mut contributions = Vec::new();
+        for package_id in self.store.package_ids()? {
+            let package = self.store.package(&package_id)?;
+            let resources = uze_core::engine::package_resources_at(&package_id, &package.root)?;
+            for resource in resources {
+                if resource.capability.kind != CapabilityKind::Instruction {
+                    continue;
+                }
+                contributions.push(InstructionContribution {
+                    package_id: package_id.clone(),
+                    content: String::from_utf8_lossy(&resource.capability.payload).into_owned(),
+                });
+            }
+        }
+        Ok(contributions)
+    }
+
     fn package_by_name(&self, name: &str) -> Result<StoredPackage> {
         self.store
             .package_ids()?
@@ -847,6 +950,36 @@ pub struct HarnessHealth {
     pub strategy: Option<String>,
     pub provisioning: Option<state::ProvisioningRecord>,
     pub publication: PublicationStatus,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct PackageInstructionStatus {
+    pub package_id: String,
+    pub state: AttachmentState,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct BridgeStatus {
+    pub integration: String,
+    pub file: PathBuf,
+    pub state: AttachmentState,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ContextReconciliationReport {
+    pub agents_md: PathBuf,
+    pub packages: Vec<PackageInstructionStatus>,
+    /// Regions this pass removed because no currently-installed package
+    /// claims them any more. See `text_region::remove_unconditionally` for
+    /// the exact (structural, not content-drift-verified) safety guarantee
+    /// this carries.
+    pub removed_orphans: Vec<String>,
+    /// An orphaned-looking region this pass found but refused to touch —
+    /// its markers were malformed, so ownership could not be proven.
+    pub blocked_orphans: Vec<(String, String)>,
+    pub bridges: Vec<BridgeStatus>,
 }
 
 #[derive(Clone, Debug, Serialize)]

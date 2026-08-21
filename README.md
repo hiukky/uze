@@ -111,6 +111,35 @@ Native planning consumes the package-provided resource identities, preventing
 a duplicate Skill or MCP attachment. Hooks, agents, commands, remote
 marketplaces, cloud state and runtime proxying are deliberately out of scope.
 
+## Capability landscape
+
+Not every capability a harness exposes is safe to treat as portable. UZE
+researches each one before building it, and reports the honest result rather
+than a name match.
+
+| Capability | Claude Code | Codex | OpenCode | Gemini CLI | UZE |
+|---|---|---|---|---|---|
+| Skills | Native | Native | Native | Native | Portable |
+| MCP | Native | Native | Native | Native | Portable |
+| Instructions | Bridged (`CLAUDE.md` → `@AGENTS.md`) | Native (`AGENTS.md`), empirically confirmed | Native (`AGENTS.md`) | Bridged (`GEMINI.md` → `@AGENTS.md`) | Partial |
+| Hooks | Native | Native, unverified | Native, executable code | Native | Research (partial subset) |
+| Commands | Merged into Skills | Native | Native | Native | Unsupported |
+| Agents | Native | Native, no package format | Native | Native, no nesting | Vendor-specific |
+
+Legend: **Portable** — UZE proved a real cross-harness delivery.
+**Partial** — delivered, with a disclosed, real difference in mechanism or
+verification depth between harnesses (see below).
+**Research** — not yet delivered; investigated in depth, gap disclosed rather
+than hidden. **Vendor-specific** — real capability, no safe bridge found.
+**Unsupported** — no case for a UZE capability was found. A capability
+existing under the same name in two harnesses is not, by itself, evidence it
+is portable — see the full landscape for what was and wasn't found to
+converge.
+
+The full capability landscape — format matrices, semantic matrices,
+portability classification, trust implications, and the tracer-bullet
+rationale — lives in [`docs/capabilities/`](docs/capabilities/landscape.md).
+
 ## Ecosystem watchlist
 
 UZE is not limited to its first tracer bullets. The following labels express
@@ -179,6 +208,7 @@ execute arbitrary plugin scripts or vendor extension code.
 ## Documentation
 
 - [Architecture invariants](docs/architecture/invariants.md)
+- [Capability landscape](docs/capabilities/landscape.md)
 - [Testing](docs/testing.md)
 - [Architecture decisions](docs/adr/README.md)
 - [Plugin-first research](openspec/changes/reframe-plugin-first-portable-environment/research-notes.md)

@@ -75,6 +75,14 @@ pub enum UzeError {
     ManagedEntryConflict(PathBuf),
     #[error("a managed entry has drifted and was preserved at {0}")]
     ManagedEntryDrift(PathBuf),
+    #[error("a managed text region's content differs from what was requested; user content at {0} was preserved")]
+    ManagedRegionDrift(PathBuf),
+    #[error("a managed text region's markers are duplicated, out of order, or only half present at {0}")]
+    ManagedRegionConflict(PathBuf),
+    #[error("managed text region identity `{0}` contains characters outside the safe marker charset")]
+    InvalidRegionIdentity(String),
+    #[error("{0} is not valid UTF-8 text")]
+    InvalidTextEncoding(PathBuf),
     #[error("another UZE mutation is already in progress at {0}")]
     MutationInProgress(PathBuf),
     #[error("failed to run `{program}`: {source}")]
