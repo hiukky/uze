@@ -1,0 +1,17 @@
+{
+  "name": "uze-playground",
+  "version": "0.1.0",
+  "description": "Portable UZE playground with planning, review, release, and MCP capabilities.",
+  "author": {
+    "name": "UZE"
+  },
+  "interface": {
+    "displayName": "UZE Playground",
+    "shortDescription": "A portable local plugin for real UZE dogfooding.",
+    "longDescription": "Exercises skills and a deterministic MCP server through the UZE package lifecycle.",
+    "developerName": "UZE",
+    "category": "Developer Tools",
+    "capabilities": ["Skills", "MCP"],
+    "defaultPrompt": "Use the uze-playground-plan skill to plan a scoped change."
+  }
+}

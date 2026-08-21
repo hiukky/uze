@@ -1,0 +1,3 @@
+# The cross-distro installer creates its staging directory on the Windows
+# temporary filesystem, never in this directory. Keep this file so the
+# playground's intended source tree stays explicit as it evolves.
