@@ -1,4 +1,4 @@
-//! Where a package came from, and how its bytes reach a local directory the
+//! Core-owned source acquisition: where a package came from and how its bytes reach a local directory the
 //! Store can ingest.
 //!
 //! This module owns every source mechanism. The Store owns bytes and persists

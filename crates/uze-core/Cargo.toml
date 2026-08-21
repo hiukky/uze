@@ -1,0 +1,13 @@
+[package]
+name = "uze-core"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+description = "Harness-agnostic package, capability, lifecycle, and integration contracts for UZE"
+license = "MIT"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+toml = "0.9"

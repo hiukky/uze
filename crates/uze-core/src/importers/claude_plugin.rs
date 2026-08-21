@@ -1,3 +1,5 @@
+//! Claude plugin envelope importer.
+
 use std::path::Path;
 
 use crate::{bundle::ImportedBundle, error::Result};

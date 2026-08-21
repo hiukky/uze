@@ -1,4 +1,4 @@
-//! Git materialization.
+//! Core-owned Git materialization.
 //!
 //! The mechanism is Git and nothing else: a URL is a URL, so no host is named
 //! here and no host API is called. Everything runs through the `git`

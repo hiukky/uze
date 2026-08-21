@@ -1,3 +1,5 @@
+//! Agent Plugin standard importer.
+
 use std::path::Path;
 
 use crate::{bundle::ImportedBundle, error::Result};

@@ -1,4 +1,4 @@
-//! Small, local-only durability primitives for UZE-owned state.
+//! Core small, local-only durability primitives for UZE-owned state.
 //!
 //! They intentionally do not attempt distributed transactions with vendor
 //! CLIs. A confirmed external side effect is recorded immediately by the

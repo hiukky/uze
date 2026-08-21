@@ -1,4 +1,4 @@
-// ADR-005: the Engine composes peer-harness inputs without named harness rules.
+// ADR-005: the Core Engine composes peer-harness inputs without named harness rules.
 use crate::{
     capability::{Capability, CapabilityKind, Representation},
     error::{Result, UzeError},

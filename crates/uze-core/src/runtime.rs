@@ -1,3 +1,5 @@
+//! Runtime support description retained for integration contracts.
+
 use serde::Serialize;
 
 #[derive(Clone, Debug, Default)]

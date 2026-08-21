@@ -1,3 +1,5 @@
+//! Capability compatibility routing without named harness rules.
+
 use std::collections::BTreeSet;
 
 use serde::Serialize;
