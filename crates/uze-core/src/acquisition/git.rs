@@ -124,7 +124,10 @@ fn resolve_commit(reference: Option<&str>, checkout: &Path) -> Result<String> {
         ],
     };
     for candidate in &candidates {
-        if let Ok(output) = run(&["rev-parse", "--verify", "--quiet", candidate], Some(checkout)) {
+        if let Ok(output) = run(
+            &["rev-parse", "--verify", "--quiet", candidate],
+            Some(checkout),
+        ) {
             let commit = output.trim().to_owned();
             if !commit.is_empty() {
                 return Ok(commit);
@@ -144,7 +147,11 @@ fn resolve_commit(reference: Option<&str>, checkout: &Path) -> Result<String> {
 /// returns `None` and the caller reports that rather than picking.
 fn sole_remote_branch(checkout: &Path) -> Option<String> {
     let listing = run(
-        &["for-each-ref", "--format=%(refname)", "refs/remotes/origin/"],
+        &[
+            "for-each-ref",
+            "--format=%(refname)",
+            "refs/remotes/origin/",
+        ],
         Some(checkout),
     )
     .ok()?;
@@ -225,9 +232,9 @@ fn run(arguments: &[&str], working_directory: Option<&Path>) -> Result<String> {
         command.current_dir(directory);
     }
 
-    let mut child = command.spawn().map_err(|error| {
-        UzeError::AcquisitionFailed(format!("could not run `git`: {error}"))
-    })?;
+    let mut child = command
+        .spawn()
+        .map_err(|error| UzeError::AcquisitionFailed(format!("could not run `git`: {error}")))?;
     let deadline = std::time::Instant::now() + COMMAND_TIMEOUT;
     loop {
         match child.try_wait() {

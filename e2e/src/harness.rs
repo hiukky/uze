@@ -187,35 +187,37 @@ pub const HARNESSES: &[HarnessSpec] = &[
         // the package and Codex derives capability names from the installed
         // envelope, which is why no UZE-named vendor-config entry exists to
         // probe for.
-        probes: &[(
-            ArtifactKind::IntegrationOwned,
-            Probe {
-                arguments: &["plugin", "list"],
-                required: &["installed", "enabled"],
-                matches_attached_name: true,
-                claim: "Codex reports the UZE marketplace plugin installed and enabled",
-            },
-        ),
-        (
-            // Second probe on the same delivery: `plugin list` proves the
-            // package installed, but says nothing about the capabilities
-            // inside it. This one proves Codex decomposed the envelope into
-            // a real MCP server registration. Codex names that server from
-            // the package's own manifest rather than from UZE, so the
-            // resolved binary path is what ties it back to this fixture.
-            //
-            // Codex runs no health check here, so this is registration
-            // evidence, not connectivity evidence — Claude and OpenCode are
-            // probed one level deeper. That asymmetry is a real coverage
-            // gap, recorded rather than papered over.
-            ArtifactKind::IntegrationOwned,
-            Probe {
-                arguments: &["mcp", "list", "--json"],
-                required: &["{mcp_binary}", "\"enabled\": true"],
-                matches_attached_name: false,
-                claim: "Codex decomposed the plugin envelope into an enabled MCP server registration (registration only: Codex runs no health check)",
-            },
-        )],
+        probes: &[
+            (
+                ArtifactKind::IntegrationOwned,
+                Probe {
+                    arguments: &["plugin", "list"],
+                    required: &["installed", "enabled"],
+                    matches_attached_name: true,
+                    claim: "Codex reports the UZE marketplace plugin installed and enabled",
+                },
+            ),
+            (
+                // Second probe on the same delivery: `plugin list` proves the
+                // package installed, but says nothing about the capabilities
+                // inside it. This one proves Codex decomposed the envelope into
+                // a real MCP server registration. Codex names that server from
+                // the package's own manifest rather than from UZE, so the
+                // resolved binary path is what ties it back to this fixture.
+                //
+                // Codex runs no health check here, so this is registration
+                // evidence, not connectivity evidence — Claude and OpenCode are
+                // probed one level deeper. That asymmetry is a real coverage
+                // gap, recorded rather than papered over.
+                ArtifactKind::IntegrationOwned,
+                Probe {
+                    arguments: &["mcp", "list", "--json"],
+                    required: &["{mcp_binary}", "\"enabled\": true"],
+                    matches_attached_name: false,
+                    claim: "Codex decomposed the plugin envelope into an enabled MCP server registration (registration only: Codex runs no health check)",
+                },
+            ),
+        ],
         behavior: Some(BehaviorSpec {
             // Codex 0.148.0 removed `wire_api = "chat"` for custom model
             // providers, so the gateway route only resolves declared as

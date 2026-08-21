@@ -6,9 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     error::Result,
-    exposure::{
-        ExposureMechanism, ExposurePlan, McpEnvironmentReference, PackageExposurePlan,
-    },
+    exposure::{ExposureMechanism, ExposurePlan, McpEnvironmentReference, PackageExposurePlan},
     home::UzeHome,
     project::EffectiveEnvironment,
     router::{HarnessCapabilities, RouteDecision, route},
@@ -387,7 +385,8 @@ mod artifact_compatibility_tests {
                 }
             }
         }"#;
-        let receipt: AttachmentReceipt = serde_json::from_str(legacy).expect("legacy receipt reads");
+        let receipt: AttachmentReceipt =
+            serde_json::from_str(legacy).expect("legacy receipt reads");
         let ManagedArtifact::IntegrationOwned {
             kind,
             selector,

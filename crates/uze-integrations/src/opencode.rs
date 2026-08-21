@@ -4,7 +4,7 @@ use std::{
     process::Command,
 };
 
-use crate::{
+use uze_core::{
     Result, UzeError,
     capability::CapabilityKind,
     exposure::{ExposureMechanism, ExposurePlan},
@@ -233,7 +233,7 @@ fn inspect_opencode_mcp_value(
     command: &Path,
     args: &[String],
     cwd: Option<&Path>,
-    environment: &[crate::exposure::McpEnvironmentReference],
+    environment: &[uze_core::exposure::McpEnvironmentReference],
     enabled: Option<bool>,
 ) -> AttachmentInspection {
     let expected_command = std::iter::once(command.to_string_lossy().into_owned())
@@ -546,7 +546,7 @@ mod lifecycle_tests {
                 &expected,
                 &args,
                 Some(Path::new("/expected")),
-                &[crate::exposure::McpEnvironmentReference {
+                &[uze_core::exposure::McpEnvironmentReference {
                     name: "TOKEN".to_owned()
                 }],
                 Some(true),

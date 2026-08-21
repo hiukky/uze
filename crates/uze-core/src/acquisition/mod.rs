@@ -124,9 +124,7 @@ pub enum ResolvedSource {
     /// Canonicalized at acquisition time. Deliberately carries no revision:
     /// a directory is mutable, so reinstalling from one is not reproducible
     /// and the model must not pretend otherwise.
-    Local {
-        path: PathBuf,
-    },
+    Local { path: PathBuf },
     /// Always an immutable commit, whatever the request named. A branch is a
     /// stable *request* whose result moves; recording only the branch would
     /// make reinstall unreproducible.
@@ -168,7 +166,9 @@ pub struct Provenance {
 /// deliberately no schema version: this is one fallback for one superseded
 /// representation, not a migration framework.
 impl<'de> Deserialize<'de> for Provenance {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
         #[derive(Deserialize)]
         #[serde(untagged)]
         enum Wire {
@@ -336,10 +336,7 @@ fn scratch_directory() -> Result<PathBuf> {
         .duration_since(std::time::UNIX_EPOCH)
         .expect("system clock is after the epoch")
         .as_nanos();
-    let path = std::env::temp_dir().join(format!(
-        "uze-acquire-{}-{nonce}",
-        std::process::id()
-    ));
+    let path = std::env::temp_dir().join(format!("uze-acquire-{}-{nonce}", std::process::id()));
     fs::create_dir_all(&path).map_err(|source| UzeError::Write {
         path: path.clone(),
         source,
@@ -383,7 +380,10 @@ mod tests {
 
         let materialized = acquire(&source).unwrap();
 
-        assert_eq!(materialized.root(), root.join("inner").canonicalize().unwrap());
+        assert_eq!(
+            materialized.root(),
+            root.join("inner").canonicalize().unwrap()
+        );
         assert_eq!(&materialized.provenance().requested, &source);
         assert_eq!(
             materialized.provenance().resolved,
@@ -404,7 +404,10 @@ mod tests {
             let materialized = acquire(&PackageSource::local(&root)).unwrap();
             assert!(materialized.root().is_dir());
         }
-        assert!(root.is_dir(), "acquisition removed a caller-owned directory");
+        assert!(
+            root.is_dir(),
+            "acquisition removed a caller-owned directory"
+        );
         let _ = fs::remove_dir_all(root);
     }
 

@@ -235,7 +235,9 @@ impl uze::trust::TrustAuthority for PromptingAuthority {
 
         println!();
         if request.previously_trusted {
-            println!("This update introduces an executable capability the installed package did not have");
+            println!(
+                "This update introduces an executable capability the installed package did not have"
+            );
         } else {
             println!("This package requests an executable capability");
         }
@@ -276,8 +278,7 @@ fn print_json(value: &impl serde::Serialize) {
 fn render_inspection(report: &PluginInspection) -> String {
     let mut text = format!(
         "{}\n\nSource\n  {}\n\nCapabilities\n",
-        report.plugin.id,
-        report.plugin.source
+        report.plugin.id, report.plugin.source
     );
     for capability in &report.capabilities {
         text.push_str(&format!("  {:?}  {}\n", capability.kind, capability.name));

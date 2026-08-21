@@ -4,13 +4,12 @@
 //! the established public imports while application, integrations, and
 //! presentation complete their own extraction.
 
+pub use uze_core::*;
 pub use uze_core::{
     acquisition, bundle, capability, engine, error, exposure, home, importer, importers,
     integration, persistence, project, reconciliation, router, runtime, state, store, trust,
 };
-pub use uze_core::*;
 
-pub mod application;
-pub mod integrations;
+pub use uze_application::{UzeApplication, application};
+pub use uze_integrations as integrations;
 pub mod tui;
-pub use application::UzeApplication;

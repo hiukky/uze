@@ -5,7 +5,7 @@ use std::{
     process::Command,
 };
 
-use crate::{
+use uze_core::{
     Result, UzeError,
     capability::CapabilityKind,
     exposure::{ExposureMechanism, ExposurePlan, PackageExposurePlan},
@@ -52,7 +52,8 @@ impl CodexIntegration {
     }
 
     fn catalogue_path(&self) -> PathBuf {
-        self.catalogue_root().join(".agents/plugins/marketplace.json")
+        self.catalogue_root()
+            .join(".agents/plugins/marketplace.json")
     }
 
     pub fn new(agents_home: PathBuf, uze_home: UzeHome) -> Self {
@@ -477,7 +478,7 @@ fn inspect_codex_mcp(
     command: &Path,
     args: &[String],
     cwd: Option<&Path>,
-    environment: &[crate::exposure::McpEnvironmentReference],
+    environment: &[uze_core::exposure::McpEnvironmentReference],
     enabled: Option<bool>,
 ) -> AttachmentInspection {
     let output = match Command::new("codex")
@@ -531,7 +532,7 @@ fn inspect_codex_mcp_value(
     command: &Path,
     args: &[String],
     expected_cwd: Option<&Path>,
-    expected_environment: &[crate::exposure::McpEnvironmentReference],
+    expected_environment: &[uze_core::exposure::McpEnvironmentReference],
     expected_enabled: Option<bool>,
 ) -> AttachmentInspection {
     let object = value
@@ -1002,7 +1003,7 @@ fn write_catalogue(path: &Path, packages: &[StoredPackage]) -> Result<()> {
         path: parent.to_path_buf(),
         source,
     })?;
-    crate::persistence::write_atomic(
+    uze_core::persistence::write_atomic(
         path,
         &serde_json::to_vec_pretty(&catalogue_document(packages))
             .expect("catalogue is serializable"),

@@ -196,7 +196,8 @@ fn copy_fixture_tree(
             bytes
         };
         fs::write(&destination_path, bytes).map_err(materialize_error)?;
-        fs::set_permissions(&destination_path, metadata.permissions()).map_err(materialize_error)?;
+        fs::set_permissions(&destination_path, metadata.permissions())
+            .map_err(materialize_error)?;
     }
     Ok(())
 }
@@ -218,8 +219,7 @@ fn resolve_mcp_manifest(bytes: &[u8], spec: &FixtureSpec) -> Result<Vec<u8>, Har
             "__UZE_MCP_FIXTURE_BINARY__",
             &spec.mcp_binary.to_string_lossy(),
         );
-    let mut manifest: serde_json::Value =
-        serde_json::from_str(&text).map_err(materialize_error)?;
+    let mut manifest: serde_json::Value = serde_json::from_str(&text).map_err(materialize_error)?;
     let servers = manifest
         .get_mut("mcpServers")
         .and_then(serde_json::Value::as_object_mut)

@@ -19,12 +19,16 @@ model {
     description 'Peer coding-agent runtime. It can discover compatible project Agent Skills without becoming UZE core configuration.'
   }
 
+  conformanceLab = system 'Harness Conformance Lab' {
+    description 'Workspace-member test tooling that executes real harnesses in isolated environments. It is intentionally outside UZE product dependencies.'
+  }
+
   uze = system 'UZE' {
     description 'Package-centric compatibility and distribution layer for the agent-plugin ecosystem. It installs once, plans native delivery first, and falls back by capability without becoming a runtime proxy.'
 
     core = container 'UZE Core' {
       description 'Harness-agnostic Store-backed environment composer, package/capability planner, and safe managed-lifecycle core.'
-      technology 'Rust CLI/library (ADR 004)'
+      technology 'Rust crate: uze-core (ADR 011)'
 
       standardDiscovery = component 'Standards Discoverer' {
         description 'Discovers standard resources while retaining their original representations; installed package resources are primary product inputs.'
@@ -59,11 +63,11 @@ model {
       }
 
       application = component 'Application Layer' {
-        description 'Package-centric product facade. CLI and future TUI invoke setup, add, list, inspect, remove, and doctor here; it composes Store, Engine, plans, receipts, and reconciliation without duplicating lifecycle logic.'
+        description 'Rust crate: uze-application. Package-centric product facade that composes Store, Engine, plans, receipts, reconciliation, and peer integrations without duplicating lifecycle logic.'
       }
 
       terminalUi = component 'Terminal UI' {
-        description 'Keyboard-first Ratatui presentation. It owns only view state and terminal cleanup; short workers create the Application facade for product actions.'
+        description 'Root uze crate: keyboard-first Ratatui presentation. It owns only view state and terminal cleanup; short workers create the Application facade for product actions.'
       }
 
       standardDiscovery -> environmentResolver 'standard resources'
@@ -82,17 +86,17 @@ model {
 
     claudeIntegration = container 'Claude Integration' {
       description 'Peer harness integration. It is not a canonical source representation; Claude plugin import is a separate foreign-format concern.'
-      technology 'Rust adapter'
+      technology 'Rust crate: uze-integrations'
     }
 
     codexIntegration = container 'Codex Integration' {
       description 'Peer harness integration. It is not a conversion destination.'
-      technology 'Rust adapter'
+      technology 'Rust crate: uze-integrations'
     }
 
     opencodeIntegration = container 'OpenCode Integration' {
       description 'Peer harness integration. It declares standards-backed capability routes independently of UZE Core.'
-      technology 'Rust adapter'
+      technology 'Rust crate: uze-integrations'
     }
   }
 
@@ -103,6 +107,11 @@ model {
   uze.claudeIntegration -> claudeCode 'falls back to managed Skill and MCP attachment when no exact native envelope exists'
   uze.codexIntegration -> codex 'prefers standard local marketplace/native plugin delivery and skips consumed components'
   uze.opencodeIntegration -> opencode 'decomposes unknown plugin envelopes into global Skill discovery and managed MCP config'
+
+  conformanceLab -> uze 'exercises the installable CLI and public application behavior'
+  conformanceLab -> claudeCode 'runs opt-in real-harness conformance'
+  conformanceLab -> codex 'runs opt-in real-harness conformance'
+  conformanceLab -> opencode 'runs opt-in real-harness conformance'
 
   developer -> agentClient 'uses to work with a selected agent runtime'
   agentClient -> claudeCode 'ACP when mutually supported; otherwise selected explicit integration'

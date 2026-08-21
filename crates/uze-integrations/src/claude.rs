@@ -4,7 +4,7 @@ use std::{
     process::Command,
 };
 
-use crate::{
+use uze_core::{
     Result, UzeError,
     capability::CapabilityKind,
     exposure::{ExposureMechanism, ExposurePlan},
@@ -359,7 +359,7 @@ fn inspect_claude_mcp(
     command: &Path,
     args: &[String],
     cwd: Option<&Path>,
-    environment: &[crate::exposure::McpEnvironmentReference],
+    environment: &[uze_core::exposure::McpEnvironmentReference],
     enabled: Option<bool>,
 ) -> AttachmentInspection {
     if transport != "stdio" || cwd.is_some() || !environment.is_empty() || enabled.is_some() {

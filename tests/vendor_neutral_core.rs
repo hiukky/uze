@@ -28,13 +28,17 @@ use uze::{
 /// acquired into a materialized package, and only then does the Store ingest
 /// it. Spelled out here rather than hidden behind a Store convenience,
 /// because the Store deliberately no longer accepts a path.
-fn install(store: &UzeStore, path: impl Into<std::path::PathBuf>) -> uze::Result<uze::StoredPackage> {
-    store.ingest(&uze::acquisition::acquire(&uze::PackageSource::local(path))?)
+fn install(
+    store: &UzeStore,
+    path: impl Into<std::path::PathBuf>,
+) -> uze::Result<uze::StoredPackage> {
+    store.ingest(&uze::acquisition::acquire(&uze::PackageSource::local(
+        path,
+    ))?)
 }
 
 fn native_package_fixture() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("e2e/fixtures/plugin-first-conformance")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("e2e/fixtures/plugin-first-conformance")
 }
 
 fn plain_package_fixture() -> PathBuf {
@@ -208,7 +212,10 @@ fn republish_is_a_noop_for_an_integration_that_publishes_nothing() {
     let home = temporary_home("quiet");
     let application = UzeApplication::new(home.clone(), vec![Box::new(QuietIntegration)]);
     application
-        .add_plugin(uze::PackageSource::local(plain_package_fixture()), &uze::trust::AlwaysTrust)
+        .add_plugin(
+            uze::PackageSource::local(plain_package_fixture()),
+            &uze::trust::AlwaysTrust,
+        )
         .expect("install succeeds with an integration that publishes nothing");
 
     let report = application.doctor();
@@ -227,7 +234,10 @@ fn a_derived_view_is_rebuilt_from_the_package_set_alone() {
         vec![Box::new(PublishingIntegration::new(views.clone()))],
     );
     application
-        .add_plugin(uze::PackageSource::local(native_package_fixture()), &uze::trust::AlwaysTrust)
+        .add_plugin(
+            uze::PackageSource::local(native_package_fixture()),
+            &uze::trust::AlwaysTrust,
+        )
         .expect("install succeeds");
 
     let catalogue = views.join("catalogue.json");
@@ -260,7 +270,10 @@ fn a_package_without_the_native_envelope_is_not_published() {
         vec![Box::new(PublishingIntegration::new(views.clone()))],
     );
     application
-        .add_plugin(uze::PackageSource::local(plain_package_fixture()), &uze::trust::AlwaysTrust)
+        .add_plugin(
+            uze::PackageSource::local(plain_package_fixture()),
+            &uze::trust::AlwaysTrust,
+        )
         .expect("install succeeds");
 
     // Which packages belong in a view is the integration's policy. The Store
@@ -287,7 +300,10 @@ fn a_failed_publication_leaves_the_package_installed_and_says_so() {
     );
 
     let report = application
-        .add_plugin(uze::PackageSource::local(native_package_fixture()), &uze::trust::AlwaysTrust)
+        .add_plugin(
+            uze::PackageSource::local(native_package_fixture()),
+            &uze::trust::AlwaysTrust,
+        )
         .expect("a failed derived view never fails the installation");
 
     // The package is a valid UZE installation.
@@ -398,8 +414,18 @@ fn the_store_contains_no_source_mechanism_semantics() {
     // Deliberately not `clone`/`fetch`: those are ordinary Rust vocabulary
     // here, and a check that cries wolf gets deleted rather than fixed.
     for forbidden in [
-        "git ", "Git", "github", "GitHub", "gitlab", "https://", "git clone",
-        "revision", "commit", "branch", "PackageSource::", "ResolvedSource",
+        "git ",
+        "Git",
+        "github",
+        "GitHub",
+        "gitlab",
+        "https://",
+        "git clone",
+        "revision",
+        "commit",
+        "branch",
+        "PackageSource::",
+        "ResolvedSource",
     ] {
         assert!(
             !store.contains(forbidden),

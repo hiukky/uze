@@ -1,0 +1,11 @@
+[package]
+name = "uze-integrations"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+description = "Peer harness integrations for UZE"
+license = "MIT"
+
+[dependencies]
+uze-core = { path = "../uze-core" }
+serde_json = "1"

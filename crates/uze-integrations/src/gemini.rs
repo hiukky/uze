@@ -18,7 +18,7 @@ use std::{
     process::Command,
 };
 
-use crate::{
+use uze_core::{
     Result, UzeError,
     capability::CapabilityKind,
     exposure::{ExposureMechanism, ExposurePlan, PackageExposurePlan},
@@ -225,13 +225,10 @@ impl IntegrationPort for GeminiIntegration {
         })
     }
 
-    /// Deliberately left at the default no-op.
-    ///
-    /// Gemini needs no catalogue: `attach_package` points it straight at the
-    /// stored package directory. That absence is the point — it is the
-    /// evidence that `republish_packages` models a real, optional concept
-    /// rather than Codex's marketplace under a general name.
-    // (no republish_packages override)
+    // `republish_packages` deliberately remains its default no-op. Gemini
+    // needs no catalogue: `attach_package` points it straight at the stored
+    // package directory. This proves publication is optional rather than a
+    // Codex marketplace concept under a general name.
 
     fn attach_package(
         &self,
@@ -326,7 +323,9 @@ impl IntegrationPort for GeminiIntegration {
             return Ok(inspection);
         }
         match &receipt.artifact {
-            ManagedArtifact::IntegrationOwned { kind, selector, .. } if kind == LINKED_EXTENSION => {
+            ManagedArtifact::IntegrationOwned { kind, selector, .. }
+                if kind == LINKED_EXTENSION =>
+            {
                 // Uninstalling a *linked* extension removes only Gemini's own
                 // reference. The stored package this integration never owns
                 // stays exactly where it is.
@@ -391,9 +390,7 @@ fn extension_name(package_root: &Path) -> Result<String> {
         .and_then(serde_json::Value::as_str)
         .map(str::to_owned)
         .ok_or_else(|| {
-            UzeError::ExposureUnavailable(
-                "gemini-extension.json has no string name".to_owned(),
-            )
+            UzeError::ExposureUnavailable("gemini-extension.json has no string name".to_owned())
         })
 }
 
@@ -403,7 +400,10 @@ fn extension_name(package_root: &Path) -> Result<String> {
 /// to **stderr**, leaving stdout empty (confirmed against 0.56.0). Preferring
 /// stdout and falling back to stderr keeps this correct either way, so a
 /// future release that moves the payload to stdout needs no change here.
-fn gemini_json(command_home: &Path, args: &[&str]) -> std::result::Result<serde_json::Value, String> {
+fn gemini_json(
+    command_home: &Path,
+    args: &[&str],
+) -> std::result::Result<serde_json::Value, String> {
     let output = Command::new("gemini")
         .env("HOME", command_home)
         .args(args)
@@ -424,7 +424,11 @@ fn gemini_json(command_home: &Path, args: &[&str]) -> std::result::Result<serde_
 /// listing. `None` when absent or when the listing itself is unavailable —
 /// callers distinguish those two cases.
 fn linked_extension(command_home: &Path, name: &str) -> Option<serde_json::Value> {
-    let listing = gemini_json(command_home, &["extensions", "list", "--output-format=json"]).ok()?;
+    let listing = gemini_json(
+        command_home,
+        &["extensions", "list", "--output-format=json"],
+    )
+    .ok()?;
     listing
         .as_array()?
         .iter()
@@ -437,7 +441,10 @@ fn inspect_linked_extension(
     name: &str,
     expected_source: &Path,
 ) -> AttachmentInspection {
-    let listing = match gemini_json(command_home, &["extensions", "list", "--output-format=json"]) {
+    let listing = match gemini_json(
+        command_home,
+        &["extensions", "list", "--output-format=json"],
+    ) {
         Ok(listing) => listing,
         Err(reason) => return blocked(reason),
     };
@@ -582,7 +589,7 @@ fn inspect_gemini_mcp(
     command: &Path,
     args: &[String],
     cwd: Option<&Path>,
-    environment: &[crate::exposure::McpEnvironmentReference],
+    environment: &[uze_core::exposure::McpEnvironmentReference],
     enabled: Option<bool>,
 ) -> AttachmentInspection {
     if transport != "stdio" || cwd.is_some() || !environment.is_empty() || enabled.is_some() {

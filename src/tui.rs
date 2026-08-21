@@ -862,7 +862,7 @@ fn footer(model: &TuiModel) -> Text<'static> {
             "↑↓ navigate · enter inspect · a add · r remove · s setup · d doctor · g refresh · q quit"
         }
     };
-    let notice = match &model.notice {
+    match &model.notice {
         Notice::Idle => Text::from(Line::from(Span::styled(hint, Style::default().fg(MUTED)))),
         Notice::Working(value) => Text::from(vec![
             Line::from(Span::styled(
@@ -885,8 +885,7 @@ fn footer(model: &TuiModel) -> Text<'static> {
             )),
             Line::from(Span::styled(hint, Style::default().fg(MUTED))),
         ]),
-    };
-    notice
+    }
 }
 
 fn package_strategy(plan: &PackageExposurePlan) -> &'static str {
