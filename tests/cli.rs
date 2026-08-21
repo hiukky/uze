@@ -64,6 +64,7 @@ fn fake_harness_bin_dir(label: &str) -> PathBuf {
     for (name, version_line) in [
         ("claude", "9.9.9 (Fake Claude)"),
         ("codex", "codex-cli 9.9.9"),
+        ("opencode", "opencode 9.9.9"),
     ] {
         let path = dir.join(name);
         let script = format!(
@@ -110,6 +111,8 @@ fn inspect_reports_an_installed_plugin_without_vendor_writes() {
     let home = temporary_home("cli-inspect");
     let add = Command::new(env!("CARGO_BIN_EXE_uze"))
         .env("UZE_HOME", &home)
+        .env("HOME", &home)
+        .env("PATH", "/usr/bin:/bin")
         .args(["add", package_fixture().to_str().unwrap()])
         .output()
         .unwrap();
@@ -117,6 +120,8 @@ fn inspect_reports_an_installed_plugin_without_vendor_writes() {
     let before = std::fs::read(home.join("state/attachments.json")).ok();
     let output = Command::new(env!("CARGO_BIN_EXE_uze"))
         .env("UZE_HOME", &home)
+        .env("HOME", &home)
+        .env("PATH", "/usr/bin:/bin")
         .args(["inspect", "uze-agent-skill-conformance", "--format", "json"])
         .output()
         .unwrap();
@@ -137,6 +142,8 @@ fn add_and_inspect_use_the_same_injected_uze_home() {
     let home = temporary_home("cli-store");
     let add = Command::new(env!("CARGO_BIN_EXE_uze"))
         .env("UZE_HOME", &home)
+        .env("HOME", &home)
+        .env("PATH", "/usr/bin:/bin")
         .args([
             "add",
             package_fixture().to_str().unwrap(),
@@ -152,6 +159,8 @@ fn add_and_inspect_use_the_same_injected_uze_home() {
 
     let inspect = Command::new(env!("CARGO_BIN_EXE_uze"))
         .env("UZE_HOME", &home)
+        .env("HOME", &home)
+        .env("PATH", "/usr/bin:/bin")
         .args(["inspect", "uze-agent-skill-conformance", "--format", "json"])
         .output()
         .unwrap();
@@ -279,6 +288,51 @@ fn setup_then_add_attaches_transparently_without_a_separate_sync_step() {
     let _ = std::fs::remove_dir_all(fake_bin);
 }
 
+/// A user with OpenCode already installed should not have to learn that an
+/// extra UZE setup step is required before their first package works. `add`
+/// detects the executable, prepares only UZE-owned prerequisites, then
+/// attaches the package through the normal integration lifecycle.
+#[test]
+fn add_prepares_a_detected_opencode_and_attaches_without_prior_setup() {
+    let home = temporary_home("cli-add-autoprepares-opencode-home");
+    let uze_home = temporary_home("cli-add-autoprepares-opencode-uze-home");
+    let fake_bin = fake_harness_bin_dir("cli-add-autoprepares-opencode-bin");
+    let path = format!("{}:{}", fake_bin.display(), std::env::var("PATH").unwrap());
+
+    let output = Command::new(env!("CARGO_BIN_EXE_uze"))
+        .env("UZE_HOME", &uze_home)
+        .env("HOME", &home)
+        .env("PATH", &path)
+        .args(["add", package_fixture().to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "uze add failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let skills_dir = home.join(".agents/skills");
+    let entries: Vec<_> = std::fs::read_dir(&skills_dir)
+        .expect("detected OpenCode should have a prepared global skills dir")
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(entries.len(), 1);
+    assert!(entries[0].is_symlink());
+    assert_eq!(
+        std::fs::read_link(&entries[0]).unwrap(),
+        uze_home.join("store/packages/uze-agent-skill-conformance/skills/uze-e2e")
+    );
+
+    let integrations = std::fs::read_to_string(uze_home.join("state/integrations.json")).unwrap();
+    assert!(integrations.contains("\"opencode\""));
+    assert!(integrations.contains("\"installed\": true"));
+
+    let _ = std::fs::remove_dir_all(home);
+    let _ = std::fs::remove_dir_all(uze_home);
+    let _ = std::fs::remove_dir_all(fake_bin);
+}
+
 /// Deterministic end-to-end for MCP (see ADR-007): fake, PATH-resolvable
 /// `claude`/`codex` scripts that understand `mcp get`/`mcp add`/`mcp
 /// remove` well enough to prove `uze setup` + `uze add` registers the MCP
@@ -359,12 +413,16 @@ fn remove_uses_the_package_centric_application_flow() {
     let home = temporary_home("cli-remove");
     let add = Command::new(env!("CARGO_BIN_EXE_uze"))
         .env("UZE_HOME", &home)
+        .env("HOME", &home)
+        .env("PATH", "/usr/bin:/bin")
         .args(["add", package_fixture().to_str().unwrap()])
         .output()
         .unwrap();
     assert!(add.status.success());
     let remove = Command::new(env!("CARGO_BIN_EXE_uze"))
         .env("UZE_HOME", &home)
+        .env("HOME", &home)
+        .env("PATH", "/usr/bin:/bin")
         .args(["remove", "uze-agent-skill-conformance", "--format", "json"])
         .output()
         .unwrap();
