@@ -8,11 +8,8 @@ use std::{
 };
 
 use uze::{
-    UzeEngine, UzeHome, UzeStore,
-    capability::CapabilityKind,
-    exposure::ExposureMechanism,
-    integration::IntegrationPort,
-    router::CompatibilityRoute,
+    UzeEngine, UzeHome, UzeStore, capability::CapabilityKind, exposure::ExposureMechanism,
+    integration::IntegrationPort, router::CompatibilityRoute,
 };
 
 use uze::integrations::{
@@ -23,13 +20,17 @@ use uze::integrations::{
 /// acquired into a materialized package, and only then does the Store ingest
 /// it. Spelled out here rather than hidden behind a Store convenience,
 /// because the Store deliberately no longer accepts a path.
-fn install(store: &UzeStore, path: impl Into<std::path::PathBuf>) -> uze::Result<uze::StoredPackage> {
-    store.ingest(&uze::acquisition::acquire(&uze::PackageSource::local(path))?)
+fn install(
+    store: &UzeStore,
+    path: impl Into<std::path::PathBuf>,
+) -> uze::Result<uze::StoredPackage> {
+    store.ingest(&uze::acquisition::acquire(&uze::PackageSource::local(
+        path,
+    ))?)
 }
 
 fn fixture() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("e2e/fixtures/plugin-first-conformance")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("e2e/fixtures/plugin-first-conformance")
 }
 fn temp(label: &str) -> PathBuf {
     let nonce = SystemTime::now()
@@ -97,7 +98,10 @@ fn one_plugin_install_is_planned_once_for_native_and_decomposed_harnesses() {
         "original native MCP document is preserved"
     );
     assert!(
-        !home.store_dir().join(".agents/plugins/marketplace.json").exists(),
+        !home
+            .store_dir()
+            .join(".agents/plugins/marketplace.json")
+            .exists(),
         "the Store publishes no harness-owned view of its own accord"
     );
 
@@ -194,8 +198,7 @@ fn one_plugin_install_is_planned_once_for_native_and_decomposed_harnesses() {
         "local"
     );
     assert_eq!(
-        config["mcp"]["uze-uze-plugin-first-conformance-conformance"]["command"]
-            [0],
+        config["mcp"]["uze-uze-plugin-first-conformance-conformance"]["command"][0],
         "__UZE_MCP_FIXTURE_BINARY__"
     );
     assert!(

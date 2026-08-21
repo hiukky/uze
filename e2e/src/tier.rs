@@ -20,8 +20,9 @@ use std::{
 use serde::Serialize;
 
 use crate::{
-    EvidenceState, HarnessRunSpec, HarnessRunResult, run,
+    EvidenceState, HarnessRunResult, HarnessRunSpec,
     harness::{ArtifactKind, HarnessSpec},
+    run,
 };
 
 /// Everything a tier needs that is not the harness under test. Constructed
@@ -260,11 +261,17 @@ pub fn attachment(
 /// because each harness reports upstream failures in its own text.
 const ENVIRONMENT_BLOCKS: [(&str, &str); 6] = [
     ("429", "provider rate limit or quota exhausted"),
-    ("Too Many Requests", "provider rate limit or quota exhausted"),
+    (
+        "Too Many Requests",
+        "provider rate limit or quota exhausted",
+    ),
     ("insufficient_quota", "provider quota exhausted"),
     ("401", "provider rejected the credential"),
     ("invalid_api_key", "provider rejected the credential"),
-    ("exceeded retry limit", "harness gave up reaching the provider"),
+    (
+        "exceeded retry limit",
+        "harness gave up reaching the provider",
+    ),
 ];
 
 fn environment_block(output: &str) -> Option<&'static str> {
@@ -320,7 +327,11 @@ fn attachment_name(tag: &str, body: &serde_json::Value) -> Option<String> {
         ArtifactKind::SymlinkReference => body
             .get("path")
             .and_then(serde_json::Value::as_str)
-            .and_then(|path| Path::new(path).file_name().map(|name| name.to_string_lossy().into_owned())),
+            .and_then(|path| {
+                Path::new(path)
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+            }),
         ArtifactKind::IntegrationOwned => body
             .get("selector")
             .and_then(serde_json::Value::as_str)
@@ -369,8 +380,11 @@ pub fn discovery(
             continue;
         }
         for probe in probes {
-            let arguments: Vec<String> =
-                probe.arguments.iter().map(|value| value.to_string()).collect();
+            let arguments: Vec<String> = probe
+                .arguments
+                .iter()
+                .map(|value| value.to_string())
+                .collect();
             let outcome = match run(&environment.spec(harness.executable, arguments.clone())) {
                 Err(error) => ProbeOutcome {
                     arguments,
@@ -393,10 +407,8 @@ pub fn discovery(
                         missing.push(format!("attached name {}", attachment.name));
                     }
                     for fragment in probe.required {
-                        let fragment = fragment.replace(
-                            "{mcp_binary}",
-                            &environment.mcp_binary.to_string_lossy(),
-                        );
+                        let fragment = fragment
+                            .replace("{mcp_binary}", &environment.mcp_binary.to_string_lossy());
                         if !output.contains(&fragment) {
                             missing.push(format!("required fragment {fragment}"));
                         }
@@ -537,11 +549,7 @@ pub fn behavior(
                 report.detail = Some(format!("{reason}: {}", excerpt(&output)));
             } else {
                 report.state = EvidenceState::HarnessFailure;
-                report.detail = Some(format!(
-                    "exit {:?}: {}",
-                    result.exit_code,
-                    excerpt(&output)
-                ));
+                report.detail = Some(format!("exit {:?}: {}", result.exit_code, excerpt(&output)));
             }
         }
     }
@@ -560,7 +568,10 @@ mod tests {
             Some("uze-x-y".to_owned())
         );
         assert_eq!(
-            attachment_name("SYMLINK_REFERENCE", &json!({"path": "/home/n/.agents/skills/uze-x"})),
+            attachment_name(
+                "SYMLINK_REFERENCE",
+                &json!({"path": "/home/n/.agents/skills/uze-x"})
+            ),
             Some("uze-x".to_owned())
         );
         assert_eq!(

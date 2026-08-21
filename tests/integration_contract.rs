@@ -23,8 +23,13 @@ use uze::integrations::{
 /// acquired into a materialized package, and only then does the Store ingest
 /// it. Spelled out here rather than hidden behind a Store convenience,
 /// because the Store deliberately no longer accepts a path.
-fn install(store: &UzeStore, path: impl Into<std::path::PathBuf>) -> uze::Result<uze::StoredPackage> {
-    store.ingest(&uze::acquisition::acquire(&uze::PackageSource::local(path))?)
+fn install(
+    store: &UzeStore,
+    path: impl Into<std::path::PathBuf>,
+) -> uze::Result<uze::StoredPackage> {
+    store.ingest(&uze::acquisition::acquire(&uze::PackageSource::local(
+        path,
+    ))?)
 }
 
 fn package_fixture() -> PathBuf {

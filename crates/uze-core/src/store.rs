@@ -219,19 +219,6 @@ impl UzeStore {
     }
 }
 
-fn checked_root(root: &Path) -> Result<PathBuf> {
-    if !root.exists() {
-        return Err(UzeError::MissingPath(root.to_path_buf()));
-    }
-    if !root.is_dir() {
-        return Err(UzeError::NotDirectory(root.to_path_buf()));
-    }
-    root.canonicalize().map_err(|source| UzeError::Read {
-        path: root.to_path_buf(),
-        source,
-    })
-}
-
 /// Enforces the invariant that an installed package is **self-contained**:
 /// no symlink the Store persists may resolve outside the package root.
 ///

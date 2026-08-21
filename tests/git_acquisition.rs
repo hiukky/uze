@@ -14,9 +14,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use uze::{
-    PackageSource, ResolvedSource, UzeError, UzeHome, UzeStore, acquisition::acquire,
-};
+use uze::{PackageSource, ResolvedSource, UzeError, UzeHome, UzeStore, acquisition::acquire};
 
 fn temporary(label: &str) -> PathBuf {
     let nonce = SystemTime::now()
@@ -83,7 +81,10 @@ impl Fixture {
         let work = root.join("work");
         let bare = root.join("origin.git");
         fs::create_dir_all(&work).unwrap();
-        git(&["init", "--quiet", "--initial-branch", "trunk", "."], &work);
+        git(
+            &["init", "--quiet", "--initial-branch", "trunk", "."],
+            &work,
+        );
         layout(&work);
         git(&["add", "-A"], &work);
         git(&["commit", "--quiet", "-m", "initial"], &work);
@@ -103,7 +104,10 @@ impl Fixture {
         fs::write(self.work.join("skills/example/SKILL.md"), body).unwrap();
         git(&["add", "-A"], &self.work);
         git(&["commit", "--quiet", "-m", "update"], &self.work);
-        git(&["push", "--quiet", "--force", "origin", branch], &self.work);
+        git(
+            &["push", "--quiet", "--force", "origin", branch],
+            &self.work,
+        );
         git(&["rev-parse", "HEAD"], &self.work)
     }
 
@@ -199,7 +203,10 @@ fn a_tag_resolves_to_an_immutable_commit() {
 fn an_explicit_commit_is_checked_out() {
     let fixture = Fixture::new("commit", false);
     let first = fixture.head();
-    fixture.commit_on("trunk", "---\nname: example\ndescription: f\n---\n\nmoved\n");
+    fixture.commit_on(
+        "trunk",
+        "---\nname: example\ndescription: f\n---\n\nmoved\n",
+    );
 
     let materialized = acquire(&PackageSource::Git {
         url: fixture.url.clone(),
@@ -220,7 +227,10 @@ fn reinstalling_a_resolved_commit_stays_at_that_commit() {
     let pinned_commit = resolved_commit(&pinned.provenance().resolved);
     drop(pinned);
 
-    let moved = fixture.commit_on("trunk", "---\nname: example\ndescription: f\n---\n\nmoved\n");
+    let moved = fixture.commit_on(
+        "trunk",
+        "---\nname: example\ndescription: f\n---\n\nmoved\n",
+    );
     assert_ne!(moved, pinned_commit);
 
     // Reinstall asks for the resolution, not the request.
@@ -249,7 +259,10 @@ fn updating_re_resolves_the_request_and_moves_with_the_branch() {
     };
     let before = resolved_commit(&acquire(&request).unwrap().provenance().resolved);
 
-    let moved = fixture.commit_on("trunk", "---\nname: example\ndescription: f\n---\n\nmoved\n");
+    let moved = fixture.commit_on(
+        "trunk",
+        "---\nname: example\ndescription: f\n---\n\nmoved\n",
+    );
     let after = resolved_commit(&acquire(&request).unwrap().provenance().resolved);
 
     assert_ne!(before, after);
@@ -378,7 +391,10 @@ fn submodules_are_not_recursed_into() {
     )
     .unwrap();
     git(&["add", "-A"], &outer.work);
-    git(&["commit", "--quiet", "-m", "declare submodule"], &outer.work);
+    git(
+        &["commit", "--quiet", "-m", "declare submodule"],
+        &outer.work,
+    );
     git(&["push", "--quiet", "origin", "trunk"], &outer.work);
 
     let materialized = acquire(&PackageSource::git(&outer.url)).unwrap();
@@ -397,7 +413,7 @@ fn submodules_are_not_recursed_into() {
 
 use uze::{
     UzeApplication,
-    trust::{AlwaysTrust, NoTrustAuthority, TrustAuthority, TrustOutcome, TrustRequest},
+    trust::{NoTrustAuthority, TrustAuthority, TrustOutcome, TrustRequest},
 };
 
 /// Records what it was asked, so a test can assert the operator was shown
@@ -462,7 +478,10 @@ fn a_remote_package_with_an_mcp_command_requires_trust() {
     let request = seen.first().expect("the operator was never asked");
     assert_eq!(request.package_id, "git-fixture");
     assert!(request.requested_source.contains("file://"));
-    assert_eq!(request.resolved_source, format!("{}@{}", fixture.url, fixture.head()));
+    assert_eq!(
+        request.resolved_source,
+        format!("{}@{}", fixture.url, fixture.head())
+    );
     assert_eq!(request.executable.len(), 1);
     assert_eq!(request.executable[0].command, "./bin/server");
     assert_eq!(request.executable[0].arguments, vec!["--stdio".to_owned()]);

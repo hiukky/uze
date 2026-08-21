@@ -224,18 +224,19 @@ fn prepare_environment(
     );
     environment.insert("TERM".to_owned(), "dumb".to_owned());
 
-    if with_provider {
-        if let Some(config) = harness.behavior.and_then(|spec| spec.provider_config) {
-            for (from, to) in config.seed {
-                copy_tree(Path::new(from), &home.join(to))?;
-            }
-            let path = home.join(config.relative_path);
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-            }
-            fs::write(&path, config.contents.replace("{gateway}", &options.gateway))
-                .map_err(|error| error.to_string())?;
+    if with_provider && let Some(config) = harness.behavior.and_then(|spec| spec.provider_config) {
+        for (from, to) in config.seed {
+            copy_tree(Path::new(from), &home.join(to))?;
         }
+        let path = home.join(config.relative_path);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        fs::write(
+            &path,
+            config.contents.replace("{gateway}", &options.gateway),
+        )
+        .map_err(|error| error.to_string())?;
     }
 
     Ok(LabEnvironment {
@@ -373,11 +374,16 @@ fn main() -> ExitCode {
         if options.tiers.runs_deterministic() {
             // Both capabilities are installed together here. There is no
             // model to confuse, so the realistic shape is also the safe one.
-            match prepare(&options, harness, FixtureVariant::Full, "deterministic", false) {
+            match prepare(
+                &options,
+                harness,
+                FixtureVariant::Full,
+                "deterministic",
+                false,
+            ) {
                 Err(detail) => reports.push(blocked(harness, "attachment", detail)),
                 Ok(run) => {
-                    let attachment =
-                        tier::attachment(&run.environment, harness, &run.package_id);
+                    let attachment = tier::attachment(&run.environment, harness, &run.package_id);
                     let attachments = attachment.attachments.clone();
                     let verified = attachment.passed();
                     reports.push(attachment);
@@ -498,9 +504,7 @@ fn main() -> ExitCode {
                     report.harness
                 );
             }
-            println!(
-                "  This measures a different surface than the behavior tier, whose workspace"
-            );
+            println!("  This measures a different surface than the behavior tier, whose workspace");
             println!("  holds no skill file at all. It does not weaken a behavior pass.");
         }
     }

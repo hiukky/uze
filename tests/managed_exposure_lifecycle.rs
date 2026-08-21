@@ -32,8 +32,13 @@ use uze::integrations::{
 /// acquired into a materialized package, and only then does the Store ingest
 /// it. Spelled out here rather than hidden behind a Store convenience,
 /// because the Store deliberately no longer accepts a path.
-fn install(store: &UzeStore, path: impl Into<std::path::PathBuf>) -> uze::Result<uze::StoredPackage> {
-    store.ingest(&uze::acquisition::acquire(&uze::PackageSource::local(path))?)
+fn install(
+    store: &UzeStore,
+    path: impl Into<std::path::PathBuf>,
+) -> uze::Result<uze::StoredPackage> {
+    store.ingest(&uze::acquisition::acquire(&uze::PackageSource::local(
+        path,
+    ))?)
 }
 
 struct SharedStoreFixture {
@@ -88,8 +93,8 @@ fn shared_store_fixture(label: &str) -> SharedStoreFixture {
     let root = temporary_root(label);
     let home = UzeHome::at(root.join("uze-home"));
     let store = UzeStore::new(home.clone());
-    let installed = install(&store, package_fixture())
-        .expect("fixture is a valid Agent Plugin 1.0 package");
+    let installed =
+        install(&store, package_fixture()).expect("fixture is a valid Agent Plugin 1.0 package");
     assert_eq!(store.registration_count().expect("registry is readable"), 1);
 
     let workspace = root.join("caller-workspace");
