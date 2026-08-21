@@ -270,7 +270,15 @@ fn dispatch(intent: Intent, home: &UzeHome, sender: &Sender<WorkerResult>, model
                 sender.clone(),
                 format!("Adding {source}…"),
                 move |app| {
-                    app.add_plugin(PathBuf::from(source))
+                    // TUI v0 cannot render a trust prompt yet, so it declines to answer
+                        // rather than answering yes on the operator's behalf. The
+                        // structured `TRUST_REQUIRED` surfaces as an error in the UI,
+                        // and a future TUI will render the same `TrustRequest` the CLI
+                        // already receives.
+                        app.add_plugin(
+                            crate::PackageSource::local(source),
+                            &crate::trust::NoTrustAuthority,
+                        )
                         .map(|report| format!("Installed {}", report.plugin.id))
                 },
             );
@@ -538,7 +546,7 @@ fn render_inspect(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, m
             &report.plugin.id,
             Style::default().add_modifier(Modifier::BOLD),
         )),
-        Line::from(format!("Source  {}", report.plugin.source.display())),
+        Line::from(format!("Source  {}", report.plugin.source)),
         Line::from(format!("Capabilities  {}", report.capabilities.len())),
         Line::from(""),
         Line::from("Delivery"),
@@ -647,12 +655,11 @@ fn plugin_health(doctor: Option<&DoctorReport>, plugin: &str) -> &'static str {
     }
 }
 
-fn short_source(source: &std::path::Path) -> String {
-    source
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("local")
-        .to_owned()
+fn short_source(source: &str) -> String {
+    let path = std::path::Path::new(source);
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| source.to_owned())
 }
 
 fn centered_line(area: ratatui::layout::Rect) -> ratatui::layout::Rect {
@@ -678,7 +685,7 @@ mod tests {
     fn plugin(id: &str) -> PluginSummary {
         PluginSummary {
             id: id.to_owned(),
-            source: PathBuf::from("/plugins/example"),
+            source: "/plugins/example".to_owned(),
             store_path: PathBuf::from("/store/example"),
             capability_count: 2,
         }

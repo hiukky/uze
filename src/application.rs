@@ -8,7 +8,8 @@ use std::{collections::BTreeSet, path::PathBuf};
 use serde::Serialize;
 
 use crate::{
-    Result, UzeEngine, UzeError, UzeHome, UzeStore,
+    PackageSource, Result, UzeEngine, UzeError, UzeHome, UzeStore,
+    trust::{self, TrustAuthority, TrustOutcome, TrustRequest},
     capability::CapabilityKind,
     exposure::{ExposurePlan, PackageExposurePlan},
     integration::{
@@ -115,9 +116,37 @@ impl UzeApplication {
 
     /// Installs once, chooses package-native delivery first, attaches only
     /// remaining resources, and records every persistent side effect.
-    pub fn add_plugin(&self, source: impl Into<PathBuf>) -> Result<AddPluginReport> {
+    pub fn add_plugin(
+        &self,
+        source: PackageSource,
+        authority: &dyn TrustAuthority,
+    ) -> Result<AddPluginReport> {
         let _mutation = crate::persistence::MutationLock::acquire(&self.home)?;
-        let installed = self.store.install_agent_plugin(source.into())?;
+        // Acquisition brings the bytes to a local directory and owns their
+        // cleanup; the Store only ever sees a materialized package.
+        let materialized = crate::acquisition::acquire(&source)?;
+        self.install_materialized(materialized, authority, &[], false)
+    }
+
+    /// The half of installation that runs once bytes exist locally.
+    ///
+    /// Deliberately takes no lock: both public entry points hold one already,
+    /// and `MutationLock` is not reentrant. Sharing this body is what lets
+    /// `update_plugin` reuse installation without re-entering it.
+    fn install_materialized(
+        &self,
+        materialized: crate::MaterializedPackage,
+        authority: &dyn TrustAuthority,
+        already_trusted: &[trust::ExecutableCapability],
+        replacing_installed: bool,
+    ) -> Result<AddPluginReport> {
+        // Trust is decided here — after the package is materialized and can
+        // be inspected honestly, and strictly before anything is written to
+        // the Store or shown to a harness. Neither the Store nor any
+        // integration knows this question exists.
+        self.authorize(&materialized, authority, already_trusted, replacing_installed)?;
+
+        let installed = self.store.ingest(&materialized)?;
 
         // Derived views refresh before attachment: a native package delivery
         // reads the view it was just given. A failure here is recorded, never
@@ -183,6 +212,57 @@ impl UzeApplication {
         })
     }
 
+    /// Re-resolves a package's original request and replaces the installed
+    /// copy with the result.
+    ///
+    /// The order is the whole safety story. Everything that can fail without
+    /// consequence happens first — re-resolve, materialize, validate, and ask
+    /// about any execution the installed revision did not already have — and
+    /// only then is the current package detached. A network failure, an
+    /// invalid package or a refused trust question therefore mutates nothing
+    /// at all.
+    ///
+    /// There is deliberately no rollback across integrations. If one fails to
+    /// re-attach, the Store stays consistent, the others keep what they got,
+    /// and the partial state is reported rather than papered over — `doctor`
+    /// reconciles it and a repeat `update` finishes the job. Blind rollback
+    /// would mean detaching artifacts UZE had just proven it owns, on the
+    /// word of an unrelated failure.
+    pub fn update_plugin(
+        &self,
+        id: &str,
+        authority: &dyn TrustAuthority,
+    ) -> Result<UpdatePluginReport> {
+        let _mutation = crate::persistence::MutationLock::acquire(&self.home)?;
+        let installed = self.package_by_name(id)?;
+
+        // Re-resolve the *request*, not the resolution: that is what makes a
+        // branch move forward while a pinned commit stays put.
+        let materialized = crate::acquisition::acquire(&installed.provenance.requested)?;
+
+        let previous = {
+            let environment = self.engine().compose(std::slice::from_ref(&installed.id))?;
+            let resources: Vec<&crate::Resource> = environment.resources.iter().collect();
+            trust::executable_capabilities(&resources)
+        };
+        self.authorize(&materialized, authority, &previous, true)?;
+
+        // Nothing destructive has happened yet. From here the current package
+        // is removed under the same ownership rules any removal obeys.
+        let removal = self.detach_and_remove(id)?;
+        if let RemovePluginReport::Blocked { report, plan } = removal {
+            return Ok(UpdatePluginReport::Blocked { report, plan });
+        }
+        // Trust was already settled above against the previous capabilities,
+        // so installation must not ask a second time for the same answer.
+        let report = self.install_materialized(materialized, &trust::AlwaysTrust, &[], true)?;
+        Ok(UpdatePluginReport::Updated {
+            plugin: report.plugin,
+            attachments: report.attachments,
+            publications: report.publications,
+        })
+    }
+
     /// Runs only selected, detected setup routines. No integration knowledge
     /// leaks to the caller beyond stable ids and reported facts.
     pub fn setup(&self, requested: Option<&str>) -> Result<Vec<SetupResult>> {
@@ -219,6 +299,11 @@ impl UzeApplication {
     /// delete UZE-owned package bytes.
     pub fn remove_plugin(&self, id: &str) -> Result<RemovePluginReport> {
         let _mutation = crate::persistence::MutationLock::acquire(&self.home)?;
+        self.detach_and_remove(id)
+    }
+
+    /// Removal without taking the lock; see `install_materialized`.
+    fn detach_and_remove(&self, id: &str) -> Result<RemovePluginReport> {
         let package = match self.package_by_name(id) {
             Ok(package) => package,
             Err(UzeError::UnknownPackage(_)) => {
@@ -379,7 +464,7 @@ impl UzeApplication {
         let environment = self.engine().compose(std::slice::from_ref(&package.id))?;
         Ok(PluginSummary {
             id: package.id.as_str().to_owned(),
-            source: package.source.clone(),
+            source: package.provenance.requested.display(),
             store_path: package.root.clone(),
             capability_count: environment.resources.len(),
         })
@@ -436,6 +521,64 @@ impl UzeApplication {
             })
     }
 
+    /// Asks the supplied authority about any capability that would introduce
+    /// process execution, and refuses to proceed without a grant.
+    ///
+    /// Returns `Ok(())` immediately when the package declares nothing
+    /// executable: a purely declarative package needs no consent beyond the
+    /// decision to install it.
+    fn authorize(
+        &self,
+        materialized: &crate::MaterializedPackage,
+        authority: &dyn TrustAuthority,
+        already_trusted: &[trust::ExecutableCapability],
+        replacing_installed: bool,
+    ) -> Result<()> {
+        let provenance = materialized.provenance();
+        if !provenance.requested.crosses_trust_boundary() {
+            return Ok(());
+        }
+        let inspected = crate::acquisition::inspect_capabilities(materialized)?;
+        let resources: Vec<&crate::Resource> = inspected.resources.iter().collect();
+        let executable = trust::executable_capabilities(&resources);
+        if executable.is_empty() || !trust::introduces_new_execution(already_trusted, &executable) {
+            return Ok(());
+        }
+        let request = TrustRequest {
+            package_id: inspected.package_id.clone(),
+            requested_source: provenance.requested.display(),
+            resolved_source: provenance.resolved.display(),
+            executable,
+            // The operator is being asked about a *change* to something they
+            // already have, not about a first install. Derived from the fact
+            // of an existing installation rather than from whether the
+            // previous revision happened to execute anything — a declarative
+            // package gaining an MCP server is exactly the case that must
+            // read as a change.
+            previously_trusted: replacing_installed,
+        };
+        match authority.authorize(&request) {
+            TrustOutcome::Granted => Ok(()),
+            TrustOutcome::Denied => Err(UzeError::TrustDenied(request.package_id)),
+            TrustOutcome::Unavailable => Err(UzeError::TrustRequired {
+                package: request.package_id.clone(),
+                detail: request
+                    .executable
+                    .iter()
+                    .map(|capability| {
+                        format!(
+                            "{} -> {} {}",
+                            capability.name,
+                            capability.command,
+                            capability.arguments.join(" ")
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            }),
+        }
+    }
+
     fn engine(&self) -> UzeEngine {
         UzeEngine::new(self.store.clone())
     }
@@ -453,7 +596,10 @@ impl UzeApplication {
 #[derive(Clone, Debug, Serialize)]
 pub struct PluginSummary {
     pub id: String,
-    pub source: PathBuf,
+    /// Human-facing description of where this package came from. Display
+    /// only: the typed provenance stays in the registry, and nothing parses
+    /// this back.
+    pub source: String,
     pub store_path: PathBuf,
     pub capability_count: usize,
 }
@@ -520,6 +666,22 @@ pub struct AddPluginReport {
     pub package_plans: Vec<(String, PackageExposurePlan)>,
     pub attachments: Vec<AttachmentSummary>,
     pub publications: Vec<PublicationOutcome>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub enum UpdatePluginReport {
+    Updated {
+        plugin: PluginSummary,
+        attachments: Vec<AttachmentSummary>,
+        publications: Vec<PublicationOutcome>,
+    },
+    /// The installed package could not be safely detached, so nothing was
+    /// replaced. The newly resolved revision is discarded with its scratch
+    /// directory.
+    Blocked {
+        report: ReconciliationReport,
+        plan: PackageRemovalPlan,
+    },
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -797,7 +959,7 @@ mod tests {
     fn list_and_inspect_are_package_centric() {
         let root = temp("inspect");
         let app = UzeApplication::new(UzeHome::at(&root), vec![Box::new(SymlinkIntegration)]);
-        app.add_plugin(fixture()).unwrap();
+        app.add_plugin(crate::PackageSource::local(fixture()), &crate::trust::AlwaysTrust).unwrap();
         let listed = app.list_plugins().unwrap();
         assert_eq!(listed.len(), 1);
         let inspection = app.inspect_plugin(&listed[0].id).unwrap();
@@ -814,7 +976,7 @@ mod tests {
         let root = temp("remove");
         let home = UzeHome::at(&root);
         let app = UzeApplication::new(home.clone(), vec![Box::new(SymlinkIntegration)]);
-        let package = app.store.install_agent_plugin(fixture()).unwrap();
+        let package = app.store.ingest(&crate::acquisition::acquire(&crate::PackageSource::local(fixture())).unwrap()).unwrap();
         let expected = package.root.join("skills/uze-e2e");
         let managed = root.join("managed");
         symlink(&expected, &managed).unwrap();
@@ -840,7 +1002,7 @@ mod tests {
         assert!(!managed.exists());
         assert!(app.store.package(&package.id).is_err());
 
-        let package = app.store.install_agent_plugin(fixture()).unwrap();
+        let package = app.store.ingest(&crate::acquisition::acquire(&crate::PackageSource::local(fixture())).unwrap()).unwrap();
         let foreign = root.join("foreign");
         fs::create_dir_all(&foreign).unwrap();
         symlink(&foreign, &managed).unwrap();
@@ -895,7 +1057,7 @@ mod tests {
             attached: Cell::new(false),
         };
         let app = UzeApplication::new(home.clone(), vec![Box::new(integration)]);
-        assert!(app.add_plugin(multi_mcp_fixture()).is_err());
+        assert!(app.add_plugin(crate::PackageSource::local(multi_mcp_fixture()), &crate::trust::AlwaysTrust).is_err());
         assert!(
             app.store
                 .package_ids()
@@ -913,7 +1075,7 @@ mod tests {
     fn remove_is_idempotent_without_claiming_history_for_absent_state() {
         let root = temp("remove-twice");
         let app = UzeApplication::new(UzeHome::at(&root), vec![Box::new(SymlinkIntegration)]);
-        let package = app.store.install_agent_plugin(fixture()).unwrap();
+        let package = app.store.ingest(&crate::acquisition::acquire(&crate::PackageSource::local(fixture())).unwrap()).unwrap();
         assert!(matches!(
             app.remove_plugin(package.id.as_str()).unwrap(),
             RemovePluginReport::Removed { .. }
@@ -922,7 +1084,7 @@ mod tests {
             app.remove_plugin(package.id.as_str()).unwrap(),
             RemovePluginReport::AlreadyAbsent { .. }
         ));
-        app.add_plugin(fixture()).unwrap();
+        app.add_plugin(crate::PackageSource::local(fixture()), &crate::trust::AlwaysTrust).unwrap();
         assert_eq!(app.list_plugins().unwrap().len(), 1);
         fs::remove_dir_all(root).unwrap();
     }
@@ -938,7 +1100,7 @@ mod tests {
                 root: root.clone(),
             })],
         );
-        app.add_plugin(multi_mcp_fixture()).unwrap();
+        app.add_plugin(crate::PackageSource::local(multi_mcp_fixture()), &crate::trust::AlwaysTrust).unwrap();
         let receipts = state::receipts(&home, Some("multi-mcp-plugin")).unwrap();
         assert_eq!(receipts.len(), 2);
         assert_ne!(

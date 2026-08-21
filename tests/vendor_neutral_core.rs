@@ -24,6 +24,14 @@ use uze::{
     store::StoredPackage,
 };
 
+/// The acquisition pipeline every install now goes through: a source is
+/// acquired into a materialized package, and only then does the Store ingest
+/// it. Spelled out here rather than hidden behind a Store convenience,
+/// because the Store deliberately no longer accepts a path.
+fn install(store: &UzeStore, path: impl Into<std::path::PathBuf>) -> uze::Result<uze::StoredPackage> {
+    store.ingest(&uze::acquisition::acquire(&uze::PackageSource::local(path))?)
+}
+
 fn native_package_fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("e2e/fixtures/plugin-first-conformance")
@@ -176,8 +184,7 @@ impl IntegrationPort for QuietIntegration {
 fn the_store_writes_no_harness_owned_artifact_of_its_own_accord() {
     let home = temporary_home("store-writes");
     let store = UzeStore::new(home.clone());
-    store
-        .install_agent_plugin(native_package_fixture())
+    install(&store, native_package_fixture())
         .expect("a package carrying a native envelope installs");
 
     // The package tree and UZE's own state are the only things the Store
@@ -201,7 +208,7 @@ fn republish_is_a_noop_for_an_integration_that_publishes_nothing() {
     let home = temporary_home("quiet");
     let application = UzeApplication::new(home.clone(), vec![Box::new(QuietIntegration)]);
     application
-        .add_plugin(plain_package_fixture())
+        .add_plugin(uze::PackageSource::local(plain_package_fixture()), &uze::trust::AlwaysTrust)
         .expect("install succeeds with an integration that publishes nothing");
 
     let report = application.doctor();
@@ -220,7 +227,7 @@ fn a_derived_view_is_rebuilt_from_the_package_set_alone() {
         vec![Box::new(PublishingIntegration::new(views.clone()))],
     );
     application
-        .add_plugin(native_package_fixture())
+        .add_plugin(uze::PackageSource::local(native_package_fixture()), &uze::trust::AlwaysTrust)
         .expect("install succeeds");
 
     let catalogue = views.join("catalogue.json");
@@ -253,7 +260,7 @@ fn a_package_without_the_native_envelope_is_not_published() {
         vec![Box::new(PublishingIntegration::new(views.clone()))],
     );
     application
-        .add_plugin(plain_package_fixture())
+        .add_plugin(uze::PackageSource::local(plain_package_fixture()), &uze::trust::AlwaysTrust)
         .expect("install succeeds");
 
     // Which packages belong in a view is the integration's policy. The Store
@@ -280,7 +287,7 @@ fn a_failed_publication_leaves_the_package_installed_and_says_so() {
     );
 
     let report = application
-        .add_plugin(native_package_fixture())
+        .add_plugin(uze::PackageSource::local(native_package_fixture()), &uze::trust::AlwaysTrust)
         .expect("a failed derived view never fails the installation");
 
     // The package is a valid UZE installation.
@@ -351,7 +358,7 @@ fn native_package_delivery_still_suppresses_individual_attachment() {
     // which resources that covers — never how.
     let home = temporary_home("suppression");
     let store = UzeStore::new(home.clone());
-    let package = store.install_agent_plugin(native_package_fixture()).unwrap();
+    let package = install(&store, native_package_fixture()).unwrap();
     let environment = UzeEngine::new(store)
         .compose(std::slice::from_ref(&package.id))
         .unwrap();
@@ -371,6 +378,71 @@ fn native_package_delivery_still_suppresses_individual_attachment() {
     assert_eq!(plan.provided_resource_identities.len(), 2);
 
     let _ = fs::remove_dir_all(home.root());
+}
+
+/// Structural counterpart to the vendor-neutrality greps: the Store must not
+/// learn source mechanisms as it learned harnesses.
+///
+/// It asserts on the source text because that is the only way to catch the
+/// failure this guards against — a future contributor reaching for a quick
+/// `if source is git` inside the Store. Provenance reaches `store.rs` as an
+/// opaque value it persists and compares through `same_origin`; it never
+/// matches a variant or reads a field.
+#[test]
+fn the_store_contains_no_source_mechanism_semantics() {
+    let store = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/store.rs"),
+    )
+    .expect("store source is readable");
+
+    // Deliberately not `clone`/`fetch`: those are ordinary Rust vocabulary
+    // here, and a check that cries wolf gets deleted rather than fixed.
+    for forbidden in [
+        "git ", "Git", "github", "GitHub", "gitlab", "https://", "git clone",
+        "revision", "commit", "branch", "PackageSource::", "ResolvedSource",
+    ] {
+        assert!(
+            !store.contains(forbidden),
+            "store.rs mentions `{forbidden}`; source mechanisms belong to acquisition"
+        );
+    }
+
+    // It may name the opaque carrier and the one comparison it is allowed to
+    // make — that is the whole of its provenance vocabulary.
+    assert!(store.contains("Provenance"));
+    assert!(store.contains("same_origin"));
+}
+
+/// The Engine, Router and package model must not *depend* on acquisition.
+///
+/// Comments are stripped before checking, deliberately. The invariant is
+/// about the dependency edge, not the vocabulary: `acquisition` depends on
+/// `engine` — which is the correct direction — and the modules on that side
+/// are allowed to explain why a rule exists. Banning the word would only
+/// teach contributors to delete the explanation.
+#[test]
+fn no_core_module_depends_on_acquisition() {
+    for module in [
+        "src/engine.rs",
+        "src/router.rs",
+        "src/capability.rs",
+        "src/project.rs",
+        "src/store.rs",
+    ] {
+        let text = fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(module))
+            .expect("core source is readable");
+        let code: String = text
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for forbidden in ["crate::acquisition", "PackageSource", "ResolvedSource"] {
+            assert!(
+                !code.contains(forbidden),
+                "{module} depends on `{forbidden}`; acquisition is not a core concern"
+            );
+        }
+    }
 }
 
 #[test]

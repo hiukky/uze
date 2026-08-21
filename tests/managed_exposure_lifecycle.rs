@@ -28,6 +28,14 @@ use uze::integrations::{
     claude::ClaudeIntegration, codex::CodexIntegration, opencode::OpenCodeIntegration,
 };
 
+/// The acquisition pipeline every install now goes through: a source is
+/// acquired into a materialized package, and only then does the Store ingest
+/// it. Spelled out here rather than hidden behind a Store convenience,
+/// because the Store deliberately no longer accepts a path.
+fn install(store: &UzeStore, path: impl Into<std::path::PathBuf>) -> uze::Result<uze::StoredPackage> {
+    store.ingest(&uze::acquisition::acquire(&uze::PackageSource::local(path))?)
+}
+
 struct SharedStoreFixture {
     root: PathBuf,
     home: UzeHome,
@@ -80,8 +88,7 @@ fn shared_store_fixture(label: &str) -> SharedStoreFixture {
     let root = temporary_root(label);
     let home = UzeHome::at(root.join("uze-home"));
     let store = UzeStore::new(home.clone());
-    let installed = store
-        .install_agent_plugin(package_fixture())
+    let installed = install(&store, package_fixture())
         .expect("fixture is a valid Agent Plugin 1.0 package");
     assert_eq!(store.registration_count().expect("registry is readable"), 1);
 
@@ -258,8 +265,7 @@ fn a_derived_mcp_entry_name_leaves_room_for_a_tool_name() {
     let root = temporary_root("mcp-entry-name");
     let home = UzeHome::at(root.join("uze-home"));
     let store = UzeStore::new(home.clone());
-    let installed = store
-        .install_agent_plugin(mcp_package_fixture())
+    let installed = install(&store, mcp_package_fixture())
         .expect("MCP fixture is a valid Agent Plugin 1.0 package");
     let workspace = root.join("caller-workspace");
     fs::create_dir_all(&workspace).expect("caller workspace is created");
