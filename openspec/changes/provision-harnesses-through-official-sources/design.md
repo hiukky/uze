@@ -34,9 +34,11 @@ blocked result rather than guessing.
 
 The command runner is injectable. Production invokes a process without a
 shell unless an official installer necessarily requires one; tests assert the
-exact approved command specification through a fake runner. Timeouts, output
-redaction, version verification, and nonzero exits become structured results.
-Normal tests never run a network installer.
+exact approved command specification through a fake runner. Installation and
+update commands inherit stdout/stderr so an explicit `uze setup` shows vendor
+progress in real time; quiet verification probes do not. Neither output mode
+persists command output. Timeouts, version verification, and nonzero exits
+become structured results. Normal tests never run a network installer.
 
 `$UZE_HOME/state/provisioning.json` records only UZE-initiated action,
 integration id, platform/method, executable identity when observed, version,

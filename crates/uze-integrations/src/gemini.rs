@@ -174,10 +174,10 @@ impl IntegrationPort for GeminiIntegration {
         } else {
             ProvisionAction::Install
         };
-        let outcome = match runner.run(&ProcessSpec::new(
-            "npm",
-            ["install", "-g", "@google/gemini-cli@latest"],
-        )) {
+        let outcome = match runner.run(
+            &ProcessSpec::new("npm", ["install", "-g", "@google/gemini-cli@latest"])
+                .with_inherited_output(),
+        ) {
             Ok(outcome) => outcome,
             Err(_) => {
                 return Ok(ProvisioningResult::failed(

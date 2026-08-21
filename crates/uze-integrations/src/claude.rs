@@ -99,8 +99,9 @@ impl IntegrationPort for ClaudeIntegration {
             ProcessSpec::new(
                 "sh",
                 ["-c", "curl -fsSL https://claude.ai/install.sh | bash"],
-            ),
-            ProcessSpec::new("claude", ["update"]),
+            )
+            .with_inherited_output(),
+            ProcessSpec::new("claude", ["update"]).with_inherited_output(),
             "official-native-installer",
         )
     }
@@ -633,16 +634,16 @@ fn unsupported(resource: &Resource, rationale: &str) -> ExposurePlan {
 mod lifecycle_tests {
     use super::*;
     use std::sync::Mutex;
-    use uze_core::provisioning::{ProcessOutput, ProcessRunner};
+    use uze_core::provisioning::{ProcessResult, ProcessRunner};
 
     struct RecordingRunner {
         commands: Mutex<Vec<ProcessSpec>>,
     }
 
     impl ProcessRunner for RecordingRunner {
-        fn run(&self, spec: &ProcessSpec) -> Result<ProcessOutput> {
+        fn run(&self, spec: &ProcessSpec) -> Result<ProcessResult> {
             self.commands.lock().unwrap().push(spec.clone());
-            Ok(ProcessOutput {
+            Ok(ProcessResult {
                 success: true,
                 timed_out: false,
             })
@@ -671,6 +672,11 @@ mod lifecycle_tests {
             );
             let commands = runner.commands.lock().unwrap();
             assert_eq!(commands[0].program, "sh");
+            assert_eq!(
+                commands[0].output,
+                uze_core::provisioning::ProcessOutput::Quiet,
+                "the helper's synthetic test command is intentionally quiet"
+            );
             assert_eq!(commands[1].program, "claude-test-does-not-exist");
             assert_eq!(commands[1].arguments, ["--version"]);
         }

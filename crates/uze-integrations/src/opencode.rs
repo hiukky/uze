@@ -76,8 +76,9 @@ impl IntegrationPort for OpenCodeIntegration {
             ProcessSpec::new(
                 "sh",
                 ["-c", "curl -fsSL https://opencode.ai/install | bash"],
-            ),
-            ProcessSpec::new("opencode", ["upgrade"]),
+            )
+            .with_inherited_output(),
+            ProcessSpec::new("opencode", ["upgrade"]).with_inherited_output(),
             "official-install-script",
         )
     }
