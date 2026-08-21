@@ -9,6 +9,10 @@ services:
       # internal gateway and never receive provider credentials.
       OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY in the shell or CI secret}
       UZE_CONFORMANCE_LITELLM_MODEL: ${UZE_CONFORMANCE_LITELLM_MODEL:-gpt-4o-mini}
+      # Backs the `uze-conformance-reasoning` alias. Claude Code sends
+      # `reasoning.effort` for any model name it does not recognize, which a
+      # plain chat model rejects with a 400; see litellm-config.yaml.
+      UZE_CONFORMANCE_REASONING_MODEL: ${UZE_CONFORMANCE_REASONING_MODEL:-gpt-5}
     volumes:
       - type: bind
         source: ./litellm-config.yaml
