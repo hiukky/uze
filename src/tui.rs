@@ -1040,6 +1040,7 @@ mod tests {
             source: "/plugins/example".to_owned(),
             store_path: PathBuf::from("/store/example"),
             capability_count: 2,
+            update_available: None,
         }
     }
 

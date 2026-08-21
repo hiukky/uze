@@ -201,11 +201,11 @@ fn setup_reports_absent_harnesses_without_failing_or_writing_state() {
 }
 
 /// Deterministic: `uze doctor` is headless and must not print credential
-/// material. With the builtin `uze` seed, a fresh home on a machine where
-/// harnesses are detected will already show them as prepared (builtin
-/// auto-prepares), so this test is deterministic by clearing `PATH` — no
+/// material. With the default `uze` seed, a fresh home on a machine where
+/// harnesses are detected will already show them as prepared (the default
+/// plugin auto-prepares), so this test is deterministic by clearing `PATH` — no
 /// harness is detected, therefore both remain "not configured" even after
-/// the builtin store entry is seeded.
+/// the default plugin's store entry is seeded.
 #[test]
 fn doctor_reports_not_configured_before_any_setup() {
     let home = temporary_home("cli-doctor-before-setup");
@@ -222,7 +222,7 @@ fn doctor_reports_not_configured_before_any_setup() {
     assert!(stdout.contains("claude-code"));
     assert!(stdout.contains("codex"));
     assert!(stdout.matches("not configured").count() >= 2);
-    // Builtin `uze` is seeded even when no harness is present.
+    // Default `uze` is seeded even when no harness is present.
     assert!(stdout.contains("uze"));
     let _ = std::fs::remove_dir_all(home);
 }
@@ -276,11 +276,11 @@ fn setup_then_add_attaches_transparently_without_a_separate_sync_step() {
         .unwrap()
         .map(|entry| entry.unwrap().path())
         .collect();
-    // With the builtin `uze` seeded, each harness has the builtin plus the
-    // freshly added fixture.
+    // With the default `uze` seeded, each harness has the default plugin
+    // plus the freshly added fixture.
     assert!(
         claude_entries.len() >= 2,
-        "claude should have builtin + fixture"
+        "claude should have default + fixture"
     );
     assert!(claude_entries.iter().any(|p| p.is_symlink()));
     // The fixture skill for Claude is exposed via a shim, so its symlink
@@ -302,7 +302,7 @@ fn setup_then_add_attaches_transparently_without_a_separate_sync_step() {
         .collect();
     assert!(
         codex_entries.len() >= 2,
-        "codex/opencode should have builtin + fixture"
+        "codex/opencode should have default + fixture"
     );
     assert!(codex_entries.iter().any(|p| p.is_symlink()));
     assert!(
@@ -347,10 +347,10 @@ fn add_prepares_a_detected_opencode_and_attaches_without_prior_setup() {
         .expect("detected OpenCode should have a prepared global skills dir")
         .map(|entry| entry.unwrap().path())
         .collect();
-    // Builtin `uze` (`uze-uze`) plus the fixture.
+    // Default `uze` (`uze-uze`) plus the fixture.
     assert!(
         entries.len() >= 2,
-        "should have builtin + fixture, got {entries:?}"
+        "should have default + fixture, got {entries:?}"
     );
     assert!(entries.iter().any(|p| p.is_symlink()));
     assert!(
@@ -358,7 +358,7 @@ fn add_prepares_a_detected_opencode_and_attaches_without_prior_setup() {
             std::fs::read_link(p).ok()
                 == Some(uze_home.join("store/packages/uze-agent-skill-conformance/skills/uze-e2e"))
         }),
-        "fixture skill should be present alongside builtin"
+        "fixture skill should be present alongside the default plugin"
     );
 
     let integrations = std::fs::read_to_string(uze_home.join("state/integrations.json")).unwrap();
@@ -417,8 +417,8 @@ fn setup_then_add_attaches_the_mcp_fixture_idempotently_and_removal_works() {
             .unwrap();
     let receipts = ledger["receipts"].as_object().unwrap();
     assert!(receipts.len() >= 2);
-    // With builtin `uze` seeded, attachments also contain its 4 skill receipts;
-    // filter to the MCP package's receipts before asserting their shape.
+    // With the default `uze` seeded, attachments also contain its 4 skill
+    // receipts; filter to the MCP package's receipts before asserting their shape.
     let mcp_receipts: Vec<_> = receipts
         .values()
         .filter(|receipt| receipt["package_id"] == "uze-mcp-conformance")
@@ -490,18 +490,18 @@ fn remove_uses_the_package_centric_application_flow() {
         .output()
         .unwrap();
     assert!(list.status.success());
-    // With builtin `uze` seeded, `list` is not empty after removing the
-    // fixture — the builtin remains. Filter it out for this test's original
-    // assertion that the user-added package is gone.
+    // With the default `uze` seeded, `list` is not empty after removing the
+    // fixture — the default plugin remains. Filter it out for this test's
+    // original assertion that the user-added package is gone.
     let plugins = serde_json::from_slice::<serde_json::Value>(&list.stdout)
         .unwrap()
         .as_array()
         .unwrap()
         .clone();
-    let non_builtin: Vec<_> = plugins.iter().filter(|p| p["id"] != "uze").collect();
+    let non_default: Vec<_> = plugins.iter().filter(|p| p["id"] != "uze").collect();
     assert!(
-        non_builtin.is_empty(),
-        "expected no non-builtin plugins after remove, got {plugins:?}"
+        non_default.is_empty(),
+        "expected no non-default plugins after remove, got {plugins:?}"
     );
     let _ = std::fs::remove_dir_all(home);
 }

@@ -12,7 +12,7 @@ yet; this is the fixture set and rubric such a runner (or a human doing a
 manual pass across the four real harnesses) should use.
 
 For each scenario: install the official `uze` Skill package
-(`uze add ./packages/uze && uze setup`) somewhere it's discoverable, `cd`
+(`uze add ./plugins/uze && uze setup`) somewhere it's discoverable, `cd`
 into the scenario directory, invoke the Skill (`/uze` in Claude Code, `$uze`
 or a matching prompt in Codex, a matching natural-language prompt in
 OpenCode/Gemini CLI — see `docs/capabilities/uze-skill.md` for the exact

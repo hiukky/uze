@@ -165,6 +165,66 @@ a rejected package and a refused consent all mutate nothing.
 
 ---
 
+## Official marketplace (M3, ADR-012)
+
+### The repository is the official marketplace
+
+`marketplace.json` + `plugins/**` at the repo root answer "which plugins
+exist, and where" — the same contract a Git or local marketplace root would
+satisfy. `uze-core::acquisition::marketplace` reads that contract; it holds
+no opinion on how the directory reached local disk.
+
+> `crates/uze-core/src/acquisition/marketplace.rs` tests, notably
+> `two_distinct_plugins_resolve_independently_with_no_special_casing`
+
+### Store, Engine, Router and every Integration stay marketplace-neutral
+
+None of them import `acquisition::marketplace` or its types.
+
+> `tests/exposure_naming.rs::store_engine_router_and_integrations_stay_marketplace_neutral`
+
+### Adding a plugin to the marketplace needs no Rust change
+
+Resolution is generic over plugin content: files + one `marketplace.json`
+entry, nothing more.
+
+> `crates/uze-core/src/acquisition/marketplace.rs::two_distinct_plugins_resolve_independently_with_no_special_casing`
+
+### Default plugins are policy, not marketplace fact
+
+`bootstrap::DEFAULT_PLUGIN_IDS` names which marketplace plugins install on a
+fresh `UZE_HOME`; the marketplace itself may offer more.
+
+> `crates/uze-application/src/application.rs::bootstrap_installs_exactly_the_default_policy_and_is_idempotent`
+
+### Bootstrap installs; it never silently updates
+
+`ensure_default_plugins` — run before every CLI dispatch, including
+read-only commands — only installs a default plugin that is absent. An
+already-installed plugin's content is never rewritten as a side effect of a
+diagnostic command.
+
+> `crates/uze-application/src/application.rs::bootstrap_never_mutates_an_already_installed_default_plugin`
+> `crates/uze-application/src/application.rs::read_only_bootstrap_leaves_store_state_byte_identical_on_repeat`
+
+### A newer snapshot is reported, never silently applied
+
+`PluginSummary::update_available` is a pure read (a scratch-directory
+comparison, discarded before returning); acting on it is a separate,
+explicit `update_plugin` call.
+
+> `crates/uze-application/src/application.rs::bootstrap_never_mutates_an_already_installed_default_plugin`
+
+### A default plugin crossing the trust boundary is never installed silently
+
+`PackageSource::Embedded` crosses the trust boundary like `Git`; a
+non-interactive bootstrap authority (`NoTrustAuthority`) refuses rather than
+granting, even for the official marketplace.
+
+> `crates/uze-application/src/application.rs::a_default_plugin_that_would_cross_the_trust_boundary_is_not_installed_silently`
+
+---
+
 ## Decisions deliberately *not* taken
 
 Recorded because absence is a decision, and because each one has been proposed
@@ -172,8 +232,8 @@ and set aside for a reason rather than forgotten.
 
 | Not built | Why not, for now |
 |---|---|
-| marketplace | UZE consumes packages; publishing is a different product |
-| remote registry | nothing to serve until acquisition is dogfooded |
+| third-party marketplace hosting | UZE's own official marketplace (M3) is a discovery/acquisition contract over its own repository; hosting *other* publishers' marketplaces is a different product |
+| remote registry | nothing to serve until acquisition is dogfooded; M3's `marketplace.json` contract is shaped to allow a remote source later without touching Store/Engine/Integration |
 | cache | correctness first; a cache is an optimization with a second-source-of-truth risk |
 | content-addressable store | a Git commit is already a content identity, and a local path has no reproducibility to protect |
 | lockfile | meaningful only with dependencies between packages, which do not exist |
@@ -181,3 +241,8 @@ and set aside for a reason rather than forgotten.
 | automatic update | requires update semantics to be exercised by hand first |
 | persistent trust database | one consent boundary, not a permission system |
 | network-dependent gating test | local bare repositories prove the mechanism; a public repo would test that provider's availability |
+| remote marketplace search | only one marketplace (embedded, official) exists; nothing to search yet |
+| TUI marketplace surface | product UX for browsing plugins is a separate milestone from the data model |
+| plugin version resolver | `plugin.json` carries no version field yet; nothing depends on one |
+| marketplace federation | one official marketplace; combining several is unproven need |
+| Git sparse checkout for marketplace sources | the `marketplace.json` contract is shaped to allow acquiring only a resolved plugin's subtree later; not implemented |

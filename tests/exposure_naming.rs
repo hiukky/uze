@@ -173,7 +173,7 @@ fn package_uze_plus_skill_uze_naturally_gets_the_bare_name_uze_no_special_case()
 }
 
 fn official_package() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("packages/uze")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("plugins/uze")
 }
 
 // --- Legacy receipt reuse ----------------------------------------------------
@@ -209,8 +209,8 @@ fn a_legacy_uze_prefixed_receipt_is_reused_verbatim_never_recomputed_or_duplicat
         .map(|entry| entry.unwrap().file_name().to_str().unwrap().to_owned())
         .collect();
     before_listing.sort();
-    // Filter out the builtin `uze` skill which is now seeded on setup; the
-    // test isolates the legacy receipt reuse, not the presence of the builtin.
+    // Filter out the default `uze` skill which is now seeded on setup; the
+    // test isolates the legacy receipt reuse, not the presence of the default plugin.
     let before_filtered: Vec<String> = before_listing
         .iter()
         .filter(|name| *name != "uze")
@@ -220,7 +220,7 @@ fn a_legacy_uze_prefixed_receipt_is_reused_verbatim_never_recomputed_or_duplicat
 
     // Re-run setup/attach — must reuse the legacy receipt's name exactly,
     // never compute the new short name and create a second artifact. The
-    // builtin `uze` may appear alongside it after setup seeds the builtin.
+    // the default `uze` plugin may appear alongside it after setup seeds the default plugin.
     application.setup(None).unwrap();
 
     let mut after_listing: Vec<String> = fs::read_dir(&skills_dir)
@@ -236,12 +236,12 @@ fn a_legacy_uze_prefixed_receipt_is_reused_verbatim_never_recomputed_or_duplicat
     assert_eq!(
         after_filtered,
         vec![legacy_name.to_owned()],
-        "exactly one non-builtin artifact must exist, and it must still be the legacy one"
+        "exactly one non-default artifact must exist, and it must still be the legacy one"
     );
-    // Builtin `uze` is expected alongside the legacy artifact after setup.
+    // The default `uze` is expected alongside the legacy artifact after setup.
     assert!(
         after_listing.contains(&"uze".to_owned()),
-        "builtin uze skill should be present alongside the legacy artifact"
+        "default uze skill should be present alongside the legacy artifact"
     );
     fs::remove_dir_all(root).unwrap();
 }
@@ -422,11 +422,14 @@ fn no_source_special_cases_the_official_uze_package_or_skill_name() {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("crates/uze-application/src"),
     ];
     let forbidden = ["== \"uze\""];
-    // The builtin seeder (`crates/uze-application/src/builtin.rs` and its
-    // one call site in `application.rs`) is the sole exception: the binary
-    // must know which package id to seed without requiring `uze add`.
-    // Every other hardcoding of the literal remains forbidden.
-    let allowed_files = ["builtin.rs"];
+    // The default marketplace bootstrap
+    // (`crates/uze-application/src/bootstrap.rs`) is the sole exception: the
+    // binary must know which package ids its embedded snapshot carries
+    // without requiring `uze add`. Every other hardcoding of the literal
+    // remains forbidden — notably, `application.rs` itself is no longer
+    // whitelisted: `ensure_default_plugins` reaches the default id only
+    // through `bootstrap::DEFAULT_PLUGIN_IDS`, never a literal comparison.
+    let allowed_files = ["bootstrap.rs"];
     let mut offenders = Vec::new();
     for root in scan_roots {
         for entry in walk_rs_files(&root) {
@@ -436,22 +439,9 @@ fn no_source_special_cases_the_official_uze_package_or_skill_name() {
             {
                 continue;
             }
-            // Allow the single `ensure_builtin_plugins` call site in application.rs
-            // that checks `id.as_str() == "uze"` to decide whether to seed.
-            // This is whitelisted by content: only that one function may contain it.
             let content = fs::read_to_string(&entry).unwrap();
             for pattern in forbidden {
                 if content.contains(pattern) {
-                    // Whitelist the exactly one allowed occurrence in application.rs
-                    if entry.file_name().and_then(|f| f.to_str()) == Some("application.rs")
-                        && content.contains("ensure_builtin")
-                    {
-                        // Count occurrences; allow one, forbid additional
-                        let count = content.matches(pattern).count();
-                        if count <= 1 {
-                            continue;
-                        }
-                    }
                     offenders.push(format!("{}: {pattern}", entry.display()));
                 }
             }
@@ -460,6 +450,53 @@ fn no_source_special_cases_the_official_uze_package_or_skill_name() {
     assert!(
         offenders.is_empty(),
         "no production code may special-case the literal package/skill name \"uze\": {offenders:?}"
+    );
+}
+
+/// Store, Engine, Router and every `IntegrationPort` must stay unaware the
+/// marketplace/bootstrap primitive exists — matching the same rule the M1/M2
+/// invariants already hold acquisition and vendor identity to. Checks the
+/// specific type/module paths (`acquisition::marketplace`,
+/// `MarketplaceManifest`, `MarketplacePluginEntry`), not the bare English
+/// word "marketplace" — Codex's own, unrelated, pre-existing local plugin
+/// catalogue (`codex.rs`'s `MARKETPLACE_NAME`, `plugin marketplace add`)
+/// legitimately uses that word for a different concept and must not trip
+/// this check.
+#[test]
+fn store_engine_router_and_integrations_stay_marketplace_neutral() {
+    let scan_roots = [
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("crates/uze-core/src/store.rs"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("crates/uze-core/src/engine.rs"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("crates/uze-core/src/router.rs"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("crates/uze-core/src/integration.rs"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("crates/uze-integrations/src"),
+    ];
+    let forbidden = [
+        "acquisition::marketplace",
+        "MarketplaceManifest",
+        "MarketplacePluginEntry",
+    ];
+    let mut offenders = Vec::new();
+    for root in scan_roots {
+        let files = if root.is_dir() {
+            walk_rs_files(&root)
+        } else {
+            vec![root]
+        };
+        for entry in files {
+            let Ok(content) = fs::read_to_string(&entry) else {
+                continue;
+            };
+            for pattern in forbidden {
+                if content.contains(pattern) {
+                    offenders.push(format!("{}: {pattern}", entry.display()));
+                }
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "Store/Engine/Router/Integration must never reference the marketplace primitive: {offenders:?}"
     );
 }
 

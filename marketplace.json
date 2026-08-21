@@ -1,0 +1,15 @@
+{
+  "name": "uze",
+  "owner": {
+    "name": "hiukky",
+    "url": "https://github.com/hiukky/uze"
+  },
+  "plugins": [
+    {
+      "name": "uze",
+      "source": "./plugins/uze",
+      "description": "UZE's own agentic context orchestrator: makes a project's instructions context (AGENTS.md and its harness bridges) portable.",
+      "keywords": ["context", "agents-md", "portability"]
+    }
+  ]
+}

@@ -121,10 +121,10 @@ fn run(cli: Cli) -> Result<()> {
     let home = UzeHome::from_env()?;
     let Some(command) = cli.command else {
         if std::io::stdout().is_terminal() && std::io::stdin().is_terminal() {
-            // Ensure builtin `uze` Skill is seeded even when launching the TUI
-            // directly (no explicit subcommand).
+            // Ensure the default marketplace plugins are seeded even when
+            // launching the TUI directly (no explicit subcommand).
             if let Ok(app) = UzeApplication::from_env(home.clone()) {
-                let _ = app.ensure_builtin_plugins();
+                let _ = app.ensure_default_plugins();
             }
             return uze::tui::run(home);
         }
@@ -138,11 +138,11 @@ fn run(cli: Cli) -> Result<()> {
         return Ok(());
     };
     let app = UzeApplication::from_env(home)?;
-    // Seed the builtin `uze` package (`packages/uze`) on every CLI
+    // Seed the default marketplace plugins (`plugins/uze`) on every CLI
     // invocation. This makes the Skill globally available without a manual
     // `uze add` and heals its attachment after a binary update. Best-effort:
     // failures here must not block `doctor`/`list` etc.
-    let _ = app.ensure_builtin_plugins();
+    let _ = app.ensure_default_plugins();
     match command {
         Command::Add {
             source,

@@ -22,6 +22,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 pub mod git;
+pub mod marketplace;
 
 use crate::error::{Result, UzeError};
 
@@ -53,6 +54,16 @@ pub enum PackageSource {
         /// materialized checkout.
         subdirectory: Option<PathBuf>,
     },
+    /// A snapshot compiled into the running binary — the official default
+    /// marketplace's offline bootstrap mechanism. `id` names which embedded
+    /// snapshot, nothing more: the bytes live one layer up, in whichever
+    /// composition root embedded them, so this crate never learns what
+    /// `id` actually contains. `acquire` therefore cannot resolve this
+    /// variant itself (see its doc comment) — callers that construct or
+    /// re-resolve an `Embedded` source own that resolution.
+    Embedded {
+        id: String,
+    },
 }
 
 impl PackageSource {
@@ -81,10 +92,18 @@ impl PackageSource {
     /// local path, bypassing the question entirely. Closing that would mean
     /// prompting on every local install with an MCP server, which changes an
     /// existing workflow — a product decision, not one to make in passing.
+    ///
+    /// `Embedded` crosses the boundary too, deliberately not treated like
+    /// `Local`: the operator trusted the binary, not necessarily every
+    /// capability a future revision of an embedded snapshot might declare.
+    /// Today's one embedded package is Skill-only, so this is dormant —
+    /// nothing currently exercises it — but it means an embedded snapshot
+    /// that later gains an executable capability asks, the same as any
+    /// other package would.
     pub fn crosses_trust_boundary(&self) -> bool {
         match self {
             Self::Local { .. } => false,
-            Self::Git { .. } => true,
+            Self::Git { .. } | Self::Embedded { .. } => true,
         }
     }
 
@@ -107,6 +126,7 @@ impl PackageSource {
                 }
                 text
             }
+            Self::Embedded { id } => format!("embedded:{id}"),
         }
     }
 }
@@ -133,6 +153,10 @@ pub enum ResolvedSource {
         commit: String,
         subdirectory: Option<PathBuf>,
     },
+    /// Identity, not a revision: an embedded snapshot's content changes only
+    /// when the binary does, and the binary is already what a reinstall or
+    /// update re-reads — there is nothing else to pin.
+    Embedded { id: String },
 }
 
 impl ResolvedSource {
@@ -140,6 +164,7 @@ impl ResolvedSource {
         match self {
             Self::Local { path } => path.display().to_string(),
             Self::Git { url, commit, .. } => format!("{url}@{commit}"),
+            Self::Embedded { id } => format!("embedded:{id}"),
         }
     }
 }
@@ -256,7 +281,13 @@ impl MaterializedPackage {
     ///
     /// Ownership stays with the *checkout*, not the narrowed root: cleanup
     /// must still remove everything UZE created, not just the package.
-    fn retarget(&mut self, root: PathBuf, provenance: Provenance) {
+    /// Narrows `root` to a subdirectory of what's already materialized,
+    /// without touching cleanup: `owned_scratch` still points at the whole
+    /// checkout, so it (not just the narrowed root) is what gets removed on
+    /// drop. Used wherever a source resolves to a subtree of a larger
+    /// acquired root — a Git checkout's `subdirectory`, or a marketplace
+    /// root's resolved plugin entry.
+    pub fn retarget(&mut self, root: PathBuf, provenance: Provenance) {
         self.root = root;
         self.provenance = provenance;
     }
@@ -278,8 +309,19 @@ impl Drop for MaterializedPackage {
 /// through, so a local package and a remote one are held to the same rule.
 ///
 /// It never executes package code.
+/// Turns a [`PackageSource`] into local bytes the Store can ingest.
+///
+/// `Embedded` is deliberately not handled here: this crate has no vendor or
+/// product knowledge (see the module doc), and an embedded snapshot's bytes
+/// live in whatever composition root `include_str!`-ed them one layer up.
+/// Resolving one is that caller's job — see
+/// `uze_application::bootstrap::materialize`.
 pub fn acquire(source: &PackageSource) -> Result<MaterializedPackage> {
     match source {
+        PackageSource::Embedded { id } => Err(UzeError::AcquisitionFailed(format!(
+            "embedded source `{id}` cannot be resolved by generic acquisition; \
+             the composition root that embedded it must resolve it directly"
+        ))),
         PackageSource::Local { path } => {
             let resolved = checked_directory(path)?;
             Ok(MaterializedPackage::borrowed(
