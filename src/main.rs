@@ -47,8 +47,6 @@ enum Command {
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
-    /// Setup harness integrations
-    Setup { harness: Option<String> },
     /// Remove a plugin
     Remove {
         plugin: String,
@@ -64,8 +62,12 @@ enum Command {
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
-    /// Run diagnostics
-    Doctor {
+    /// Install project environment from agents.lock
+    Install {
+        path: Option<PathBuf>,
+        /// Authorize executable capabilities
+        #[arg(long)]
+        trust: bool,
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
@@ -90,15 +92,13 @@ enum Command {
         #[command(subcommand)]
         action: PluginAction,
     },
-    /// Install project environment from agents.lock
-    Install {
-        path: Option<PathBuf>,
-        /// Authorize executable capabilities
-        #[arg(long)]
-        trust: bool,
+    /// Run diagnostics
+    Doctor {
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
+    /// Setup harness integrations
+    Setup { harness: Option<String> },
 }
 
 #[derive(Debug, Subcommand)]
@@ -226,35 +226,40 @@ fn print_colored_help() {
     println!();
     println!("{}Usage:{} uze <command> [options]", bold, reset);
     println!();
-    println!("{}Commands:{}", bold, reset);
+    println!("{}Package Management:{}", bold, reset);
     println!(
         "  {}add{}        Install a local plugin package",
         cyan, reset
     );
     println!("  {}list{}       List installed plugins", cyan, reset);
     println!("  {}inspect{}    Inspect a plugin's delivery", cyan, reset);
-    println!("  {}setup{}      Setup harness integrations", cyan, reset);
     println!("  {}remove{}     Remove a plugin", cyan, reset);
     println!(
         "  {}update{}     Update a plugin to latest version",
         cyan, reset
     );
-    println!("  {}doctor{}     Run diagnostics", cyan, reset);
+    println!();
+    println!("{}Project Environment:{}", bold, reset);
+    println!(
+        "  {}install{}    Install project environment from agents.lock",
+        cyan, reset
+    );
     println!("  {}status{}     Show project health status", cyan, reset);
     println!(
         "  {}context{}    Manage project context (AGENTS.md)",
         cyan, reset
     );
+    println!();
+    println!("{}Marketplace:{}", bold, reset);
     println!("  {}marketplace{} Manage marketplace sources", cyan, reset);
     println!(
         "  {}plugin{}     Manage plugins via marketplace",
         cyan, reset
     );
-    println!(
-        "  {}install{}    Install project environment from agents.lock",
-        cyan, reset
-    );
-    println!("  {}help{}       Print help message", cyan, reset);
+    println!();
+    println!("{}Diagnostics:{}", bold, reset);
+    println!("  {}doctor{}     Run diagnostics", cyan, reset);
+    println!("  {}setup{}      Setup harness integrations", cyan, reset);
     println!();
     println!("{}Options:{}", bold, reset);
     println!("  {}-h, --help{}     Print help", green, reset);
@@ -262,15 +267,15 @@ fn print_colored_help() {
     println!();
     println!("{}Quick Start:{}", bold, reset);
     println!(
-        "  {}uze flow@ai{}         Add flow plugin from ai marketplace",
-        yellow, reset
-    );
-    println!(
         "  {}uze install{}         Install project environment",
         yellow, reset
     );
     println!(
         "  {}uze doctor{}          Check system health",
+        yellow, reset
+    );
+    println!(
+        "  {}uze marketplace add{} Add a marketplace source",
         yellow, reset
     );
 }
