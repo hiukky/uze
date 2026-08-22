@@ -1,0 +1,19 @@
+# https://lefthook.dev
+#
+# Mirrors the fast, deterministic half of .github/workflows/ci.yml locally,
+# before code leaves the machine. `cargo test` is deliberately not wired in
+# here: in some local setups the git_acquisition tests are flaky on
+# gpg/pinentry (unrelated to code correctness), which would make hooks cry
+# wolf. CI still runs the full suite on every push.
+
+pre-commit:
+  commands:
+    fmt:
+      run: cargo fmt --check
+
+pre-push:
+  commands:
+    fmt:
+      run: cargo fmt --check
+    clippy:
+      run: cargo clippy --all-targets -- -D warnings
