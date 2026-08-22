@@ -658,6 +658,26 @@ impl UzeApplication {
         self.detach_and_remove(id)
     }
 
+    fn is_protected_package(package: &StoredPackage) -> bool {
+        // Only the verified official origin is protected: an embedded
+        // provenance whose id appears in the compiled marketplace snapshot.
+        // A local/git package that merely shares the name `uze` is not
+        // official and remains removable — prevents spoofing by name alone.
+        let embedded_id = match &package.provenance.requested {
+            PackageSource::Embedded { id } => id,
+            _ => return false,
+        };
+        if bootstrap::DEFAULT_PLUGIN_IDS.contains(&embedded_id.as_str()) {
+            return true;
+        }
+        if let Ok((_, entries)) = bootstrap::entries()
+            && entries.iter().any(|entry| entry.name == *embedded_id)
+        {
+            return true;
+        }
+        false
+    }
+
     /// Removal without taking the lock; see `install_materialized`.
     fn detach_and_remove(&self, id: &str) -> Result<RemovePluginReport> {
         let package = match self.package_by_name(id) {
@@ -678,6 +698,12 @@ impl UzeApplication {
             }
             Err(error) => return Err(error),
         };
+        if Self::is_protected_package(&package) {
+            return Err(UzeError::ExposureUnavailable(format!(
+                "official marketplace plugin `{}` is protected and cannot be removed",
+                package.id.as_str()
+            )));
+        }
         let report = self.reconcile(package.id.as_str());
         let plan = plan_remove(&report);
         let (detached_receipts, already_missing_receipts) = match &plan {
