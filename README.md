@@ -1,275 +1,164 @@
-# UZE
+<div align="center">
 
-**One agent environment. Any harness.**
+# uze
 
-UZE is a local compatibility and distribution layer for the agent-plugin
-ecosystem. It installs an external package once, preserves its original
-representation, identifies the capabilities it can safely understand, and
-delivers them through the best surface each harness supports.
+**Install once. Native everywhere.**
 
-```text
-                         UZE
-                          |
-       +------------------+------------------+
-       |                  |                  |
- Harness Manager     Plugin Manager     Context Manager
-       |                  |                  |
- install/update      packages/store      instructions
- harnesses           skills/MCP/...      AGENTS.md reconciliation
-                          |                  |
-                    ~/.uze/store       <project>/AGENTS.md
-```
+[![CI](https://github.com/hiukky/uze/actions/workflows/ci.yml/badge.svg)](https://github.com/hiukky/uze/actions/workflows/ci.yml)
+[![Rust](https://img.shields.io/badge/rust-1.97%2B-orange)](Cargo.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](Cargo.toml)
+[![Status](https://img.shields.io/badge/status-alpha-important)](#alpha)
 
-Three pillars, two interfaces. The pillars above are deterministic Rust —
-no LLM, no network call, fully tested without one. On top of them sits an
-agentic UX layer: the `uze` Skill (`plugins/uze/`, installed the same way
-as any other package), which most people should use directly inside their
-harness rather than learning the pillars' own CLI:
+A compatibility and distribution layer for agentic tooling across harnesses.
+
+</div>
+
+Install a plugin once and uze exposes it through the most native surface
+each harness supports — a real plugin where one exists, native capabilities
+where it doesn't, a safe adapter only as a last resort.
+
+One project context (`AGENTS.md`) replaces separately maintained `.claude`,
+`.codex`, `.opencode`, and Gemini configuration. uze keeps a single source
+of truth and projects it to each harness safely.
 
 ```text
-                       /uze Skill
-                    agentic UX layer
-                          |
-                    deterministic
-                          |
-       +------------------+------------------+
-       |                  |                  |
- Harness Manager     Plugin Manager     Context Manager
+Marketplace / Project
+        │
+        ▼
+       uze
+   ┌────┼────┬────────┐
+   ▼    ▼    ▼         ▼
+Claude Codex OpenCode Gemini
 ```
 
-UZE is not a vendor-to-vendor converter, a filesystem synchronizer, a runtime
-proxy, a launcher, or a new plugin standard.
+## Why uze
 
-## Current v0
+- Install a plugin once; uze delivers it through whatever each harness
+  natively supports.
+- Share one project context across every harness instead of maintaining
+  four.
+- Native delivery over lowest-common-denominator conversion — nothing is
+  translated without proven equivalence.
+- Lifecycle, drift, and ownership are managed centrally, with typed
+  receipts, never silent overwrites.
 
-The current Rust implementation proves a package-first vertical slice using
-one external Agent Plugin with a Skill and an MCP server. The package is stored
-once and planned across Claude Code, Codex and OpenCode.
+## Compatibility
 
-Its architectural baseline is:
-
-- **Plugin First** — package is the distribution unit.
-- **Capability Aware** — resources are compatibility units.
-- **Native Plugin First** — a supported source envelope wins; safe capability
-  fallback remains available when it does not.
-- **Install Once** — Store is the local source of truth for package bytes.
-- **Safe managed lifecycle** — typed receipts and live inspection prevent UZE
-  from deleting harness state it cannot positively identify as managed.
-
-See [ADR-008](docs/adr/008-adopt-plugin-first-capability-aware-delivery.md)
-and [ADR-009](docs/adr/009-manage-harness-attachments-with-receipts-and-safe-reconciliation.md).
-
-## Local workflow
-
-For local development and a real machine installation, the repository also
-ships a small Makefile:
-
-```bash
-make build
-make test
-make check
-make install
-```
-
-Releases use a single workspace SemVer pre-release version (currently the
-`0.y.z-alpha.N` line). See [versioning](docs/versioning.md); increment it
-before distributing or installing a new binary.
-
-`make install` invokes `cargo install --path . --bin uze --locked --force` and
-therefore installs only the product binary into Cargo's configured binary
-directory (usually `~/.cargo/bin`). It does not run `uze setup` or mutate any
-harness configuration. Set `CARGO_INSTALL_ROOT` to select another install
-location.
-
-From one WSL distro, deploy a release build into another isolated distro
-without sharing either Linux home directory:
-
-```bash
-make install-wsl-lab
-# or: ./playground/install-wsl-distro.sh MyOtherDistro
-```
-
-The helper also deploys the evolving local test package to
-`~/uze-playground/default-plugin` in the target distro. See
-[`playground/README.md`](playground/README.md) for the safe, repeatable
-playground workflow.
-
-The script stages only `target/release/uze` in Windows `%TEMP%`, copies it to
-the target's `~/.local/bin/uze`, verifies `--version`, then removes staging.
-
-```bash
-uze setup
-uze add ./my-agent-plugin
-uze list
-uze inspect my-agent-plugin
-uze doctor
-uze remove my-agent-plugin
-```
-
-Running `uze` in an interactive terminal opens the minimal TUI. Explicit
-subcommands remain the scriptable interface.
-
-### Making a project's context portable
-
-Install the official `uze` Skill once (it's an ordinary package — no special
-Store treatment):
-
-```bash
-uze add ./plugins/uze --trust
-uze setup
-```
-
-Then, inside any project, the primary experience is invoking the Skill from
-*within* your harness — `/uze` in Claude Code, `$uze` or a matching prompt
-in Codex, a natural-language request ("check if my project's context is
-portable") in OpenCode or Gemini CLI. See
-[`docs/capabilities/uze-skill.md`](docs/capabilities/uze-skill.md) for the
-exact invocation per harness — it genuinely differs, and that document says
-so rather than pretending one syntax is universal.
-
-The Skill is agentic (it reasons about your project) but never mutates
-anything itself — it only ever calls the deterministic commands below, the
-same ones you can run directly for scripting, CI, or debugging:
-
-```bash
-uze status                  # is this project's UZE-managed context healthy?
-uze context inspect         # read-only: what's here, and is it portable?
-uze context plan            # read-only: what would reconcile change?
-uze context reconcile       # writes: compose AGENTS.md and its harness bridges
-```
-
-See [`docs/capabilities/context-manager.md`](docs/capabilities/context-manager.md)
-for the model behind these.
-
-Packages are currently local-path Agent Plugins with root `plugin.json`. UZE
-preserves the full source tree, including vendor-native envelopes; it does not
-write a UZE plugin manifest. Remote registries and marketplaces are not part
-of v0.
-
-## Delivery support today
-
-These are delivery facts, not a compatibility score.
-
-| Harness | Package | Skill | stdio MCP |
-|---|---|---|---|
-| Claude Code | capability fallback | managed user-scope reference | managed Claude config |
-| Codex | native when source has compatible Codex envelope | provided by package | provided by package |
-| OpenCode | decomposed | native user/global discovery | managed OpenCode config |
-
-Native planning consumes the package-provided resource identities, preventing
-a duplicate Skill or MCP attachment. Hooks, agents, commands, remote
-marketplaces, cloud state and runtime proxying are deliberately out of scope.
-
-## Capability landscape
-
-Not every capability a harness exposes is safe to treat as portable. UZE
-researches each one before building it, and reports the honest result rather
-than a name match.
-
-| Capability | Claude Code | Codex | OpenCode | Gemini CLI | UZE |
+| Harness | Plugin delivery | Skills | MCP | Context | Runtime |
 |---|---|---|---|---|---|
-| Skills | Native | Native | Native | Native | Portable |
-| MCP | Native | Native | Native | Native | Portable |
-| Instructions | Bridged (`CLAUDE.md` → `@AGENTS.md`) | Native (`AGENTS.md`), empirically confirmed | Native (`AGENTS.md`) | Bridged (`GEMINI.md` → `@AGENTS.md`) | Partial |
-| Hooks | Native | Native, unverified | Native, executable code | Native | Research (partial subset) |
-| Commands | Merged into Skills | Native | Native | Native | Unsupported |
-| Agents | Native | Native, no package format | Native | Native, no nesting | Vendor-specific |
+| Claude Code | Adapted | ✅ | ✅ | Bridged | ◌ Experimental |
+| Codex | Native plugin | ✅ | ✅ | Native | — |
+| OpenCode | Native capabilities | ✅ | ✅ | Native | — |
+| Gemini CLI | Native extension | ✅ | ✅ | Bridged | — |
 
-Legend: **Portable** — UZE proved a real cross-harness delivery.
-**Partial** — delivered, with a disclosed, real difference in mechanism or
-verification depth between harnesses (see below).
-**Research** — not yet delivered; investigated in depth, gap disclosed rather
-than hidden. **Vendor-specific** — real capability, no safe bridge found.
-**Unsupported** — no case for a UZE capability was found. A capability
-existing under the same name in two harnesses is not, by itself, evidence it
-is portable — see the full landscape for what was and wasn't found to
-converge.
+`✅` Ready/native · `◐` Partial/adapted · `◌` Experimental · `—` Not
+implemented. "Native" means a real, first-class mechanism per harness, not
+a shared name — see the [capability landscape](docs/capabilities/landscape.md)
+for exactly what each cell means and its evidence.
 
-The full capability landscape — format matrices, semantic matrices,
-portability classification, trust implications, and the tracer-bullet
-rationale — lives in [`docs/capabilities/`](docs/capabilities/landscape.md).
-Instructions delivery — the `/uze` Skill and the deterministic `uze
-context`/`uze status` commands underneath it — is covered in
-["Making a project's context portable"](#making-a-projects-context-portable)
-above.
-
-## Ecosystem watchlist
-
-UZE is not limited to its first tracer bullets. The following labels express
-research maturity, not implemented product integrations.
-
-| Harness | Delivery research | Local conformance research | Next safe direction |
-|---|---|---|---|
-| Claude Code | native plugin | possible | Native Claude envelope when supplied; otherwise fallback. |
-| Codex | native plugin | possible | Existing marketplace path; Responses spike required. |
-| OpenCode | capability adapter | ready | Existing OpenAI-compatible local path. |
-| Cursor | native plugin | possible | Agent Plugins native path; local provider still needs proof. |
-| Windsurf | IDE extension required | contract only | Do not force IDE automation into Docker L2. |
-| Gemini CLI | native extension | not currently testable | Native package adversary; zero-vendor model route is not established. |
-| GitHub Copilot CLI | native plugin | ready | Strong next peer candidate with official local BYOK. |
-| Cline | capability adapter | possible | Skills/MCP first; preserve executable plugin code. |
-| Roo Code | capability adapter | contract only | Wait for maintained CLI evidence. |
-
-The full sources, capability semantics, provider routes and Core impact are in
-[the ecosystem research](openspec/changes/establish-local-real-harness-conformance/research-notes.md).
-
-## Confidence tiers
-
-| Tier | Evidence | Requirements |
-|---|---|---|
-| L0 — Unit | Pure Rust domain behavior | `cargo test`; no harness, model or network. |
-| L1 — Contract | Store, planning, receipts and vendor config contracts | Isolated filesystem; no LLM. |
-| L2 — Isolated real-harness E2E | Real CLI receives and exercises UZE-managed capability against local or routed test inference | Opt-in Docker/provider tooling; under research. |
-| L3 — Vendor conformance | Real harness against official provider/model | Opt-in manual or release evidence. |
-
-L2 is test infrastructure, not a UZE product dependency. A local or routed
-model failure must never be reported as an attachment incompatibility.
-
-## Architecture
-
-```text
-CLI ─┐
-     ├── UzeApplication ── UZE Engine/Core ── peer integrations ── harnesses
-TUI ─┘            |               |
-                  |               └── EffectiveEnvironment + PackageExposurePlan
-                  └── Store + ownership ledger/reconciliation
-```
-
-| Concept | Responsibility |
+| Capability | Status |
 |---|---|
-| Package | Distribution unit; preserved external bytes and identity. |
-| Resource / capability | Compatibility unit; never a parallel package system. |
-| Integration | Harness delivery, inspection and safe detach authority. |
-| Store | Authoritative local installation/provenance, never harness artifacts. |
-| Ledger | Expected ownership receipts, never live vendor state. |
-| Application | Package-centric API shared by CLI and TUI. |
-| Context Manager | Project-scoped `inspect`/`plan`/`reconcile` over the shared `AGENTS.md` baseline. Independent of Package Manager: `uze add` never touches a project, `uze context`/`uze status` never touch the Store. Deterministic — no LLM dependency, ever. |
-| `/uze` Skill | The agentic layer, distributed as an ordinary package (`plugins/uze/`). Reasons and proposes; only the Context Manager's own commands ever write. |
+| Skills | Ready |
+| MCP | Ready |
+| Instructions | Ready |
+| Agents | Research |
+| Hooks | Research |
 
-## Safety
+## Today
 
-Every managed side effect carries an attachment receipt. Before removal, UZE
-asks the owning integration to inspect real state:
+- Harness manager — detect, provision, and set up Claude Code, Codex,
+  OpenCode, and Gemini CLI.
+- Plugin manager — install once, store bytes, deliver natively per harness.
+- Context manager — one `AGENTS.md`, projected to each harness's own
+  mechanism.
+- Official marketplace — `plugins/uze`, the `/uze` Skill.
+- Terminal UI — browse plugins, harnesses, context, and diagnostics.
+- Runtime integration *(experimental)* — a PATH shim that projects
+  `AGENTS.md` into Claude Code without writing into the project.
 
-```text
-MATCHED                       -> safe detach
-MISSING                       -> nothing to delete
-DRIFTED / CONFLICT / BLOCKED  -> preserve external state
+## Quick start
+
+```bash
+cargo install --path .   # alpha: installs from source, no registry yet
+uze setup
+uze
 ```
 
-UZE preserves plugin content during installation; it does not automatically
-execute arbitrary plugin scripts or vendor extension code.
+```bash
+uze doctor
+```
 
-## Documentation
+## Terminal UI
+
+```bash
+uze
+```
+
+> Browse marketplaces, plugins, harnesses, project context, and
+> diagnostics from one terminal UI.
+
+## Native first
+
+```text
+native package → native capability → safe adapter → unsupported
+```
+
+uze preserves source plugins as-is and never translates semantics unless
+equivalence is proven.
+
+## Official marketplace
+
+```text
+marketplace.json
+plugins/
+  uze/
+```
+
+This repository is also the official uze marketplace; official plugins
+live under `plugins/`.
+
+## Project context
+
+```text
+AGENTS.md
+```
+
+`AGENTS.md` is the canonical project instruction surface. uze delivers it
+through each harness's native mechanism, or a runtime projection where
+native delivery isn't available yet.
+
+## Roadmap
+
+- [x] Harness management
+- [x] Skills & MCP delivery
+- [x] Project context (`AGENTS.md`)
+- [x] Official marketplace
+- [x] Terminal UI
+- [ ] Native package delivery for Claude Code
+- [ ] Runtime context projection beyond experimental
+- [ ] Agent & hook portability
+
+## Alpha
+
+uze is alpha. APIs, schemas, and harness integration behavior may change
+while the cross-harness model is being validated.
+
+## Learn more
 
 - [Architecture invariants](docs/architecture/invariants.md)
 - [Capability landscape](docs/capabilities/landscape.md)
-- [Testing](docs/testing.md)
 - [Architecture decisions](docs/adr/README.md)
-- [Plugin-first research](openspec/changes/reframe-plugin-first-portable-environment/research-notes.md)
-- [Lifecycle consolidation](openspec/changes/consolidate-plugin-first-v0-experience/README.md)
-- [Local real-harness conformance research](openspec/changes/establish-local-real-harness-conformance/research-notes.md)
 
-## License
+## Development
 
-MIT. See [Cargo.toml](Cargo.toml).
+```bash
+cargo test --no-fail-fast
+cargo clippy --all-targets -- -D warnings
+```
+
+Contributions and early feedback are welcome while uze is still validating
+its compatibility model.
+
+---
+
+Built in Rust. MIT licensed.
