@@ -31,19 +31,18 @@ version = "0.1.0-alpha.8"
 uze-core = { path = "crates/uze-core" }
 uze-integrations = { path = "crates/uze-integrations" }
 uze-application = { path = "crates/uze-application" }
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4.6", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
-toml = "0.9"
-ratatui = "0.29"
-crossterm = "0.28"
+ratatui = "0.30"
+crossterm = "0.29"
 
 # MCP fixtures and the local playground server are test/development support;
 # neither is linked into UZE's application/core crates.
-rmcp = { version = "0.1", features = ["server", "transport-io", "macros"] }
+rmcp = { version = "3", features = ["server", "transport-io", "macros"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std"] }
-schemars = "0.8"
+schemars = "1"
 
 [[bin]]
 name = "uze-mcp-conformance-fixture"
