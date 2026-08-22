@@ -3,6 +3,8 @@
 //! CLI, TUI, and future presentation layers call this facade rather than
 //! reaching into Store, integrations, vendor files, or lifecycle mechanics.
 
+#![allow(clippy::empty_line_after_doc_comments)]
+
 use std::{
     collections::BTreeSet,
     fs,
@@ -14,19 +16,16 @@ use serde::Serialize;
 use uze_core::{
     PackageSource, Result, UzeEngine, UzeError, UzeHome, UzeStore,
     capability::CapabilityKind,
-    context::{self as instruction_context, InstructionContribution},
+    context::{self as instruction_context},
     exposure::{ExposurePlan, PackageExposurePlan},
     integration::{
         AttachmentState, HarnessDetection, IntegrationPort, IntegrationStatus, PublicationStatus,
-        managed_artifact_exposure_name, receipt_location,
     },
-    project::Resource,
     provisioning::{ProcessRunner, ProvisionStatus, ProvisioningResult, SystemProcessRunner},
-    reconciliation::{PackageRemovalPlan, ReconciliationReport, plan_remove, reconcile_package},
+    reconciliation::{PackageRemovalPlan, ReconciliationReport, reconcile_package},
     router::HarnessCapabilities,
     state,
     store::StoredPackage,
-    text_region,
     trust::{self, TrustAuthority, TrustOutcome, TrustRequest},
 };
 use uze_integrations::{
@@ -35,6 +34,12 @@ use uze_integrations::{
 };
 
 use crate::bootstrap;
+
+mod context;
+mod doctor;
+mod lifecycle;
+mod marketplace;
+mod read_models;
 
 /// `LEGACY/PERSISTENT CONTEXT DELIVERY STRATEGY`. Harnesses that read a
 /// project's shared `AGENTS.md` only through an explicit bridge region
@@ -199,7 +204,7 @@ impl UzeApplication {
 
     /// Installs default plugin `id` if it is not already in the Store.
     /// Never touches an already-installed copy — see `ensure_default_plugins`.
-    fn ensure_default_plugin_installed(&self, id: &str) -> Result<bool> {
+    pub(crate) fn ensure_default_plugin_installed(&self, id: &str) -> Result<bool> {
         let already_installed = self
             .store
             .package_ids()?
@@ -218,163 +223,13 @@ impl UzeApplication {
     /// composition root carries (`uze-core`'s generic acquisition cannot
     /// reach bytes `include_str!` compiled a layer up); every other source
     /// goes through the normal acquisition mechanism.
-    fn acquire(&self, source: &PackageSource) -> Result<uze_core::MaterializedPackage> {
-        match source {
-            PackageSource::Embedded { id } => bootstrap::materialize(id),
-            _ => uze_core::acquisition::acquire(source),
-        }
-    }
-
-    pub fn list_plugins(&self) -> Result<Vec<PluginSummary>> {
-        self.store
-            .package_ids()?
-            .into_iter()
-            .map(|id| self.plugin_summary(&self.store.package(&id)?))
-            .collect()
-    }
-
-    pub fn inspect_plugin(&self, id: &str) -> Result<PluginInspection> {
-        let package = self.package_by_name(id)?;
-        let environment = self.engine().compose(std::slice::from_ref(&package.id))?;
-        let resources: Vec<_> = environment.resources.iter().collect();
-        let deliveries = self
-            .integrations
-            .iter()
-            .map(|integration| {
-                let package_plan = integration.package_exposure_plan(&package, &resources);
-                let provided = package_plan
-                    .as_ref()
-                    .map(|plan| plan.provided_resource_identities.clone())
-                    .unwrap_or_default();
-                let capabilities = resources
-                    .iter()
-                    .map(|resource| CapabilityDelivery {
-                        identity: resource.identity(),
-                        kind: resource.capability.kind,
-                        plan: (!provided.contains(&resource.identity()))
-                            .then(|| integration.exposure_plan(resource)),
-                        provided_by_package: provided.contains(&resource.identity()),
-                    })
-                    .collect();
-                HarnessDelivery {
-                    integration: integration.id().to_owned(),
-                    package_plan,
-                    capabilities,
-                }
-            })
-            .collect();
-        let reconciliation = self.reconcile(package.id.as_str());
-        Ok(PluginInspection {
-            plugin: self.plugin_summary(&package)?,
-            capabilities: resources
-                .iter()
-                .map(|resource| PluginCapability {
-                    identity: resource.identity(),
-                    name: resource.name(),
-                    kind: resource.capability.kind,
-                })
-                .collect(),
-            deliveries,
-            managed_state: managed_state(&reconciliation),
-            reconciliation,
-        })
-    }
 
     /// Every marketplace this composition root knows how to read from.
     /// Exactly one today — the official embedded snapshot — but the return
     /// shape does not assume that stays true. Read-only; parses no product
     /// content beyond `marketplace.json`'s own name and plugin count.
-    pub fn list_marketplaces(&self) -> Result<Vec<MarketplaceSummary>> {
-        let (name, entries) = bootstrap::entries()?;
-        Ok(vec![MarketplaceSummary {
-            name: name.clone(),
-            source: "embedded:uze-official".to_owned(),
-            plugin_count: entries.len(),
-        }])
-    }
 
-    pub fn marketplace_add(&self, source_str: &str) -> Result<()> {
-        let source = Self::parse_marketplace_source(source_str)?;
-        let (marketplace_root, manifest) = Self::load_marketplace_manifest(&source)?;
-        let name = manifest.name.clone();
-        if name == "uze-official" {
-            return Err(UzeError::ExposureUnavailable(
-                "marketplace `uze-official` is reserved".to_owned(),
-            ));
-        }
-        uze_core::state::marketplace_add(&self.home, &name, source)?;
-        let _ = (marketplace_root, manifest);
-        Ok(())
-    }
-
-    pub fn marketplace_remove(&self, name: &str) -> Result<()> {
-        if name == "uze-official" {
-            return Err(UzeError::ExposureUnavailable(
-                "marketplace `uze-official` cannot be removed".to_owned(),
-            ));
-        }
-        uze_core::state::marketplace_remove(&self.home, name)
-    }
-
-    pub fn marketplace_list(&self) -> Result<Vec<MarketplaceSummary>> {
-        let mut out = Vec::new();
-        let (official_name, official_entries) = bootstrap::entries()?;
-        out.push(MarketplaceSummary {
-            name: "uze-official".to_owned(),
-            source: "embedded:uze-official".to_owned(),
-            plugin_count: official_entries.len(),
-        });
-        for (name, record) in uze_core::state::marketplace_list(&self.home)? {
-            let plugin_count = match Self::load_marketplace_manifest(&record.source) {
-                Ok((_, manifest)) => manifest.plugins.len(),
-                Err(_) => 0,
-            };
-            out.push(MarketplaceSummary {
-                name: name.clone(),
-                source: record.source.display(),
-                plugin_count,
-            });
-        }
-        let _ = official_name;
-        Ok(out)
-    }
-
-    pub fn plugin_install(
-        &self,
-        spec: &str,
-        authority: &dyn TrustAuthority,
-    ) -> Result<AddPluginReport> {
-        let (plugin_name, marketplace_name) = spec.split_once('@').ok_or_else(|| {
-            UzeError::ExposureUnavailable(format!(
-                "plugin spec `{spec}` must be `name@marketplace`"
-            ))
-        })?;
-        if marketplace_name == "uze-official" {
-            return self.install_from_marketplace(plugin_name, authority);
-        }
-        let record =
-            uze_core::state::marketplace_get(&self.home, marketplace_name)?.ok_or_else(|| {
-                UzeError::UnknownPackage(format!("marketplace `{marketplace_name}` not found"))
-            })?;
-        let (marketplace_root, manifest) = Self::load_marketplace_manifest(&record.source)?;
-        let plugin_source = uze_core::acquisition::marketplace::resolve_plugin_source(
-            &manifest,
-            plugin_name,
-            &marketplace_root,
-        )?;
-        let source = PackageSource::Local {
-            path: plugin_source,
-        };
-        let report = self.add_plugin(source, authority)?;
-        uze_core::state::plugin_marketplace_record(
-            &self.home,
-            &report.plugin.id,
-            marketplace_name,
-        )?;
-        Ok(report)
-    }
-
-    fn parse_marketplace_source(source_str: &str) -> Result<PackageSource> {
+    pub(crate) fn parse_marketplace_source(source_str: &str) -> Result<PackageSource> {
         let looks_remote = source_str.starts_with("https://")
             || source_str.starts_with("http://")
             || source_str.starts_with("git://")
@@ -409,7 +264,7 @@ impl UzeApplication {
         })
     }
 
-    fn load_marketplace_manifest(
+    pub(crate) fn load_marketplace_manifest(
         source: &PackageSource,
     ) -> Result<(
         PathBuf,
@@ -454,239 +309,25 @@ impl UzeApplication {
     /// Every plugin the official marketplace lists, cross-referenced against
     /// what's actually installed. `update_available` is computed the same
     /// pure, offline way `PluginSummary`'s is — never re-applied here.
-    pub fn list_marketplace_plugins(&self) -> Result<Vec<MarketplacePluginSummary>> {
-        let (_name, entries) = bootstrap::entries()?;
-        let installed_packages = self.installed_packages();
-        let installed: std::collections::BTreeMap<&str, &StoredPackage> = installed_packages
-            .iter()
-            .map(|package| (package.id.as_str(), package))
-            .collect();
-        Ok(entries
-            .into_iter()
-            .map(|entry| {
-                let installed_package = installed.get(entry.name.as_str());
-                let update_available = installed_package
-                    .and_then(|package| bootstrap::has_update(&entry.name, &package.root).ok());
-                MarketplacePluginSummary {
-                    name: entry.name.clone(),
-                    description: entry.description,
-                    keywords: entry.keywords,
-                    installed: installed_package.is_some(),
-                    update_available,
-                    is_default: bootstrap::DEFAULT_PLUGIN_IDS.contains(&entry.name.as_str()),
-                }
-            })
-            .collect())
-    }
 
     /// One marketplace plugin's full detail, including capabilities read
     /// straight off the manifest snapshot — no install required. Capability
     /// inspection materializes a scratch copy that is discarded before this
     /// returns; nothing is written to the Store.
-    pub fn inspect_marketplace_plugin(&self, name: &str) -> Result<MarketplacePluginDetail> {
-        let summary = self
-            .list_marketplace_plugins()?
-            .into_iter()
-            .find(|plugin| plugin.name == name)
-            .ok_or_else(|| UzeError::UnknownPackage(name.to_owned()))?;
-        let materialized = bootstrap::materialize(name)?;
-        let inspected = uze_core::acquisition::inspect_capabilities(&materialized)?;
-        Ok(MarketplacePluginDetail {
-            capabilities: inspected
-                .resources
-                .iter()
-                .map(|resource| PluginCapability {
-                    identity: resource.identity(),
-                    name: resource.name(),
-                    kind: resource.capability.kind,
-                })
-                .collect(),
-            summary,
-        })
-    }
 
     /// Installs a marketplace plugin by name through the exact same
     /// lifecycle any other `add` uses — trust included. A thin, named
     /// convenience over `add_plugin(PackageSource::Embedded { .. })` so
     /// callers never need to know `Embedded` is the mechanism.
-    pub fn install_from_marketplace(
-        &self,
-        name: &str,
-        authority: &dyn TrustAuthority,
-    ) -> Result<AddPluginReport> {
-        self.add_plugin(
-            PackageSource::Embedded {
-                id: name.to_owned(),
-            },
-            authority,
-        )
-    }
 
     /// Installs once, chooses package-native delivery first, attaches only
     /// remaining resources, and records every persistent side effect.
-    pub fn add_plugin(
-        &self,
-        source: PackageSource,
-        authority: &dyn TrustAuthority,
-    ) -> Result<AddPluginReport> {
-        let _mutation = uze_core::persistence::MutationLock::acquire(&self.home)?;
-        // Acquisition brings the bytes to a local directory and owns their
-        // cleanup; the Store only ever sees a materialized package.
-        let materialized = self.acquire(&source)?;
-        self.install_materialized(materialized, authority, &[], false)
-    }
 
     /// The half of installation that runs once bytes exist locally.
     ///
     /// Deliberately takes no lock: both public entry points hold one already,
     /// and `MutationLock` is not reentrant. Sharing this body is what lets
     /// `update_plugin` reuse installation without re-entering it.
-    fn install_materialized(
-        &self,
-        materialized: uze_core::MaterializedPackage,
-        authority: &dyn TrustAuthority,
-        already_trusted: &[trust::ExecutableCapability],
-        replacing_installed: bool,
-    ) -> Result<AddPluginReport> {
-        // Trust is decided here — after the package is materialized and can
-        // be inspected honestly, and strictly before anything is written to
-        // the Store or shown to a harness. Neither the Store nor any
-        // integration knows this question exists.
-        self.authorize(
-            &materialized,
-            authority,
-            already_trusted,
-            replacing_installed,
-        )?;
-
-        // `uze add` is deliberately enough for a harness the user already
-        // has.  Preparing a detected integration only creates UZE's own
-        // prerequisites (such as a user-scope discovery directory) and
-        // records its setup state; it never installs, upgrades, or launches
-        // the vendor executable.  Do it before ingesting so a preparation
-        // failure cannot leave a newly installed package with no reported
-        // delivery attempt.
-        self.prepare_detected_integrations(None)?;
-
-        let installed = self.store.ingest(&materialized)?;
-
-        // Derived views refresh before attachment: a native package delivery
-        // reads the view it was just given. A failure here is recorded, never
-        // propagated — the package is installed, and one integration's view
-        // being stale does not make the installation invalid.
-        let publications = self.republish_all();
-        let unpublished: BTreeSet<&str> = publications
-            .iter()
-            .filter(|outcome| outcome.error.is_some())
-            .map(|outcome| outcome.integration.as_str())
-            .collect();
-
-        let environment = self.engine().compose(std::slice::from_ref(&installed.id))?;
-        let resources: Vec<_> = environment.resources.iter().collect();
-        let mut attachments = Vec::new();
-        let mut package_plans = Vec::new();
-        for integration in &self.integrations {
-            // A package must remain installable on a machine that has only a
-            // subset of UZE's peer harnesses. `add` prepares and attaches to
-            // detected harnesses; an absent executable is neither a package
-            // incompatibility nor a reason to invoke its vendor CLI.
-            if !integration.detect().present {
-                continue;
-            }
-            let mut provided = BTreeSet::new();
-            // Native delivery reads the view; attempting it against a view
-            // that failed to publish would fail for a reason that has
-            // nothing to do with this package.
-            if let Some(plan) = integration
-                .package_exposure_plan(&installed, &resources)
-                .filter(|_| !unpublished.contains(integration.id()))
-            {
-                package_plans.push((integration.id().to_owned(), plan.clone()));
-                // Migration: if this package was previously decomposed, detach
-                // covered capability receipts that are now provided, but only
-                // if they are safely detachable.
-                let existing: Vec<(String, uze_core::integration::AttachmentReceipt)> =
-                    state::receipts(&self.home, Some(installed.id.as_str()))?
-                        .into_iter()
-                        .filter(|(_, r)| {
-                            r.integration == integration.id() && r.resource_identity.is_some()
-                        })
-                        .collect();
-                let mut covered_existing = Vec::new();
-                for (key, receipt) in &existing {
-                    if let Some(identity) = &receipt.resource_identity
-                        && plan.provided_resource_identities.contains(identity)
-                    {
-                        covered_existing.push((key.clone(), receipt.clone()));
-                    }
-                }
-                let mut migration_blocked = false;
-                for (_, receipt) in &covered_existing {
-                    let inspection = integration.inspect_receipt(receipt);
-                    if matches!(
-                        inspection.state,
-                        AttachmentState::Drifted
-                            | AttachmentState::Conflict
-                            | AttachmentState::Blocked
-                    ) {
-                        migration_blocked = true;
-                        break;
-                    }
-                }
-                if migration_blocked {
-                    // Keep decomposed; do not attach native to avoid duplication.
-                } else {
-                    for (key, receipt) in covered_existing {
-                        let inspection = integration.inspect_receipt(&receipt);
-                        if inspection.state == AttachmentState::Matched {
-                            let detached = integration.detach_receipt(&receipt)?;
-                            if detached.state == AttachmentState::Missing {
-                                state::forget_receipt(&self.home, &key)?;
-                            }
-                        } else if inspection.state == AttachmentState::Missing {
-                            state::forget_receipt(&self.home, &key)?;
-                        }
-                    }
-                    if let Some(receipt) = integration.attach_package(&installed, &plan)? {
-                        let location = receipt_location(&receipt);
-                        state::record_receipt(
-                            &self.home,
-                            package_receipt_key(installed.id.as_str(), integration.id()),
-                            receipt,
-                        )?;
-                        attachments.push(AttachmentSummary {
-                            integration: integration.id().to_owned(),
-                            location,
-                        });
-                        provided = plan.provided_resource_identities;
-                    }
-                }
-            }
-            for resource in &resources {
-                if !provided.contains(&resource.identity()) {
-                    let resolved = self.resolve_exposure_name(resource, integration.as_ref());
-                    if let Some(receipt) = integration.attach_receipt(&resolved)? {
-                        let location = receipt_location(&receipt);
-                        state::record_receipt(
-                            &self.home,
-                            resource_receipt_key(installed.id.as_str(), integration.id(), resource),
-                            receipt,
-                        )?;
-                        attachments.push(AttachmentSummary {
-                            integration: integration.id().to_owned(),
-                            location,
-                        });
-                    }
-                }
-            }
-        }
-        Ok(AddPluginReport {
-            plugin: self.plugin_summary(&installed)?,
-            package_plans,
-            attachments,
-            publications,
-        })
-    }
 
     /// Re-resolves a package's original request and replaces the installed
     /// copy with the result.
@@ -704,42 +345,6 @@ impl UzeApplication {
     /// reconciles it and a repeat `update` finishes the job. Blind rollback
     /// would mean detaching artifacts UZE had just proven it owns, on the
     /// word of an unrelated failure.
-    pub fn update_plugin(
-        &self,
-        id: &str,
-        authority: &dyn TrustAuthority,
-    ) -> Result<UpdatePluginReport> {
-        let _mutation = uze_core::persistence::MutationLock::acquire(&self.home)?;
-        let installed = self.package_by_name(id)?;
-
-        // Re-resolve the *request*, not the resolution: that is what makes a
-        // branch move forward while a pinned commit stays put.
-        let materialized = self.acquire(&installed.provenance.requested)?;
-
-        let previous = {
-            let environment = self.engine().compose(std::slice::from_ref(&installed.id))?;
-            let resources: Vec<&uze_core::Resource> = environment.resources.iter().collect();
-            trust::executable_capabilities(&resources)
-        };
-        self.authorize(&materialized, authority, &previous, true)?;
-
-        // Nothing destructive has happened yet. From here the current package
-        // is removed under the same ownership rules any removal obeys.
-        // Updates are allowed to replace a protected official plugin — the
-        // protection is against `remove`, not `update`.
-        let removal = self.detach_and_remove(id, true)?;
-        if let RemovePluginReport::Blocked { report, plan } = removal {
-            return Ok(UpdatePluginReport::Blocked { report, plan });
-        }
-        // Trust was already settled above against the previous capabilities,
-        // so installation must not ask a second time for the same answer.
-        let report = self.install_materialized(materialized, &trust::AlwaysTrust, &[], true)?;
-        Ok(UpdatePluginReport::Updated {
-            plugin: report.plugin,
-            attachments: report.attachments,
-            publications: report.publications,
-        })
-    }
 
     /// Runs only selected, detected setup routines. No integration knowledge
     /// leaks to the caller beyond stable ids and reported facts.
@@ -781,7 +386,7 @@ impl UzeApplication {
     ///
     /// `EXPERIMENTAL RUNTIME DELIVERY STRATEGY` (`RUNTIME INFRASTRUCTURE`,
     /// not a `CONTEXT DELIVERY POLICY` decision; see `BRIDGE_INTEGRATIONS`).
-    fn ensure_runtime_shim(
+    pub(crate) fn ensure_runtime_shim(
         &self,
         integration: &dyn IntegrationPort,
     ) -> Result<Option<RuntimeShimSetup>> {
@@ -860,7 +465,10 @@ impl UzeApplication {
 
     /// Explicit setup is the only path allowed to provision or update an
     /// executable. `add` deliberately calls only `prepare_detected_*`.
-    fn provision_and_prepare(&self, requested: Option<&str>) -> Result<Vec<SetupResult>> {
+    pub(crate) fn provision_and_prepare(
+        &self,
+        requested: Option<&str>,
+    ) -> Result<Vec<SetupResult>> {
         self.integrations
             .iter()
             .filter(|integration| requested.is_none_or(|id| integration.id() == id))
@@ -889,7 +497,10 @@ impl UzeApplication {
     /// This is the shared bridge between explicit `setup` and implicit
     /// preparation during `add`; neither presentation layer needs to know
     /// which directories/configuration an integration owns.
-    fn prepare_detected_integrations(&self, requested: Option<&str>) -> Result<Vec<SetupResult>> {
+    pub(crate) fn prepare_detected_integrations(
+        &self,
+        requested: Option<&str>,
+    ) -> Result<Vec<SetupResult>> {
         self.integrations
             .iter()
             .filter(|integration| requested.is_none_or(|id| integration.id() == id))
@@ -918,13 +529,6 @@ impl UzeApplication {
     /// this integration available. This repeats the same package-first plan
     /// as `add`, scoped to one integration, and ledger keys make it
     /// idempotent without inventing a sync subsystem.
-    fn attach_stored_packages_to(&self, integration: &dyn IntegrationPort) -> Result<()> {
-        for package_id in self.store.package_ids()? {
-            let package = self.store.package(&package_id)?;
-            self.attach_package_to(&package, integration)?;
-        }
-        Ok(())
-    }
 
     /// Attaches one already-stored `package` to `integration`: a package-level
     /// native delivery when the integration offers one, then per-resource
@@ -936,281 +540,15 @@ impl UzeApplication {
     /// capability receipts that are now covered by `provided` are migrated
     /// safely: only `Matched` receipts are detached, `Drifted`/`Conflict`/
     /// `Blocked` block migration per ADR-009.
-    fn attach_package_to(
-        &self,
-        package: &StoredPackage,
-        integration: &dyn IntegrationPort,
-    ) -> Result<()> {
-        let environment = self.engine().compose(std::slice::from_ref(&package.id))?;
-        let resources: Vec<_> = environment.resources.iter().collect();
-        let mut provided = BTreeSet::new();
-        if let Some(plan) = integration.package_exposure_plan(package, &resources) {
-            // Migration: decomposed → native. Detach covered capability receipts
-            // that are now provided by the package, but only if they are
-            // safely detachable. Any Drifted/Conflict/Blocked blocks migration
-            // and also blocks duplicate native attach to avoid duplication.
-            let existing: Vec<(String, uze_core::integration::AttachmentReceipt)> =
-                state::receipts(&self.home, Some(package.id.as_str()))?
-                    .into_iter()
-                    .filter(|(_, r)| {
-                        r.integration == integration.id() && r.resource_identity.is_some()
-                    })
-                    .collect();
-            let mut covered_existing = Vec::new();
-            for (key, receipt) in &existing {
-                if let Some(identity) = &receipt.resource_identity
-                    && plan.provided_resource_identities.contains(identity)
-                {
-                    covered_existing.push((key.clone(), receipt.clone()));
-                }
-            }
-            let mut migration_blocked = false;
-            for (_, receipt) in &covered_existing {
-                let inspection = integration.inspect_receipt(receipt);
-                if matches!(
-                    inspection.state,
-                    AttachmentState::Drifted | AttachmentState::Conflict | AttachmentState::Blocked
-                ) {
-                    migration_blocked = true;
-                    break;
-                }
-            }
-            if migration_blocked {
-                // Keep decomposed delivery; do not attach native to avoid duplication.
-                provided = BTreeSet::new();
-            } else {
-                for (key, receipt) in covered_existing {
-                    let inspection = integration.inspect_receipt(&receipt);
-                    if inspection.state == AttachmentState::Matched {
-                        let detached = integration.detach_receipt(&receipt)?;
-                        if detached.state == AttachmentState::Missing {
-                            state::forget_receipt(&self.home, &key)?;
-                        }
-                    } else if inspection.state == AttachmentState::Missing {
-                        state::forget_receipt(&self.home, &key)?;
-                    }
-                }
-                if let Some(receipt) = integration.attach_package(package, &plan)? {
-                    state::record_receipt(
-                        &self.home,
-                        package_receipt_key(package.id.as_str(), integration.id()),
-                        receipt,
-                    )?;
-                    provided = plan.provided_resource_identities;
-                }
-            }
-        }
-        for resource in &resources {
-            if !provided.contains(&resource.identity()) {
-                let resolved = self.resolve_exposure_name(resource, integration);
-                if let Some(receipt) = integration.attach_receipt(&resolved)? {
-                    state::record_receipt(
-                        &self.home,
-                        resource_receipt_key(package.id.as_str(), integration.id(), resource),
-                        receipt,
-                    )?;
-                }
-            }
-        }
-        Ok(())
-    }
 
     /// Applies the approved lifecycle contract: reconcile, plan, detach only
     /// matched receipts, re-reconcile, forget resolved ledger records, then
     /// delete UZE-owned package bytes.
-    pub fn remove_plugin(&self, id: &str) -> Result<RemovePluginReport> {
-        let _mutation = uze_core::persistence::MutationLock::acquire(&self.home)?;
-        let report = self.detach_and_remove(id, false)?;
-        if matches!(report, RemovePluginReport::Removed { .. }) {
-            let _ = uze_core::state::plugin_marketplace_remove(&self.home, id);
-        }
-        Ok(report)
-    }
-
-    fn is_protected_package(package: &StoredPackage) -> bool {
-        // Only the verified official origin is protected: an embedded
-        // provenance whose id appears in the compiled marketplace snapshot.
-        // A local/git package that merely shares the name `uze` is not
-        // official and remains removable — prevents spoofing by name alone.
-        let embedded_id = match &package.provenance.requested {
-            PackageSource::Embedded { id } => id,
-            _ => return false,
-        };
-        if bootstrap::DEFAULT_PLUGIN_IDS.contains(&embedded_id.as_str()) {
-            return true;
-        }
-        if let Ok((_, entries)) = bootstrap::entries()
-            && entries.iter().any(|entry| entry.name == *embedded_id)
-        {
-            return true;
-        }
-        false
-    }
 
     /// Removal without taking the lock; see `install_materialized`.
-    fn detach_and_remove(&self, id: &str, allow_protected: bool) -> Result<RemovePluginReport> {
-        let package = match self.package_by_name(id) {
-            Ok(package) => package,
-            Err(UzeError::UnknownPackage(_)) => {
-                // There is no tombstone, so UZE cannot claim this package was
-                // previously installed. It can still make repeated remove a
-                // safe no-op when no ownership evidence remains.
-                if state::receipts(&self.home, Some(id))?.is_empty() {
-                    return Ok(RemovePluginReport::AlreadyAbsent {
-                        plugin: id.to_owned(),
-                    });
-                }
-                return Ok(RemovePluginReport::Blocked {
-                    report: self.reconcile(id),
-                    plan: PackageRemovalPlan::BlockedByInspection,
-                });
-            }
-            Err(error) => return Err(error),
-        };
-        if !allow_protected && Self::is_protected_package(&package) {
-            return Err(UzeError::ExposureUnavailable(format!(
-                "official marketplace plugin `{}` is protected and cannot be removed",
-                package.id.as_str()
-            )));
-        }
-        let report = self.reconcile(package.id.as_str());
-        let plan = plan_remove(&report);
-        let (detached_receipts, already_missing_receipts) = match &plan {
-            PackageRemovalPlan::Safe {
-                detachable_receipts,
-                already_missing_receipts,
-            } => (
-                detachable_receipts.clone(),
-                already_missing_receipts.clone(),
-            ),
-            _ => (Vec::new(), Vec::new()),
-        };
-        if !matches!(plan, PackageRemovalPlan::Safe { .. }) {
-            return Ok(RemovePluginReport::Blocked { report, plan });
-        }
-        for reconciled in &report.receipts {
-            if reconciled.inspection.state != AttachmentState::Matched {
-                continue;
-            }
-            let Some(integration) = self
-                .integrations
-                .iter()
-                .find(|integration| integration.id() == reconciled.receipt.integration)
-            else {
-                return Ok(RemovePluginReport::Blocked {
-                    report: self.reconcile(package.id.as_str()),
-                    plan: PackageRemovalPlan::BlockedByInspection,
-                });
-            };
-            let detached = integration.detach_receipt(&reconciled.receipt)?;
-            if detached.state != AttachmentState::Missing {
-                return Ok(RemovePluginReport::Blocked {
-                    report: self.reconcile(package.id.as_str()),
-                    plan: plan_remove(&self.reconcile(package.id.as_str())),
-                });
-            }
-        }
-        let final_report = self.reconcile(package.id.as_str());
-        let final_plan = plan_remove(&final_report);
-        if !matches!(final_plan, PackageRemovalPlan::Safe { .. }) {
-            return Ok(RemovePluginReport::Blocked {
-                report: final_report,
-                plan: final_plan,
-            });
-        }
-        for reconciled in &final_report.receipts {
-            state::forget_receipt(&self.home, &reconciled.ledger_key)?;
-        }
-        self.store.remove_package(&package.id)?;
-        // The package set changed, so every derived view is now stale. A
-        // failure to rebuild one does not un-remove the package.
-        let _ = self.republish_all();
-        Ok(RemovePluginReport::Removed {
-            plugin: package.id.as_str().to_owned(),
-            detached_receipts,
-            already_missing_receipts,
-        })
-    }
 
     /// Deterministic environment diagnostics. Attachment facts are always
     /// obtained through the same receipt reconciliation used by removal.
-    pub fn doctor(&self) -> DoctorReport {
-        let package_ids = self.store.package_ids();
-        let (store, plugins) = match package_ids {
-            Ok(ids) => {
-                let packages = ids
-                    .into_iter()
-                    .filter_map(|id| self.store.package(&id).ok())
-                    .collect::<Vec<_>>();
-                let inconsistencies = packages
-                    .iter()
-                    .filter_map(package_store_inconsistency)
-                    .collect::<Vec<_>>();
-                let health = if inconsistencies.is_empty() {
-                    StoreHealth::Ready
-                } else {
-                    StoreHealth::Blocked(inconsistencies.join("; "))
-                };
-                (
-                    health,
-                    packages
-                        .iter()
-                        .filter_map(|package| self.plugin_summary(package).ok())
-                        .collect(),
-                )
-            }
-            Err(error) => (StoreHealth::Blocked(error.to_string()), Vec::new()),
-        };
-        let installed = self.installed_packages();
-        let harnesses = self
-            .integrations
-            .iter()
-            .map(|integration| HarnessHealth {
-                integration: integration.id().to_owned(),
-                detection: integration.detect(),
-                setup: integration_status(integration.status(&self.home)),
-                strategy: state::get(&self.home, integration.id())
-                    .ok()
-                    .flatten()
-                    .map(|record| record.strategy),
-                provisioning: state::provisioning(&self.home, integration.id())
-                    .ok()
-                    .flatten(),
-                // Observed, not remembered. A package can be installed and
-                // reconciled while a harness still cannot see it, and that is
-                // exactly the state this field exists to surface.
-                publication: integration.publication(&installed),
-                capabilities: integration.capabilities(),
-                native_instructions: NATIVE_INSTRUCTION_INTEGRATIONS.contains(&integration.id()),
-            })
-            .collect();
-        let attachments = plugins
-            .iter()
-            .map(|plugin: &PluginSummary| PackageManagedState {
-                plugin: plugin.id.clone(),
-                state: managed_state(&self.reconcile(&plugin.id)),
-            })
-            .collect();
-        let ledger_error = state::receipts(&self.home, None)
-            .err()
-            .map(|error| error.to_string());
-        let integration_state_error = state::load(&self.home).err().map(|error| error.to_string());
-        let provisioning_state_error = self
-            .integrations
-            .iter()
-            .find_map(|integration| state::provisioning(&self.home, integration.id()).err())
-            .map(|error| error.to_string());
-        DoctorReport {
-            uze_home: self.home.root().to_path_buf(),
-            store,
-            plugins,
-            harnesses,
-            attachments,
-            ledger_error,
-            integration_state_error,
-            provisioning_state_error,
-        }
-    }
 
     /// A short, project-scoped health summary — the single high-level
     /// question most callers actually want answered: "is everything UZE
@@ -1224,290 +562,6 @@ impl UzeApplication {
     /// read-only) with the Store's own package count. It duplicates no
     /// health logic doctor already owns; a genuine installation problem
     /// (corrupt ledger, missing executable) stays doctor's to report.
-    pub fn status(&self, project_root: &std::path::Path) -> Result<StatusReport> {
-        let context = self.context_inspect(project_root)?;
-        let installed = self.store.package_ids()?.len();
-        let contributing = context.contributions.len();
-        let issues: Vec<String> = context
-            .contributions
-            .iter()
-            .filter(|contribution| !matches!(contribution.state, AttachmentState::Matched))
-            .map(|contribution| format!("{}: {:?}", contribution.package_id, contribution.state))
-            .chain(
-                context
-                    .harnesses
-                    .iter()
-                    .filter_map(|harness| match &harness.delivery {
-                        HarnessContextDelivery::Bridge {
-                            needed: true,
-                            state,
-                        } if *state != AttachmentState::Matched => {
-                            Some(format!("{}: bridge {:?}", harness.integration, state))
-                        }
-                        _ => None,
-                    }),
-            )
-            .chain(
-                context
-                    .malformed_regions
-                    .iter()
-                    .map(|region| format!("{region}: malformed")),
-            )
-            .collect();
-        Ok(StatusReport {
-            root: context.canonical.clone(),
-            portability: context.portability,
-            harnesses: context.harnesses,
-            packages_installed: installed,
-            packages_contributing_here: contributing,
-            issues,
-        })
-    }
-
-    /// Read-only observation of one project's context — genuinely zero-
-    /// write, whatever state the project is in. Never calls `attach`,
-    /// `detach`, `reconcile`, or `remove_unconditionally`; every fact here
-    /// comes from `text_region::inspect`/`region_shape`/
-    /// `has_content_outside_managed_regions` and `context::inspect_agents_md`,
-    /// all themselves zero-write. `context_reconcile` does **not** build on
-    /// this method — the dependency runs the other way, so a write path can
-    /// never accidentally regress into being "mostly" read-only.
-    pub fn context_inspect(&self, project_root: &std::path::Path) -> Result<ProjectContextStatus> {
-        if !project_root.is_dir() {
-            return Err(UzeError::NotDirectory(project_root.to_path_buf()));
-        }
-        let canonical = project_root
-            .canonicalize()
-            .map_err(|source| UzeError::Read {
-                path: project_root.to_path_buf(),
-                source,
-            })?;
-
-        let agents_md_path = canonical.join("AGENTS.md");
-        let contributions_input = self.instruction_contributions()?;
-        let observation =
-            instruction_context::inspect_agents_md(&agents_md_path, &contributions_input);
-        let agents_md_exists = agents_md_path.is_file();
-
-        let sources: Vec<InstructionSourceObservation> = ["AGENTS.md", "CLAUDE.md", "GEMINI.md"]
-            .iter()
-            .map(|file_name| {
-                let path = canonical.join(file_name);
-                let exists = path.is_file();
-                InstructionSourceObservation {
-                    file_name: (*file_name).to_owned(),
-                    path: path.clone(),
-                    exists,
-                    has_user_content: exists
-                        && text_region::has_content_outside_managed_regions(&path),
-                    managed_region_identities: if exists {
-                        let mut identities: Vec<String> =
-                            text_region::region_identities_present(&path)
-                                .into_iter()
-                                .collect::<BTreeSet<_>>()
-                                .into_iter()
-                                .collect();
-                        identities.sort();
-                        identities
-                    } else {
-                        Vec::new()
-                    },
-                }
-            })
-            .collect();
-
-        let mut harnesses = Vec::new();
-        for integration in &self.integrations {
-            let id = integration.id();
-            let is_native = NATIVE_INSTRUCTION_INTEGRATIONS.contains(&id);
-            let bridge_file_name = BRIDGE_INTEGRATIONS
-                .iter()
-                .find(|(bridge_id, _)| *bridge_id == id)
-                .map(|(_, file_name)| *file_name);
-            if !is_native && bridge_file_name.is_none() {
-                // Not a harness this milestone models Instructions delivery
-                // for at all; silently excluded rather than reported as a
-                // gap it was never claimed to close.
-                continue;
-            }
-            if !integration.detect().present {
-                harnesses.push(HarnessContextStatus {
-                    integration: id.to_owned(),
-                    delivery: HarnessContextDelivery::NotDetected,
-                });
-                continue;
-            }
-            if is_native {
-                harnesses.push(HarnessContextStatus {
-                    integration: id.to_owned(),
-                    delivery: HarnessContextDelivery::Native,
-                });
-                continue;
-            }
-            let bridge_file = canonical.join(bridge_file_name.expect("checked above"));
-            let state = text_region::inspect(
-                &bridge_file,
-                INSTRUCTION_BRIDGE_IDENTITY,
-                INSTRUCTION_BRIDGE_CONTENT,
-            )
-            .state;
-            harnesses.push(HarnessContextStatus {
-                integration: id.to_owned(),
-                delivery: HarnessContextDelivery::Bridge {
-                    needed: observation.has_any_matched_contribution(),
-                    state,
-                },
-            });
-        }
-
-        let portability = derive_portability(agents_md_exists, &sources, &harnesses);
-        let warnings = derive_warnings(agents_md_exists, &sources);
-
-        Ok(ProjectContextStatus {
-            root: project_root.to_path_buf(),
-            canonical,
-            sources,
-            contributions: observation
-                .packages
-                .into_iter()
-                .map(|(package_id, inspection)| PackageInstructionStatus {
-                    package_id: package_id.as_str().to_owned(),
-                    state: inspection.state,
-                    reason: inspection.reason,
-                })
-                .collect(),
-            orphaned_regions: observation.orphaned_regions,
-            malformed_regions: observation.malformed_regions,
-            harnesses,
-            portability,
-            warnings,
-        })
-    }
-
-    /// The plan `context_reconcile` would execute against this project,
-    /// computed without writing anything. Built directly from
-    /// `context::plan_agents_md` (which is itself built on
-    /// `inspect_agents_md`) for the shared file, plus the same bridge-gating
-    /// logic `context_reconcile` uses, mapped through the identical
-    /// `PlannedAction` vocabulary so a plan and its later reconcile can
-    /// never disagree about what "wrong" looks like — only about whether it
-    /// got fixed.
-    pub fn context_plan(&self, project_root: &std::path::Path) -> Result<ContextPlan> {
-        if !project_root.is_dir() {
-            return Err(UzeError::NotDirectory(project_root.to_path_buf()));
-        }
-        let agents_md = project_root.join("AGENTS.md");
-        let contributions = self.instruction_contributions()?;
-        let agents_md_plan = instruction_context::plan_agents_md(&agents_md, &contributions);
-
-        // Bridge planning needs the same "would AGENTS.md end up with a
-        // matched contribution" question `context_reconcile` asks, computed
-        // the same read-only way: attach-or-not never actually ran here.
-        let observation = instruction_context::inspect_agents_md(&agents_md, &contributions);
-        let would_have_contribution = agents_md_plan.contributions.iter().any(|plan| {
-            matches!(
-                plan.action,
-                instruction_context::PlannedAction::Attach
-                    | instruction_context::PlannedAction::NoChange
-            )
-        }) || observation.has_any_matched_contribution();
-
-        let bridges = BRIDGE_INTEGRATIONS
-            .iter()
-            .filter_map(|(integration_id, file_name)| {
-                let integration = self
-                    .integrations
-                    .iter()
-                    .find(|integration| integration.id() == *integration_id)?;
-                if !integration.detect().present {
-                    return None;
-                }
-                let bridge_file = project_root.join(file_name);
-                let state = text_region::inspect(
-                    &bridge_file,
-                    INSTRUCTION_BRIDGE_IDENTITY,
-                    INSTRUCTION_BRIDGE_CONTENT,
-                )
-                .state;
-                Some(BridgePlan {
-                    integration: (*integration_id).to_owned(),
-                    file: bridge_file,
-                    action: plan_action_for_bridge(would_have_contribution, state),
-                })
-            })
-            .collect();
-
-        Ok(ContextPlan {
-            agents_md,
-            agents_md_plan,
-            bridges,
-        })
-    }
-
-    /// Reconciles one project's shared `AGENTS.md` against every currently
-    /// (globally) installed package that contributes Instructions, then
-    /// reconciles the small set of harnesses that need a bridge into it
-    /// rather than reading it natively.
-    ///
-    /// Deliberately independent of `add_plugin`/`remove_plugin`: package
-    /// installation stays global and project-agnostic. `project_root` is
-    /// ordinary input to this one explicit, idempotent, re-runnable
-    /// operation — never a persisted concept. Calling this is the only way
-    /// a project's `AGENTS.md` changes; nothing here happens implicitly
-    /// during `add`/`remove`.
-    pub fn context_reconcile(
-        &self,
-        project_root: &std::path::Path,
-    ) -> Result<ContextReconciliationReport> {
-        if !project_root.is_dir() {
-            return Err(UzeError::NotDirectory(project_root.to_path_buf()));
-        }
-        let agents_md = project_root.join("AGENTS.md");
-        let contributions = self.instruction_contributions()?;
-        let agents_md_report = instruction_context::reconcile_agents_md(&agents_md, &contributions);
-
-        let bridges = BRIDGE_INTEGRATIONS
-            .iter()
-            .filter_map(|(integration_id, file_name)| {
-                let integration = self
-                    .integrations
-                    .iter()
-                    .find(|integration| integration.id() == *integration_id)?;
-                if !integration.detect().present {
-                    return None;
-                }
-                let bridge_file = project_root.join(file_name);
-                let inspection = text_region::reconcile(
-                    &bridge_file,
-                    INSTRUCTION_BRIDGE_IDENTITY,
-                    INSTRUCTION_BRIDGE_CONTENT,
-                    agents_md_report.has_any_matched_contribution(),
-                );
-                Some(BridgeStatus {
-                    integration: (*integration_id).to_owned(),
-                    file: bridge_file,
-                    state: inspection.state,
-                    reason: inspection.reason,
-                })
-            })
-            .collect();
-
-        Ok(ContextReconciliationReport {
-            agents_md,
-            packages: agents_md_report
-                .packages
-                .into_iter()
-                .map(|(package_id, inspection)| PackageInstructionStatus {
-                    package_id: package_id.as_str().to_owned(),
-                    state: inspection.state,
-                    reason: inspection.reason,
-                })
-                .collect(),
-            removed_orphans: agents_md_report.removed_orphans,
-            blocked_orphans: agents_md_report.blocked_orphans,
-            bridges,
-        })
-    }
 
     /// Resolves `resource`'s physical exposure name for `integration`,
     /// immediately before an attach call — the one place a naming decision
@@ -1538,101 +592,8 @@ impl UzeApplication {
     /// access — so it can never itself decide a foreign-artifact conflict;
     /// `attach`'s own structural check (unchanged) remains the last word on
     /// that.
-    fn resolve_exposure_name(
-        &self,
-        resource: &Resource,
-        integration: &dyn IntegrationPort,
-    ) -> Resource {
-        if !matches!(
-            resource.capability.kind,
-            CapabilityKind::AgentSkill | CapabilityKind::Mcp
-        ) {
-            return resource.clone();
-        }
-        let mut resolved = resource.clone();
-        let Ok(all_receipts) = state::receipts(&self.home, None) else {
-            return resolved;
-        };
-        let resource_id = resource.identity();
-        let shared_root = (resource.capability.kind == CapabilityKind::AgentSkill)
-            .then(|| integration.shared_agent_skill_root())
-            .flatten();
-        let shares_root = |other_id: &str| -> bool {
-            let Some(root) = &shared_root else {
-                return false;
-            };
-            self.integrations.iter().any(|other| {
-                other.id() == other_id && other.shared_agent_skill_root().as_ref() == Some(root)
-            })
-        };
-        if let Some((_, existing)) = all_receipts.iter().find(|(_, receipt)| {
-            receipt.resource_identity.as_deref() == Some(resource_id.as_str())
-                && (receipt.integration == integration.id() || shares_root(&receipt.integration))
-        }) {
-            resolved.resolved_exposure_name = managed_artifact_exposure_name(&existing.artifact);
-            resolved.resolved_artifact_target = match &existing.artifact {
-                uze_core::integration::ManagedArtifact::SymlinkReference { target, .. } => {
-                    Some(target.clone())
-                }
-                _ => None,
-            };
-            return resolved;
-        }
-        let claimed: BTreeSet<String> = all_receipts
-            .iter()
-            .filter(|(_, receipt)| {
-                receipt.integration == integration.id() || shares_root(&receipt.integration)
-            })
-            .filter_map(|(_, receipt)| managed_artifact_exposure_name(&receipt.artifact))
-            .collect();
-        // A shared root must converge on the same physical name no matter
-        // which member happens to attach first. If any integration sharing
-        // `shared_root` prefers the resource's bare logical name first (only
-        // OpenCode does today, for its V2 slash-command UX), that preference
-        // governs for the whole group — otherwise whichever of
-        // Codex/Gemini/OpenCode attaches before OpenCode would lock the
-        // group onto the always-qualified fallback via the reuse check
-        // above, even though the bare name was free.
-        let candidates = shared_root
-            .as_ref()
-            .and_then(|root| {
-                self.integrations
-                    .iter()
-                    .filter(|other| other.shared_agent_skill_root().as_ref() == Some(root))
-                    .map(|other| other.exposure_name_candidates(resource))
-                    .find(|list| {
-                        list.first().map(String::as_str)
-                            == resource.logical_capability_name().as_deref()
-                    })
-            })
-            .unwrap_or_else(|| integration.exposure_name_candidates(resource));
-        resolved.resolved_exposure_name = candidates
-            .iter()
-            .find(|candidate| !claimed.contains(*candidate))
-            .cloned()
-            .or_else(|| candidates.last().cloned());
-        resolved
-    }
 
-    fn instruction_contributions(&self) -> Result<Vec<InstructionContribution>> {
-        let mut contributions = Vec::new();
-        for package_id in self.store.package_ids()? {
-            let package = self.store.package(&package_id)?;
-            let resources = uze_core::engine::package_resources_at(&package_id, &package.root)?;
-            for resource in resources {
-                if resource.capability.kind != CapabilityKind::Instruction {
-                    continue;
-                }
-                contributions.push(InstructionContribution {
-                    package_id: package_id.clone(),
-                    content: String::from_utf8_lossy(&resource.capability.payload).into_owned(),
-                });
-            }
-        }
-        Ok(contributions)
-    }
-
-    fn package_by_name(&self, name: &str) -> Result<StoredPackage> {
+    pub(crate) fn package_by_name(&self, name: &str) -> Result<StoredPackage> {
         self.store
             .package_ids()?
             .into_iter()
@@ -1642,7 +603,7 @@ impl UzeApplication {
             .ok_or_else(|| UzeError::UnknownPackage(name.to_owned()))
     }
 
-    fn plugin_summary(&self, package: &StoredPackage) -> Result<PluginSummary> {
+    pub(crate) fn plugin_summary(&self, package: &StoredPackage) -> Result<PluginSummary> {
         let environment = self.engine().compose(std::slice::from_ref(&package.id))?;
         let update_available = match &package.provenance.requested {
             PackageSource::Embedded { id } => bootstrap::has_update(id, &package.root).ok(),
@@ -1661,7 +622,7 @@ impl UzeApplication {
     /// set. Collects failures instead of propagating them: publication is not
     /// part of package ownership, so one harness failing to rebuild its view
     /// leaves the package installed and the other harnesses unaffected.
-    fn republish_all(&self) -> Vec<PublicationOutcome> {
+    pub(crate) fn republish_all(&self) -> Vec<PublicationOutcome> {
         let packages = self.installed_packages();
         self.integrations
             .iter()
@@ -1675,7 +636,7 @@ impl UzeApplication {
             .collect()
     }
 
-    fn installed_packages(&self) -> Vec<StoredPackage> {
+    pub(crate) fn installed_packages(&self) -> Vec<StoredPackage> {
         self.store
             .package_ids()
             .unwrap_or_default()
@@ -1688,7 +649,7 @@ impl UzeApplication {
     /// registered in this composition root. There is deliberately no central
     /// list of vendors: an integration declares its own id and aliases, so
     /// registering one is the only step needed to make it selectable.
-    fn resolve_integration_id(&self, requested: &str) -> Result<&'static str> {
+    pub(crate) fn resolve_integration_id(&self, requested: &str) -> Result<&'static str> {
         self.integrations
             .iter()
             .find(|integration| {
@@ -1714,7 +675,7 @@ impl UzeApplication {
     /// Returns `Ok(())` immediately when the package declares nothing
     /// executable: a purely declarative package needs no consent beyond the
     /// decision to install it.
-    fn authorize(
+    pub(crate) fn authorize(
         &self,
         materialized: &uze_core::MaterializedPackage,
         authority: &dyn TrustAuthority,
@@ -1766,11 +727,11 @@ impl UzeApplication {
         }
     }
 
-    fn engine(&self) -> UzeEngine {
+    pub(crate) fn engine(&self) -> UzeEngine {
         UzeEngine::new(self.store.clone())
     }
 
-    fn reconcile(&self, package_id: &str) -> ReconciliationReport {
+    pub(crate) fn reconcile(&self, package_id: &str) -> ReconciliationReport {
         let integrations = self
             .integrations
             .iter()
@@ -2065,81 +1026,6 @@ pub struct ProjectContextStatus {
     pub warnings: Vec<String>,
 }
 
-fn derive_portability(
-    agents_md_exists: bool,
-    sources: &[InstructionSourceObservation],
-    harnesses: &[HarnessContextStatus],
-) -> Portability {
-    if !agents_md_exists {
-        let vendor_files: Vec<PathBuf> = sources
-            .iter()
-            .filter(|source| {
-                source.file_name != "AGENTS.md" && source.exists && source.has_user_content
-            })
-            .map(|source| source.path.clone())
-            .collect();
-        return if vendor_files.is_empty() {
-            Portability::NoContext
-        } else {
-            Portability::VendorLocked {
-                files: vendor_files,
-            }
-        };
-    }
-    let gaps: Vec<String> = harnesses
-        .iter()
-        .filter_map(|harness| match &harness.delivery {
-            HarnessContextDelivery::Bridge {
-                needed: true,
-                state,
-            } if *state != AttachmentState::Matched => {
-                Some(format!("{}: bridge {:?}", harness.integration, state))
-            }
-            _ => None,
-        })
-        .collect();
-    if gaps.is_empty() {
-        Portability::Portable
-    } else {
-        Portability::PartiallyPortable { gaps }
-    }
-}
-
-fn derive_warnings(
-    agents_md_exists: bool,
-    sources: &[InstructionSourceObservation],
-) -> Vec<String> {
-    let mut warnings = Vec::new();
-    let vendor_specific_with_content: Vec<&InstructionSourceObservation> = sources
-        .iter()
-        .filter(|source| {
-            source.file_name != "AGENTS.md" && source.exists && source.has_user_content
-        })
-        .collect();
-    if !agents_md_exists && vendor_specific_with_content.len() >= 2 {
-        let names: Vec<&str> = vendor_specific_with_content
-            .iter()
-            .map(|source| source.file_name.as_str())
-            .collect();
-        warnings.push(format!(
-            "{} each carry their own content with no shared AGENTS.md — these are observed as \
-             independent, potentially divergent vendor-specific sources; UZE does not compare or \
-             consolidate them.",
-            names.join(" and ")
-        ));
-    }
-    if agents_md_exists {
-        for source in &vendor_specific_with_content {
-            warnings.push(format!(
-                "{} carries content beyond the shared bridge — this is expected and supported \
-                 (vendor-specific instructions alongside portable ones), not a gap.",
-                source.file_name
-            ));
-        }
-    }
-    warnings
-}
-
 #[derive(Clone, Debug, Serialize)]
 pub struct BridgePlan {
     pub integration: String,
@@ -2164,29 +1050,6 @@ impl ContextPlan {
                         | instruction_context::PlannedAction::Remove
                 )
             })
-    }
-}
-
-fn plan_action_for_bridge(
-    needed: bool,
-    state: AttachmentState,
-) -> instruction_context::PlannedAction {
-    use instruction_context::PlannedAction;
-    match (needed, state) {
-        (true, AttachmentState::Matched) | (false, AttachmentState::Missing) => {
-            PlannedAction::NoChange
-        }
-        (true, AttachmentState::Missing) => PlannedAction::Attach,
-        (false, AttachmentState::Matched) => PlannedAction::Remove,
-        (_, AttachmentState::Drifted) => PlannedAction::Blocked(
-            "bridge content differs from the expected import line".to_owned(),
-        ),
-        (_, AttachmentState::Blocked) => {
-            PlannedAction::Blocked("bridge region markers are malformed".to_owned())
-        }
-        (_, AttachmentState::Conflict) => {
-            PlannedAction::Blocked("bridge region ownership is ambiguous".to_owned())
-        }
     }
 }
 
@@ -2254,7 +1117,7 @@ pub struct DoctorReport {
     pub provisioning_state_error: Option<String>,
 }
 
-fn managed_state(report: &ReconciliationReport) -> ManagedStateSummary {
+pub(crate) fn managed_state(report: &ReconciliationReport) -> ManagedStateSummary {
     let mut summary = ManagedStateSummary {
         ledger_error: report.ledger_error.clone(),
         ..ManagedStateSummary::default()
@@ -2271,7 +1134,7 @@ fn managed_state(report: &ReconciliationReport) -> ManagedStateSummary {
     summary
 }
 
-fn integration_status(status: IntegrationStatus) -> String {
+pub(crate) fn integration_status(status: IntegrationStatus) -> String {
     match status {
         IntegrationStatus::NotConfigured => "not configured",
         IntegrationStatus::InstalledUnverified => "installed / unverified",
@@ -2285,7 +1148,7 @@ fn integration_status(status: IntegrationStatus) -> String {
 /// the same conflict-safety shape `ClaudeIntegration`'s own skill symlink
 /// helper uses.
 #[cfg(unix)]
-fn refresh_shim_symlink(target: &Path, link: &Path) -> Result<()> {
+pub(crate) fn refresh_shim_symlink(target: &Path, link: &Path) -> Result<()> {
     match fs::symlink_metadata(link) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             let current = fs::read_link(link).map_err(|source| UzeError::Read {
@@ -2316,19 +1179,23 @@ fn refresh_shim_symlink(target: &Path, link: &Path) -> Result<()> {
 }
 
 #[cfg(not(unix))]
-fn refresh_shim_symlink(_target: &Path, link: &Path) -> Result<()> {
+pub(crate) fn refresh_shim_symlink(_target: &Path, link: &Path) -> Result<()> {
     Err(UzeError::UnsupportedRuntimeProjection(link.to_path_buf()))
 }
 
-fn package_receipt_key(package: &str, integration: &str) -> String {
+pub(crate) fn package_receipt_key(package: &str, integration: &str) -> String {
     format!("{package}:{integration}:package")
 }
 
-fn resource_receipt_key(package: &str, integration: &str, resource: &uze_core::Resource) -> String {
+pub(crate) fn resource_receipt_key(
+    package: &str,
+    integration: &str,
+    resource: &uze_core::Resource,
+) -> String {
     format!("{package}:{integration}:{}", resource.identity())
 }
 
-fn package_store_inconsistency(package: &StoredPackage) -> Option<String> {
+pub(crate) fn package_store_inconsistency(package: &StoredPackage) -> Option<String> {
     if !package.root.is_dir() {
         return Some(format!(
             "package `{}` store directory is missing",
@@ -2549,7 +1416,7 @@ mod tests {
         }
     }
 
-    fn temp(label: &str) -> PathBuf {
+    pub(crate) fn temp(label: &str) -> PathBuf {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -2560,18 +1427,18 @@ mod tests {
         ))
     }
 
-    fn fixture() -> PathBuf {
+    pub(crate) fn fixture() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/fixtures/packages/agent-plugin-skill")
     }
 
-    fn multi_mcp_fixture() -> PathBuf {
+    pub(crate) fn multi_mcp_fixture() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/fixtures/packages/multi-mcp-plugin")
     }
 
     #[test]
-    fn list_and_inspect_are_package_centric() {
+    pub(crate) fn list_and_inspect_are_package_centric() {
         let root = temp("inspect");
         let app = UzeApplication::new(UzeHome::at(&root), vec![Box::new(SymlinkIntegration)]);
         app.add_plugin(
@@ -2589,7 +1456,7 @@ mod tests {
     }
 
     #[test]
-    fn add_installs_portable_package_without_invoking_absent_harnesses() {
+    pub(crate) fn add_installs_portable_package_without_invoking_absent_harnesses() {
         let root = temp("absent-harness");
         let absent = AbsentIntegration {
             attach_attempted: Cell::new(false),
@@ -2606,7 +1473,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn removal_uses_reconciliation_and_preserves_drift() {
+    pub(crate) fn removal_uses_reconciliation_and_preserves_drift() {
         use std::os::unix::fs::symlink;
         let root = temp("remove");
         let home = UzeHome::at(&root);
@@ -2681,7 +1548,7 @@ mod tests {
     }
 
     #[test]
-    fn doctor_reports_corrupt_ledger_without_destructive_work() {
+    pub(crate) fn doctor_reports_corrupt_ledger_without_destructive_work() {
         let root = temp("doctor");
         let home = UzeHome::at(&root);
         home.ensure_layout().unwrap();
@@ -2696,7 +1563,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn add_failure_after_a_confirmed_attachment_leaves_reconcilable_ledger_evidence() {
+    pub(crate) fn add_failure_after_a_confirmed_attachment_leaves_reconcilable_ledger_evidence() {
         let root = temp("partial-add");
         let home = UzeHome::at(&root);
         let integration = PartialIntegration {
@@ -2725,7 +1592,7 @@ mod tests {
     }
 
     #[test]
-    fn remove_is_idempotent_without_claiming_history_for_absent_state() {
+    pub(crate) fn remove_is_idempotent_without_claiming_history_for_absent_state() {
         let root = temp("remove-twice");
         let app = UzeApplication::new(UzeHome::at(&root), vec![Box::new(SymlinkIntegration)]);
         let package = app
@@ -2754,7 +1621,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn multi_mcp_package_has_independent_receipts_through_safe_removal() {
+    pub(crate) fn multi_mcp_package_has_independent_receipts_through_safe_removal() {
         let root = temp("multi-mcp-lifecycle");
         let home = UzeHome::at(&root);
         let app = UzeApplication::new(
@@ -2786,7 +1653,7 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    fn mcp_fixture() -> PathBuf {
+    pub(crate) fn mcp_fixture() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/fixtures/packages/agent-plugin-mcp")
     }
@@ -2794,7 +1661,7 @@ mod tests {
     // --- Marketplace bootstrap: install-only, never silent-update --------
 
     #[test]
-    fn bootstrap_installs_exactly_the_default_policy_and_is_idempotent() {
+    pub(crate) fn bootstrap_installs_exactly_the_default_policy_and_is_idempotent() {
         let root = temp("bootstrap-default");
         let app = UzeApplication::new(UzeHome::at(&root), Vec::new());
 
@@ -2815,7 +1682,7 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_never_mutates_an_already_installed_default_plugin() {
+    pub(crate) fn bootstrap_never_mutates_an_already_installed_default_plugin() {
         let root = temp("bootstrap-no-silent-update");
         let app = UzeApplication::new(UzeHome::at(&root), Vec::new());
         app.ensure_default_plugins().unwrap();
@@ -2840,7 +1707,7 @@ mod tests {
     }
 
     #[test]
-    fn read_only_bootstrap_leaves_store_state_byte_identical_on_repeat() {
+    pub(crate) fn read_only_bootstrap_leaves_store_state_byte_identical_on_repeat() {
         let root = temp("bootstrap-snapshot");
         let home = UzeHome::at(&root);
         let app = UzeApplication::new(home.clone(), Vec::new());
@@ -2860,7 +1727,7 @@ mod tests {
     }
 
     #[test]
-    fn existing_receipts_survive_repeated_bootstrap_unchanged() {
+    pub(crate) fn existing_receipts_survive_repeated_bootstrap_unchanged() {
         let root = temp("bootstrap-receipts");
         let home = UzeHome::at(&root);
         let app = UzeApplication::new(
@@ -2880,7 +1747,7 @@ mod tests {
     }
 
     #[test]
-    fn a_default_plugin_that_would_cross_the_trust_boundary_is_not_installed_silently() {
+    pub(crate) fn a_default_plugin_that_would_cross_the_trust_boundary_is_not_installed_silently() {
         let root = temp("bootstrap-trust");
         let app = UzeApplication::new(UzeHome::at(&root), Vec::new());
 
@@ -2914,7 +1781,7 @@ mod tests {
     }
 
     #[test]
-    fn a_corrupted_stored_copy_reports_unknown_update_status_without_panicking() {
+    pub(crate) fn a_corrupted_stored_copy_reports_unknown_update_status_without_panicking() {
         let root = temp("bootstrap-corrupt");
         let app = UzeApplication::new(UzeHome::at(&root), Vec::new());
         app.ensure_default_plugins().unwrap();
@@ -2936,7 +1803,7 @@ mod tests {
     }
 
     #[test]
-    fn official_embedded_plugin_is_protected_from_remove_but_allows_update() {
+    pub(crate) fn official_embedded_plugin_is_protected_from_remove_but_allows_update() {
         let root = temp("protected-update");
         let home = UzeHome::at(&root);
         let app = UzeApplication::new(home, Vec::new());
@@ -2967,7 +1834,7 @@ mod tests {
     }
 
     #[test]
-    fn local_spoof_named_uze_is_not_protected() {
+    pub(crate) fn local_spoof_named_uze_is_not_protected() {
         let root = temp("spoof-not-protected");
         let spoof_src = temp("spoof-src-uze");
         fs::create_dir_all(spoof_src.join("skills/spoof")).unwrap();
