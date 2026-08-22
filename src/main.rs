@@ -27,92 +27,73 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Install one local Agent Plugins package and expose it where safe.
+    /// Install a local plugin package
     Add {
         source: String,
-        /// Authorize any executable capability the package declares without
-        /// prompting. Named for what it grants rather than as a generic
-        /// `--yes`, because it answers one specific security question.
+        /// Authorize executable capabilities
         #[arg(long)]
         trust: bool,
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
-    /// List locally installed plugins.
+    /// List installed plugins
     List {
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
-    /// Inspect one installed plugin and its delivery facts.
+    /// Inspect a plugin's delivery
     Inspect {
         plugin: String,
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
-    /// Prepare detected harness integrations. For a harness with an
-    /// EXPERIMENTAL runtime-integration story (currently Claude Code only),
-    /// this also creates/refreshes its PATH shim
-    /// (`~/.uze/shims/<name> -> uze`) as an ordinary part of the same
-    /// command — no separate flag. This is `RUNTIME INFRASTRUCTURE`,
-    /// alongside and not a replacement for the existing persistent
-    /// `CLAUDE.md`/`GEMINI.md` bridge `context reconcile` still writes.
-    /// Removing the symlink UZE printed is how to turn it back off.
+    /// Setup harness integrations
     Setup { harness: Option<String> },
-    /// Safely detach a plugin only when its receipts still match.
+    /// Remove a plugin
     Remove {
         plugin: String,
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
-    /// Re-resolve an installed plugin's source and replace it — always
-    /// explicit. Nothing installs a newer revision on its own; `doctor`/
-    /// `list`/`inspect` only ever report that one is available.
+    /// Update a plugin to latest version
     Update {
         plugin: String,
-        /// Authorize any *newly* introduced executable capability without
-        /// prompting. Same meaning as `add --trust`.
+        /// Authorize new executable capabilities
         #[arg(long)]
         trust: bool,
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
-    /// Deterministic Store, harness, and attachment diagnostics.
+    /// Run diagnostics
     Doctor {
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
-    /// Short, project-scoped health summary: is this project's context
-    /// portable, and does anything need attention? For installation/
-    /// environment health independent of any project, see `doctor`.
+    /// Show project health status
     Status {
         path: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
-    /// Observe and reconcile one project's shared instructions context
-    /// (AGENTS.md and its harness bridges). Entirely separate from package
-    /// installation: `uze add`/`uze remove` never touch a project's files,
-    /// and `uze context` never touches the installed package set.
+    /// Manage project context (AGENTS.md)
     Context {
         #[command(subcommand)]
         action: ContextAction,
     },
-    /// Manage marketplace discovery sources (add/list/remove).
+    /// Manage marketplace sources
     Marketplace {
         #[command(subcommand)]
         action: MarketplaceAction,
     },
-    /// Manage plugins via marketplace (install/list/remove/update).
+    /// Manage plugins via marketplace
     Plugin {
         #[command(subcommand)]
         action: PluginAction,
     },
-    /// Install the project's desired agent environment from `agents.lock`.
-    /// On a fresh machine, reconstructs the environment without requiring
-    /// prior `uze marketplace add` setup.
+    /// Install project environment from agents.lock
     Install {
         path: Option<PathBuf>,
-        /// Authorize any executable capability without prompting.
+        /// Authorize executable capabilities
         #[arg(long)]
         trust: bool,
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
@@ -206,9 +187,15 @@ fn main() {
         shim::run(&name);
     }
 
+    // Check for --help flag and render custom colored help
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() == 2 && (args[1] == "--help" || args[1] == "-h") {
+        print_colored_help();
+        return;
+    }
+
     // Check for project shorthand `uze <plugin>@<marketplace>` before clap parsing.
     // If the first argument contains `@` and is not a known subcommand, treat it as shorthand.
-    let args: Vec<String> = std::env::args().collect();
     if args.len() >= 2 {
         let first_arg = &args[1];
         if first_arg.contains('@') && !first_arg.starts_with('-') {
@@ -226,6 +213,66 @@ fn main() {
         eprintln!("uze: {error}");
         std::process::exit(1);
     }
+}
+
+fn print_colored_help() {
+    let cyan = "\x1b[36m";
+    let green = "\x1b[32m";
+    let yellow = "\x1b[33m";
+    let reset = "\x1b[0m";
+    let bold = "\x1b[1m";
+
+    println!("{}UZE{} - Agent Plugin Environment Manager", bold, reset);
+    println!();
+    println!("{}Usage:{} uze <command> [options]", bold, reset);
+    println!();
+    println!("{}Commands:{}", bold, reset);
+    println!(
+        "  {}add{}        Install a local plugin package",
+        cyan, reset
+    );
+    println!("  {}list{}       List installed plugins", cyan, reset);
+    println!("  {}inspect{}    Inspect a plugin's delivery", cyan, reset);
+    println!("  {}setup{}      Setup harness integrations", cyan, reset);
+    println!("  {}remove{}     Remove a plugin", cyan, reset);
+    println!(
+        "  {}update{}     Update a plugin to latest version",
+        cyan, reset
+    );
+    println!("  {}doctor{}     Run diagnostics", cyan, reset);
+    println!("  {}status{}     Show project health status", cyan, reset);
+    println!(
+        "  {}context{}    Manage project context (AGENTS.md)",
+        cyan, reset
+    );
+    println!("  {}marketplace{} Manage marketplace sources", cyan, reset);
+    println!(
+        "  {}plugin{}     Manage plugins via marketplace",
+        cyan, reset
+    );
+    println!(
+        "  {}install{}    Install project environment from agents.lock",
+        cyan, reset
+    );
+    println!("  {}help{}       Print help message", cyan, reset);
+    println!();
+    println!("{}Options:{}", bold, reset);
+    println!("  {}-h, --help{}     Print help", green, reset);
+    println!("  {}-V, --version{}  Print version", green, reset);
+    println!();
+    println!("{}Quick Start:{}", bold, reset);
+    println!(
+        "  {}uze flow@ai{}         Add flow plugin from ai marketplace",
+        yellow, reset
+    );
+    println!(
+        "  {}uze install{}         Install project environment",
+        yellow, reset
+    );
+    println!(
+        "  {}uze doctor{}          Check system health",
+        yellow, reset
+    );
 }
 
 fn run_project_shorthand(args: &[String]) -> Result<()> {
