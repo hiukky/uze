@@ -37,6 +37,7 @@ serde_json = "1"
 thiserror = "2"
 ratatui = "0.30"
 crossterm = "0.29"
+indicatif = "0.17"
 
 # MCP fixtures and the local playground server are test/development support;
 # neither is linked into UZE's application/core crates.

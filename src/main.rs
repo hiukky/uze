@@ -1,5 +1,6 @@
 //! Thin CLI presentation over `UzeApplication`.
 
+mod progress;
 mod shim;
 
 use std::{io::IsTerminal, path::PathBuf};
@@ -368,36 +369,45 @@ fn run(cli: Cli) -> Result<()> {
             format,
         } => {
             let authority = trust_authority(trust);
-            let report = app.add_plugin(parse_source(&source), authority.as_ref())?;
-            match format {
-                OutputFormat::Text => {
-                    println!("Installed plugin: {}", report.plugin.id);
-                    println!("Store path: {}", report.plugin.store_path.display());
-                    for (harness, plan) in &report.package_plans {
-                        println!(
-                            "Package delivery to {harness}: {:?} ({} components)",
-                            plan.route,
-                            plan.provided_resource_identities.len()
-                        );
-                    }
-                    for attachment in &report.attachments {
-                        println!(
-                            "Attached to {}: {}",
-                            attachment.integration,
-                            attachment.location.display()
-                        );
-                    }
-                    for publication in &report.publications {
-                        if let Some(error) = &publication.error {
-                            println!(
-                                "Warning: {} could not publish its package view: {error}\n  \
-                                 The package is installed. Re-run `uze setup {}` to rebuild it.",
-                                publication.integration, publication.integration
-                            );
+            let spinner = progress::spinner(&format!("Installing plugin from {source}..."));
+            match app.add_plugin(parse_source(&source), authority.as_ref()) {
+                Ok(report) => {
+                    spinner.finish_with_message("Plugin installed");
+                    match format {
+                        OutputFormat::Text => {
+                            progress::success(&format!("Installed plugin: {}", report.plugin.id));
+                            println!("  Store path: {}", report.plugin.store_path.display());
+                            for (harness, plan) in &report.package_plans {
+                                println!(
+                                    "  Package delivery to {harness}: {:?} ({} components)",
+                                    plan.route,
+                                    plan.provided_resource_identities.len()
+                                );
+                            }
+                            for attachment in &report.attachments {
+                                println!(
+                                    "  Attached to {}: {}",
+                                    attachment.integration,
+                                    attachment.location.display()
+                                );
+                            }
+                            for publication in &report.publications {
+                                if let Some(error) = &publication.error {
+                                    progress::warn(&format!(
+                                        "{} could not publish: {error}",
+                                        publication.integration
+                                    ));
+                                }
+                            }
                         }
+                        OutputFormat::Json => print_json(&report),
                     }
                 }
-                OutputFormat::Json => print_json(&report),
+                Err(e) => {
+                    spinner.finish_with_message("Failed");
+                    progress::error(&format!("Failed to install plugin: {e}"));
+                    return Err(e);
+                }
             }
         }
         Command::List { format } => {
@@ -462,24 +472,43 @@ fn run(cli: Cli) -> Result<()> {
                 path: std::path::PathBuf::from("."),
                 source: e,
             })?;
-            let project_report = app.remove_project_plugin(&plugin, &current_dir)?;
-
-            match project_report {
-                uze::application::RemoveProjectPluginReport::Removed { .. } => {
-                    // Successfully removed from project lock
-                    match format {
-                        OutputFormat::Text => println!("Removed {plugin} from project"),
-                        OutputFormat::Json => print_json(&project_report),
+            let spinner = progress::spinner(&format!("Removing {plugin}..."));
+            match app.remove_project_plugin(&plugin, &current_dir) {
+                Ok(project_report) => {
+                    match project_report {
+                        uze::application::RemoveProjectPluginReport::Removed { .. } => {
+                            spinner.finish_with_message("Removed from project");
+                            match format {
+                                OutputFormat::Text => {
+                                    progress::success(&format!("Removed {plugin} from project"));
+                                }
+                                OutputFormat::Json => print_json(&project_report),
+                            }
+                        }
+                        uze::application::RemoveProjectPluginReport::NoLock
+                        | uze::application::RemoveProjectPluginReport::NotInLock { .. } => {
+                            // No lock or plugin not in lock, fallback to global remove
+                            match app.remove_plugin(&plugin) {
+                                Ok(report) => {
+                                    spinner.finish_with_message("Plugin removed");
+                                    match format {
+                                        OutputFormat::Text => print!("{}", render_remove(&report)),
+                                        OutputFormat::Json => print_json(&report),
+                                    }
+                                }
+                                Err(e) => {
+                                    spinner.finish_with_message("Failed");
+                                    progress::error(&format!("Failed to remove plugin: {e}"));
+                                    return Err(e);
+                                }
+                            }
+                        }
                     }
                 }
-                uze::application::RemoveProjectPluginReport::NoLock
-                | uze::application::RemoveProjectPluginReport::NotInLock { .. } => {
-                    // No lock or plugin not in lock, fallback to global remove
-                    let report = app.remove_plugin(&plugin)?;
-                    match format {
-                        OutputFormat::Text => print!("{}", render_remove(&report)),
-                        OutputFormat::Json => print_json(&report),
-                    }
+                Err(e) => {
+                    spinner.finish_with_message("Failed");
+                    progress::error(&format!("Failed to remove {plugin}: {e}"));
+                    return Err(e);
                 }
             }
         }
@@ -489,14 +518,26 @@ fn run(cli: Cli) -> Result<()> {
             format,
         } => {
             let authority = trust_authority(trust);
-            let report = app.update_plugin(&plugin, authority.as_ref())?;
-            match format {
-                OutputFormat::Text => print!("{}", render_update(&report)),
-                OutputFormat::Json => print_json(&report),
+            let spinner = progress::spinner(&format!("Updating {plugin}..."));
+            match app.update_plugin(&plugin, authority.as_ref()) {
+                Ok(report) => {
+                    spinner.finish_with_message("Plugin updated");
+                    match format {
+                        OutputFormat::Text => print!("{}", render_update(&report)),
+                        OutputFormat::Json => print_json(&report),
+                    }
+                }
+                Err(e) => {
+                    spinner.finish_with_message("Failed");
+                    progress::error(&format!("Failed to update {plugin}: {e}"));
+                    return Err(e);
+                }
             }
         }
         Command::Doctor { format } => {
+            let spinner = progress::spinner("Running diagnostics...");
             let report = app.doctor();
+            spinner.finish_with_message("Diagnostics complete");
             match format {
                 OutputFormat::Text => print!("{}", render_doctor(&report)),
                 OutputFormat::Json => print_json(&report),
@@ -534,8 +575,18 @@ fn run(cli: Cli) -> Result<()> {
         },
         Command::Marketplace { action } => match action {
             MarketplaceAction::Add { source } => {
-                app.marketplace_add(&source)?;
-                println!("Added marketplace from {source}");
+                let spinner = progress::spinner("Adding marketplace...");
+                match app.marketplace_add(&source) {
+                    Ok(()) => {
+                        spinner.finish_with_message("Marketplace added");
+                        progress::success(&format!("Added marketplace from {source}"));
+                    }
+                    Err(e) => {
+                        spinner.finish_with_message("Failed");
+                        progress::error(&format!("Failed to add marketplace: {e}"));
+                        return Err(e);
+                    }
+                }
             }
             MarketplaceAction::List { format } => {
                 let mps = app.marketplace_list()?;
@@ -561,13 +612,26 @@ fn run(cli: Cli) -> Result<()> {
                 format,
             } => {
                 let authority = trust_authority(trust);
-                let report = app.plugin_install(&plugin, authority.as_ref())?;
-                match format {
-                    OutputFormat::Text => {
-                        println!("Installed plugin: {}", report.plugin.id);
-                        println!("Store path: {}", report.plugin.store_path.display());
+                let spinner = progress::spinner(&format!("Installing plugin {plugin}..."));
+                match app.plugin_install(&plugin, authority.as_ref()) {
+                    Ok(report) => {
+                        spinner.finish_with_message("Plugin installed");
+                        match format {
+                            OutputFormat::Text => {
+                                progress::success(&format!(
+                                    "Installed plugin: {}",
+                                    report.plugin.id
+                                ));
+                                println!("  Store path: {}", report.plugin.store_path.display());
+                            }
+                            OutputFormat::Json => print_json(&report),
+                        }
                     }
-                    OutputFormat::Json => print_json(&report),
+                    Err(e) => {
+                        spinner.finish_with_message("Failed");
+                        progress::error(&format!("Failed to install plugin: {e}"));
+                        return Err(e);
+                    }
                 }
             }
             PluginAction::List { format } => {
@@ -608,11 +672,20 @@ fn run(cli: Cli) -> Result<()> {
             format,
         } => {
             let authority = trust_authority(trust);
-            let report =
-                app.install_project_environment(&context_path(path), authority.as_ref())?;
-            match format {
-                OutputFormat::Text => print!("{}", render_install(&report)),
-                OutputFormat::Json => print_json(&report),
+            let spinner = progress::spinner("Installing project environment...");
+            match app.install_project_environment(&context_path(path), authority.as_ref()) {
+                Ok(report) => {
+                    spinner.finish_with_message("Environment installed");
+                    match format {
+                        OutputFormat::Text => print!("{}", render_install(&report)),
+                        OutputFormat::Json => print_json(&report),
+                    }
+                }
+                Err(e) => {
+                    spinner.finish_with_message("Failed");
+                    progress::error(&format!("Failed to install environment: {e}"));
+                    return Err(e);
+                }
             }
         }
     }
