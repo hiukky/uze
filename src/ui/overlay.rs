@@ -63,12 +63,19 @@ impl TuiModel {
                 self.close_overlay();
                 Intent::None
             }
-            (Overlay::ConfirmInstall(name), KeyCode::Char('y') | KeyCode::Enter) => {
-                let name = name.clone();
+            (
+                Overlay::ConfirmInstall { name, marketplace },
+                KeyCode::Char('y') | KeyCode::Enter,
+            ) => {
+                let (name, marketplace) = (name.clone(), marketplace.clone());
                 self.close_overlay();
-                Intent::Install(name, TrustGrant::Ask)
+                Intent::Install {
+                    name,
+                    marketplace,
+                    grant: TrustGrant::Ask,
+                }
             }
-            (Overlay::ConfirmInstall(_), _) => {
+            (Overlay::ConfirmInstall { .. }, _) => {
                 self.close_overlay();
                 Intent::None
             }
@@ -84,11 +91,39 @@ impl TuiModel {
                 self.close_overlay();
                 Intent::None
             }
+            (Overlay::AddMarketplace(input), KeyCode::Enter) => {
+                let source = input.trim().to_owned();
+                self.close_overlay();
+                if source.is_empty() {
+                    Intent::None
+                } else {
+                    Intent::AddMarketplace(source)
+                }
+            }
+            (Overlay::AddMarketplace(_), KeyCode::Esc) => {
+                self.close_overlay();
+                Intent::None
+            }
+            (Overlay::AddMarketplace(input), KeyCode::Backspace) => {
+                let mut input = input.clone();
+                input.pop();
+                self.overlay = Overlay::AddMarketplace(input);
+                Intent::None
+            }
+            (Overlay::AddMarketplace(input), KeyCode::Char(c)) => {
+                let mut input = input.clone();
+                input.push(c);
+                self.overlay = Overlay::AddMarketplace(input);
+                Intent::None
+            }
+            (Overlay::AddMarketplace(_), _) => Intent::None,
             (Overlay::TrustRequired { retry, .. }, KeyCode::Char('y') | KeyCode::Enter) => {
                 let intent = match retry {
-                    TrustedRetry::Install(name) => {
-                        Intent::Install(name.clone(), TrustGrant::Granted)
-                    }
+                    TrustedRetry::Install { name, marketplace } => Intent::Install {
+                        name: name.clone(),
+                        marketplace: marketplace.clone(),
+                        grant: TrustGrant::Granted,
+                    },
                     TrustedRetry::Update(id) => Intent::Update(id.clone(), TrustGrant::Granted),
                 };
                 self.close_overlay();
@@ -119,10 +154,12 @@ pub(crate) fn render_help(frame: &mut ratatui::Frame<'_>, area: Rect) {
             Line::from("Enter        Open / Inspect"),
             Line::from("Mouse click  Select sidebar route or list row"),
             Line::from("Scroll       Move selection"),
-            Line::from("r            Remove plugin (Plugins)"),
+            Line::from("r            Remove plugin (Plugins) · Refresh elsewhere"),
             Line::from("u            Update plugin (Plugins, when available)"),
             Line::from("i            Install plugin (Marketplace)"),
-            Line::from("a / p        Analyze / Apply (Context)"),
+            Line::from("/            Filter marketplace list"),
+            Line::from("a            Add marketplace · Analyze (Context)"),
+            Line::from("p            Apply (Context)"),
             Line::from("s            Setup harness (Harnesses)"),
             Line::from("g            Refresh"),
             Line::from("q            Quit"),
@@ -288,7 +325,12 @@ pub(crate) fn render_confirm_update(frame: &mut ratatui::Frame<'_>, area: Rect, 
     );
 }
 
-pub(crate) fn render_confirm_install(frame: &mut ratatui::Frame<'_>, area: Rect, name: &str) {
+pub(crate) fn render_confirm_install(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    name: &str,
+    marketplace: &str,
+) {
     render_modal(
         frame,
         area,
@@ -300,7 +342,9 @@ pub(crate) fn render_confirm_install(frame: &mut ratatui::Frame<'_>, area: Rect,
                     name.to_owned(),
                     Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
                 ),
-                Span::raw(" from the official marketplace?"),
+                Span::raw(" from "),
+                Span::styled(marketplace.to_owned(), Style::default().fg(MUTED)),
+                Span::raw("?"),
             ]),
             Line::from(Span::styled(
                 "enter/y install · esc/n cancel",
@@ -308,6 +352,62 @@ pub(crate) fn render_confirm_install(frame: &mut ratatui::Frame<'_>, area: Rect,
             )),
         ],
         ACCENT,
+    );
+}
+
+pub(crate) fn render_add_marketplace(frame: &mut ratatui::Frame<'_>, area: Rect, input: &str) {
+    let width = 60.min(area.width.saturating_sub(4));
+    let height = 7.min(area.height.saturating_sub(2));
+    let popup = Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    );
+    frame.render_widget(Clear, popup);
+    let block = panel_block(" Add marketplace ")
+        .border_style(Style::default().fg(ACCENT))
+        .padding(Padding::new(1, 1, 1, 0));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .split(inner);
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            "Local path or https://... source",
+            Style::default().fg(MUTED),
+        )),
+        rows[0],
+    );
+    let field = Line::from(vec![
+        Span::raw("› "),
+        Span::styled(
+            input.to_owned(),
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("▏", Style::default().fg(ACCENT)),
+    ]);
+    frame.render_widget(
+        Paragraph::new(field).block(
+            ratatui::widgets::Block::default()
+                .borders(ratatui::widgets::Borders::BOTTOM)
+                .border_style(Style::default().fg(MUTED)),
+        ),
+        rows[1],
+    );
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            "enter add · esc cancel",
+            Style::default().fg(MUTED),
+        )),
+        rows[3],
     );
 }
 

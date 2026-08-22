@@ -27,11 +27,19 @@ pub(crate) enum Intent {
     Quit,
     Refresh,
     InspectPlugin(String),
-    InspectMarketplacePlugin(String),
+    InspectMarketplacePlugin {
+        name: String,
+        marketplace: String,
+    },
     Remove(String),
     Update(String, TrustGrant),
-    Install(String, TrustGrant),
+    Install {
+        name: String,
+        marketplace: String,
+        grant: TrustGrant,
+    },
     Setup(String),
+    AddMarketplace(String),
     ContextAnalyze(PathBuf),
     ContextApply(PathBuf),
 }
@@ -72,12 +80,12 @@ pub(crate) fn dispatch(
                 let _ = sender.send(WorkerResult::PluginInspected(result));
             });
         }
-        Intent::InspectMarketplacePlugin(name) => {
+        Intent::InspectMarketplacePlugin { name, marketplace } => {
             model.status = Status::Working(format!("Inspecting {name}…"));
             let (home, sender) = (home.clone(), sender.clone());
             thread::spawn(move || {
                 let result = tui_application(home)
-                    .and_then(|app| app.inspect_marketplace_plugin(&name))
+                    .and_then(|app| app.inspect_marketplace_plugin(&marketplace, &name))
                     .map_err(|error| error.to_string());
                 let _ = sender.send(WorkerResult::MarketplaceInspected(result));
             });
@@ -104,9 +112,15 @@ pub(crate) fn dispatch(
                 TrustedRetry::Update(retry_id),
             );
         }
-        Intent::Install(name, grant) => {
+        Intent::Install {
+            name,
+            marketplace,
+            grant,
+        } => {
             model.status = Status::Working(format!("Installing {name}…"));
             let retry_name = name.clone();
+            let retry_marketplace = marketplace.clone();
+            let spec = format!("{name}@{marketplace}");
             spawn_trust_sensitive(
                 home.clone(),
                 sender.clone(),
@@ -114,10 +128,13 @@ pub(crate) fn dispatch(
                 grant,
                 name.clone(),
                 move |app, authority| {
-                    app.install_from_marketplace(&name, authority)
+                    app.plugin_install(&spec, authority)
                         .map(|report| format!("Installed {}", report.plugin.id))
                 },
-                TrustedRetry::Install(retry_name),
+                TrustedRetry::Install {
+                    name: retry_name,
+                    marketplace: retry_marketplace,
+                },
             );
         }
         Intent::Setup(harness) => {
@@ -139,6 +156,23 @@ pub(crate) fn dispatch(
                                 }
                             })
                             .unwrap_or_else(|| format!("{harness} setup attempted"))
+                    })
+                },
+            );
+        }
+        Intent::AddMarketplace(source) => {
+            model.status = Status::Working(format!("Adding marketplace from {source}…"));
+            spawn_mutation(
+                home.clone(),
+                sender.clone(),
+                model.context_root.clone(),
+                move |app| {
+                    app.marketplace_add(&source).map(|added| {
+                        if added {
+                            format!("Added marketplace from {source}")
+                        } else {
+                            format!("Marketplace from {source} is already added")
+                        }
                     })
                 },
             );
@@ -200,18 +234,14 @@ fn load_refresh_data(home: UzeHome, context_root: &std::path::Path) -> Result<Re
     let app = tui_application(home)?;
     let plugins = app.list_plugins()?;
     let doctor = app.doctor();
-    let marketplaces = app.list_marketplaces()?;
+    let marketplace_count = app.marketplace_list()?.len();
     let marketplace_plugins = app.list_marketplace_plugins()?;
-    let marketplace_name = marketplaces
-        .first()
-        .map(|m| m.name.clone())
-        .unwrap_or_default();
     let context_status = app.context_inspect(context_root).ok();
     Ok(RefreshData {
         plugins,
         doctor: Some(doctor),
         marketplace_plugins,
-        marketplace_name,
+        marketplace_count,
         context_status,
     })
 }

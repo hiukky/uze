@@ -43,12 +43,17 @@ pub(crate) fn render_overview(frame: &mut ratatui::Frame<'_>, area: Rect, model:
                 " plugins installed"
             }),
         ]),
-        Line::from(vec![Span::raw(if model.marketplace_name.is_empty() {
+        Line::from(vec![Span::raw(if model.marketplace_count == 0 {
             "Marketplace loading…".to_owned()
         } else {
             format!(
-                "{} marketplace ready ({} plugins)",
-                model.marketplace_name,
+                "{} marketplace{} ready ({} plugins)",
+                model.marketplace_count,
+                if model.marketplace_count == 1 {
+                    ""
+                } else {
+                    "s"
+                },
                 model.marketplace_plugins.len()
             )
         })]),

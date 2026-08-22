@@ -9,6 +9,13 @@ pub(crate) enum Hit {
     Route(Route),
     PluginRow(usize),
     MarketplaceRow(usize),
+    /// A marketplace group's header row — clicking it expands/collapses
+    /// that group instead of selecting a plugin.
+    MarketplaceGroupToggle(String),
+    /// The external-link glyph on a plugin detail's Source card — jumps
+    /// list selection to that marketplace's header, expanding it first if
+    /// it's currently collapsed.
+    JumpToMarketplace(String),
     HarnessRow(usize),
 }
 
@@ -48,6 +55,24 @@ impl TuiModel {
                 self.marketplace_selected = index;
                 self.focus = Focus::Content;
                 self.open_or_act()
+            }
+            Hit::MarketplaceGroupToggle(marketplace) => {
+                self.marketplace_toggle_group(&marketplace);
+                self.focus = Focus::Content;
+                Intent::None
+            }
+            Hit::JumpToMarketplace(marketplace) => {
+                self.collapsed_marketplaces.remove(&marketplace);
+                if let Some(position) = self
+                    .marketplace_visible_indices()
+                    .iter()
+                    .position(|&raw| self.marketplace_plugins[raw].marketplace == marketplace)
+                {
+                    self.marketplace_selected = position;
+                }
+                self.set_route(Route::Marketplace);
+                self.focus = Focus::Content;
+                Intent::None
             }
             Hit::HarnessRow(index) => {
                 self.harnesses_selected = index;

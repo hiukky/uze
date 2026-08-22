@@ -1169,6 +1169,18 @@ pub struct DoctorReport {
     pub provisioning_state_error: Option<String>,
 }
 
+/// The friendliest name available for a resource in a `PluginCapability`
+/// read model: a Skill's own directory name or a named MCP server's name
+/// (`Resource::logical_capability_name`) when one exists, falling back to
+/// `Resource::name` (typically a bare file name like `SKILL.md`) otherwise.
+/// Display-only — never used for exposure naming, which stays entirely
+/// `IntegrationPort::exposure_name_candidates`'s decision.
+pub(crate) fn capability_display_name(resource: &uze_core::Resource) -> String {
+    resource
+        .logical_capability_name()
+        .unwrap_or_else(|| resource.name())
+}
+
 pub(crate) fn managed_state(report: &ReconciliationReport) -> ManagedStateSummary {
     let mut summary = ManagedStateSummary {
         ledger_error: report.ledger_error.clone(),

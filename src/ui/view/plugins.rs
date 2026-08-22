@@ -13,7 +13,10 @@ use crate::application::DoctorReport;
 
 use super::super::hit::Hit;
 use super::super::model::TuiModel;
-use super::super::{ACCENT, MUTED, SUCCESS, WARNING, health_style, panel_block, route_style};
+use super::super::{
+    ACCENT, DANGER, MUTED, SUCCESS, WARNING, health_style, icon, panel_block, route_style,
+};
+use super::{push_capability_table, render_status_card};
 
 pub(crate) fn render_plugins(
     frame: &mut ratatui::Frame<'_>,
@@ -45,11 +48,23 @@ pub(crate) fn render_plugins(
             inner,
         );
     } else {
+        // Fixed column widths, mirroring the Marketplace list: every column
+        // pads to its own widest value across the panel, so Official/Update
+        // available/health line up instead of drifting with each plugin
+        // id's length.
+        let id_width = model
+            .plugins
+            .iter()
+            .map(|plugin| plugin.id.chars().count())
+            .max()
+            .unwrap_or(0);
         let items: Vec<ListItem> = model
             .plugins
             .iter()
             .enumerate()
-            .map(|(index, plugin)| plugin_row(plugin, index == model.plugins_selected, model))
+            .map(|(index, plugin)| {
+                plugin_row(plugin, index == model.plugins_selected, model, id_width)
+            })
             .collect();
         frame.render_widget(List::new(items), inner);
         for index in 0..model.plugins.len() {
@@ -62,7 +77,17 @@ pub(crate) fn render_plugins(
     render_plugin_detail(frame, columns[1], model);
 }
 
-fn plugin_row<'a>(plugin: &'a PluginSummary, selected: bool, model: &TuiModel) -> ListItem<'a> {
+/// Widest badge text in each fixed slot, so a shorter/absent badge still
+/// reserves its column's width and the next one doesn't drift.
+const OFFICIAL_WIDTH: usize = "Official".len();
+const UPDATE_WIDTH: usize = "Update available".len();
+
+fn plugin_row<'a>(
+    plugin: &'a PluginSummary,
+    selected: bool,
+    model: &TuiModel,
+    id_width: usize,
+) -> ListItem<'a> {
     let marker = if selected { "› " } else { "  " };
     let style = if selected {
         Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
@@ -70,18 +95,30 @@ fn plugin_row<'a>(plugin: &'a PluginSummary, selected: bool, model: &TuiModel) -
         Style::default()
     };
     let is_official = plugin.source.starts_with("embedded:");
-    let mut spans = vec![Span::styled(marker, style), Span::styled(&plugin.id, style)];
-    if is_official {
-        spans.push(Span::styled("  Official", Style::default().fg(ACCENT)));
-    }
-    if plugin.update_available == Some(true) {
-        spans.push(Span::styled(
-            "  Update available",
-            Style::default().fg(WARNING),
-        ));
-    }
+    let id = format!("{:<id_width$}", plugin.id);
+    let official = format!(
+        "{:<OFFICIAL_WIDTH$}",
+        if is_official { "Official" } else { "" }
+    );
+    let update = format!(
+        "{:<UPDATE_WIDTH$}",
+        if plugin.update_available == Some(true) {
+            "Update available"
+        } else {
+            ""
+        }
+    );
     let health = plugin_health(model.doctor.as_ref(), &plugin.id);
-    spans.push(Span::styled(format!("  {health}"), health_style(health)));
+    let spans = vec![
+        Span::styled(marker, style),
+        Span::styled(id, style),
+        Span::raw("  "),
+        Span::styled(official, Style::default().fg(ACCENT)),
+        Span::raw("  "),
+        Span::styled(update, Style::default().fg(WARNING)),
+        Span::raw("  "),
+        Span::styled(health, health_style(health)),
+    ];
     ListItem::new(Line::from(spans))
 }
 
@@ -90,12 +127,23 @@ fn render_plugin_detail(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiM
         frame.render_widget(Paragraph::new("").block(panel_block(" Plugin ")), area);
         return;
     };
+    // Status card pinned to the bottom, main content scrolling above it —
+    // mirrors the Marketplace detail pane's layout.
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(6), Constraint::Length(4)])
+        .split(area);
+
     let is_official = plugin.source.starts_with("embedded:");
     let mut lines = vec![
-        Line::from(Span::styled(
-            &plugin.id,
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-        )),
+        Line::from(vec![
+            Span::styled(format!("{} ", icon::PLUGINS), Style::default()),
+            Span::styled(
+                &plugin.id,
+                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(""),
         Line::from(Span::styled(
             if is_official {
                 "Official".to_owned()
@@ -121,6 +169,12 @@ fn render_plugin_detail(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiM
     if let Some(inspection) = &model.plugin_detail
         && inspection.plugin.id == plugin.id
     {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "Resources",
+            Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
+        )));
+        push_capability_table(&mut lines, &inspection.capabilities);
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             "Available in",
@@ -168,8 +222,30 @@ fn render_plugin_detail(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiM
         Paragraph::new(lines)
             .block(panel_block(" Selected plugin "))
             .wrap(Wrap { trim: true }),
-        area,
+        sections[0],
     );
+
+    let health = plugin_health(model.doctor.as_ref(), &plugin.id);
+    let (color, headline, subtitle) = match (health, plugin.update_available) {
+        (_, Some(true)) => (
+            WARNING,
+            "Update available",
+            "A newer marketplace revision is ready",
+        ),
+        ("ready", _) => (SUCCESS, "Installed", "Ready to use in your projects"),
+        ("missing", _) => (
+            WARNING,
+            "Missing",
+            "Not attached to any detected harness yet",
+        ),
+        ("needs attention", _) => (
+            DANGER,
+            "Needs attention",
+            "Drifted, conflicting, or blocked — see Doctor",
+        ),
+        _ => (MUTED, "Unknown", "No health record for this plugin yet"),
+    };
+    render_status_card(frame, sections[1], color, headline, subtitle);
 }
 
 fn exposure_route_label(plan: &crate::exposure::ExposurePlan) -> &'static str {

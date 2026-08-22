@@ -18,6 +18,9 @@ impl TuiModel {
         if self.overlay != Overlay::None {
             return self.overlay_key(key);
         }
+        if self.filtering {
+            return self.filter_key(key);
+        }
         match key.code {
             KeyCode::Char('?') => {
                 self.overlay = Overlay::Help;
@@ -97,6 +100,13 @@ impl TuiModel {
                 }
                 Intent::None
             }
+            // Global refresh alias outside Plugins, where `r` already means
+            // remove — `g`/F5 keep working everywhere too.
+            KeyCode::Char('r') => Intent::Refresh,
+            KeyCode::Char('/') if self.route == Route::Marketplace => {
+                self.filtering = true;
+                Intent::None
+            }
             KeyCode::Char('u') if self.route == Route::Plugins => {
                 if let Some(id) = self
                     .selected_plugin()
@@ -109,12 +119,12 @@ impl TuiModel {
                 Intent::None
             }
             KeyCode::Char('i') if self.route == Route::Marketplace => {
-                if let Some(name) = self
+                if let Some((name, marketplace)) = self
                     .selected_marketplace_plugin()
                     .filter(|plugin| !plugin.installed)
-                    .map(|plugin| plugin.name.clone())
+                    .map(|plugin| (plugin.name.clone(), plugin.marketplace.clone()))
                 {
-                    self.overlay = Overlay::ConfirmInstall(name);
+                    self.overlay = Overlay::ConfirmInstall { name, marketplace };
                     self.focus = Focus::Overlay;
                 }
                 Intent::None
@@ -126,6 +136,13 @@ impl TuiModel {
             }
             KeyCode::Char('a') if self.route == Route::Context => {
                 Intent::ContextAnalyze(self.context_root.clone())
+            }
+            // Global "add marketplace" everywhere else — Context keeps `a`
+            // for analyze above, since that arm is matched first.
+            KeyCode::Char('a') => {
+                self.overlay = Overlay::AddMarketplace(String::new());
+                self.focus = Focus::Overlay;
+                Intent::None
             }
             KeyCode::Char('p') if self.route == Route::Context => {
                 if self
@@ -152,8 +169,9 @@ impl TuiModel {
                 .map_or(Intent::None, |p| Intent::InspectPlugin(p.id.clone())),
             Route::Marketplace => self
                 .selected_marketplace_plugin()
-                .map_or(Intent::None, |p| {
-                    Intent::InspectMarketplacePlugin(p.name.clone())
+                .map_or(Intent::None, |p| Intent::InspectMarketplacePlugin {
+                    name: p.name.clone(),
+                    marketplace: p.marketplace.clone(),
                 }),
             _ => Intent::None,
         }

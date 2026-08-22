@@ -52,7 +52,7 @@ impl UzeApplication {
                 .iter()
                 .map(|resource| PluginCapability {
                     identity: resource.identity(),
-                    name: resource.name(),
+                    name: capability_display_name(resource),
                     kind: resource.capability.kind,
                 })
                 .collect(),

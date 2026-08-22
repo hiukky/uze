@@ -76,15 +76,47 @@ fn tui_application(home: UzeHome) -> Result<UzeApplication> {
     UzeApplication::from_env_with_runner(home, Box::new(SilentProcessRunner))
 }
 
-// Compact, low-chrome palette. The terminal's own background stays
-// authoritative; these colors establish hierarchy and make real lifecycle
-// states legible at a glance — not a "dashboard 2019" full-color treatment.
-const ACCENT: Color = Color::Cyan;
-const MUTED: Color = Color::DarkGray;
-const SUCCESS: Color = Color::Green;
-const WARNING: Color = Color::Yellow;
-const DANGER: Color = Color::Red;
-const PANEL: Color = Color::DarkGray;
+// Compact, low-chrome, deliberately desaturated palette. Full-saturation
+// ANSI Cyan/Green/Yellow/Red read as a generic "AI product" look and fight
+// whatever theme the terminal is already set to; these are toned down —
+// closer to the terminal's own default foreground with a hint of hue —
+// so real lifecycle states stay legible without shouting over the theme.
+const ACCENT: Color = Color::Rgb(135, 155, 175);
+/// ANSI `DarkGray` (bright-black, palette index 8) reads as near-invisible
+/// against a true-black terminal background in many color schemes — this
+/// is a genuine mid-gray instead, so secondary text stays legible without
+/// competing with primary text.
+const MUTED: Color = Color::Rgb(150, 150, 160);
+const SUCCESS: Color = Color::Rgb(140, 170, 145);
+const WARNING: Color = Color::Rgb(195, 165, 115);
+const DANGER: Color = Color::Rgb(190, 115, 110);
+/// Panel/box borders — same contrast reasoning as `MUTED`, one shade
+/// dimmer so borders read as structure, not as another text color.
+const PANEL: Color = Color::Rgb(110, 110, 120);
+/// The selected-row highlight background across list panels — a neutral
+/// dark slate rather than a saturated navy, so it reads as "this row is
+/// highlighted" without asserting a brand hue.
+const SELECTED_BG: Color = Color::Rgb(48, 50, 58);
+
+/// Single-glyph icons used throughout the TUI. Plain Unicode/emoji, not
+/// Nerd Font glyphs — those need a patched font the user's terminal may not
+/// have, and a missing glyph renders as a box, which is worse than no icon.
+mod icon {
+    pub(crate) const OVERVIEW: &str = "🏠";
+    pub(crate) const MARKETPLACE: &str = "🏪";
+    pub(crate) const PLUGINS: &str = "🧩";
+    pub(crate) const CONTEXT: &str = "📄";
+    pub(crate) const HARNESSES: &str = "🔌";
+    pub(crate) const DOCTOR: &str = "🩺";
+    pub(crate) const SEARCH: &str = "🔍";
+    pub(crate) const MARKETPLACE_GROUP: &str = "🗄";
+    pub(crate) const SKILLS: &str = "👥";
+    pub(crate) const AGENTS: &str = "🤖";
+    pub(crate) const MCP: &str = "🔗";
+    pub(crate) const CHECK: &str = "✓";
+    pub(crate) const EXTERNAL_LINK: &str = "↗";
+    pub(crate) const BRANCH: &str = "⑂";
+}
 
 const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -102,7 +134,10 @@ fn is_protected_plugin(
     if uze_application::bootstrap::DEFAULT_PLUGIN_IDS.contains(&plugin.id.as_str()) {
         return true;
     }
-    if marketplace_plugins.iter().any(|m| m.name == plugin.id) {
+    if marketplace_plugins
+        .iter()
+        .any(|m| m.marketplace == "uze-official" && m.name == plugin.id)
+    {
         return true;
     }
     // Fallback when marketplace hasn't loaded yet (startup): consult the
@@ -216,13 +251,13 @@ fn render(frame: &mut ratatui::Frame<'_>, model: &TuiModel, hits: &mut Vec<(Rect
         .split(frame.area());
     render_titlebar(frame, rows[0], model);
 
-    let narrow = rows[1].width < 80;
+    let narrow = rows[1].width < 90;
     let sidebar_width = if rows[1].width < 60 {
         16
     } else if narrow {
         18
     } else {
-        22
+        26
     };
     let columns = Layout::default()
         .direction(Direction::Horizontal)
@@ -248,9 +283,14 @@ fn render(frame: &mut ratatui::Frame<'_>, model: &TuiModel, hits: &mut Vec<(Rect
             overlay::render_confirm_remove(frame, frame.area(), id, *focus)
         }
         Overlay::ConfirmUpdate(id) => overlay::render_confirm_update(frame, frame.area(), id),
-        Overlay::ConfirmInstall(name) => overlay::render_confirm_install(frame, frame.area(), name),
+        Overlay::ConfirmInstall { name, marketplace } => {
+            overlay::render_confirm_install(frame, frame.area(), name, marketplace)
+        }
         Overlay::ConfirmContextApply => overlay::render_confirm_context_apply(frame, frame.area()),
         Overlay::ProtectedPlugin(id) => overlay::render_protected_plugin(frame, frame.area(), id),
+        Overlay::AddMarketplace(input) => {
+            overlay::render_add_marketplace(frame, frame.area(), input)
+        }
         Overlay::TrustRequired { plugin, detail, .. } => {
             overlay::render_trust_required(frame, frame.area(), plugin, detail)
         }
@@ -258,38 +298,117 @@ fn render(frame: &mut ratatui::Frame<'_>, model: &TuiModel, hits: &mut Vec<(Rect
 }
 
 fn render_titlebar(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
+    let block = Block::default()
+        .borders(Borders::BOTTOM)
+        .border_style(Style::default().fg(PANEL));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
     let issues = model.issues().len();
-    let mut line_spans = vec![
+    let mut left = vec![
         Span::styled(
             " UZE",
             Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
     ];
-    if model.doctor.is_none() {
+    let status_color = if model.doctor.is_none() {
         let frame = SPINNER_FRAMES[model.tick % SPINNER_FRAMES.len()];
-        line_spans.push(Span::styled(
+        left.push(Span::styled(
             format!("{frame} "),
             Style::default().fg(MUTED),
         ));
-        line_spans.push(Span::styled("checking…", Style::default().fg(MUTED)));
+        left.push(Span::styled("checking…", Style::default().fg(MUTED)));
+        None
     } else if issues == 0 {
-        line_spans.push(Span::styled("healthy", Style::default().fg(SUCCESS)));
+        left.push(Span::styled("healthy", Style::default().fg(SUCCESS)));
+        Some(SUCCESS)
     } else {
-        line_spans.push(Span::styled(
+        left.push(Span::styled(
             format!("{issues} issue(s)"),
             Style::default().fg(WARNING),
         ));
+        Some(WARNING)
+    };
+    if let Some(color) = status_color {
+        left.push(Span::raw("  "));
+        left.push(Span::styled("●", Style::default().fg(color)));
     }
-    let line = Line::from(line_spans);
+
+    // Path and branch sit together as one right-aligned group — not path
+    // centered with branch off on its own further right — so the titlebar
+    // reads as two blocks (status on the left, project identity on the
+    // right) instead of three scattered pieces.
+    let mut right = vec![Span::styled(
+        display_project_path(&model.context_root),
+        Style::default().fg(ACCENT),
+    )];
+    if let Some(branch) = git_branch(&model.context_root) {
+        right.push(Span::raw("  "));
+        right.push(Span::styled(
+            format!("{} {branch}", icon::BRANCH),
+            Style::default().fg(MUTED),
+        ));
+    }
+    // Version deliberately lives in exactly one place — the global footer,
+    // next to the keybinding hints — so it isn't repeated here and in the
+    // sidebar too.
+
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Min(10), Constraint::Percentage(45)])
+        .split(inner);
+    frame.render_widget(Paragraph::new(Line::from(left)), columns[0]);
     frame.render_widget(
-        Paragraph::new(line).block(
-            Block::default()
-                .borders(Borders::BOTTOM)
-                .border_style(Style::default().fg(PANEL)),
-        ),
-        area,
+        Paragraph::new(Line::from(right)).alignment(ratatui::layout::Alignment::Right),
+        columns[1],
     );
+}
+
+/// `~/relative/path` when `root` is under the user's home directory, else
+/// the path as-is — mirrors what a shell prompt usually shows.
+fn display_project_path(root: &std::path::Path) -> String {
+    if let Some(home) = std::env::var_os("HOME")
+        && let Ok(relative) = root.strip_prefix(&home)
+    {
+        return format!("~/{}", relative.display());
+    }
+    root.display().to_string()
+}
+
+/// Best-effort current branch name, read directly from `.git/HEAD` — no
+/// `git` subprocess, so this stays as cheap as every other read-only TUI
+/// refresh. `None` for anything not a plain git checkout (no repo, a
+/// worktree's `.git` file, a detached-but-unreadable state): silently
+/// omitted from the title bar rather than shown as an error.
+fn git_branch(project_root: &std::path::Path) -> Option<String> {
+    let head = std::fs::read_to_string(project_root.join(".git/HEAD")).ok()?;
+    let head = head.trim();
+    head.strip_prefix("ref: refs/heads/")
+        .map(str::to_owned)
+        .or_else(|| (head.len() >= 7).then(|| head[..7].to_owned()))
+}
+
+fn route_icon(route: Route) -> &'static str {
+    match route {
+        Route::Overview => icon::OVERVIEW,
+        Route::Marketplace => icon::MARKETPLACE,
+        Route::Plugins => icon::PLUGINS,
+        Route::Context => icon::CONTEXT,
+        Route::Harnesses => icon::HARNESSES,
+        Route::Doctor => icon::DOCTOR,
+    }
+}
+
+fn route_subtitle(route: Route) -> &'static str {
+    match route {
+        Route::Overview => "status & health",
+        Route::Marketplace => "browse & install",
+        Route::Plugins => "installed plugins",
+        Route::Context => "AGENTS.md bridges",
+        Route::Harnesses => "detected agents",
+        Route::Doctor => "diagnostics",
+    }
 }
 
 fn render_sidebar(
@@ -305,39 +424,126 @@ fn render_sidebar(
         .padding(Padding::new(1, 1, 1, 0));
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    // A little vertical air between routes reads far less cramped than a
-    // solid stack — but only when the terminal is actually tall enough to
-    // afford it; a short terminal falls back to one row each so every
-    // route stays reachable by mouse, not just by cycling with the keys.
-    let stride: u16 = if inner.height as usize >= ROUTES.len() * 2 {
-        2
-    } else {
-        1
-    };
-    for (index, route) in ROUTES.iter().enumerate() {
-        let row = Rect::new(inner.x, inner.y + index as u16 * stride, inner.width, 1);
-        if row.y >= inner.y + inner.height {
-            break;
+
+    let mut y = inner.y;
+    let bottom = inner.y + inner.height;
+    let mut row = |height: u16| -> Option<Rect> {
+        if y + height > bottom {
+            return None;
         }
-        let selected = *route == model.route;
-        let style = if selected && model.focus == Focus::Sidebar {
-            Style::default()
-                .fg(Color::Black)
-                .bg(ACCENT)
-                .add_modifier(Modifier::BOLD)
-        } else if selected {
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(MUTED)
-        };
-        let label = if narrow {
-            &route.label()[..route.label().len().min(inner.width as usize)]
-        } else {
-            route.label()
-        };
-        frame.render_widget(Paragraph::new(Span::styled(label, style)), row);
-        hits.push((row, Hit::Route(*route)));
+        let rect = Rect::new(inner.x, y, inner.width, height);
+        y += height;
+        Some(rect)
+    };
+
+    if let Some(rect) = row(1) {
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                "NAVIGATION",
+                Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
+            )),
+            rect,
+        );
     }
+    row(1); // spacer
+    for route in ROUTES {
+        // The active route always carries the highlight bar — matches a
+        // tab/nav convention where "what's open" stays visible regardless
+        // of where keyboard focus currently is; bold is reserved for
+        // "the sidebar itself has focus right now, arrow keys move here".
+        let selected = route == model.route;
+        let bold = selected && model.focus == Focus::Sidebar;
+
+        if narrow {
+            // Icon-only single row — no room for a subtitle line here.
+            let Some(rect) = row(1) else { break };
+            let fg = if selected { ACCENT } else { MUTED };
+            let mut style = Style::default().fg(fg);
+            if selected {
+                style = style.bg(SELECTED_BG);
+            }
+            if bold {
+                style = style.add_modifier(Modifier::BOLD);
+            }
+            let padded = pad_line(route_icon(route), rect.width as usize, style);
+            frame.render_widget(Paragraph::new(padded), rect);
+            hits.push((rect, Hit::Route(route)));
+            continue;
+        }
+
+        // Taller, two-line rows — icon+label, then a muted subtitle — with
+        // the highlight bar (when selected) covering both, plus a blank
+        // spacer row after so items read as distinct blocks rather than a
+        // cramped stack.
+        let Some(label_rect) = row(1) else { break };
+        let subtitle_rect = row(1);
+        row(1); // spacer between items
+
+        let label_fg = if selected { Color::White } else { Color::Gray };
+        let mut label_style = Style::default().fg(label_fg);
+        if selected {
+            label_style = label_style.bg(SELECTED_BG);
+        }
+        if bold {
+            label_style = label_style.add_modifier(Modifier::BOLD);
+        }
+        let label_text = format!("{} {}", route_icon(route), route.label());
+        frame.render_widget(
+            Paragraph::new(pad_line(
+                &label_text,
+                label_rect.width as usize,
+                label_style,
+            )),
+            label_rect,
+        );
+        hits.push((label_rect, Hit::Route(route)));
+
+        if let Some(subtitle_rect) = subtitle_rect {
+            let mut subtitle_style = Style::default().fg(MUTED);
+            if selected {
+                subtitle_style = subtitle_style.bg(SELECTED_BG);
+            }
+            let subtitle_text = format!("   {}", route_subtitle(route));
+            frame.render_widget(
+                Paragraph::new(pad_line(
+                    &subtitle_text,
+                    subtitle_rect.width as usize,
+                    subtitle_style,
+                )),
+                subtitle_rect,
+            );
+            hits.push((subtitle_rect, Hit::Route(route)));
+        }
+    }
+
+    // Quick Actions and Status were both dropped: Quick Actions only
+    // repeated the shortcuts the global footer already shows on every
+    // screen, and Status duplicated the Marketplace count already visible
+    // in that panel's own title plus a Doctor summary nobody used from
+    // here — an actual problem belongs in the titlebar's health indicator
+    // (top-left "healthy" / "N issue(s)"), not a second count buried in
+    // the sidebar.
+
+    // Footer pinned to the very bottom, only when there's still room —
+    // never overlaps the sections above on a short terminal. No version
+    // here either — see `render_titlebar`'s note, it lives in the global
+    // footer only.
+    if bottom > y {
+        let footer_rect = Rect::new(inner.x, bottom - 1, inner.width, 1);
+        frame.render_widget(
+            Paragraph::new(Span::styled("UZE", Style::default().fg(MUTED))),
+            footer_rect,
+        );
+    }
+}
+
+/// Pads `text` with trailing spaces to `width` columns under one `style` —
+/// used to paint a selection highlight across a whole row's background,
+/// not just behind the characters it happens to contain.
+fn pad_line(text: &str, width: usize, style: Style) -> Line<'static> {
+    let used = ratatui::text::Span::raw(text).width();
+    let padding = " ".repeat(width.saturating_sub(used));
+    Line::from(Span::styled(format!("{text}{padding}"), style))
 }
 
 // --- Shared helpers ---------------------------------------------------------
@@ -369,14 +575,19 @@ fn render_footer(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
 }
 
 fn footer(model: &TuiModel) -> Text<'static> {
-    let hint = match model.overlay {
-        Overlay::None => match model.focus {
-            Focus::Sidebar => "↑↓/jk select route · enter/tab open · ? help · q quit",
-            _ => route_hint(model.route),
-        },
-        Overlay::ConfirmRemove { .. } => "tab switch · enter confirm · esc cancel · y/n",
-        Overlay::ProtectedPlugin(_) => "esc/enter to dismiss",
-        _ => "enter/y confirm · esc/n cancel",
+    let hint = if model.filtering {
+        "type to filter · enter apply · esc clear"
+    } else {
+        match model.overlay {
+            Overlay::None => match model.focus {
+                Focus::Sidebar => "↑↓/jk select route · enter/tab open · ? help · q quit",
+                _ => route_hint(model.route),
+            },
+            Overlay::ConfirmRemove { .. } => "tab switch · enter confirm · esc cancel · y/n",
+            Overlay::ProtectedPlugin(_) => "esc/enter to dismiss",
+            Overlay::AddMarketplace(_) => "type path/URL · enter add · esc cancel",
+            _ => "enter/y confirm · esc/n cancel",
+        }
     };
     match &model.status {
         model::Status::Idle => {
@@ -417,14 +628,16 @@ fn footer(model: &TuiModel) -> Text<'static> {
 
 fn route_hint(route: Route) -> &'static str {
     match route {
-        Route::Overview => "tab sidebar · ? help · q quit",
+        Route::Overview => "tab sidebar · r/g refresh · ? help · q quit",
         Route::Plugins => {
             "↑↓/jk select · enter inspect · u update · r remove · tab sidebar · ? help"
         }
-        Route::Marketplace => "↑↓/jk select · enter inspect · i install · tab sidebar · ? help",
+        Route::Marketplace => {
+            "↑↓ select · enter inspect · i install · a add marketplace · / search · esc back"
+        }
         Route::Context => "a analyze · p apply · tab sidebar · ? help",
         Route::Harnesses => "↑↓/jk select · s setup · tab sidebar · ? help",
-        Route::Doctor => "tab sidebar · g refresh · ? help",
+        Route::Doctor => "tab sidebar · r/g refresh · ? help",
     }
 }
 
@@ -514,8 +727,9 @@ mod tests {
 
         let mut model = model_with_plugins(&["one", "two"]);
         model.plugins[0].update_available = Some(true);
-        model.marketplace_name = "uze-official".to_owned();
+        model.marketplace_count = 1;
         model.marketplace_plugins = vec![MarketplacePluginSummary {
+            marketplace: "uze-official".to_owned(),
             name: "flow".to_owned(),
             description: Some("A flow plugin".to_owned()),
             keywords: vec!["flow".to_owned()],
@@ -572,6 +786,44 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
+    fn debug_dump_marketplace_header_pills() {
+        use ratatui::{Terminal, backend::TestBackend};
+        let mut terminal = Terminal::new(TestBackend::new(180, 20)).unwrap();
+        let mut model = model_with_data();
+        model.route = Route::Marketplace;
+        model.marketplace_count = 1;
+        model.marketplace_plugins = vec![MarketplacePluginSummary {
+            marketplace: "uze-official".to_owned(),
+            name: "uze".to_owned(),
+            description: None,
+            keywords: vec![],
+            installed: true,
+            update_available: Some(false),
+            is_default: true,
+        }];
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| render(frame, &model, &mut hits))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        for y in 0..20 {
+            let row_text: String = (0..90).map(|x| buffer[(x, y)].symbol()).collect();
+            if row_text.contains("uze-official") {
+                for x in 28..75 {
+                    let cell = &buffer[(x, y)];
+                    eprintln!(
+                        "x={x:2} sym={:?} bg={:?} fg={:?}",
+                        cell.symbol(),
+                        cell.bg,
+                        cell.fg
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn every_route_renders_without_panicking() {
         use ratatui::{Terminal, backend::TestBackend};
 
@@ -582,7 +834,7 @@ mod tests {
                 route,
                 plugins: base.plugins.clone(),
                 plugins_selected: base.plugins_selected,
-                marketplace_name: base.marketplace_name.clone(),
+                marketplace_count: base.marketplace_count,
                 marketplace_plugins: base.marketplace_plugins.clone(),
                 doctor: base.doctor.clone(),
                 harnesses_selected: base.harnesses_selected,
@@ -609,13 +861,20 @@ mod tests {
                 focus: 1,
             },
             Overlay::ConfirmUpdate("one".to_owned()),
-            Overlay::ConfirmInstall("flow".to_owned()),
+            Overlay::ConfirmInstall {
+                name: "flow".to_owned(),
+                marketplace: "uze-official".to_owned(),
+            },
             Overlay::ConfirmContextApply,
             Overlay::ProtectedPlugin("one".to_owned()),
+            Overlay::AddMarketplace("/home/user/marketplace".to_owned()),
             Overlay::TrustRequired {
                 plugin: "one".to_owned(),
                 detail: "one -> mcp-server".to_owned(),
-                retry: TrustedRetry::Install("one".to_owned()),
+                retry: TrustedRetry::Install {
+                    name: "one".to_owned(),
+                    marketplace: "uze-official".to_owned(),
+                },
             },
         ];
         for overlay in overlays {
@@ -710,7 +969,10 @@ mod tests {
             overlay: Overlay::TrustRequired {
                 plugin: "acme".to_owned(),
                 detail: "acme -> mcp-server".to_owned(),
-                retry: TrustedRetry::Install("acme".to_owned()),
+                retry: TrustedRetry::Install {
+                    name: "acme".to_owned(),
+                    marketplace: "uze-official".to_owned(),
+                },
             },
             focus: Focus::Overlay,
             ..TuiModel::default()
@@ -718,7 +980,11 @@ mod tests {
         let intent = model.apply_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
         assert_eq!(
             intent,
-            Intent::Install("acme".to_owned(), TrustGrant::Granted)
+            Intent::Install {
+                name: "acme".to_owned(),
+                marketplace: "uze-official".to_owned(),
+                grant: TrustGrant::Granted,
+            }
         );
         assert_eq!(model.overlay, Overlay::None);
     }
@@ -821,6 +1087,7 @@ mod tests {
         let mut model = model_with_plugins(&["one", "two"]);
         model.set_route(Route::Marketplace);
         model.marketplace_plugins = vec![MarketplacePluginSummary {
+            marketplace: "uze-official".to_owned(),
             name: "uze".to_owned(),
             description: None,
             keywords: Vec::new(),
@@ -865,5 +1132,113 @@ mod tests {
         let issues = classify_doctor(Some(&doctor));
         assert_eq!(issues[0].severity, Severity::High);
         assert!(issues.iter().any(|i| i.severity == Severity::Low));
+    }
+
+    fn marketplace_plugin(
+        marketplace: &str,
+        name: &str,
+        installed: bool,
+    ) -> MarketplacePluginSummary {
+        MarketplacePluginSummary {
+            marketplace: marketplace.to_owned(),
+            name: name.to_owned(),
+            description: None,
+            keywords: Vec::new(),
+            installed,
+            update_available: None,
+            is_default: false,
+        }
+    }
+
+    #[test]
+    fn marketplace_filter_narrows_visible_selection() {
+        let mut model = TuiModel {
+            route: Route::Marketplace,
+            focus: Focus::Content,
+            marketplace_plugins: vec![
+                marketplace_plugin("ai", "std", false),
+                marketplace_plugin("ai", "flow", true),
+            ],
+            ..TuiModel::default()
+        };
+        assert_eq!(model.marketplace_visible_indices(), vec![0, 1]);
+
+        model.apply_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+        assert!(model.filtering);
+        for c in "flow".chars() {
+            model.apply_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        assert_eq!(model.marketplace_visible_indices(), vec![1]);
+        assert_eq!(model.selected_marketplace_plugin().unwrap().name, "flow");
+
+        model.apply_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!model.filtering);
+        assert!(model.marketplace_filter.is_empty());
+        assert_eq!(model.marketplace_visible_indices(), vec![0, 1]);
+    }
+
+    #[test]
+    fn marketplace_group_collapse_hides_its_plugins() {
+        let mut model = TuiModel {
+            route: Route::Marketplace,
+            marketplace_plugins: vec![marketplace_plugin("ai", "std", false)],
+            ..TuiModel::default()
+        };
+        assert_eq!(model.list_len(), 1);
+        model.marketplace_toggle_group("ai");
+        assert_eq!(model.list_len(), 0);
+        assert!(model.selected_marketplace_plugin().is_none());
+        model.marketplace_toggle_group("ai");
+        assert_eq!(model.list_len(), 1);
+    }
+
+    #[test]
+    fn add_marketplace_overlay_types_and_submits() {
+        let mut model = TuiModel {
+            focus: Focus::Content,
+            ..TuiModel::default()
+        };
+        let intent = model.apply_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        assert_eq!(intent, Intent::None);
+        assert!(matches!(model.overlay, Overlay::AddMarketplace(ref s) if s.is_empty()));
+
+        for c in "/tmp/mp".chars() {
+            model.apply_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        assert!(matches!(model.overlay, Overlay::AddMarketplace(ref s) if s == "/tmp/mp"));
+
+        let intent = model.apply_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(intent, Intent::AddMarketplace("/tmp/mp".to_owned()));
+        assert_eq!(model.overlay, Overlay::None);
+    }
+
+    #[test]
+    fn add_marketplace_overlay_esc_cancels_without_intent() {
+        let mut model = TuiModel {
+            overlay: Overlay::AddMarketplace("abc".to_owned()),
+            focus: Focus::Overlay,
+            ..TuiModel::default()
+        };
+        let intent = model.apply_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(intent, Intent::None);
+        assert_eq!(model.overlay, Overlay::None);
+    }
+
+    #[test]
+    fn r_refreshes_outside_plugins_but_still_removes_within_plugins() {
+        let mut model = TuiModel {
+            focus: Focus::Content,
+            route: Route::Overview,
+            ..TuiModel::default()
+        };
+        let intent = model.apply_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+        assert_eq!(intent, Intent::Refresh);
+
+        let mut plugins_model = model_with_plugins(&["one"]);
+        let intent = plugins_model.apply_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+        assert!(
+            matches!(plugins_model.overlay, Overlay::ConfirmRemove { ref id, .. } if id == "one")
+        );
+        assert_eq!(intent, Intent::None);
     }
 }

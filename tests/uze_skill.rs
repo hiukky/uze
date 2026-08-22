@@ -119,7 +119,9 @@ fn the_official_package_contributes_exactly_one_agent_skill_resource() {
     let inspection = application.inspect_plugin("uze").unwrap();
     assert_eq!(inspection.capabilities.len(), 1);
     assert_eq!(inspection.capabilities[0].kind, CapabilityKind::AgentSkill);
-    assert_eq!(inspection.capabilities[0].name, "SKILL.md");
+    // The skill's own logical name (its directory, `skills/uze`), not the
+    // generic `SKILL.md` file name — a display-only read-model improvement.
+    assert_eq!(inspection.capabilities[0].name, "uze");
     fs::remove_dir_all(root).unwrap();
 }
 

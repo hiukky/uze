@@ -1,5 +1,6 @@
 //! TUI — navigation, selection, and overlay state.
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use ratatui::layout::Rect;
@@ -66,9 +67,15 @@ pub(crate) enum Overlay {
         focus: usize,
     },
     ConfirmUpdate(String),
-    ConfirmInstall(String),
+    ConfirmInstall {
+        name: String,
+        marketplace: String,
+    },
     ConfirmContextApply,
     ProtectedPlugin(String),
+    /// Free-text input, appended to on every character key and popped on
+    /// backspace — see `TuiModel::overlay_key`'s `AddMarketplace` arms.
+    AddMarketplace(String),
     /// A mutation needs consent it wasn't given non-interactively. Confirming
     /// re-runs the *same* action with explicit trust — never a silent
     /// bypass; the operator sees exactly what would newly execute.
@@ -81,7 +88,7 @@ pub(crate) enum Overlay {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum TrustedRetry {
-    Install(String),
+    Install { name: String, marketplace: String },
     Update(String),
 }
 
@@ -100,7 +107,7 @@ pub(crate) struct RefreshData {
     pub(crate) plugins: Vec<PluginSummary>,
     pub(crate) doctor: Option<DoctorReport>,
     pub(crate) marketplace_plugins: Vec<MarketplacePluginSummary>,
-    pub(crate) marketplace_name: String,
+    pub(crate) marketplace_count: usize,
     pub(crate) context_status: Option<ProjectContextStatus>,
 }
 
@@ -114,10 +121,20 @@ pub(crate) struct TuiModel {
     pub(crate) plugins_selected: usize,
     pub(crate) plugin_detail: Option<PluginInspection>,
 
-    pub(crate) marketplace_name: String,
+    pub(crate) marketplace_count: usize,
     pub(crate) marketplace_plugins: Vec<MarketplacePluginSummary>,
+    /// An index into the *visible* (filtered, group-expanded) sequence —
+    /// see `marketplace_visible_indices` — not directly into
+    /// `marketplace_plugins`. Resolve through `selected_marketplace_plugin`.
     pub(crate) marketplace_selected: usize,
     pub(crate) marketplace_detail: Option<MarketplacePluginDetail>,
+    /// Live substring filter over plugin/marketplace name, typed while
+    /// `filtering` is true (`/` in the Marketplace route).
+    pub(crate) marketplace_filter: String,
+    pub(crate) filtering: bool,
+    /// Marketplace group names currently collapsed in the tree — absence
+    /// means expanded, so a freshly registered marketplace starts open.
+    pub(crate) collapsed_marketplaces: BTreeSet<String>,
 
     pub(crate) harnesses_selected: usize,
 
@@ -146,10 +163,13 @@ impl Default for TuiModel {
             plugins: Vec::new(),
             plugins_selected: 0,
             plugin_detail: None,
-            marketplace_name: String::new(),
+            marketplace_count: 0,
             marketplace_plugins: Vec::new(),
             marketplace_selected: 0,
             marketplace_detail: None,
+            marketplace_filter: String::new(),
+            filtering: false,
+            collapsed_marketplaces: BTreeSet::new(),
             harnesses_selected: 0,
             doctor: None,
             context_root: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
@@ -166,8 +186,73 @@ impl TuiModel {
         self.plugins.get(self.plugins_selected)
     }
 
+    /// Every `marketplace_plugins` index that currently passes the live
+    /// filter (case-insensitive substring of plugin or marketplace name)
+    /// and belongs to a group that isn't collapsed — the single source of
+    /// truth both the list renderer and selection/navigation resolve
+    /// through, so a hidden row is never selectable and vice versa.
+    pub(crate) fn marketplace_visible_indices(&self) -> Vec<usize> {
+        let needle = self.marketplace_filter.trim().to_lowercase();
+        self.marketplace_plugins
+            .iter()
+            .enumerate()
+            .filter(|(_, plugin)| !self.collapsed_marketplaces.contains(&plugin.marketplace))
+            .filter(|(_, plugin)| {
+                needle.is_empty()
+                    || plugin.name.to_lowercase().contains(&needle)
+                    || plugin.marketplace.to_lowercase().contains(&needle)
+            })
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    /// Resolves `marketplace_selected` (a position in the visible sequence)
+    /// back to the plugin it points at.
     pub(crate) fn selected_marketplace_plugin(&self) -> Option<&MarketplacePluginSummary> {
-        self.marketplace_plugins.get(self.marketplace_selected)
+        let raw_index = *self
+            .marketplace_visible_indices()
+            .get(self.marketplace_selected)?;
+        self.marketplace_plugins.get(raw_index)
+    }
+
+    /// Expands/collapses one marketplace group and re-clamps the selection
+    /// so it never points past the now-shorter (or longer) visible list.
+    pub(crate) fn marketplace_toggle_group(&mut self, marketplace: &str) {
+        if !self.collapsed_marketplaces.remove(marketplace) {
+            self.collapsed_marketplaces.insert(marketplace.to_owned());
+        }
+        self.clamp_marketplace_selection();
+    }
+
+    fn clamp_marketplace_selection(&mut self) {
+        let visible = self.marketplace_visible_indices().len();
+        self.marketplace_selected = self.marketplace_selected.min(visible.saturating_sub(1));
+    }
+
+    /// Consumes one key while `filtering` is true — every printable
+    /// character is appended to `marketplace_filter` rather than
+    /// interpreted as a shortcut. `Enter` keeps the filter and returns to
+    /// normal navigation; `Esc` clears it too.
+    pub(crate) fn filter_key(&mut self, key: crossterm::event::KeyEvent) -> super::worker::Intent {
+        use crossterm::event::KeyCode;
+        match key.code {
+            KeyCode::Enter => self.filtering = false,
+            KeyCode::Esc => {
+                self.filtering = false;
+                self.marketplace_filter.clear();
+                self.clamp_marketplace_selection();
+            }
+            KeyCode::Backspace => {
+                self.marketplace_filter.pop();
+                self.clamp_marketplace_selection();
+            }
+            KeyCode::Char(c) => {
+                self.marketplace_filter.push(c);
+                self.clamp_marketplace_selection();
+            }
+            _ => {}
+        }
+        super::worker::Intent::None
     }
 
     pub(crate) fn selected_harness(&self) -> Option<&HarnessHealth> {
@@ -179,7 +264,7 @@ impl TuiModel {
     pub(crate) fn list_len(&self) -> usize {
         match self.route {
             Route::Plugins => self.plugins.len(),
-            Route::Marketplace => self.marketplace_plugins.len(),
+            Route::Marketplace => self.marketplace_visible_indices().len(),
             Route::Harnesses => self.doctor.as_ref().map_or(0, |d| d.harnesses.len()),
             _ => 0,
         }
@@ -219,10 +304,8 @@ impl TuiModel {
                 .saturating_sub(1),
         );
         self.marketplace_plugins = data.marketplace_plugins;
-        self.marketplace_name = data.marketplace_name;
-        self.marketplace_selected = self
-            .marketplace_selected
-            .min(self.marketplace_plugins.len().saturating_sub(1));
+        self.marketplace_count = data.marketplace_count;
+        self.clamp_marketplace_selection();
         if data.context_status.is_some() {
             self.context_status = data.context_status;
         }
@@ -234,6 +317,9 @@ impl TuiModel {
     }
 
     pub(crate) fn set_route(&mut self, route: Route) {
+        if route != Route::Marketplace {
+            self.filtering = false;
+        }
         self.route = route;
     }
 }
