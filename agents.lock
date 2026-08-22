@@ -1,0 +1,13 @@
+version: 1
+marketplaces:
+  ai:
+    source:
+      type: path
+      path: /home/hiukky/ai
+plugins:
+  flow:
+    source:
+      type: marketplace
+      marketplace: ai
+      plugin: flow
+    resolved: {}
