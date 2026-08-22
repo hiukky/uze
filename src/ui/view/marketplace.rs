@@ -12,14 +12,14 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, List, ListItem, Paragraph, Wrap},
 };
 
 use crate::application::MarketplacePluginSummary;
 
 use super::super::hit::Hit;
 use super::super::model::TuiModel;
-use super::super::{ACCENT, MUTED, PANEL, SELECTED_BG, SUCCESS, WARNING, icon, panel_block};
+use super::super::{ACCENT, MUTED, SELECTED_BG, SUCCESS, SURFACE_RAISED, WARNING, surface_block};
 use super::{push_capability_table, render_status_card};
 
 /// Both status labels are 9 characters (`Installed`/`Available`), but that's
@@ -102,14 +102,15 @@ pub(crate) fn render_marketplace(
 ) {
     let columns = Layout::default()
         .direction(Direction::Horizontal)
+        .spacing(1)
         .constraints([Constraint::Percentage(46), Constraint::Percentage(54)])
         .split(area);
 
     let title = if model.marketplace_count == 0 {
-        " Marketplace ".to_owned()
+        " Marketplace".to_owned()
     } else {
         format!(
-            " Marketplace  ·  {} source{} ",
+            " Marketplace  ·  {} source{}",
             model.marketplace_count,
             if model.marketplace_count == 1 {
                 ""
@@ -118,13 +119,13 @@ pub(crate) fn render_marketplace(
             }
         )
     };
-    let block = panel_block(title);
+    let block = surface_block(title);
     let panel_inner = block.inner(columns[0]);
     frame.render_widget(block, columns[0]);
 
     let sections = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(3)])
+        .constraints([Constraint::Length(2), Constraint::Min(3)])
         .split(panel_inner);
     render_filter_box(frame, sections[0], model);
     let inner = sections[1];
@@ -198,21 +199,22 @@ pub(crate) fn render_marketplace(
 }
 
 fn render_filter_box(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
-    let border_color = if model.filtering { ACCENT } else { PANEL };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(border_color));
-    let text = if model.marketplace_filter.is_empty() {
-        Line::from(vec![
-            Span::styled(format!("{} ", icon::SEARCH), Style::default().fg(MUTED)),
-            Span::styled("Filter marketplaces...", Style::default().fg(MUTED)),
-        ])
+    // The filter is a raised input slab — brighter than the panel surface
+    // it sits on — with no border. While filtering, the slab stays raised
+    // and the text turns into a live input; otherwise it reads as a hint.
+    let slab = if model.filtering {
+        SELECTED_BG
     } else {
-        let mut spans = vec![
-            Span::styled(format!("{} ", icon::SEARCH), Style::default().fg(MUTED)),
-            Span::raw(model.marketplace_filter.clone()),
-        ];
+        SURFACE_RAISED
+    };
+    let block = Block::default().style(Style::default().bg(slab));
+    let text = if model.marketplace_filter.is_empty() {
+        Line::from(Span::styled(
+            "Filter marketplaces…",
+            Style::default().fg(MUTED),
+        ))
+    } else {
+        let mut spans = vec![Span::raw(model.marketplace_filter.clone())];
         if model.filtering {
             spans.push(Span::styled("▏", Style::default().fg(ACCENT)));
         }
@@ -241,24 +243,25 @@ fn header_line<'a>(
     all_installed: bool,
     is_official: bool,
 ) -> Line<'a> {
-    let chevron = if collapsed { "▶" } else { "▼" };
+    let chevron = if collapsed { "▸" } else { "▾" };
     let mut spans = vec![
         Span::styled(format!("{chevron} "), Style::default().fg(MUTED)),
-        Span::styled(
-            format!("{} ", icon::MARKETPLACE_GROUP),
-            Style::default().fg(ACCENT),
-        ),
         Span::styled(
             marketplace.to_owned(),
             Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
         ),
     ];
+    // Explicit `Color::Reset` rather than a bare unstyled `Span::raw` — some
+    // terminals/multiplexers don't emit a background-reset escape between
+    // two adjacent styled spans unless one is actually present, which reads
+    // as the pills bleeding into each other with no visible gap.
+    let gap = || Span::styled("  ", Style::default().bg(Color::Reset));
     if all_installed {
-        spans.push(Span::raw("  "));
+        spans.push(gap());
         spans.push(pill("Installed", SUCCESS));
     }
     if is_official {
-        spans.push(Span::raw("  "));
+        spans.push(gap());
         spans.push(pill("Default", ACCENT));
     }
     Line::from(spans)
@@ -343,24 +346,22 @@ fn render_marketplace_detail(
     hits: &mut Vec<(Rect, Hit)>,
 ) {
     let Some(plugin) = model.selected_marketplace_plugin() else {
-        frame.render_widget(Paragraph::new("").block(panel_block(" Plugin ")), area);
+        frame.render_widget(Paragraph::new("").block(surface_block(" Plugin")), area);
         return;
     };
 
     // Status card pinned to the bottom, main content scrolling above it.
     let sections = Layout::default()
         .direction(Direction::Vertical)
+        .spacing(1)
         .constraints([Constraint::Min(6), Constraint::Length(4)])
         .split(area);
 
     let mut lines = vec![
-        Line::from(vec![
-            Span::styled(format!("{} ", icon::PLUGINS), Style::default()),
-            Span::styled(
-                &plugin.name,
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-            ),
-        ]),
+        Line::from(vec![Span::styled(
+            &plugin.name,
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        )]),
         Line::from(""),
         Line::from(Span::styled(
             plugin.description.clone().unwrap_or_default(),
@@ -380,13 +381,9 @@ fn render_marketplace_detail(
     )));
     let source_row_y = area.y + lines.len() as u16 + 1;
     lines.push(Line::from(vec![
-        Span::styled(
-            format!("{} ", icon::MARKETPLACE_GROUP),
-            Style::default().fg(ACCENT),
-        ),
         Span::raw(plugin.marketplace.clone()),
         Span::raw("   "),
-        Span::styled(icon::EXTERNAL_LINK, Style::default().fg(MUTED)),
+        Span::styled("↗", Style::default().fg(MUTED)),
     ]));
     // The external-link glyph jumps the Marketplace list to this plugin's
     // group. Registering the whole row (not just the glyph) keeps the
@@ -417,7 +414,7 @@ fn render_marketplace_detail(
 
     frame.render_widget(
         Paragraph::new(lines)
-            .block(panel_block(" Plugin "))
+            .block(surface_block(" Plugin"))
             .wrap(Wrap { trim: true }),
         sections[0],
     );

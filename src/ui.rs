@@ -26,7 +26,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, BorderType, Borders, Padding, Paragraph, Wrap},
+    widgets::{Block, Padding, Paragraph, Wrap},
 };
 
 use crate::{
@@ -90,33 +90,16 @@ const MUTED: Color = Color::Rgb(150, 150, 160);
 const SUCCESS: Color = Color::Rgb(140, 170, 145);
 const WARNING: Color = Color::Rgb(195, 165, 115);
 const DANGER: Color = Color::Rgb(190, 115, 110);
-/// Panel/box borders — same contrast reasoning as `MUTED`, one shade
-/// dimmer so borders read as structure, not as another text color.
-const PANEL: Color = Color::Rgb(110, 110, 120);
-/// The selected-row highlight background across list panels — a neutral
-/// dark slate rather than a saturated navy, so it reads as "this row is
-/// highlighted" without asserting a brand hue.
-const SELECTED_BG: Color = Color::Rgb(48, 50, 58);
 
-/// Single-glyph icons used throughout the TUI. Plain Unicode/emoji, not
-/// Nerd Font glyphs — those need a patched font the user's terminal may not
-/// have, and a missing glyph renders as a box, which is worse than no icon.
-mod icon {
-    pub(crate) const OVERVIEW: &str = "🏠";
-    pub(crate) const MARKETPLACE: &str = "🏪";
-    pub(crate) const PLUGINS: &str = "🧩";
-    pub(crate) const CONTEXT: &str = "📄";
-    pub(crate) const HARNESSES: &str = "🔌";
-    pub(crate) const DOCTOR: &str = "🩺";
-    pub(crate) const SEARCH: &str = "🔍";
-    pub(crate) const MARKETPLACE_GROUP: &str = "🗄";
-    pub(crate) const SKILLS: &str = "👥";
-    pub(crate) const AGENTS: &str = "🤖";
-    pub(crate) const MCP: &str = "🔗";
-    pub(crate) const CHECK: &str = "✓";
-    pub(crate) const EXTERNAL_LINK: &str = "↗";
-    pub(crate) const BRANCH: &str = "⑂";
-}
+// Structure comes from background contrast, not borders: the app paints a
+// dark backdrop, and every region that holds content is a slightly lighter
+// slab. `SURFACE` is a panel/sidebar slab; `SURFACE_RAISED` is the top
+// layer (inputs, dialogs, status cards); `SELECTED_BG` is one step brighter
+// still, so a selection reads as "this row is raised".
+const BASE: Color = Color::Rgb(14, 15, 18);
+const SURFACE: Color = Color::Rgb(22, 24, 28);
+const SURFACE_RAISED: Color = Color::Rgb(32, 35, 40);
+const SELECTED_BG: Color = Color::Rgb(48, 50, 58);
 
 const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -237,9 +220,16 @@ fn io_error(source: io::Error) -> crate::UzeError {
 // --- Rendering ----------------------------------------------------------
 
 fn render(frame: &mut ratatui::Frame<'_>, model: &TuiModel, hits: &mut Vec<(Rect, Hit)>) {
-    // A margin around the whole app keeps every panel — sidebar included —
-    // off the raw terminal edge, instead of every border sitting flush
-    // against column/row zero.
+    // The whole screen sits on the base backdrop; every region that holds
+    // content is a lighter slab painted on top of it, so structure comes
+    // from surfaces rather than a grid of borders.
+    frame.render_widget(
+        Block::default().style(Style::default().bg(BASE)),
+        frame.area(),
+    );
+    // A margin around the whole app keeps every surface — sidebar included —
+    // off the raw terminal edge, so the backdrop reads as "the app is inset",
+    // the way a window is inset from its desktop.
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
@@ -298,19 +288,16 @@ fn render(frame: &mut ratatui::Frame<'_>, model: &TuiModel, hits: &mut Vec<(Rect
 }
 
 fn render_titlebar(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
-    let block = Block::default()
-        .borders(Borders::BOTTOM)
-        .border_style(Style::default().fg(PANEL));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
+    // No border and no surface: the titlebar is just the app's name and
+    // status sitting on the backdrop, so it doesn't compete with the
+    // content slabs below.
     let issues = model.issues().len();
     let mut left = vec![
         Span::styled(
-            " UZE",
+            "UZE",
             Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
         ),
-        Span::raw("  "),
+        Span::raw("   "),
     ];
     let status_color = if model.doctor.is_none() {
         let frame = SPINNER_FRAMES[model.tick % SPINNER_FRAMES.len()];
@@ -345,10 +332,7 @@ fn render_titlebar(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel)
     )];
     if let Some(branch) = git_branch(&model.context_root) {
         right.push(Span::raw("  "));
-        right.push(Span::styled(
-            format!("{} {branch}", icon::BRANCH),
-            Style::default().fg(MUTED),
-        ));
+        right.push(Span::styled(branch, Style::default().fg(MUTED)));
     }
     // Version deliberately lives in exactly one place — the global footer,
     // next to the keybinding hints — so it isn't repeated here and in the
@@ -357,7 +341,7 @@ fn render_titlebar(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel)
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Min(10), Constraint::Percentage(45)])
-        .split(inner);
+        .split(area);
     frame.render_widget(Paragraph::new(Line::from(left)), columns[0]);
     frame.render_widget(
         Paragraph::new(Line::from(right)).alignment(ratatui::layout::Alignment::Right),
@@ -389,17 +373,6 @@ fn git_branch(project_root: &std::path::Path) -> Option<String> {
         .or_else(|| (head.len() >= 7).then(|| head[..7].to_owned()))
 }
 
-fn route_icon(route: Route) -> &'static str {
-    match route {
-        Route::Overview => icon::OVERVIEW,
-        Route::Marketplace => icon::MARKETPLACE,
-        Route::Plugins => icon::PLUGINS,
-        Route::Context => icon::CONTEXT,
-        Route::Harnesses => icon::HARNESSES,
-        Route::Doctor => icon::DOCTOR,
-    }
-}
-
 fn route_subtitle(route: Route) -> &'static str {
     match route {
         Route::Overview => "status & health",
@@ -418,10 +391,12 @@ fn render_sidebar(
     narrow: bool,
     hits: &mut Vec<(Rect, Hit)>,
 ) {
+    // The sidebar is a full-height surface slab: no border, just a
+    // background one step lighter than the backdrop, so the division from
+    // the content column is a surface edge rather than a drawn line.
     let block = Block::default()
-        .borders(Borders::RIGHT)
-        .border_style(Style::default().fg(PANEL))
-        .padding(Padding::new(1, 1, 1, 0));
+        .style(Style::default().bg(SURFACE))
+        .padding(Padding::new(2, 1, 1, 0));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -455,9 +430,9 @@ fn render_sidebar(
         let bold = selected && model.focus == Focus::Sidebar;
 
         if narrow {
-            // Icon-only single row — no room for a subtitle line here.
+            // Single-row labels only — no room for a subtitle line here.
             let Some(rect) = row(1) else { break };
-            let fg = if selected { ACCENT } else { MUTED };
+            let fg = if selected { Color::White } else { MUTED };
             let mut style = Style::default().fg(fg);
             if selected {
                 style = style.bg(SELECTED_BG);
@@ -465,16 +440,16 @@ fn render_sidebar(
             if bold {
                 style = style.add_modifier(Modifier::BOLD);
             }
-            let padded = pad_line(route_icon(route), rect.width as usize, style);
+            let padded = pad_line(route.label(), rect.width as usize, style);
             frame.render_widget(Paragraph::new(padded), rect);
             hits.push((rect, Hit::Route(route)));
             continue;
         }
 
-        // Taller, two-line rows — icon+label, then a muted subtitle — with
-        // the highlight bar (when selected) covering both, plus a blank
-        // spacer row after so items read as distinct blocks rather than a
-        // cramped stack.
+        // Taller, two-line rows — label, then a muted subtitle — with the
+        // highlight bar (when selected) covering both, plus a blank spacer
+        // row after so items read as distinct blocks rather than a cramped
+        // stack.
         let Some(label_rect) = row(1) else { break };
         let subtitle_rect = row(1);
         row(1); // spacer between items
@@ -487,10 +462,9 @@ fn render_sidebar(
         if bold {
             label_style = label_style.add_modifier(Modifier::BOLD);
         }
-        let label_text = format!("{} {}", route_icon(route), route.label());
         frame.render_widget(
             Paragraph::new(pad_line(
-                &label_text,
+                route.label(),
                 label_rect.width as usize,
                 label_style,
             )),
@@ -503,7 +477,7 @@ fn render_sidebar(
             if selected {
                 subtitle_style = subtitle_style.bg(SELECTED_BG);
             }
-            let subtitle_text = format!("   {}", route_subtitle(route));
+            let subtitle_text = format!("  {}", route_subtitle(route));
             frame.render_widget(
                 Paragraph::new(pad_line(
                     &subtitle_text,
@@ -548,13 +522,33 @@ fn pad_line(text: &str, width: usize, style: Style) -> Line<'static> {
 
 // --- Shared helpers ---------------------------------------------------------
 
-fn render_footer(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
-    let block = Block::default()
-        .borders(Borders::TOP)
-        .border_style(Style::default().fg(PANEL));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+/// Styled spans for one footer hint: `key action · key action …` chunks are
+/// split so the command/key part carries the accent (and bold) and the
+/// description stays muted — the shortcut bar reads as "keys + what they
+/// do" instead of one uniform wall of gray text. Chunks without a verb
+/// (e.g. `y/n`) render as a command alone.
+fn hint_spans(hint: &str) -> Vec<Span<'static>> {
+    let command = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
+    let muted = Style::default().fg(MUTED);
+    let mut spans = Vec::new();
+    for (i, chunk) in hint.split(" · ").enumerate() {
+        if i > 0 {
+            spans.push(Span::raw(" · "));
+        }
+        match chunk.split_once(' ') {
+            Some((key, action)) => {
+                spans.push(Span::styled(key.to_owned(), command));
+                spans.push(Span::styled(format!(" {action}"), muted));
+            }
+            None => spans.push(Span::styled(chunk.to_owned(), command)),
+        }
+    }
+    spans
+}
 
+fn render_footer(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
+    // No border above the footer either — the hint line just sits on the
+    // backdrop below the content slabs.
     let version = format!("v{}", env!("CARGO_PKG_VERSION"));
     let columns = Layout::default()
         .direction(Direction::Horizontal)
@@ -562,7 +556,7 @@ fn render_footer(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
             Constraint::Min(10),
             Constraint::Length(version.len() as u16),
         ])
-        .split(inner);
+        .split(area);
     frame.render_widget(
         Paragraph::new(footer(model)).wrap(Wrap { trim: true }),
         columns[0],
@@ -590,9 +584,7 @@ fn footer(model: &TuiModel) -> Text<'static> {
         }
     };
     match &model.status {
-        model::Status::Idle => {
-            Text::from(Line::from(Span::styled(hint, Style::default().fg(MUTED))))
-        }
+        model::Status::Idle => Text::from(Line::from(hint_spans(hint))),
         model::Status::Working(value) => {
             let frame = SPINNER_FRAMES[model.tick % SPINNER_FRAMES.len()];
             Text::from(vec![
@@ -606,7 +598,7 @@ fn footer(model: &TuiModel) -> Text<'static> {
                         Style::default().fg(WARNING).add_modifier(Modifier::BOLD),
                     ),
                 ]),
-                Line::from(Span::styled(hint, Style::default().fg(MUTED))),
+                Line::from(hint_spans(hint)),
             ])
         }
         model::Status::Success(value) => Text::from(vec![
@@ -614,14 +606,14 @@ fn footer(model: &TuiModel) -> Text<'static> {
                 value.clone(),
                 Style::default().fg(SUCCESS).add_modifier(Modifier::BOLD),
             )),
-            Line::from(Span::styled(hint, Style::default().fg(MUTED))),
+            Line::from(hint_spans(hint)),
         ]),
         model::Status::Error(value) => Text::from(vec![
             Line::from(Span::styled(
                 value.clone(),
                 Style::default().fg(DANGER).add_modifier(Modifier::BOLD),
             )),
-            Line::from(Span::styled(hint, Style::default().fg(MUTED))),
+            Line::from(hint_spans(hint)),
         ]),
     }
 }
@@ -641,14 +633,16 @@ fn route_hint(route: Route) -> &'static str {
     }
 }
 
-fn panel_block(title: impl Into<Line<'static>>) -> Block<'static> {
+/// The borderless surface every content panel sits on: no box around the
+/// content — just a background slab one step lighter than the backdrop, a
+/// bold title on its first line, and one column of breathing room. Division
+/// between regions comes from surface contrast, not drawn lines.
+fn surface_block(title: impl Into<Line<'static>>) -> Block<'static> {
     Block::default()
         .title(title)
         .title_style(Style::default().fg(ACCENT).add_modifier(Modifier::BOLD))
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(PANEL))
-        .padding(Padding::new(2, 2, 1, 0))
+        .style(Style::default().bg(SURFACE))
+        .padding(Padding::new(1, 1, 1, 0))
 }
 
 fn health_style(health: &str) -> Style {
@@ -694,6 +688,7 @@ mod tests {
     use super::render;
     use super::view::doctor::{Severity, classify_doctor};
     use super::worker::{Intent, TrustGrant};
+    use super::{ACCENT, MUTED, hint_spans};
 
     fn plugin(id: &str) -> PluginSummary {
         PluginSummary {
@@ -783,44 +778,6 @@ mod tests {
         });
         model.harnesses_selected = 0;
         model
-    }
-
-    #[test]
-    #[ignore]
-    fn debug_dump_marketplace_header_pills() {
-        use ratatui::{Terminal, backend::TestBackend};
-        let mut terminal = Terminal::new(TestBackend::new(180, 20)).unwrap();
-        let mut model = model_with_data();
-        model.route = Route::Marketplace;
-        model.marketplace_count = 1;
-        model.marketplace_plugins = vec![MarketplacePluginSummary {
-            marketplace: "uze-official".to_owned(),
-            name: "uze".to_owned(),
-            description: None,
-            keywords: vec![],
-            installed: true,
-            update_available: Some(false),
-            is_default: true,
-        }];
-        let mut hits = Vec::new();
-        terminal
-            .draw(|frame| render(frame, &model, &mut hits))
-            .unwrap();
-        let buffer = terminal.backend().buffer();
-        for y in 0..20 {
-            let row_text: String = (0..90).map(|x| buffer[(x, y)].symbol()).collect();
-            if row_text.contains("uze-official") {
-                for x in 28..75 {
-                    let cell = &buffer[(x, y)];
-                    eprintln!(
-                        "x={x:2} sym={:?} bg={:?} fg={:?}",
-                        cell.symbol(),
-                        cell.bg,
-                        cell.fg
-                    );
-                }
-            }
-        }
     }
 
     #[test]
@@ -1240,5 +1197,36 @@ mod tests {
             matches!(plugins_model.overlay, Overlay::ConfirmRemove { ref id, .. } if id == "one")
         );
         assert_eq!(intent, Intent::None);
+    }
+
+    #[test]
+    fn footer_hint_styles_commands_with_accent_and_descriptions_muted() {
+        use ratatui::{
+            style::{Modifier, Style},
+            text::Line,
+        };
+
+        let line = Line::from(hint_spans("↑↓ select · enter inspect · esc back"));
+        let content: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(content, "↑↓ select · enter inspect · esc back");
+        // Chunks split as key/description: command accent+bold, verb muted,
+        // with raw " · " separators between chunks.
+        assert_eq!(line.spans.len(), 8);
+        assert_eq!(
+            line.spans[0].style,
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
+        );
+        assert_eq!(line.spans[0].content.as_ref(), "↑↓");
+        assert_eq!(line.spans[1].style, Style::default().fg(MUTED));
+        assert_eq!(line.spans[1].content.as_ref(), " select");
+        assert_eq!(line.spans[2].content.as_ref(), " · ");
+        assert_eq!(line.spans[6].content.as_ref(), "esc");
+        assert_eq!(line.spans[6].style.fg, Some(ACCENT));
+
+        // A command-only chunk (no verb) still carries the accent.
+        let line = Line::from(hint_spans("tab switch · y/n"));
+        assert_eq!(line.spans.len(), 4);
+        assert_eq!(line.spans[3].content.as_ref(), "y/n");
+        assert_eq!(line.spans[3].style.fg, Some(ACCENT));
     }
 }

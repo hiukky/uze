@@ -10,7 +10,7 @@ use ratatui::{
 use crate::application::DoctorReport;
 
 use super::super::model::TuiModel;
-use super::super::{DANGER, MUTED, SUCCESS, WARNING, panel_block};
+use super::super::{DANGER, MUTED, SUCCESS, WARNING, surface_block};
 
 pub(crate) fn render_doctor(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
     let mut lines = Vec::new();
@@ -57,7 +57,7 @@ pub(crate) fn render_doctor(frame: &mut ratatui::Frame<'_>, area: Rect, model: &
     }
     frame.render_widget(
         Paragraph::new(lines)
-            .block(panel_block(" Doctor "))
+            .block(surface_block(" Doctor"))
             .wrap(Wrap { trim: true }),
         area,
     );

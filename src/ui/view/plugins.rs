@@ -14,7 +14,7 @@ use crate::application::DoctorReport;
 use super::super::hit::Hit;
 use super::super::model::TuiModel;
 use super::super::{
-    ACCENT, DANGER, MUTED, SUCCESS, WARNING, health_style, icon, panel_block, route_style,
+    ACCENT, DANGER, MUTED, SELECTED_BG, SUCCESS, WARNING, health_style, route_style, surface_block,
 };
 use super::{push_capability_table, render_status_card};
 
@@ -26,10 +26,11 @@ pub(crate) fn render_plugins(
 ) {
     let columns = Layout::default()
         .direction(Direction::Horizontal)
+        .spacing(1)
         .constraints([Constraint::Percentage(46), Constraint::Percentage(54)])
         .split(area);
 
-    let block = panel_block(format!(" Plugins  {} installed ", model.plugins.len()));
+    let block = surface_block(format!(" Plugins  {} installed ", model.plugins.len()));
     let inner = block.inner(columns[0]);
     frame.render_widget(block, columns[0]);
     if model.plugins.is_empty() {
@@ -63,7 +64,13 @@ pub(crate) fn render_plugins(
             .iter()
             .enumerate()
             .map(|(index, plugin)| {
-                plugin_row(plugin, index == model.plugins_selected, model, id_width)
+                plugin_row(
+                    plugin,
+                    index == model.plugins_selected,
+                    model,
+                    id_width,
+                    inner.width,
+                )
             })
             .collect();
         frame.render_widget(List::new(items), inner);
@@ -87,6 +94,7 @@ fn plugin_row<'a>(
     selected: bool,
     model: &TuiModel,
     id_width: usize,
+    row_width: u16,
 ) -> ListItem<'a> {
     let marker = if selected { "› " } else { "  " };
     let style = if selected {
@@ -109,7 +117,7 @@ fn plugin_row<'a>(
         }
     );
     let health = plugin_health(model.doctor.as_ref(), &plugin.id);
-    let spans = vec![
+    let mut spans = vec![
         Span::styled(marker, style),
         Span::styled(id, style),
         Span::raw("  "),
@@ -119,30 +127,41 @@ fn plugin_row<'a>(
         Span::raw("  "),
         Span::styled(health, health_style(health)),
     ];
+    if selected {
+        // The highlight covers the whole row (background included), matching
+        // the Marketplace list's selected treatment.
+        for span in &mut spans {
+            span.style = span.style.bg(SELECTED_BG);
+        }
+        let used: usize = spans.iter().map(|s| s.width()).sum();
+        let gap = (row_width as usize).saturating_sub(used);
+        spans.push(Span::styled(
+            " ".repeat(gap),
+            Style::default().bg(SELECTED_BG),
+        ));
+    }
     ListItem::new(Line::from(spans))
 }
 
 fn render_plugin_detail(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
     let Some(plugin) = model.selected_plugin() else {
-        frame.render_widget(Paragraph::new("").block(panel_block(" Plugin ")), area);
+        frame.render_widget(Paragraph::new("").block(surface_block(" Plugin")), area);
         return;
     };
     // Status card pinned to the bottom, main content scrolling above it —
     // mirrors the Marketplace detail pane's layout.
     let sections = Layout::default()
         .direction(Direction::Vertical)
+        .spacing(1)
         .constraints([Constraint::Min(6), Constraint::Length(4)])
         .split(area);
 
     let is_official = plugin.source.starts_with("embedded:");
     let mut lines = vec![
-        Line::from(vec![
-            Span::styled(format!("{} ", icon::PLUGINS), Style::default()),
-            Span::styled(
-                &plugin.id,
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-            ),
-        ]),
+        Line::from(vec![Span::styled(
+            &plugin.id,
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        )]),
         Line::from(""),
         Line::from(Span::styled(
             if is_official {
@@ -220,7 +239,7 @@ fn render_plugin_detail(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiM
     }
     frame.render_widget(
         Paragraph::new(lines)
-            .block(panel_block(" Selected plugin "))
+            .block(surface_block(" Selected plugin"))
             .wrap(Wrap { trim: true }),
         sections[0],
     );

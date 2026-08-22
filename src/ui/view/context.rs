@@ -10,7 +10,7 @@ use ratatui::{
 use crate::application::HarnessContextDelivery;
 
 use super::super::model::TuiModel;
-use super::super::{MUTED, SUCCESS, WARNING, panel_block};
+use super::super::{MUTED, SUCCESS, WARNING, surface_block};
 use super::overview::{portability_label, portability_style};
 
 pub(crate) fn render_context(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
@@ -81,7 +81,7 @@ pub(crate) fn render_context(frame: &mut ratatui::Frame<'_>, area: Rect, model: 
     }
     frame.render_widget(
         Paragraph::new(lines)
-            .block(panel_block(" Context "))
+            .block(surface_block(" Context"))
             .wrap(Wrap { trim: true }),
         area,
     );

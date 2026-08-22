@@ -10,7 +10,7 @@ use ratatui::{
 use crate::application::{Portability, ProjectContextStatus};
 
 use super::super::model::TuiModel;
-use super::super::{ACCENT, MUTED, SUCCESS, WARNING, panel_block};
+use super::super::{ACCENT, MUTED, SUCCESS, WARNING, surface_block};
 
 pub(crate) fn render_overview(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
     let harness_total = model.doctor.as_ref().map_or(0, |d| d.harnesses.len());
@@ -90,7 +90,7 @@ pub(crate) fn render_overview(frame: &mut ratatui::Frame<'_>, area: Rect, model:
     }
     frame.render_widget(
         Paragraph::new(lines)
-            .block(panel_block(" Overview "))
+            .block(surface_block(" Overview"))
             .wrap(Wrap { trim: true }),
         area,
     );

@@ -11,7 +11,9 @@ use crate::{application::HarnessHealth, capability::CapabilityKind, router::Harn
 
 use super::super::hit::Hit;
 use super::super::model::TuiModel;
-use super::super::{ACCENT, DANGER, MUTED, SUCCESS, WARNING, panel_block, setup_style};
+use super::super::{
+    ACCENT, DANGER, MUTED, SELECTED_BG, SUCCESS, WARNING, setup_style, surface_block,
+};
 
 pub(crate) fn render_harnesses(
     frame: &mut ratatui::Frame<'_>,
@@ -21,9 +23,10 @@ pub(crate) fn render_harnesses(
 ) {
     let columns = Layout::default()
         .direction(Direction::Horizontal)
+        .spacing(1)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(area);
-    let block = panel_block(" Harnesses ");
+    let block = surface_block(" Harnesses");
     let inner = block.inner(columns[0]);
     frame.render_widget(block, columns[0]);
     match &model.doctor {
@@ -48,11 +51,17 @@ pub(crate) fn render_harnesses(
                     } else {
                         Span::styled("Not installed", Style::default().fg(MUTED))
                     };
-                    ListItem::new(Line::from(vec![
+                    let mut spans = vec![
                         Span::styled(marker, style),
                         Span::styled(format!("{:<14}", harness.integration), style),
                         status,
-                    ]))
+                    ];
+                    if selected {
+                        for span in &mut spans {
+                            span.style = span.style.bg(SELECTED_BG);
+                        }
+                    }
+                    ListItem::new(Line::from(spans))
                 })
                 .collect();
             frame.render_widget(List::new(items), inner);
@@ -69,7 +78,7 @@ pub(crate) fn render_harnesses(
 
 fn render_harness_detail(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
     let Some(harness) = model.selected_harness() else {
-        frame.render_widget(Paragraph::new("").block(panel_block(" Harness ")), area);
+        frame.render_widget(Paragraph::new("").block(surface_block(" Harness")), area);
         return;
     };
     let mut lines = vec![
@@ -123,7 +132,7 @@ fn render_harness_detail(frame: &mut ratatui::Frame<'_>, area: Rect, model: &Tui
     }
     frame.render_widget(
         Paragraph::new(lines)
-            .block(panel_block(" Harness "))
+            .block(surface_block(" Harness"))
             .wrap(Wrap { trim: true }),
         area,
     );

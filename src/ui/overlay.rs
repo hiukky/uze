@@ -5,12 +5,12 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Clear, Padding, Paragraph},
+    widgets::{Block, Padding, Paragraph},
 };
 
 use super::model::{Focus, Overlay, TrustedRetry, TuiModel};
 use super::worker::{Intent, TrustGrant};
-use super::{ACCENT, DANGER, MUTED, WARNING, panel_block};
+use super::{ACCENT, DANGER, MUTED, SURFACE_RAISED, WARNING};
 
 impl TuiModel {
     pub(crate) fn overlay_key(&mut self, key: KeyEvent) -> Intent {
@@ -185,7 +185,6 @@ pub(crate) fn render_confirm_remove(
         width,
         height,
     );
-    frame.render_widget(Clear, popup);
 
     let cancel_style = if focus == 0 {
         Style::default()
@@ -228,9 +227,7 @@ pub(crate) fn render_confirm_remove(
         Style::default().fg(MUTED),
     ));
 
-    let block = panel_block(" Remove plugin? ")
-        .border_style(Style::default().fg(DANGER))
-        .padding(Padding::new(1, 1, 1, 0));
+    let block = modal_block(" Remove plugin? ", DANGER);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     // Layout inside popup: message, hint, empty, buttons, footer
@@ -271,7 +268,6 @@ pub(crate) fn render_protected_plugin(frame: &mut ratatui::Frame<'_>, area: Rect
         width,
         height,
     );
-    frame.render_widget(Clear, popup);
     let lines = vec![
         Line::from(vec![
             Span::styled(
@@ -295,7 +291,7 @@ pub(crate) fn render_protected_plugin(frame: &mut ratatui::Frame<'_>, area: Rect
     ];
     frame.render_widget(
         Paragraph::new(lines)
-            .block(panel_block(" Protected plugin ").border_style(Style::default().fg(WARNING)))
+            .block(modal_block(" Protected plugin ", WARNING))
             .wrap(ratatui::widgets::Wrap { trim: true })
             .alignment(Alignment::Center),
         popup,
@@ -364,10 +360,7 @@ pub(crate) fn render_add_marketplace(frame: &mut ratatui::Frame<'_>, area: Rect,
         width,
         height,
     );
-    frame.render_widget(Clear, popup);
-    let block = panel_block(" Add marketplace ")
-        .border_style(Style::default().fg(ACCENT))
-        .padding(Padding::new(1, 1, 1, 0));
+    let block = modal_block(" Add marketplace ", ACCENT);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     let rows = Layout::default()
@@ -394,14 +387,7 @@ pub(crate) fn render_add_marketplace(frame: &mut ratatui::Frame<'_>, area: Rect,
         ),
         Span::styled("▏", Style::default().fg(ACCENT)),
     ]);
-    frame.render_widget(
-        Paragraph::new(field).block(
-            ratatui::widgets::Block::default()
-                .borders(ratatui::widgets::Borders::BOTTOM)
-                .border_style(Style::default().fg(MUTED)),
-        ),
-        rows[1],
-    );
+    frame.render_widget(Paragraph::new(field), rows[1]);
     frame.render_widget(
         Paragraph::new(Span::styled(
             "enter add · esc cancel",
@@ -471,11 +457,21 @@ fn render_modal(
         width,
         height,
     );
-    frame.render_widget(Clear, popup);
     frame.render_widget(
         Paragraph::new(lines)
-            .block(panel_block(format!(" {title} ")).border_style(Style::default().fg(color)))
+            .block(modal_block(format!(" {title} "), color))
             .wrap(ratatui::widgets::Wrap { trim: true }),
         popup,
     );
+}
+
+/// The modal dialog surface: a raised slab (no border, no `Clear` needed —
+/// its own background paints the whole popup rect opaque) with a colored
+/// bold title on its first line.
+fn modal_block(title: impl Into<Line<'static>>, color: Color) -> Block<'static> {
+    Block::default()
+        .title(title)
+        .title_style(Style::default().fg(color).add_modifier(Modifier::BOLD))
+        .style(Style::default().bg(SURFACE_RAISED))
+        .padding(Padding::new(1, 1, 1, 0))
 }

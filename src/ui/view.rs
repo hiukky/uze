@@ -6,13 +6,13 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Paragraph},
+    widgets::{Block, Padding, Paragraph},
 };
 
 use crate::application::PluginCapability;
 use uze_core::capability::CapabilityKind;
 
-use super::{ACCENT, MUTED, icon};
+use super::{MUTED, SURFACE_RAISED};
 
 pub mod context;
 pub mod doctor;
@@ -37,15 +37,6 @@ pub(crate) fn capability_kind_label(kind: CapabilityKind) -> &'static str {
     }
 }
 
-fn capability_kind_icon(kind: CapabilityKind) -> &'static str {
-    match kind {
-        CapabilityKind::AgentSkill => icon::SKILLS,
-        CapabilityKind::Agent => icon::AGENTS,
-        CapabilityKind::Mcp => icon::MCP,
-        _ => "•",
-    }
-}
-
 /// The three resource kinds every plugin could plausibly declare, always
 /// shown in this fixed order (even empty, as a `–` placeholder) so the
 /// Resources card reads as a stable table rather than a list that
@@ -56,12 +47,12 @@ const CORE_KINDS: [CapabilityKind; 3] = [
     CapabilityKind::Mcp,
 ];
 
-/// Appends a grouped-by-kind, indented listing of `capabilities` to `lines`,
-/// as a bordered card: the three core kinds (Skills/Agents/MCP Servers)
-/// always appear, in that order, each as its own icon-labeled group with a
-/// `–` placeholder when empty; any other kind actually present
-/// (Instructions/Actions/Hooks/Policies) is appended after, only when
-/// non-empty. A thin divider separates each group. Only the resource's own
+/// Appends a grouped-by-kind, indented listing of `capabilities` to `lines`:
+/// the three core kinds (Skills/Agents/MCP Servers) always appear, in that
+/// order, each as its own label-headed group with a `–` placeholder when
+/// empty; any other kind actually present (Instructions/Actions/Hooks/
+/// Policies) is appended after, only when non-empty. Groups are separated
+/// by blank lines (not drawn dividers), and only the resource's own
 /// logical/file name is shown — an MCP server groups as one row here, since
 /// the individual tools it exposes are runtime-discovered by the harness
 /// that connects to it, not declared anywhere UZE reads.
@@ -85,22 +76,13 @@ pub(crate) fn push_capability_table(lines: &mut Vec<Line<'_>>, capabilities: &[P
             continue;
         }
         if !first {
-            lines.push(Line::from(Span::styled(
-                "─".repeat(20),
-                Style::default().fg(MUTED),
-            )));
+            lines.push(Line::from(""));
         }
         first = false;
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("{} ", capability_kind_icon(kind)),
-                Style::default().fg(ACCENT),
-            ),
-            Span::styled(
-                capability_kind_label(kind),
-                Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
-            ),
-        ]));
+        lines.push(Line::from(Span::styled(
+            capability_kind_label(kind),
+            Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
+        )));
         match items {
             Some(items) => {
                 for item in items {
@@ -112,11 +94,11 @@ pub(crate) fn push_capability_table(lines: &mut Vec<Line<'_>>, capabilities: &[P
     }
 }
 
-/// The bordered, icon-headlined status card pinned under a detail panel's
-/// scrollable content — same shape for the Marketplace and Plugins routes,
-/// each computing its own `(color, headline, subtitle)` from its own
-/// domain state (install/update for a catalog entry; health/update for an
-/// installed one).
+/// The raised status card pinned under a detail panel's content — same
+/// shape for the Marketplace and Plugins routes, each computing its own
+/// `(color, headline, subtitle)` from its own domain state (install/update
+/// for a catalog entry; health/update for an installed one). A colored dot
+/// plus a bold headline on a slightly lighter slab, no border.
 pub(crate) fn render_status_card(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
@@ -125,15 +107,11 @@ pub(crate) fn render_status_card(
     subtitle: &str,
 ) {
     let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(color));
+        .style(Style::default().bg(SURFACE_RAISED))
+        .padding(Padding::new(1, 1, 1, 0));
     let lines = vec![
         Line::from(vec![
-            Span::styled(
-                format!("{} ", icon::CHECK),
-                Style::default().fg(color).add_modifier(Modifier::BOLD),
-            ),
+            Span::styled("● ", Style::default().fg(color)),
             Span::styled(
                 headline.to_owned(),
                 Style::default().fg(color).add_modifier(Modifier::BOLD),
