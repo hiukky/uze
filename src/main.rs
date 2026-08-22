@@ -205,12 +205,12 @@ fn run(cli: Cli) -> Result<()> {
     let Some(command) = cli.command else {
         if std::io::stdout().is_terminal() && std::io::stdin().is_terminal() {
             // Seeding default marketplace plugins now happens inside the
-            // TUI's own startup worker (see `tui::spawn_startup`), off the
+            // TUI's own startup worker (see `ui::spawn_startup`), off the
             // terminal-takeover path — running it here, synchronously,
             // before the alternate screen is even entered, left the
             // terminal looking frozen for however long harness detection
             // took.
-            return uze::tui::run(home);
+            return uze::ui::run(home);
         }
         Cli::command()
             .print_help()

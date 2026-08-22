@@ -13,4 +13,4 @@ pub use uze_core::{
 
 pub use uze_application::{UzeApplication, application};
 pub use uze_integrations as integrations;
-pub mod tui;
+pub mod ui;
