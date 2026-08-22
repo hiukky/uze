@@ -54,7 +54,10 @@ Claude Codex OpenCode Gemini
 `✅` Ready/native · `◐` Partial/adapted · `◌` Experimental · `—` Not
 implemented. "Native" means a real, first-class mechanism per harness, not
 a shared name — see the [capability landscape](docs/capabilities/landscape.md)
-for exactly what each cell means and its evidence.
+for exactly what each cell means and its evidence, or
+[`crates/uze-integrations/README.md`](crates/uze-integrations/README.md) for
+the evidence-graded, per-harness compatibility audit (status per surface,
+package-coverage safety, lifecycle, and each integration's own README).
 
 | Capability | Status |
 |---|---|
