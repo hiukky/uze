@@ -84,6 +84,33 @@ const WARNING: Color = Color::Yellow;
 const DANGER: Color = Color::Red;
 const PANEL: Color = Color::DarkGray;
 
+const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+fn is_protected_plugin(
+    plugin: &PluginSummary,
+    marketplace_plugins: &[MarketplacePluginSummary],
+) -> bool {
+    // Only the verified official origin is protected: any `embedded:` provenance
+    // whose id is listed in the compiled marketplace snapshot. A local or git
+    // package that spoofs the name `uze` without `embedded:` provenance is not
+    // considered official and remains removable.
+    if !plugin.source.starts_with("embedded:") {
+        return false;
+    }
+    if uze_application::bootstrap::DEFAULT_PLUGIN_IDS.contains(&plugin.id.as_str()) {
+        return true;
+    }
+    if marketplace_plugins.iter().any(|m| m.name == plugin.id) {
+        return true;
+    }
+    // Fallback when marketplace hasn't loaded yet (startup): consult the
+    // compiled snapshot directly. Keeps protection deterministic.
+    if let Ok((_, entries)) = uze_application::bootstrap::entries() {
+        return entries.iter().any(|entry| entry.name == plugin.id);
+    }
+    false
+}
+
 // --- Routes -----------------------------------------------------------------
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -133,10 +160,14 @@ enum Focus {
 enum Overlay {
     None,
     Help,
-    ConfirmRemove(String),
+    ConfirmRemove {
+        id: String,
+        focus: usize,
+    },
     ConfirmUpdate(String),
     ConfirmInstall(String),
     ConfirmContextApply,
+    ProtectedPlugin(String),
     /// A mutation needs consent it wasn't given non-interactively. Confirming
     /// re-runs the *same* action with explicit trust — never a silent
     /// bypass; the operator sees exactly what would newly execute.
@@ -195,6 +226,9 @@ struct TuiModel {
     context_status: Option<ProjectContextStatus>,
     context_plan: Option<ContextPlan>,
 
+    /// Frame counter for spinner animation while background work is pending.
+    tick: usize,
+
     /// Mouse hit targets for the frame just drawn, rebuilt every render.
     /// Kept in one place rather than recomputed ad hoc from coordinates
     /// scattered through render functions.
@@ -228,6 +262,7 @@ impl Default for TuiModel {
             context_root: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             context_status: None,
             context_plan: None,
+            tick: 0,
             hits: Vec::new(),
         }
     }
@@ -379,9 +414,17 @@ impl TuiModel {
             }
             KeyCode::Enter => self.open_or_act(),
             KeyCode::Char('r') if self.route == Route::Plugins => {
-                if let Some(id) = self.selected_plugin().map(|plugin| plugin.id.clone()) {
-                    self.overlay = Overlay::ConfirmRemove(id);
-                    self.focus = Focus::Overlay;
+                if let Some(plugin) = self.selected_plugin() {
+                    if is_protected_plugin(plugin, &self.marketplace_plugins) {
+                        self.overlay = Overlay::ProtectedPlugin(plugin.id.clone());
+                        self.focus = Focus::Overlay;
+                    } else {
+                        self.overlay = Overlay::ConfirmRemove {
+                            id: plugin.id.clone(),
+                            focus: 1,
+                        };
+                        self.focus = Focus::Overlay;
+                    }
                 }
                 Intent::None
             }
@@ -454,15 +497,40 @@ impl TuiModel {
                 self.close_overlay();
                 Intent::None
             }
-            (Overlay::ConfirmRemove(id), KeyCode::Char('y') | KeyCode::Enter) => {
+            (
+                Overlay::ConfirmRemove { id, focus },
+                KeyCode::Tab | KeyCode::BackTab | KeyCode::Left | KeyCode::Right,
+            ) => {
+                let new_focus = 1 - *focus;
+                self.overlay = Overlay::ConfirmRemove {
+                    id: id.clone(),
+                    focus: new_focus,
+                };
+                Intent::None
+            }
+            (Overlay::ConfirmRemove { id, focus }, KeyCode::Enter) => {
+                if *focus == 1 {
+                    let id = id.clone();
+                    self.close_overlay();
+                    Intent::Remove(id)
+                } else {
+                    self.close_overlay();
+                    Intent::None
+                }
+            }
+            (Overlay::ConfirmRemove { id, .. }, KeyCode::Char('y') | KeyCode::Char('Y')) => {
                 let id = id.clone();
                 self.close_overlay();
                 Intent::Remove(id)
             }
-            (Overlay::ConfirmRemove(_), _) => {
+            (
+                Overlay::ConfirmRemove { .. },
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc,
+            ) => {
                 self.close_overlay();
                 Intent::None
             }
+            (Overlay::ConfirmRemove { .. }, _) => Intent::None,
             (Overlay::ConfirmUpdate(id), KeyCode::Char('y') | KeyCode::Enter) => {
                 let id = id.clone();
                 self.close_overlay();
@@ -486,6 +554,10 @@ impl TuiModel {
                 Intent::ContextApply(self.context_root.clone())
             }
             (Overlay::ConfirmContextApply, _) => {
+                self.close_overlay();
+                Intent::None
+            }
+            (Overlay::ProtectedPlugin(_), _) => {
                 self.close_overlay();
                 Intent::None
             }
@@ -976,6 +1048,7 @@ impl TerminalSession {
     }
 
     fn draw(&mut self, model: &mut TuiModel) -> Result<()> {
+        model.tick = model.tick.wrapping_add(1);
         let mut hits = Vec::new();
         self.terminal
             .draw(|frame| render(frame, model, &mut hits))
@@ -1051,10 +1124,13 @@ fn render(frame: &mut ratatui::Frame<'_>, model: &TuiModel, hits: &mut Vec<(Rect
     match &model.overlay {
         Overlay::None => {}
         Overlay::Help => render_help(frame, frame.area()),
-        Overlay::ConfirmRemove(id) => render_confirm_remove(frame, frame.area(), id),
+        Overlay::ConfirmRemove { id, focus } => {
+            render_confirm_remove(frame, frame.area(), id, *focus)
+        }
         Overlay::ConfirmUpdate(id) => render_confirm_update(frame, frame.area(), id),
         Overlay::ConfirmInstall(name) => render_confirm_install(frame, frame.area(), name),
         Overlay::ConfirmContextApply => render_confirm_context_apply(frame, frame.area()),
+        Overlay::ProtectedPlugin(id) => render_protected_plugin(frame, frame.area(), id),
         Overlay::TrustRequired { plugin, detail, .. } => {
             render_trust_required(frame, frame.area(), plugin, detail)
         }
@@ -1063,21 +1139,29 @@ fn render(frame: &mut ratatui::Frame<'_>, model: &TuiModel, hits: &mut Vec<(Rect
 
 fn render_titlebar(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
     let issues = model.issues().len();
-    let health = if model.doctor.is_none() {
-        Span::styled("checking…", Style::default().fg(MUTED))
-    } else if issues == 0 {
-        Span::styled("healthy", Style::default().fg(SUCCESS))
-    } else {
-        Span::styled(format!("{issues} issue(s)"), Style::default().fg(WARNING))
-    };
-    let line = Line::from(vec![
+    let mut line_spans = vec![
         Span::styled(
             " UZE",
             Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
-        health,
-    ]);
+    ];
+    if model.doctor.is_none() {
+        let frame = SPINNER_FRAMES[model.tick % SPINNER_FRAMES.len()];
+        line_spans.push(Span::styled(
+            format!("{frame} "),
+            Style::default().fg(MUTED),
+        ));
+        line_spans.push(Span::styled("checking…", Style::default().fg(MUTED)));
+    } else if issues == 0 {
+        line_spans.push(Span::styled("healthy", Style::default().fg(SUCCESS)));
+    } else {
+        line_spans.push(Span::styled(
+            format!("{issues} issue(s)"),
+            Style::default().fg(WARNING),
+        ));
+    }
+    let line = Line::from(line_spans);
     frame.render_widget(
         Paragraph::new(line).block(
             Block::default()
@@ -1844,30 +1928,130 @@ fn render_help(frame: &mut ratatui::Frame<'_>, area: Rect) {
     );
 }
 
-fn render_confirm_remove(frame: &mut ratatui::Frame<'_>, area: Rect, id: &str) {
-    render_modal(
-        frame,
-        area,
-        "Remove plugin?",
-        vec![
-            Line::from(vec![
-                Span::raw("Remove "),
-                Span::styled(
-                    id.to_owned(),
-                    Style::default().fg(DANGER).add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(" from UZE?"),
-            ]),
-            Line::from(Span::styled(
-                "Only artifacts that still match UZE ownership are detached.",
-                Style::default().fg(MUTED),
-            )),
-            Line::from(Span::styled(
-                "enter/y remove · esc/n preserve",
-                Style::default().fg(MUTED),
-            )),
-        ],
-        DANGER,
+fn render_confirm_remove(frame: &mut ratatui::Frame<'_>, area: Rect, id: &str, focus: usize) {
+    // Compact, centered confirmation ~52 wide instead of stretching full width.
+    let width = 52.min(area.width.saturating_sub(4));
+    let height = 8.min(area.height.saturating_sub(2));
+    let popup = Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    );
+    frame.render_widget(Clear, popup);
+
+    let cancel_style = if focus == 0 {
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::White)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(MUTED)
+    };
+    let remove_style = if focus == 1 {
+        Style::default()
+            .fg(Color::White)
+            .bg(DANGER)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(DANGER).add_modifier(Modifier::BOLD)
+    };
+
+    let message = Line::from(vec![
+        Span::raw("Remove "),
+        Span::styled(
+            id.to_owned(),
+            Style::default().fg(DANGER).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("?"),
+    ]);
+    let hint = Line::from(Span::styled(
+        "Only matched artifacts will be detached.",
+        Style::default().fg(MUTED),
+    ));
+    // Centered button row with clear visual hierarchy; destructive action is
+    // red, safe action is muted, focused button gets solid background.
+    let buttons = Line::from(vec![
+        Span::styled("  Cancel  ", cancel_style),
+        Span::raw("  "),
+        Span::styled("  Remove  ", remove_style),
+    ]);
+    let footer = Line::from(Span::styled(
+        "tab switch · enter confirm · esc cancel · y/n",
+        Style::default().fg(MUTED),
+    ));
+
+    let block = panel_block(" Remove plugin? ")
+        .border_style(Style::default().fg(DANGER))
+        .padding(Padding::new(1, 1, 1, 0));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    // Layout inside popup: message, hint, empty, buttons, footer
+    let inner_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .split(inner);
+    frame.render_widget(
+        Paragraph::new(message).alignment(Alignment::Center),
+        inner_layout[0],
+    );
+    frame.render_widget(
+        Paragraph::new(hint).alignment(Alignment::Center),
+        inner_layout[1],
+    );
+    frame.render_widget(
+        Paragraph::new(buttons).alignment(Alignment::Center),
+        inner_layout[3],
+    );
+    frame.render_widget(
+        Paragraph::new(footer).alignment(Alignment::Center),
+        inner_layout[4],
+    );
+}
+
+fn render_protected_plugin(frame: &mut ratatui::Frame<'_>, area: Rect, id: &str) {
+    let width = 56.min(area.width.saturating_sub(4));
+    let height = 7.min(area.height.saturating_sub(2));
+    let popup = Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    );
+    frame.render_widget(Clear, popup);
+    let lines = vec![
+        Line::from(vec![
+            Span::styled(
+                id.to_owned(),
+                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" is an official marketplace plugin"),
+        ]),
+        Line::from(Span::styled(
+            "and cannot be removed from the TUI.",
+            Style::default().fg(MUTED),
+        )),
+        Line::from(Span::styled(
+            "Use a custom source for removable plugins.",
+            Style::default().fg(MUTED),
+        )),
+        Line::from(Span::styled(
+            "esc / enter to dismiss",
+            Style::default().fg(MUTED),
+        )),
+    ];
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(panel_block(" Protected plugin ").border_style(Style::default().fg(WARNING)))
+            .wrap(Wrap { trim: true })
+            .alignment(Alignment::Center),
+        popup,
     );
 }
 
@@ -2015,17 +2199,28 @@ fn footer(model: &TuiModel) -> Text<'static> {
             Focus::Sidebar => "↑↓/jk select route · enter/tab open · ? help · q quit",
             _ => route_hint(model.route),
         },
+        Overlay::ConfirmRemove { .. } => "tab switch · enter confirm · esc cancel · y/n",
+        Overlay::ProtectedPlugin(_) => "esc/enter to dismiss",
         _ => "enter/y confirm · esc/n cancel",
     };
     match &model.status {
         Status::Idle => Text::from(Line::from(Span::styled(hint, Style::default().fg(MUTED)))),
-        Status::Working(value) => Text::from(vec![
-            Line::from(Span::styled(
-                value.clone(),
-                Style::default().fg(WARNING).add_modifier(Modifier::BOLD),
-            )),
-            Line::from(Span::styled(hint, Style::default().fg(MUTED))),
-        ]),
+        Status::Working(value) => {
+            let frame = SPINNER_FRAMES[model.tick % SPINNER_FRAMES.len()];
+            Text::from(vec![
+                Line::from(vec![
+                    Span::styled(
+                        format!("{frame} "),
+                        Style::default().fg(WARNING).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        value.clone(),
+                        Style::default().fg(WARNING).add_modifier(Modifier::BOLD),
+                    ),
+                ]),
+                Line::from(Span::styled(hint, Style::default().fg(MUTED))),
+            ])
+        }
         Status::Success(value) => Text::from(vec![
             Line::from(Span::styled(
                 value.clone(),
@@ -2294,7 +2489,7 @@ mod tests {
     fn remove_confirmation_flow() {
         let mut model = model_with_plugins(&["one"]);
         model.apply_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
-        assert!(matches!(model.overlay, Overlay::ConfirmRemove(ref id) if id == "one"));
+        assert!(matches!(model.overlay, Overlay::ConfirmRemove { ref id, .. } if id == "one"));
         assert_eq!(model.focus, Focus::Overlay);
         let intent = model.apply_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
         assert_eq!(intent, Intent::None);
@@ -2393,7 +2588,10 @@ mod tests {
     #[test]
     fn click_outside_overlay_dismisses_without_confirming() {
         let mut model = model_with_plugins(&["one"]);
-        model.overlay = Overlay::ConfirmRemove("one".to_owned());
+        model.overlay = Overlay::ConfirmRemove {
+            id: "one".to_owned(),
+            focus: 1,
+        };
         model.focus = Focus::Overlay;
         let intent = model.apply_mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
