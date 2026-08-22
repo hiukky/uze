@@ -1,5 +1,5 @@
 ---
-name: uze-playground-review
+name: review
 description: Performs a focused code or configuration review with actionable findings.
 ---
 

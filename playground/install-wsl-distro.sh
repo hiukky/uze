@@ -40,16 +40,16 @@ trap 'rm -rf -- "$stage_dir"' EXIT
 
 cd "$repo_root"
 echo "Building UZE and the playground MCP server from $repo_root…"
-cargo build --locked --release --bin uze --bin uze-playground-mcp
+cargo build --locked --release --bin uze --bin playground-mcp
 
 install -m 0755 target/release/uze "$stage_dir/uze"
-install -m 0755 target/release/uze-playground-mcp "$stage_dir/uze-playground-mcp"
+install -m 0755 target/release/playground-mcp "$stage_dir/playground-mcp"
 cp -a "$playground_root/default-plugin" "$stage_dir/default-plugin"
 # Both distributions mount the Windows staging directory at the same
 # `/mnt/c/...` path. Keeping this Unix path avoids both the `\\wsl.localhost`
 # conversion and the backslash re-parsing that `wsl.exe` applies to arguments.
 quoted_artifact="'${stage_dir}/uze'"
-quoted_mcp_artifact="'${stage_dir}/uze-playground-mcp'"
+quoted_mcp_artifact="'${stage_dir}/playground-mcp'"
 quoted_plugin_source="'${stage_dir}/default-plugin'"
 
 echo "Installing UZE into WSL distro '$target_distro'…"
@@ -61,7 +61,7 @@ source_artifact=__UZE_STAGED_ARTIFACT__
 source_mcp_artifact=__UZE_STAGED_MCP_ARTIFACT__
 source_plugin=__UZE_STAGED_PLUGIN_SOURCE__
 destination="\$HOME/.local/bin/uze"
-playground_mcp_destination="\$HOME/.local/bin/uze-playground-mcp"
+playground_mcp_destination="\$HOME/.local/bin/playground-mcp"
 playground_destination="\$HOME/uze-playground/default-plugin"
 if [[ ! -f "\$source_artifact" || ! -f "\$source_mcp_artifact" || ! -d "\$source_plugin" ]]; then
   echo "error: a staged playground artifact is unavailable in target distro" >&2
@@ -74,7 +74,7 @@ install -m 0755 "\$source_mcp_artifact" "\$playground_mcp_destination"
 # This exact location is owned by the cross-distro playground helper. Refuse
 # to replace a directory not previously created by it, so user state is never
 # silently discarded.
-if [[ -e "\$playground_destination" && ! -f "\$playground_destination/.uze-playground-managed" ]]; then
+if [[ -e "\$playground_destination" && ! -f "\$playground_destination/.playground-managed" ]]; then
   echo "error: refusing to replace unmanaged playground at \$playground_destination" >&2
   exit 1
 fi

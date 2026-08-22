@@ -45,5 +45,5 @@ name = "uze-mcp-conformance-fixture"
 path = "e2e/fixtures/bin/mcp_conformance_fixture.rs"
 
 [[bin]]
-name = "uze-playground-mcp"
+name = "playground-mcp"
 path = "playground/mcp_server.rs"
