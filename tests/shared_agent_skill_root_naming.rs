@@ -18,7 +18,9 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use uze::integrations::{codex::CodexIntegration, gemini::GeminiIntegration, opencode::OpenCodeIntegration};
+use uze::integrations::{
+    codex::CodexIntegration, gemini::GeminiIntegration, opencode::OpenCodeIntegration,
+};
 use uze::{
     PackageSource, UzeApplication, UzeHome,
     provisioning::{ProcessResult, ProcessRunner, ProcessSpec},
@@ -80,7 +82,10 @@ fn opencode_codex_and_gemini_share_exactly_one_symlink_for_the_same_skill() {
         uze_home.clone(),
         vec![
             Box::new(CodexIntegration::new(agents_home.clone(), uze_home.clone())),
-            Box::new(GeminiIntegration::new(agents_home.clone(), uze_home.clone())),
+            Box::new(GeminiIntegration::new(
+                agents_home.clone(),
+                uze_home.clone(),
+            )),
             Box::new(OpenCodeIntegration::new(
                 agents_home.clone(),
                 root.join("opencode-config.json"),

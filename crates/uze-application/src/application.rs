@@ -1203,7 +1203,8 @@ impl UzeApplication {
                     .filter(|other| other.shared_agent_skill_root().as_ref() == Some(root))
                     .map(|other| other.exposure_name_candidates(resource))
                     .find(|list| {
-                        list.first().map(String::as_str) == resource.logical_capability_name().as_deref()
+                        list.first().map(String::as_str)
+                            == resource.logical_capability_name().as_deref()
                     })
             })
             .unwrap_or_else(|| integration.exposure_name_candidates(resource));
