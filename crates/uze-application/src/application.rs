@@ -3,7 +3,11 @@
 //! CLI, TUI, and future presentation layers call this facade rather than
 //! reaching into Store, integrations, vendor files, or lifecycle mechanics.
 
-use std::{collections::BTreeSet, path::PathBuf};
+use std::{
+    collections::BTreeSet,
+    fs,
+    path::{Path, PathBuf},
+};
 
 use serde::Serialize;
 
@@ -32,15 +36,24 @@ use uze_integrations::{
 
 use crate::bootstrap;
 
-/// Harnesses that read a project's shared `AGENTS.md` only through an
-/// explicit bridge region in their own native file, rather than natively —
-/// see `docs/capabilities/instructions-design.md` Fase 4. Codex and OpenCode
-/// are deliberately absent: both read `AGENTS.md` directly, so
-/// `context_reconcile` never needs to write anything into a Codex- or
-/// OpenCode-specific file at all. This list is explicit, hardcoded vendor
-/// knowledge — appropriate here, in the composition root that already names
-/// every concrete integration by type, and not something `uze-core` or
-/// `IntegrationPort` needs to know.
+/// `LEGACY/PERSISTENT CONTEXT DELIVERY STRATEGY`. Harnesses that read a
+/// project's shared `AGENTS.md` only through an explicit bridge region
+/// written into their own native file *inside the project's working tree*,
+/// rather than natively — see `docs/capabilities/instructions-design.md`
+/// Fase 4. Codex and OpenCode are deliberately absent: both read
+/// `AGENTS.md` directly, so `context_reconcile` never needs to write
+/// anything into a Codex- or OpenCode-specific file at all. This list is
+/// explicit, hardcoded vendor knowledge — appropriate here, in the
+/// composition root that already names every concrete integration by type,
+/// and not something `uze-core` or `IntegrationPort` needs to know.
+///
+/// Kept, unchanged, alongside the newer `EXPERIMENTAL RUNTIME DELIVERY
+/// STRATEGY` (`ClaudeIntegration::runtime_contribution`, driven through the
+/// PATH shim rather than through `context reconcile`). Whether runtime
+/// projection ever replaces this bridge for Claude is a separate, later
+/// decision pending an empirical interactive comparison — see the
+/// Checkpoint 2 report. Do not remove or fold this into the experimental
+/// path without that comparison.
 const BRIDGE_INTEGRATIONS: &[(&str, &str)] =
     &[("claude-code", "CLAUDE.md"), ("gemini", "GEMINI.md")];
 
@@ -533,20 +546,79 @@ impl UzeApplication {
         let wanted = requested
             .map(|name| self.resolve_integration_id(name))
             .transpose()?;
-        let results = self.provision_and_prepare(wanted)?;
+        let mut results = self.provision_and_prepare(wanted)?;
         // `setup` is the documented way to repair a derived view that
         // failed to publish, so it always rebuilds them.
         let _ = self.republish_all();
-        for result in results.iter().filter(|result| result.configured) {
+        for result in results.iter_mut().filter(|result| result.configured) {
             if let Some(integration) = self
                 .integrations
                 .iter()
                 .find(|integration| integration.id() == result.integration)
             {
                 self.attach_stored_packages_to(integration.as_ref())?;
+                result.runtime_shim = self.ensure_runtime_shim(integration.as_ref())?;
             }
         }
         Ok(results)
+    }
+
+    /// Idempotently creates/refreshes the PATH shim for `integration` when
+    /// it opts in via `IntegrationPort::supports_runtime_integration` — see
+    /// that method's doc comment for why there is no separate enabled/
+    /// disabled flag: the shim symlink's own presence at `shims_dir/<name>`
+    /// is the only state this tracks. `Ok(None)` (not an error) when the
+    /// integration has no runtime-integration story. Called automatically
+    /// by `setup()` — running `uze setup <harness>` is the entire opt-in,
+    /// no separate flag.
+    ///
+    /// `EXPERIMENTAL RUNTIME DELIVERY STRATEGY` (`RUNTIME INFRASTRUCTURE`,
+    /// not a `CONTEXT DELIVERY POLICY` decision; see `BRIDGE_INTEGRATIONS`).
+    fn ensure_runtime_shim(
+        &self,
+        integration: &dyn IntegrationPort,
+    ) -> Result<Option<RuntimeShimSetup>> {
+        if !integration.supports_runtime_integration() {
+            return Ok(None);
+        }
+        let shim_name = integration
+            .aliases()
+            .first()
+            .copied()
+            .unwrap_or(integration.id());
+        let shims_dir = self.home.shims_dir();
+
+        // Refuse to shim a harness with no real binary anywhere — that
+        // would silently create a symlink that can never resolve.
+        let resolved = uze_core::harness_runtime::resolve_real_executable(&[shim_name], &shims_dir)
+            .ok_or_else(|| {
+                UzeError::ExposureUnavailable(format!(
+                    "no real `{shim_name}` executable found on PATH outside {} — install it \
+                         first",
+                    shims_dir.display()
+                ))
+            })?;
+
+        fs::create_dir_all(&shims_dir).map_err(|source| UzeError::Write {
+            path: shims_dir.clone(),
+            source,
+        })?;
+        let uze_binary = std::env::current_exe().map_err(|source| UzeError::Process {
+            program: "uze".to_owned(),
+            source,
+        })?;
+        let shim_path = shims_dir.join(shim_name);
+        refresh_shim_symlink(&uze_binary, &shim_path)?;
+
+        let on_path = std::env::var_os("PATH")
+            .map(|path| std::env::split_paths(&path).any(|entry| entry == shims_dir))
+            .unwrap_or(false);
+
+        Ok(Some(RuntimeShimSetup {
+            shim_path,
+            resolved_executable: resolved,
+            path_hint: (!on_path).then(|| format!("export PATH=\"{}:$PATH\"", shims_dir.display())),
+        }))
     }
 
     /// Explicit setup is the only path allowed to provision or update an
@@ -567,6 +639,10 @@ impl UzeApplication {
                     detection: provisioning.detection.clone(),
                     configured,
                     provisioning,
+                    // Only explicit `setup()` wires up `ensure_runtime_shim` —
+                    // this helper also backs `add`'s implicit preparation,
+                    // which must never silently create a PATH shim.
+                    runtime_shim: None,
                 })
             })
             .collect()
@@ -595,6 +671,7 @@ impl UzeApplication {
                         "implicit-existing-executable",
                         integration.detect(),
                     ),
+                    runtime_shim: None,
                 })
             })
             .collect()
@@ -1542,6 +1619,23 @@ pub struct SetupResult {
     pub detection: HarnessDetection,
     pub configured: bool,
     pub provisioning: ProvisioningResult,
+    /// `Some` when this integration opted into `EXPERIMENTAL RUNTIME
+    /// DELIVERY STRATEGY` (`IntegrationPort::supports_runtime_integration`)
+    /// and `ensure_runtime_shim` created/refreshed its PATH shim as an
+    /// ordinary part of this `setup` call — see `BRIDGE_INTEGRATIONS`'s
+    /// doc comment for how this relates to the existing, still-default,
+    /// persistent `CLAUDE.md`/`GEMINI.md` bridge. `None` for every
+    /// integration with no runtime-integration story (not an error).
+    pub runtime_shim: Option<RuntimeShimSetup>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct RuntimeShimSetup {
+    pub shim_path: PathBuf,
+    pub resolved_executable: PathBuf,
+    /// Set only when the shim directory isn't yet on `PATH` — the exact
+    /// manual instruction to run. UZE never edits shell rc files itself.
+    pub path_hint: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1881,6 +1975,46 @@ fn integration_status(status: IntegrationStatus) -> String {
         IntegrationStatus::InstalledVerified => "installed / verified",
     }
     .to_owned()
+}
+
+/// Idempotently points `link` at `target`, refusing to overwrite anything
+/// at `link` that is not already a UZE-created symlink to something else —
+/// the same conflict-safety shape `ClaudeIntegration`'s own skill symlink
+/// helper uses.
+#[cfg(unix)]
+fn refresh_shim_symlink(target: &Path, link: &Path) -> Result<()> {
+    match fs::symlink_metadata(link) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            let current = fs::read_link(link).map_err(|source| UzeError::Read {
+                path: link.to_path_buf(),
+                source,
+            })?;
+            if current == target {
+                return Ok(());
+            }
+            fs::remove_file(link).map_err(|source| UzeError::Write {
+                path: link.to_path_buf(),
+                source,
+            })?;
+        }
+        Ok(_) => return Err(UzeError::ManagedEntryConflict(link.to_path_buf())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(UzeError::Read {
+                path: link.to_path_buf(),
+                source: error,
+            });
+        }
+    }
+    std::os::unix::fs::symlink(target, link).map_err(|source| UzeError::Write {
+        path: link.to_path_buf(),
+        source,
+    })
+}
+
+#[cfg(not(unix))]
+fn refresh_shim_symlink(_target: &Path, link: &Path) -> Result<()> {
+    Err(UzeError::UnsupportedRuntimeProjection(link.to_path_buf()))
 }
 
 fn package_receipt_key(package: &str, integration: &str) -> String {

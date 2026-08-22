@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     error::Result,
     exposure::{ExposureMechanism, ExposurePlan, McpEnvironmentReference, PackageExposurePlan},
+    harness_runtime::{HarnessRuntimeContribution, RuntimeContext},
     home::UzeHome,
     project::EffectiveEnvironment,
     router::{HarnessCapabilities, RouteDecision, route},
@@ -131,6 +132,30 @@ pub trait IntegrationPort {
 
     fn runtime_support(&self) -> RuntimeSupport {
         RuntimeSupport::default()
+    }
+
+    /// This integration's opt-in contribution to a shim-mediated harness
+    /// launch (`RUNTIME INFRASTRUCTURE`, see `harness_runtime`) — entirely
+    /// separate from `exposure_plan`, which governs package/skill delivery.
+    /// The default is a pure passthrough: every integration except Claude
+    /// Code currently has no runtime projection story and inherits this
+    /// unchanged. Never fallible — see `HarnessRuntimeContribution`'s own
+    /// documentation for why fail-open is structural here.
+    fn runtime_contribution(&self, _ctx: &RuntimeContext) -> HarnessRuntimeContribution {
+        HarnessRuntimeContribution::passthrough()
+    }
+
+    /// Whether `uze setup <harness>` should also create the PATH shim
+    /// (`UzeHome::shims_dir`) for this harness, as an ordinary part of that
+    /// one command — no separate flag or persisted enabled/disabled state.
+    /// The shim symlink's own presence is the entire "is this on" answer:
+    /// removing it is how one turns it back off. Default `false` — an
+    /// integration whose `runtime_contribution` is still just the inherited
+    /// passthrough has nothing to gain from being shimmed, so opting in
+    /// here is a deliberate per-integration decision, not automatic from
+    /// overriding `runtime_contribution` alone.
+    fn supports_runtime_integration(&self) -> bool {
+        false
     }
 
     /// The integration, not the resource representation, selects how the

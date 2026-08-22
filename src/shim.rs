@@ -1,0 +1,184 @@
+//! PATH shim entry point.
+//!
+//! This is the part of `uze` that runs when the binary is invoked under a
+//! symlinked name (`claude`, `codex`, `opencode`, `gemini`) rather than as
+//! `uze` itself — see `UzeApplication::ensure_runtime_shim`, which is what
+//! creates that symlink at `~/.uze/shims/<name>` as an ordinary part of
+//! `uze setup <harness>`, for whichever integrations opt in.
+//!
+//! Deliberately thin, and deliberately generic: every vendor-specific
+//! decision comes from `IntegrationPort::runtime_contribution`. This file
+//! only detects the invocation, resolves the real binary, asks the matching
+//! integration what to add, and `exec`s — no `UzeApplication`, no Store
+//! scan, no marketplace refresh, no network. Those are exactly the costs
+//! kept out of this hot path (see the Checkpoint 2 report's performance
+//! section).
+//!
+//! `RUNTIME INFRASTRUCTURE`, not `CONTEXT DELIVERY POLICY` — this file
+//! neither knows nor cares whether runtime projection ever replaces the
+//! existing persistent `CLAUDE.md`/`GEMINI.md` bridge; it only launches
+//! whatever the integration decided.
+
+use std::{
+    env,
+    ffi::OsString,
+    path::{Path, PathBuf},
+};
+
+use uze::{
+    UzeHome,
+    harness_runtime::{self, HarnessRuntimeContribution, RuntimeContext},
+    integration::IntegrationPort,
+};
+use uze_integrations::{
+    claude::ClaudeIntegration, codex::CodexIntegration, gemini::GeminiIntegration,
+    opencode::OpenCodeIntegration,
+};
+
+const KNOWN_SHIM_NAMES: &[&str] = &["claude", "codex", "opencode", "gemini"];
+
+/// `None` when this process was not invoked through one of the known shim
+/// names — the ordinary `uze <subcommand>` path in `main()` continues
+/// unchanged, including a direct `uze` invocation.
+pub fn detect() -> Option<String> {
+    let argv0 = env::args_os().next()?;
+    let name = Path::new(&argv0).file_name()?.to_str()?.to_owned();
+    KNOWN_SHIM_NAMES.contains(&name.as_str()).then_some(name)
+}
+
+/// Diverges. On success this replaces the process image (`exec`) and never
+/// returns to `main()`; on an unrecoverable failure (no real executable
+/// found at all — nothing left to fail open *to*) it prints one line to
+/// stderr and exits non-zero. Every other failure mode falls open to a
+/// plain launch of the real binary — see the inline handling below.
+pub fn run(shim_name: &str) -> ! {
+    let original_args: Vec<OsString> = env::args_os().skip(1).collect();
+
+    let home = match UzeHome::from_env() {
+        Ok(home) => home,
+        // `$HOME` itself is missing — there is no reliable `shims_dir` to
+        // exclude, so a bare PATH search here could resolve back to this
+        // very shim. This is the one case where "just try anyway" is less
+        // safe than a clear, immediate error.
+        Err(error) => die(&format!(
+            "cannot resolve UZE_HOME/HOME ({error}); refusing to guess at a real `{shim_name}` \
+             to avoid a possible shim loop"
+        )),
+    };
+
+    let bypass = env::var_os("UZE_BYPASS").is_some_and(|value| value != "0");
+
+    let executable = match harness_runtime::resolve_real_executable(&[shim_name], &home.shims_dir())
+    {
+        Some(path) => path,
+        None => die(&format!(
+            "no real `{shim_name}` executable found on PATH outside {} — is it installed?",
+            home.shims_dir().display()
+        )),
+    };
+
+    if bypass {
+        exec_or_die(
+            &executable,
+            &original_args,
+            &HarnessRuntimeContribution::passthrough(),
+        );
+    }
+
+    // Reaching this line at all already means the shim symlink exists —
+    // that is the entire opt-in signal (see
+    // `IntegrationPort::supports_runtime_integration`'s doc comment). No
+    // separate enabled/disabled state to read.
+    let integration = build_integration(shim_name, &home);
+    let contribution = match &integration {
+        Some(integration) => {
+            let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            integration.runtime_contribution(&RuntimeContext {
+                cwd: &cwd,
+                home: &home,
+            })
+        }
+        None => HarnessRuntimeContribution::passthrough(),
+    };
+
+    if let Some(note) = &contribution.note {
+        eprintln!(
+            "uze: runtime projection unavailable ({note}); launching {shim_name} without \
+             portable context."
+        );
+    }
+
+    exec_or_die(&executable, &original_args, &contribution);
+}
+
+fn build_integration(shim_name: &str, home: &UzeHome) -> Option<Box<dyn IntegrationPort>> {
+    match shim_name {
+        "claude" => ClaudeIntegration::from_env(home.clone())
+            .ok()
+            .map(|integration| Box::new(integration) as Box<dyn IntegrationPort>),
+        "codex" => CodexIntegration::from_env(home.clone())
+            .ok()
+            .map(|integration| Box::new(integration) as Box<dyn IntegrationPort>),
+        "opencode" => OpenCodeIntegration::from_env(home.clone())
+            .ok()
+            .map(|integration| Box::new(integration) as Box<dyn IntegrationPort>),
+        "gemini" => GeminiIntegration::from_env(home.clone())
+            .ok()
+            .map(|integration| Box::new(integration) as Box<dyn IntegrationPort>),
+        _ => None,
+    }
+}
+
+/// Exact argv passthrough: `contribution.extra_args` are prepended before
+/// the caller's original argv (argv[1..] as this process received it,
+/// untouched — never reparsed). Environment additions are applied on top of
+/// the inherited environment; nothing is cleared. On Unix this replaces the
+/// process image via `exec`, so the real binary inherits this process's
+/// stdin/stdout/stderr, controlling terminal, and pid directly — PTY,
+/// signals (Ctrl+C), and exit code all fall out of that for free, which is
+/// exactly why `exec` is used instead of spawn-and-wait.
+fn exec_or_die(
+    executable: &Path,
+    original_args: &[OsString],
+    contribution: &HarnessRuntimeContribution,
+) -> ! {
+    let mut command = std::process::Command::new(executable);
+    command.args(&contribution.extra_args);
+    command.args(original_args);
+    for (key, value) in &contribution.extra_env {
+        command.env(key, value);
+    }
+    run_replacing_process(command, executable)
+}
+
+#[cfg(unix)]
+fn run_replacing_process(mut command: std::process::Command, executable: &Path) -> ! {
+    use std::os::unix::process::CommandExt;
+    // `exec` only returns on failure.
+    let error = command.exec();
+    die(&format!(
+        "failed to exec `{}`: {error}",
+        executable.display()
+    ));
+}
+
+/// Non-Unix fallback: `exec`-style process replacement has no equivalent in
+/// `std` there, so this spawns and waits, forwarding the exit code. Not the
+/// primary, empirically-verified path — Windows/WSL is explicitly deferred
+/// (see the Checkpoint 1/2 reports); this only keeps the shim from being
+/// Unix-only at compile time.
+#[cfg(not(unix))]
+fn run_replacing_process(mut command: std::process::Command, executable: &Path) -> ! {
+    match command.status() {
+        Ok(status) => std::process::exit(status.code().unwrap_or(1)),
+        Err(error) => die(&format!(
+            "failed to launch `{}`: {error}",
+            executable.display()
+        )),
+    }
+}
+
+fn die(message: &str) -> ! {
+    eprintln!("uze: {message}");
+    std::process::exit(127);
+}
