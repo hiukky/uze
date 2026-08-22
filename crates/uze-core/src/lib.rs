@@ -9,6 +9,7 @@ pub mod context;
 pub mod engine;
 pub mod error;
 pub mod exposure;
+pub mod harness_runtime;
 pub mod home;
 pub mod importer;
 pub mod importers;

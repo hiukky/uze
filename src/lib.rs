@@ -6,9 +6,9 @@
 
 pub use uze_core::*;
 pub use uze_core::{
-    acquisition, bundle, capability, context, engine, error, exposure, home, importer, importers,
-    integration, persistence, project, reconciliation, router, runtime, state, store, text_region,
-    trust,
+    acquisition, bundle, capability, context, engine, error, exposure, harness_runtime, home,
+    importer, importers, integration, persistence, project, reconciliation, router, runtime, state,
+    store, text_region, trust,
 };
 
 pub use uze_application::{UzeApplication, application};

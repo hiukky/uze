@@ -1,5 +1,7 @@
 //! Thin CLI presentation over `UzeApplication`.
 
+mod shim;
+
 use std::{io::IsTerminal, path::PathBuf};
 
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
@@ -47,7 +49,14 @@ enum Command {
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
-    /// Prepare detected harness integrations.
+    /// Prepare detected harness integrations. For a harness with an
+    /// EXPERIMENTAL runtime-integration story (currently Claude Code only),
+    /// this also creates/refreshes its PATH shim
+    /// (`~/.uze/shims/<name> -> uze`) as an ordinary part of the same
+    /// command — no separate flag. This is `RUNTIME INFRASTRUCTURE`,
+    /// alongside and not a replacement for the existing persistent
+    /// `CLAUDE.md`/`GEMINI.md` bridge `context reconcile` still writes.
+    /// Removing the symlink UZE printed is how to turn it back off.
     Setup { harness: Option<String> },
     /// Safely detach a plugin only when its receipts still match.
     Remove {
@@ -123,6 +132,14 @@ enum OutputFormat {
 }
 
 fn main() {
+    // Checked before any `clap` parsing, on `argv[0]` alone: a process
+    // invoked as `claude`/`codex`/`opencode`/`gemini` (via the symlink
+    // `ensure_runtime_shim` creates at `~/.uze/shims/<name>`) never reaches
+    // the ordinary `uze` subcommand grammar at all. `shim::run` diverges —
+    // it always either `exec`s the real binary or exits.
+    if let Some(name) = shim::detect() {
+        shim::run(&name);
+    }
     if let Err(error) = run(Cli::parse()) {
         eprintln!("uze: {error}");
         std::process::exit(1);
@@ -224,6 +241,16 @@ fn run(cli: Cli) -> Result<()> {
                         format!("{:?}", result.provisioning.action).to_lowercase(),
                         result.detection.version.as_deref().unwrap_or("unknown")
                     );
+                    if let Some(shim) = &result.runtime_shim {
+                        println!(
+                            "  EXPERIMENTAL runtime shim: {} (remove this symlink to turn it \
+                             back off)",
+                            shim.shim_path.display()
+                        );
+                        if let Some(hint) = &shim.path_hint {
+                            println!("  Not yet on PATH — add it to use the shim: {hint}");
+                        }
+                    }
                 } else {
                     println!(
                         "{}: setup {:?}: {}",

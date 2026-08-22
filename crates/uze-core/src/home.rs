@@ -81,6 +81,28 @@ impl UzeHome {
         self.runtime_dir().join(integration).join(session)
     }
 
+    /// Where the PATH shim (`claude`, `codex`, `opencode`, `gemini`, …)
+    /// lives. Never on `PATH` unless the operator has explicitly enabled
+    /// runtime integration and added it themselves — UZE does not edit
+    /// shell rc files.
+    pub fn shims_dir(&self) -> PathBuf {
+        self.root.join("shims")
+    }
+
+    /// Where a project-scoped runtime projection lives for one integration,
+    /// keyed by `harness_runtime::project_id_for`. Distinct from
+    /// `runtime_session_dir`: a runtime projection is a derived,
+    /// rebuildable cache meant to persist and be safely shared by
+    /// concurrent sessions on the same project — never torn down at session
+    /// end — so it lives under its own `projects` namespace rather than
+    /// reusing the session-scoped, `Drop`-cleaned tree.
+    pub fn runtime_projection_dir(&self, integration: &str, project_id: &str) -> PathBuf {
+        self.runtime_dir()
+            .join(integration)
+            .join("projects")
+            .join(project_id)
+    }
+
     pub fn ensure_layout(&self) -> Result<()> {
         for directory in [
             self.packages_dir(),
