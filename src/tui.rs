@@ -27,7 +27,7 @@ use crossterm::{
 use ratatui::{
     Terminal,
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, BorderType, Borders, Clear, List, ListItem, Padding, Paragraph, Wrap},
@@ -40,6 +40,7 @@ use crate::{
         MarketplacePluginDetail, MarketplacePluginSummary, PluginInspection, PluginSummary,
         ProjectContextStatus, RemovePluginReport, UpdatePluginReport,
     },
+    capability::CapabilityKind,
     provisioning::{ProcessOutput, ProcessResult, ProcessRunner, ProcessSpec, SystemProcessRunner},
 };
 
@@ -1045,16 +1046,7 @@ fn render(frame: &mut ratatui::Frame<'_>, model: &TuiModel, hits: &mut Vec<(Rect
         Route::Doctor => render_doctor(frame, columns[1], model),
     }
 
-    frame.render_widget(
-        Paragraph::new(footer(model))
-            .block(
-                Block::default()
-                    .borders(Borders::TOP)
-                    .border_style(Style::default().fg(PANEL)),
-            )
-            .wrap(Wrap { trim: true }),
-        rows[2],
-    );
+    render_footer(frame, rows[2], model);
 
     match &model.overlay {
         Overlay::None => {}
@@ -1085,10 +1077,6 @@ fn render_titlebar(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel)
         ),
         Span::raw("  "),
         health,
-        Span::styled(
-            format!("  ·  v{} ", env!("CARGO_PKG_VERSION")),
-            Style::default().fg(MUTED),
-        ),
     ]);
     frame.render_widget(
         Paragraph::new(line).block(
@@ -1396,27 +1384,6 @@ fn render_plugin_detail(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiM
             ),
         ]));
     }
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "enter  Inspect delivery",
-        Style::default().fg(ACCENT),
-    )));
-    lines.push(Line::from(Span::styled(
-        if plugin.update_available == Some(true) {
-            "u      Update"
-        } else {
-            ""
-        },
-        Style::default().fg(if plugin.update_available == Some(true) {
-            ACCENT
-        } else {
-            MUTED
-        }),
-    )));
-    lines.push(Line::from(Span::styled(
-        "r      Remove",
-        Style::default().fg(MUTED),
-    )));
     frame.render_widget(
         Paragraph::new(lines)
             .block(panel_block(" Selected plugin "))
@@ -1545,17 +1512,6 @@ fn render_marketplace_detail(frame: &mut ratatui::Frame<'_>, area: Rect, model: 
             Style::default().fg(MUTED),
         )));
     }
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "enter  Inspect capabilities",
-        Style::default().fg(ACCENT),
-    )));
-    if !plugin.installed {
-        lines.push(Line::from(Span::styled(
-            "i      Install",
-            Style::default().fg(ACCENT),
-        )));
-    }
     frame.render_widget(
         Paragraph::new(lines)
             .block(panel_block(" Plugin "))
@@ -1632,21 +1588,6 @@ fn render_context(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) 
             Style::default().fg(if plan.has_changes() { WARNING } else { SUCCESS }),
         )));
     }
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "a  Analyze (read-only)",
-        Style::default().fg(ACCENT),
-    )));
-    if model
-        .context_plan
-        .as_ref()
-        .is_some_and(ContextPlan::has_changes)
-    {
-        lines.push(Line::from(Span::styled(
-            "p  Apply",
-            Style::default().fg(ACCENT),
-        )));
-    }
     frame.render_widget(
         Paragraph::new(lines)
             .block(panel_block(" Context "))
@@ -1714,11 +1655,6 @@ fn render_harness_detail(frame: &mut ratatui::Frame<'_>, area: Rect, model: &Tui
         frame.render_widget(Paragraph::new("").block(panel_block(" Harness ")), area);
         return;
     };
-    let action_label = if harness.detection.present {
-        "Update"
-    } else {
-        "Install"
-    };
     let mut lines = vec![
         Line::from(Span::styled(
             &harness.integration,
@@ -1759,15 +1695,75 @@ fn render_harness_detail(frame: &mut ratatui::Frame<'_>, area: Rect, model: &Tui
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        format!("s  {action_label}"),
-        Style::default().fg(ACCENT),
+        "Compatibility",
+        Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
     )));
+    for (label, status, style) in compatibility_rows(harness) {
+        lines.push(Line::from(vec![
+            Span::raw(format!("  {label:<10}")),
+            Span::styled(status, style),
+        ]));
+    }
     frame.render_widget(
         Paragraph::new(lines)
             .block(panel_block(" Harness "))
             .wrap(Wrap { trim: true }),
         area,
     );
+}
+
+/// One row per capability UZE knows about, in the order a reader would care
+/// about them: what a harness actually delivers today first, what remains
+/// unimplemented anywhere last. `AGENTS.md` is listed separately from the
+/// `capabilities()`-derived rows below it: instructions are not a
+/// `CapabilityKind::Instruction` resource routed through the same
+/// `HarnessCapabilities` sets (see `HarnessHealth::native_instructions`'s
+/// doc comment) — mixing it into the same lookup would silently mislabel it
+/// "not supported" on every harness, since none of them ever populate that
+/// capability kind.
+fn compatibility_rows(harness: &HarnessHealth) -> Vec<(&'static str, &'static str, Style)> {
+    let instructions = if harness.native_instructions {
+        ("AGENTS.md", "✓ Native", Style::default().fg(SUCCESS))
+    } else {
+        ("AGENTS.md", "✓ Bridged", Style::default().fg(SUCCESS))
+    };
+    let routed = [
+        ("Skills", CapabilityKind::AgentSkill),
+        ("MCP", CapabilityKind::Mcp),
+    ]
+    .into_iter()
+    .map(|(label, kind)| {
+        let (status, style) = capability_status(&harness.capabilities, kind);
+        (label, status, style)
+    });
+    // Recognized on import but not yet routed to any harness — see
+    // `uze_core::importers`, which is the only place these kinds appear at
+    // all today.
+    let unimplemented = [
+        ("Agents", "— Not implemented"),
+        ("Hooks", "— Not implemented"),
+    ]
+    .into_iter()
+    .map(|(label, status)| (label, status, Style::default().fg(MUTED)));
+    std::iter::once(instructions)
+        .chain(routed)
+        .chain(unimplemented)
+        .collect()
+}
+
+fn capability_status(
+    capabilities: &crate::router::HarnessCapabilities,
+    kind: CapabilityKind,
+) -> (&'static str, Style) {
+    if capabilities.direct_standard.contains(&kind) || capabilities.native.contains(&kind) {
+        ("✓ Native", Style::default().fg(SUCCESS))
+    } else if capabilities.adaptable.contains(&kind) {
+        ("≈ Adapted", Style::default().fg(WARNING))
+    } else if capabilities.degraded.contains(&kind) {
+        ("⚠ Degraded", Style::default().fg(WARNING))
+    } else {
+        ("✗ Not supported", Style::default().fg(DANGER))
+    }
 }
 
 fn render_doctor(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
@@ -1986,6 +1982,32 @@ fn render_modal(
 }
 
 // --- Shared helpers ---------------------------------------------------------
+
+fn render_footer(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
+    let block = Block::default()
+        .borders(Borders::TOP)
+        .border_style(Style::default().fg(PANEL));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let version = format!("v{}", env!("CARGO_PKG_VERSION"));
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Min(10),
+            Constraint::Length(version.len() as u16),
+        ])
+        .split(inner);
+    frame.render_widget(
+        Paragraph::new(footer(model)).wrap(Wrap { trim: true }),
+        columns[0],
+    );
+    frame.render_widget(
+        Paragraph::new(Span::styled(version, Style::default().fg(MUTED)))
+            .alignment(Alignment::Right),
+        columns[1],
+    );
+}
 
 fn footer(model: &TuiModel) -> Text<'static> {
     let hint = match model.overlay {
