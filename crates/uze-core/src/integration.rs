@@ -157,6 +157,23 @@ pub trait IntegrationPort {
         default_exposure_name_candidates(resource)
     }
 
+    /// The physical directory this integration's harness reads Agent Skills
+    /// from, when — and only when — that directory is durably shared with
+    /// one or more *other* integrations rather than owned exclusively by
+    /// this one. OpenCode, Codex, and Gemini CLI all discover Skills from
+    /// the same `~/.agents/skills` root, so naming resolution must treat a
+    /// name already claimed there by any one of them as claimed for all;
+    /// otherwise each independently-computed candidate list produces its
+    /// own physical entry in what is, on disk, a single shared folder —
+    /// visible to a harness (OpenCode's V2 slash commands) as duplicate
+    /// listings of the identical skill. `None` is the correct default for
+    /// every integration with an exclusive skills directory (Claude Code)
+    /// or no Skill delivery at all: it opts out of this cross-integration
+    /// awareness entirely, matching prior behavior.
+    fn shared_agent_skill_root(&self) -> Option<std::path::PathBuf> {
+        None
+    }
+
     /// Optional preferred delivery of an external package as a whole. The
     /// returned plan owns only the listed resources; remaining resources are
     /// still routed capability-by-capability.

@@ -30,7 +30,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, BorderType, Borders, Clear, List, ListItem, Padding, Paragraph, Wrap},
 };
 
 use crate::{
@@ -40,9 +40,38 @@ use crate::{
         MarketplacePluginDetail, MarketplacePluginSummary, PluginInspection, PluginSummary,
         ProjectContextStatus, RemovePluginReport, UpdatePluginReport,
     },
+    provisioning::{ProcessOutput, ProcessRunner, ProcessResult, ProcessSpec, SystemProcessRunner},
 };
 
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Forces every process the TUI spawns to run silently, regardless of
+/// whether the integration asked for inherited output. The TUI owns the
+/// terminal's alternate screen for its own rendering; a vendor installer's
+/// progress written directly to the real stdout (as `uze setup`'s inherited
+/// output is designed to do on the CLI) has nowhere sane to land here — it
+/// prints straight through the ratatui frame and corrupts the layout, which
+/// is exactly what `SystemProcessRunner`'s `ProcessOutput::Inherit` does.
+/// Every `UzeApplication` the TUI constructs uses this instead.
+struct SilentProcessRunner;
+
+impl ProcessRunner for SilentProcessRunner {
+    fn run(&self, spec: &ProcessSpec) -> Result<ProcessResult> {
+        let quiet = ProcessSpec {
+            output: ProcessOutput::Quiet,
+            ..spec.clone()
+        };
+        SystemProcessRunner.run(&quiet)
+    }
+}
+
+/// The TUI's one composition point for `UzeApplication` — every worker
+/// thread builds its application through this, never `UzeApplication::from_env`
+/// directly, so no code path can accidentally let a provisioning command's
+/// output loose on the terminal.
+fn tui_application(home: UzeHome) -> Result<UzeApplication> {
+    UzeApplication::from_env_with_runner(home, Box::new(SilentProcessRunner))
+}
 
 // Compact, low-chrome palette. The terminal's own background stays
 // authoritative; these colors establish hierarchy and make real lifecycle
@@ -68,8 +97,8 @@ enum Route {
 
 const ROUTES: [Route; 6] = [
     Route::Overview,
-    Route::Plugins,
     Route::Marketplace,
+    Route::Plugins,
     Route::Context,
     Route::Harnesses,
     Route::Doctor,
@@ -591,7 +620,7 @@ pub fn run(home: UzeHome) -> Result<()> {
     let mut terminal = TerminalSession::start()?;
     let (sender, receiver) = mpsc::channel();
     let mut model = TuiModel::default();
-    spawn_refresh(home.clone(), sender.clone(), model.context_root.clone());
+    spawn_startup(home.clone(), sender.clone(), model.context_root.clone());
     loop {
         terminal.draw(&mut model)?;
         drain_worker_results(&mut model, &receiver);
@@ -626,7 +655,7 @@ fn dispatch(intent: Intent, home: &UzeHome, sender: &Sender<WorkerResult>, model
             model.status = Status::Working(format!("Inspecting {id}…"));
             let (home, sender) = (home.clone(), sender.clone());
             thread::spawn(move || {
-                let result = UzeApplication::from_env(home)
+                let result = tui_application(home)
                     .and_then(|app| app.inspect_plugin(&id))
                     .map_err(|error| error.to_string());
                 let _ = sender.send(WorkerResult::PluginInspected(result));
@@ -636,7 +665,7 @@ fn dispatch(intent: Intent, home: &UzeHome, sender: &Sender<WorkerResult>, model
             model.status = Status::Working(format!("Inspecting {name}…"));
             let (home, sender) = (home.clone(), sender.clone());
             thread::spawn(move || {
-                let result = UzeApplication::from_env(home)
+                let result = tui_application(home)
                     .and_then(|app| app.inspect_marketplace_plugin(&name))
                     .map_err(|error| error.to_string());
                 let _ = sender.send(WorkerResult::MarketplaceInspected(result));
@@ -707,7 +736,7 @@ fn dispatch(intent: Intent, home: &UzeHome, sender: &Sender<WorkerResult>, model
             model.status = Status::Working("Analyzing project context…".to_owned());
             let (home, sender) = (home.clone(), sender.clone());
             thread::spawn(move || {
-                let result = UzeApplication::from_env(home).and_then(|app| {
+                let result = tui_application(home).and_then(|app| {
                     let status = app.context_inspect(&root)?;
                     let plan = app.context_plan(&root)?;
                     Ok((status, plan))
@@ -721,7 +750,7 @@ fn dispatch(intent: Intent, home: &UzeHome, sender: &Sender<WorkerResult>, model
             model.status = Status::Working("Applying context reconciliation…".to_owned());
             let (home, sender) = (home.clone(), sender.clone());
             thread::spawn(move || {
-                let result = UzeApplication::from_env(home)
+                let result = tui_application(home)
                     .and_then(|app| app.context_reconcile(&root))
                     .map(|report| ("Context reconciled".to_owned(), report))
                     .map_err(|error| error.to_string());
@@ -738,8 +767,26 @@ fn spawn_refresh(home: UzeHome, sender: Sender<WorkerResult>, context_root: Path
     });
 }
 
+/// The one-time startup path, run in the background so the terminal takes
+/// over instantly instead of sitting blank while default plugins are
+/// seeded. Before this moved here, `main` ran `ensure_default_plugins`
+/// synchronously — several harness-detection subprocess spawns — *before*
+/// the alternate screen was even entered, so the terminal appeared frozen
+/// for that whole stretch. Every subsequent refresh (`Intent::Refresh`)
+/// goes through the plain `spawn_refresh` above; seeding defaults only
+/// needs to happen once, at launch, not on every manual refresh.
+fn spawn_startup(home: UzeHome, sender: Sender<WorkerResult>, context_root: PathBuf) {
+    thread::spawn(move || {
+        if let Ok(app) = tui_application(home.clone()) {
+            let _ = app.ensure_default_plugins();
+        }
+        let result = load_refresh_data(home, &context_root).map_err(|error| error.to_string());
+        let _ = sender.send(WorkerResult::Refreshed(result));
+    });
+}
+
 fn load_refresh_data(home: UzeHome, context_root: &std::path::Path) -> Result<RefreshData> {
-    let app = UzeApplication::from_env(home)?;
+    let app = tui_application(home)?;
     let plugins = app.list_plugins()?;
     let doctor = app.doctor();
     let marketplaces = app.list_marketplaces()?;
@@ -765,7 +812,7 @@ fn spawn_mutation(
     operation: impl FnOnce(&UzeApplication) -> Result<String> + Send + 'static,
 ) {
     thread::spawn(move || {
-        let result = UzeApplication::from_env(home.clone()).and_then(|app| {
+        let result = tui_application(home.clone()).and_then(|app| {
             let message = operation(&app)?;
             let data = load_refresh_data(home, &context_root)?;
             Ok((message, data))
@@ -794,7 +841,7 @@ fn spawn_trust_sensitive(
     retry: TrustedRetry,
 ) {
     thread::spawn(move || {
-        let outcome = UzeApplication::from_env(home.clone()).and_then(|app| {
+        let outcome = tui_application(home.clone()).and_then(|app| {
             let result = match grant {
                 TrustGrant::Ask => operation(&app, &crate::trust::NoTrustAuthority),
                 TrustGrant::Granted => operation(&app, &crate::trust::AlwaysTrust),
@@ -961,8 +1008,12 @@ fn io_error(source: io::Error) -> crate::UzeError {
 // --- Rendering ----------------------------------------------------------
 
 fn render(frame: &mut ratatui::Frame<'_>, model: &TuiModel, hits: &mut Vec<(Rect, Hit)>) {
+    // A margin around the whole app keeps every panel — sidebar included —
+    // off the raw terminal edge, instead of every border sitting flush
+    // against column/row zero.
     let rows = Layout::default()
         .direction(Direction::Vertical)
+        .margin(1)
         .constraints([
             Constraint::Length(2),
             Constraint::Min(3),
@@ -973,11 +1024,11 @@ fn render(frame: &mut ratatui::Frame<'_>, model: &TuiModel, hits: &mut Vec<(Rect
 
     let narrow = rows[1].width < 80;
     let sidebar_width = if rows[1].width < 60 {
-        14
-    } else if narrow {
         16
+    } else if narrow {
+        18
     } else {
-        20
+        22
     };
     let columns = Layout::default()
         .direction(Direction::Horizontal)
@@ -1058,11 +1109,21 @@ fn render_sidebar(
 ) {
     let block = Block::default()
         .borders(Borders::RIGHT)
-        .border_style(Style::default().fg(PANEL));
+        .border_style(Style::default().fg(PANEL))
+        .padding(Padding::new(1, 1, 1, 0));
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    // A little vertical air between routes reads far less cramped than a
+    // solid stack — but only when the terminal is actually tall enough to
+    // afford it; a short terminal falls back to one row each so every
+    // route stays reachable by mouse, not just by cycling with the keys.
+    let stride: u16 = if inner.height as usize >= ROUTES.len() * 2 {
+        2
+    } else {
+        1
+    };
     for (index, route) in ROUTES.iter().enumerate() {
-        let row = Rect::new(inner.x, inner.y + index as u16, inner.width, 1);
+        let row = Rect::new(inner.x, inner.y + index as u16 * stride, inner.width, 1);
         if row.y >= inner.y + inner.height {
             break;
         }
@@ -1078,12 +1139,9 @@ fn render_sidebar(
             Style::default().fg(MUTED)
         };
         let label = if narrow {
-            format!(
-                " {}",
-                &route.label()[..route.label().len().min(inner.width as usize - 1)]
-            )
+            &route.label()[..route.label().len().min(inner.width as usize)]
         } else {
-            format!(" {}", route.label())
+            route.label()
         };
         frame.render_widget(Paragraph::new(Span::styled(label, style)), row);
         hits.push((row, Hit::Route(*route)));
@@ -1103,7 +1161,6 @@ fn render_overview(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel)
     let issues = model.issues().len();
 
     let mut lines = vec![
-        Line::from(""),
         Line::from(vec![
             Span::styled(
                 format!("{harness_detected}"),
@@ -2009,6 +2066,7 @@ fn panel_block(title: impl Into<Line<'static>>) -> Block<'static> {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(PANEL))
+        .padding(Padding::new(2, 2, 1, 0))
 }
 
 fn health_style(health: &str) -> Style {
@@ -2182,11 +2240,11 @@ mod tests {
         };
         assert_eq!(model.route, Route::Overview);
         model.apply_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-        assert_eq!(model.route, Route::Plugins);
-        model.apply_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
         assert_eq!(model.route, Route::Marketplace);
-        model.apply_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        model.apply_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
         assert_eq!(model.route, Route::Plugins);
+        model.apply_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(model.route, Route::Marketplace);
     }
 
     #[test]

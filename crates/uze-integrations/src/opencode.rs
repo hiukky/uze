@@ -85,6 +85,16 @@ impl IntegrationPort for OpenCodeIntegration {
         short_then_qualified_exposure_name_candidates(resource)
     }
 
+    /// Codex and Gemini CLI both discover Skills from this exact same
+    /// `~/.agents/skills` directory (see their own overrides of this
+    /// method), so a name this integration claims here must be treated as
+    /// claimed for them too — otherwise OpenCode's own preference for the
+    /// bare name collides with their always-qualified default, leaving two
+    /// symlinks for one skill in the one folder OpenCode scans.
+    fn shared_agent_skill_root(&self) -> Option<PathBuf> {
+        Some(self.skills_dir.clone())
+    }
+
     /// OpenCode's v2 installer names the binary `opencode2`; UZE's canonical
     /// invocation stays `opencode` with no version suffix, so provisioning
     /// installs or upgrades normally and then ensures that alias exists —
