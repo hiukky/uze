@@ -133,11 +133,12 @@ fn run(cli: Cli) -> Result<()> {
     let home = UzeHome::from_env()?;
     let Some(command) = cli.command else {
         if std::io::stdout().is_terminal() && std::io::stdin().is_terminal() {
-            // Ensure the default marketplace plugins are seeded even when
-            // launching the TUI directly (no explicit subcommand).
-            if let Ok(app) = UzeApplication::from_env(home.clone()) {
-                let _ = app.ensure_default_plugins();
-            }
+            // Seeding default marketplace plugins now happens inside the
+            // TUI's own startup worker (see `tui::spawn_startup`), off the
+            // terminal-takeover path — running it here, synchronously,
+            // before the alternate screen is even entered, left the
+            // terminal looking frozen for however long harness detection
+            // took.
             return uze::tui::run(home);
         }
         Cli::command()

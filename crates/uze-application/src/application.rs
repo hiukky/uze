@@ -90,6 +90,25 @@ impl UzeApplication {
         Self::new_with_runner(home, integrations, Box::new(SystemProcessRunner))
     }
 
+    /// Same production integration set as `from_env`, with an explicit
+    /// process runner instead of the default `SystemProcessRunner`. For a
+    /// caller that owns the terminal itself (the TUI's alternate screen), a
+    /// vendor installer's inherited-output progress would otherwise print
+    /// straight onto the real terminal and corrupt whatever is rendered
+    /// there.
+    pub fn from_env_with_runner(home: UzeHome, runner: Box<dyn ProcessRunner>) -> Result<Self> {
+        Ok(Self::new_with_runner(
+            home.clone(),
+            vec![
+                Box::new(ClaudeIntegration::from_env(home.clone())?),
+                Box::new(CodexIntegration::from_env(home.clone())?),
+                Box::new(OpenCodeIntegration::from_env(home.clone())?),
+                Box::new(GeminiIntegration::from_env(home)?),
+            ],
+            runner,
+        ))
+    }
+
     /// Test and embedding composition point for the process runner used only
     /// by explicit harness provisioning. Package lifecycle remains entirely
     /// independent of process execution.
@@ -1105,10 +1124,19 @@ impl UzeApplication {
     /// resource; this is what makes re-add/setup idempotent and legacy
     /// installs safe without any migration step.
     ///
-    /// Only for a brand new resource does this ask the integration for
-    /// ordered candidates (`exposure_name_candidates`) and pick the first
-    /// one not already claimed by a *different* resource this integration
-    /// manages. This resolves purely from the ledger — no filesystem
+    /// The same reuse extends to a *different* integration's receipt for
+    /// this identical resource when the two integrations report the same
+    /// `shared_agent_skill_root` (OpenCode, Codex, and Gemini CLI all read
+    /// `~/.agents/skills`): reusing that name means the second integration's
+    /// attach writes the very same symlink rather than a second one next to
+    /// it, so a directory one harness scans in full never ends up listing
+    /// the identical skill twice.
+    ///
+    /// Only for a brand new resource with no reusable receipt anywhere does
+    /// this ask the integration for ordered candidates
+    /// (`exposure_name_candidates`) and pick the first one not already
+    /// claimed — by this integration, or by another integration sharing its
+    /// skill root. This resolves purely from the ledger — no filesystem
     /// access — so it can never itself decide a foreign-artifact conflict;
     /// `attach`'s own structural check (unchanged) remains the last word on
     /// that.
@@ -1128,9 +1156,20 @@ impl UzeApplication {
             return resolved;
         };
         let resource_id = resource.identity();
+        let shared_root = (resource.capability.kind == CapabilityKind::AgentSkill)
+            .then(|| integration.shared_agent_skill_root())
+            .flatten();
+        let shares_root = |other_id: &str| -> bool {
+            let Some(root) = &shared_root else {
+                return false;
+            };
+            self.integrations.iter().any(|other| {
+                other.id() == other_id && other.shared_agent_skill_root().as_ref() == Some(root)
+            })
+        };
         if let Some((_, existing)) = all_receipts.iter().find(|(_, receipt)| {
-            receipt.integration == integration.id()
-                && receipt.resource_identity.as_deref() == Some(resource_id.as_str())
+            receipt.resource_identity.as_deref() == Some(resource_id.as_str())
+                && (receipt.integration == integration.id() || shares_root(&receipt.integration))
         }) {
             resolved.resolved_exposure_name = managed_artifact_exposure_name(&existing.artifact);
             resolved.resolved_artifact_target = match &existing.artifact {
@@ -1143,10 +1182,31 @@ impl UzeApplication {
         }
         let claimed: BTreeSet<String> = all_receipts
             .iter()
-            .filter(|(_, receipt)| receipt.integration == integration.id())
+            .filter(|(_, receipt)| {
+                receipt.integration == integration.id() || shares_root(&receipt.integration)
+            })
             .filter_map(|(_, receipt)| managed_artifact_exposure_name(&receipt.artifact))
             .collect();
-        let candidates = integration.exposure_name_candidates(resource);
+        // A shared root must converge on the same physical name no matter
+        // which member happens to attach first. If any integration sharing
+        // `shared_root` prefers the resource's bare logical name first (only
+        // OpenCode does today, for its V2 slash-command UX), that preference
+        // governs for the whole group — otherwise whichever of
+        // Codex/Gemini/OpenCode attaches before OpenCode would lock the
+        // group onto the always-qualified fallback via the reuse check
+        // above, even though the bare name was free.
+        let candidates = shared_root
+            .as_ref()
+            .and_then(|root| {
+                self.integrations
+                    .iter()
+                    .filter(|other| other.shared_agent_skill_root().as_ref() == Some(root))
+                    .map(|other| other.exposure_name_candidates(resource))
+                    .find(|list| {
+                        list.first().map(String::as_str) == resource.logical_capability_name().as_deref()
+                    })
+            })
+            .unwrap_or_else(|| integration.exposure_name_candidates(resource));
         resolved.resolved_exposure_name = candidates
             .iter()
             .find(|candidate| !claimed.contains(*candidate))
