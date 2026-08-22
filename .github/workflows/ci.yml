@@ -43,6 +43,9 @@ jobs:
   audit:
     name: Audit
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
     env:
       ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
     steps:
@@ -64,10 +67,12 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov
-      # Global 65% now (64.8% lines / 65.6% regions) — roadmap 65→70→80→90.
-      # `crates/` already ~75%+, TUI (`src/tui.rs:22%`) is the gap; 90% global
-      # requires real TUI + codex/gemini harness tests, not shallow line chasing.
-      - run: cargo llvm-cov --workspace --summary-only --fail-under-lines 64 --fail-under-regions 65
+      # Global 70%/67% now (71.1% lines / 68.0% regions) — roadmap 70→80→90.
+      # `crates/` already ~75%+; `src/ui/worker.rs` (thread-spawning
+      # dispatch, needs a fake `UzeApplication`/channel harness to test
+      # meaningfully) is the largest remaining gap. 90% global requires
+      # that plus real codex/gemini harness tests, not shallow line chasing.
+      - run: cargo llvm-cov --workspace --summary-only --fail-under-lines 70 --fail-under-regions 67
       - run: cargo llvm-cov --workspace --lcov --output-path lcov.info
       - uses: actions/upload-artifact@v4
         with:

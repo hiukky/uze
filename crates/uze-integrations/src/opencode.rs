@@ -816,6 +816,16 @@ mod lifecycle_tests {
         if !cfg!(unix) {
             return;
         }
+        // `provision`'s install/upgrade command is mocked below, so nothing
+        // is genuinely installed — `ensure_opencode_alias` still resolves
+        // `opencode`/`opencode2` for real. On a machine with neither on
+        // PATH (a bare CI runner, unlike a dev box that has one installed)
+        // that real resolution fails and `Verified` is unreachable no
+        // matter what the mock records; skip rather than assert a status
+        // this test has no way to produce here.
+        if !detect_binary("opencode").present && resolve_executable_path("opencode2").is_none() {
+            return;
+        }
         let root = temp("provision");
         let integration = integration(&root);
         let runner = RecordingRunner {

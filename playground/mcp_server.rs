@@ -4,8 +4,9 @@
 
 use rmcp::{
     ServerHandler, ServiceExt,
+    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{ServerCapabilities, ServerInfo},
-    tool,
+    tool, tool_handler, tool_router,
     transport::io::stdio,
 };
 
@@ -28,40 +29,47 @@ struct StatusArgs {
 }
 
 #[derive(Debug, Clone)]
-struct PlaygroundServer;
+struct PlaygroundServer {
+    tool_router: ToolRouter<Self>,
+}
 
-#[tool(tool_box)]
+impl PlaygroundServer {
+    fn new() -> Self {
+        Self {
+            tool_router: Self::tool_router(),
+        }
+    }
+}
+
+#[tool_router]
 impl PlaygroundServer {
     #[tool(description = "Echoes text exactly as supplied. Useful for proving MCP tool wiring.")]
-    fn echo(&self, #[tool(aggr)] args: EchoArgs) -> String {
+    fn echo(&self, Parameters(args): Parameters<EchoArgs>) -> String {
         args.text
     }
 
     #[tool(description = "Adds two integer values and returns their exact sum.")]
-    fn add(&self, #[tool(aggr)] args: AddArgs) -> String {
+    fn add(&self, Parameters(args): Parameters<AddArgs>) -> String {
         (args.left + args.right).to_string()
     }
 
     #[tool(description = "Returns a deterministic status value for the playground MCP server.")]
-    fn status(&self, #[tool(aggr)] _args: StatusArgs) -> String {
+    fn status(&self, Parameters(_args): Parameters<StatusArgs>) -> String {
         "UZE_PLAYGROUND_MCP_READY".to_owned()
     }
 }
 
-#[tool(tool_box)]
+#[tool_handler(router = self.tool_router)]
 impl ServerHandler for PlaygroundServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            instructions: Some("Deterministic playground MCP tools".into()),
-            ..Default::default()
-        }
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_instructions("Deterministic playground MCP tools")
     }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let server = PlaygroundServer.serve(stdio()).await?;
+    let server = PlaygroundServer::new().serve(stdio()).await?;
     server.waiting().await?;
     Ok(())
 }

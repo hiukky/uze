@@ -477,7 +477,8 @@ mod tests {
     use crate::application::{DoctorReport, MarketplacePluginSummary, PluginSummary};
 
     use super::hit::Hit;
-    use super::model::{Focus, Overlay, Route, TrustedRetry, TuiModel};
+    use super::model::{Focus, Overlay, ROUTES, Route, TrustedRetry, TuiModel};
+    use super::render;
     use super::view::doctor::{Severity, classify_doctor};
     use super::worker::{Intent, TrustGrant};
 
@@ -497,6 +498,139 @@ mod tests {
             focus: Focus::Content,
             route: Route::Plugins,
             ..TuiModel::default()
+        }
+    }
+
+    /// A model with every route's list populated (plugins, marketplace,
+    /// harnesses) and a mixed-severity doctor report, so rendering each
+    /// route exercises its non-empty branch rather than only the
+    /// nothing-loaded-yet placeholder every other test leaves in place.
+    fn model_with_data() -> TuiModel {
+        use crate::application::{
+            HarnessHealth, ManagedStateSummary, PackageManagedState, StoreHealth,
+        };
+        use uze_core::integration::{HarnessDetection, PublicationStatus};
+        use uze_core::router::HarnessCapabilities;
+
+        let mut model = model_with_plugins(&["one", "two"]);
+        model.plugins[0].update_available = Some(true);
+        model.marketplace_name = "uze-official".to_owned();
+        model.marketplace_plugins = vec![MarketplacePluginSummary {
+            name: "flow".to_owned(),
+            description: Some("A flow plugin".to_owned()),
+            keywords: vec!["flow".to_owned()],
+            installed: true,
+            update_available: Some(false),
+            is_default: true,
+        }];
+        model.doctor = Some(DoctorReport {
+            uze_home: PathBuf::from("/home/uze"),
+            store: StoreHealth::Ready,
+            plugins: model.plugins.clone(),
+            harnesses: vec![
+                HarnessHealth {
+                    integration: "claude".to_owned(),
+                    detection: HarnessDetection {
+                        present: true,
+                        version: Some("1.0.0".to_owned()),
+                    },
+                    setup: "configured, verified".to_owned(),
+                    strategy: Some("native-user-scope-skills".to_owned()),
+                    provisioning: None,
+                    publication: PublicationStatus::Published,
+                    capabilities: HarnessCapabilities::default(),
+                    native_instructions: true,
+                },
+                HarnessHealth {
+                    integration: "codex".to_owned(),
+                    detection: HarnessDetection::default(),
+                    setup: "not configured".to_owned(),
+                    strategy: None,
+                    provisioning: None,
+                    publication: PublicationStatus::NotApplicable,
+                    capabilities: HarnessCapabilities::default(),
+                    native_instructions: false,
+                },
+            ],
+            attachments: vec![PackageManagedState {
+                plugin: "one".to_owned(),
+                state: ManagedStateSummary {
+                    matched: 1,
+                    missing: 1,
+                    drifted: 1,
+                    conflicts: 1,
+                    blocked: 0,
+                    ledger_error: None,
+                },
+            }],
+            ledger_error: None,
+            integration_state_error: None,
+            provisioning_state_error: None,
+        });
+        model.harnesses_selected = 0;
+        model
+    }
+
+    #[test]
+    fn every_route_renders_without_panicking() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+        let base = model_with_data();
+        for route in ROUTES {
+            let model = TuiModel {
+                route,
+                plugins: base.plugins.clone(),
+                plugins_selected: base.plugins_selected,
+                marketplace_name: base.marketplace_name.clone(),
+                marketplace_plugins: base.marketplace_plugins.clone(),
+                doctor: base.doctor.clone(),
+                harnesses_selected: base.harnesses_selected,
+                focus: Focus::Content,
+                ..TuiModel::default()
+            };
+            let mut hits = Vec::new();
+            terminal
+                .draw(|frame| render(frame, &model, &mut hits))
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn every_overlay_renders_without_panicking() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+        let base = model_with_data();
+        let overlays = [
+            Overlay::Help,
+            Overlay::ConfirmRemove {
+                id: "one".to_owned(),
+                focus: 1,
+            },
+            Overlay::ConfirmUpdate("one".to_owned()),
+            Overlay::ConfirmInstall("flow".to_owned()),
+            Overlay::ConfirmContextApply,
+            Overlay::ProtectedPlugin("one".to_owned()),
+            Overlay::TrustRequired {
+                plugin: "one".to_owned(),
+                detail: "one -> mcp-server".to_owned(),
+                retry: TrustedRetry::Install("one".to_owned()),
+            },
+        ];
+        for overlay in overlays {
+            let model = TuiModel {
+                overlay,
+                plugins: base.plugins.clone(),
+                marketplace_plugins: base.marketplace_plugins.clone(),
+                doctor: base.doctor.clone(),
+                focus: Focus::Overlay,
+                ..TuiModel::default()
+            };
+            let mut hits = Vec::new();
+            terminal
+                .draw(|frame| render(frame, &model, &mut hits))
+                .unwrap();
         }
     }
 

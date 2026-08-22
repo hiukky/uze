@@ -8,14 +8,25 @@
 
 use rmcp::{
     ServerHandler, ServiceExt,
+    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{ServerCapabilities, ServerInfo},
-    tool,
+    tool, tool_handler, tool_router,
     transport::io::stdio,
 };
 
 #[derive(Debug, Clone)]
 struct ConformanceServer {
     proof: String,
+    tool_router: ToolRouter<Self>,
+}
+
+impl ConformanceServer {
+    fn new(proof: String) -> Self {
+        Self {
+            proof,
+            tool_router: Self::tool_router(),
+        }
+    }
 }
 
 /// No fields are read; the tool takes no meaningful input. A single optional
@@ -28,25 +39,22 @@ struct NoArgs {
     unused: Option<String>,
 }
 
-#[tool(tool_box)]
+#[tool_router]
 impl ConformanceServer {
     #[tool(description = "Returns the UZE MCP conformance proof value")]
-    fn uze_conformance(&self, #[tool(aggr)] _args: NoArgs) -> String {
+    fn uze_conformance(&self, Parameters(_args): Parameters<NoArgs>) -> String {
         self.proof.clone()
     }
 }
 
-#[tool(tool_box)]
+#[tool_handler(router = self.tool_router)]
 impl ServerHandler for ConformanceServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            // Some MCP clients only attempt tool discovery when the server
-            // explicitly advertises tool support here, even though this
-            // server always answers `tools/list`/`tools/call` regardless.
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            instructions: Some("UZE MCP conformance fixture".into()),
-            ..Default::default()
-        }
+        // Some MCP clients only attempt tool discovery when the server
+        // explicitly advertises tool support here, even though this server
+        // always answers `tools/list`/`tools/call` regardless.
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_instructions("UZE MCP conformance fixture")
     }
 }
 
@@ -69,7 +77,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let proof = proof
         .or_else(|| std::env::var("UZE_MCP_CONFORMANCE_PROOF").ok())
         .unwrap_or_else(|| "UZE_MCP_CONFORMANCE_DEFAULT_PROOF".to_owned());
-    let server = ConformanceServer { proof }.serve(stdio()).await?;
+    let server = ConformanceServer::new(proof).serve(stdio()).await?;
     server.waiting().await?;
     Ok(())
 }
