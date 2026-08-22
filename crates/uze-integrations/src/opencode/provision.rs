@@ -1,12 +1,14 @@
-//! OpenCode automatic provisioning and binary detection/aliasing.
+//! OpenCode automatic provisioning and binary detection.
 //!
-//! OpenCode's v2 installer names the binary `opencode2`; UZE's canonical
-//! invocation stays `opencode` with no version suffix, so provisioning
-//! installs or upgrades normally and then ensures that alias exists —
-//! success is only reported once `opencode` itself resolves, not merely
-//! `opencode2`.
+//! OpenCode's v2 installer names the binary `opencode2`; provisioning
+//! installs or upgrades normally and reports success once either name
+//! resolves. Reconciling that name with UZE's canonical `opencode`
+//! invocation happens at launch time, in the generic PATH shim
+//! (`OpenCodeIntegration::runtime_executable_aliases`, resolved by
+//! `harness_runtime::resolve_real_executable`) — not here, and not through
+//! any symlink this module creates.
 
-use std::{fs, path::Path, path::PathBuf, process::Command};
+use std::process::Command;
 
 use uze_core::{
     Result,
@@ -87,112 +89,27 @@ pub(super) fn provision_opencode(
         };
         return Ok(ProvisioningResult::failed(action, method, reason));
     }
-    if let Err(reason) = ensure_opencode_alias() {
-        return Ok(ProvisioningResult::failed(action, method, reason));
-    }
-    let verified = runner.run(&ProcessSpec::new("opencode", ["--version"]));
-    if !matches!(verified, Ok(o) if o.success) {
+    let verified = detect();
+    if !verified.present {
         return Ok(ProvisioningResult::failed(
             action,
             method,
-            "installer finished but the `opencode` executable could not be verified",
+            "installer finished but neither `opencode` nor `opencode2` could be verified",
         ));
     }
-    Ok(ProvisioningResult::verified(action, method, detect()))
-}
-
-/// Resolves `name` to an absolute path via the shell's own `PATH` lookup —
-/// the same mechanism the installer that put it there used.
-pub(super) fn resolve_executable_path(name: &str) -> Option<PathBuf> {
-    let output = Command::new("sh")
-        .arg("-c")
-        .arg(format!("command -v {name}"))
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let path = String::from_utf8(output.stdout).ok()?;
-    let path = path.trim();
-    (!path.is_empty()).then(|| PathBuf::from(path))
-}
-
-/// Creates or repairs a symlink at `alias_path` pointing to `target`.
-/// Idempotent: a symlink already pointing at `target` is left untouched, a
-/// stale symlink is replaced, and a real (non-symlink) file already
-/// occupying `alias_path` is never touched — it isn't UZE's to overwrite.
-#[cfg(unix)]
-pub(super) fn ensure_symlink_alias(alias_path: &Path, target: &Path) -> std::io::Result<()> {
-    match fs::symlink_metadata(alias_path) {
-        Ok(meta) if meta.file_type().is_symlink() => {
-            if fs::read_link(alias_path)? == target {
-                return Ok(());
-            }
-            fs::remove_file(alias_path)?;
-            std::os::unix::fs::symlink(target, alias_path)
-        }
-        Ok(_) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            if let Some(parent) = alias_path.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            std::os::unix::fs::symlink(target, alias_path)
-        }
-        Err(error) => Err(error),
-    }
-}
-
-#[cfg(not(unix))]
-pub(super) fn ensure_symlink_alias(_alias_path: &Path, _target: &Path) -> std::io::Result<()> {
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "opencode alias creation is only supported on Unix",
-    ))
-}
-
-/// Ensures `opencode` resolves to OpenCode v2's `opencode2` binary, since
-/// UZE's canonical invocation never carries the version suffix. Tries both a
-/// alias next to `opencode2` on `PATH` and one in `~/.local/bin`, and
-/// succeeds if either lands — `provision`'s own final `opencode --version`
-/// check is the actual proof this worked; this function's `Err` only short-
-/// circuits that doomed check when neither location was writable.
-pub(super) fn ensure_opencode_alias() -> std::result::Result<(), String> {
-    if detect_binary("opencode").present {
-        return Ok(());
-    }
-    let target = resolve_executable_path("opencode2")
-        .ok_or_else(|| "opencode2 executable not found on PATH after install".to_owned())?;
-    let mut aliased = false;
-    if let Some(dir) = target.parent()
-        && ensure_symlink_alias(&dir.join("opencode"), &target).is_ok()
-    {
-        aliased = true;
-    }
-    if let Some(home) = std::env::var_os("HOME")
-        && ensure_symlink_alias(&PathBuf::from(home).join(".local/bin/opencode"), &target).is_ok()
-    {
-        aliased = true;
-    }
-    if aliased {
-        Ok(())
-    } else {
-        Err(format!(
-            "could not create an `opencode` alias for {}",
-            target.display()
-        ))
-    }
+    Ok(ProvisioningResult::verified(action, method, verified))
 }
 
 #[cfg(test)]
 mod provision_tests {
-    use std::{fs, path::PathBuf};
+    use std::path::PathBuf;
 
     use uze_core::home::UzeHome;
     use uze_core::integration::IntegrationPort;
     use uze_core::provisioning::{ProcessResult, ProcessRunner, ProcessSpec};
 
     use super::super::OpenCodeIntegration;
-    use super::{detect_binary, ensure_symlink_alias, resolve_executable_path};
+    use super::resolve_opencode_binary;
 
     fn temp(label: &str) -> PathBuf {
         let nonce = std::time::SystemTime::now()
@@ -203,45 +120,6 @@ mod provision_tests {
             "uze-opencode-{label}-{}-{nonce}",
             std::process::id()
         ))
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn symlink_alias_is_created_repaired_and_leaves_foreign_files_alone() {
-        use std::os::unix::fs::symlink;
-
-        let root = temp("alias");
-        fs::create_dir_all(&root).unwrap();
-        let target = root.join("opencode2");
-        fs::write(&target, "binary").unwrap();
-
-        // Absent -> created.
-        let alias = root.join("bin/opencode");
-        ensure_symlink_alias(&alias, &target).unwrap();
-        assert_eq!(fs::read_link(&alias).unwrap(), target);
-
-        // Already correct -> left untouched (idempotent).
-        ensure_symlink_alias(&alias, &target).unwrap();
-        assert_eq!(fs::read_link(&alias).unwrap(), target);
-
-        // Stale symlink (e.g. still pointing at a removed v1 binary) -> repaired.
-        let stale_target = root.join("opencode-v1");
-        fs::write(&stale_target, "old").unwrap();
-        let stale_alias = root.join("bin2/opencode");
-        fs::create_dir_all(stale_alias.parent().unwrap()).unwrap();
-        symlink(&stale_target, &stale_alias).unwrap();
-        ensure_symlink_alias(&stale_alias, &target).unwrap();
-        assert_eq!(fs::read_link(&stale_alias).unwrap(), target);
-
-        // A real (non-symlink) file already at the alias path is not UZE's
-        // to overwrite.
-        let foreign = root.join("bin3/opencode");
-        fs::create_dir_all(foreign.parent().unwrap()).unwrap();
-        fs::write(&foreign, "not managed by uze").unwrap();
-        ensure_symlink_alias(&foreign, &target).unwrap();
-        assert_eq!(fs::read_to_string(&foreign).unwrap(), "not managed by uze");
-
-        fs::remove_dir_all(root).unwrap();
     }
 
     struct RecordingRunner {
@@ -271,13 +149,13 @@ mod provision_tests {
             return;
         }
         // `provision`'s install/upgrade command is mocked below, so nothing
-        // is genuinely installed — `ensure_opencode_alias` still resolves
-        // `opencode`/`opencode2` for real. On a machine with neither on
-        // PATH (a bare CI runner, unlike a dev box that has one installed)
-        // that real resolution fails and `Verified` is unreachable no
-        // matter what the mock records; skip rather than assert a status
-        // this test has no way to produce here.
-        if !detect_binary("opencode").present && resolve_executable_path("opencode2").is_none() {
+        // is genuinely installed — the final `detect()` verification still
+        // resolves `opencode`/`opencode2` for real. On a machine with
+        // neither on PATH (a bare CI runner, unlike a dev box that has one
+        // installed) that real resolution fails and `Verified` is
+        // unreachable no matter what the mock records; skip rather than
+        // assert a status this test has no way to produce here.
+        if resolve_opencode_binary().is_none() {
             return;
         }
         let root = temp("provision");
@@ -310,7 +188,6 @@ mod provision_tests {
             assert_eq!(commands[0].program, "sh");
             assert!(commands[0].arguments[1].contains("opencode.ai/v2/install"));
         }
-        assert_eq!(commands[1].program, "opencode");
-        assert_eq!(commands[1].arguments, ["--version"]);
+        assert_eq!(commands.len(), 1);
     }
 }

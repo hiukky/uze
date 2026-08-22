@@ -68,7 +68,22 @@ pub fn run(shim_name: &str) -> ! {
 
     let bypass = env::var_os("UZE_BYPASS").is_some_and(|value| value != "0");
 
-    let executable = match harness_runtime::resolve_real_executable(&[shim_name], &home.shims_dir())
+    // Reaching this line at all already means the shim symlink exists —
+    // that is the entire opt-in signal (see
+    // `IntegrationPort::supports_runtime_integration`'s doc comment). No
+    // separate enabled/disabled state to read.
+    let integration = build_integration(shim_name, &home);
+
+    // Resolve the real binary under the invoked name first, falling back to
+    // any alternate names the integration declares (e.g. OpenCode's v2
+    // installer names its binary `opencode2`, not `opencode`) — this is what
+    // lets the shim dispatch to a differently-named real executable without
+    // a physical alias file ever being created outside `$UZE_HOME`.
+    let mut candidates = vec![shim_name];
+    if let Some(integration) = &integration {
+        candidates.extend(integration.runtime_executable_aliases());
+    }
+    let executable = match harness_runtime::resolve_real_executable(&candidates, &home.shims_dir())
     {
         Some(path) => path,
         None => die(&format!(
@@ -85,11 +100,6 @@ pub fn run(shim_name: &str) -> ! {
         );
     }
 
-    // Reaching this line at all already means the shim symlink exists —
-    // that is the entire opt-in signal (see
-    // `IntegrationPort::supports_runtime_integration`'s doc comment). No
-    // separate enabled/disabled state to read.
-    let integration = build_integration(shim_name, &home);
     let contribution = match &integration {
         Some(integration) => {
             let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));

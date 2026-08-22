@@ -158,6 +158,18 @@ pub trait IntegrationPort {
         false
     }
 
+    /// Alternate names the real binary behind this harness's shim may be
+    /// installed under, tried in order after the shim's own invoked name
+    /// when resolving which executable to `exec`. Default: none — the
+    /// invoked name is the only candidate. Exists for a harness whose
+    /// installer names the binary differently from the name users type
+    /// (e.g. OpenCode's v2 installer produces `opencode2`, not `opencode`):
+    /// the shim can dispatch straight to the real name without a physical
+    /// alias file ever being created outside `$UZE_HOME`.
+    fn runtime_executable_aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
+
     /// The integration, not the resource representation, selects how the
     /// harness receives a capability from a composed UZE environment.
     fn exposure_plan(&self, resource: &crate::project::Resource) -> ExposurePlan;

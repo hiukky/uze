@@ -401,8 +401,13 @@ impl UzeApplication {
         let shims_dir = self.home.shims_dir();
 
         // Refuse to shim a harness with no real binary anywhere — that
-        // would silently create a symlink that can never resolve.
-        let resolved = uze_core::harness_runtime::resolve_real_executable(&[shim_name], &shims_dir)
+        // would silently create a symlink that can never resolve. Includes
+        // the integration's own `runtime_executable_aliases` (e.g. OpenCode's
+        // `opencode2`) so a harness whose installer names the binary
+        // differently from `shim_name` is still found.
+        let mut candidates = vec![shim_name];
+        candidates.extend(integration.runtime_executable_aliases());
+        let resolved = uze_core::harness_runtime::resolve_real_executable(&candidates, &shims_dir)
             .ok_or_else(|| {
                 UzeError::ExposureUnavailable(format!(
                     "no real `{shim_name}` executable found on PATH outside {} — install it \

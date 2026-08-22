@@ -5,9 +5,12 @@
 //!
 //! Split by concern: [`mcp`] (the global `mcp.<name>` config entries),
 //! [`skills`] (the managed skills-dir reference), and [`provision`]
-//! (install/update plus the `opencode`/`opencode2` binary alias). This file
-//! is the composition root: the `OpenCodeIntegration` struct and its
-//! `IntegrationPort` impl, delegating to each submodule.
+//! (install/update, plus detecting whichever of `opencode`/`opencode2` is
+//! present). Dispatching `opencode` to a binary actually named `opencode2`
+//! is handled by the generic PATH shim (`runtime_executable_aliases` below),
+//! not by anything in this module. This file is the composition root: the
+//! `OpenCodeIntegration` struct and its `IntegrationPort` impl, delegating
+//! to each submodule.
 
 use std::{fs, path::PathBuf};
 
@@ -86,6 +89,18 @@ impl IntegrationPort for OpenCodeIntegration {
             .unwrap_or_default()
     }
 
+    /// OpenCode's v2 installer names the binary `opencode2`, not `opencode`.
+    /// Rather than a UZE-managed symlink alias placed next to the real
+    /// binary (outside `$UZE_HOME`), the generic PATH shim resolves straight
+    /// to whichever name is actually present — see `runtime_executable_aliases`.
+    fn supports_runtime_integration(&self) -> bool {
+        true
+    }
+
+    fn runtime_executable_aliases(&self) -> &'static [&'static str] {
+        &["opencode2"]
+    }
+
     /// OpenCode V2 discovers `~/.agents/skills` via path-derived ID and
     /// exposes Skills as slash commands (`/id`) by default (`slash: true`
     /// unless opted out). The physical directory is now user-visible, like
@@ -109,12 +124,11 @@ impl IntegrationPort for OpenCodeIntegration {
         Some(self.skills_dir.clone())
     }
 
-    /// OpenCode's v2 installer names the binary `opencode2`; UZE's canonical
-    /// invocation stays `opencode` with no version suffix, so provisioning
-    /// installs or upgrades normally and then ensures that alias exists —
-    /// success is only reported once `opencode` itself resolves, not merely
-    /// `opencode2`, since that's the one guarantee this method's callers
-    /// (and the doc comment above the struct) actually rely on.
+    /// OpenCode's v2 installer names the binary `opencode2`; provisioning
+    /// installs or upgrades normally and reports success once either
+    /// `opencode` or `opencode2` resolves — reconciling the name gap with
+    /// UZE's canonical `opencode` invocation is the PATH shim's job
+    /// (`runtime_executable_aliases`), not provisioning's.
     fn provision(&self, runner: &dyn ProcessRunner) -> Result<ProvisioningResult> {
         provision_opencode(runner, || self.detect())
     }
