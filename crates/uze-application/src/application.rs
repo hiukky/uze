@@ -614,10 +614,40 @@ impl UzeApplication {
             .map(|path| std::env::split_paths(&path).any(|entry| entry == shims_dir))
             .unwrap_or(false);
 
+        let mut rc_file_updated = None;
+        let mut path_hint = None;
+        if !on_path {
+            let manual_export = format!("export PATH=\"{}:$PATH\"", shims_dir.display());
+            match std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .and_then(|home_dir| uze_core::shell_path::detect_shell_rc(&home_dir))
+            {
+                Some(target) => match uze_core::shell_path::ensure_path_line(&target, &shims_dir) {
+                    Ok(changed) => {
+                        if changed {
+                            rc_file_updated = Some(target.rc_file.clone());
+                        }
+                        path_hint = Some(format!(
+                            "open a new terminal, or run: source {}",
+                            target.rc_file.display()
+                        ));
+                    }
+                    // The rc file has a marker in a shape this function
+                    // doesn't recognize (edited by hand, presumably) —
+                    // refuse to guess, fall back to the manual instruction.
+                    Err(_) => path_hint = Some(manual_export),
+                },
+                // No detected shell (uncommon shell, `$SHELL`/`$HOME` unset)
+                // — nothing to edit, same manual fallback.
+                None => path_hint = Some(manual_export),
+            }
+        }
+
         Ok(Some(RuntimeShimSetup {
             shim_path,
             resolved_executable: resolved,
-            path_hint: (!on_path).then(|| format!("export PATH=\"{}:$PATH\"", shims_dir.display())),
+            rc_file_updated,
+            path_hint,
         }))
     }
 
@@ -1633,8 +1663,18 @@ pub struct SetupResult {
 pub struct RuntimeShimSetup {
     pub shim_path: PathBuf,
     pub resolved_executable: PathBuf,
-    /// Set only when the shim directory isn't yet on `PATH` — the exact
-    /// manual instruction to run. UZE never edits shell rc files itself.
+    /// Set only when this call actually wrote a change into a detected
+    /// shell rc file (`shell_path::ensure_path_line`) — the file that was
+    /// touched. A marked, reversible block; see `shell_path` for the exact
+    /// shape and safety guarantees. Absent when the shim dir was already
+    /// on `PATH`, when the rc file already had the right line (idempotent
+    /// no-op), or when no rc file was touched at all.
+    pub rc_file_updated: Option<PathBuf>,
+    /// Set whenever the shim dir isn't yet on `PATH` for the *current*
+    /// shell session — a change to a shell rc file only takes effect in a
+    /// new shell, so this is always the instruction for finishing that
+    /// (open a new terminal / `source <rc>`), or the raw manual `export`
+    /// line when no supported shell rc file was detected at all.
     pub path_hint: Option<String>,
 }
 

@@ -247,8 +247,11 @@ fn run(cli: Cli) -> Result<()> {
                              back off)",
                             shim.shim_path.display()
                         );
+                        if let Some(rc_file) = &shim.rc_file_updated {
+                            println!("  Added it to PATH in {}", rc_file.display());
+                        }
                         if let Some(hint) = &shim.path_hint {
-                            println!("  Not yet on PATH — add it to use the shim: {hint}");
+                            println!("  Not yet on PATH in this session — {hint}");
                         }
                     }
                 } else {

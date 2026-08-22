@@ -20,6 +20,7 @@ pub mod provisioning;
 pub mod reconciliation;
 pub mod router;
 pub mod runtime;
+pub mod shell_path;
 pub mod state;
 pub mod store;
 pub mod text_region;
