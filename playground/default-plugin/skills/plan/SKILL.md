@@ -1,5 +1,5 @@
 ---
-name: uze-playground-plan
+name: plan
 description: Creates a compact implementation plan before making a scoped change.
 ---
 

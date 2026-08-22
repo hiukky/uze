@@ -1,4 +1,4 @@
-//! Deterministic stdio MCP server for the manually dogfoodable UZE playground.
+//! Deterministic stdio MCP server for the manually dogfoodable playground.
 //! It performs no network or filesystem access: the point is to validate that
 //! a real harness received an MCP capability from one UZE-managed package.
 
@@ -42,7 +42,7 @@ impl PlaygroundServer {
         (args.left + args.right).to_string()
     }
 
-    #[tool(description = "Returns a deterministic status value for the UZE playground MCP server.")]
+    #[tool(description = "Returns a deterministic status value for the playground MCP server.")]
     fn status(&self, #[tool(aggr)] _args: StatusArgs) -> String {
         "UZE_PLAYGROUND_MCP_READY".to_owned()
     }
@@ -53,7 +53,7 @@ impl ServerHandler for PlaygroundServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             capabilities: ServerCapabilities::builder().enable_tools().build(),
-            instructions: Some("Deterministic UZE playground MCP tools".into()),
+            instructions: Some("Deterministic playground MCP tools".into()),
             ..Default::default()
         }
     }

@@ -1,7 +1,7 @@
 {
   "mcpServers": {
-    "playground": {
-      "command": "uze-playground-mcp",
+    "tools": {
+      "command": "playground-mcp",
       "args": []
     }
   }

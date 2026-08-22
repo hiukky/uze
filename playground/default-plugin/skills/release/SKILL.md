@@ -1,5 +1,5 @@
 ---
-name: uze-playground-release
+name: release
 description: Produces a safe, reproducible local release readiness checklist for Rust projects.
 ---
 
