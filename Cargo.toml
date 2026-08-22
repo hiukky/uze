@@ -5,6 +5,11 @@ edition = "2024"
 rust-version = "1.97"
 description = "Standards-first agent project composition"
 license = "MIT"
+# UZE is not published to crates.io. Native Cargo field (independent of
+# cargo-release's own `publish = false` in release.toml) so `cargo publish`
+# itself refuses, and its manifest-completeness checks (repository/
+# homepage/documentation, path-dependency versions) never block a release.
+publish = false
 
 [workspace]
 members = [
