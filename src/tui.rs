@@ -40,7 +40,7 @@ use crate::{
         MarketplacePluginDetail, MarketplacePluginSummary, PluginInspection, PluginSummary,
         ProjectContextStatus, RemovePluginReport, UpdatePluginReport,
     },
-    provisioning::{ProcessOutput, ProcessRunner, ProcessResult, ProcessSpec, SystemProcessRunner},
+    provisioning::{ProcessOutput, ProcessResult, ProcessRunner, ProcessSpec, SystemProcessRunner},
 };
 
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
