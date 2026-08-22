@@ -19,7 +19,6 @@
 //! each submodule.
 
 use std::{
-    collections::BTreeSet,
     fs,
     path::{Path, PathBuf},
     process::Command,
@@ -46,7 +45,9 @@ mod mcp;
 mod provision;
 mod skills;
 
-use extension::{extension_name, inspect_linked_extension, linked_extension, run_gemini};
+use extension::{
+    extension_name, gemini_exact_coverage, inspect_linked_extension, linked_extension, run_gemini,
+};
 use mcp::attach_mcp_entry;
 use provision::{detect_binary, provision_npm};
 
@@ -171,19 +172,17 @@ impl IntegrationPort for GeminiIntegration {
         if !package.root.join("gemini-extension.json").is_file() {
             return None;
         }
-        // An extension's `mcpServers` live inside its own manifest and its
-        // skills inside its own `skills/`, so Gemini owns every capability in
-        // the package once linked. Attaching any of them again would produce
-        // a duplicate the harness never asked for.
+        // An extension's `mcpServers` live inside its own manifest (declared
+        // inline, by name) and its skills inside its own conventional
+        // `skills/` directory — Gemini owns exactly those, not everything the
+        // Engine happened to discover in the same package tree.
+        let provided = gemini_exact_coverage(package, resources);
         Some(PackageExposurePlan {
             package_id: package.id.clone(),
             route: CompatibilityRoute::Native,
             verification: VerificationStatus::Unverified,
-            provided_resource_identities: resources
-                .iter()
-                .map(|resource| resource.identity())
-                .collect::<BTreeSet<_>>(),
-            evidence: "The preserved external gemini-extension.json is linked directly from the UZE store through `gemini extensions link`. Gemini owns Skill and MCP loading for a linked extension, so UZE must not attach either resource a second time."
+            provided_resource_identities: provided,
+            evidence: "The preserved external gemini-extension.json is linked directly from the UZE store through `gemini extensions link`, for exactly the skills/mcpServers it declares; undeclared resources fall back to individual attachment."
                 .to_owned(),
         })
     }

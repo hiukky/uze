@@ -39,8 +39,8 @@ pub use mcp::detach_mcp_entry;
 
 use mcp::attach_mcp_entry;
 use plugin::{
-    MARKETPLACE_NAME, catalogue_document, detail_path, inspect_codex_plugin, marketplace_exists,
-    publishable, remove_plugin, run_codex, write_catalogue,
+    MARKETPLACE_NAME, catalogue_document, codex_exact_coverage, detail_path, inspect_codex_plugin,
+    marketplace_exists, publishable, remove_plugin, run_codex, write_catalogue,
 };
 use provision::{detect_binary, provision_cli};
 
@@ -182,15 +182,13 @@ impl IntegrationPort for CodexIntegration {
         if !package.root.join(".codex-plugin/plugin.json").is_file() {
             return None;
         }
+        let provided = codex_exact_coverage(package, resources);
         Some(PackageExposurePlan {
             package_id: package.id.clone(),
             route: CompatibilityRoute::Native,
             verification: VerificationStatus::Unverified,
-            provided_resource_identities: resources
-                .iter()
-                .map(|resource| resource.identity())
-                .collect::<std::collections::BTreeSet<_>>(),
-            evidence: "The preserved external .codex-plugin/plugin.json is exposed through UZE's generated, standard Codex local marketplace catalog. Codex owns Skill and MCP loading, so UZE must not attach either resource a second time.".to_owned(),
+            provided_resource_identities: provided,
+            evidence: "The preserved external .codex-plugin/plugin.json is exposed through UZE's generated, standard Codex local marketplace catalog for exactly the skills/mcpServers it declares; undeclared resources fall back to individual attachment.".to_owned(),
         })
     }
 

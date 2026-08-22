@@ -63,6 +63,69 @@ pub(super) fn extension_name(package_root: &Path) -> Result<String> {
         })
 }
 
+/// Computes which of `resources` (already discovered by UZE's Engine) are
+/// actually covered by a linked Gemini extension — the intersection
+/// ADR-013 §2 requires (`provided = discovered ∩ declared`), mirroring
+/// Claude's `claude_exact_coverage` and Codex's `codex_exact_coverage`.
+/// Gemini's schema differs from both: `gemini-extension.json` declares no
+/// `skills` path at all — confirmed by
+/// `e2e/fixtures/gemini-native-conformance/gemini-extension.json`, which has
+/// no `skills` key even though its sibling `skills/uze-plugin-first/SKILL.md`
+/// exists — so Skill coverage is convention-based: a skill is covered iff its
+/// directory lives directly under the extension root's fixed `skills/`
+/// subdirectory, never a manifest-declared path. `mcpServers` **is** declared
+/// in the manifest, inline as an object keyed by server name (the fixture
+/// confirms this — unlike Codex's external-file reference). A missing or
+/// malformed manifest, or an unexpected `mcpServers` shape, contributes no
+/// MCP coverage rather than erroring or panicking; Skill coverage never
+/// depends on the manifest parsing at all, since it needs no manifest field.
+pub(super) fn gemini_exact_coverage(
+    package: &StoredPackage,
+    resources: &[&uze_core::project::Resource],
+) -> std::collections::BTreeSet<String> {
+    let manifest_path = package.root.join("gemini-extension.json");
+    let declared_mcp: std::collections::BTreeSet<String> = fs::read(&manifest_path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|value| {
+            value
+                .get("mcpServers")
+                .and_then(serde_json::Value::as_object)
+                .map(|servers| servers.keys().cloned().collect())
+        })
+        .unwrap_or_default();
+
+    let mut provided = std::collections::BTreeSet::new();
+    for resource in resources {
+        match resource.capability.kind {
+            uze_core::capability::CapabilityKind::AgentSkill => {
+                let Some(relative) = resource.capability.path.strip_prefix(&package.root).ok()
+                else {
+                    continue;
+                };
+                let Some(parent) = relative.parent() else {
+                    continue;
+                };
+                // Component-wise, not a string prefix — "skills-extra" must
+                // never be mistaken for inside "skills", same discipline as
+                // Codex's `codex_exact_coverage`.
+                if parent.starts_with("skills") {
+                    provided.insert(resource.identity());
+                }
+            }
+            uze_core::capability::CapabilityKind::Mcp => {
+                if let Some(name) = &resource.resource_name
+                    && declared_mcp.contains(name)
+                {
+                    provided.insert(resource.identity());
+                }
+            }
+            _ => {}
+        }
+    }
+    provided
+}
+
 /// Reads Gemini's machine-readable output.
 ///
 /// `gemini extensions list --output-format=json` exits 0 and writes its JSON
@@ -287,5 +350,258 @@ mod extension_tests {
         fs::write(root.join("gemini-extension.json"), r#"{"version":"1.0.0"}"#).unwrap();
         assert!(extension_name(&root).is_err());
         let _ = fs::remove_dir_all(root);
+    }
+}
+
+#[cfg(test)]
+mod gemini_native_coverage_tests {
+    use std::collections::BTreeSet;
+    use std::fs;
+    use std::path::PathBuf;
+
+    use uze_core::capability::{Capability, CapabilityKind, Representation};
+    use uze_core::home::UzeHome;
+    use uze_core::integration::IntegrationPort;
+    use uze_core::project::Resource;
+
+    use super::super::GeminiIntegration;
+    use super::gemini_exact_coverage;
+
+    fn temp_root(label: &str) -> PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "uze-gemini-coverage-{label}-{nonce}-{}",
+            std::process::id()
+        ))
+    }
+
+    /// `manifest_body` is written into `gemini-extension.json` verbatim — a
+    /// test can supply malformed JSON or an unexpected `mcpServers` shape.
+    fn make_package(label: &str, manifest_body: &str) -> (PathBuf, uze_core::store::StoredPackage) {
+        let root = temp_root(label);
+        let pkg_root = root.join("pkg");
+        fs::create_dir_all(&pkg_root).unwrap();
+        fs::write(pkg_root.join("gemini-extension.json"), manifest_body).unwrap();
+        fs::write(pkg_root.join("plugin.json"), r#"{"name":"test-pkg"}"#).unwrap();
+        let id =
+            uze_core::store::PackageId::from_plugin_name("test-pkg", &pkg_root.join("plugin.json"))
+                .unwrap();
+        let pkg = uze_core::store::StoredPackage {
+            id,
+            root: pkg_root.clone(),
+            manifest: pkg_root.join("plugin.json"),
+            provenance: uze_core::acquisition::Provenance {
+                requested: uze_core::acquisition::PackageSource::Local {
+                    path: PathBuf::from("/tmp/fake"),
+                },
+                resolved: uze_core::acquisition::ResolvedSource::Local {
+                    path: PathBuf::from("/tmp/fake"),
+                },
+            },
+        };
+        (root, pkg)
+    }
+
+    fn skill_resource(pkg: &uze_core::store::StoredPackage, dir: &str, skill: &str) -> Resource {
+        let path = pkg.root.join(dir).join(skill).join("SKILL.md");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, format!("---\nname: {skill}\n---\n")).unwrap();
+        Resource::from_package(
+            pkg.id.clone(),
+            pkg.root.clone(),
+            Capability {
+                kind: CapabilityKind::AgentSkill,
+                representation: Representation::Standard,
+                path: path.clone(),
+                payload: Vec::new(),
+            },
+        )
+    }
+
+    fn mcp_resource(pkg: &uze_core::store::StoredPackage, name: &str) -> Resource {
+        let path = pkg.root.join("mcp.json");
+        let payload = serde_json::json!({"command":"node","args":[name]})
+            .to_string()
+            .into_bytes();
+        Resource::from_package_named(
+            pkg.id.clone(),
+            pkg.root.clone(),
+            Capability {
+                kind: CapabilityKind::Mcp,
+                representation: Representation::Standard,
+                path: path.clone(),
+                payload,
+            },
+            name.to_owned(),
+        )
+    }
+
+    /// A. Manifest declares mcpServers matching everything discovered; the
+    /// discovered skill lives under the conventional `skills/` directory —
+    /// full coverage.
+    #[test]
+    fn manifest_declares_all_is_fully_covered() {
+        let (_root, pkg) = make_package(
+            "all",
+            r#"{"name":"ext","mcpServers":{"mcp-a":{"command":"a"}}}"#,
+        );
+        let r_a = skill_resource(&pkg, "skills", "a");
+        let r_m = mcp_resource(&pkg, "mcp-a");
+        let resources = vec![&r_a, &r_m];
+        let covered = gemini_exact_coverage(&pkg, &resources);
+        let expected: BTreeSet<String> = resources.iter().map(|r| r.identity()).collect();
+        assert_eq!(covered, expected);
+        let _ = fs::remove_dir_all(_root);
+    }
+
+    /// B. Manifest declares only a subset of the discovered MCP servers.
+    #[test]
+    fn manifest_declares_subset_only_that_subset_is_covered() {
+        let (_root, pkg) = make_package(
+            "subset",
+            r#"{"name":"ext","mcpServers":{"mcp-a":{"command":"a"}}}"#,
+        );
+        let r_covered = mcp_resource(&pkg, "mcp-a");
+        let r_uncovered = mcp_resource(&pkg, "mcp-b");
+        let resources = vec![&r_covered, &r_uncovered];
+        let covered = gemini_exact_coverage(&pkg, &resources);
+        assert_eq!(covered, BTreeSet::from([r_covered.identity()]));
+        assert!(!covered.contains(&r_uncovered.identity()));
+        let _ = fs::remove_dir_all(_root);
+    }
+
+    /// C. Store contains a Skill physically outside the conventional
+    /// `skills/` directory — not covered, falls back to individual
+    /// attachment.
+    #[test]
+    fn store_has_a_skill_outside_the_conventional_directory_is_not_covered() {
+        let (_root, pkg) = make_package("extra-skill", r#"{"name":"ext"}"#);
+        let r_in = skill_resource(&pkg, "skills", "a");
+        let r_out = skill_resource(&pkg, "extra", "b");
+        let resources = vec![&r_in, &r_out];
+        let covered = gemini_exact_coverage(&pkg, &resources);
+        assert_eq!(covered, BTreeSet::from([r_in.identity()]));
+        assert!(!covered.contains(&r_out.identity()));
+        let _ = fs::remove_dir_all(_root);
+    }
+
+    /// D. Store contains an MCP resource the manifest never names — not
+    /// covered.
+    #[test]
+    fn store_has_an_mcp_server_not_named_in_the_manifest_is_not_covered() {
+        let (_root, pkg) = make_package(
+            "extra-mcp",
+            r#"{"name":"ext","mcpServers":{"mcp-a":{"command":"a"}}}"#,
+        );
+        let r_named = mcp_resource(&pkg, "mcp-a");
+        let r_extra = mcp_resource(&pkg, "mcp-c");
+        let resources = vec![&r_named, &r_extra];
+        let covered = gemini_exact_coverage(&pkg, &resources);
+        assert_eq!(covered, BTreeSet::from([r_named.identity()]));
+        let _ = fs::remove_dir_all(_root);
+    }
+
+    /// E. `mcpServers` absent from an otherwise-valid manifest — no MCP
+    /// coverage claimed, no panic; Skill coverage (convention-based, no
+    /// manifest field needed) is unaffected.
+    #[test]
+    fn manifest_without_mcp_servers_field_yields_no_mcp_coverage() {
+        let (_root, pkg) = make_package("no-mcp-field", r#"{"name":"ext"}"#);
+        let r_a = skill_resource(&pkg, "skills", "a");
+        let r_m = mcp_resource(&pkg, "mcp-a");
+        let resources = vec![&r_a, &r_m];
+        let covered = gemini_exact_coverage(&pkg, &resources);
+        assert_eq!(covered, BTreeSet::from([r_a.identity()]));
+        assert!(!covered.contains(&r_m.identity()));
+        let _ = fs::remove_dir_all(_root);
+    }
+
+    /// F. `gemini-extension.json` exists but is malformed JSON — no MCP
+    /// coverage, not a crash; package still installs natively via
+    /// `package_exposure_plan`, and Skill coverage is unaffected since it
+    /// needs no manifest field.
+    #[test]
+    fn malformed_manifest_yields_empty_mcp_coverage_but_package_still_deliverable() {
+        let (_root, pkg) = make_package("malformed", "{not json");
+        let r_a = skill_resource(&pkg, "skills", "a");
+        let r_m = mcp_resource(&pkg, "mcp-a");
+        let resources = vec![&r_a, &r_m];
+        let covered = gemini_exact_coverage(&pkg, &resources);
+        assert_eq!(covered, BTreeSet::from([r_a.identity()]));
+        let integration =
+            GeminiIntegration::new(_root.join("agents"), UzeHome::at(_root.join("uze")));
+        let plan = integration.package_exposure_plan(&pkg, &resources);
+        assert!(
+            plan.is_some(),
+            "malformed native manifest must not block native delivery"
+        );
+        let _ = fs::remove_dir_all(_root);
+    }
+
+    /// G. An unexpected JSON shape for `mcpServers` (an array instead of the
+    /// documented name-keyed object) is tolerated as "no servers declared"
+    /// rather than panicking or matching every resource.
+    #[test]
+    fn unexpected_mcp_servers_field_shape_is_tolerated_as_no_declaration() {
+        let (_root, pkg) = make_package("wrong-shape", r#"{"name":"ext","mcpServers":["mcp-a"]}"#);
+        let r_m = mcp_resource(&pkg, "mcp-a");
+        let resources = vec![&r_m];
+        let covered = gemini_exact_coverage(&pkg, &resources);
+        assert!(covered.is_empty());
+        let _ = fs::remove_dir_all(_root);
+    }
+
+    /// H. Partial native delivery: a package with one conventionally-placed
+    /// skill and one skill/MCP outside the manifest's declared surface must
+    /// cover only the conventional/declared ones — no duplicate receipt,
+    /// nothing missing, and the uncovered resources still route through the
+    /// normal capability-level fallback.
+    #[test]
+    fn partial_native_coverage_leaves_undeclared_resources_on_the_fallback_path() {
+        let (_root, pkg) = make_package("partial", r#"{"name":"ext"}"#);
+        let r_native = skill_resource(&pkg, "skills", "skill-native");
+        let r_extra_skill = skill_resource(&pkg, "extra", "skill-extra");
+        let r_extra_mcp = mcp_resource(&pkg, "mcp-extra");
+        let resources = vec![&r_native, &r_extra_skill, &r_extra_mcp];
+        let uze_home = UzeHome::at(_root.join("uze"));
+        let integration = GeminiIntegration::new(_root.join("agents"), uze_home.clone());
+        uze_core::state::record(
+            &uze_home,
+            uze_core::state::IntegrationRecord {
+                harness: integration.id().to_owned(),
+                version: None,
+                strategy: "test".to_owned(),
+                installed: true,
+            },
+        )
+        .unwrap();
+        let plan = integration
+            .package_exposure_plan(&pkg, &resources)
+            .expect("native envelope still applies");
+        assert_eq!(
+            plan.provided_resource_identities,
+            BTreeSet::from([r_native.identity()])
+        );
+        assert!(
+            !plan
+                .provided_resource_identities
+                .contains(&r_extra_skill.identity())
+        );
+        assert!(
+            !plan
+                .provided_resource_identities
+                .contains(&r_extra_mcp.identity())
+        );
+        for uncovered in [&r_extra_skill, &r_extra_mcp] {
+            let fallback = integration.exposure_plan(uncovered);
+            assert!(!matches!(
+                fallback.mechanism,
+                uze_core::exposure::ExposureMechanism::Unsupported { .. }
+            ));
+        }
+        let _ = fs::remove_dir_all(_root);
     }
 }
