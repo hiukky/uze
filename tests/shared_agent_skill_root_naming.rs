@@ -10,7 +10,9 @@
 //! slash command.
 //!
 //! Deterministic by construction: a `NoopProcessRunner` means no real
-//! `opencode`/`codex`/`gemini` binary is ever spawned.
+//! `opencode`/`codex`/`gemini` binary is ever spawned. Detection is forced
+//! to present via an `AlwaysPresent` wrapper so the suite does not depend on
+//! host binaries.
 
 use std::{
     fs,
@@ -23,7 +25,15 @@ use uze::integrations::{
 };
 use uze::{
     PackageSource, UzeApplication, UzeHome,
+    exposure::{ExposurePlan, PackageExposurePlan},
+    integration::{
+        AttachmentInspection, AttachmentReceipt, HarnessDetection, IntegrationPort,
+        IntegrationStatus, PublicationStatus,
+    },
+    project::Resource as ProjectResource,
     provisioning::{ProcessResult, ProcessRunner, ProcessSpec},
+    router::HarnessCapabilities,
+    store::StoredPackage,
 };
 
 fn temp(label: &str) -> PathBuf {
@@ -45,6 +55,82 @@ impl ProcessRunner for NoopProcessRunner {
             success: true,
             timed_out: false,
         })
+    }
+}
+
+struct AlwaysPresent<T: IntegrationPort>(T);
+
+impl<T: IntegrationPort> IntegrationPort for AlwaysPresent<T> {
+    fn id(&self) -> &'static str {
+        self.0.id()
+    }
+    fn capabilities(&self) -> HarnessCapabilities {
+        self.0.capabilities()
+    }
+    fn runtime_support(&self) -> uze::runtime::RuntimeSupport {
+        self.0.runtime_support()
+    }
+    fn exposure_plan(&self, resource: &ProjectResource) -> ExposurePlan {
+        self.0.exposure_plan(resource)
+    }
+    fn exposure_name_candidates(&self, resource: &ProjectResource) -> Vec<String> {
+        self.0.exposure_name_candidates(resource)
+    }
+    fn shared_agent_skill_root(&self) -> Option<PathBuf> {
+        self.0.shared_agent_skill_root()
+    }
+    fn package_exposure_plan(
+        &self,
+        package: &StoredPackage,
+        resources: &[&ProjectResource],
+    ) -> Option<PackageExposurePlan> {
+        self.0.package_exposure_plan(package, resources)
+    }
+    fn detect(&self) -> HarnessDetection {
+        HarnessDetection {
+            present: true,
+            version: Some("9.9.9".to_owned()),
+        }
+    }
+    fn provision(
+        &self,
+        runner: &dyn ProcessRunner,
+    ) -> uze::Result<uze::provisioning::ProvisioningResult> {
+        self.0.provision(runner)
+    }
+    fn install(&self, home: &UzeHome) -> uze::Result<()> {
+        self.0.install(home)
+    }
+    fn status(&self, home: &UzeHome) -> IntegrationStatus {
+        self.0.status(home)
+    }
+    fn attach(&self, resource: &ProjectResource) -> uze::Result<Option<PathBuf>> {
+        self.0.attach(resource)
+    }
+    fn attach_package(
+        &self,
+        package: &StoredPackage,
+        plan: &PackageExposurePlan,
+    ) -> uze::Result<Option<AttachmentReceipt>> {
+        self.0.attach_package(package, plan)
+    }
+    fn aliases(&self) -> &'static [&'static str] {
+        self.0.aliases()
+    }
+    fn republish_packages(&self, packages: &[StoredPackage]) -> uze::Result<()> {
+        self.0.republish_packages(packages)
+    }
+    fn publication(&self, packages: &[StoredPackage]) -> PublicationStatus {
+        self.0.publication(packages)
+    }
+    fn attach_receipt(&self, resource: &ProjectResource) -> uze::Result<Option<AttachmentReceipt>> {
+        self.0.attach_receipt(resource)
+    }
+    fn inspect_receipt(&self, receipt: &AttachmentReceipt) -> AttachmentInspection {
+        self.0.inspect_receipt(receipt)
+    }
+    fn detach_receipt(&self, receipt: &AttachmentReceipt) -> uze::Result<AttachmentInspection> {
+        self.0.detach_receipt(receipt)
     }
 }
 
@@ -81,16 +167,19 @@ fn opencode_codex_and_gemini_share_exactly_one_symlink_for_the_same_skill() {
     let application = UzeApplication::new_with_runner(
         uze_home.clone(),
         vec![
-            Box::new(CodexIntegration::new(agents_home.clone(), uze_home.clone())),
-            Box::new(GeminiIntegration::new(
+            Box::new(AlwaysPresent(CodexIntegration::new(
                 agents_home.clone(),
                 uze_home.clone(),
-            )),
-            Box::new(OpenCodeIntegration::new(
+            ))),
+            Box::new(AlwaysPresent(GeminiIntegration::new(
+                agents_home.clone(),
+                uze_home.clone(),
+            ))),
+            Box::new(AlwaysPresent(OpenCodeIntegration::new(
                 agents_home.clone(),
                 root.join("opencode-config.json"),
                 uze_home.clone(),
-            )),
+            ))),
         ],
         Box::new(NoopProcessRunner),
     );

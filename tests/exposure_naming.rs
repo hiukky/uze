@@ -16,11 +16,11 @@
 //!     UZE surfaces an explicit conflict instead of silently falling back
 //!     (this milestone's accepted first-slice scope).
 //!
-//! Deterministic by construction: no vendor binary is ever spawned. Harness
-//! *detection* (`claude --version`) is real, since it only reads, but
-//! provisioning is wired to a `NoopProcessRunner` so nothing here can ever
-//! invoke a real installer/updater against the developer's actual `claude`
-//! CLI.
+//! Deterministic by construction: no vendor binary is ever spawned.
+//! Harness detection is forced to `present` via an `AlwaysPresent` wrapper
+//! so the suite does not depend on whether `claude` is installed on the
+//! runner. Provisioning is wired to a `NoopProcessRunner` so no real
+//! installer/updater is invoked.
 
 use std::{
     fs,
@@ -31,8 +31,15 @@ use std::{
 use uze::integrations::claude::ClaudeIntegration;
 use uze::{
     PackageSource, Resource, UzeApplication, UzeEngine, UzeHome, UzeStore,
-    integration::default_exposure_name_candidates,
+    exposure::{ExposurePlan, PackageExposurePlan},
+    integration::{
+        AttachmentInspection, AttachmentReceipt, HarnessDetection, IntegrationPort,
+        IntegrationStatus, PublicationStatus, default_exposure_name_candidates,
+    },
+    project::Resource as ProjectResource,
     provisioning::{ProcessResult, ProcessRunner, ProcessSpec},
+    router::HarnessCapabilities,
+    store::StoredPackage,
 };
 
 fn temp(label: &str) -> PathBuf {
@@ -61,15 +68,91 @@ impl ProcessRunner for NoopProcessRunner {
     }
 }
 
+struct AlwaysPresent<T: IntegrationPort>(T);
+
+impl<T: IntegrationPort> IntegrationPort for AlwaysPresent<T> {
+    fn id(&self) -> &'static str {
+        self.0.id()
+    }
+    fn capabilities(&self) -> HarnessCapabilities {
+        self.0.capabilities()
+    }
+    fn runtime_support(&self) -> uze::runtime::RuntimeSupport {
+        self.0.runtime_support()
+    }
+    fn exposure_plan(&self, resource: &ProjectResource) -> ExposurePlan {
+        self.0.exposure_plan(resource)
+    }
+    fn exposure_name_candidates(&self, resource: &ProjectResource) -> Vec<String> {
+        self.0.exposure_name_candidates(resource)
+    }
+    fn shared_agent_skill_root(&self) -> Option<PathBuf> {
+        self.0.shared_agent_skill_root()
+    }
+    fn package_exposure_plan(
+        &self,
+        package: &StoredPackage,
+        resources: &[&ProjectResource],
+    ) -> Option<PackageExposurePlan> {
+        self.0.package_exposure_plan(package, resources)
+    }
+    fn detect(&self) -> HarnessDetection {
+        HarnessDetection {
+            present: true,
+            version: Some("9.9.9".to_owned()),
+        }
+    }
+    fn provision(
+        &self,
+        runner: &dyn ProcessRunner,
+    ) -> uze::Result<uze::provisioning::ProvisioningResult> {
+        self.0.provision(runner)
+    }
+    fn install(&self, home: &UzeHome) -> uze::Result<()> {
+        self.0.install(home)
+    }
+    fn status(&self, home: &UzeHome) -> IntegrationStatus {
+        self.0.status(home)
+    }
+    fn attach(&self, resource: &ProjectResource) -> uze::Result<Option<PathBuf>> {
+        self.0.attach(resource)
+    }
+    fn attach_package(
+        &self,
+        package: &StoredPackage,
+        plan: &PackageExposurePlan,
+    ) -> uze::Result<Option<AttachmentReceipt>> {
+        self.0.attach_package(package, plan)
+    }
+    fn aliases(&self) -> &'static [&'static str] {
+        self.0.aliases()
+    }
+    fn republish_packages(&self, packages: &[StoredPackage]) -> uze::Result<()> {
+        self.0.republish_packages(packages)
+    }
+    fn publication(&self, packages: &[StoredPackage]) -> PublicationStatus {
+        self.0.publication(packages)
+    }
+    fn attach_receipt(&self, resource: &ProjectResource) -> uze::Result<Option<AttachmentReceipt>> {
+        self.0.attach_receipt(resource)
+    }
+    fn inspect_receipt(&self, receipt: &AttachmentReceipt) -> AttachmentInspection {
+        self.0.inspect_receipt(receipt)
+    }
+    fn detach_receipt(&self, receipt: &AttachmentReceipt) -> uze::Result<AttachmentInspection> {
+        self.0.detach_receipt(receipt)
+    }
+}
+
 fn app_with_claude(root: &Path) -> (UzeApplication, PathBuf) {
     let claude_home = root.join("claude-home");
     let uze_home = UzeHome::at(root.join("uze-home"));
     let application = UzeApplication::new_with_runner(
         uze_home.clone(),
-        vec![Box::new(ClaudeIntegration::new(
+        vec![Box::new(AlwaysPresent(ClaudeIntegration::new(
             claude_home.clone(),
             uze_home,
-        ))],
+        )))],
         Box::new(NoopProcessRunner),
     );
     (application, claude_home)
