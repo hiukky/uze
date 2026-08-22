@@ -5,7 +5,7 @@ UZE_BIN ?= target/debug/uze
 RELEASE_BIN ?= target/release/uze
 INSTALL_ARGS ?= --force
 
-.PHONY: help build release install install-wsl-lab playground-lab run test check fmt lint version clean changelog
+.PHONY: help build release install install-wsl-lab playground-lab run test check fmt lint coverage version clean changelog
 
 help: ## Show the available local-development targets.
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z0-9_.-]+:.*##/ { printf "  %-12s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -46,6 +46,9 @@ check: ## Run formatting, linting, and tests.
 	$(CARGO) fmt --check
 	$(CARGO) clippy -- -D warnings
 	$(CARGO) test --no-fail-fast
+
+coverage: ## Run coverage and enforce 65%→70%→90% roadmap (see CI).
+	$(CARGO) llvm-cov --workspace --summary-only --fail-under-lines 64 --fail-under-regions 65 --html
 
 clean: ## Remove local Cargo build artifacts.
 	$(CARGO) clean

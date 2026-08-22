@@ -374,3 +374,43 @@ fn copy_symlink(source: &Path, _destination: &Path) -> Result<()> {
         source.display()
     )))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::UzeHome;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp(label: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("uze-store-{label}-{}-{nonce}", std::process::id()))
+    }
+
+    #[test]
+    fn package_id_rejects_invalid_names() {
+        let manifest = PathBuf::from("/tmp/plugin.json");
+        assert!(PackageId::from_plugin_name("valid-name_123", &manifest).is_ok());
+        assert!(PackageId::from_plugin_name("", &manifest).is_err());
+        assert!(PackageId::from_plugin_name("has space", &manifest).is_err());
+        assert!(PackageId::from_plugin_name("has/slash", &manifest).is_err());
+        assert!(PackageId::from_plugin_name("has.dot", &manifest).is_err());
+        assert!(PackageId::from_plugin_name("has:colon", &manifest).is_err());
+    }
+
+    #[test]
+    fn load_registry_returns_empty_when_missing_and_survives_corrupt_json() {
+        let root = temp("registry-missing");
+        let home = UzeHome::at(&root);
+        let store = UzeStore::new(home.clone());
+        // No registry yet — should be empty, not error.
+        assert_eq!(store.package_ids().unwrap().len(), 0);
+        // Corrupt JSON should surface as error, not panic.
+        home.ensure_layout().unwrap();
+        fs::write(home.registry_path(), "bad json").unwrap();
+        assert!(store.package_ids().is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+}

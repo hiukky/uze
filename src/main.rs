@@ -97,6 +97,16 @@ enum Command {
         #[command(subcommand)]
         action: ContextAction,
     },
+    /// Manage marketplace discovery sources (add/list/remove).
+    Marketplace {
+        #[command(subcommand)]
+        action: MarketplaceAction,
+    },
+    /// Manage plugins via marketplace (install/list/remove/update).
+    Plugin {
+        #[command(subcommand)]
+        action: PluginAction,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -120,6 +130,50 @@ enum ContextAction {
     /// project's AGENTS.md, and reconciles the harness bridges it implies.
     Reconcile {
         path: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+        format: OutputFormat,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum MarketplaceAction {
+    /// Add a marketplace discovery source (local path or https://...).
+    Add { source: String },
+    /// List registered marketplaces (including embedded uze-official).
+    List {
+        #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+        format: OutputFormat,
+    },
+    /// Remove a marketplace (blocked while plugins from it are installed).
+    Remove { name: String },
+}
+
+#[derive(Debug, Subcommand)]
+enum PluginAction {
+    /// Install a plugin via `name@marketplace`.
+    Install {
+        plugin: String,
+        #[arg(long)]
+        trust: bool,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+        format: OutputFormat,
+    },
+    /// List installed plugins (with marketplace column).
+    List {
+        #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+        format: OutputFormat,
+    },
+    /// Remove a plugin.
+    Remove {
+        plugin: String,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+        format: OutputFormat,
+    },
+    /// Update a plugin (re-resolve marketplace source).
+    Update {
+        plugin: String,
+        #[arg(long)]
+        trust: bool,
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
@@ -320,6 +374,76 @@ fn run(cli: Cli) -> Result<()> {
                 let report = app.context_reconcile(&context_path(path))?;
                 match format {
                     OutputFormat::Text => print!("{}", render_context_reconciliation(&report)),
+                    OutputFormat::Json => print_json(&report),
+                }
+            }
+        },
+        Command::Marketplace { action } => match action {
+            MarketplaceAction::Add { source } => {
+                app.marketplace_add(&source)?;
+                println!("Added marketplace from {source}");
+            }
+            MarketplaceAction::List { format } => {
+                let mps = app.marketplace_list()?;
+                match format {
+                    OutputFormat::Text => {
+                        println!("Marketplaces");
+                        for mp in mps {
+                            println!("{}  {}  {}", mp.name, mp.source, mp.plugin_count);
+                        }
+                    }
+                    OutputFormat::Json => print_json(&mps),
+                }
+            }
+            MarketplaceAction::Remove { name } => {
+                app.marketplace_remove(&name)?;
+                println!("Removed marketplace {name}");
+            }
+        },
+        Command::Plugin { action } => match action {
+            PluginAction::Install {
+                plugin,
+                trust,
+                format,
+            } => {
+                let authority = trust_authority(trust);
+                let report = app.plugin_install(&plugin, authority.as_ref())?;
+                match format {
+                    OutputFormat::Text => {
+                        println!("Installed plugin: {}", report.plugin.id);
+                        println!("Store path: {}", report.plugin.store_path.display());
+                    }
+                    OutputFormat::Json => print_json(&report),
+                }
+            }
+            PluginAction::List { format } => {
+                let plugins = app.list_plugins()?;
+                match format {
+                    OutputFormat::Text => {
+                        println!("Plugins");
+                        for p in plugins {
+                            println!("{}  {}", p.id, p.capability_count);
+                        }
+                    }
+                    OutputFormat::Json => print_json(&plugins),
+                }
+            }
+            PluginAction::Remove { plugin, format } => {
+                let report = app.remove_plugin(&plugin)?;
+                match format {
+                    OutputFormat::Text => print!("{}", render_remove(&report)),
+                    OutputFormat::Json => print_json(&report),
+                }
+            }
+            PluginAction::Update {
+                plugin,
+                trust,
+                format,
+            } => {
+                let authority = trust_authority(trust);
+                let report = app.update_plugin(&plugin, authority.as_ref())?;
+                match format {
+                    OutputFormat::Text => print!("{}", render_update(&report)),
                     OutputFormat::Json => print_json(&report),
                 }
             }
