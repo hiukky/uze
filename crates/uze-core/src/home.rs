@@ -69,6 +69,14 @@ impl UzeHome {
         self.state_dir().join("provisioning.json")
     }
 
+    pub fn marketplaces_path(&self) -> PathBuf {
+        self.state_dir().join("marketplaces.json")
+    }
+
+    pub fn plugin_marketplaces_path(&self) -> PathBuf {
+        self.state_dir().join("plugin_marketplaces.json")
+    }
+
     pub fn cache_dir(&self) -> PathBuf {
         self.root.join("cache")
     }

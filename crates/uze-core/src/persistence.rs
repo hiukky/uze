@@ -119,4 +119,52 @@ mod tests {
         MutationLock::acquire(&home).unwrap();
         let _ = fs::remove_dir_all(root);
     }
+
+    #[test]
+    fn write_atomic_creates_parent_and_is_idempotent() {
+        let root = std::env::temp_dir().join(format!(
+            "uze-write-atomic-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let path = root.join("a/b/state.json");
+        write_atomic(&path, b"first").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"first");
+        // No temp files left behind.
+        assert!(
+            !fs::read_dir(root.join("a/b")).unwrap().any(|e| e
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".tmp"))
+        );
+
+        write_atomic(&path, b"second").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"second");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn mutation_lock_is_released_on_drop_and_allows_reacquire() {
+        let root = std::env::temp_dir().join(format!(
+            "uze-lock-drop-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let home = UzeHome::at(&root);
+        {
+            let _guard = MutationLock::acquire(&home).unwrap();
+            assert!(home.state_dir().join("mutation.lock").exists());
+        }
+        // Dropped — file must be gone and a new acquire must succeed.
+        assert!(!home.state_dir().join("mutation.lock").exists());
+        MutationLock::acquire(&home).unwrap();
+        let _ = fs::remove_dir_all(root);
+    }
 }

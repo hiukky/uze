@@ -196,6 +196,134 @@ fn load_provisioning_registry(home: &UzeHome) -> Result<ProvisioningRegistry> {
     serde_json::from_slice(&bytes).map_err(|source| UzeError::Json { path, source })
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct MarketplaceRecord {
+    pub name: String,
+    pub source: crate::acquisition::PackageSource,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct MarketplaceRegistry {
+    marketplaces: BTreeMap<String, MarketplaceRecord>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct PluginMarketplaceRegistry {
+    plugins: BTreeMap<String, String>,
+}
+
+pub fn marketplace_add(
+    home: &UzeHome,
+    name: &str,
+    source: crate::acquisition::PackageSource,
+) -> Result<()> {
+    home.ensure_layout()?;
+    let mut registry = load_marketplace_registry(home)?;
+    if registry.marketplaces.contains_key(name) {
+        return Err(UzeError::ExposureUnavailable(format!(
+            "marketplace `{name}` already exists"
+        )));
+    }
+    registry.marketplaces.insert(
+        name.to_owned(),
+        MarketplaceRecord {
+            name: name.to_owned(),
+            source,
+        },
+    );
+    save_marketplace_registry(home, &registry)
+}
+
+pub fn marketplace_remove(home: &UzeHome, name: &str) -> Result<()> {
+    let mut registry = load_marketplace_registry(home)?;
+    if !registry.marketplaces.contains_key(name) {
+        return Err(UzeError::UnknownPackage(format!(
+            "marketplace `{name}` not found"
+        )));
+    }
+    let plugin_map = load_plugin_marketplace_registry(home)?;
+    if plugin_map.plugins.values().any(|m| m == name) {
+        return Err(UzeError::ExposureUnavailable(format!(
+            "marketplace `{name}` still has installed plugins; remove them first"
+        )));
+    }
+    registry.marketplaces.remove(name);
+    save_marketplace_registry(home, &registry)
+}
+
+pub fn marketplace_list(home: &UzeHome) -> Result<BTreeMap<String, MarketplaceRecord>> {
+    Ok(load_marketplace_registry(home)?.marketplaces)
+}
+
+pub fn marketplace_get(home: &UzeHome, name: &str) -> Result<Option<MarketplaceRecord>> {
+    Ok(load_marketplace_registry(home)?
+        .marketplaces
+        .get(name)
+        .cloned())
+}
+
+pub fn plugin_marketplace_record(home: &UzeHome, plugin_id: &str, marketplace: &str) -> Result<()> {
+    home.ensure_layout()?;
+    let mut registry = load_plugin_marketplace_registry(home)?;
+    registry
+        .plugins
+        .insert(plugin_id.to_owned(), marketplace.to_owned());
+    save_plugin_marketplace_registry(home, &registry)
+}
+
+pub fn plugin_marketplace_get(home: &UzeHome, plugin_id: &str) -> Result<Option<String>> {
+    Ok(load_plugin_marketplace_registry(home)?
+        .plugins
+        .get(plugin_id)
+        .cloned())
+}
+
+pub fn plugin_marketplace_remove(home: &UzeHome, plugin_id: &str) -> Result<()> {
+    let mut registry = load_plugin_marketplace_registry(home)?;
+    registry.plugins.remove(plugin_id);
+    save_plugin_marketplace_registry(home, &registry)
+}
+
+fn load_marketplace_registry(home: &UzeHome) -> Result<MarketplaceRegistry> {
+    let path = home.marketplaces_path();
+    if !path.exists() {
+        return Ok(MarketplaceRegistry::default());
+    }
+    let bytes = fs::read(&path).map_err(|source| UzeError::Read {
+        path: path.clone(),
+        source,
+    })?;
+    serde_json::from_slice(&bytes).map_err(|source| UzeError::Json { path, source })
+}
+
+fn save_marketplace_registry(home: &UzeHome, registry: &MarketplaceRegistry) -> Result<()> {
+    let path = home.marketplaces_path();
+    let payload = serde_json::to_vec_pretty(registry).expect("marketplace registry serializable");
+    crate::persistence::write_atomic(&path, &payload)
+}
+
+fn load_plugin_marketplace_registry(home: &UzeHome) -> Result<PluginMarketplaceRegistry> {
+    let path = home.plugin_marketplaces_path();
+    if !path.exists() {
+        return Ok(PluginMarketplaceRegistry::default());
+    }
+    let bytes = fs::read(&path).map_err(|source| UzeError::Read {
+        path: path.clone(),
+        source,
+    })?;
+    serde_json::from_slice(&bytes).map_err(|source| UzeError::Json { path, source })
+}
+
+fn save_plugin_marketplace_registry(
+    home: &UzeHome,
+    registry: &PluginMarketplaceRegistry,
+) -> Result<()> {
+    let path = home.plugin_marketplaces_path();
+    let payload =
+        serde_json::to_vec_pretty(registry).expect("plugin marketplace registry serializable");
+    crate::persistence::write_atomic(&path, &payload)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

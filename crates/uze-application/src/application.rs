@@ -287,9 +287,168 @@ impl UzeApplication {
     pub fn list_marketplaces(&self) -> Result<Vec<MarketplaceSummary>> {
         let (name, entries) = bootstrap::entries()?;
         Ok(vec![MarketplaceSummary {
-            name,
+            name: name.clone(),
+            source: "embedded:uze-official".to_owned(),
             plugin_count: entries.len(),
         }])
+    }
+
+    pub fn marketplace_add(&self, source_str: &str) -> Result<()> {
+        let source = Self::parse_marketplace_source(source_str)?;
+        let (marketplace_root, manifest) = Self::load_marketplace_manifest(&source)?;
+        let name = manifest.name.clone();
+        if name == "uze-official" {
+            return Err(UzeError::ExposureUnavailable(
+                "marketplace `uze-official` is reserved".to_owned(),
+            ));
+        }
+        uze_core::state::marketplace_add(&self.home, &name, source)?;
+        let _ = (marketplace_root, manifest);
+        Ok(())
+    }
+
+    pub fn marketplace_remove(&self, name: &str) -> Result<()> {
+        if name == "uze-official" {
+            return Err(UzeError::ExposureUnavailable(
+                "marketplace `uze-official` cannot be removed".to_owned(),
+            ));
+        }
+        uze_core::state::marketplace_remove(&self.home, name)
+    }
+
+    pub fn marketplace_list(&self) -> Result<Vec<MarketplaceSummary>> {
+        let mut out = Vec::new();
+        let (official_name, official_entries) = bootstrap::entries()?;
+        out.push(MarketplaceSummary {
+            name: "uze-official".to_owned(),
+            source: "embedded:uze-official".to_owned(),
+            plugin_count: official_entries.len(),
+        });
+        for (name, record) in uze_core::state::marketplace_list(&self.home)? {
+            let plugin_count = match Self::load_marketplace_manifest(&record.source) {
+                Ok((_, manifest)) => manifest.plugins.len(),
+                Err(_) => 0,
+            };
+            out.push(MarketplaceSummary {
+                name: name.clone(),
+                source: record.source.display(),
+                plugin_count,
+            });
+        }
+        let _ = official_name;
+        Ok(out)
+    }
+
+    pub fn plugin_install(
+        &self,
+        spec: &str,
+        authority: &dyn TrustAuthority,
+    ) -> Result<AddPluginReport> {
+        let (plugin_name, marketplace_name) = spec.split_once('@').ok_or_else(|| {
+            UzeError::ExposureUnavailable(format!(
+                "plugin spec `{spec}` must be `name@marketplace`"
+            ))
+        })?;
+        if marketplace_name == "uze-official" {
+            return self.install_from_marketplace(plugin_name, authority);
+        }
+        let record =
+            uze_core::state::marketplace_get(&self.home, marketplace_name)?.ok_or_else(|| {
+                UzeError::UnknownPackage(format!("marketplace `{marketplace_name}` not found"))
+            })?;
+        let (marketplace_root, manifest) = Self::load_marketplace_manifest(&record.source)?;
+        let plugin_source = uze_core::acquisition::marketplace::resolve_plugin_source(
+            &manifest,
+            plugin_name,
+            &marketplace_root,
+        )?;
+        let source = PackageSource::Local {
+            path: plugin_source,
+        };
+        let report = self.add_plugin(source, authority)?;
+        uze_core::state::plugin_marketplace_record(
+            &self.home,
+            &report.plugin.id,
+            marketplace_name,
+        )?;
+        Ok(report)
+    }
+
+    fn parse_marketplace_source(source_str: &str) -> Result<PackageSource> {
+        let looks_remote = source_str.starts_with("https://")
+            || source_str.starts_with("http://")
+            || source_str.starts_with("git://")
+            || source_str.starts_with("ssh://")
+            || source_str.starts_with("file://");
+        if !looks_remote {
+            let path = PathBuf::from(source_str)
+                .canonicalize()
+                .map_err(|_| UzeError::MissingPath(PathBuf::from(source_str)))?;
+            let manifest_path = path.join("marketplace.json");
+            if !manifest_path.is_file() {
+                return Err(UzeError::MissingManifest(manifest_path));
+            }
+            return Ok(PackageSource::Local { path });
+        }
+        let (locator, subdirectory) = match source_str.split_once('#') {
+            Some((locator, sub)) => (locator, Some(PathBuf::from(sub))),
+            None => (source_str, None),
+        };
+        let scheme_end = locator.find("://").map(|at| at + 3).unwrap_or(0);
+        let (url, reference) = match locator[scheme_end..].rfind('@') {
+            Some(at) => {
+                let at = scheme_end + at;
+                (&locator[..at], Some(locator[at + 1..].to_owned()))
+            }
+            None => (locator, None),
+        };
+        Ok(PackageSource::Git {
+            url: url.to_owned(),
+            reference,
+            subdirectory,
+        })
+    }
+
+    fn load_marketplace_manifest(
+        source: &PackageSource,
+    ) -> Result<(
+        PathBuf,
+        uze_core::acquisition::marketplace::MarketplaceManifest,
+    )> {
+        match source {
+            PackageSource::Local { path } => {
+                let manifest_path = path.join("marketplace.json");
+                let bytes = std::fs::read(&manifest_path).map_err(|e| UzeError::Read {
+                    path: manifest_path.clone(),
+                    source: e,
+                })?;
+                let manifest = uze_core::acquisition::marketplace::parse_manifest(&bytes)?;
+                Ok((path.clone(), manifest))
+            }
+            PackageSource::Git {
+                url,
+                reference,
+                subdirectory,
+            } => {
+                let git_source = PackageSource::Git {
+                    url: url.clone(),
+                    reference: reference.clone(),
+                    subdirectory: subdirectory.clone(),
+                };
+                let materialized = uze_core::acquisition::acquire(&git_source)?;
+                let root = materialized.root().to_path_buf();
+                let manifest_path = root.join("marketplace.json");
+                let bytes = std::fs::read(&manifest_path).map_err(|e| UzeError::Read {
+                    path: manifest_path.clone(),
+                    source: e,
+                })?;
+                let manifest = uze_core::acquisition::marketplace::parse_manifest(&bytes)?;
+                Ok((root, manifest))
+            }
+            PackageSource::Embedded { .. } => Err(UzeError::ExposureUnavailable(
+                "embedded marketplace cannot be used as marketplace source".to_owned(),
+            )),
+        }
     }
 
     /// Every plugin the official marketplace lists, cross-referenced against
@@ -861,7 +1020,11 @@ impl UzeApplication {
     /// delete UZE-owned package bytes.
     pub fn remove_plugin(&self, id: &str) -> Result<RemovePluginReport> {
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.home)?;
-        self.detach_and_remove(id, false)
+        let report = self.detach_and_remove(id, false)?;
+        if matches!(report, RemovePluginReport::Removed { .. }) {
+            let _ = uze_core::state::plugin_marketplace_remove(&self.home, id);
+        }
+        Ok(report)
     }
 
     fn is_protected_package(package: &StoredPackage) -> bool {
@@ -1646,6 +1809,7 @@ pub struct PluginCapability {
 #[derive(Clone, Debug, Serialize)]
 pub struct MarketplaceSummary {
     pub name: String,
+    pub source: String,
     pub plugin_count: usize,
 }
 
@@ -2769,5 +2933,67 @@ mod tests {
             .unwrap();
         assert_eq!(summary.update_available, None);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn official_embedded_plugin_is_protected_from_remove_but_allows_update() {
+        let root = temp("protected-update");
+        let home = UzeHome::at(&root);
+        let app = UzeApplication::new(home, Vec::new());
+        app.add_plugin(
+            uze_core::PackageSource::Embedded {
+                id: "uze".to_owned(),
+            },
+            &uze_core::trust::AlwaysTrust,
+        )
+        .unwrap();
+
+        let err = app.remove_plugin("uze").unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("official marketplace plugin `uze` is protected"),
+            "expected protected error, got: {err}"
+        );
+
+        let report = app
+            .update_plugin("uze", &uze_core::trust::AlwaysTrust)
+            .unwrap();
+        assert!(
+            matches!(report, UpdatePluginReport::Updated { .. }),
+            "expected Updated, got: {report:?}"
+        );
+        assert!(app.package_by_name("uze").is_ok());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn local_spoof_named_uze_is_not_protected() {
+        let root = temp("spoof-not-protected");
+        let spoof_src = temp("spoof-src-uze");
+        fs::create_dir_all(spoof_src.join("skills/spoof")).unwrap();
+        fs::write(
+            spoof_src.join("plugin.json"),
+            r#"{"name":"uze","description":"spoof","version":"0.1.0"}"#,
+        )
+        .unwrap();
+        fs::write(spoof_src.join("skills/spoof/SKILL.md"), "# Spoof\n").unwrap();
+
+        let home = UzeHome::at(&root);
+        let app = UzeApplication::new(home, Vec::new());
+        app.add_plugin(
+            uze_core::PackageSource::Local {
+                path: spoof_src.clone(),
+            },
+            &uze_core::trust::AlwaysTrust,
+        )
+        .unwrap();
+
+        let package = app.package_by_name("uze").unwrap();
+        assert!(!UzeApplication::is_protected_package(&package));
+
+        let report = app.remove_plugin("uze").unwrap();
+        assert!(matches!(report, RemovePluginReport::Removed { .. }));
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(spoof_src).unwrap();
     }
 }
