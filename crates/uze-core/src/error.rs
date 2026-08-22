@@ -65,6 +65,24 @@ pub enum UzeError {
     TrustRequired { package: String, detail: String },
     #[error("unknown UZE package `{0}`")]
     UnknownPackage(String),
+    #[error("unsupported agents.lock version {found}; expected {expected}")]
+    UnsupportedLockVersion { found: u32, expected: u32 },
+    #[error("malformed agents.lock at {path}: {reason}")]
+    MalformedLock { path: PathBuf, reason: String },
+    #[error(
+        "marketplace source conflict for `{marketplace}`: lock has {lock_source}, global has {global_source}"
+    )]
+    MarketplaceSourceConflict {
+        marketplace: String,
+        lock_source: String,
+        global_source: String,
+    },
+    #[error("marketplace mismatch for plugin `{plugin}`: expected `{expected}`, found `{found}`")]
+    MarketplaceMismatch {
+        plugin: String,
+        expected: String,
+        found: String,
+    },
     #[error("marketplace declares plugin `{0}` more than once")]
     DuplicateMarketplacePlugin(String),
     #[error("runtime projection target already exists: {0}")]

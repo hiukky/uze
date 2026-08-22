@@ -107,6 +107,17 @@ enum Command {
         #[command(subcommand)]
         action: PluginAction,
     },
+    /// Install the project's desired agent environment from `agents.lock`.
+    /// On a fresh machine, reconstructs the environment without requiring
+    /// prior `uze marketplace add` setup.
+    Install {
+        path: Option<PathBuf>,
+        /// Authorize any executable capability without prompting.
+        #[arg(long)]
+        trust: bool,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+        format: OutputFormat,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -194,10 +205,81 @@ fn main() {
     if let Some(name) = shim::detect() {
         shim::run(&name);
     }
+
+    // Check for project shorthand `uze <plugin>@<marketplace>` before clap parsing.
+    // If the first argument contains `@` and is not a known subcommand, treat it as shorthand.
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() >= 2 {
+        let first_arg = &args[1];
+        if first_arg.contains('@') && !first_arg.starts_with('-') {
+            // This looks like `uze flow@ai` shorthand.
+            // Parse it and convert to a synthetic Cli command.
+            if let Err(error) = run_project_shorthand(&args[1..]) {
+                eprintln!("uze: {error}");
+                std::process::exit(1);
+            }
+            return;
+        }
+    }
+
     if let Err(error) = run(Cli::parse()) {
         eprintln!("uze: {error}");
         std::process::exit(1);
     }
+}
+
+fn run_project_shorthand(args: &[String]) -> Result<()> {
+    // Parse `plugin@marketplace [--trust] [--format text|json]`
+    let spec = &args[0];
+    let (plugin, marketplace) = uze_core::project_lock::parse_plugin_marketplace_spec(spec)?;
+
+    let mut trust = false;
+    let mut format = OutputFormat::Text;
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--trust" => trust = true,
+            "--format" => {
+                i += 1;
+                if i < args.len() {
+                    format = match args[i].as_str() {
+                        "json" => OutputFormat::Json,
+                        _ => OutputFormat::Text,
+                    };
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    let home = UzeHome::from_env()?;
+    let app = UzeApplication::from_env(home)?;
+    let _ = app.ensure_default_plugins();
+
+    let authority = trust_authority(trust);
+    let report = app.add_project_plugin(
+        &plugin,
+        &marketplace,
+        &PathBuf::from("."),
+        authority.as_ref(),
+    )?;
+
+    match format {
+        OutputFormat::Text => {
+            println!("Added plugin to project: {plugin}@{marketplace}");
+            println!("Store path: {}", report.plugin.store_path.display());
+            for (harness, plan) in &report.package_plans {
+                println!(
+                    "Package delivery to {harness}: {:?} ({} components)",
+                    plan.route,
+                    plan.provided_resource_identities.len()
+                );
+            }
+        }
+        OutputFormat::Json => print_json(&report),
+    }
+    Ok(())
 }
 
 fn run(cli: Cli) -> Result<()> {
@@ -323,10 +405,30 @@ fn run(cli: Cli) -> Result<()> {
             }
         }
         Command::Remove { plugin, format } => {
-            let report = app.remove_plugin(&plugin)?;
-            match format {
-                OutputFormat::Text => print!("{}", render_remove(&report)),
-                OutputFormat::Json => print_json(&report),
+            // Try to remove from project first (if agents.lock exists)
+            let current_dir = std::env::current_dir().map_err(|e| uze::UzeError::Read {
+                path: std::path::PathBuf::from("."),
+                source: e,
+            })?;
+            let project_report = app.remove_project_plugin(&plugin, &current_dir)?;
+
+            match project_report {
+                uze::application::RemoveProjectPluginReport::Removed { .. } => {
+                    // Successfully removed from project lock
+                    match format {
+                        OutputFormat::Text => println!("Removed {plugin} from project"),
+                        OutputFormat::Json => print_json(&project_report),
+                    }
+                }
+                uze::application::RemoveProjectPluginReport::NoLock
+                | uze::application::RemoveProjectPluginReport::NotInLock { .. } => {
+                    // No lock or plugin not in lock, fallback to global remove
+                    let report = app.remove_plugin(&plugin)?;
+                    match format {
+                        OutputFormat::Text => print!("{}", render_remove(&report)),
+                        OutputFormat::Json => print_json(&report),
+                    }
+                }
             }
         }
         Command::Update {
@@ -448,6 +550,19 @@ fn run(cli: Cli) -> Result<()> {
                 }
             }
         },
+        Command::Install {
+            path,
+            trust,
+            format,
+        } => {
+            let authority = trust_authority(trust);
+            let report =
+                app.install_project_environment(&context_path(path), authority.as_ref())?;
+            match format {
+                OutputFormat::Text => print!("{}", render_install(&report)),
+                OutputFormat::Json => print_json(&report),
+            }
+        }
     }
     Ok(())
 }
@@ -635,6 +750,16 @@ fn render_remove(report: &RemovePluginReport) -> String {
                     .collect::<Vec<_>>(),
             )
         ),
+    }
+}
+
+fn render_install(report: &uze::application::InstallReport) -> String {
+    use uze::application::InstallReport;
+    match report {
+        InstallReport::NoChanges => "Project environment is already up to date.\n".to_owned(),
+        InstallReport::NotImplemented => {
+            "Project environment install is not yet fully implemented.\n".to_owned()
+        }
     }
 }
 

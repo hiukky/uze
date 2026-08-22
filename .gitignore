@@ -1,3 +1,4 @@
 /target/
 /e2e/target/
 /e2e/.env
+agents.lock

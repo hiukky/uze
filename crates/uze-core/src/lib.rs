@@ -16,6 +16,8 @@ pub mod importers;
 pub mod integration;
 pub mod persistence;
 pub mod project;
+pub mod project_lock;
+pub mod project_root;
 pub mod provisioning;
 pub mod reconciliation;
 pub mod router;

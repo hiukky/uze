@@ -39,7 +39,13 @@ mod context;
 mod doctor;
 mod lifecycle;
 mod marketplace;
+mod project_environment;
 mod read_models;
+
+// Re-export project environment types for CLI access.
+pub use project_environment::{
+    InstallReport, ProjectEnvironment, ProjectEnvironmentPlan, RemoveProjectPluginReport,
+};
 
 /// `LEGACY/PERSISTENT CONTEXT DELIVERY STRATEGY`. Harnesses that read a
 /// project's shared `AGENTS.md` only through an explicit bridge region
