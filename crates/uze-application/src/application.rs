@@ -443,18 +443,64 @@ impl UzeApplication {
                 .filter(|_| !unpublished.contains(integration.id()))
             {
                 package_plans.push((integration.id().to_owned(), plan.clone()));
-                if let Some(receipt) = integration.attach_package(&installed, &plan)? {
-                    let location = receipt_location(&receipt);
-                    state::record_receipt(
-                        &self.home,
-                        package_receipt_key(installed.id.as_str(), integration.id()),
-                        receipt,
-                    )?;
-                    attachments.push(AttachmentSummary {
-                        integration: integration.id().to_owned(),
-                        location,
-                    });
-                    provided = plan.provided_resource_identities;
+                // Migration: if this package was previously decomposed, detach
+                // covered capability receipts that are now provided, but only
+                // if they are safely detachable.
+                let existing: Vec<(String, uze_core::integration::AttachmentReceipt)> =
+                    state::receipts(&self.home, Some(installed.id.as_str()))?
+                        .into_iter()
+                        .filter(|(_, r)| {
+                            r.integration == integration.id() && r.resource_identity.is_some()
+                        })
+                        .collect();
+                let mut covered_existing = Vec::new();
+                for (key, receipt) in &existing {
+                    if let Some(identity) = &receipt.resource_identity
+                        && plan.provided_resource_identities.contains(identity)
+                    {
+                        covered_existing.push((key.clone(), receipt.clone()));
+                    }
+                }
+                let mut migration_blocked = false;
+                for (_, receipt) in &covered_existing {
+                    let inspection = integration.inspect_receipt(receipt);
+                    if matches!(
+                        inspection.state,
+                        AttachmentState::Drifted
+                            | AttachmentState::Conflict
+                            | AttachmentState::Blocked
+                    ) {
+                        migration_blocked = true;
+                        break;
+                    }
+                }
+                if migration_blocked {
+                    // Keep decomposed; do not attach native to avoid duplication.
+                } else {
+                    for (key, receipt) in covered_existing {
+                        let inspection = integration.inspect_receipt(&receipt);
+                        if inspection.state == AttachmentState::Matched {
+                            let detached = integration.detach_receipt(&receipt)?;
+                            if detached.state == AttachmentState::Missing {
+                                state::forget_receipt(&self.home, &key)?;
+                            }
+                        } else if inspection.state == AttachmentState::Missing {
+                            state::forget_receipt(&self.home, &key)?;
+                        }
+                    }
+                    if let Some(receipt) = integration.attach_package(&installed, &plan)? {
+                        let location = receipt_location(&receipt);
+                        state::record_receipt(
+                            &self.home,
+                            package_receipt_key(installed.id.as_str(), integration.id()),
+                            receipt,
+                        )?;
+                        attachments.push(AttachmentSummary {
+                            integration: integration.id().to_owned(),
+                            location,
+                        });
+                        provided = plan.provided_resource_identities;
+                    }
                 }
             }
             for resource in &resources {
@@ -520,7 +566,9 @@ impl UzeApplication {
 
         // Nothing destructive has happened yet. From here the current package
         // is removed under the same ownership rules any removal obeys.
-        let removal = self.detach_and_remove(id)?;
+        // Updates are allowed to replace a protected official plugin — the
+        // protection is against `remove`, not `update`.
+        let removal = self.detach_and_remove(id, true)?;
         if let RemovePluginReport::Blocked { report, plan } = removal {
             return Ok(UpdatePluginReport::Blocked { report, plan });
         }
@@ -724,6 +772,11 @@ impl UzeApplication {
     /// attachment for whatever it doesn't cover. Idempotent via the ledger's
     /// receipt keys. Shared by `attach_stored_packages_to` (every package) and
     /// `ensure_default_plugins` (only the default marketplace plugins).
+    ///
+    /// When a package gains a native envelope, previously decomposed
+    /// capability receipts that are now covered by `provided` are migrated
+    /// safely: only `Matched` receipts are detached, `Drifted`/`Conflict`/
+    /// `Blocked` block migration per ADR-009.
     fn attach_package_to(
         &self,
         package: &StoredPackage,
@@ -732,15 +785,61 @@ impl UzeApplication {
         let environment = self.engine().compose(std::slice::from_ref(&package.id))?;
         let resources: Vec<_> = environment.resources.iter().collect();
         let mut provided = BTreeSet::new();
-        if let Some(plan) = integration.package_exposure_plan(package, &resources)
-            && let Some(receipt) = integration.attach_package(package, &plan)?
-        {
-            state::record_receipt(
-                &self.home,
-                package_receipt_key(package.id.as_str(), integration.id()),
-                receipt,
-            )?;
-            provided = plan.provided_resource_identities;
+        if let Some(plan) = integration.package_exposure_plan(package, &resources) {
+            // Migration: decomposed → native. Detach covered capability receipts
+            // that are now provided by the package, but only if they are
+            // safely detachable. Any Drifted/Conflict/Blocked blocks migration
+            // and also blocks duplicate native attach to avoid duplication.
+            let existing: Vec<(String, uze_core::integration::AttachmentReceipt)> =
+                state::receipts(&self.home, Some(package.id.as_str()))?
+                    .into_iter()
+                    .filter(|(_, r)| {
+                        r.integration == integration.id() && r.resource_identity.is_some()
+                    })
+                    .collect();
+            let mut covered_existing = Vec::new();
+            for (key, receipt) in &existing {
+                if let Some(identity) = &receipt.resource_identity
+                    && plan.provided_resource_identities.contains(identity)
+                {
+                    covered_existing.push((key.clone(), receipt.clone()));
+                }
+            }
+            let mut migration_blocked = false;
+            for (_, receipt) in &covered_existing {
+                let inspection = integration.inspect_receipt(receipt);
+                if matches!(
+                    inspection.state,
+                    AttachmentState::Drifted | AttachmentState::Conflict | AttachmentState::Blocked
+                ) {
+                    migration_blocked = true;
+                    break;
+                }
+            }
+            if migration_blocked {
+                // Keep decomposed delivery; do not attach native to avoid duplication.
+                provided = BTreeSet::new();
+            } else {
+                for (key, receipt) in covered_existing {
+                    let inspection = integration.inspect_receipt(&receipt);
+                    if inspection.state == AttachmentState::Matched {
+                        let detached = integration.detach_receipt(&receipt)?;
+                        if detached.state == AttachmentState::Missing {
+                            state::forget_receipt(&self.home, &key)?;
+                        }
+                    } else if inspection.state == AttachmentState::Missing {
+                        state::forget_receipt(&self.home, &key)?;
+                    }
+                }
+                if let Some(receipt) = integration.attach_package(package, &plan)? {
+                    state::record_receipt(
+                        &self.home,
+                        package_receipt_key(package.id.as_str(), integration.id()),
+                        receipt,
+                    )?;
+                    provided = plan.provided_resource_identities;
+                }
+            }
         }
         for resource in &resources {
             if !provided.contains(&resource.identity()) {
@@ -762,7 +861,7 @@ impl UzeApplication {
     /// delete UZE-owned package bytes.
     pub fn remove_plugin(&self, id: &str) -> Result<RemovePluginReport> {
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.home)?;
-        self.detach_and_remove(id)
+        self.detach_and_remove(id, false)
     }
 
     fn is_protected_package(package: &StoredPackage) -> bool {
@@ -786,7 +885,7 @@ impl UzeApplication {
     }
 
     /// Removal without taking the lock; see `install_materialized`.
-    fn detach_and_remove(&self, id: &str) -> Result<RemovePluginReport> {
+    fn detach_and_remove(&self, id: &str, allow_protected: bool) -> Result<RemovePluginReport> {
         let package = match self.package_by_name(id) {
             Ok(package) => package,
             Err(UzeError::UnknownPackage(_)) => {
@@ -805,7 +904,7 @@ impl UzeApplication {
             }
             Err(error) => return Err(error),
         };
-        if Self::is_protected_package(&package) {
+        if !allow_protected && Self::is_protected_package(&package) {
             return Err(UzeError::ExposureUnavailable(format!(
                 "official marketplace plugin `{}` is protected and cannot be removed",
                 package.id.as_str()
