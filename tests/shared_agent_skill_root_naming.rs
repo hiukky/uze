@@ -98,8 +98,8 @@ impl<T: IntegrationPort> IntegrationPort for AlwaysPresent<T> {
     ) -> uze::Result<uze::provisioning::ProvisioningResult> {
         self.0.provision(runner)
     }
-    fn install(&self, home: &UzeHome) -> uze::Result<()> {
-        self.0.install(home)
+    fn install(&self, home: &UzeHome, detection: &HarnessDetection) -> uze::Result<()> {
+        self.0.install(home, detection)
     }
     fn status(&self, home: &UzeHome) -> IntegrationStatus {
         self.0.status(home)

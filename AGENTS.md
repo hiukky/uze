@@ -39,6 +39,7 @@ cargo test --no-fail-fast
 - **Acquisition never executes package code:** no hooks/submodules, consent boundary (`--trust`) only for remote MCP `command`.
 - **Deterministic context:** `AGENTS.md` is the portable baseline. `CLAUDE.md`/`GEMINI.md` are bridged via `@AGENTS.md`; do not hand-edit managed regions.
 - **Package vs context independence:** `uze add`/`remove`/`update` are global (Store); `uze context inspect|plan|reconcile` are project-scoped. Neither touches the other's state.
+- **CLI commands must be fast, or explicitly justified otherwise:** a new command must be classified in `src/command_performance.rs` (`Budgeted` — low-millisecond, cache-backed — or `JustifiedSlow` with a stated reason); `cargo test --bin uze` fails by name if it's missing. See ADR 018 and `docs/adr/018-cache-harness-detection-with-fingerprint-ttl-invalidation.md`.
 
 ## Structure
 

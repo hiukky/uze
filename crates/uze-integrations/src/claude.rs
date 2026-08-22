@@ -137,6 +137,12 @@ impl IntegrationPort for ClaudeIntegration {
         detect_binary("claude")
     }
 
+    /// `id()` is `claude-code`; the binary people actually have on `PATH`
+    /// is `claude`.
+    fn detection_program_candidates(&self) -> Vec<&'static str> {
+        vec!["claude"]
+    }
+
     /// `CONTEXT DELIVERY POLICY`: this is the `EXPERIMENTAL RUNTIME
     /// DELIVERY STRATEGY` — see `runtime::claude_runtime_projection`'s doc
     /// comment. Building this shim path does not by itself replace the
@@ -168,17 +174,16 @@ impl IntegrationPort for ClaudeIntegration {
         )
     }
 
-    fn install(&self, home: &UzeHome) -> Result<()> {
+    fn install(&self, home: &UzeHome, detection: &HarnessDetection) -> Result<()> {
         fs::create_dir_all(&self.skills_dir).map_err(|source| UzeError::Write {
             path: self.skills_dir.clone(),
             source,
         })?;
-        let detected = self.detect();
         state::record(
             home,
             state::IntegrationRecord {
                 harness: self.id().to_owned(),
-                version: detected.version,
+                version: detection.version.clone(),
                 strategy: "managed-user-scope-skills-dir".to_owned(),
                 installed: true,
             },

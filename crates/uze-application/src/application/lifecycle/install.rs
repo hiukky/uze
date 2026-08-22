@@ -84,7 +84,7 @@ impl UzeApplication {
             // subset of UZE's peer harnesses. `add` prepares and attaches to
             // detected harnesses; an absent executable is neither a package
             // incompatibility nor a reason to invoke its vendor CLI.
-            if !integration.detect().present {
+            if !self.detect_cached(integration.as_ref()).present {
                 continue;
             }
             let mut provided = BTreeSet::new();

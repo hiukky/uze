@@ -6,6 +6,7 @@ pub mod acquisition;
 pub mod bundle;
 pub mod capability;
 pub mod context;
+pub mod detection_cache;
 pub mod engine;
 pub mod error;
 pub mod exposure;

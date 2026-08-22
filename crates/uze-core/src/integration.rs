@@ -224,8 +224,26 @@ pub trait IntegrationPort {
 
     /// Detects whether the harness binary is present and, if cheaply
     /// obtainable, its version. Read-only; performs no filesystem writes.
+    ///
+    /// Callers on a path that should stay fast (nearly every command —
+    /// see `specs/cli-performance/spec.md`) should prefer
+    /// `UzeApplication::detect_cached`, which wraps this method in a
+    /// cross-invocation cache (`detection_cache::DetectionCache`, ADR
+    /// 018) instead of calling this directly and re-paying a live probe's
+    /// cost on every command.
     fn detect(&self) -> HarnessDetection {
         HarnessDetection::default()
+    }
+
+    /// Program name(s) `detect()` may resolve to on `PATH`, most preferred
+    /// first. Used only by `DetectionCache` to compute the cache's
+    /// freshness fingerprint — never to decide presence itself, which
+    /// remains `detect()`'s job alone. Defaults to `[id()]`, correct for
+    /// every integration whose executable name matches its id; an
+    /// integration whose id differs from its binary name (or that may
+    /// resolve to more than one name) overrides this.
+    fn detection_program_candidates(&self) -> Vec<&'static str> {
+        vec![self.id()]
     }
 
     /// Explicitly provisions or updates the vendor executable through a
@@ -253,8 +271,16 @@ pub trait IntegrationPort {
     /// exist (e.g. its user-scope discovery directory) and records setup
     /// state. Safe to call more than once; a second call refreshes recorded
     /// facts rather than duplicating state or artifacts.
-    fn install(&self, home: &UzeHome) -> Result<()> {
-        let _ = home;
+    ///
+    /// `detection` is the caller's already-obtained result (normally via
+    /// `UzeApplication::detect_cached`) — an implementation records it
+    /// (e.g. the version, into `state::IntegrationRecord`) rather than
+    /// calling `detect()` again itself. `install` runs on nearly every
+    /// command (see `specs/cli-performance/spec.md`), so a fresh,
+    /// uncached probe here would silently reintroduce the exact cost this
+    /// cache exists to remove.
+    fn install(&self, home: &UzeHome, detection: &HarnessDetection) -> Result<()> {
+        let _ = (home, detection);
         Ok(())
     }
 

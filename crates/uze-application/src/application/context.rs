@@ -76,7 +76,7 @@ impl UzeApplication {
                 // gap it was never claimed to close.
                 continue;
             }
-            if !integration.detect().present {
+            if !self.detect_cached(integration.as_ref()).present {
                 harnesses.push(HarnessContextStatus {
                     integration: id.to_owned(),
                     delivery: HarnessContextDelivery::NotDetected,
@@ -157,7 +157,7 @@ impl UzeApplication {
                     .integrations
                     .iter()
                     .find(|integration| integration.id() == *integration_id)?;
-                if !integration.detect().present {
+                if !self.detect_cached(integration.as_ref()).present {
                     return None;
                 }
                 let bridge_file = project_root.join(file_name);
@@ -200,7 +200,7 @@ impl UzeApplication {
                     .integrations
                     .iter()
                     .find(|integration| integration.id() == *integration_id)?;
-                if !integration.detect().present {
+                if !self.detect_cached(integration.as_ref()).present {
                     return None;
                 }
                 let bridge_file = project_root.join(file_name);

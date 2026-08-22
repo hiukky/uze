@@ -49,3 +49,4 @@ never renumbered), using this structure (Michael Nygard style):
 - [009 — Manage harness attachments with receipts and safe reconciliation](009-manage-harness-attachments-with-receipts-and-safe-reconciliation.md)
 - [010 — Provision supported harnesses through official, integration-owned routes](010-provision-supported-harnesses-through-official-routes.md)
 - [011 — Split UZE into a layered Cargo workspace](011-split-uze-into-layered-cargo-workspace.md)
+- [018 — Cache harness detection with fingerprint + TTL invalidation](018-cache-harness-detection-with-fingerprint-ttl-invalidation.md)

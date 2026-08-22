@@ -17,6 +17,7 @@ use uze_core::{
     PackageSource, Result, UzeEngine, UzeError, UzeHome, UzeStore,
     capability::CapabilityKind,
     context::{self as instruction_context},
+    detection_cache::DetectionCache,
     exposure::{ExposurePlan, PackageExposurePlan},
     integration::{
         AttachmentState, HarnessDetection, IntegrationPort, IntegrationStatus, PublicationStatus,
@@ -89,6 +90,7 @@ pub struct UzeApplication {
     store: UzeStore,
     integrations: Vec<Box<dyn IntegrationPort>>,
     runner: Box<dyn ProcessRunner>,
+    detection_cache: DetectionCache,
 }
 
 impl UzeApplication {
@@ -144,10 +146,31 @@ impl UzeApplication {
     ) -> Self {
         Self {
             store: UzeStore::new(home.clone()),
+            detection_cache: DetectionCache::new(&home),
             home,
             integrations,
             runner,
         }
+    }
+
+    /// The cached path for `IntegrationPort::detect()`: an in-process hit
+    /// or a still-fresh on-disk entry (see `detection_cache::
+    /// DetectionCache`) is returned with no subprocess spawned; only a
+    /// genuine cache miss falls through to a live probe, whose result is
+    /// then written through both cache tiers for the next caller — in
+    /// this run and in the next CLI invocation alike. Every internal
+    /// caller on a path that should stay fast (see
+    /// `specs/cli-performance/spec.md`) must go through this rather than
+    /// `integration.detect()` directly.
+    pub(crate) fn detect_cached(&self, integration: &dyn IntegrationPort) -> HarnessDetection {
+        let id = integration.id();
+        let candidates = integration.detection_program_candidates();
+        if let Some(cached) = self.detection_cache.get(id, &candidates) {
+            return cached;
+        }
+        let live = integration.detect();
+        self.detection_cache.put(id, &candidates, live.clone());
+        live
     }
 
     /// Ensures every plugin `bootstrap::DEFAULT_PLUGIN_IDS` names is present
@@ -199,7 +222,7 @@ impl UzeApplication {
                 continue;
             };
             for integration in &self.integrations {
-                if integration.detect().present {
+                if self.detect_cached(integration.as_ref()).present {
                     self.attach_package_to(&package, integration.as_ref())?;
                 }
             }
@@ -488,7 +511,18 @@ impl UzeApplication {
                 state::record_provisioning(&self.home, integration.id(), &provisioning)?;
                 let configured = provisioning.status == ProvisionStatus::Verified;
                 if configured {
-                    integration.install(&self.home)?;
+                    integration.install(&self.home, &provisioning.detection)?;
+                    // Write-through (ADR 018 decision 3): `provision()`
+                    // already verified this result, so record it in the
+                    // cache directly instead of leaving the pre-action
+                    // entry to be caught later by a read-time fingerprint
+                    // check — a UZE-driven install/update has no stale
+                    // window, and no separate probe is spent to get that.
+                    self.detection_cache.put(
+                        integration.id(),
+                        &integration.detection_program_candidates(),
+                        provisioning.detection.clone(),
+                    );
                 }
                 Ok(SetupResult {
                     integration: integration.id().to_owned(),
@@ -516,19 +550,19 @@ impl UzeApplication {
             .iter()
             .filter(|integration| requested.is_none_or(|id| integration.id() == id))
             .map(|integration| {
-                let detection = integration.detect();
+                let detection = self.detect_cached(integration.as_ref());
                 let configured = detection.present;
                 if detection.present {
-                    integration.install(&self.home)?;
+                    integration.install(&self.home, &detection)?;
                 }
                 Ok(SetupResult {
                     integration: integration.id().to_owned(),
-                    detection,
+                    detection: detection.clone(),
                     configured,
                     provisioning: ProvisioningResult::verified(
                         uze_core::provisioning::ProvisionAction::None,
                         "implicit-existing-executable",
-                        integration.detect(),
+                        detection,
                     ),
                     runtime_shim: None,
                 })
@@ -1227,7 +1261,11 @@ mod tests {
     use std::{
         cell::Cell,
         fs,
-        time::{SystemTime, UNIX_EPOCH},
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::{Duration, Instant, SystemTime, UNIX_EPOCH},
     };
 
     use super::*;
@@ -1873,5 +1911,231 @@ mod tests {
         assert!(matches!(report, RemovePluginReport::Removed { .. }));
         fs::remove_dir_all(root).unwrap();
         fs::remove_dir_all(spoof_src).unwrap();
+    }
+
+    // --- cli-performance: detect_cached / DetectionCache integration ---
+    // See ADR 018 and specs/cli-performance/spec.md. `FakeIntegration`
+    // stands in for a slow harness (like `gemini`, ~2-11s per real
+    // `--version` invocation) without spawning a real subprocess, and its
+    // shared `Arc<AtomicUsize>` counter is what these tests assert
+    // against: the whole point of `detect_cached` is that this counter
+    // stays at 1 no matter how many call sites, command executions, or
+    // (simulated) CLI invocations ask for the same integration's
+    // detection result.
+
+    struct FakeIntegration {
+        id: &'static str,
+        detection: HarnessDetection,
+        delay: Duration,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl FakeIntegration {
+        fn new(id: &'static str, present: bool, calls: Arc<AtomicUsize>) -> Self {
+            Self {
+                id,
+                detection: HarnessDetection {
+                    present,
+                    version: present.then(|| "1.0.0".to_owned()),
+                },
+                delay: Duration::ZERO,
+                calls,
+            }
+        }
+
+        fn with_delay(mut self, delay: Duration) -> Self {
+            self.delay = delay;
+            self
+        }
+    }
+
+    impl IntegrationPort for FakeIntegration {
+        fn id(&self) -> &'static str {
+            self.id
+        }
+
+        fn capabilities(&self) -> HarnessCapabilities {
+            HarnessCapabilities::default()
+        }
+
+        fn detect(&self) -> HarnessDetection {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if !self.delay.is_zero() {
+                std::thread::sleep(self.delay);
+            }
+            self.detection.clone()
+        }
+
+        fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+            ExposurePlan {
+                representation: resource.capability.representation,
+                route: CompatibilityRoute::Adaptable,
+                verification: VerificationStatus::Unverified,
+                mechanism: ExposureMechanism::Unsupported {
+                    rationale: "test does not attach".to_owned(),
+                },
+                evidence: "test".to_owned(),
+            }
+        }
+    }
+
+    #[test]
+    fn detect_cached_calls_detect_at_most_once_per_command() {
+        let root = temp("detect-cached-once-per-command");
+        let calls = Arc::new(AtomicUsize::new(0));
+        let fake = FakeIntegration::new("fake-a", true, calls.clone());
+        let app = UzeApplication::new(UzeHome::at(&root), vec![Box::new(fake)]);
+        let integration = app.integrations[0].as_ref();
+
+        let _ = app.detect_cached(integration);
+        let _ = app.detect_cached(integration);
+        let _ = app.detect_cached(integration);
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "three calls within one UzeApplication (one command) must probe only once"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn detect_cached_reuses_the_on_disk_result_across_separate_uze_application_instances() {
+        // A fresh `UzeApplication` instance stands in for a separate CLI
+        // invocation: it shares nothing in-process with the first, only
+        // the on-disk cache file under the same `UzeHome`.
+        let root = temp("detect-cached-cross-invocation");
+        let calls = Arc::new(AtomicUsize::new(0));
+
+        let first = UzeApplication::new(
+            UzeHome::at(&root),
+            vec![Box::new(FakeIntegration::new(
+                "fake-b",
+                true,
+                calls.clone(),
+            ))],
+        );
+        let _ = first.detect_cached(first.integrations[0].as_ref());
+
+        let second = UzeApplication::new(
+            UzeHome::at(&root),
+            vec![Box::new(FakeIntegration::new(
+                "fake-b",
+                true,
+                calls.clone(),
+            ))],
+        );
+        let _ = second.detect_cached(second.integrations[0].as_ref());
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "the second UzeApplication instance must reuse the first's on-disk result"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn prepare_detected_integrations_probes_each_integration_at_most_once() {
+        // Regression test for the bug found while measuring end-to-end
+        // timing (design.md decision 7): `install()` used to call
+        // `self.detect()` again internally, on top of the one
+        // `detect_cached` call `prepare_detected_integrations` already
+        // made — two live probes per integration instead of one.
+        let root = temp("prepare-detected-once");
+        let calls = Arc::new(AtomicUsize::new(0));
+        let fake = FakeIntegration::new("fake-c", true, calls.clone());
+        let app = UzeApplication::new(UzeHome::at(&root), vec![Box::new(fake)]);
+
+        let results = app.prepare_detected_integrations(None).unwrap();
+
+        assert!(results[0].configured);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "prepare_detected_integrations must probe each integration exactly once, \
+             including the install() step it triggers"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn provision_and_prepare_writes_through_the_cache_on_success() {
+        let root = temp("write-through-on-provision");
+        let calls = Arc::new(AtomicUsize::new(0));
+        let fake = FakeIntegration::new("fake-d", true, calls.clone());
+        let app = UzeApplication::new(UzeHome::at(&root), vec![Box::new(fake)]);
+
+        let results = app.provision_and_prepare(None).unwrap();
+        assert!(results[0].configured);
+        let calls_after_provision = calls.load(Ordering::SeqCst);
+        assert!(calls_after_provision >= 1);
+
+        // The write-through (ADR 018 decision 3) means a `detect_cached`
+        // call right after observes the fresh result without an extra
+        // live probe.
+        let _ = app.detect_cached(app.integrations[0].as_ref());
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            calls_after_provision,
+            "detect_cached after a successful provision must not re-probe"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn cache_warm_detect_cached_meets_the_performance_budget() {
+        // Stands in for `gemini --version`'s real-world 2-11s cost
+        // without spawning a subprocess (see proposal.md's measurements).
+        const SLOW_HARNESS_DELAY: Duration = Duration::from_millis(500);
+        const BUDGET: Duration = Duration::from_millis(50);
+
+        let root = temp("perf-budget");
+        let calls = Arc::new(AtomicUsize::new(0));
+
+        {
+            let fake = FakeIntegration::new("slow-harness", true, calls.clone())
+                .with_delay(SLOW_HARNESS_DELAY);
+            let app = UzeApplication::new(UzeHome::at(&root), vec![Box::new(fake)]);
+            let integration = app.integrations[0].as_ref();
+
+            // Cold: pays the simulated delay once, populates both cache
+            // tiers.
+            let _ = app.detect_cached(integration);
+
+            // Warm, same command: in-process memoization tier.
+            let started = Instant::now();
+            let _ = app.detect_cached(integration);
+            let elapsed = started.elapsed();
+            assert!(
+                elapsed < BUDGET,
+                "warm in-process detect_cached took {elapsed:?}, budget is {BUDGET:?}"
+            );
+        }
+
+        {
+            // A fresh UzeApplication simulates a separate CLI invocation:
+            // only the on-disk tier is available, no in-process memo.
+            let fake = FakeIntegration::new("slow-harness", true, calls.clone())
+                .with_delay(SLOW_HARNESS_DELAY);
+            let app = UzeApplication::new(UzeHome::at(&root), vec![Box::new(fake)]);
+            let integration = app.integrations[0].as_ref();
+
+            let started = Instant::now();
+            let _ = app.detect_cached(integration);
+            let elapsed = started.elapsed();
+            assert!(
+                elapsed < BUDGET,
+                "warm cross-invocation detect_cached took {elapsed:?}, budget is {BUDGET:?}"
+            );
+        }
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "the simulated slow probe must be paid exactly once across the cold call \
+             and both warm reads (in-process and cross-invocation)"
+        );
+        let _ = fs::remove_dir_all(&root);
     }
 }

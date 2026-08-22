@@ -81,6 +81,13 @@ impl UzeHome {
         self.root.join("cache")
     }
 
+    /// Cross-invocation cache of `IntegrationPort::detect()` results (see
+    /// `detection_cache`). Reconstructable at any time from a live probe —
+    /// never authoritative, hence `cache_dir()` rather than `state_dir()`.
+    pub fn harness_detection_cache_path(&self) -> PathBuf {
+        self.cache_dir().join("harness_detection.json")
+    }
+
     pub fn runtime_dir(&self) -> PathBuf {
         self.root.join("runtime")
     }

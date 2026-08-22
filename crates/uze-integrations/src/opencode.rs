@@ -89,6 +89,13 @@ impl IntegrationPort for OpenCodeIntegration {
             .unwrap_or_default()
     }
 
+    /// Matches `resolve_opencode_binary`'s own preference order: the
+    /// canonical `opencode` alias first, the raw v2 binary name
+    /// `opencode2` as fallback for a fresh install with no alias yet.
+    fn detection_program_candidates(&self) -> Vec<&'static str> {
+        vec!["opencode", "opencode2"]
+    }
+
     /// OpenCode's v2 installer names the binary `opencode2`, not `opencode`.
     /// Rather than a UZE-managed symlink alias placed next to the real
     /// binary (outside `$UZE_HOME`), the generic PATH shim resolves straight
@@ -132,17 +139,16 @@ impl IntegrationPort for OpenCodeIntegration {
     fn provision(&self, runner: &dyn ProcessRunner) -> Result<ProvisioningResult> {
         provision_opencode(runner, || self.detect())
     }
-    fn install(&self, home: &UzeHome) -> Result<()> {
+    fn install(&self, home: &UzeHome, detection: &HarnessDetection) -> Result<()> {
         fs::create_dir_all(&self.skills_dir).map_err(|source| UzeError::Write {
             path: self.skills_dir.clone(),
             source,
         })?;
-        let detected = self.detect();
         state::record(
             home,
             state::IntegrationRecord {
                 harness: self.id().to_owned(),
-                version: detected.version,
+                version: detection.version.clone(),
                 strategy: "native-user-scope-skills-plus-managed-mcp-config".to_owned(),
                 installed: true,
             },

@@ -1,5 +1,9 @@
 //! Thin CLI presentation over `UzeApplication`.
 
+// Test-only tooling (see command_performance.rs's module doc): a registry
+// plus exhaustiveness tests, never wired into runtime command dispatch.
+#[cfg(test)]
+mod command_performance;
 mod progress;
 mod shim;
 

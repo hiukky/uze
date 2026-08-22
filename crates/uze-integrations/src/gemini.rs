@@ -126,17 +126,16 @@ impl IntegrationPort for GeminiIntegration {
         provision_npm(runner, self.detect().present)
     }
 
-    fn install(&self, home: &UzeHome) -> Result<()> {
+    fn install(&self, home: &UzeHome, detection: &HarnessDetection) -> Result<()> {
         fs::create_dir_all(&self.skills_dir).map_err(|source| UzeError::Write {
             path: self.skills_dir.clone(),
             source,
         })?;
-        let detected = self.detect();
         state::record(
             home,
             state::IntegrationRecord {
                 harness: self.id().to_owned(),
-                version: detected.version,
+                version: detection.version.clone(),
                 strategy: "managed-user-scope-skills-dir".to_owned(),
                 installed: true,
             },
