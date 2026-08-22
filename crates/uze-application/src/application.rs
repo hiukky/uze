@@ -19,6 +19,7 @@ use uze_core::{
     project::Resource,
     provisioning::{ProcessRunner, ProvisionStatus, ProvisioningResult, SystemProcessRunner},
     reconciliation::{PackageRemovalPlan, ReconciliationReport, plan_remove, reconcile_package},
+    router::HarnessCapabilities,
     state,
     store::StoredPackage,
     text_region,
@@ -784,6 +785,8 @@ impl UzeApplication {
                 // reconciled while a harness still cannot see it, and that is
                 // exactly the state this field exists to surface.
                 publication: integration.publication(&installed),
+                capabilities: integration.capabilities(),
+                native_instructions: NATIVE_INSTRUCTION_INTEGRATIONS.contains(&integration.id()),
             })
             .collect();
         let attachments = plugins
@@ -1547,6 +1550,18 @@ pub struct HarnessHealth {
     pub strategy: Option<String>,
     pub provisioning: Option<state::ProvisioningRecord>,
     pub publication: PublicationStatus,
+    /// This harness's own declared compatibility, independent of any
+    /// installed plugin — what a Skill/MCP resource would route to if one
+    /// existed. Compare against `PluginInspection::deliveries`, which is
+    /// the same routing decision but for one specific installed resource.
+    pub capabilities: HarnessCapabilities,
+    /// Whether this harness reads a project's AGENTS.md directly rather
+    /// than through UZE's managed bridge region. Instructions are not a
+    /// `Resource`/`CapabilityKind::Instruction` routed through `capabilities`
+    /// above — they're a distinct delivery mechanism (see `context` module)
+    /// — so this is sourced from the same `NATIVE_INSTRUCTION_INTEGRATIONS`
+    /// list `context_reconcile` itself uses, not re-derived.
+    pub native_instructions: bool,
 }
 
 /// One recognized instructions file's observed state — never whether UZE

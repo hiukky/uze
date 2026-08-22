@@ -33,7 +33,7 @@ pub enum VerificationStatus {
     },
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct HarnessCapabilities {
     pub direct_standard: BTreeSet<CapabilityKind>,
     pub native: BTreeSet<CapabilityKind>,
