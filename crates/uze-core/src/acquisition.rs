@@ -167,6 +167,21 @@ impl ResolvedSource {
             Self::Embedded { id } => format!("embedded:{id}"),
         }
     }
+
+    /// The value a lock file records to make reproduction possible: an
+    /// immutable commit for Git, a fixed identity marker for the embedded
+    /// snapshot, or nothing for a local path — a directory is mutable, so
+    /// pinning a "revision" for it would claim a reproducibility this
+    /// source can't back (see the `Local` variant's own doc). Shared by
+    /// `project_lock`'s marketplace and plugin lock entries so both use
+    /// the same rule.
+    pub fn lock_revision(&self) -> Option<String> {
+        match self {
+            Self::Local { .. } => None,
+            Self::Git { commit, .. } => Some(commit.clone()),
+            Self::Embedded { .. } => Some("embedded".to_owned()),
+        }
+    }
 }
 
 /// Everything the Store persists about a package's origin, and nothing it

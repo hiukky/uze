@@ -85,6 +85,20 @@ pub enum UzeError {
     },
     #[error("marketplace declares plugin `{0}` more than once")]
     DuplicateMarketplacePlugin(String),
+    /// A real conflict, distinct from re-adding the same marketplace from
+    /// the same source (idempotent, not an error — see
+    /// `state::marketplace_add`): the requested source disagrees with what
+    /// is already registered under this name.
+    #[error("marketplace `{name}` is already registered from {existing}, not {requested}")]
+    MarketplaceConflict {
+        name: String,
+        existing: String,
+        requested: String,
+    },
+    #[error("marketplace `{0}` is reserved and cannot be added or removed")]
+    ReservedMarketplace(String),
+    #[error("invalid plugin spec: {0}")]
+    InvalidPluginSpec(String),
     #[error("runtime projection target already exists: {0}")]
     RuntimePathExists(PathBuf),
     #[error("runtime filesystem projection is unavailable on this platform: {0}")]

@@ -45,7 +45,8 @@ mod read_models;
 
 // Re-export project environment types for CLI access.
 pub use project_environment::{
-    InstallReport, ProjectEnvironment, ProjectEnvironmentPlan, RemoveProjectPluginReport,
+    InstallReport, ProjectEnvironment, ProjectEnvironmentPlan, ProjectLockStatus,
+    ProjectPluginHealth, RemoveProjectPluginReport,
 };
 
 /// `LEGACY/PERSISTENT CONTEXT DELIVERY STRATEGY`. Harnesses that read a
@@ -821,6 +822,11 @@ pub struct MarketplaceSummary {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct MarketplacePluginSummary {
+    /// Which registered marketplace this plugin came from (`uze-official`
+    /// for the embedded snapshot, or the name it was registered under via
+    /// `marketplace add`). Needed once more than one marketplace can
+    /// contribute plugins to the same list — see `list_marketplace_plugins`.
+    pub marketplace: String,
     pub name: String,
     pub description: Option<String>,
     pub keywords: Vec<String>,
@@ -1107,6 +1113,7 @@ pub struct StatusReport {
     pub harnesses: Vec<HarnessContextStatus>,
     pub packages_installed: usize,
     pub packages_contributing_here: usize,
+    pub project_lock: ProjectLockStatus,
     /// Human-readable, one-line-each context problems: a non-matched
     /// contribution, a bridge gap, a malformed or blocked orphan region.
     /// Empty means healthy. Never a substitute for `context inspect`'s

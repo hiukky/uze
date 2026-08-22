@@ -581,9 +581,13 @@ fn run(cli: Cli) -> Result<()> {
             MarketplaceAction::Add { source } => {
                 let spinner = progress::spinner("Adding marketplace...");
                 match app.marketplace_add(&source) {
-                    Ok(()) => {
+                    Ok(true) => {
                         spinner.finish_with_message("Marketplace added");
                         progress::success(&format!("Added marketplace from {source}"));
+                    }
+                    Ok(false) => {
+                        spinner.finish_with_message("Already added");
+                        progress::success(&format!("Marketplace from {source} is already added"));
                     }
                     Err(e) => {
                         spinner.finish_with_message("Failed");
@@ -679,7 +683,13 @@ fn run(cli: Cli) -> Result<()> {
             let spinner = progress::spinner("Installing project environment...");
             match app.install_project_environment(&context_path(path), authority.as_ref()) {
                 Ok(report) => {
-                    spinner.finish_with_message("Environment installed");
+                    let message = match &report {
+                        uze::application::InstallReport::NoChanges => "Already up to date",
+                        uze::application::InstallReport::Installed { .. } => {
+                            "Environment installed"
+                        }
+                    };
+                    spinner.finish_with_message(message);
                     match format {
                         OutputFormat::Text => print!("{}", render_install(&report)),
                         OutputFormat::Json => print_json(&report),
@@ -886,8 +896,12 @@ fn render_install(report: &uze::application::InstallReport) -> String {
     use uze::application::InstallReport;
     match report {
         InstallReport::NoChanges => "Project environment is already up to date.\n".to_owned(),
-        InstallReport::NotImplemented => {
-            "Project environment install is not yet fully implemented.\n".to_owned()
+        InstallReport::Installed { plugins } => {
+            let mut text = format!("Installed {} plugin(s):\n", plugins.len());
+            for plugin in plugins {
+                text.push_str(&format!("  {plugin}\n"));
+            }
+            text
         }
     }
 }
@@ -956,6 +970,7 @@ fn render_status(report: &StatusReport) -> String {
         "\nPackages\n  {} installed\n  {} contributing here\n",
         report.packages_installed, report.packages_contributing_here
     ));
+    text.push_str(&render_project_lock_status(&report.project_lock));
     if report.issues.is_empty() {
         text.push_str("\nHealth\n  no issues\n");
     } else {
@@ -965,6 +980,31 @@ fn render_status(report: &StatusReport) -> String {
         }
     }
     text
+}
+
+fn render_project_lock_status(status: &uze::application::ProjectLockStatus) -> String {
+    use uze::application::ProjectLockStatus;
+    match status {
+        ProjectLockStatus::Absent => String::new(),
+        ProjectLockStatus::Malformed { reason } => {
+            format!("\nProject lock\n  agents.lock is malformed: {reason}\n")
+        }
+        ProjectLockStatus::Present { plugins } => {
+            let mut text = "\nProject lock\n".to_owned();
+            if plugins.is_empty() {
+                text.push_str("  agents.lock has no plugins\n");
+            }
+            for plugin in plugins {
+                let state = if plugin.installed {
+                    "installed"
+                } else {
+                    "missing (run `uze install`)"
+                };
+                text.push_str(&format!("  {}  {state}\n", plugin.plugin));
+            }
+            text
+        }
+    }
 }
 
 fn render_context_status(status: &ProjectContextStatus) -> String {

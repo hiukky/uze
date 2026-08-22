@@ -212,17 +212,29 @@ struct PluginMarketplaceRegistry {
     plugins: BTreeMap<String, String>,
 }
 
+/// Registers a marketplace under `name`. Idempotent, mirroring
+/// `UzeStore::install_materialized`'s same-origin check: adding a
+/// marketplace already registered from the exact same source is a no-op
+/// (`Ok(false)`), not an error — a marketplace discovery source has no
+/// content of its own to overwrite, so this is safe to repeat. Adding it
+/// again from a *different* source is a genuine conflict (`Ok(true)` when
+/// newly registered).
 pub fn marketplace_add(
     home: &UzeHome,
     name: &str,
     source: crate::acquisition::PackageSource,
-) -> Result<()> {
+) -> Result<bool> {
     home.ensure_layout()?;
     let mut registry = load_marketplace_registry(home)?;
-    if registry.marketplaces.contains_key(name) {
-        return Err(UzeError::ExposureUnavailable(format!(
-            "marketplace `{name}` already exists"
-        )));
+    if let Some(existing) = registry.marketplaces.get(name) {
+        if existing.source == source {
+            return Ok(false);
+        }
+        return Err(UzeError::MarketplaceConflict {
+            name: name.to_owned(),
+            existing: format!("{:?}", existing.source),
+            requested: format!("{source:?}"),
+        });
     }
     registry.marketplaces.insert(
         name.to_owned(),
@@ -231,7 +243,8 @@ pub fn marketplace_add(
             source,
         },
     );
-    save_marketplace_registry(home, &registry)
+    save_marketplace_registry(home, &registry)?;
+    Ok(true)
 }
 
 pub fn marketplace_remove(home: &UzeHome, name: &str) -> Result<()> {

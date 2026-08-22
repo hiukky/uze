@@ -121,6 +121,7 @@ impl UzeApplication {
             harnesses: context.harnesses,
             packages_installed: installed,
             packages_contributing_here: contributing,
+            project_lock: self.project_lock_status(project_root),
             issues,
         })
     }

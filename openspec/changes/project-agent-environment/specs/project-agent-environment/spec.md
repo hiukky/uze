@@ -1,147 +1,138 @@
-# Project Agent Environment — Specification
+## Purpose
 
-## Requirements
+Lets a project declare its desired agent environment (marketplaces +
+plugins) in a project-scoped, Git-versionable file (`agents.lock`), so a
+fresh clone can reproduce that environment with `uze install` instead of
+depending on undocumented global machine state.
 
-### REQ-PAE-001: Project-scoped desired state
+## ADDED Requirements
 
-**MUST** provide a project-scoped file (`agents.lock`) declaring the desired agent environment (marketplaces + plugins with resolved sources).
+### Requirement: Project-scoped desired state
+The system SHALL provide a project-scoped file (`agents.lock`) declaring
+the desired agent environment: marketplaces and plugins, with whatever
+source/resolution facts are available.
 
-**Scenario:** A project declares dependency on `flow@ai`.
-**WHEN** the author runs `uze flow@ai`
-**THEN** `agents.lock` is created/updated with `flow` plugin entry referencing `ai` marketplace
+#### Scenario: Shorthand creates a lock entry
+- **WHEN** the author runs `uze flow@ai` in a project
+- **THEN** `agents.lock` is created or updated with a `flow` plugin entry
+  referencing the `ai` marketplace
 
----
+### Requirement: Global vs project separation
+Global machine state (`~/.uze/*`) SHALL remain separate from project
+desired state (`agents.lock`): global commands never write the lock, and
+project commands never write global state.
 
-### REQ-PAE-002: Global vs project separation
+#### Scenario: Global admin command does not touch the project lock
+- **WHEN** the user runs `uze marketplace add <source>` or `uze plugin
+  install <plugin>@<marketplace>`
+- **THEN** `agents.lock` is not created or modified, if a project is
+  present
 
-**MUST** separate global machine state (`~/.uze/*`) from project desired state (`agents.lock`).
+### Requirement: Project shorthand requires `@`
+The `uze <plugin>@<marketplace>` shorthand SHALL require an explicit
+`@marketplace` segment.
 
-**Scenario:** Global admin command does not touch project lock.
-**WHEN** the user runs `uze marketplace add <source>` or `uze plugin install <plugin>@<marketplace>`
-**THEN** `agents.lock` is NOT modified (if present)
+#### Scenario: Shorthand without `@` is rejected
+- **WHEN** the user runs `uze flow` (no `@`)
+- **THEN** the command fails with an error indicating `@marketplace` is
+  required, and no lock is written
 
----
+### Requirement: Fresh-machine reproducibility
+`uze install` SHALL reconstruct the environment described by `agents.lock`
+on a machine with no prior `uze marketplace add` or `uze add`/`uze
+<plugin>@<marketplace>` history for that project.
 
-### REQ-PAE-003: Project shorthand requires `@`
+#### Scenario: Fresh machine with only agents.lock
+- **WHEN** the user runs `uze install` in a project whose `agents.lock`
+  lists plugins not yet in the local Store
+- **THEN** each missing plugin's marketplace source is resolved directly
+  from the lock (not from the global marketplace registry), acquired, and
+  installed through the same lifecycle `uze add` uses
 
-**MUST** require `@marketplace` in project shorthand `uze <plugin>@<marketplace>`.
+#### Scenario: Nothing to do
+- **WHEN** the user runs `uze install` and every locked plugin is already
+  installed
+- **THEN** the command reports no changes and performs no acquisition
 
-**Scenario:** Shorthand without `@` is rejected.
-**WHEN** the user runs `uze flow` (no `@`)
-**THEN** the command fails with error indicating `@marketplace` is required
+### Requirement: Trust boundary preserved
+`agents.lock` SHALL NOT grant trust on its own. Installing a locked
+plugin SHALL go through the same authorization decision as `uze add`.
 
----
+#### Scenario: Install honors the trust authority passed to it
+- **WHEN** the user runs `uze install` (which resolves to a trust
+  authority based on the `--trust` flag)
+- **THEN** each locked plugin's installation is authorized through that
+  same authority, not silently trusted because it came from a lock file
 
-### REQ-PAE-004: Fresh-machine reproducibility
+### Requirement: Vendor neutrality
+Lock parsing and serialization SHALL live in the vendor-neutral core,
+never in a peer harness integration.
 
-**MUST** allow `uze install` to reconstruct the environment on a fresh machine using only `agents.lock` (no prior `uze marketplace add`).
+#### Scenario: Core has no integration dependency
+- **WHEN** `uze-core` is compiled
+- **THEN** it does not import any integration-specific code (Claude,
+  Codex, Gemini, or OpenCode)
 
-**Scenario:** Fresh machine with only `agents.lock`.
-**WHEN** the user runs `uze install` in a project with `agents.lock`
-**THEN** the environment is reconstructed (marketplaces resolved, packages ingested, attachments created) without requiring prior global setup
+### Requirement: Project root resolution
+The system SHALL deterministically resolve a project's root by walking
+upward from the working directory, preferring `agents.lock`, then
+`AGENTS.md`, then `.git`, falling back to the working directory itself.
 
----
+#### Scenario: Resolution from a subdirectory
+- **WHEN** the user runs a project command from `<root>/subdir`, and
+  `<root>` contains `agents.lock`
+- **THEN** the project root resolves to `<root>`
 
-### REQ-PAE-005: Lock revision wins over global
+### Requirement: `desired ≠ actual` is a reportable, non-error state
+A locked plugin that is not yet installed SHALL be a normal, reportable
+state — not an error and not collapsed into a generic "unhealthy" signal.
 
-**MUST** respect `agents.lock` resolved revision over global marketplace state.
+#### Scenario: Status reports a missing locked plugin
+- **WHEN** the user runs `uze status` in a project whose lock declares a
+  plugin not present in the local Store
+- **THEN** the report includes that plugin's lock entry with its
+  installed state, distinguishable from an installed one
 
-**Scenario:** Lock revision X, global points to Y.
-**WHEN** the user runs `uze install`
-**THEN** revision X (from lock) is used, not Y (from global)
+### Requirement: Remove disambiguation
+`uze remove <plugin>` SHALL remove from the project lock when a lock is
+present and the plugin is declared there; otherwise it SHALL fall back to
+the existing global removal behavior.
 
----
+#### Scenario: Remove from the project lock
+- **WHEN** the user runs `uze remove flow` in a project whose
+  `agents.lock` declares `flow`
+- **THEN** `flow` is removed from `agents.lock`; the Store copy is left
+  untouched
 
-### REQ-PAE-006: Trust boundary preserved
+#### Scenario: Remove from the global Store
+- **WHEN** the user runs `uze remove flow` in a project with no lock, or
+  whose lock does not declare `flow`
+- **THEN** `flow` is removed from the global Store, exactly as it would
+  be without any project lock involved
 
-**MUST** never grant trust via `agents.lock`. `authorize` is always called if `crosses_trust_boundary` + `executable_capabilities`.
+### Requirement: Application API surface
+The application layer SHALL expose `project_environment()`,
+`plan_project_environment()`, `add_project_plugin()`,
+`remove_project_plugin()`, and `install_project_environment()` as the
+complete surface project-aware presentation layers (CLI, TUI) build on.
 
-**Scenario:** Locked plugin declares MCP server with `command`.
-**WHEN** the user runs `uze install` on a fresh machine
-**THEN** the command fails with `TrustRequired` error (not silent execution)
+#### Scenario: Plan is read-only
+- **WHEN** `plan_project_environment(root)` is called
+- **THEN** it performs no filesystem write — no lock persisted, no
+  package acquired or ingested — regardless of what it finds
 
----
+#### Scenario: Install reconciles the environment
+- **WHEN** `install_project_environment(root, authority)` is called and
+  the lock declares plugins not yet installed
+- **THEN** each is acquired and installed through the standard lifecycle
+  (authorize, prepare, ingest, republish, attach)
 
-### REQ-PAE-007: Vendor neutrality
+### Requirement: Lock persistence ordering
+`add_project_plugin` SHALL persist `agents.lock` only after the plugin has
+been successfully ingested into the Store — never a lock entry pointing
+at a package that was never installed.
 
-**MUST** preserve vendor neutrality: Store/Engine/Integration remain lock-neutral.
-
-**Scenario:** Lock parser/serializer is in Core, not Integration.
-**WHEN** `uze-core` is compiled
-**THEN** it does NOT import any integration-specific code (Claude/Codex/Gemini/OpenCode)
-
----
-
-### REQ-PAE-008: Project root resolution
-
-**MUST** deterministically resolve project root by walking upward from `cwd` looking for `agents.lock` (priority), then `AGENTS.md`, then `.git`. Fallback: `cwd` itself.
-
-**Scenario:** Project root detection from subdirectory.
-**WHEN** the user runs `uze install` from `cwd/project/subdir`
-**THEN** the project root is resolved as `cwd/project` (where `agents.lock` or `AGENTS.md` exists)
-
----
-
-### REQ-PAE-009: `desired ≠ actual` is valid state
-
-**MUST** allow `desired ≠ actual` as a valid, diagnosticable state (not an error).
-
-**Scenario:** Lock declares plugin, Store does not contain it.
-**WHEN** the user runs `uze status` or `uze plan`
-**THEN** the state is reported as `Installed ✗ Used ✓` (not collapsed into "unhealthy")
-
----
-
-### REQ-PAE-010: Remove disambiguation
-
-**MUST** disambiguate `uze remove <plugin>`: if lock present + plugin in lock → remove from project; else → delegate to global `remove_plugin`.
-
-**Scenario:** Remove from project lock.
-**WHEN** the user runs `uze remove flow` in a project with `agents.lock` containing `flow`
-**THEN** `flow` is removed from `agents.lock` (Store bytes remain if referenced elsewhere)
-
-**Scenario:** Remove from global Store.
-**WHEN** the user runs `uze remove flow` in a project without `agents.lock` or with `flow` not in lock
-**THEN** `flow` is removed from global Store (existing behavior)
-
----
-
-### REQ-PAE-011: Application API
-
-**MUST** provide Application API: `project_environment()`, `plan_project_environment()`, `add_project_plugin()`, `remove_project_plugin()`, `install_project_environment()`.
-
-**Scenario:** Read-only plan.
-**WHEN** the user calls `plan_project_environment(root)`
-**THEN** the plan is computed without writing anything (zero `MutationLock`, zero `write_atomic`)
-
-**Scenario:** Apply install.
-**WHEN** the user calls `install_project_environment(root, authority)`
-**THEN** the environment is reconciled (acquire, ingest, attach, persist lock)
-
----
-
-### REQ-PAE-012: Atomicity order
-
-**MUST** persist `agents.lock` after `ingest` succeeds (avoids orphan lock pointing to non-ingested package).
-
-**Scenario:** Ingest fails.
-**WHEN** `store.ingest()` fails (e.g., `PackageConflict`)
-**THEN** `agents.lock` is NOT modified
-
-**Scenario:** Attach fails.
-**WHEN** `attach_package()` fails after successful `ingest`
-**THEN** `agents.lock` IS persisted (desired state), but `doctor/plan` reports `delivery missing/drifted`
-
----
-
-## Non-Goals
-
-- `uze sync` (use `install` for now)
-- Transitive dependency graph (plugins are independent)
-- Semantic version solver (commit is identity)
-- `agents.toml` manifest vs `agents.lock` lock split (deferred)
-- Automatic lock update (explicit `update` future)
-- Remote marketplace search / federation
-- Cryptographic signature of marketplace
-- Automatic garbage collection of Store
-- `integrity: sha256:...` implementation (reserved, commit is identity today)
+#### Scenario: Ingest failure leaves the lock untouched
+- **WHEN** `add_project_plugin` is called and the underlying `install
+  Materialized` call fails (e.g. a package conflict)
+- **THEN** `agents.lock` is not modified

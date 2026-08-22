@@ -196,11 +196,11 @@ pub fn save_lock(root: &Path, lock: &ProjectLock) -> Result<()> {
 /// Parses `plugin@marketplace` shorthand. Marketplace is required.
 pub fn parse_plugin_marketplace_spec(spec: &str) -> Result<(String, String)> {
     let (plugin, marketplace) = spec.split_once('@').ok_or_else(|| {
-        UzeError::ExposureUnavailable(format!("plugin spec `{spec}` must be `name@marketplace`"))
+        UzeError::InvalidPluginSpec(format!("`{spec}` must be `name@marketplace`"))
     })?;
     if plugin.is_empty() || marketplace.is_empty() {
-        return Err(UzeError::ExposureUnavailable(format!(
-            "plugin spec `{spec}` must be `name@marketplace` with non-empty parts"
+        return Err(UzeError::InvalidPluginSpec(format!(
+            "`{spec}` must be `name@marketplace` with non-empty parts"
         )));
     }
     // Validate charset similar to PackageId but allow same set.
@@ -214,7 +214,7 @@ pub fn parse_plugin_marketplace_spec(spec: &str) -> Result<(String, String)> {
     }
     for c in marketplace.chars() {
         if !(c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.') {
-            return Err(UzeError::ExposureUnavailable(format!(
+            return Err(UzeError::InvalidPluginSpec(format!(
                 "invalid marketplace name `{marketplace}`"
             )));
         }
@@ -260,14 +260,23 @@ impl From<MarketplaceSource> for PackageSource {
 
 impl From<ResolvedSource> for ResolvedMarketplace {
     fn from(value: ResolvedSource) -> Self {
-        match value {
-            ResolvedSource::Git { commit, .. } => Self {
-                revision: Some(commit),
-            },
-            ResolvedSource::Embedded { .. } => Self {
-                revision: Some("embedded".to_owned()),
-            },
-            ResolvedSource::Local { .. } => Self { revision: None },
+        Self {
+            revision: value.lock_revision(),
+        }
+    }
+}
+
+impl ResolvedPlugin {
+    /// Builds a lock entry's resolved facts from what acquisition actually
+    /// observed. `version` stays `None` here: nothing in this crate parses
+    /// a plugin manifest's `version` field yet (unlike `revision`, which
+    /// `ResolvedSource` already carries) — a real gap, not silently
+    /// papered over with a fabricated value.
+    pub fn from_resolved_source(resolved: &ResolvedSource) -> Self {
+        Self {
+            revision: resolved.lock_revision(),
+            version: None,
+            integrity: None,
         }
     }
 }

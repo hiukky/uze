@@ -70,6 +70,14 @@ impl UzeApplication {
     }
 
     /// Read-only: computes what `install_project_environment` would do.
+    ///
+    /// `trust_required`, `delivery_changes`, and `offline_unavailable` are
+    /// deliberately left empty rather than faked: each would require
+    /// materializing a missing package just to *inspect* it (executable
+    /// capabilities, delivery routes, offline availability) without
+    /// installing it — a real feature this pass does not implement. Left
+    /// as future work rather than reported as done; see
+    /// `openspec/changes/project-agent-environment/tasks.md`.
     pub fn plan_project_environment(&self, root: &Path) -> Result<ProjectEnvironmentPlan> {
         let env = self.project_environment(root)?;
         let lock = match env.lock {
@@ -88,43 +96,32 @@ impl UzeApplication {
             }
         };
 
-        let installed_packages = self.installed_packages();
-        let installed_ids: BTreeSet<String> = installed_packages
-            .iter()
-            .map(|p| p.id.as_str().to_owned())
+        let installed_ids = self.installed_plugin_ids();
+        let dependencies: Vec<LockedPlugin> = lock.plugins.values().cloned().collect();
+        let installed: Vec<String> = lock
+            .plugins
+            .keys()
+            .filter(|name| installed_ids.contains(name.as_str()))
+            .cloned()
+            .collect();
+        let missing: Vec<LockedPlugin> = Self::missing_locked_plugins(&lock, &installed_ids)
+            .into_iter()
+            .map(|(_, locked)| locked.clone())
             .collect();
 
-        let mut dependencies = Vec::new();
-        let mut installed = Vec::new();
-        let mut missing = Vec::new();
+        // Deliberately deferred (see doc comment above): none of these
+        // compare an *installed* package's provenance against what the
+        // lock expects, which is what a real `conflicts` check would
+        // need. `project_environment()`'s own `diagnostics` already
+        // surfaces the one related, weaker signal available today (a
+        // plugin referencing a marketplace not declared in the lock) —
+        // not duplicated here as a false "conflict".
+        let trust_required = Vec::new();
+        let delivery_changes = Vec::new();
+        let offline_unavailable = Vec::new();
         let conflicts = Vec::new();
 
-        for (plugin_name, locked_plugin) in &lock.plugins {
-            dependencies.push(locked_plugin.clone());
-            if installed_ids.contains(plugin_name) {
-                // Check if installed package matches lock resolution.
-                if let Some(stored) = installed_packages
-                    .iter()
-                    .find(|p| p.id.as_str() == plugin_name)
-                {
-                    installed.push(stored.id.as_str().to_owned());
-                    // TODO: Check if resolved.revision matches stored.provenance.resolved
-                }
-            } else {
-                missing.push(locked_plugin.clone());
-            }
-        }
-
-        // TODO: Compute trust_required by inspecting missing packages for executable capabilities.
-        let trust_required = Vec::new();
-
-        // TODO: Compute delivery_changes by checking which integrations need republish/attach.
-        let delivery_changes = Vec::new();
-
-        // TODO: Compute offline_unavailable by checking if missing packages can be acquired offline.
-        let offline_unavailable = Vec::new();
-
-        let has_changes = !missing.is_empty() || !conflicts.is_empty();
+        let has_changes = !missing.is_empty();
 
         Ok(ProjectEnvironmentPlan {
             dependencies,
@@ -136,6 +133,73 @@ impl UzeApplication {
             offline_unavailable,
             has_changes,
         })
+    }
+
+    fn installed_plugin_ids(&self) -> BTreeSet<String> {
+        self.installed_packages()
+            .into_iter()
+            .map(|p| p.id.as_str().to_owned())
+            .collect()
+    }
+
+    /// Locked plugins not yet present in the Store, paired with their
+    /// name — `LockedPlugin` itself carries no name (it's the `BTreeMap`
+    /// key), and both `plan_project_environment` (reporting) and
+    /// `install_project_environment` (acting) need it, so this is the one
+    /// place that walks the lock and keeps the two in sync.
+    fn missing_locked_plugins<'lock>(
+        lock: &'lock ProjectLock,
+        installed_ids: &BTreeSet<String>,
+    ) -> Vec<(&'lock str, &'lock LockedPlugin)> {
+        lock.plugins
+            .iter()
+            .filter(|(name, _)| !installed_ids.contains(name.as_str()))
+            .map(|(name, locked)| (name.as_str(), locked))
+            .collect()
+    }
+
+    /// Resolves a locked plugin's source into an acquirable `PackageSource`.
+    /// Shared by `add_project_plugin` (adding a new entry) and
+    /// `install_project_environment` (reproducing existing entries), so
+    /// the two can never resolve the same kind of source differently.
+    fn resolve_locked_plugin_source(
+        &self,
+        lock: &ProjectLock,
+        plugin: &str,
+        source: &PluginSource,
+    ) -> Result<PackageSource> {
+        match source {
+            PluginSource::Marketplace {
+                marketplace,
+                plugin: marketplace_plugin,
+            } => {
+                let locked_mp = lock.marketplaces.get(marketplace).ok_or_else(|| {
+                    UzeError::MarketplaceMismatch {
+                        plugin: plugin.to_owned(),
+                        expected: marketplace.clone(),
+                        found: "not declared in lock".to_owned(),
+                    }
+                })?;
+                let marketplace_source = PackageSource::from(locked_mp.source.clone());
+                let (marketplace_root, manifest) =
+                    Self::load_marketplace_manifest(&marketplace_source)?;
+                let plugin_path = uze_core::acquisition::marketplace::resolve_plugin_source(
+                    &manifest,
+                    marketplace_plugin,
+                    &marketplace_root,
+                )?;
+                Ok(PackageSource::Local { path: plugin_path })
+            }
+            PluginSource::Git {
+                url,
+                reference,
+                subdirectory,
+            } => Ok(PackageSource::Git {
+                url: url.clone(),
+                reference: reference.clone(),
+                subdirectory: subdirectory.clone(),
+            }),
+        }
     }
 
     /// Adds a plugin to the project lock and ensures it's in the Store.
@@ -202,39 +266,34 @@ impl UzeApplication {
         lock.marketplaces.insert(
             marketplace.to_owned(),
             LockedMarketplace {
-                source: mp_source.clone(),
+                source: mp_source,
                 resolved: mp_resolved,
             },
         );
 
-        // Resolve plugin source via marketplace.
-        let plugin_source = PackageSource::from(mp_source.clone());
-        let (marketplace_root, manifest) = Self::load_marketplace_manifest(&plugin_source)?;
-        let plugin_path = uze_core::acquisition::marketplace::resolve_plugin_source(
-            &manifest,
-            plugin,
-            &marketplace_root,
-        )?;
-        let package_source = PackageSource::Local { path: plugin_path };
+        let plugin_source = PluginSource::Marketplace {
+            marketplace: marketplace.to_owned(),
+            plugin: plugin.to_owned(),
+        };
+        let package_source = self.resolve_locked_plugin_source(&lock, plugin, &plugin_source)?;
 
         // Acquire and ingest (reuses existing lifecycle).
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.home)?;
         let materialized = self.acquire(&package_source)?;
         let report = self.install_materialized(materialized, authority, &[], false)?;
 
-        // Add plugin to lock.
+        // What was actually acquired is the source of truth for `resolved`
+        // — read back from the Store rather than trusting the request,
+        // the same discipline `Provenance` itself exists to enforce.
+        let resolved = ResolvedPlugin::from_resolved_source(
+            &self.package_by_name(plugin)?.provenance.resolved,
+        );
+
         lock.plugins.insert(
             plugin.to_owned(),
             LockedPlugin {
-                source: PluginSource::Marketplace {
-                    marketplace: marketplace.to_owned(),
-                    plugin: plugin.to_owned(),
-                },
-                resolved: ResolvedPlugin {
-                    revision: None, // TODO: Populate from materialized.provenance.resolved
-                    version: None,  // TODO: Read from plugin.json
-                    integrity: None,
-                },
+                source: plugin_source,
+                resolved,
             },
         );
 
@@ -272,20 +331,89 @@ impl UzeApplication {
         })
     }
 
-    /// Applies the project environment plan (acquires missing, persists lock).
+    /// Reproduces the project's desired environment: acquires and installs
+    /// every locked plugin not yet in the Store, through the same
+    /// `authorize → prepare → ingest → republish → attach` lifecycle
+    /// `add_project_plugin`/`add_plugin` use — a fresh machine running
+    /// `uze install` against a cloned `agents.lock` is not a different
+    /// code path from an ordinary add, just a batch of them driven by the
+    /// lock instead of a marketplace argument. `authority` is honored
+    /// exactly as it is there: `install_materialized`'s own `authorize()`
+    /// call is what actually enforces the trust boundary, per plugin, so
+    /// this function does no trust reasoning of its own.
+    ///
+    /// Stops at the first plugin that fails to acquire or install and
+    /// returns that error — an install is either fully applied or (for
+    /// whichever plugins came before the failure) partially applied with
+    /// the failure surfaced, never silently partial. Plugins already
+    /// installed are left untouched; already-successful ones are not
+    /// rolled back on a later failure, matching `add_project_plugin`'s own
+    /// no-transaction model (the Store has no all-or-nothing multi-package
+    /// primitive to build one on).
     pub fn install_project_environment(
         &self,
         root: &Path,
-        _authority: &dyn TrustAuthority,
+        authority: &dyn TrustAuthority,
     ) -> Result<InstallReport> {
-        let plan = self.plan_project_environment(root)?;
-        if !plan.has_changes {
+        let canonical = project_root::resolve_project_root(root)?;
+        let lock = match project_lock::load_lock(&canonical)? {
+            Some(lock) => lock,
+            None => return Ok(InstallReport::NoChanges),
+        };
+
+        let installed_ids = self.installed_plugin_ids();
+        let missing: Vec<(String, LockedPlugin)> =
+            Self::missing_locked_plugins(&lock, &installed_ids)
+                .into_iter()
+                .map(|(name, locked)| (name.to_owned(), locked.clone()))
+                .collect();
+        if missing.is_empty() {
             return Ok(InstallReport::NoChanges);
         }
 
-        // TODO: Implement full install logic (acquire missing, authorize, ingest, attach, persist lock).
-        // For now, return a placeholder.
-        Ok(InstallReport::NotImplemented)
+        let _mutation = uze_core::persistence::MutationLock::acquire(&self.home)?;
+        let mut installed_plugins = Vec::new();
+        for (name, locked) in missing {
+            let package_source = self.resolve_locked_plugin_source(&lock, &name, &locked.source)?;
+            let materialized = self.acquire(&package_source)?;
+            self.install_materialized(materialized, authority, &[], false)?;
+            installed_plugins.push(name);
+        }
+
+        Ok(InstallReport::Installed {
+            plugins: installed_plugins,
+        })
+    }
+
+    /// A summary of this project's `agents.lock` for `uze status` — never
+    /// errors: a missing lock is `Absent`, and a lock that fails to parse
+    /// is `Malformed` rather than failing `status` itself, since `status`
+    /// is meant to diagnose exactly this kind of problem, not refuse to
+    /// run because of it.
+    pub fn project_lock_status(&self, root: &Path) -> ProjectLockStatus {
+        let canonical = match project_root::resolve_project_root(root) {
+            Ok(canonical) => canonical,
+            Err(_) => return ProjectLockStatus::Absent,
+        };
+        let lock = match project_lock::load_lock(&canonical) {
+            Ok(Some(lock)) => lock,
+            Ok(None) => return ProjectLockStatus::Absent,
+            Err(error) => {
+                return ProjectLockStatus::Malformed {
+                    reason: error.to_string(),
+                };
+            }
+        };
+        let installed_ids = self.installed_plugin_ids();
+        let plugins = lock
+            .plugins
+            .keys()
+            .map(|name| ProjectPluginHealth {
+                plugin: name.clone(),
+                installed: installed_ids.contains(name.as_str()),
+            })
+            .collect();
+        ProjectLockStatus::Present { plugins }
     }
 }
 
@@ -295,6 +423,24 @@ pub struct ProjectEnvironment {
     pub canonical: PathBuf,
     pub lock: Option<ProjectLock>,
     pub diagnostics: Vec<String>,
+}
+
+/// `uze status`'s view of this project's `agents.lock` — deliberately
+/// smaller than `ProjectEnvironment`/`ProjectEnvironmentPlan` (which
+/// `context inspect`-equivalent commands already cover in full): just
+/// enough to answer "is there a lock, and does it match what's installed."
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "state", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ProjectLockStatus {
+    Absent,
+    Malformed { reason: String },
+    Present { plugins: Vec<ProjectPluginHealth> },
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ProjectPluginHealth {
+    pub plugin: String,
+    pub installed: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -320,7 +466,9 @@ pub enum RemoveProjectPluginReport {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "outcome", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum InstallReport {
+    /// Every locked plugin was already installed; nothing to do.
     NoChanges,
-    NotImplemented,
-    // TODO: Add Installed { packages: Vec<String> } etc.
+    /// At least one previously-missing locked plugin was acquired and
+    /// installed.
+    Installed { plugins: Vec<String> },
 }

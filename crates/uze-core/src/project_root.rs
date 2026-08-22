@@ -25,12 +25,8 @@ pub fn resolve_project_root(cwd: &Path) -> Result<PathBuf> {
             })?
     };
 
-    // 1. If cwd itself has agents.lock → it is root.
-    if cwd.join(LOCK_FILE_NAME).is_file() {
-        return Ok(cwd);
-    }
-
-    // 2. Walk upward looking for agents.lock, AGENTS.md, or .git (priority in that order per directory).
+    // Walk upward (starting at cwd itself) looking for agents.lock,
+    // AGENTS.md, or .git (priority in that order per directory).
     let mut current = Some(cwd.as_path());
     let mut best_agents: Option<PathBuf> = None;
     let mut best_git: Option<PathBuf> = None;
