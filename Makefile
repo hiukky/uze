@@ -5,7 +5,7 @@ UZE_BIN ?= target/debug/uze
 RELEASE_BIN ?= target/release/uze
 INSTALL_ARGS ?= --force
 
-.PHONY: help build release install install-wsl-lab playground-lab run test check fmt lint version clean
+.PHONY: help build release install install-wsl-lab playground-lab run test check fmt lint version clean changelog
 
 help: ## Show the available local-development targets.
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z0-9_.-]+:.*##/ { printf "  %-12s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -18,6 +18,9 @@ release: ## Build the optimized UZE binary for a real local installation.
 
 version: ## Print the single workspace version carried by the UZE binary.
 	$(CARGO) run --quiet --bin uze -- --version
+
+changelog: ## Regenerate CHANGELOG.md from Conventional Commits (git-cliff; see cliff.toml).
+	git-cliff -o CHANGELOG.md
 
 install: ## Install/replace `uze` in Cargo's configured binary directory.
 	$(CARGO) install --path . --bin uze --locked $(INSTALL_ARGS)

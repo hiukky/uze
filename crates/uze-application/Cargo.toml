@@ -5,6 +5,7 @@ edition = "2024"
 rust-version = "1.97"
 description = "Package-centric UZE product application facade"
 license = "MIT"
+publish = false
 
 [dependencies]
 uze-core = { path = "../uze-core" }
