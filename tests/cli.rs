@@ -283,33 +283,50 @@ fn setup_then_add_attaches_transparently_without_a_separate_sync_step() {
     // see `IntegrationPort::status`'s doc comment.
     assert!(doctor.matches("installed / verified").count() >= 2);
 
-    // `uze add` alone attaches both, without any separate sync command.
+    // `uze plugin install` alone attaches both, without any separate sync
+    // command.
+    //
+    // Both the default `uze` package and this single-skill fixture qualify
+    // for Generated Native Package (ADR-020: no explicit `.claude-plugin/
+    // plugin.json`, but a conventional `skills/` directory UZE can safely
+    // represent) — so Claude receives package-level delivery, not a
+    // per-resource `.claude/skills` symlink. Codex has no envelope for
+    // either package and still decomposes at the capability level, so its
+    // resource-level attachment output is unchanged.
     let add = run(&["plugin", "install", package_fixture().to_str().unwrap()]);
-    assert!(add.contains("Attached to claude-code:"));
+    assert!(add.contains("Package delivery to claude-code:"));
     assert!(add.contains("Attached to codex:"));
 
-    let claude_entries: Vec<_> = std::fs::read_dir(home.join(".claude/skills"))
+    // `.claude/skills` is prepared (by `install`) but stays empty: neither
+    // package decomposes into it anymore. The generated envelope directory
+    // is where delivery now lives, one subdirectory per generatable
+    // package, each independently rebuildable from the Store.
+    let claude_skills_entries: Vec<_> = std::fs::read_dir(home.join(".claude/skills"))
         .unwrap()
         .map(|entry| entry.unwrap().path())
         .collect();
-    // With the default `uze` seeded, each harness has the default plugin
-    // plus the freshly added fixture.
     assert!(
-        claude_entries.len() >= 2,
-        "claude should have default + fixture"
+        claude_skills_entries.is_empty(),
+        "no package should decompose into .claude/skills once generatable, got {claude_skills_entries:?}"
     );
-    assert!(claude_entries.iter().any(|p| p.is_symlink()));
-    // The fixture skill for Claude is exposed via a shim, so its symlink
-    // points at the shim dir, not directly at the store. Check presence by
-    // listing, not by exact target.
-    let claude_names: Vec<_> = claude_entries
-        .iter()
-        .map(|p| p.file_name().unwrap().to_str().unwrap().to_owned())
-        .collect();
+    let generated_root = uze_home.join("state/attachments/claude/generated");
     assert!(
-        claude_names.contains(&"uze-e2e".to_owned())
-            || claude_names.contains(&"uze-agent-skill-conformance-uze-e2e".to_owned()),
-        "claude should contain the fixture skill, got {claude_names:?}"
+        generated_root
+            .join("uze-agent-skill-conformance/.claude-plugin/plugin.json")
+            .is_file(),
+        "the fixture's generated Claude envelope should exist"
+    );
+    assert!(
+        generated_root
+            .join("uze-agent-skill-conformance/skills")
+            .is_symlink(),
+        "the generated envelope should reference the Store's skills/ by symlink, not a copy"
+    );
+    assert!(
+        generated_root
+            .join("uze/.claude-plugin/plugin.json")
+            .is_file(),
+        "the default uze package's generated Claude envelope should exist too"
     );
 
     let codex_entries: Vec<_> = std::fs::read_dir(home.join(".agents/skills"))
@@ -418,59 +435,69 @@ fn setup_then_add_attaches_the_mcp_fixture_idempotently_and_removal_works() {
     };
 
     run(&["setup"]);
+    // This fixture (`agent-plugin-mcp`) has only `mcp.json`, no `skills/`
+    // and no `.claude-plugin/plugin.json` — under Generated Native Package
+    // (ADR-020) an MCP-only package is just as eligible as a Skill-only
+    // one, so Claude receives package-level delivery covering the one MCP
+    // resource; Codex, which has no envelope of any kind and never
+    // implements package-level Claude-style generation, still attaches at
+    // the resource level exactly as before.
     let add = run(&["plugin", "install", package.to_str().unwrap()]);
-    assert!(add.contains("Attached to claude-code: mcp:uze-mcp-conformance-uze-conformance"));
+    assert!(add.contains("Package delivery to claude-code:"));
     assert!(add.contains("Attached to codex: mcp:uze-mcp-conformance-uze-conformance"));
 
     let mcp_state = fake_bin.join("mcp-state");
     assert!(
         mcp_state
             .join("uze-mcp-conformance-uze-conformance")
-            .is_file()
+            .is_file(),
+        "codex's mcp add should still have touched the fake state file"
     );
     let ledger: serde_json::Value =
         serde_json::from_slice(&std::fs::read(uze_home.join("state/attachments.json")).unwrap())
             .unwrap();
     let receipts = ledger["receipts"].as_object().unwrap();
     assert!(receipts.len() >= 2);
-    // With the default `uze` seeded, attachments also contain its 4 skill
-    // receipts; filter to the MCP package's receipts before asserting their shape.
+    // With the default `uze` seeded, attachments also contain its own
+    // package-level Claude receipt (the default package is generatable
+    // too, see the skill-fixture CLI test); filter to this MCP package's
+    // receipts before asserting their shape.
     let mcp_receipts: Vec<_> = receipts
         .values()
         .filter(|receipt| receipt["package_id"] == "uze-mcp-conformance")
         .collect();
     assert!(
         mcp_receipts.len() >= 2,
-        "expected at least 2 MCP receipts, got {mcp_receipts:?}"
+        "expected at least 2 receipts for the MCP package (claude package-level + codex resource-level), got {mcp_receipts:?}"
     );
-    assert!(
-        mcp_receipts.iter().all(
-            |receipt| receipt["artifact"]["VENDOR_CONFIG_ENTRY"]["entry_name"]
-                == "uze-mcp-conformance-uze-conformance"
-        ),
-        "MCP receipts had unexpected entry_name: {mcp_receipts:?}"
+    let claude_receipt = mcp_receipts
+        .iter()
+        .find(|r| r["integration"] == "claude-code")
+        .expect("claude receipt missing");
+    assert_eq!(
+        claude_receipt["artifact"]["INTEGRATION_OWNED"]["kind"], "claude-plugin-generated",
+        "claude's receipt for an envelope-less MCP-only package must be the generated package kind, not a resource-level VendorConfigEntry: {claude_receipt:?}"
     );
-    // At least claude and codex must be among the MCP deliveries; gemini/
-    // opencode may also be present depending on integration support.
-    assert!(
-        mcp_receipts
-            .iter()
-            .any(|r| r["integration"] == "claude-code"),
-        "claude MCP receipt missing"
+    assert_eq!(
+        claude_receipt["artifact"]["INTEGRATION_OWNED"]["origin"],
+        "generated"
     );
-    assert!(
-        mcp_receipts.iter().any(|r| r["integration"] == "codex"),
-        "codex MCP receipt missing"
+    let codex_receipt = mcp_receipts
+        .iter()
+        .find(|r| r["integration"] == "codex")
+        .expect("codex receipt missing");
+    assert_eq!(
+        codex_receipt["artifact"]["VENDOR_CONFIG_ENTRY"]["entry_name"],
+        "uze-mcp-conformance-uze-conformance",
+        "codex has no envelope for this package and must keep resource-level MCP delivery: {codex_receipt:?}"
     );
 
-    // Idempotent: `add` a second time does not fail and does not require a
-    // real "already exists" overwrite behavior from either harness (the
-    // fake script's `get` reports success, so `attach()` never re-invokes
-    // `add`).
+    // Idempotent: `plugin install` a second time does not fail. Claude's
+    // package delivery re-resolves to the same already-installed selector
+    // (no reinstall); Codex's `attach()` never re-invokes `mcp add` because
+    // the fake script's `get` already reports success.
     let second_add = run(&["plugin", "install", package.to_str().unwrap()]);
-    assert!(
-        second_add.contains("Attached to claude-code: mcp:uze-mcp-conformance-uze-conformance")
-    );
+    assert!(second_add.contains("Package delivery to claude-code:"));
     assert!(second_add.contains("Attached to codex: mcp:uze-mcp-conformance-uze-conformance"));
 
     let _ = std::fs::remove_dir_all(home);

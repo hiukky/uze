@@ -2,6 +2,16 @@
 
 Status: Accepted
 
+Status note: §2's condition for Native Package ("the package ships the
+harness's own envelope") is refined, not overturned, by
+[ADR-020](020-generated-native-package-projection.md): a source package's
+absence of a vendor envelope no longer by itself forces capability-level
+decomposition. The hierarchy becomes `Explicit Native Package > Generated
+Native Package > Native Capability > Safe Adaptation > Unsupported`. Every
+other decision in this ADR — Derived Artifact, `Native ≠ zero-copy`,
+physical location ≠ ownership, exact coverage via `discovered ∩ declared` —
+remains in effect unchanged and is reused, not replaced, by ADR-020.
+
 ## Context
 
 UZE's Store already owns canonical plugin bytes and the Engine already discovers portable capabilities, but delivery had no explicit hierarchy. A plugin could reach Claude Code as decomposed `~/.claude/skills` shims + `~/.claude.json` MCP entries, even when the same plugin ships a valid `.claude-plugin/plugin.json` that Claude Code can consume as a single native bundle. That duality needed a principle: when to prefer a bundle, when to fall back to capabilities, and what may be derived without becoming authoritative. The same tension exists for Codex (catalogue), Gemini (linked extension), and OpenCode (capability-native projection) — each with a different native surface and a different native-vs-copy trade-off.

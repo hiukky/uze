@@ -28,6 +28,7 @@ use uze_core::{
     Result, UzeError,
     capability::CapabilityKind,
     exposure::{ExposureMechanism, ExposurePlan, PackageExposurePlan},
+    harness_runtime::resolve_real_executable,
     home::UzeHome,
     integration::{
         AttachmentInspection, AttachmentReceipt, AttachmentState, HarnessDetection,
@@ -90,6 +91,16 @@ impl GeminiIntegration {
     fn settings_path(&self) -> PathBuf {
         self.command_home.join(".gemini/settings.json")
     }
+
+    /// Same PATH-shim recursion hazard, and the same fix, as
+    /// `ClaudeIntegration::provisioning_executable` and
+    /// `CodexIntegration::provisioning_executable`: internal invocations must
+    /// never risk re-entering UZE's own `~/.uze/shims/gemini`.
+    fn provisioning_executable(&self) -> String {
+        resolve_real_executable(&["gemini"], &self.uze_home.shims_dir())
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "gemini".to_owned())
+    }
 }
 
 impl IntegrationPort for GeminiIntegration {
@@ -112,7 +123,7 @@ impl IntegrationPort for GeminiIntegration {
     }
 
     fn detect(&self) -> HarnessDetection {
-        detect_binary("gemini")
+        detect_binary(&self.provisioning_executable())
     }
 
     /// OpenCode and Codex also discover Skills from this exact same
@@ -207,10 +218,11 @@ impl IntegrationPort for GeminiIntegration {
         // keeps the Store the single copy, is non-interactive with
         // `--consent`, and leaves the stored package untouched on uninstall
         // (confirmed empirically against 0.56.0).
-        if linked_extension(&self.command_home, &extension_name).is_some() {
+        let executable = self.provisioning_executable();
+        if linked_extension(&executable, &self.command_home, &extension_name).is_some() {
             return Ok(Some(self.receipt(package, &extension_name)));
         }
-        let status = Command::new("gemini")
+        let status = Command::new(&executable)
             .env("HOME", &self.command_home)
             .args(["extensions", "link"])
             .arg(&package.root)
@@ -238,7 +250,13 @@ impl IntegrationPort for GeminiIntegration {
                 command,
                 args,
                 ..
-            } => attach_mcp_entry(&self.command_home, entry_name, command, args),
+            } => attach_mcp_entry(
+                &self.provisioning_executable(),
+                &self.command_home,
+                entry_name,
+                command,
+                args,
+            ),
             _ => Ok(None),
         }
     }
@@ -253,7 +271,12 @@ impl IntegrationPort for GeminiIntegration {
                 let Some(source) = detail_path(detail, "source_path") else {
                     return blocked("extension receipt has no expected source path".to_owned());
                 };
-                inspect_linked_extension(&self.command_home, selector, &source)
+                inspect_linked_extension(
+                    &self.provisioning_executable(),
+                    &self.command_home,
+                    selector,
+                    &source,
+                )
             }
             ManagedArtifact::VendorConfigEntry {
                 entry_name,
@@ -283,6 +306,7 @@ impl IntegrationPort for GeminiIntegration {
         if inspection.state != AttachmentState::Matched {
             return Ok(inspection);
         }
+        let executable = self.provisioning_executable();
         match &receipt.artifact {
             ManagedArtifact::IntegrationOwned { kind, selector, .. }
                 if kind == LINKED_EXTENSION =>
@@ -291,6 +315,7 @@ impl IntegrationPort for GeminiIntegration {
                 // reference. The stored package this integration never owns
                 // stays exactly where it is.
                 run_gemini(
+                    &executable,
                     &self.command_home,
                     &["extensions", "uninstall", selector],
                     "gemini extensions uninstall",
@@ -298,6 +323,7 @@ impl IntegrationPort for GeminiIntegration {
             }
             ManagedArtifact::VendorConfigEntry { entry_name, .. } => {
                 run_gemini(
+                    &executable,
                     &self.command_home,
                     &["mcp", "remove", "--scope", "user", entry_name],
                     "gemini mcp remove",

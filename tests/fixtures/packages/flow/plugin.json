@@ -1,0 +1,6 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "flow",
+  "version": "1.0.0",
+  "description": "North Star vendor-neutral fixture: one canonical package, no vendor manifests, delivered natively where each harness supports it."
+}

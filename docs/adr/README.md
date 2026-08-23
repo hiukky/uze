@@ -50,3 +50,4 @@ never renumbered), using this structure (Michael Nygard style):
 - [010 — Provision supported harnesses through official, integration-owned routes](010-provision-supported-harnesses-through-official-routes.md)
 - [011 — Split UZE into a layered Cargo workspace](011-split-uze-into-layered-cargo-workspace.md)
 - [018 — Cache harness detection with fingerprint + TTL invalidation](018-cache-harness-detection-with-fingerprint-ttl-invalidation.md)
+- [020 — Generated Native Package Projection](020-generated-native-package-projection.md)

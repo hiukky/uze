@@ -397,12 +397,12 @@ fn detach_mcp_entry_removes_a_registered_entry_idempotently() {
     }
 
     assert!(marker.exists());
-    claude::detach_mcp_entry(std::path::Path::new("claude"), &dir, "uze-example").unwrap();
+    claude::detach_mcp_entry(&dir.join("claude"), &dir, "uze-example").unwrap();
     assert!(!marker.exists(), "claude mcp remove should have run");
 
     // Idempotent: removing an already-absent entry is not an error.
-    claude::detach_mcp_entry(std::path::Path::new("claude"), &dir, "uze-example").unwrap();
-    codex::detach_mcp_entry(&dir, "uze-example").unwrap();
+    claude::detach_mcp_entry(&dir.join("claude"), &dir, "uze-example").unwrap();
+    codex::detach_mcp_entry(&dir.join("codex"), &dir, "uze-example").unwrap();
 
     unsafe {
         std::env::set_var("PATH", original_path);

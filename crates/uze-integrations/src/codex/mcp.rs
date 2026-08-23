@@ -57,15 +57,16 @@ impl CodexIntegration {
 }
 
 pub(super) fn attach_mcp_entry(
+    executable: &Path,
     command_home: &Path,
     entry_name: &str,
     command: &PathBuf,
     args: &[String],
 ) -> Result<Option<PathBuf>> {
-    if mcp_entry_exists(command_home, entry_name) {
+    if mcp_entry_exists(executable, command_home, entry_name) {
         return Ok(Some(PathBuf::from(format!("mcp:{entry_name}"))));
     }
-    let status = Command::new("codex")
+    let status = Command::new(executable)
         .env("HOME", command_home)
         .args(["mcp", "add", entry_name, "--"])
         .arg(command)
@@ -85,8 +86,8 @@ pub(super) fn attach_mcp_entry(
 /// Idempotently checked before ever calling `codex mcp add` — Codex's
 /// overwrite behavior for a colliding, differently-configured name was not
 /// confirmed by research, so UZE never relies on it (see ADR-007).
-pub(super) fn mcp_entry_exists(command_home: &Path, entry_name: &str) -> bool {
-    Command::new("codex")
+pub(super) fn mcp_entry_exists(executable: &Path, command_home: &Path, entry_name: &str) -> bool {
+    Command::new(executable)
         .env("HOME", command_home)
         .args(["mcp", "get", entry_name])
         .output()
@@ -99,6 +100,7 @@ pub(super) fn mcp_entry_exists(command_home: &Path, entry_name: &str) -> bool {
 /// deliberately BLOCKED rather than interpreted as absence.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn inspect_codex_mcp(
+    executable: &Path,
     command_home: &Path,
     entry_name: &str,
     transport: &str,
@@ -108,7 +110,7 @@ pub(super) fn inspect_codex_mcp(
     environment: &[uze_core::exposure::McpEnvironmentReference],
     enabled: Option<bool>,
 ) -> AttachmentInspection {
-    let output = match Command::new("codex")
+    let output = match Command::new(executable)
         .env("HOME", command_home)
         .args(["mcp", "get", entry_name, "--json"])
         .output()
@@ -268,15 +270,15 @@ pub(super) fn inspect_codex_mcp_value(
 /// `HOME` for the same reason `attach_mcp_entry` does — never relies on the
 /// calling process's own environment.
 #[allow(dead_code)]
-pub fn detach_mcp_entry(command_home: &Path, entry_name: &str) -> Result<()> {
-    let status = Command::new("codex")
+pub fn detach_mcp_entry(executable: &Path, command_home: &Path, entry_name: &str) -> Result<()> {
+    let status = Command::new(executable)
         .env("HOME", command_home)
         .args(["mcp", "remove", entry_name])
         .status();
     match status {
         Ok(status) if status.success() => Ok(()),
         // Already absent is not an error — removal is idempotent.
-        Ok(_) if !mcp_entry_exists(command_home, entry_name) => Ok(()),
+        Ok(_) if !mcp_entry_exists(executable, command_home, entry_name) => Ok(()),
         Ok(status) => Err(UzeError::ExposureUnavailable(format!(
             "`codex mcp remove` exited with {status} for entry `{entry_name}`"
         ))),

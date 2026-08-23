@@ -17,6 +17,7 @@ use uze_core::{
     Result, UzeError,
     capability::CapabilityKind,
     exposure::{ExposureMechanism, ExposurePlan, PackageExposurePlan},
+    harness_runtime::resolve_real_executable,
     home::UzeHome,
     integration::{
         AttachmentInspection, AttachmentReceipt, AttachmentState, HarnessDetection,
@@ -95,6 +96,20 @@ impl CodexIntegration {
         let home = std::env::var_os("HOME").ok_or(UzeError::MissingHomeDirectory)?;
         Ok(Self::new(PathBuf::from(home).join(".agents"), uze_home))
     }
+
+    /// The real `codex` executable, resolved explicitly rather than through
+    /// a bare `Command::new("codex")` PATH lookup — same rationale, same
+    /// recursion hazard, as `ClaudeIntegration::provisioning_executable`:
+    /// once `uze setup codex` has ever succeeded, `~/.uze/shims/codex` can
+    /// sit ahead of the real binary on `PATH`, and an internal integration
+    /// call must never re-enter UZE's own runtime shim. Falls back to the
+    /// bare name (previous behavior) if no real binary can be found outside
+    /// the shims directory.
+    fn provisioning_executable(&self) -> String {
+        resolve_real_executable(&["codex"], &self.uze_home.shims_dir())
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "codex".to_owned())
+    }
 }
 
 impl IntegrationPort for CodexIntegration {
@@ -115,7 +130,7 @@ impl IntegrationPort for CodexIntegration {
     }
 
     fn detect(&self) -> HarnessDetection {
-        detect_binary("codex")
+        detect_binary(&self.provisioning_executable())
     }
 
     /// OpenCode and Gemini CLI also discover Skills from this exact same
@@ -202,7 +217,16 @@ impl IntegrationPort for CodexIntegration {
                 command,
                 args,
                 ..
-            } => attach_mcp_entry(&self.command_home, entry_name, command, args),
+            } => {
+                let executable = self.provisioning_executable();
+                attach_mcp_entry(
+                    Path::new(&executable),
+                    &self.command_home,
+                    entry_name,
+                    command,
+                    args,
+                )
+            }
             _ => Ok(None),
         }
     }
@@ -212,16 +236,19 @@ impl IntegrationPort for CodexIntegration {
         package: &StoredPackage,
         _plan: &PackageExposurePlan,
     ) -> Result<Option<AttachmentReceipt>> {
+        let executable = self.provisioning_executable();
+        let executable = Path::new(&executable);
         let catalogue_root = self.catalogue_root();
-        if !marketplace_exists(&self.command_home, &catalogue_root) {
+        if !marketplace_exists(executable, &self.command_home, &catalogue_root) {
             run_codex(
+                executable,
                 &self.command_home,
                 ["plugin", "marketplace", "add"],
                 Some(&catalogue_root),
             )?;
         }
         let selector = format!("{}@{MARKETPLACE_NAME}", package.id.as_str());
-        match Command::new("codex")
+        match Command::new(executable)
             .env("HOME", &self.command_home)
             .args(["plugin", "add", &selector])
             .status()
@@ -293,16 +320,20 @@ impl IntegrationPort for CodexIntegration {
                 cwd,
                 environment,
                 enabled,
-            } => mcp::inspect_codex_mcp(
-                &self.command_home,
-                entry_name,
-                transport,
-                command,
-                args,
-                cwd.as_deref(),
-                environment,
-                *enabled,
-            ),
+            } => {
+                let executable = self.provisioning_executable();
+                mcp::inspect_codex_mcp(
+                    Path::new(&executable),
+                    &self.command_home,
+                    entry_name,
+                    transport,
+                    command,
+                    args,
+                    cwd.as_deref(),
+                    environment,
+                    *enabled,
+                )
+            }
             ManagedArtifact::IntegrationOwned {
                 kind,
                 selector,
@@ -314,7 +345,9 @@ impl IntegrationPort for CodexIntegration {
                 let Some(package_root) = detail_path(detail, "package_root") else {
                     return plugin::blocked("plugin receipt has no package root".to_owned());
                 };
+                let executable = self.provisioning_executable();
                 inspect_codex_plugin(
+                    Path::new(&executable),
                     &self.command_home,
                     selector,
                     &marketplace_root,
@@ -332,12 +365,14 @@ impl IntegrationPort for CodexIntegration {
         }
         match &receipt.artifact {
             ManagedArtifact::VendorConfigEntry { entry_name, .. } => {
-                mcp::detach_mcp_entry(&self.command_home, entry_name)?;
+                let executable = self.provisioning_executable();
+                mcp::detach_mcp_entry(Path::new(&executable), &self.command_home, entry_name)?;
             }
             ManagedArtifact::IntegrationOwned { kind, selector, .. }
                 if kind == "marketplace-plugin" =>
             {
-                remove_plugin(&self.command_home, selector)?;
+                let executable = self.provisioning_executable();
+                remove_plugin(Path::new(&executable), &self.command_home, selector)?;
             }
             _ => return detach_standard_receipt(receipt),
         }

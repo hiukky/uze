@@ -58,6 +58,7 @@ impl GeminiIntegration {
 }
 
 pub(super) fn attach_mcp_entry(
+    executable: &str,
     command_home: &Path,
     entry_name: &str,
     command: &Path,
@@ -69,7 +70,7 @@ pub(super) fn attach_mcp_entry(
     if mcp_entry_exists(command_home, entry_name) {
         return Ok(Some(PathBuf::from(format!("mcp:{entry_name}"))));
     }
-    let status = Command::new("gemini")
+    let status = Command::new(executable)
         .env("HOME", command_home)
         .args([
             "mcp",

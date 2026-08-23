@@ -15,8 +15,8 @@ use uze_core::{
 /// held by the Codex integration.
 pub(super) const MARKETPLACE_NAME: &str = "uze-local";
 
-pub(super) fn marketplace_exists(command_home: &Path, root: &Path) -> bool {
-    let output = Command::new("codex")
+pub(super) fn marketplace_exists(executable: &Path, command_home: &Path, root: &Path) -> bool {
+    let output = Command::new(executable)
         .env("HOME", command_home)
         .args(["plugin", "marketplace", "list", "--json"])
         .output();
@@ -36,8 +36,13 @@ pub(super) fn marketplace_exists(command_home: &Path, root: &Path) -> bool {
     })
 }
 
-pub(super) fn run_codex(command_home: &Path, prefix: [&str; 3], path: Option<&Path>) -> Result<()> {
-    let mut command = Command::new("codex");
+pub(super) fn run_codex(
+    executable: &Path,
+    command_home: &Path,
+    prefix: [&str; 3],
+    path: Option<&Path>,
+) -> Result<()> {
+    let mut command = Command::new(executable);
     command.env("HOME", command_home).args(prefix);
     if let Some(path) = path {
         command.arg(path);
@@ -56,12 +61,17 @@ pub(super) fn run_codex(command_home: &Path, prefix: [&str; 3], path: Option<&Pa
 }
 
 pub(super) fn inspect_codex_plugin(
+    executable: &Path,
     command_home: &Path,
     selector: &str,
     marketplace_root: &Path,
     package_root: &Path,
 ) -> AttachmentInspection {
-    let marketplace = match codex_json(command_home, ["plugin", "marketplace", "list", "--json"]) {
+    let marketplace = match codex_json(
+        executable,
+        command_home,
+        ["plugin", "marketplace", "list", "--json"],
+    ) {
         Ok(value) => value,
         Err(reason) => return blocked(reason),
     };
@@ -97,7 +107,7 @@ pub(super) fn inspect_codex_plugin(
             reason: "Codex marketplace root differs from receipt".to_owned(),
         };
     }
-    let plugins = match codex_json(command_home, ["plugin", "list", "--json"]) {
+    let plugins = match codex_json(executable, command_home, ["plugin", "list", "--json"]) {
         Ok(value) => value,
         Err(reason) => return blocked(reason),
     };
@@ -163,10 +173,11 @@ fn inspect_codex_plugin_value(
 }
 
 fn codex_json<const N: usize>(
+    executable: &Path,
     command_home: &Path,
     args: [&str; N],
 ) -> std::result::Result<serde_json::Value, String> {
-    let output = Command::new("codex")
+    let output = Command::new(executable)
         .env("HOME", command_home)
         .args(args)
         .output()
@@ -178,8 +189,8 @@ fn codex_json<const N: usize>(
         .map_err(|error| format!("Codex JSON is invalid: {error}"))
 }
 
-pub(super) fn remove_plugin(command_home: &Path, selector: &str) -> Result<()> {
-    match Command::new("codex")
+pub(super) fn remove_plugin(executable: &Path, command_home: &Path, selector: &str) -> Result<()> {
+    match Command::new(executable)
         .env("HOME", command_home)
         .args(["plugin", "remove", selector])
         .status()

@@ -34,6 +34,7 @@ use uze_core::{
     store::StoredPackage,
 };
 
+mod generate;
 mod mcp;
 mod plugin;
 mod provision;
@@ -42,6 +43,11 @@ mod skills;
 
 pub use mcp::detach_mcp_entry;
 
+use generate::{
+    GENERATED_MARKETPLACE_NAME, GENERATED_PLUGIN_KIND, generatable, generated_catalogue_matches,
+    generated_exact_coverage, generated_package_receipt, generated_root,
+    materialize_generated_package, remove_generated_package_by_id, write_generated_catalogue,
+};
 use mcp::attach_mcp_entry;
 use plugin::{
     claude_catalogue_document, claude_marketplace_exists, claude_package_receipt,
@@ -73,6 +79,19 @@ pub struct ClaudeIntegration {
     /// gets a consistent, isolated value.
     command_home: std::path::PathBuf,
     uze_home: UzeHome,
+    /// Test-only escape hatch from PATH-based executable resolution. `None`
+    /// in every production path (`new`/`from_env` never set it), so
+    /// `provisioning_executable()` keeps resolving the real binary via
+    /// `resolve_real_executable` as normal. Exists because a test's own
+    /// isolated `UzeHome` only excludes *its own* `shims_dir` from that
+    /// resolution — on a machine where `uze setup claude` has genuinely run
+    /// (the real `~/.uze/shims/claude` sitting earlier on the *real* `$PATH`
+    /// the test process inherited), resolution would silently walk past the
+    /// test's fixtures and invoke the operator's live shim instead. No test
+    /// should ever depend on what happens to be installed on the machine
+    /// running it; this makes the executable an explicit, injected fact
+    /// instead of a discovered one.
+    executable_override: Option<std::path::PathBuf>,
 }
 
 impl ClaudeIntegration {
@@ -85,7 +104,19 @@ impl ClaudeIntegration {
             skills_dir: claude_home.join("skills"),
             command_home,
             uze_home,
+            executable_override: None,
         }
+    }
+
+    /// Pins the executable `provisioning_executable()` returns, bypassing
+    /// PATH/shim resolution entirely. Test-only in practice (production
+    /// composition roots never call this), but a genuine public method
+    /// rather than a `#[cfg(test)]` item: integration tests under `tests/`
+    /// construct this type through the compiled library, not the crate's
+    /// own internal test module.
+    pub fn with_executable_override(mut self, executable: std::path::PathBuf) -> Self {
+        self.executable_override = Some(executable);
+        self
     }
 
     /// Convenience constructor for the CLI composition root. Unused when
@@ -122,9 +153,97 @@ impl ClaudeIntegration {
     /// updates. Falls back to the bare name (previous behavior) if no real
     /// binary can be found outside the shims directory.
     fn provisioning_executable(&self) -> String {
+        if let Some(executable) = &self.executable_override {
+            return executable.to_string_lossy().into_owned();
+        }
         resolve_real_executable(&["claude"], &self.uze_home.shims_dir())
             .map(|path| path.to_string_lossy().into_owned())
             .unwrap_or_else(|| "claude".to_owned())
+    }
+
+    /// Installs a package whose source ships its own `.claude-plugin/
+    /// plugin.json`, through the existing `uze-local` marketplace rooted at
+    /// the Store itself. Unchanged behavior — extracted verbatim from the
+    /// pre-generation `attach_package` so the explicit-envelope path stays
+    /// exactly as proven by the existing 12 native-package tests.
+    fn attach_explicit_package(
+        &self,
+        executable: &Path,
+        package: &StoredPackage,
+    ) -> Result<Option<AttachmentReceipt>> {
+        let catalogue_root = self.catalogue_root();
+        if !claude_marketplace_exists(executable, &self.command_home, &catalogue_root) {
+            run_claude_marketplace_add(executable, &self.command_home, &catalogue_root)?;
+        }
+        let selector = format!("{}@{CLAUDE_MARKETPLACE_NAME}", package.id.as_str());
+        if claude_plugin_installed(executable, &self.command_home, &selector) {
+            return Ok(Some(claude_package_receipt(
+                self.id(),
+                package,
+                &catalogue_root,
+                &selector,
+            )));
+        }
+        match Command::new(executable)
+            .env("HOME", &self.command_home)
+            .args(["plugin", "install", &selector])
+            .status()
+        {
+            Ok(status) if status.success() => Ok(Some(claude_package_receipt(
+                self.id(),
+                package,
+                &catalogue_root,
+                &selector,
+            ))),
+            Ok(status) => Err(UzeError::ExposureUnavailable(format!(
+                "`claude plugin install` exited with {status} for `{selector}`"
+            ))),
+            Err(error) => Err(UzeError::ExposureUnavailable(format!(
+                "failed to run `claude plugin install` for `{selector}`: {error}"
+            ))),
+        }
+    }
+
+    /// Installs a package with no author-provided envelope through the
+    /// second, UZE-owned `uze-local-generated` marketplace, materializing
+    /// (or refreshing) its generated envelope directory first.
+    fn attach_generated_package(
+        &self,
+        executable: &Path,
+        package: &StoredPackage,
+    ) -> Result<Option<AttachmentReceipt>> {
+        materialize_generated_package(&self.uze_home, package)?;
+        let marketplace_root = generated_root(&self.uze_home);
+        if !claude_marketplace_exists(executable, &self.command_home, &marketplace_root) {
+            run_claude_marketplace_add(executable, &self.command_home, &marketplace_root)?;
+        }
+        let selector = format!("{}@{GENERATED_MARKETPLACE_NAME}", package.id.as_str());
+        if claude_plugin_installed(executable, &self.command_home, &selector) {
+            return Ok(Some(generated_package_receipt(
+                self.id(),
+                package,
+                &marketplace_root,
+                &selector,
+            )));
+        }
+        match Command::new(executable)
+            .env("HOME", &self.command_home)
+            .args(["plugin", "install", &selector])
+            .status()
+        {
+            Ok(status) if status.success() => Ok(Some(generated_package_receipt(
+                self.id(),
+                package,
+                &marketplace_root,
+                &selector,
+            ))),
+            Ok(status) => Err(UzeError::ExposureUnavailable(format!(
+                "`claude plugin install` exited with {status} for `{selector}`"
+            ))),
+            Err(error) => Err(UzeError::ExposureUnavailable(format!(
+                "failed to run `claude plugin install` for `{selector}`: {error}"
+            ))),
+        }
     }
 }
 
@@ -250,16 +369,33 @@ impl IntegrationPort for ClaudeIntegration {
         package: &StoredPackage,
         resources: &[&Resource],
     ) -> Option<PackageExposurePlan> {
-        if !package.root.join(".claude-plugin/plugin.json").is_file() {
+        if package.root.join(".claude-plugin/plugin.json").is_file() {
+            let provided = plugin::claude_exact_coverage(package, resources);
+            return Some(PackageExposurePlan {
+                package_id: package.id.clone(),
+                route: CompatibilityRoute::Native,
+                verification: VerificationStatus::Unverified,
+                provided_resource_identities: provided,
+                evidence: "The preserved external .claude-plugin/plugin.json is exposed through UZE's derived Claude marketplace. Claude Code owns Skill and MCP loading for this plugin, so UZE must not attach them a second time."
+                    .to_owned(),
+            });
+        }
+        // No author-provided envelope. Rather than falling straight to
+        // capability decomposition, check whether UZE can safely synthesize
+        // one (ADR-020, refining ADR-013 §2: Explicit Native Package >
+        // Generated Native Package > Native Capability > Safe Adaptation >
+        // Unsupported). This method stays read-only either way — it
+        // computes what *would* be covered, never materializes anything.
+        if !generatable(package) {
             return None;
         }
-        let provided = plugin::claude_exact_coverage(package, resources);
+        let provided = generated_exact_coverage(package, resources);
         Some(PackageExposurePlan {
             package_id: package.id.clone(),
             route: CompatibilityRoute::Native,
             verification: VerificationStatus::Unverified,
             provided_resource_identities: provided,
-            evidence: "The preserved external .claude-plugin/plugin.json is exposed through UZE's derived Claude marketplace. Claude Code owns Skill and MCP loading for this plugin, so UZE must not attach them a second time."
+            evidence: "No .claude-plugin/plugin.json was provided. UZE synthesizes one deterministically into a UZE-owned derived directory (never the Store) covering exactly the package's conventional skills/ directory and mcp.json-declared servers, published through a second, generated-only Claude marketplace."
                 .to_owned(),
         })
     }
@@ -271,69 +407,52 @@ impl IntegrationPort for ClaudeIntegration {
     ) -> Result<Option<AttachmentReceipt>> {
         let executable = self.provisioning_executable();
         let executable = Path::new(&executable);
-        let catalogue_root = self.catalogue_root();
-        if !claude_marketplace_exists(executable, &self.command_home, &catalogue_root) {
-            run_claude_marketplace_add(executable, &self.command_home, &catalogue_root)?;
+        if package.root.join(".claude-plugin/plugin.json").is_file() {
+            return self.attach_explicit_package(executable, package);
         }
-        let selector = format!("{}@{CLAUDE_MARKETPLACE_NAME}", package.id.as_str());
-        // Idempotent: if already installed, return receipt without reinstalling.
-        if claude_plugin_installed(executable, &self.command_home, &selector) {
-            return Ok(Some(claude_package_receipt(
-                self.id(),
-                package,
-                &catalogue_root,
-                &selector,
-            )));
-        }
-        match Command::new(executable)
-            .env("HOME", &self.command_home)
-            .args(["plugin", "install", &selector])
-            .status()
-        {
-            Ok(status) if status.success() => Ok(Some(claude_package_receipt(
-                self.id(),
-                package,
-                &catalogue_root,
-                &selector,
-            ))),
-            Ok(status) => Err(UzeError::ExposureUnavailable(format!(
-                "`claude plugin install` exited with {status} for `{selector}`"
-            ))),
-            Err(error) => Err(UzeError::ExposureUnavailable(format!(
-                "failed to run `claude plugin install` for `{selector}`: {error}"
-            ))),
-        }
+        self.attach_generated_package(executable, package)
     }
 
     fn republish_packages(&self, packages: &[StoredPackage]) -> Result<()> {
-        write_claude_catalogue(&self.catalogue_path(), packages)
+        write_claude_catalogue(&self.catalogue_path(), packages)?;
+        write_generated_catalogue(&self.uze_home, packages)
     }
 
     fn publication(&self, packages: &[StoredPackage]) -> PublicationStatus {
         let expected = claude_catalogue_document(packages);
-        match fs::read(self.catalogue_path()) {
+        let explicit_published = match fs::read(self.catalogue_path()) {
             Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
-                Ok(actual) if actual == expected => PublicationStatus::Published,
-                Ok(_) => PublicationStatus::Unpublished(
+                Ok(actual) if actual == expected => Ok(()),
+                Ok(_) => Err(
                     "the Claude marketplace does not match the installed package set; re-run `uze setup claude`"
                         .to_owned(),
                 ),
-                Err(error) => PublicationStatus::Unpublished(format!(
+                Err(error) => Err(format!(
                     "the Claude marketplace is unreadable ({error}); re-run `uze setup claude`"
                 )),
             },
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 if claude_publishable(packages).is_empty() {
-                    PublicationStatus::Published
+                    Ok(())
                 } else {
-                    PublicationStatus::Unpublished(
+                    Err(
                         "no Claude marketplace has been written for the installed packages; re-run `uze setup claude`"
                             .to_owned(),
                     )
                 }
             }
-            Err(error) => PublicationStatus::Unpublished(error.to_string()),
+            Err(error) => Err(error.to_string()),
+        };
+        if let Err(reason) = explicit_published {
+            return PublicationStatus::Unpublished(reason);
         }
+        if !generated_catalogue_matches(&self.uze_home, packages) {
+            return PublicationStatus::Unpublished(
+                "the generated Claude marketplace does not match the installed package set; re-run `uze setup claude`"
+                    .to_owned(),
+            );
+        }
+        PublicationStatus::Published
     }
 
     fn attach(&self, resource: &Resource) -> Result<Option<std::path::PathBuf>> {
@@ -397,7 +516,7 @@ impl IntegrationPort for ClaudeIntegration {
                 kind,
                 selector,
                 detail,
-            } if kind == "claude-plugin" => {
+            } if kind == "claude-plugin" || kind == GENERATED_PLUGIN_KIND => {
                 let Some(marketplace_root) = detail_path(detail, "marketplace_root") else {
                     return plugin::blocked("plugin receipt has no marketplace root".to_owned());
                 };
@@ -431,9 +550,18 @@ impl IntegrationPort for ClaudeIntegration {
                     reason: "Claude managed MCP entry detached via CLI".to_owned(),
                 })
             }
-            ManagedArtifact::IntegrationOwned { kind, selector, .. } if kind == "claude-plugin" => {
+            ManagedArtifact::IntegrationOwned { kind, selector, .. }
+                if kind == "claude-plugin" || kind == GENERATED_PLUGIN_KIND =>
+            {
                 let executable = self.provisioning_executable();
                 remove_claude_plugin(Path::new(&executable), &self.command_home, selector)?;
+                if kind == GENERATED_PLUGIN_KIND {
+                    // The generated envelope directory is a Derived Artifact
+                    // (ADR-013 §4): non-authoritative, rebuildable, and
+                    // never the canonical Store — safe to remove outright
+                    // now that Claude no longer references it.
+                    remove_generated_package_by_id(&self.uze_home, &receipt.package_id)?;
+                }
                 Ok(AttachmentInspection {
                     state: AttachmentState::Missing,
                     reason: "Claude native plugin detached".to_owned(),

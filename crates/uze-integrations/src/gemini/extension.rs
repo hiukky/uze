@@ -133,10 +133,11 @@ pub(super) fn gemini_exact_coverage(
 /// stdout and falling back to stderr keeps this correct either way, so a
 /// future release that moves the payload to stdout needs no change here.
 fn gemini_json(
+    executable: &str,
     command_home: &Path,
     args: &[&str],
 ) -> std::result::Result<serde_json::Value, String> {
-    let output = Command::new("gemini")
+    let output = Command::new(executable)
         .env("HOME", command_home)
         .args(args)
         .output()
@@ -155,8 +156,13 @@ fn gemini_json(
 /// One installed extension, by name, from Gemini's own machine-readable
 /// listing. `None` when absent or when the listing itself is unavailable —
 /// callers distinguish those two cases.
-pub(super) fn linked_extension(command_home: &Path, name: &str) -> Option<serde_json::Value> {
+pub(super) fn linked_extension(
+    executable: &str,
+    command_home: &Path,
+    name: &str,
+) -> Option<serde_json::Value> {
     let listing = gemini_json(
+        executable,
         command_home,
         &["extensions", "list", "--output-format=json"],
     )
@@ -169,11 +175,13 @@ pub(super) fn linked_extension(command_home: &Path, name: &str) -> Option<serde_
 }
 
 pub(super) fn inspect_linked_extension(
+    executable: &str,
     command_home: &Path,
     name: &str,
     expected_source: &Path,
 ) -> AttachmentInspection {
     let listing = match gemini_json(
+        executable,
         command_home,
         &["extensions", "list", "--output-format=json"],
     ) {
@@ -259,8 +267,13 @@ fn inspect_listing(
     }
 }
 
-pub(super) fn run_gemini(command_home: &Path, args: &[&str], label: &str) -> Result<()> {
-    match Command::new("gemini")
+pub(super) fn run_gemini(
+    executable: &str,
+    command_home: &Path,
+    args: &[&str],
+    label: &str,
+) -> Result<()> {
+    match Command::new(executable)
         .env("HOME", command_home)
         .args(args)
         .status()

@@ -128,10 +128,35 @@ fn one_plugin_install_is_planned_once_for_native_and_decomposed_harnesses() {
         "no capability is also individually attached for Codex"
     );
 
-    assert!(
-        claude.package_exposure_plan(&package, &resources).is_none(),
-        "Agent Plugin/Codex envelope is not claimed native for Claude"
+    // Claude has no envelope of its own (only Codex's `.codex-plugin/
+    // plugin.json` is present), but ADR-020 (refining ADR-013 §2) makes
+    // envelope-less packages eligible for a UZE-GENERATED native envelope
+    // rather than falling straight to capability decomposition: the
+    // package's Skill lives under a conventional `skills/` directory and
+    // its MCP server is declared in `.mcp.json`, so both are safely
+    // representable. This is a deliberate, accepted behavior change from
+    // this fixture's pre-generation expectation.
+    let claude_package = claude
+        .package_exposure_plan(&package, &resources)
+        .expect("no Claude envelope, but UZE can safely generate one");
+    assert_eq!(claude_package.route, CompatibilityRoute::Native);
+    assert_eq!(
+        claude_package.provided_resource_identities.len(),
+        2,
+        "both the Skill and the MCP server are safely representable"
     );
+    assert!(
+        resources
+            .iter()
+            .all(|resource| claude_package.provides(resource)),
+        "no capability is also individually attached for Claude once generated"
+    );
+
+    // Per-resource `exposure_plan` is unaffected by package-level
+    // generation — it is Application orchestration's job to skip
+    // individually attaching a resource the package plan already covers,
+    // not `exposure_plan`'s. The capability-level fallback mechanism must
+    // still exist and still be correct on its own terms.
     let claude_routes: Vec<_> = resources.iter().map(|r| claude.exposure_plan(r)).collect();
     assert!(
         claude_routes
