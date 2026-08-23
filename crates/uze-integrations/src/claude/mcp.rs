@@ -15,6 +15,7 @@ use uze_core::{
 
 use super::ClaudeIntegration;
 use super::unsupported;
+use crate::shared::process::{capture, failed_message};
 
 impl ClaudeIntegration {
     pub(super) fn mcp_exposure_plan(&self, resource: &Resource) -> ExposurePlan {
@@ -66,30 +67,30 @@ pub(super) fn attach_mcp_entry(
     if mcp_entry_exists(executable, command_home, entry_name) {
         return Ok(Some(PathBuf::from(format!("mcp:{entry_name}"))));
     }
-    let status = Command::new(executable)
-        .env("HOME", command_home)
-        .args([
-            "mcp",
-            "add",
-            "--scope",
-            "user",
-            "--transport",
-            "stdio",
-            entry_name,
-            "--",
-        ])
-        .arg(command)
-        .args(args)
-        .status();
-    match status {
-        Ok(status) if status.success() => Ok(Some(PathBuf::from(format!("mcp:{entry_name}")))),
-        Ok(status) => Err(UzeError::ExposureUnavailable(format!(
-            "`claude mcp add` exited with {status} for entry `{entry_name}`"
-        ))),
-        Err(error) => Err(UzeError::ExposureUnavailable(format!(
+    let mut mcp_args: Vec<std::ffi::OsString> = vec![
+        std::ffi::OsString::from("mcp"),
+        std::ffi::OsString::from("add"),
+        std::ffi::OsString::from("--scope"),
+        std::ffi::OsString::from("user"),
+        std::ffi::OsString::from("--transport"),
+        std::ffi::OsString::from("stdio"),
+        std::ffi::OsString::from(entry_name),
+        std::ffi::OsString::from("--"),
+    ];
+    mcp_args.push(command.as_os_str().to_owned());
+    mcp_args.extend(args.iter().map(std::ffi::OsString::from));
+    let output = capture(executable, command_home, &mcp_args).map_err(|error| {
+        UzeError::ExposureUnavailable(format!(
             "failed to run `claude mcp add` for entry `{entry_name}`: {error}"
-        ))),
+        ))
+    })?;
+    if !output.status.success() {
+        return Err(UzeError::ExposureUnavailable(failed_message(
+            &format!("claude mcp add `{entry_name}`"),
+            &output,
+        )));
     }
+    Ok(Some(PathBuf::from(format!("mcp:{entry_name}"))))
 }
 
 /// Idempotently checked before ever calling `claude mcp add` — Claude's
@@ -193,21 +194,23 @@ pub(super) fn inspect_claude_mcp(
 /// calling process's own environment.
 #[allow(dead_code)]
 pub fn detach_mcp_entry(executable: &Path, command_home: &Path, entry_name: &str) -> Result<()> {
-    let status = Command::new(executable)
-        .env("HOME", command_home)
-        .args(["mcp", "remove", entry_name])
-        .status();
-    match status {
-        Ok(status) if status.success() => Ok(()),
-        // Already absent is not an error — removal is idempotent.
-        Ok(_) if !mcp_entry_exists(executable, command_home, entry_name) => Ok(()),
-        Ok(status) => Err(UzeError::ExposureUnavailable(format!(
-            "`claude mcp remove` exited with {status} for entry `{entry_name}`"
-        ))),
-        Err(error) => Err(UzeError::ExposureUnavailable(format!(
-            "failed to run `claude mcp remove` for entry `{entry_name}`: {error}"
-        ))),
+    let output =
+        capture(executable, command_home, &["mcp", "remove", entry_name]).map_err(|error| {
+            UzeError::ExposureUnavailable(format!(
+                "failed to run `claude mcp remove` for entry `{entry_name}`: {error}"
+            ))
+        })?;
+    if output.status.success() {
+        return Ok(());
     }
+    // Already absent is not an error — removal is idempotent.
+    if !mcp_entry_exists(executable, command_home, entry_name) {
+        return Ok(());
+    }
+    Err(UzeError::ExposureUnavailable(failed_message(
+        &format!("claude mcp remove `{entry_name}`"),
+        &output,
+    )))
 }
 
 /// Parses `{"command": "...", "args": [...]}` from a payload produced by

@@ -4,7 +4,7 @@
 //! and the exact-coverage computation that tells UZE which resources that
 //! native envelope already accounts for.
 
-use std::{collections::BTreeSet, fs, path::Path, path::PathBuf, process::Command};
+use std::{collections::BTreeSet, ffi::OsStr, fs, path::Path, path::PathBuf, process::Command};
 
 use uze_core::{
     Result, UzeError,
@@ -14,6 +14,7 @@ use uze_core::{
 };
 
 use crate::shared::path::normalize_declared_relative_path;
+use crate::shared::process::run_quiet;
 
 use super::CLAUDE_MARKETPLACE_NAME;
 
@@ -57,22 +58,14 @@ pub(super) fn run_claude_marketplace_add(
     command_home: &Path,
     root: &Path,
 ) -> Result<()> {
-    match Command::new(executable)
-        .env("HOME", command_home)
-        .args(["plugin", "marketplace", "add"])
-        .arg(root)
-        .status()
-    {
-        Ok(status) if status.success() => Ok(()),
-        Ok(status) => Err(UzeError::ExposureUnavailable(format!(
-            "`claude plugin marketplace add` exited with {status} for `{}`",
-            root.display()
-        ))),
-        Err(error) => Err(UzeError::ExposureUnavailable(format!(
-            "failed to run `claude plugin marketplace add` for `{}`: {error}",
-            root.display()
-        ))),
-    }
+    let label = format!("claude plugin marketplace add {}", root.display());
+    let args: Vec<&OsStr> = vec![
+        OsStr::new("plugin"),
+        OsStr::new("marketplace"),
+        OsStr::new("add"),
+        root.as_os_str(),
+    ];
+    run_quiet(executable, command_home, &label, &args)
 }
 
 pub(super) fn claude_plugin_installed(
@@ -368,19 +361,12 @@ pub(super) fn remove_claude_plugin(
     command_home: &Path,
     selector: &str,
 ) -> Result<()> {
-    match Command::new(executable)
-        .env("HOME", command_home)
-        .args(["plugin", "uninstall", selector])
-        .status()
-    {
-        Ok(status) if status.success() => Ok(()),
-        Ok(status) => Err(UzeError::ExposureUnavailable(format!(
-            "`claude plugin uninstall` exited with {status} for `{selector}`"
-        ))),
-        Err(error) => Err(UzeError::ExposureUnavailable(format!(
-            "failed to run `claude plugin uninstall` for `{selector}`: {error}"
-        ))),
-    }
+    run_quiet(
+        executable,
+        command_home,
+        &format!("claude plugin uninstall {selector}"),
+        &["plugin", "uninstall", selector],
+    )
 }
 
 pub(super) fn detail_path(

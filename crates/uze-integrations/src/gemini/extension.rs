@@ -15,6 +15,7 @@ use uze_core::{
 
 use super::LINKED_EXTENSION;
 use super::blocked;
+use crate::shared::process::run_quiet;
 
 impl super::GeminiIntegration {
     pub(super) fn receipt(
@@ -273,19 +274,7 @@ pub(super) fn run_gemini(
     args: &[&str],
     label: &str,
 ) -> Result<()> {
-    match Command::new(executable)
-        .env("HOME", command_home)
-        .args(args)
-        .status()
-    {
-        Ok(status) if status.success() => Ok(()),
-        Ok(status) => Err(UzeError::ExposureUnavailable(format!(
-            "`{label}` exited with {status}"
-        ))),
-        Err(error) => Err(UzeError::ExposureUnavailable(format!(
-            "failed to run `{label}`: {error}"
-        ))),
-    }
+    run_quiet(Path::new(executable), command_home, label, args)
 }
 
 #[cfg(test)]

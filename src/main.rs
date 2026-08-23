@@ -7,15 +7,15 @@ mod command_performance;
 mod progress;
 mod shim;
 
-use std::{io::IsTerminal, path::PathBuf};
+use std::{collections::BTreeMap, io::IsTerminal, path::PathBuf};
 
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum, error::ErrorKind};
 use uze::{
     Result, UzeApplication, UzeHome,
     application::{
-        ContextPlan, ContextReconciliationReport, DoctorReport, HarnessContextDelivery,
-        HarnessHealth, MarketplaceSummary, PluginInspection, Portability, ProjectContextStatus,
-        RemovePluginReport, RemoveProjectPluginReport, StatusReport,
+        AddPluginReport, ContextPlan, ContextReconciliationReport, DoctorReport,
+        HarnessContextDelivery, HarnessHealth, MarketplaceSummary, PluginInspection, Portability,
+        ProjectContextStatus, RemovePluginReport, RemoveProjectPluginReport, StatusReport,
     },
     context::PlannedAction,
 };
@@ -27,6 +27,9 @@ use uze::{
     about = "Manage one local agent plugin environment"
 )]
 struct Cli {
+    /// Show delivery evidence and full attachment details
+    #[arg(long, global = true)]
+    verbose: bool,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -222,6 +225,9 @@ struct ShorthandArgs {
     /// Authorize executable capabilities
     #[arg(long)]
     trust: bool,
+    /// Show delivery evidence and full attachment details
+    #[arg(long)]
+    verbose: bool,
     #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
     format: OutputFormat,
 }
@@ -321,6 +327,7 @@ fn print_colored_help() {
 
 fn run(cli: Cli) -> Result<()> {
     let home = UzeHome::from_env()?;
+    let verbose = cli.verbose;
     let Some(command) = cli.command else {
         if std::io::stdout().is_terminal() && std::io::stdin().is_terminal() {
             // Seeding default marketplace plugins now happens inside the
@@ -512,26 +519,7 @@ fn run(cli: Cli) -> Result<()> {
                                     report.plugin.id
                                 ));
                                 println!("  Store path: {}", report.plugin.store_path.display());
-                                for (harness, plan) in &report.package_plans {
-                                    println!(
-                                        "  Package delivery to {harness}: {:?} ({} components)",
-                                        plan.route,
-                                        plan.provided_resource_identities.len()
-                                    );
-                                    // `evidence` already distinguishes explicit
-                                    // vs. generated (or any other route-specific
-                                    // provenance an integration wants to state)
-                                    // in its own words — no vendor enum needed
-                                    // to surface that here.
-                                    println!("    {}", plan.evidence);
-                                }
-                                for attachment in &report.attachments {
-                                    println!(
-                                        "  Attached to {}: {}",
-                                        attachment.integration,
-                                        attachment.location.display()
-                                    );
-                                }
+                                print!("{}", render_add_report(&report, verbose));
                                 for publication in &report.publications {
                                     if let Some(error) = &publication.error {
                                         progress::warn(&format!(
@@ -617,7 +605,7 @@ fn run(cli: Cli) -> Result<()> {
             }
         }
         Command::Setup { harness } => run_setup(&app, harness.as_deref())?,
-        Command::External(args) => run_shorthand(&app, args)?,
+        Command::External(args) => run_shorthand(&app, args, verbose)?,
     }
     Ok(())
 }
@@ -672,7 +660,7 @@ fn run_setup(app: &UzeApplication, harness: Option<&str>) -> Result<()> {
 /// argument classification and rendering — the Application layer owns
 /// desired-project-state → `agents.lock` → reconciliation → machine
 /// delivery (see `docs/adr/019-...md`).
-fn run_shorthand(app: &UzeApplication, args: Vec<String>) -> Result<()> {
+fn run_shorthand(app: &UzeApplication, args: Vec<String>, verbose: bool) -> Result<()> {
     // `external_subcommand` only ever fires with at least one token: the
     // unrecognized first argument that caused the fallback.
     let first = args[0].clone();
@@ -719,14 +707,10 @@ fn run_shorthand(app: &UzeApplication, args: Vec<String>) -> Result<()> {
         OutputFormat::Text => {
             println!("Added plugin to project: {plugin}@{marketplace}");
             println!("Store path: {}", report.plugin.store_path.display());
-            for (harness, plan) in &report.package_plans {
-                println!(
-                    "Package delivery to {harness}: {:?} ({} components)",
-                    plan.route,
-                    plan.provided_resource_identities.len()
-                );
-                println!("  {}", plan.evidence);
-            }
+            print!(
+                "{}",
+                render_add_report(&report, verbose || shorthand.verbose)
+            );
         }
         OutputFormat::Json => print_json(&report),
     }
@@ -875,6 +859,46 @@ fn render_inspection(report: &PluginInspection) -> String {
         text.push_str(&format!("  ledger blocked: {error}\n"));
     }
     text
+}
+
+/// Compact per-harness report for an install/add: one line per harness with
+/// its route and — when an attachment was recorded — where. Evidence
+/// sentences and full attachment details are `--verbose`-only; `doctor`/
+/// `plugin inspect` state the same facts read-only.
+fn render_add_report(report: &AddPluginReport, verbose: bool) -> String {
+    let mut out = String::new();
+    let attachments: BTreeMap<&str, &PathBuf> = report
+        .attachments
+        .iter()
+        .map(|attachment| (attachment.integration.as_str(), &attachment.location))
+        .collect();
+    for (harness, plan) in &report.package_plans {
+        let route = format!("{:?}", plan.route).to_lowercase();
+        let attached = attachments
+            .get(harness.as_str())
+            .map(|location| format!(" ({})", location.display()))
+            .unwrap_or_default();
+        out.push_str(&format!("  {harness}: {route}{attached}\n"));
+        if verbose {
+            out.push_str(&format!("    {}\n", plan.evidence));
+        }
+    }
+    // Attachments that are not package delivery (e.g. an Agent Skill
+    // symlink in the shared skills root) still belong in the summary.
+    for attachment in &report.attachments {
+        if !report
+            .package_plans
+            .iter()
+            .any(|(harness, _)| harness == &attachment.integration)
+        {
+            out.push_str(&format!(
+                "  {}: attached at {}\n",
+                attachment.integration,
+                attachment.location.display()
+            ));
+        }
+    }
+    out
 }
 
 fn render_update(report: &uze::application::UpdatePluginReport) -> String {

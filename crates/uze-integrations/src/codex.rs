@@ -11,7 +11,7 @@
 //! composition root: the `CodexIntegration` struct and its `IntegrationPort`
 //! impl, delegating to each submodule.
 
-use std::{fs, path::Path, path::PathBuf, process::Command};
+use std::{fs, path::Path, path::PathBuf};
 
 use uze_core::{
     Result, UzeError,
@@ -39,6 +39,7 @@ mod skills;
 
 pub use mcp::detach_mcp_entry;
 
+use crate::shared::process::run_quiet;
 use generate::{
     GENERATED_MARKETPLACE_NAME, GENERATED_PLUGIN_KIND, generatable, generated_catalogue_matches,
     generated_exact_coverage, generated_package_receipt, generated_root,
@@ -136,37 +137,31 @@ impl CodexIntegration {
             )?;
         }
         let selector = format!("{}@{MARKETPLACE_NAME}", package.id.as_str());
-        match Command::new(executable)
-            .env("HOME", &self.command_home)
-            .args(["plugin", "add", &selector])
-            .status()
-        {
-            Ok(status) if status.success() => Ok(Some(AttachmentReceipt {
-                package_id: package.id.as_str().to_owned(),
-                resource_identity: None,
-                integration: self.id().to_owned(),
-                strategy: "native-plugin-marketplace".to_owned(),
-                artifact: ManagedArtifact::IntegrationOwned {
-                    kind: "marketplace-plugin".to_owned(),
-                    selector,
-                    detail: [
-                        (
-                            "marketplace_root".to_owned(),
-                            serde_json::json!(catalogue_root),
-                        ),
-                        ("package_root".to_owned(), serde_json::json!(package.root)),
-                    ]
-                    .into_iter()
-                    .collect(),
-                },
-            })),
-            Ok(status) => Err(UzeError::ExposureUnavailable(format!(
-                "`codex plugin add` exited with {status} for `{selector}`"
-            ))),
-            Err(error) => Err(UzeError::ExposureUnavailable(format!(
-                "failed to run `codex plugin add` for `{selector}`: {error}"
-            ))),
-        }
+        run_quiet(
+            executable,
+            &self.command_home,
+            &format!("codex plugin add `{selector}`"),
+            &["plugin", "add", selector.as_str()],
+        )?;
+        Ok(Some(AttachmentReceipt {
+            package_id: package.id.as_str().to_owned(),
+            resource_identity: None,
+            integration: self.id().to_owned(),
+            strategy: "native-plugin-marketplace".to_owned(),
+            artifact: ManagedArtifact::IntegrationOwned {
+                kind: "marketplace-plugin".to_owned(),
+                selector,
+                detail: [
+                    (
+                        "marketplace_root".to_owned(),
+                        serde_json::json!(catalogue_root),
+                    ),
+                    ("package_root".to_owned(), serde_json::json!(package.root)),
+                ]
+                .into_iter()
+                .collect(),
+            },
+        }))
     }
 
     /// Installs a package with no author-provided envelope through the
@@ -188,25 +183,19 @@ impl CodexIntegration {
             )?;
         }
         let selector = format!("{}@{GENERATED_MARKETPLACE_NAME}", package.id.as_str());
-        match Command::new(executable)
-            .env("HOME", &self.command_home)
-            .args(["plugin", "add", &selector])
-            .status()
-        {
-            Ok(status) if status.success() => Ok(Some(generated_package_receipt(
-                self.id(),
-                package,
-                &marketplace_root,
-                &generated_dir,
-                &selector,
-            ))),
-            Ok(status) => Err(UzeError::ExposureUnavailable(format!(
-                "`codex plugin add` exited with {status} for `{selector}`"
-            ))),
-            Err(error) => Err(UzeError::ExposureUnavailable(format!(
-                "failed to run `codex plugin add` for `{selector}`: {error}"
-            ))),
-        }
+        run_quiet(
+            executable,
+            &self.command_home,
+            &format!("codex plugin add `{selector}`"),
+            &["plugin", "add", selector.as_str()],
+        )?;
+        Ok(Some(generated_package_receipt(
+            self.id(),
+            package,
+            &marketplace_root,
+            &generated_dir,
+            &selector,
+        )))
     }
 }
 

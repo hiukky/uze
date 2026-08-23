@@ -294,8 +294,8 @@ fn setup_then_add_attaches_transparently_without_a_separate_sync_step() {
     // either package and still decomposes at the capability level, so its
     // resource-level attachment output is unchanged.
     let add = run(&["plugin", "install", package_fixture().to_str().unwrap()]);
-    assert!(add.contains("Package delivery to claude-code:"));
-    assert!(add.contains("Attached to codex:"));
+    assert!(add.contains("claude-code: native"));
+    assert!(add.contains("codex: native"));
 
     // `.claude/skills` is prepared (by `install`) but stays empty: neither
     // package decomposes into it anymore. The generated envelope directory
@@ -442,8 +442,8 @@ fn setup_then_add_attaches_the_mcp_fixture_idempotently_and_removal_works() {
     // receive package-level delivery covering the one MCP resource — no
     // resource-level `mcp add` for either.
     let add = run(&["plugin", "install", package.to_str().unwrap()]);
-    assert!(add.contains("Package delivery to claude-code:"));
-    assert!(add.contains("Package delivery to codex:"));
+    assert!(add.contains("claude-code: native"));
+    assert!(add.contains("codex: native"));
 
     let mcp_state = fake_bin.join("mcp-state");
     assert!(
@@ -498,8 +498,8 @@ fn setup_then_add_attaches_the_mcp_fixture_idempotently_and_removal_works() {
     // integrations' package delivery re-resolves to the same
     // already-installed selector — no reinstall, no resource-level replay.
     let second_add = run(&["plugin", "install", package.to_str().unwrap()]);
-    assert!(second_add.contains("Package delivery to claude-code:"));
-    assert!(second_add.contains("Package delivery to codex:"));
+    assert!(second_add.contains("claude-code: native"));
+    assert!(second_add.contains("codex: native"));
 
     let _ = std::fs::remove_dir_all(home);
     let _ = std::fs::remove_dir_all(uze_home);

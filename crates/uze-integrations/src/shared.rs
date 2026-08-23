@@ -18,4 +18,5 @@
 //! thing `uze-application` or any downstream crate ever names.
 
 pub(crate) mod path;
+pub(crate) mod process;
 pub(crate) mod provision;

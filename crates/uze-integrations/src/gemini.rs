@@ -19,9 +19,9 @@
 //! each submodule.
 
 use std::{
+    ffi::OsStr,
     fs,
     path::{Path, PathBuf},
-    process::Command,
 };
 
 use uze_core::{
@@ -47,6 +47,7 @@ mod mcp;
 mod provision;
 mod skills;
 
+use crate::shared::process::run_quiet;
 use extension::{
     extension_name, gemini_exact_coverage, inspect_linked_extension, linked_extension, run_gemini,
 };
@@ -130,21 +131,19 @@ impl GeminiIntegration {
         if linked_extension(executable, &self.command_home, &extension_name).is_some() {
             return Ok(Some(self.receipt(package, &extension_name)));
         }
-        let status = Command::new(executable)
-            .env("HOME", &self.command_home)
-            .args(["extensions", "link"])
-            .arg(&package.root)
-            .arg("--consent")
-            .status();
-        match status {
-            Ok(status) if status.success() => Ok(Some(self.receipt(package, &extension_name))),
-            Ok(status) => Err(UzeError::ExposureUnavailable(format!(
-                "`gemini extensions link` exited with {status} for `{extension_name}`"
-            ))),
-            Err(error) => Err(UzeError::ExposureUnavailable(format!(
-                "failed to run `gemini extensions link` for `{extension_name}`: {error}"
-            ))),
-        }
+        let args: Vec<&OsStr> = vec![
+            OsStr::new("extensions"),
+            OsStr::new("link"),
+            package.root.as_os_str(),
+            OsStr::new("--consent"),
+        ];
+        run_quiet(
+            Path::new(executable),
+            &self.command_home,
+            &format!("gemini extensions link `{extension_name}`"),
+            &args,
+        )?;
+        Ok(Some(self.receipt(package, &extension_name)))
     }
 
     /// Links a package with no author-provided envelope from a UZE-owned
@@ -162,23 +161,19 @@ impl GeminiIntegration {
         if linked_extension(executable, &self.command_home, extension_name).is_some() {
             return Ok(Some(generated_extension_receipt(self.id(), package, &dir)));
         }
-        let status = Command::new(executable)
-            .env("HOME", &self.command_home)
-            .args(["extensions", "link"])
-            .arg(&dir)
-            .arg("--consent")
-            .status();
-        match status {
-            Ok(status) if status.success() => {
-                Ok(Some(generated_extension_receipt(self.id(), package, &dir)))
-            }
-            Ok(status) => Err(UzeError::ExposureUnavailable(format!(
-                "`gemini extensions link` exited with {status} for `{extension_name}`"
-            ))),
-            Err(error) => Err(UzeError::ExposureUnavailable(format!(
-                "failed to run `gemini extensions link` for `{extension_name}`: {error}"
-            ))),
-        }
+        let args: Vec<&OsStr> = vec![
+            OsStr::new("extensions"),
+            OsStr::new("link"),
+            dir.as_os_str(),
+            OsStr::new("--consent"),
+        ];
+        run_quiet(
+            Path::new(executable),
+            &self.command_home,
+            &format!("gemini extensions link `{extension_name}`"),
+            &args,
+        )?;
+        Ok(Some(generated_extension_receipt(self.id(), package, &dir)))
     }
 }
 

@@ -12,6 +12,7 @@ use uze_core::{
 };
 
 use crate::shared::path::normalize_declared_relative_path;
+use crate::shared::process::run_quiet;
 
 /// Name of the local catalogue this integration publishes. A Codex identity,
 /// held by the Codex integration.
@@ -44,22 +45,12 @@ pub(super) fn run_codex(
     prefix: [&str; 3],
     path: Option<&Path>,
 ) -> Result<()> {
-    let mut command = Command::new(executable);
-    command.env("HOME", command_home).args(prefix);
+    let label = format!("codex {}", prefix.join(" "));
+    let mut args: Vec<std::ffi::OsString> = prefix.iter().map(std::ffi::OsString::from).collect();
     if let Some(path) = path {
-        command.arg(path);
+        args.push(path.as_os_str().to_owned());
     }
-    match command.status() {
-        Ok(status) if status.success() => Ok(()),
-        Ok(status) => Err(UzeError::ExposureUnavailable(format!(
-            "`codex {}` exited with {status}",
-            prefix.join(" ")
-        ))),
-        Err(error) => Err(UzeError::ExposureUnavailable(format!(
-            "failed to run `codex {}`: {error}",
-            prefix.join(" ")
-        ))),
-    }
+    run_quiet(executable, command_home, &label, &args)
 }
 
 pub(super) fn inspect_codex_plugin(
@@ -192,19 +183,12 @@ fn codex_json<const N: usize>(
 }
 
 pub(super) fn remove_plugin(executable: &Path, command_home: &Path, selector: &str) -> Result<()> {
-    match Command::new(executable)
-        .env("HOME", command_home)
-        .args(["plugin", "remove", selector])
-        .status()
-    {
-        Ok(status) if status.success() => Ok(()),
-        Ok(status) => Err(UzeError::ExposureUnavailable(format!(
-            "`codex plugin remove` exited with {status} for `{selector}`"
-        ))),
-        Err(error) => Err(UzeError::ExposureUnavailable(format!(
-            "failed to run `codex plugin remove` for `{selector}`: {error}"
-        ))),
-    }
+    run_quiet(
+        executable,
+        command_home,
+        &format!("codex plugin remove {selector}"),
+        &["plugin", "remove", selector],
+    )
 }
 
 pub(super) fn blocked(reason: String) -> AttachmentInspection {

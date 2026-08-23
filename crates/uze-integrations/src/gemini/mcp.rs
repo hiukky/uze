@@ -3,7 +3,7 @@
 //! so inspection reads the one expected `mcpServers.<name>` entry directly
 //! out of `~/.gemini/settings.json`.
 
-use std::{fs, path::Path, path::PathBuf, process::Command};
+use std::{fs, path::Path, path::PathBuf};
 
 use uze_core::{
     Result, UzeError,
@@ -16,6 +16,7 @@ use uze_core::{
 
 use super::GeminiIntegration;
 use super::{blocked, unsupported};
+use crate::shared::process::{capture, failed_message};
 
 impl GeminiIntegration {
     pub(super) fn mcp_exposure_plan(&self, resource: &Resource) -> ExposurePlan {
@@ -70,29 +71,29 @@ pub(super) fn attach_mcp_entry(
     if mcp_entry_exists(command_home, entry_name) {
         return Ok(Some(PathBuf::from(format!("mcp:{entry_name}"))));
     }
-    let status = Command::new(executable)
-        .env("HOME", command_home)
-        .args([
-            "mcp",
-            "add",
-            "--scope",
-            "user",
-            "--transport",
-            "stdio",
-            entry_name,
-        ])
-        .arg(command)
-        .args(args)
-        .status();
-    match status {
-        Ok(status) if status.success() => Ok(Some(PathBuf::from(format!("mcp:{entry_name}")))),
-        Ok(status) => Err(UzeError::ExposureUnavailable(format!(
-            "`gemini mcp add` exited with {status} for entry `{entry_name}`"
-        ))),
-        Err(error) => Err(UzeError::ExposureUnavailable(format!(
+    let mut mcp_args: Vec<std::ffi::OsString> = vec![
+        std::ffi::OsString::from("mcp"),
+        std::ffi::OsString::from("add"),
+        std::ffi::OsString::from("--scope"),
+        std::ffi::OsString::from("user"),
+        std::ffi::OsString::from("--transport"),
+        std::ffi::OsString::from("stdio"),
+        std::ffi::OsString::from(entry_name),
+    ];
+    mcp_args.push(command.as_os_str().to_owned());
+    mcp_args.extend(args.iter().map(std::ffi::OsString::from));
+    let output = capture(Path::new(executable), command_home, &mcp_args).map_err(|error| {
+        UzeError::ExposureUnavailable(format!(
             "failed to run `gemini mcp add` for entry `{entry_name}`: {error}"
-        ))),
+        ))
+    })?;
+    if !output.status.success() {
+        return Err(UzeError::ExposureUnavailable(failed_message(
+            &format!("gemini mcp add `{entry_name}`"),
+            &output,
+        )));
     }
+    Ok(Some(PathBuf::from(format!("mcp:{entry_name}"))))
 }
 
 fn mcp_entry_exists(command_home: &Path, entry_name: &str) -> bool {

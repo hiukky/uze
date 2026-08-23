@@ -13,7 +13,7 @@
 //! file is the composition root: the `ClaudeIntegration` struct and its
 //! `IntegrationPort` impl, delegating to each submodule.
 
-use std::{fs, path::Path, process::Command};
+use std::{fs, path::Path};
 
 use uze_core::{
     Result, UzeError,
@@ -43,6 +43,7 @@ mod skills;
 
 pub use mcp::detach_mcp_entry;
 
+use crate::shared::process::run_quiet;
 use generate::{
     GENERATED_MARKETPLACE_NAME, GENERATED_PLUGIN_KIND, generatable, generated_catalogue_matches,
     generated_exact_coverage, generated_package_receipt, generated_root,
@@ -56,7 +57,6 @@ use plugin::{
 };
 use provision::{detect_binary, provision_cli};
 use skills::materialize_shim;
-
 const CLAUDE_MARKETPLACE_NAME: &str = "uze-local";
 
 /// Claude Code peer integration. Its transparent-attachment strategy is a
@@ -156,24 +156,18 @@ impl ClaudeIntegration {
                 &selector,
             )));
         }
-        match Command::new(executable)
-            .env("HOME", &self.command_home)
-            .args(["plugin", "install", &selector])
-            .status()
-        {
-            Ok(status) if status.success() => Ok(Some(claude_package_receipt(
-                self.id(),
-                package,
-                &catalogue_root,
-                &selector,
-            ))),
-            Ok(status) => Err(UzeError::ExposureUnavailable(format!(
-                "`claude plugin install` exited with {status} for `{selector}`"
-            ))),
-            Err(error) => Err(UzeError::ExposureUnavailable(format!(
-                "failed to run `claude plugin install` for `{selector}`: {error}"
-            ))),
-        }
+        run_quiet(
+            executable,
+            &self.command_home,
+            &format!("claude plugin install `{selector}`"),
+            &["plugin", "install", selector.as_str()],
+        )?;
+        Ok(Some(claude_package_receipt(
+            self.id(),
+            package,
+            &catalogue_root,
+            &selector,
+        )))
     }
 
     /// Installs a package with no author-provided envelope through the
@@ -198,24 +192,18 @@ impl ClaudeIntegration {
                 &selector,
             )));
         }
-        match Command::new(executable)
-            .env("HOME", &self.command_home)
-            .args(["plugin", "install", &selector])
-            .status()
-        {
-            Ok(status) if status.success() => Ok(Some(generated_package_receipt(
-                self.id(),
-                package,
-                &marketplace_root,
-                &selector,
-            ))),
-            Ok(status) => Err(UzeError::ExposureUnavailable(format!(
-                "`claude plugin install` exited with {status} for `{selector}`"
-            ))),
-            Err(error) => Err(UzeError::ExposureUnavailable(format!(
-                "failed to run `claude plugin install` for `{selector}`: {error}"
-            ))),
-        }
+        run_quiet(
+            executable,
+            &self.command_home,
+            &format!("claude plugin install `{selector}`"),
+            &["plugin", "install", selector.as_str()],
+        )?;
+        Ok(Some(generated_package_receipt(
+            self.id(),
+            package,
+            &marketplace_root,
+            &selector,
+        )))
     }
 }
 
