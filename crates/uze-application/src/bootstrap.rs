@@ -1,11 +1,11 @@
 //! Official default marketplace — a snapshot of this repository's own
-//! `marketplace.json` + `plugins/**`, compiled into the binary so a fresh
+//! `agents.json` + `plugins/**`, compiled into the binary so a fresh
 //! install has something to seed without a network fetch or a running
 //! registry.
 //!
 //! The embedded snapshot represents **a marketplace**, not a plugin: this
 //! module extracts the whole snapshot and resolves a plugin name against
-//! its `marketplace.json` exactly the way a Git or local marketplace root
+//! its `agents.json` exactly the way a Git or local marketplace root
 //! would (`uze_core::acquisition::marketplace`), so adding a plugin to the
 //! marketplace never touches this file. `plugins/uze` is not privileged —
 //! it is simply the one entry [`DEFAULT_PLUGIN_IDS`] names as installed by
@@ -39,7 +39,7 @@ pub const DEFAULT_PLUGIN_IDS: &[&str] = &["uze"];
 
 /// Materializes `plugin_name` from the embedded official marketplace
 /// snapshot: extracts the whole snapshot into a fresh scratch directory,
-/// reads its `marketplace.json`, and resolves the plugin the same way any
+/// reads its `agents.json`, and resolves the plugin the same way any
 /// marketplace root would. `Err(UnknownPackage)` if the snapshot's manifest
 /// does not list `plugin_name`.
 pub fn materialize(plugin_name: &str) -> Result<MaterializedPackage> {
@@ -78,10 +78,10 @@ pub fn has_update(plugin_name: &str, stored_root: &Path) -> Result<bool> {
     Ok(!trees_match(current.root(), stored_root)?)
 }
 
-/// The official embedded marketplace's own declared name (`marketplace.json`'s
+/// The official embedded marketplace's own declared name (`agents.json`'s
 /// `name` field) and every plugin entry it lists — a pure, read-only parse of
 /// the manifest. This is the one place `uze-application` reads
-/// `marketplace.json` structure directly; the Application facade turns this
+/// `agents.json` structure directly; the Application facade turns this
 /// into product-facing read models, and nothing below `uze-core::acquisition`
 /// ever sees it.
 pub fn entries() -> Result<(String, Vec<marketplace::MarketplacePluginEntry>)> {
@@ -91,11 +91,11 @@ pub fn entries() -> Result<(String, Vec<marketplace::MarketplacePluginEntry>)> {
 }
 
 /// Extracts a fresh copy of the embedded snapshot and parses its
-/// `marketplace.json`. The returned root is the scratch directory the
+/// `agents.json`. The returned root is the scratch directory the
 /// manifest and every plugin subtree live under.
 fn extract_and_parse() -> Result<(PathBuf, marketplace::MarketplaceManifest)> {
     let root = extract_embedded_snapshot()?;
-    let manifest_path = root.join("marketplace.json");
+    let manifest_path = root.join("agents.json");
     let manifest_bytes = fs::read(&manifest_path).map_err(|source| UzeError::Read {
         path: manifest_path,
         source,

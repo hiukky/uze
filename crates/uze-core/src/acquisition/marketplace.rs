@@ -1,4 +1,4 @@
-//! `marketplace.json` — the contract a marketplace root answers "which
+//! `agents.json` — the contract a marketplace root answers "which
 //! plugins exist here, and where" with.
 //!
 //! This module is a pure, deterministic, offline primitive: it reads a
@@ -7,7 +7,7 @@
 //! snapshot, Git checkout, or a local path someone typed are all the same
 //! marketplace root to this code, exactly as `PackageSource` keeps the
 //! acquisition *mechanism* orthogonal to what gets acquired. Nothing here
-//! names a specific plugin; adding one to `marketplace.json` and its
+//! names a specific plugin; adding one to `agents.json` and its
 //! directory under the root is the entire integration surface.
 
 use std::path::{Path, PathBuf};
@@ -45,7 +45,7 @@ pub struct MarketplacePluginEntry {
     pub keywords: Vec<String>,
 }
 
-/// Parses and validates a `marketplace.json` payload. Validation is limited
+/// Parses and validates an `agents.json` payload. Validation is limited
 /// to what this module itself must be able to rely on: well-formed JSON
 /// matching the shape, and no two plugins claiming the same name. It does
 /// not check that any `source` exists — that happens per-lookup in
@@ -53,7 +53,7 @@ pub struct MarketplacePluginEntry {
 pub fn parse_manifest(bytes: &[u8]) -> Result<MarketplaceManifest> {
     let manifest: MarketplaceManifest =
         serde_json::from_slice(bytes).map_err(|source| UzeError::Json {
-            path: PathBuf::from("marketplace.json"),
+            path: PathBuf::from("agents.json"),
             source,
         })?;
     let mut seen = std::collections::BTreeSet::new();
@@ -117,7 +117,7 @@ mod tests {
 
     fn write_manifest(root: &Path, plugins_json: &str) {
         fs::write(
-            root.join("marketplace.json"),
+            root.join("agents.json"),
             format!(r#"{{"name":"test","plugins":[{plugins_json}]}}"#),
         )
         .unwrap();
@@ -167,7 +167,7 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         let dir = plugin_dir(&root, "plugins/uze");
         write_manifest(&root, r#"{"name":"uze","source":"./plugins/uze"}"#);
-        let manifest = parse_manifest(&fs::read(root.join("marketplace.json")).unwrap()).unwrap();
+        let manifest = parse_manifest(&fs::read(root.join("agents.json")).unwrap()).unwrap();
 
         let resolved = resolve_plugin_source(&manifest, "uze", &root).unwrap();
         assert_eq!(resolved, dir.canonicalize().unwrap());
@@ -184,7 +184,7 @@ mod tests {
             &root,
             r#"{"name":"uze","source":"./plugins/uze"},{"name":"rust-guidelines","source":"./plugins/rust-guidelines"}"#,
         );
-        let manifest = parse_manifest(&fs::read(root.join("marketplace.json")).unwrap()).unwrap();
+        let manifest = parse_manifest(&fs::read(root.join("agents.json")).unwrap()).unwrap();
 
         assert_eq!(
             resolve_plugin_source(&manifest, "uze", &root).unwrap(),
@@ -203,7 +203,7 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         plugin_dir(&root, "plugins/uze");
         write_manifest(&root, r#"{"name":"uze","source":"./plugins/uze"}"#);
-        let manifest = parse_manifest(&fs::read(root.join("marketplace.json")).unwrap()).unwrap();
+        let manifest = parse_manifest(&fs::read(root.join("agents.json")).unwrap()).unwrap();
 
         assert!(matches!(
             resolve_plugin_source(&manifest, "does-not-exist", &root),
@@ -217,7 +217,7 @@ mod tests {
         let root = temp("missing-source");
         fs::create_dir_all(&root).unwrap();
         write_manifest(&root, r#"{"name":"uze","source":"./plugins/uze"}"#);
-        let manifest = parse_manifest(&fs::read(root.join("marketplace.json")).unwrap()).unwrap();
+        let manifest = parse_manifest(&fs::read(root.join("agents.json")).unwrap()).unwrap();
 
         assert!(matches!(
             resolve_plugin_source(&manifest, "uze", &root),
@@ -236,7 +236,7 @@ mod tests {
             r#"{"name":"evil","source":"../outside"}"#,
         );
         let manifest =
-            parse_manifest(&fs::read(root.join("marketplace").join("marketplace.json")).unwrap())
+            parse_manifest(&fs::read(root.join("marketplace").join("agents.json")).unwrap())
                 .unwrap();
 
         assert!(matches!(

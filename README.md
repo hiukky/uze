@@ -112,7 +112,7 @@ equivalence is proven.
 ## Official marketplace
 
 ```text
-marketplace.json
+agents.json
 plugins/
   uze/
 ```

@@ -265,7 +265,7 @@ impl UzeApplication {
     /// Every marketplace this composition root knows how to read from.
     /// Exactly one today — the official embedded snapshot — but the return
     /// shape does not assume that stays true. Read-only; parses no product
-    /// content beyond `marketplace.json`'s own name and plugin count.
+    /// content beyond `agents.json`'s own name and plugin count.
 
     pub(crate) fn parse_marketplace_source(source_str: &str) -> Result<PackageSource> {
         let looks_remote = source_str.starts_with("https://")
@@ -277,7 +277,7 @@ impl UzeApplication {
             let path = PathBuf::from(source_str)
                 .canonicalize()
                 .map_err(|_| UzeError::MissingPath(PathBuf::from(source_str)))?;
-            let manifest_path = path.join("marketplace.json");
+            let manifest_path = path.join("agents.json");
             if !manifest_path.is_file() {
                 return Err(UzeError::MissingManifest(manifest_path));
             }
@@ -310,7 +310,7 @@ impl UzeApplication {
     )> {
         match source {
             PackageSource::Local { path } => {
-                let manifest_path = path.join("marketplace.json");
+                let manifest_path = path.join("agents.json");
                 let bytes = std::fs::read(&manifest_path).map_err(|e| UzeError::Read {
                     path: manifest_path.clone(),
                     source: e,
@@ -330,7 +330,7 @@ impl UzeApplication {
                 };
                 let materialized = uze_core::acquisition::acquire(&git_source)?;
                 let root = materialized.root().to_path_buf();
-                let manifest_path = root.join("marketplace.json");
+                let manifest_path = root.join("agents.json");
                 let bytes = std::fs::read(&manifest_path).map_err(|e| UzeError::Read {
                     path: manifest_path.clone(),
                     source: e,

@@ -33,7 +33,7 @@ fn temp(label: &str) -> PathBuf {
 fn write_marketplace(root: &PathBuf, marketplace_name: &str, plugin_name: &str) {
     fs::create_dir_all(root).unwrap();
     fs::write(
-        root.join("marketplace.json"),
+        root.join("agents.json"),
         format!(
             r#"{{"name": "{marketplace_name}", "plugins": [{{"name": "{plugin_name}", "source": "{plugin_name}"}}]}}"#
         ),

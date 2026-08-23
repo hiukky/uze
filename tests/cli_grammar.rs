@@ -93,11 +93,11 @@ fn remove_is_the_builtin_not_shorthand() {
 fn market_add_never_touches_the_project_lock() {
     let home = temporary_home("market-add");
     std::fs::create_dir_all(&home).unwrap();
-    // A local marketplace root: needs its own `marketplace.json`.
+    // A local marketplace root: needs its own `agents.json`.
     let market_root = home.join("market");
     std::fs::create_dir_all(&market_root).unwrap();
     std::fs::write(
-        market_root.join("marketplace.json"),
+        market_root.join("agents.json"),
         r#"{"name": "ai", "plugins": []}"#,
     )
     .unwrap();

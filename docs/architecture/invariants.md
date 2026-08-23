@@ -181,7 +181,7 @@ a rejected package and a refused consent all mutate nothing.
 
 ### The repository is the official marketplace
 
-`marketplace.json` + `plugins/**` at the repo root answer "which plugins
+`agents.json` + `plugins/**` at the repo root answer "which plugins
 exist, and where" — the same contract a Git or local marketplace root would
 satisfy. `uze-core::acquisition::marketplace` reads that contract; it holds
 no opinion on how the directory reached local disk.
@@ -197,7 +197,7 @@ None of them import `acquisition::marketplace` or its types.
 
 ### Adding a plugin to the marketplace needs no Rust change
 
-Resolution is generic over plugin content: files + one `marketplace.json`
+Resolution is generic over plugin content: files + one `agents.json`
 entry, nothing more.
 
 > `crates/uze-core/src/acquisition/marketplace.rs::two_distinct_plugins_resolve_independently_with_no_special_casing`
@@ -245,7 +245,7 @@ and set aside for a reason rather than forgotten.
 | Not built | Why not, for now |
 |---|---|
 | third-party marketplace hosting | UZE's own official marketplace (M3) is a discovery/acquisition contract over its own repository; hosting *other* publishers' marketplaces is a different product |
-| remote registry | nothing to serve until acquisition is dogfooded; M3's `marketplace.json` contract is shaped to allow a remote source later without touching Store/Engine/Integration |
+| remote registry | nothing to serve until acquisition is dogfooded; M3's `agents.json` contract is shaped to allow a remote source later without touching Store/Engine/Integration |
 | cache | correctness first; a cache is an optimization with a second-source-of-truth risk |
 | content-addressable store | a Git commit is already a content identity, and a local path has no reproducibility to protect |
 | lockfile | meaningful only with dependencies between packages, which do not exist |
@@ -257,5 +257,5 @@ and set aside for a reason rather than forgotten.
 | TUI marketplace surface | product UX for browsing plugins is a separate milestone from the data model |
 | plugin version resolver | `plugin.json` carries no version field yet; nothing depends on one |
 | marketplace federation | one official marketplace; combining several is unproven need |
-| Git sparse checkout for marketplace sources | the `marketplace.json` contract is shaped to allow acquiring only a resolved plugin's subtree later; not implemented |
+| Git sparse checkout for marketplace sources | the `agents.json` contract is shaped to allow acquiring only a resolved plugin's subtree later; not implemented |
 | reverse/foreign harness-format import | the acquisition contract is canonical `plugin.json` only (M2); a foreign-format importer (`ClaudePluginImporter`) existed as dead, unreachable code and was removed (ADR-022) — foreign import staying structurally separate from harness delivery is still the intended shape if it returns, but nothing is retained in production speculatively |
