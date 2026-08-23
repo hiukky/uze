@@ -12,11 +12,12 @@
 //! conformance container, with no credential.
 //!
 //! Split by concern: [`mcp`] (MCP server registration/inspection),
-//! [`skills`] (the managed skills-dir reference), [`extension`] (the native
-//! `gemini extensions link` delivery), and [`provision`] (install/update via
-//! the official npm package). This file is the composition root: the
-//! `GeminiIntegration` struct and its `IntegrationPort` impl, delegating to
-//! each submodule.
+//! [`skills`] (the managed skills-dir reference), [`commands`] (generated
+//! user-scope `.toml` command delivery), [`extension`] (the native
+//! `gemini extensions link` delivery), and [`provision`] (install/update
+//! via the official npm package). This file is the composition root: the
+//! `GeminiIntegration` struct and its `IntegrationPort` impl, delegating
+//! to each submodule.
 
 use std::{
     ffi::OsStr,
@@ -32,7 +33,8 @@ use uze_core::{
     home::UzeHome,
     integration::{
         AttachmentInspection, AttachmentReceipt, AttachmentState, HarnessDetection,
-        IntegrationPort, ManagedArtifact, detach_standard_receipt, inspect_standard_receipt,
+        IntegrationPort, ManagedArtifact, default_exposure_name_candidates,
+        detach_standard_receipt, inspect_standard_receipt,
     },
     project::Resource,
     provisioning::{ProcessRunner, ProvisioningResult},
@@ -41,6 +43,7 @@ use uze_core::{
     store::StoredPackage,
 };
 
+mod commands;
 mod extension;
 mod generate;
 mod mcp;
@@ -67,6 +70,9 @@ pub struct GeminiIntegration {
     /// `~/.agents/skills` alongside its own `~/.gemini/skills`, which is why
     /// the Skill fallback needs no Gemini-specific mechanism at all.
     skills_dir: PathBuf,
+    /// User-scope custom commands directory (`~/.gemini/commands/`), where
+    /// Gemini discovers `.toml` command files.
+    commands_dir: PathBuf,
     /// `HOME` set explicitly for every shelled-out `gemini` subcommand, for
     /// the same reason the Claude and Codex integrations do it: Gemini
     /// derives `~/.gemini` from `$HOME` and must never be pointed at the
@@ -83,6 +89,7 @@ impl GeminiIntegration {
             .unwrap_or_else(|| agents_home.clone());
         Self {
             skills_dir: agents_home.join("skills"),
+            commands_dir: command_home.join(".gemini/commands"),
             command_home,
             uze_home,
         }
@@ -188,11 +195,11 @@ impl IntegrationPort for GeminiIntegration {
 
     fn capabilities(&self) -> HarnessCapabilities {
         HarnessCapabilities {
-            native: [CapabilityKind::AgentSkill, CapabilityKind::Mcp]
+            native: [CapabilityKind::AgentSkill, CapabilityKind::Mcp, CapabilityKind::Command]
                 .into_iter()
                 .collect(),
             verification: VerificationStatus::Unverified,
-            evidence: "Gemini CLI consumes UZE's linked extensions: a package shipping gemini-extension.json is linked straight from the Store via `gemini extensions link`; one without gets a deterministically synthesized extension linked from a UZE-owned derived directory (ADR-021) — both deliver the extension's conventional skills/ and declared mcpServers natively (confirmed against real Gemini CLI 0.56.0 dogfood). Capability-level fallback (`gemini mcp add --scope user`) remains only for resources outside the extension's coverage."
+            evidence: "Gemini CLI consumes UZE's linked extensions: a package shipping gemini-extension.json is linked straight from the Store via `gemini extensions link`; one without gets a deterministically synthesized extension linked from a UZE-owned derived directory (ADR-021) — both deliver the extension's conventional skills/, its commands/ TOML files, and its declared mcpServers natively (confirmed against real Gemini CLI 0.56.0 dogfood). A canonical command outside any extension reaches Gemini as a generated user-scope `~/.gemini/commands/<name>.toml` (ADR-025). Capability-level fallback (`gemini mcp add --scope user`) remains only for resources outside the extension's coverage."
                 .to_owned(),
             ..HarnessCapabilities::default()
         }
@@ -218,6 +225,10 @@ impl IntegrationPort for GeminiIntegration {
             path: self.skills_dir.clone(),
             source,
         })?;
+        fs::create_dir_all(&self.commands_dir).map_err(|source| UzeError::Write {
+            path: self.commands_dir.clone(),
+            source,
+        })?;
         state::record(
             home,
             state::IntegrationRecord {
@@ -229,6 +240,18 @@ impl IntegrationPort for GeminiIntegration {
         )
     }
 
+    /// Gemini's naming decision: a command's physical file name is what the
+    /// user types (`/review`), so bare logical first, then qualified. The
+    /// `.toml` suffix is a vendor naming constraint. Skills keep the shared
+    /// default; MCP stays fully qualified — capability naming policies are
+    /// never mixed just because all are `Resource`s.
+    fn exposure_name_candidates(&self, resource: &Resource) -> Vec<String> {
+        if resource.capability.kind == CapabilityKind::Command {
+            return commands::gemini_command_exposure_name_candidates(resource);
+        }
+        default_exposure_name_candidates(resource)
+    }
+
     fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
         if resource.package_root().is_none() {
             return unsupported(
@@ -238,10 +261,11 @@ impl IntegrationPort for GeminiIntegration {
         }
         match resource.capability.kind {
             CapabilityKind::AgentSkill => self.skill_exposure_plan(resource),
+            CapabilityKind::Command => self.command_plan(resource),
             CapabilityKind::Mcp => self.mcp_exposure_plan(resource),
             _ => unsupported(
                 resource,
-                "Gemini attachment is only modeled for Agent Skills and MCP servers.",
+                "Gemini attachment is only modeled for Agent Skills, Commands, and MCP servers.",
             ),
         }
     }
@@ -312,6 +336,9 @@ impl IntegrationPort for GeminiIntegration {
         match &plan.mechanism {
             ExposureMechanism::ManagedUserScopeReference { .. } => {
                 Ok(Some(plan.mechanism.attach()?))
+            }
+            ExposureMechanism::ManagedFile { .. } => {
+                Ok(Some(plan.mechanism.attach_managed_file()?))
             }
             ExposureMechanism::ManagedVendorConfig {
                 entry_name,

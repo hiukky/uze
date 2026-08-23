@@ -124,6 +124,15 @@ impl Resource {
                 let skill_name = self.capability.path.parent()?.file_name()?.to_str()?;
                 Some(skill_name.to_owned())
             }
+            // A command's path is `commands/<command-name>.md`: the file
+            // stem is the command's own logical name (`review.md` →
+            // `review`), the same name the harness's `/name` invocation is
+            // derived from. A same-named Skill and Command stay distinct:
+            // identity is path-based (ADR-025 §4).
+            CapabilityKind::Command => {
+                let command_name = self.capability.path.file_stem()?.to_str()?;
+                Some(command_name.to_owned())
+            }
             CapabilityKind::Mcp => self.resource_name.clone(),
             _ => None,
         }
@@ -371,6 +380,26 @@ mod tests {
         assert_eq!(
             resource.logical_capability_name().as_deref(),
             Some("github")
+        );
+    }
+
+    #[test]
+    fn command_package_resource_logical_name_is_the_file_stem() {
+        let id = PackageId::from_plugin_name("demo-package", Path::new("plugin.json")).unwrap();
+        let resource = Resource::from_package_named(
+            id,
+            PathBuf::from("/uze-home/store/packages/demo-package"),
+            Capability {
+                kind: CapabilityKind::Command,
+                representation: Representation::Standard,
+                path: PathBuf::from("/uze-home/store/packages/demo-package/commands/review.md"),
+                payload: Vec::new(),
+            },
+            "review".to_owned(),
+        );
+        assert_eq!(
+            resource.logical_capability_name().as_deref(),
+            Some("review")
         );
     }
 }

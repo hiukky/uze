@@ -21,8 +21,8 @@ use uze_core::{
     home::UzeHome,
     integration::{
         AttachmentInspection, AttachmentReceipt, AttachmentState, HarnessDetection,
-        IntegrationPort, ManagedArtifact, PublicationStatus, detach_standard_receipt,
-        inspect_standard_receipt,
+        IntegrationPort, ManagedArtifact, PublicationStatus, default_exposure_name_candidates,
+        detach_standard_receipt, inspect_standard_receipt,
     },
     project::Resource,
     provisioning::{ProcessRunner, ProcessSpec, ProvisioningResult},
@@ -31,6 +31,7 @@ use uze_core::{
     store::StoredPackage,
 };
 
+mod commands;
 mod generate;
 mod mcp;
 mod plugin;
@@ -40,6 +41,7 @@ mod skills;
 pub use mcp::detach_mcp_entry;
 
 use crate::shared::process::run_quiet;
+use commands::{codex_command_exposure_name_candidates, materialize_generated_command};
 use generate::{
     GENERATED_MARKETPLACE_NAME, GENERATED_PLUGIN_KIND, generatable, generated_catalogue_matches,
     generated_exact_coverage, generated_package_receipt, generated_root,
@@ -206,11 +208,15 @@ impl IntegrationPort for CodexIntegration {
 
     fn capabilities(&self) -> HarnessCapabilities {
         HarnessCapabilities {
-            native: [CapabilityKind::AgentSkill, CapabilityKind::Mcp]
-                .into_iter()
-                .collect(),
+            native: [
+                CapabilityKind::AgentSkill,
+                CapabilityKind::Mcp,
+                CapabilityKind::Command,
+            ]
+            .into_iter()
+            .collect(),
             verification: VerificationStatus::Unverified,
-            evidence: "Codex consumes UZE's derived marketplaces: a package shipping .codex-plugin/plugin.json is added as a native plugin covering its declared skills/mcpServers (`codex plugin add <sel>@uze-local`); one without gets a deterministically synthesized envelope published through the generated-only `uze-local-generated` marketplace (ADR-021) — both confirmed against real Codex 0.148.0 dogfood (`codex plugin list --json`). Capability-level fallbacks (USER-scope `~/.agents/skills` reference, `codex mcp add`) remain only for resources outside the envelope's coverage."
+            evidence: "Codex consumes UZE's derived marketplaces: a package shipping .codex-plugin/plugin.json is added as a native plugin covering its declared skills/mcpServers (`codex plugin add <sel>@uze-local`); one without gets a deterministically synthesized envelope published through the generated-only `uze-local-generated` marketplace (ADR-021) — both confirmed against real Codex 0.148.0 dogfood (`codex plugin list --json`). Commands are NATIVE via Codex's official explicit-invocation-only Skill mechanism: a canonical Command becomes a generated user-invokable Skill carrying `agents/openai.yaml` → `policy.allow_implicit_invocation: false` (Codex Build skills documentation; empirically honored by codex-cli 0.149.0 via `codex debug prompt-input` — the skill leaves the model-visible list only when that policy file is present and well-formed), so the model cannot auto-select it while explicit `$skill` invocation keeps working. Per ADR-025, Native means an officially supported primitive that preserves the canonical capability semantics — not an identical vendor file format or primitive name. Capability-level fallbacks (USER-scope `~/.agents/skills` reference, `codex mcp add`) remain only for resources outside the envelope's coverage."
                 .to_owned(),
             ..HarnessCapabilities::default()
         }
@@ -273,12 +279,25 @@ impl IntegrationPort for CodexIntegration {
         }
         match resource.capability.kind {
             CapabilityKind::AgentSkill => self.skill_exposure_plan(resource),
+            CapabilityKind::Command => self.command_exposure_plan(resource),
             CapabilityKind::Mcp => self.mcp_exposure_plan(resource),
             _ => unsupported(
                 resource,
-                "Codex attachment is only modeled for Agent Skills and MCP servers.",
+                "Codex attachment is only modeled for Agent Skills, Commands, and MCP servers.",
             ),
         }
+    }
+
+    /// Codex's command naming decision mirrors its Skills: the directory
+    /// name in `~/.agents/skills` is the user-facing identity, so bare
+    /// logical first, then fully qualified. MCP stays on the default
+    /// fully-qualified policy, and commands are never mixed with MCP naming
+    /// just because all are `Resource`s.
+    fn exposure_name_candidates(&self, resource: &Resource) -> Vec<String> {
+        if resource.capability.kind == CapabilityKind::Command {
+            return codex_command_exposure_name_candidates(resource);
+        }
+        default_exposure_name_candidates(resource)
     }
 
     fn package_exposure_plan(
@@ -317,6 +336,9 @@ impl IntegrationPort for CodexIntegration {
         let plan = self.exposure_plan(resource);
         match &plan.mechanism {
             ExposureMechanism::ManagedUserScopeReference { .. } => {
+                if resource.capability.kind == CapabilityKind::Command {
+                    materialize_generated_command(&self.uze_home, resource)?;
+                }
                 Ok(Some(plan.mechanism.attach()?))
             }
             ExposureMechanism::ManagedVendorConfig {
@@ -462,7 +484,15 @@ impl IntegrationPort for CodexIntegration {
                     remove_generated_package_by_id(&self.uze_home, &receipt.package_id)?;
                 }
             }
-            _ => return detach_standard_receipt(receipt),
+            _ => {
+                let detached = detach_standard_receipt(receipt)?;
+                if detached.state == AttachmentState::Missing
+                    && let ManagedArtifact::SymlinkReference { target, .. } = &receipt.artifact
+                {
+                    self.cleanup_unused_command_adaptation(target)?;
+                }
+                return Ok(detached);
+            }
         }
         Ok(AttachmentInspection {
             state: AttachmentState::Missing,

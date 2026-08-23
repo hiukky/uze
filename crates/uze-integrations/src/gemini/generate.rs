@@ -47,13 +47,15 @@ fn generated_package_dir_for_id(uze_home: &UzeHome, package_id: &str) -> PathBuf
 
 /// Whether this package has anything UZE can safely represent as a
 /// generated native envelope: no explicit envelope of its own, and at
-/// least one of the two structural surfaces UZE synthesizes from (a
-/// conventional `skills/` directory, or a root `mcp.json`) — identical
-/// eligibility rule to Claude's and Codex's, applied to Gemini's own
-/// explicit-envelope marker file.
+/// least one of the three structural surfaces UZE synthesizes from (a
+/// conventional `skills/` directory, a canonical `commands/` directory, or
+/// a root `mcp.json`) — identical eligibility rule to Claude's and Codex's,
+/// applied to Gemini's own explicit-envelope marker file.
 pub(super) fn generatable(package: &StoredPackage) -> bool {
     !package.root.join("gemini-extension.json").is_file()
-        && (package.root.join("skills").is_dir() || package.root.join("mcp.json").is_file())
+        && (package.root.join("skills").is_dir()
+            || package.root.join("commands").is_dir()
+            || package.root.join("mcp.json").is_file())
 }
 
 /// The intersection ADR-013 §2 requires (`provided = discovered ∩
@@ -61,6 +63,12 @@ pub(super) fn generatable(package: &StoredPackage) -> bool {
 /// declares — not by re-parsing a manifest this same module just wrote, so
 /// generation and coverage agree by construction. Identical rule to
 /// Claude's and Codex's `generated_exact_coverage`.
+///
+/// A canonical Command is covered iff it lives under the package's
+/// conventional `commands/` directory — the same directory whose files this
+/// module's materialization generates as vendor `.toml`s, so coverage and
+/// generation agree by construction. A Command elsewhere (or a same-named
+/// Skill) is never `provided`.
 pub(super) fn generated_exact_coverage(
     package: &StoredPackage,
     resources: &[&Resource],
@@ -88,6 +96,20 @@ pub(super) fn generated_exact_coverage(
                     continue;
                 };
                 if parent.starts_with("skills") {
+                    provided.insert(resource.identity());
+                }
+            }
+            uze_core::capability::CapabilityKind::Command => {
+                let Some(direct_parent) = resource
+                    .capability
+                    .path
+                    .strip_prefix(&package.root)
+                    .ok()
+                    .and_then(|relative| relative.parent().map(|parent| parent.to_path_buf()))
+                else {
+                    continue;
+                };
+                if direct_parent == std::path::Path::new("commands") {
                     provided.insert(resource.identity());
                 }
             }
@@ -159,7 +181,10 @@ fn read_name_fields(package: &StoredPackage) -> (String, String) {
 /// Idempotent and deterministic: recreated wholesale from the Store package
 /// on every call — the directory is entirely UZE-owned and
 /// non-authoritative (ADR-013 §4). `skills/` is symlinked to the Store's
-/// own bytes, never copied.
+/// own bytes, never copied; canonical `commands/*.md` are translated into
+/// vendor `commands/*.toml` files inside the derived directory (Gemini
+/// discovers only `.toml`), so the extension — not a user-scope file — is
+/// what delivers them.
 pub(super) fn materialize_generated_extension(
     uze_home: &UzeHome,
     package: &StoredPackage,
@@ -188,6 +213,42 @@ pub(super) fn materialize_generated_extension(
     let skills_source = package.root.join("skills");
     if skills_source.is_dir() {
         symlink(&skills_source, &dir.join("skills"))?;
+    }
+
+    let commands_source = package.root.join("commands");
+    if commands_source.is_dir() {
+        let commands_target = dir.join("commands");
+        fs::create_dir_all(&commands_target).map_err(|source| UzeError::Write {
+            path: commands_target.clone(),
+            source,
+        })?;
+        for path in uze_core::engine::command_files(&commands_source)? {
+            let Some(name) = path.file_stem().and_then(|stem| stem.to_str()) else {
+                continue;
+            };
+            let bytes = fs::read(&path).map_err(|source| UzeError::Read {
+                path: path.clone(),
+                source,
+            })?;
+            let (description, body) = crate::shared::command::parse_command_body(&bytes);
+            let mut document = String::new();
+            if let Some(description) = description {
+                document.push_str(&format!(
+                    "description = \"{}\"\n",
+                    crate::shared::command::toml_escape(&description)
+                ));
+            }
+            document.push_str(&format!(
+                "prompt = \"{}\"\n",
+                crate::shared::command::toml_escape(&body)
+            ));
+            fs::write(commands_target.join(format!("{name}.toml")), document).map_err(
+                |source| UzeError::Write {
+                    path: commands_target.join(format!("{name}.toml")),
+                    source,
+                },
+            )?;
+        }
     }
     Ok(dir)
 }

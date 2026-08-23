@@ -1,0 +1,5 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "workflow",
+  "description": "Canonical package proving Skill and Command are distinct resources: the same logical name `review` exists as both a Skill and a Command."
+}

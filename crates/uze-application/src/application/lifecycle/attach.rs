@@ -113,7 +113,7 @@ impl UzeApplication {
     ) -> Resource {
         if !matches!(
             resource.capability.kind,
-            CapabilityKind::AgentSkill | CapabilityKind::Mcp
+            CapabilityKind::AgentSkill | CapabilityKind::Command | CapabilityKind::Mcp
         ) {
             return resource.clone();
         }
@@ -122,6 +122,10 @@ impl UzeApplication {
             return resolved;
         };
         let resource_id = resource.identity();
+        // Only Agent Skills live in a directory shared across integrations
+        // (Codex, Gemini, OpenCode all read `~/.agents/skills`); a
+        // Command's registry (e.g. OpenCode's user-global commands dir) is
+        // per-integration, so no shared-root group applies to it.
         let shared_root = (resource.capability.kind == CapabilityKind::AgentSkill)
             .then(|| integration.shared_agent_skill_root())
             .flatten();

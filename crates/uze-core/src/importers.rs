@@ -70,7 +70,7 @@ pub(crate) fn import_from_manifest(
 
     let mut optional_enhancements = Vec::new();
     for (directory, kind) in [
-        ("commands", CapabilityKind::Action),
+        ("commands", CapabilityKind::Command),
         ("agents", CapabilityKind::Agent),
         ("hooks", CapabilityKind::Hook),
     ] {

@@ -4,6 +4,17 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
+/// Canonical capability identities. Vendor-neutral: a kind says what a
+/// capability *is*, never which harness consumes it or how.
+///
+/// `Command` is the explicitly user-invocable prompt/action surface
+/// (`commands/<name>.md` in a canonical package). It is deliberately
+/// distinct from `AgentSkill`: a Skill is model-discoverable reusable
+/// knowledge that may not be directly user-invocable, while a Command is
+/// a user-invokable action with its own identity. They may share content
+/// patterns; they are not the same capability, and UZE never reinterprets
+/// one as the other. (This variant was previously named `Action`; the
+/// rename evidence is ADR-025.)
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CapabilityKind {
@@ -11,7 +22,7 @@ pub enum CapabilityKind {
     AgentSkill,
     Mcp,
     Agent,
-    Action,
+    Command,
     Hook,
     Policy,
 }

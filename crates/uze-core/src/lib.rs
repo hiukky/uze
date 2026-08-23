@@ -15,6 +15,7 @@ pub mod home;
 pub mod importer;
 pub mod importers;
 pub mod integration;
+pub mod managed_file;
 pub mod persistence;
 pub mod project;
 pub mod project_lock;

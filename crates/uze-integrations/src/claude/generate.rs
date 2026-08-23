@@ -60,19 +60,24 @@ fn generated_package_dir_for_id(uze_home: &UzeHome, package_id: &str) -> PathBuf
 
 /// Whether this package has anything UZE can safely represent as a
 /// generated native envelope: no explicit envelope of its own, and at
-/// least one of the two structural surfaces UZE synthesizes from (a
-/// conventional `skills/` directory, or a root `mcp.json`).
+/// least one of the three structural surfaces UZE synthesizes from (a
+/// conventional `skills/` directory, a canonical `commands/` directory, or
+/// a root `mcp.json`).
 pub(super) fn generatable(package: &StoredPackage) -> bool {
     !package.root.join(".claude-plugin/plugin.json").is_file()
-        && (package.root.join("skills").is_dir() || package.root.join("mcp.json").is_file())
+        && (package.root.join("skills").is_dir()
+            || package.root.join("commands").is_dir()
+            || package.root.join("mcp.json").is_file())
 }
 
 /// The intersection ADR-013 §2 requires (`provided = discovered ∩
 /// declared`), computed against the STRUCTURAL surface a generated manifest
 /// declares — not by re-parsing a manifest this same module just wrote, so
 /// generation and coverage agree by construction. A Skill is covered iff it
-/// lives under the package's conventional `skills/` directory; an MCP
-/// server is covered iff its name appears in the package's own `mcp.json`.
+/// lives under the package's conventional `skills/` directory; a Command
+/// iff it lives under the conventional `commands/` directory (the same
+/// surface the generated envelope materializes); an MCP server is covered
+/// iff its name appears in the package's own `mcp.json`.
 pub(super) fn generated_exact_coverage(
     package: &StoredPackage,
     resources: &[&Resource],
@@ -100,6 +105,20 @@ pub(super) fn generated_exact_coverage(
                     continue;
                 };
                 if parent.starts_with("skills") {
+                    provided.insert(resource.identity());
+                }
+            }
+            uze_core::capability::CapabilityKind::Command => {
+                let Some(direct_parent) = resource
+                    .capability
+                    .path
+                    .strip_prefix(&package.root)
+                    .ok()
+                    .and_then(|relative| relative.parent().map(|parent| parent.to_path_buf()))
+                else {
+                    continue;
+                };
+                if direct_parent == std::path::Path::new("commands") {
                     provided.insert(resource.identity());
                 }
             }
@@ -134,6 +153,14 @@ fn generated_manifest_document(package: &StoredPackage) -> serde_json::Value {
 
     if package.root.join("skills").is_dir() {
         document["skills"] = serde_json::json!(["./skills"]);
+    }
+
+    if package.root.join("commands").is_dir() {
+        // Claude's `commands` manifest field *replaces* the default
+        // `commands/` scan, and `commands/` is also the default location —
+        // declaring the conventional path explicitly keeps the generated
+        // manifest self-describing without changing what is discovered.
+        document["commands"] = serde_json::json!(["./commands"]);
     }
 
     if let Some(servers) = fs::read(package.root.join("mcp.json"))
@@ -207,6 +234,10 @@ pub(super) fn materialize_generated_package(
     let skills_source = package.root.join("skills");
     if skills_source.is_dir() {
         symlink(&skills_source, &dir.join("skills"))?;
+    }
+    let commands_source = package.root.join("commands");
+    if commands_source.is_dir() {
+        symlink(&commands_source, &dir.join("commands"))?;
     }
     Ok(dir)
 }

@@ -114,6 +114,19 @@ pub(super) fn gemini_exact_coverage(
                     provided.insert(resource.identity());
                 }
             }
+            uze_core::capability::CapabilityKind::Command => {
+                // Deliberately never provided. An explicit extension's
+                // commands are vendor-authored `.toml` files under its own
+                // `commands/` directory; a canonical `.md` command is not
+                // the same artifact, and Gemini does not load `.md`
+                // command files. Claiming a canonical Command here would be
+                // exactly the blanket-coverage error ADR-013 §2 forbids —
+                // so it falls back to the capability-level generated
+                // user-scope TOML instead. Only the *generated* extension
+                // (which translates canonical `.md` → vendor `.toml`, see
+                // `generate.rs`) ever provides canonical Command
+                // resources, by construction.
+            }
             uze_core::capability::CapabilityKind::Mcp => {
                 if let Some(name) = &resource.resource_name
                     && declared_mcp.contains(name)

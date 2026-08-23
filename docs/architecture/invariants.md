@@ -62,6 +62,24 @@ carved-out exception.
 
 > `tests/integration_conformance.rs::core_never_names_a_vendor_harness`
 
+### Native means preserved semantics, not identical primitives (ADR-025)
+
+A route is **Native** when a harness offers a first-class, officially
+supported mechanism that preserves the canonical semantics of the
+capability. It does **not** require the same vendor name, file format, or
+physical primitive across vendors: UZE models user-visible semantics, and
+the same canonical capability may legitimately be Native on every harness
+through differently-named primitives. In particular, a UZE Command is
+Native on Codex via that harness's official explicit-invocation-only Skill
+(`agents/openai.yaml` → `policy.allow_implicit_invocation: false`) even
+though the physical artifact is a Skill — the canonical identity remains
+`CapabilityKind::Command`, the model cannot auto-select it, and explicit
+user invocation (`$name` / `/skills`) is preserving the Command semantics.
+
+> `tests/command_capability_conformance.rs::codex_delivers_command_natively_via_explicit_only_skill`
+> `tests/command_capability_conformance.rs::real_codex_dogfood_explicit_only_preserves_command_semantics`
+> `tests/command_capability_conformance.rs::same_name_skill_and_command_stay_distinct_on_codex`
+
 ---
 
 ## Acquisition and provenance (M2)

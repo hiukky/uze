@@ -224,11 +224,15 @@ impl IntegrationPort for ClaudeIntegration {
 
     fn capabilities(&self) -> HarnessCapabilities {
         HarnessCapabilities {
-            native: [CapabilityKind::AgentSkill, CapabilityKind::Mcp]
-                .into_iter()
-                .collect(),
+            native: [
+                CapabilityKind::AgentSkill,
+                CapabilityKind::Mcp,
+                CapabilityKind::Command,
+            ]
+            .into_iter()
+            .collect(),
             verification: VerificationStatus::Unverified,
-            evidence: "Claude Code consumes UZE's derived marketplaces: a package shipping .claude-plugin/plugin.json is installed as a native plugin covering its declared skills/mcpServers (`claude plugin install <sel>@uze-local`, empirically confirmed via `claude plugin validate`/`plugin list`); one without gets a deterministically synthesized envelope published through the generated-only `uze-local-generated` marketplace (ADR-020). Capability-level shims (`<claude_home>/skills` reference, `claude mcp add`) remain only as fallback for resources outside the envelope's coverage. Behavioral (prompted) verification remains a separate opt-in conformance probe."
+            evidence: "Claude Code consumes UZE's derived marketplaces: a package shipping .claude-plugin/plugin.json is installed as a native plugin covering its declared skills/commands/mcpServers (`claude plugin install <sel>@uze-local`, empirically confirmed via `claude plugin validate`/`plugin list`); one without gets a deterministically synthesized envelope published through the generated-only `uze-local-generated` marketplace (ADR-020). A plugin's `commands/` directory is delivered by Claude natively (commands are simple markdown files discovered alongside skills). Capability-level shims (`<claude_home>/skills` reference, `claude mcp add`) remain only as fallback for resources outside the envelope's coverage. Behavioral (prompted) verification remains a separate opt-in conformance probe."
                 .to_owned(),
             ..HarnessCapabilities::default()
         }
@@ -302,9 +306,13 @@ impl IntegrationPort for ClaudeIntegration {
         match resource.capability.kind {
             CapabilityKind::AgentSkill => self.skill_exposure_plan(resource),
             CapabilityKind::Mcp => self.mcp_exposure_plan(resource),
+            CapabilityKind::Command => unsupported(
+                resource,
+                "Claude Code delivers Commands through the native plugin envelope (its `commands/` directory, explicit or generated); capability-level Command delivery is not modeled in this slice.",
+            ),
             _ => unsupported(
                 resource,
-                "Claude Code attachment is only modeled for Agent Skills and MCP servers.",
+                "Claude Code attachment is only modeled for Agent Skills, Commands, and MCP servers.",
             ),
         }
     }

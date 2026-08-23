@@ -31,6 +31,7 @@ use uze_core::{
     state,
 };
 
+mod commands;
 mod mcp;
 mod provision;
 mod skills;
@@ -39,19 +40,26 @@ use mcp::attach_mcp_config;
 use provision::{provision_opencode, resolve_opencode_binary};
 
 /// OpenCode does not consume the external plugin envelope. It does natively
-/// discover user Agent Skills at `~/.agents/skills` and natively reads local
-/// MCP definitions from its global config, so this integration decomposes
-/// only those portable capabilities.
+/// discover user Agent Skills at `~/.agents/skills`, natively reads local
+/// MCP definitions from its global config, and natively reads `.md` custom
+/// commands from its user-global commands directory, so this integration
+/// decomposes only those portable capabilities.
 pub struct OpenCodeIntegration {
     skills_dir: PathBuf,
+    commands_dir: PathBuf,
     config_path: PathBuf,
     uze_home: UzeHome,
 }
 
 impl OpenCodeIntegration {
     pub fn new(agents_home: PathBuf, config_path: PathBuf, uze_home: UzeHome) -> Self {
+        let commands_dir = config_path
+            .parent()
+            .map(|parent| parent.join("commands"))
+            .unwrap_or_else(|| PathBuf::from("commands"));
         Self {
             skills_dir: agents_home.join("skills"),
+            commands_dir,
             config_path,
             uze_home,
         }
@@ -76,10 +84,12 @@ impl IntegrationPort for OpenCodeIntegration {
     }
     fn capabilities(&self) -> HarnessCapabilities {
         HarnessCapabilities {
-            direct_standard: [CapabilityKind::AgentSkill].into_iter().collect(),
+            direct_standard: [CapabilityKind::AgentSkill, CapabilityKind::Command]
+                .into_iter()
+                .collect(),
             adaptable: [CapabilityKind::Mcp].into_iter().collect(),
             verification: VerificationStatus::Unverified,
-            evidence: "OpenCode documents global Agent Skills discovery at ~/.agents/skills and global local-MCP configuration under `mcp` in opencode.json. It does not consume the external plugin envelope, so UZE decomposes only these portable components.".to_owned(),
+            evidence: "OpenCode documents global Agent Skills discovery at ~/.agents/skills, global local-MCP configuration under `mcp` in opencode.json, and user-global custom commands as .md files under ~/.config/opencode/commands/ (also configurable via the `commands` key; project `.opencode/commands/` is project-scoped, so machine-level attachment uses the global scope). It does not consume the external plugin envelope, so UZE decomposes only these portable components.".to_owned(),
             ..HarnessCapabilities::default()
         }
     }
@@ -110,15 +120,20 @@ impl IntegrationPort for OpenCodeIntegration {
 
     /// OpenCode V2 discovers `~/.agents/skills` via path-derived ID and
     /// exposes Skills as slash commands (`/id`) by default (`slash: true`
-    /// unless opted out). The physical directory is now user-visible, like
-    /// Claude, so try bare logical first then qualified fallback. MCP stays
-    /// on the default fully-qualified policy — Skill and MCP naming are
-    /// never mixed just because both are `Resource`s.
+    /// unless opted out). Its `.md` commands are likewise user-typed by
+    /// bare name (`/review`), so both get the bare-logical-first, then
+    /// qualified-fallback candidates (extension included for commands —
+    /// the physical file name a registry shows). MCP stays on the default
+    /// fully-qualified policy — capability naming policies are never mixed
+    /// just because all are `Resource`s.
     fn exposure_name_candidates(&self, resource: &Resource) -> Vec<String> {
-        if resource.capability.kind != CapabilityKind::AgentSkill {
-            return default_exposure_name_candidates(resource);
+        match resource.capability.kind {
+            CapabilityKind::AgentSkill => short_then_qualified_exposure_name_candidates(resource),
+            CapabilityKind::Command => {
+                commands::opencode_command_exposure_name_candidates(resource)
+            }
+            _ => default_exposure_name_candidates(resource),
         }
-        short_then_qualified_exposure_name_candidates(resource)
     }
 
     /// Codex and Gemini CLI both discover Skills from this exact same
@@ -144,6 +159,10 @@ impl IntegrationPort for OpenCodeIntegration {
             path: self.skills_dir.clone(),
             source,
         })?;
+        fs::create_dir_all(&self.commands_dir).map_err(|source| UzeError::Write {
+            path: self.commands_dir.clone(),
+            source,
+        })?;
         state::record(
             home,
             state::IntegrationRecord {
@@ -160,10 +179,11 @@ impl IntegrationPort for OpenCodeIntegration {
         }
         match resource.capability.kind {
             CapabilityKind::AgentSkill => self.skill_plan(resource),
+            CapabilityKind::Command => self.command_plan(resource),
             CapabilityKind::Mcp => self.mcp_plan(resource),
             _ => unsupported(
                 resource,
-                "OpenCode portability is implemented only for Agent Skills and MCP in this slice.",
+                "OpenCode portability is implemented only for Agent Skills, Commands, and MCP in this slice.",
             ),
         }
     }

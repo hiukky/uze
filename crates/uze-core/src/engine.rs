@@ -84,10 +84,97 @@ pub fn package_resources_at(id: &PackageId, root: &std::path::Path) -> Result<Ve
             ));
         }
     }
+    resources.extend(command_resources(id, root)?);
     resources.extend(instruction_resources(id, root)?);
     resources.extend(mcp_resources(id, root)?);
     resources.sort_by_key(|resource| resource.identity());
     Ok(resources)
+}
+
+/// Discovers a package's canonical Commands — flat `.md` files directly
+/// under the package's conventional `commands/` directory. One `Resource`
+/// per file; the file stem is the command's logical name (`review.md` →
+/// `review`), mirroring the naming convention every harness examined
+/// (ADR-025) derives the slash-command name from.
+///
+/// Deliberately flat and non-recursive: nested directories are a
+/// vendor-naming concern (OpenCode `team/review`, Gemini `/gcp:sync`) that
+/// an integration may resolve at delivery; the canonical v0 model is one
+/// file = one command. Discovery is also symlink-safe by construction —
+/// symlinked entries are skipped, not followed, matching
+/// `files_named`'s rule. The canonical file bytes are the payload:
+/// **nothing is parsed, frontmatter or otherwise, at discovery time**, so
+/// a Skill and a Command are never conflated here or anywhere downstream.
+fn command_resources(id: &PackageId, package_root: &std::path::Path) -> Result<Vec<Resource>> {
+    let mut resources = Vec::new();
+    for path in command_files(package_root)? {
+        let payload = crate::project::read_file(&path)?;
+        let name = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .expect("command_files validates a utf-8 stem")
+            .to_owned();
+        resources.push(Resource::from_package_named(
+            id.clone(),
+            package_root.to_path_buf(),
+            Capability {
+                kind: CapabilityKind::Command,
+                representation: Representation::Standard,
+                path,
+                payload,
+            },
+            name,
+        ));
+    }
+    Ok(resources)
+}
+
+/// The canonical command files of a package — the one shared authority for
+/// "which files are canonical Commands", used by Engine discovery and by
+/// every integration that must translate or reference them identically. See
+/// [`command_resources`] for the rules.
+pub fn command_files(package_root: &std::path::Path) -> Result<Vec<std::path::PathBuf>> {
+    let commands_root = package_root.join("commands");
+    if !commands_root.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut entries = std::fs::read_dir(&commands_root)
+        .map_err(|source| crate::UzeError::Read {
+            path: commands_root.clone(),
+            source,
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|source| crate::UzeError::Read {
+            path: commands_root.clone(),
+            source,
+        })?;
+    entries.sort_by_key(|entry| entry.file_name());
+    let mut files = Vec::new();
+    for entry in entries {
+        let path = entry.path();
+        let metadata =
+            std::fs::symlink_metadata(&path).map_err(|source| crate::UzeError::Read {
+                path: path.clone(),
+                source,
+            })?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+            continue;
+        };
+        if !stem
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            continue;
+        }
+        if path.extension().and_then(|ext| ext.to_str()) != Some("md") {
+            continue;
+        }
+        files.push(path);
+    }
+    Ok(files)
 }
 
 /// Discovers a package's optional root-level `AGENTS.md` — the same
@@ -160,4 +247,67 @@ fn mcp_resources(id: &PackageId, package_root: &std::path::Path) -> Result<Vec<R
             ))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod command_discovery_tests {
+    use super::*;
+    use std::fs;
+
+    fn temp(label: &str) -> std::path::PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "uze-command-files-{label}-{}-{nonce}",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn discovers_only_flat_valid_markdown_commands_sorted() {
+        let root = temp("discover");
+        let pkg = root.join("pkg");
+        fs::create_dir_all(pkg.join("commands/nested")).unwrap();
+        fs::write(pkg.join("commands/review.md"), "a").unwrap();
+        fs::write(pkg.join("commands/commit.md"), "b").unwrap();
+        fs::write(pkg.join("commands/not-valid name.md"), "c").unwrap();
+        fs::write(pkg.join("commands/readme.txt"), "d").unwrap();
+        fs::write(pkg.join("commands/nested/deep.md"), "e").unwrap();
+        let files = command_files(&pkg).unwrap();
+        let names: Vec<String> = files
+            .iter()
+            .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec!["commit.md".to_owned(), "review.md".to_owned()]);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_command_entries_are_never_followed() {
+        use std::os::unix::fs::symlink;
+        let root = temp("symlink");
+        let pkg = root.join("pkg");
+        fs::create_dir_all(pkg.join("commands")).unwrap();
+        let outside = root.join("outside.md");
+        fs::write(&outside, "x").unwrap();
+        symlink(&outside, pkg.join("commands/evil.md")).unwrap();
+        let files = command_files(&pkg).unwrap();
+        assert!(
+            files.is_empty(),
+            "a symlink into a command file is not a canonical command"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn absent_commands_directory_is_empty() {
+        let root = temp("absent");
+        let pkg = root.join("pkg");
+        fs::create_dir_all(&pkg).unwrap();
+        assert!(command_files(&pkg).unwrap().is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
 }

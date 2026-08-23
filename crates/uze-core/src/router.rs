@@ -1,4 +1,20 @@
 //! Capability compatibility routing without named harness rules.
+//!
+//! # What "Native" means (ADR-025)
+//!
+//! A route is **Native** when the harness provides a first-class,
+//! officially supported mechanism that preserves the *canonical semantics*
+//! of the capability — **not** when the vendor name, file format, or
+//! physical primitive happens to match another harness's. Two harnesses
+//! may implement one canonical capability under different names; both are
+//! Native if each preserves the semantics through a supported primitive.
+//! UZE models user-visible semantics, never one-to-one vendor type names:
+//! e.g. UZE Command reaches Claude as a plugin `commands/` file, OpenCode
+//! as a `.md` command, Gemini as a `.toml` command, and Codex as an
+//! official *explicit-invocation-only Skill* — all Native, all the same
+//! canonical capability. (A route that must emulate or degrade through a
+//! mechanism the harness does not intend for that capability is
+//! `Adaptable`; see `CompatibilityRoute`.)
 
 use std::collections::BTreeSet;
 
@@ -9,9 +25,17 @@ use crate::capability::{Capability, CapabilityKind, Representation};
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum CompatibilityRoute {
+    /// The harness offers a first-class, officially supported mechanism that
+    /// preserves the canonical capability semantics — regardless of whether
+    /// the vendor calls it by the same name or uses the same file format as
+    /// another harness (ADR-025).
     Native,
+    /// UZE must emulate or degrade semantics through a mechanism the
+    /// harness does not intend for this capability.
     Adaptable,
+    /// Core semantics are preserved only partially.
     Degraded,
+    /// No safe route; the harness has nothing equivalent.
     Unsupported,
 }
 

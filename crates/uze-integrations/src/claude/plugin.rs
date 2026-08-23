@@ -218,6 +218,30 @@ pub(super) fn claude_exact_coverage(
         }
     }
 
+    // Claude's `commands` manifest field *replaces* the default `commands/`
+    // scan: declared file/directory paths are the surface; absent, the
+    // conventional `commands/` directory is. The same shape rules as
+    // `skills` apply (a normalizer that rejects absolute/escaping paths),
+    // with the replace-vs-add difference honored.
+    let mut declared_command_paths: Option<BTreeSet<String>> = None;
+    if let Some(commands) = value.get("commands") {
+        let mut paths: BTreeSet<String> = BTreeSet::new();
+        let declarations: Vec<&serde_json::Value> = match commands {
+            serde_json::Value::String(_) => vec![commands],
+            serde_json::Value::Array(values) => values.iter().collect(),
+            _ => Vec::new(),
+        };
+        for entry in declarations {
+            let Some(raw) = entry.as_str() else {
+                continue;
+            };
+            if let Some(normalized) = normalize_declared_relative_path(raw) {
+                paths.insert(normalized.to_string_lossy().into_owned());
+            }
+        }
+        declared_command_paths = Some(paths);
+    }
+
     let mut provided = BTreeSet::new();
     for resource in resources {
         match resource.capability.kind {
@@ -234,6 +258,32 @@ pub(super) fn claude_exact_coverage(
                 };
                 // Parent is like "skills/skill-a"
                 if declared_skill_dirs.contains(&parent) {
+                    provided.insert(resource.identity());
+                }
+            }
+            uze_core::capability::CapabilityKind::Command => {
+                let Some(relative) = resource.capability.path.strip_prefix(&package.root).ok()
+                else {
+                    continue;
+                };
+                let relative_string = relative.to_string_lossy().into_owned();
+                let direct_parent = relative.parent().map(|p| p.to_string_lossy().into_owned());
+                let covered = match &declared_command_paths {
+                    // Manifest declares the surface: a command is covered
+                    // iff its own path or its direct parent is declared.
+                    Some(paths) => {
+                        paths.contains(&relative_string)
+                            || direct_parent
+                                .as_deref()
+                                .is_some_and(|parent| paths.contains(parent))
+                    }
+                    // No declaration: the default `commands/` directory is
+                    // the command surface — covered iff directly inside it.
+                    None => direct_parent
+                        .as_deref()
+                        .is_some_and(|parent| parent == "commands"),
+                };
+                if covered {
                     provided.insert(resource.identity());
                 }
             }
