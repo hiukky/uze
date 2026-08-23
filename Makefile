@@ -22,7 +22,7 @@ version: ## Print the single workspace version carried by the UZE binary.
 changelog: ## Regenerate CHANGELOG.md from Conventional Commits (git-cliff; see cliff.toml).
 	git-cliff -o CHANGELOG.md
 
-install: ## Install/replace `uze` in Cargo's configured binary directory.
+install: ## Force-rebuild (no version bump) and install/replace `uze` in Cargo's configured binary directory.
 	$(CARGO) install --path . --bin uze --locked $(INSTALL_ARGS)
 
 install-wsl-lab: ## Build release here and install it into the WSL distro named Lab.
