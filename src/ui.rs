@@ -4,7 +4,7 @@
 //! This module owns only navigation/selection/overlay state and input
 //! transitions. Every product operation runs in a short-lived worker against
 //! a fresh application facade, so the terminal never reads Store, vendor
-//! files, integrations, or `marketplace.json` directly — it calls
+//! files, integrations, or `agents.json` directly — it calls
 //! `UzeApplication` read models exactly like the CLI does, and renders what
 //! comes back.
 
@@ -250,7 +250,7 @@ fn render(frame: &mut ratatui::Frame<'_>, model: &TuiModel, hits: &mut Vec<(Rect
             Constraint::Length(2),
         ])
         .split(area);
-    render_titlebar(frame, rows[0], model);
+    render_titlebar(frame, rows[0], model, hits);
 
     let narrow = rows[1].width < 90;
     let sidebar_width = if rows[1].width < 60 {
@@ -299,13 +299,24 @@ fn render(frame: &mut ratatui::Frame<'_>, model: &TuiModel, hits: &mut Vec<(Rect
     }
 }
 
-fn render_titlebar(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
+fn render_titlebar(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    model: &TuiModel,
+    hits: &mut Vec<(Rect, Hit)>,
+) {
     let block = Block::default()
         .borders(Borders::BOTTOM)
         .border_style(Style::default().fg(BORDER));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    // The titlebar is compact identity chrome: name, then *only* the health
+    // indicator — never the in-flight operation message ("Installing …",
+    // "Added plugin …"), which lives in the footer where long text has its
+    // own line. Keeping operation text out of the header is what stops a
+    // long install root/path from wrapping into the project path and
+    // breaking the two-column layout.
     let issues = model.issues().len();
     let mut left = vec![
         Span::styled(
@@ -335,6 +346,22 @@ fn render_titlebar(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel)
             Style::default().fg(WARNING),
         ));
     }
+    // The health block is clickable — anywhere on it jumps to the Doctor
+    // screen, which is where the full problem + evidence + solution list
+    // lives. The hit rect covers the indicator only, so "UZE" and the hair-
+    // line stay inert.
+    let prefix_width: usize = left.iter().take(4).map(|s| s.width()).sum();
+    let health_width: usize = left.iter().skip(4).map(|s| s.width()).sum();
+    let health_rect = Rect::new(
+        inner
+            .x
+            .saturating_add(prefix_width as u16)
+            .min(inner.right()),
+        inner.y,
+        (health_width.min(inner.width as usize) as u16).max(1),
+        1,
+    );
+    hits.push((health_rect, Hit::Route(Route::Doctor)));
 
     // Path and branch, plain muted text with a faint dot separator — the
     // design colors neither with the accent; this is identity chrome, not
@@ -532,15 +559,48 @@ fn render_footer(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
             Constraint::Length(version.len() as u16),
         ])
         .split(inner);
-    frame.render_widget(
-        Paragraph::new(footer(model)).wrap(Wrap { trim: true }),
-        columns[0],
-    );
+    let mut text = footer(model);
+    // Operation messages (install roots, marketplace paths) can exceed the
+    // hint column; clip the status line to the column instead of letting it
+    // wrap into a second row — the footer is exactly one row tall and the
+    // second virtual line would be clipped mid-word, which is worse than an
+    // ellipsis.
+    if !matches!(model.status, model::Status::Idle)
+        && let Some(line) = text.lines.first_mut()
+    {
+        clip_line(line, columns[0].width as usize);
+    }
+    frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: true }), columns[0]);
     frame.render_widget(
         Paragraph::new(Span::styled(version, Style::default().fg(TEXT_DIM)))
             .alignment(ratatui::layout::Alignment::Right),
         columns[1],
     );
+}
+
+/// Truncates `line` in place to `max` columns, replacing whatever crosses
+/// the limit with `…`. Spans are trimmed greedily left-to-right, so the
+/// truncation point stays at the text that would have been visible anyway.
+fn clip_line(line: &mut Line<'static>, max: usize) {
+    let mut used = 0usize;
+    let mut cut = None;
+    for (i, span) in line.spans.iter().enumerate() {
+        let width = span.width();
+        if used + width <= max {
+            used += width;
+        } else {
+            cut = Some(i);
+            break;
+        }
+    }
+    let Some(i) = cut else {
+        return;
+    };
+    let keep = max.saturating_sub(used).saturating_sub(1); // room for "…"
+    let mut truncated: String = line.spans[i].content.chars().take(keep).collect();
+    truncated.push('…');
+    line.spans[i].content = std::borrow::Cow::Owned(truncated);
+    line.spans.truncate(i + 1);
 }
 
 fn footer(model: &TuiModel) -> Text<'static> {
@@ -726,7 +786,7 @@ mod tests {
     use super::render;
     use super::view::doctor::{Severity, classify_doctor};
     use super::worker::{Intent, TrustGrant};
-    use super::{ACCENT, MUTED, hint_spans};
+    use super::{ACCENT, MUTED, clip_line, hint_spans};
 
     fn plugin(id: &str) -> PluginSummary {
         PluginSummary {
@@ -1283,5 +1343,48 @@ mod tests {
         assert_eq!(line.spans.len(), 4);
         assert_eq!(line.spans[3].content.as_ref(), "y/n");
         assert_eq!(line.spans[3].style.fg, Some(ACCENT));
+    }
+
+    #[test]
+    fn titlebar_health_click_opens_doctor_and_focuses_content() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+        let mut model = TuiModel::default(); // doctor not loaded → "checking…"
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| render(frame, &model, &mut hits))
+            .unwrap();
+        model.hits = hits;
+        let intent = model.apply_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 10,
+            row: 1,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(intent, Intent::None);
+        assert_eq!(
+            model.route,
+            Route::Doctor,
+            "clicking the titlebar's health indicator must open the Doctor screen"
+        );
+        assert_eq!(model.focus, Focus::Content);
+    }
+
+    #[test]
+    fn clip_line_truncates_long_status_with_ellipsis() {
+        use ratatui::text::Line;
+
+        let mut line =
+            Line::from("Installed plugin root: /home/user/.codex/plugins/cache/very/long/path");
+        clip_line(&mut line, 20);
+        let content: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(content, "Installed plugin ro…");
+        assert_eq!(ratatui::text::Span::raw(&content).width(), 20);
+
+        let mut line = Line::from("Installed uze");
+        clip_line(&mut line, 20);
+        let content: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(content, "Installed uze");
     }
 }
