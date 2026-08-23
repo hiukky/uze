@@ -7,7 +7,8 @@ use ratatui::layout::Rect;
 
 use crate::application::{
     ContextPlan, DoctorReport, HarnessHealth, MarketplacePluginDetail, MarketplacePluginSummary,
-    PluginInspection, PluginSummary, ProjectContextStatus,
+    OverviewWorkspaceSummary, PluginInspection, PluginSummary, ProjectContextStatus,
+    ProjectEnvironmentState,
 };
 
 use super::hit::Hit;
@@ -114,6 +115,12 @@ pub(crate) struct RefreshData {
     pub(crate) marketplace_plugins: Vec<MarketplacePluginSummary>,
     pub(crate) marketplace_count: usize,
     pub(crate) context_status: Option<ProjectContextStatus>,
+    /// The Overview's workspace-aware read model — present from the very
+    /// first refresh onward (there is always a kind, even `NoWorkspace`).
+    pub(crate) workspace: Option<OverviewWorkspaceSummary>,
+    /// Whether `doctor` is the full per-receipt report (`true`) or the
+    /// cheap dashboard health (`false`, attachments not inspected).
+    pub(crate) deep_doctor: bool,
 }
 
 pub(crate) struct TuiModel {
@@ -152,9 +159,18 @@ pub(crate) struct TuiModel {
 
     pub(crate) doctor: Option<DoctorReport>,
 
+    /// Whether `doctor` carries full per-receipt attachment inspection
+    /// (`true`) or the cheap dashboard health (`false`). The Doctor route
+    /// upgrades itself on entry; everything else stays fast.
+    pub(crate) doctor_deep: bool,
+
     pub(crate) context_root: PathBuf,
     pub(crate) context_status: Option<ProjectContextStatus>,
     pub(crate) context_plan: Option<ContextPlan>,
+
+    /// The detected UZE workspace (`agents.lock`/`agents.json`), loaded on
+    /// the first refresh. `None` only before the startup worker returns.
+    pub(crate) workspace: Option<OverviewWorkspaceSummary>,
 
     /// Frame counter for spinner animation while background work is pending.
     pub(crate) tick: usize,
@@ -187,9 +203,11 @@ impl Default for TuiModel {
             harnesses_drawer_open: false,
             plugin_drawer_open: false,
             doctor: None,
+            doctor_deep: false,
             context_root: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             context_status: None,
             context_plan: None,
+            workspace: None,
             tick: 0,
             hits: Vec::new(),
         }
@@ -343,6 +361,7 @@ impl TuiModel {
             .plugins_selected
             .min(self.plugins.len().saturating_sub(1));
         self.doctor = data.doctor;
+        self.doctor_deep = data.deep_doctor;
         self.harnesses_selected = self.harnesses_selected.min(
             self.doctor
                 .as_ref()
@@ -355,7 +374,33 @@ impl TuiModel {
         if data.context_status.is_some() {
             self.context_status = data.context_status;
         }
+        if data.workspace.is_some() {
+            self.workspace = data.workspace;
+        }
         self.status = Status::Idle;
+    }
+
+    /// The path the workspace-aware read models resolve against: the
+    /// detected workspace root when there is one, else the cwd (which
+    /// `NoWorkspace`'s summary itself canonicalizes).
+    pub(crate) fn workspace_root(&self) -> PathBuf {
+        self.workspace
+            .as_ref()
+            .map(|workspace| workspace.root.clone())
+            .unwrap_or_else(|| self.context_root.clone())
+    }
+
+    /// `Some(root)` exactly when the Application reports the project
+    /// environment as `InstallRequired` — the only state the Overview may
+    /// offer `i install` in. The state is the Application's verdict, never
+    /// re-derived here from lock bytes.
+    pub(crate) fn overview_install_path(&self) -> Option<PathBuf> {
+        let workspace = self.workspace.as_ref()?;
+        if workspace.project.environment == ProjectEnvironmentState::InstallRequired {
+            Some(workspace.root.clone())
+        } else {
+            None
+        }
     }
 
     pub(crate) fn issues(&self) -> Vec<Issue> {
@@ -375,5 +420,19 @@ impl TuiModel {
             self.harnesses_drawer_open = true;
         }
         self.route = route;
+    }
+
+    /// Whether switching to `route` needs the full, vendor-inspecting
+    /// `doctor()` — only the Doctor route, and only while the cached
+    /// report is still the cheap dashboard health.
+    pub(crate) fn route_change_needs_deep_health(&self, route: Route) -> bool {
+        route == Route::Doctor && !self.doctor_deep
+    }
+
+    /// Depth of `doctor()` an ordinary refresh should request: deep only
+    /// while the Doctor screen is the one being watched (it already shows
+    /// `r refresh`), shallow everywhere else.
+    pub(crate) fn refresh_depth(&self) -> bool {
+        self.route == Route::Doctor
     }
 }

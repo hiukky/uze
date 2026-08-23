@@ -7,8 +7,8 @@ use std::{path::PathBuf, sync::mpsc::Sender, thread};
 use crate::{
     Result, UzeApplication, UzeError, UzeHome,
     application::{
-        ContextPlan, ContextReconciliationReport, ProjectContextStatus, RemovePluginReport,
-        UpdatePluginReport,
+        ContextPlan, ContextReconciliationReport, InstallReport, ProjectContextStatus,
+        RemovePluginReport, UpdatePluginReport,
     },
 };
 
@@ -26,6 +26,9 @@ pub(crate) enum Intent {
     None,
     Quit,
     Refresh,
+    /// Entering the Doctor route — the one place the shallow dashboard
+    /// health is upgraded to the full, vendor-inspecting `doctor()`.
+    RefreshDoctor,
     InspectPlugin(String),
     InspectMarketplacePlugin {
         name: String,
@@ -42,6 +45,9 @@ pub(crate) enum Intent {
     AddMarketplace(String),
     ContextAnalyze(PathBuf),
     ContextApply(PathBuf),
+    /// Reproduce the detected consumer workspace's `agents.lock` through
+    /// the exact same Application use case `uze install` invokes.
+    InstallProjectEnvironment(PathBuf),
 }
 
 pub(crate) enum WorkerResult {
@@ -68,7 +74,24 @@ pub(crate) fn dispatch(
         Intent::None | Intent::Quit => {}
         Intent::Refresh => {
             model.status = Status::Working("Refreshing environment…".to_owned());
-            spawn_refresh(home.clone(), sender.clone(), model.context_root.clone());
+            // The dashboard only needs the cheap health report; the full
+            // per-receipt inspection belongs to the Doctor route.
+            let deep = model.refresh_depth();
+            spawn_refresh(
+                home.clone(),
+                sender.clone(),
+                model.context_root.clone(),
+                deep,
+            );
+        }
+        Intent::RefreshDoctor => {
+            model.status = Status::Working("Running diagnostics…".to_owned());
+            spawn_refresh(
+                home.clone(),
+                sender.clone(),
+                model.context_root.clone(),
+                true,
+            );
         }
         Intent::InspectPlugin(id) => {
             model.status = Status::Working(format!("Inspecting {id}…"));
@@ -191,6 +214,29 @@ pub(crate) fn dispatch(
                 ));
             });
         }
+        Intent::InstallProjectEnvironment(root) => {
+            model.status = Status::Working("Installing project environment…".to_owned());
+            spawn_mutation(
+                home.clone(),
+                sender.clone(),
+                model.context_root.clone(),
+                move |app| {
+                    // Same use case and same default (no trust flag) as the
+                    // CLI's `uze install`; the TUI adds no install logic.
+                    app.install_project_environment(&root, &crate::trust::NoTrustAuthority)
+                        .map(|report| match report {
+                            InstallReport::NoChanges => {
+                                "Project environment already up to date".to_owned()
+                            }
+                            InstallReport::Installed { plugins } => format!(
+                                "Installed {} plugin{}",
+                                plugins.len(),
+                                if plugins.len() == 1 { "" } else { "s" }
+                            ),
+                        })
+                },
+            );
+        }
         Intent::ContextApply(root) => {
             model.status = Status::Working("Applying context reconciliation…".to_owned());
             let (home, sender) = (home.clone(), sender.clone());
@@ -205,9 +251,15 @@ pub(crate) fn dispatch(
     }
 }
 
-fn spawn_refresh(home: UzeHome, sender: Sender<WorkerResult>, context_root: PathBuf) {
+fn spawn_refresh(
+    home: UzeHome,
+    sender: Sender<WorkerResult>,
+    context_root: PathBuf,
+    deep_doctor: bool,
+) {
     thread::spawn(move || {
-        let result = load_refresh_data(home, &context_root).map_err(|error| error.to_string());
+        let result =
+            load_refresh_data(home, &context_root, deep_doctor).map_err(|error| error.to_string());
         let _ = sender.send(WorkerResult::Refreshed(result));
     });
 }
@@ -217,36 +269,69 @@ fn spawn_refresh(home: UzeHome, sender: Sender<WorkerResult>, context_root: Path
 /// seeded. Before this moved here, `main` ran `ensure_default_plugins`
 /// synchronously — several harness-detection subprocess spawns — *before*
 /// the alternate screen was even entered, so the terminal appeared frozen
-/// for that whole stretch. Every subsequent refresh (`Intent::Refresh`)
-/// goes through the plain `spawn_refresh` above; seeding defaults only
-/// needs to happen once, at launch, not on every manual refresh.
+/// for that whole stretch.
+///
+/// Two stages, deliberate: the *fast* health refresh goes out first (the
+/// "checking…" spinner clears in milliseconds), then
+/// `ensure_default_plugins` — whose attach pass may run vendor CLIs
+/// (`claude/codex plugin add`, …) — happens in the background with the UI
+/// already interactive, and a second cheap refresh picks up whatever it
+/// changed (a fresh `UZE_HOME` gets its default plugins installed between
+/// the two). Every subsequent refresh (`Intent::Refresh`) goes through the
+/// plain `spawn_refresh`; seeding defaults only needs to happen once, at
+/// launch, not on every manual refresh.
 pub(crate) fn spawn_startup(home: UzeHome, sender: Sender<WorkerResult>, context_root: PathBuf) {
     thread::spawn(move || {
+        let first = load_refresh_data(home.clone(), &context_root, false)
+            .map_err(|error| error.to_string());
+        let _ = sender.send(WorkerResult::Refreshed(first));
         if let Ok(app) = tui_application(home.clone()) {
             let _ = app.ensure_default_plugins();
         }
-        let result = load_refresh_data(home, &context_root).map_err(|error| error.to_string());
-        let _ = sender.send(WorkerResult::Refreshed(result));
+        let second =
+            load_refresh_data(home, &context_root, false).map_err(|error| error.to_string());
+        let _ = sender.send(WorkerResult::Refreshed(second));
     });
 }
 
-fn load_refresh_data(home: UzeHome, context_root: &std::path::Path) -> Result<RefreshData> {
+fn load_refresh_data(
+    home: UzeHome,
+    context_root: &std::path::Path,
+    deep_doctor: bool,
+) -> Result<RefreshData> {
     let app = tui_application(home)?;
     let mut plugins = app.list_plugins()?;
     // Official plugins always lead the list — a stable sort keeps every
     // other ordering (whatever `list_plugins` returns) untouched within
     // each of the two groups.
     plugins.sort_by_key(|plugin| !plugin.source.starts_with("embedded:"));
-    let doctor = app.doctor();
+    // The dashboard/titlebar run the cheap health (no per-receipt vendor
+    // CLI inspection); the Doctor route upgrades itself on entry.
+    let doctor = if deep_doctor {
+        app.doctor()
+    } else {
+        app.doctor_fast()
+    };
     let marketplace_count = app.marketplace_list()?.len();
     let marketplace_plugins = app.list_marketplace_plugins()?;
-    let context_status = app.context_inspect(context_root).ok();
+    // Workspace detection first, then context at the detected root: callers
+    // deep inside a subdirectory get the workspace's own AGENTS.md/bridge
+    // state, not a cwd-scoped one that misses it. Best-effort — a summary
+    // is always producible, but a refresh must not fail over it.
+    let workspace = app.overview_workspace(context_root).ok();
+    let status_root = workspace
+        .as_ref()
+        .map(|workspace| workspace.root.as_path())
+        .unwrap_or(context_root);
+    let context_status = app.context_inspect(status_root).ok();
     Ok(RefreshData {
         plugins,
         doctor: Some(doctor),
         marketplace_plugins,
         marketplace_count,
         context_status,
+        workspace,
+        deep_doctor,
     })
 }
 
@@ -259,7 +344,7 @@ fn spawn_mutation(
     thread::spawn(move || {
         let result = tui_application(home.clone()).and_then(|app| {
             let message = operation(&app)?;
-            let data = load_refresh_data(home, &context_root)?;
+            let data = load_refresh_data(home, &context_root, false)?;
             Ok((message, data))
         });
         let _ = sender.send(WorkerResult::Mutated(
@@ -294,7 +379,7 @@ fn spawn_trust_sensitive(
             result.map(|message| (message, ()))
         });
         match outcome {
-            Ok((message, ())) => match load_refresh_data(home, &context_root) {
+            Ok((message, ())) => match load_refresh_data(home, &context_root, false) {
                 Ok(data) => {
                     let _ = sender.send(WorkerResult::Mutated(Ok((message, data))));
                 }

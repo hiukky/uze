@@ -54,12 +54,24 @@ impl TuiModel {
     fn sidebar_key(&mut self, key: KeyEvent) -> Intent {
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => {
-                self.set_route(ROUTES[(self.route.index() + 1) % ROUTES.len()]);
-                Intent::None
+                let next = ROUTES[(self.route.index() + 1) % ROUTES.len()];
+                let deep = self.route_change_needs_deep_health(next);
+                self.set_route(next);
+                if deep {
+                    Intent::RefreshDoctor
+                } else {
+                    Intent::None
+                }
             }
             KeyCode::Char('k') | KeyCode::Up => {
-                self.set_route(ROUTES[(self.route.index() + ROUTES.len() - 1) % ROUTES.len()]);
-                Intent::None
+                let next = ROUTES[(self.route.index() + ROUTES.len() - 1) % ROUTES.len()];
+                let deep = self.route_change_needs_deep_health(next);
+                self.set_route(next);
+                if deep {
+                    Intent::RefreshDoctor
+                } else {
+                    Intent::None
+                }
             }
             KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => {
                 self.focus = Focus::Content;
@@ -136,6 +148,15 @@ impl TuiModel {
                 }
                 Intent::None
             }
+            KeyCode::Char('i') if self.route == Route::Overview => {
+                // `i install` on Overview is only offered when the consumer
+                // lock declares plugins that aren't installed yet — the
+                // intent carries the detected workspace root, and the
+                // worker reproduces it through `install_project_environment`.
+                self.overview_install_path()
+                    .map(Intent::InstallProjectEnvironment)
+                    .unwrap_or(Intent::None)
+            }
             KeyCode::Char('i') if self.route == Route::Marketplace => {
                 if let Some((name, marketplace)) = self
                     .selected_marketplace_plugin()
@@ -153,7 +174,7 @@ impl TuiModel {
                 })
             }
             KeyCode::Char('a') if self.route == Route::Context => {
-                Intent::ContextAnalyze(self.context_root.clone())
+                Intent::ContextAnalyze(self.workspace_root())
             }
             // Global "add marketplace" everywhere else — Context keeps `a`
             // for analyze above, since that arm is matched first.

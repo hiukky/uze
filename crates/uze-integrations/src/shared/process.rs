@@ -96,10 +96,18 @@ fn output_tail(output: &Output) -> Option<String> {
 mod tests {
     use super::*;
 
+    /// A non-success exit status without touching vendor installs — the
+    /// platform's own `false` command is the canonical source.
+    fn failing_status() -> std::process::ExitStatus {
+        std::process::Command::new("false")
+            .status()
+            .expect("`false` must exist on every supported platform")
+    }
+
     #[test]
     fn failure_message_includes_the_vendor_last_words() {
         let output = Output {
-            status: std::process::ExitStatus::from_raw(1),
+            status: failing_status(),
             stdout: b"".to_vec(),
             stderr: b"first line\nsecond line\nthird line\n".to_vec(),
         };
@@ -114,7 +122,7 @@ mod tests {
     #[test]
     fn a_silent_failure_still_names_the_status() {
         let output = Output {
-            status: std::process::ExitStatus::from_raw(1),
+            status: failing_status(),
             stdout: vec![],
             stderr: vec![],
         };
@@ -124,7 +132,7 @@ mod tests {
     #[test]
     fn an_overlong_tail_is_capped() {
         let output = Output {
-            status: std::process::ExitStatus::from_raw(1),
+            status: failing_status(),
             stdout: vec![],
             stderr: vec![b'x'; 5000],
         };

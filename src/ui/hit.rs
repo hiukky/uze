@@ -42,9 +42,14 @@ impl TuiModel {
         };
         match hit {
             Hit::Route(route) => {
+                let deep = self.route_change_needs_deep_health(route);
                 self.set_route(route);
                 self.focus = Focus::Content;
-                Intent::None
+                if deep {
+                    Intent::RefreshDoctor
+                } else {
+                    Intent::None
+                }
             }
             Hit::PluginRow(index) => {
                 // Selecting only — same as arrow-key navigation. The

@@ -81,7 +81,7 @@ impl TuiModel {
             }
             (Overlay::ConfirmContextApply, KeyCode::Char('y') | KeyCode::Enter) => {
                 self.close_overlay();
-                Intent::ContextApply(self.context_root.clone())
+                Intent::ContextApply(self.workspace_root())
             }
             (Overlay::ConfirmContextApply, _) => {
                 self.close_overlay();

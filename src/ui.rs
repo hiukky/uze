@@ -610,7 +610,7 @@ fn footer(model: &TuiModel) -> Text<'static> {
         match model.overlay {
             Overlay::None => match model.focus {
                 Focus::Sidebar => "↑↓/jk select route · enter/tab open · ? help · q quit",
-                _ => route_hint(model.route),
+                _ => route_hint(model),
             },
             Overlay::ConfirmRemove { .. } => "tab switch · enter confirm · esc cancel · y/n",
             Overlay::ProtectedPlugin(_) => "esc/enter to dismiss",
@@ -653,9 +653,15 @@ fn footer(model: &TuiModel) -> Text<'static> {
     }
 }
 
-fn route_hint(route: Route) -> &'static str {
-    match route {
-        Route::Overview => "r refresh · ? help",
+fn route_hint(model: &TuiModel) -> &'static str {
+    match model.route {
+        Route::Overview => {
+            if model.overview_install_path().is_some() {
+                "i install · r refresh · ? help"
+            } else {
+                "r refresh · ? help"
+            }
+        }
         Route::Plugins => "↑↓ select · enter details · u update · r remove",
         Route::Marketplace => {
             "↑↓ select · enter inspect · i install · a add marketplace · / search · esc close"
@@ -777,12 +783,13 @@ mod tests {
     use crossterm::event::{
         KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
     };
-    use ratatui::layout::Rect;
+    use ratatui::{Terminal, backend::TestBackend, layout::Rect};
 
+    use crate::UzeHome;
     use crate::application::{DoctorReport, MarketplacePluginSummary, PluginSummary};
 
     use super::hit::Hit;
-    use super::model::{Focus, Overlay, ROUTES, Route, TrustedRetry, TuiModel};
+    use super::model::{Focus, Overlay, ROUTES, RefreshData, Route, TrustedRetry, TuiModel};
     use super::render;
     use super::view::doctor::{Severity, classify_doctor};
     use super::worker::{Intent, TrustGrant};
@@ -1315,6 +1322,94 @@ mod tests {
     }
 
     #[test]
+    fn entering_doctor_route_requests_deep_health_once() {
+        // The dashboard starts with shallow health (no per-receipt vendor
+        // inspection); walking the sidebar into Doctor must upgrade it —
+        // exactly once, and never again after the deep report arrives.
+        let mut model = TuiModel {
+            focus: Focus::Sidebar,
+            ..TuiModel::default()
+        };
+        model.refreshed(RefreshData {
+            doctor: Some(DoctorReport {
+                uze_home: PathBuf::from("/home"),
+                store: crate::application::StoreHealth::Ready,
+                plugins: Vec::new(),
+                harnesses: Vec::new(),
+                attachments: Vec::new(),
+                ledger_error: None,
+                integration_state_error: None,
+                provisioning_state_error: None,
+            }),
+            deep_doctor: false,
+            ..RefreshData::default()
+        });
+        assert!(!model.doctor_deep);
+
+        // Sidebar order: Overview → Marketplace → Plugins → Context →
+        // Harnesses → Doctor.
+        let mut last_intent = Intent::None;
+        for _ in 0..5 {
+            last_intent = model.apply_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        }
+        assert_eq!(model.route, Route::Doctor);
+        assert_eq!(
+            last_intent,
+            Intent::RefreshDoctor,
+            "entering Doctor with shallow health must request the full report"
+        );
+
+        // Deep report arrives; leaving and re-entering Doctor is free.
+        model.refreshed(RefreshData {
+            doctor: model.doctor.clone(),
+            deep_doctor: true,
+            ..RefreshData::default()
+        });
+        assert!(model.doctor_deep);
+        let _ = model.apply_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        let intent = model.apply_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(
+            intent,
+            Intent::None,
+            "a deep report must not be re-requested on every Doctor visit"
+        );
+        assert_eq!(model.route, Route::Doctor);
+    }
+
+    #[test]
+    fn doctor_route_refresh_is_deep_but_other_routes_stay_shallow() {
+        // The depth decision is a pure routing rule: `r` on Doctor
+        // refreshes the full report; everywhere else the cheap health.
+        let doctor_route = TuiModel {
+            route: Route::Doctor,
+            ..TuiModel::default()
+        };
+        assert!(doctor_route.refresh_depth());
+
+        let mut other = TuiModel::default();
+        assert!(!other.refresh_depth());
+        other.set_route(Route::Marketplace);
+        assert!(!other.refresh_depth());
+        // Even a shallow report present on the dashboard never claims to
+        // carry attachment checks.
+        other.refreshed(RefreshData {
+            doctor: Some(DoctorReport {
+                uze_home: PathBuf::from("/home"),
+                store: crate::application::StoreHealth::Ready,
+                plugins: Vec::new(),
+                harnesses: Vec::new(),
+                attachments: Vec::new(),
+                ledger_error: None,
+                integration_state_error: None,
+                provisioning_state_error: None,
+            }),
+            deep_doctor: false,
+            ..RefreshData::default()
+        });
+        assert!(!other.doctor_deep);
+    }
+
+    #[test]
     fn footer_hint_styles_commands_with_accent_and_descriptions_muted() {
         use ratatui::{
             style::{Modifier, Style},
@@ -1362,7 +1457,11 @@ mod tests {
             row: 1,
             modifiers: KeyModifiers::NONE,
         });
-        assert_eq!(intent, Intent::None);
+        assert_eq!(
+            intent,
+            Intent::RefreshDoctor,
+            "entering Doctor (titlebar health click) must request the full report"
+        );
         assert_eq!(
             model.route,
             Route::Doctor,
@@ -1386,5 +1485,609 @@ mod tests {
         clip_line(&mut line, 20);
         let content: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(content, "Installed uze");
+    }
+
+    // --- Overview workspace awareness ---------------------------------------
+
+    use crate::application::{
+        MarketplaceState, MemoryState, OverviewMarketplace, OverviewWorkspaceSummary,
+        ProjectEnvironmentState, ProjectOverview, WorkspaceKind,
+    };
+    fn consumer_workspace(
+        state: ProjectEnvironmentState,
+        declared: usize,
+        installed: usize,
+        missing: &[&str],
+        root: &std::path::Path,
+    ) -> OverviewWorkspaceSummary {
+        OverviewWorkspaceSummary {
+            cwd: root.to_path_buf(),
+            root: root.to_path_buf(),
+            kind: WorkspaceKind::Consumer,
+            project: ProjectOverview {
+                environment: state,
+                memory: MemoryState::Ready,
+                declared_plugins: declared,
+                installed_plugins: installed,
+                missing_plugins: missing.iter().map(|s| s.to_string()).collect(),
+            },
+            marketplace: None,
+        }
+    }
+
+    fn marketplace_workspace(root: &std::path::Path) -> OverviewWorkspaceSummary {
+        OverviewWorkspaceSummary {
+            cwd: root.to_path_buf(),
+            root: root.to_path_buf(),
+            kind: WorkspaceKind::Marketplace,
+            project: ProjectOverview {
+                environment: ProjectEnvironmentState::NotConfigured,
+                memory: MemoryState::None,
+                declared_plugins: 0,
+                installed_plugins: 0,
+                missing_plugins: Vec::new(),
+            },
+            marketplace: Some(OverviewMarketplace {
+                name: Some("acme".to_owned()),
+                package_count: 1,
+                invalid_packages: 0,
+                state: MarketplaceState::Valid,
+            }),
+        }
+    }
+
+    #[test]
+    fn overview_install_key_emits_install_intent_with_workspace_root() {
+        let root = std::path::PathBuf::from("/tmp/project");
+        let mut model = TuiModel {
+            route: Route::Overview,
+            focus: Focus::Content,
+            workspace: Some(consumer_workspace(
+                ProjectEnvironmentState::InstallRequired,
+                4,
+                3,
+                &["flow"],
+                &root,
+            )),
+            ..TuiModel::default()
+        };
+        let intent = model.apply_key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        assert_eq!(intent, Intent::InstallProjectEnvironment(root.clone()));
+    }
+
+    #[test]
+    fn overview_install_key_is_inert_when_environment_is_ready() {
+        let root = std::path::PathBuf::from("/tmp/project");
+        let mut model = TuiModel {
+            route: Route::Overview,
+            focus: Focus::Content,
+            workspace: Some(consumer_workspace(
+                ProjectEnvironmentState::Ready,
+                2,
+                2,
+                &[],
+                &root,
+            )),
+            ..TuiModel::default()
+        };
+        let intent = model.apply_key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        assert_eq!(intent, Intent::None);
+    }
+
+    #[test]
+    fn overview_install_key_is_inert_outside_consumer_workspaces() {
+        let root = std::path::PathBuf::from("/tmp/market");
+        let mut model = TuiModel {
+            route: Route::Overview,
+            focus: Focus::Content,
+            workspace: Some(marketplace_workspace(&root)),
+            ..TuiModel::default()
+        };
+        let intent = model.apply_key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        assert_eq!(
+            intent,
+            Intent::None,
+            "marketplace health must not offer `uze install`"
+        );
+    }
+
+    #[test]
+    fn refreshed_updates_workspace_state() {
+        let root = std::path::PathBuf::from("/tmp/project");
+        let mut model = TuiModel {
+            route: Route::Overview,
+            ..TuiModel::default()
+        };
+        assert!(model.workspace.is_none());
+        model.refreshed(RefreshData {
+            workspace: Some(consumer_workspace(
+                ProjectEnvironmentState::InstallRequired,
+                4,
+                3,
+                &["flow"],
+                &root,
+            )),
+            ..RefreshData::default()
+        });
+        assert_eq!(model.overview_install_path(), Some(root.clone()));
+
+        model.refreshed(RefreshData {
+            workspace: Some(consumer_workspace(
+                ProjectEnvironmentState::Ready,
+                4,
+                4,
+                &[],
+                &root,
+            )),
+            ..RefreshData::default()
+        });
+        assert_eq!(
+            model.overview_install_path(),
+            None,
+            "refresh must reflect a completed install"
+        );
+    }
+
+    /// All rows of the rendered buffer, right-trimmed — the cheap,
+    /// snapshot-free way to assert on what the TUI actually drew.
+    fn buffer_rows(terminal: &Terminal<TestBackend>) -> Vec<String> {
+        let buffer = terminal.backend().buffer();
+        let area = buffer.area;
+        (area.y..area.y + area.height)
+            .map(|row| {
+                let mut line = String::new();
+                for column in area.x..area.x + area.width {
+                    line.push_str(buffer[(column, row)].symbol());
+                }
+                line.trim_end().to_string()
+            })
+            .collect()
+    }
+
+    fn overview_model(root: &std::path::Path) -> TuiModel {
+        // Hybrid workspace: both columns exist, so layout tests can assert
+        // on PROJECT vs MARKETPLACE placement.
+        let mut workspace = consumer_workspace(
+            ProjectEnvironmentState::InstallRequired,
+            4,
+            3,
+            &["flow"],
+            root,
+        );
+        workspace.kind = WorkspaceKind::Hybrid;
+        workspace.marketplace = Some(OverviewMarketplace {
+            name: Some("acme".to_owned()),
+            package_count: 2,
+            invalid_packages: 0,
+            state: MarketplaceState::Valid,
+        });
+        TuiModel {
+            route: Route::Overview,
+            focus: Focus::Content,
+            workspace: Some(workspace),
+            ..TuiModel::default()
+        }
+    }
+
+    #[test]
+    fn wide_terminal_stacks_workspace_rows() {
+        let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+        let model = overview_model(std::path::Path::new("/tmp/project"));
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| render(frame, &model, &mut hits))
+            .unwrap();
+        let rows = buffer_rows(&terminal);
+        let project_row = rows
+            .iter()
+            .position(|row| row.contains("PROJECT"))
+            .expect("PROJECT heading");
+        let marketplace_row = rows
+            .iter()
+            .position(|row| row.contains("MARKETPLACE"))
+            .expect("MARKETPLACE heading");
+        assert!(
+            project_row < marketplace_row,
+            "workspace blocks always stack: PROJECT above MARKETPLACE, on wide terminals too"
+        );
+    }
+
+    #[test]
+    fn narrow_terminal_stacks_workspace_rows() {
+        let mut terminal = Terminal::new(TestBackend::new(60, 40)).unwrap();
+        let model = overview_model(std::path::Path::new("/tmp/project"));
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| render(frame, &model, &mut hits))
+            .unwrap();
+        let rows = buffer_rows(&terminal);
+        let project_row = rows
+            .iter()
+            .position(|row| row.contains("PROJECT"))
+            .expect("PROJECT heading");
+        let marketplace_row = rows
+            .iter()
+            .position(|row| row.contains("MARKETPLACE"))
+            .expect("MARKETPLACE heading");
+        assert!(
+            project_row < marketplace_row,
+            "narrow layout stacks PROJECT above MARKETPLACE"
+        );
+    }
+
+    #[test]
+    fn install_action_only_rendered_when_dependencies_are_missing() {
+        let root = std::path::Path::new("/tmp/project");
+        let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+        let model = TuiModel {
+            route: Route::Overview,
+            focus: Focus::Content,
+            workspace: Some(consumer_workspace(
+                ProjectEnvironmentState::InstallRequired,
+                4,
+                3,
+                &["flow"],
+                root,
+            )),
+            ..TuiModel::default()
+        };
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| render(frame, &model, &mut hits))
+            .unwrap();
+        let rows = buffer_rows(&terminal);
+        assert!(rows.iter().any(|row| row.contains("i install")));
+        assert!(rows.iter().any(|row| row.contains("! install required")));
+        assert!(rows.iter().any(|row| row.contains("! 3/4 installed")));
+
+        let model = TuiModel {
+            route: Route::Overview,
+            focus: Focus::Content,
+            workspace: Some(consumer_workspace(
+                ProjectEnvironmentState::Ready,
+                4,
+                4,
+                &[],
+                root,
+            )),
+            ..TuiModel::default()
+        };
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| render(frame, &model, &mut hits))
+            .unwrap();
+        let rows = buffer_rows(&terminal);
+        assert!(
+            !rows.iter().any(|row| row.contains("i install")),
+            "a ready environment must not offer a useless install action"
+        );
+        assert!(rows.iter().any(|row| row.contains("✓ ready")));
+        assert!(rows.iter().any(|row| row.contains("4 installed")));
+    }
+
+    #[test]
+    fn overview_renders_application_verdicts_verbatim() {
+        let root = std::path::Path::new("/tmp/project");
+        let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+
+        // Invalid lock: the Application says Invalid, the view renders it —
+        // and there is no install action for a state the system cannot read.
+        let model = TuiModel {
+            route: Route::Overview,
+            focus: Focus::Content,
+            workspace: Some(consumer_workspace(
+                ProjectEnvironmentState::Invalid,
+                0,
+                0,
+                &[],
+                root,
+            )),
+            ..TuiModel::default()
+        };
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| render(frame, &model, &mut hits))
+            .unwrap();
+        let rows = buffer_rows(&terminal);
+        assert!(rows.iter().any(|row| row.contains("× invalid")));
+        assert!(rows.iter().any(|row| row.contains("— unknown")));
+        assert!(!rows.iter().any(|row| row.contains("i install")));
+
+        // Marketplace with an invalid manifest: state rendered verbatim.
+        let mut bad_market = marketplace_workspace(root);
+        bad_market.marketplace = Some(OverviewMarketplace {
+            name: None,
+            package_count: 0,
+            invalid_packages: 0,
+            state: MarketplaceState::InvalidManifest,
+        });
+        let model = TuiModel {
+            route: Route::Overview,
+            focus: Focus::Content,
+            workspace: Some(bad_market),
+            ..TuiModel::default()
+        };
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| render(frame, &model, &mut hits))
+            .unwrap();
+        let rows = buffer_rows(&terminal);
+        assert!(rows.iter().any(|row| row.contains("× invalid manifest")));
+        assert!(
+            rows.iter().any(|row| row.contains("— unknown")),
+            "an unparseable manifest cannot name itself"
+        );
+        assert!(
+            !rows.iter().any(|row| row.contains("PROJECT")),
+            "a pure marketplace workspace must not show a PROJECT column"
+        );
+    }
+
+    #[test]
+    fn consumer_only_workspace_hides_marketplace_column() {
+        let root = std::path::Path::new("/tmp/project");
+        let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+        let model = TuiModel {
+            route: Route::Overview,
+            focus: Focus::Content,
+            workspace: Some(consumer_workspace(
+                ProjectEnvironmentState::Ready,
+                2,
+                2,
+                &[],
+                root,
+            )),
+            ..TuiModel::default()
+        };
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| render(frame, &model, &mut hits))
+            .unwrap();
+        let rows = buffer_rows(&terminal);
+        assert!(rows.iter().any(|row| row.contains("PROJECT")));
+        assert!(
+            !rows.iter().any(|row| row.contains("MARKETPLACE")),
+            "no agents.json → no MARKETPLACE column, even in a consumer"
+        );
+    }
+
+    #[test]
+    fn overview_render_does_not_mutate_project_state() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let base = std::env::temp_dir().join(format!(
+            "uze-ui-overview-immutable-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = base.join("project");
+        std::fs::create_dir_all(&root).unwrap();
+        let lock_path = root.join("agents.lock");
+        let lock_bytes = b"version: 1\nplugins: {}\n";
+        std::fs::write(&lock_path, lock_bytes).unwrap();
+        let manifest_bytes = br#"{"name":"m","plugins":[]}"#;
+        std::fs::write(root.join("agents.json"), manifest_bytes).unwrap();
+        let agents_md = b"# hi\n";
+        std::fs::write(root.join("AGENTS.md"), agents_md).unwrap();
+
+        let model = TuiModel {
+            route: Route::Overview,
+            context_root: root.clone(),
+            workspace: Some(consumer_workspace(
+                ProjectEnvironmentState::Ready,
+                2,
+                2,
+                &[],
+                &root,
+            )),
+            ..TuiModel::default()
+        };
+        let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| render(frame, &model, &mut hits))
+            .unwrap();
+        let rows = buffer_rows(&terminal);
+
+        // The render must leave the workspace exactly as found.
+        assert_eq!(std::fs::read(&lock_path).unwrap(), lock_bytes);
+        assert_eq!(
+            std::fs::read(root.join("agents.json")).unwrap(),
+            manifest_bytes
+        );
+        assert_eq!(std::fs::read(root.join("AGENTS.md")).unwrap(), agents_md);
+        // And the semantic rows actually rendered (sanity, not just no-op).
+        assert!(rows.iter().any(|row| row.contains("Environment")));
+        assert!(rows.iter().any(|row| row.contains("Memory")));
+        assert!(rows.iter().any(|row| row.contains("Plugins")));
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn no_workspace_render_creates_nothing() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let base = std::env::temp_dir().join(format!(
+            "uze-ui-noworkspace-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = base.join("random");
+        std::fs::create_dir_all(&root).unwrap();
+
+        let model = TuiModel {
+            route: Route::Overview,
+            context_root: root.clone(),
+            workspace: Some(OverviewWorkspaceSummary {
+                cwd: root.clone(),
+                root: root.clone(),
+                kind: WorkspaceKind::NoWorkspace,
+                project: ProjectOverview {
+                    environment: ProjectEnvironmentState::NotConfigured,
+                    memory: MemoryState::None,
+                    declared_plugins: 0,
+                    installed_plugins: 0,
+                    missing_plugins: Vec::new(),
+                },
+                marketplace: None,
+            }),
+            ..TuiModel::default()
+        };
+        let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| render(frame, &model, &mut hits))
+            .unwrap();
+        let rows = buffer_rows(&terminal);
+        assert!(rows.iter().any(|row| row.contains("— not configured")));
+        assert!(rows.iter().any(|row| row.contains("PROJECT")));
+        assert!(
+            !rows.iter().any(|row| row.contains("MARKETPLACE")),
+            "no agents.json in a plain directory → no MARKETPLACE column"
+        );
+
+        assert!(
+            !root.join("agents.lock").exists(),
+            "rendering must never create a project lock"
+        );
+        assert!(
+            !root.join("agents.json").exists(),
+            "rendering must never create a marketplace manifest"
+        );
+        let entries: Vec<_> = std::fs::read_dir(&root).unwrap().collect();
+        assert!(
+            entries.is_empty(),
+            "a NoWorkspace render must leave the directory untouched"
+        );
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn overview_install_intent_reaches_install_project_environment() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        // `dispatch` builds its application through
+        // `UzeApplication::from_env_with_runner`, whose integrations read
+        // `HOME`; serialize + restore it so the test is hermetic.
+        use std::sync::Mutex;
+        static HOME_LOCK: Mutex<()> = Mutex::new(());
+        let _guard = HOME_LOCK.lock().unwrap();
+
+        let base = std::env::temp_dir().join(format!(
+            "uze-ui-install-dispatch-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let home = base.join("home");
+        let project = base.join("project");
+        let market = base.join("market");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(market.join("flow/skills/uze-test")).unwrap();
+        std::fs::write(
+            market.join("agents.json"),
+            r#"{"name":"test","plugins":[{"name":"flow","source":"flow"}]}"#,
+        )
+        .unwrap();
+        std::fs::write(market.join("flow/plugin.json"), r#"{"name":"flow"}"#).unwrap();
+        std::fs::write(market.join("flow/skills/uze-test/SKILL.md"), "# s\n").unwrap();
+        let lock = uze_core::project_lock::ProjectLock {
+            version: 1,
+            marketplaces: [(
+                "test".to_owned(),
+                uze_core::project_lock::LockedMarketplace {
+                    source: uze_core::project_lock::MarketplaceSource::Path {
+                        path: market.clone(),
+                    },
+                    resolved: uze_core::project_lock::ResolvedMarketplace::default(),
+                },
+            )]
+            .into_iter()
+            .collect(),
+            plugins: [(
+                "flow".to_owned(),
+                uze_core::project_lock::LockedPlugin {
+                    source: uze_core::project_lock::PluginSource::Marketplace {
+                        marketplace: "test".to_owned(),
+                        plugin: "flow".to_owned(),
+                    },
+                    resolved: uze_core::project_lock::ResolvedPlugin {
+                        revision: None,
+                        version: None,
+                        integrity: None,
+                    },
+                },
+            )]
+            .into_iter()
+            .collect(),
+        };
+        uze_core::project_lock::save_lock(&project, &lock).unwrap();
+
+        let original_home = std::env::var_os("HOME");
+        // SAFETY: single-threaded access to HOME guarded by HOME_LOCK; none
+        // of the other tests in this binary read HOME.
+        unsafe { std::env::set_var("HOME", &base) };
+        unsafe { std::env::set_var("UZE_HOME", &home) };
+
+        let uze_home = UzeHome::at(&home);
+        let mut model = TuiModel {
+            route: Route::Overview,
+            context_root: project.clone(),
+            workspace: Some(consumer_workspace(
+                ProjectEnvironmentState::InstallRequired,
+                1,
+                0,
+                &["flow"],
+                &project,
+            )),
+            ..TuiModel::default()
+        };
+        let (sender, receiver) = mpsc::channel();
+        super::worker::dispatch(
+            Intent::InstallProjectEnvironment(project.clone()),
+            &uze_home,
+            &sender,
+            &mut model,
+        );
+        let result = receiver.recv_timeout(Duration::from_secs(30)).unwrap();
+        match result {
+            super::worker::WorkerResult::Mutated(Ok((message, data))) => {
+                assert!(
+                    message.contains("Installed"),
+                    "install must report success, got {message}"
+                );
+                let workspace = data.workspace.expect("refresh carries workspace state");
+                let project = &workspace.project;
+                assert_eq!(
+                    project.environment,
+                    ProjectEnvironmentState::Ready,
+                    "after install the Application must report Ready"
+                );
+                assert_eq!(
+                    (project.declared_plugins, project.installed_plugins),
+                    (1, 1)
+                );
+                assert!(project.missing_plugins.is_empty());
+            }
+            _ => panic!("expected Mutated(Ok(..))"),
+        }
+
+        if let Some(home) = original_home {
+            // SAFETY: same guard as above.
+            unsafe { std::env::set_var("HOME", home) };
+        } else {
+            unsafe { std::env::remove_var("HOME") };
+        }
+        unsafe { std::env::remove_var("UZE_HOME") };
+        std::fs::remove_dir_all(&base).ok();
     }
 }

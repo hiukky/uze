@@ -7,7 +7,40 @@ use uze_core::{Result, integration::AttachmentState, state};
 use super::*;
 
 impl UzeApplication {
+    /// Full machine diagnostics: Store/state errors, harness detection,
+    /// plugin summaries, and **per-receipt attachment inspection** through
+    /// each integration (which may run vendor CLIs — e.g. `codex plugin
+    /// list`). That inspection is the "heavyweight" part of `doctor` and
+    /// the reason it belongs on the explicit diagnostics path only (see
+    /// ADR 018's performance budget): callers on a hot path — the TUI's
+    /// startup/refresh — use [`doctor_fast`](Self::doctor_fast) and let
+    /// the Doctor screen run this full report when it opens.
     pub fn doctor(&self) -> DoctorReport {
+        let mut report = self.doctor_shell();
+        let attachments = report
+            .plugins
+            .iter()
+            .map(|plugin: &PluginSummary| PackageManagedState {
+                plugin: plugin.id.clone(),
+                state: managed_state(&self.reconcile(&plugin.id)),
+            })
+            .collect();
+        report.attachments = attachments;
+        report
+    }
+
+    /// The millisecond-fast half of `doctor`: everything except
+    /// per-receipt attachment inspection (`attachments` stays empty).
+    /// Same shape, same machine question — the missing half is explicitly
+    /// "not checked yet", never folded into "checked and fine": the Doctor
+    /// route and the CLI `doctor` command use [`doctor`](Self::doctor),
+    /// the TUI dashboard/titlebar use this and upgrade on Doctor entry.
+    pub fn doctor_fast(&self) -> DoctorReport {
+        self.doctor_shell()
+    }
+
+    /// The shared cheap half of both `doctor` variants.
+    fn doctor_shell(&self) -> DoctorReport {
         let package_ids = self.store.package_ids();
         let (store, plugins) = match package_ids {
             Ok(ids) => {
@@ -35,13 +68,6 @@ impl UzeApplication {
             Err(error) => (StoreHealth::Blocked(error.to_string()), Vec::new()),
         };
         let harnesses = self.harness_health();
-        let attachments = plugins
-            .iter()
-            .map(|plugin: &PluginSummary| PackageManagedState {
-                plugin: plugin.id.clone(),
-                state: managed_state(&self.reconcile(&plugin.id)),
-            })
-            .collect();
         let ledger_error = state::receipts(&self.home, None)
             .err()
             .map(|error| error.to_string());
@@ -56,7 +82,7 @@ impl UzeApplication {
             store,
             plugins,
             harnesses,
-            attachments,
+            attachments: Vec::new(),
             ledger_error,
             integration_state_error,
             provisioning_state_error,
@@ -148,5 +174,145 @@ impl UzeApplication {
             project_lock: self.project_lock_status(project_root),
             issues,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    use uze_core::{
+        PackageSource, UzeHome,
+        exposure::ExposurePlan,
+        integration::{
+            AttachmentInspection, AttachmentReceipt, AttachmentState, HarnessDetection,
+            ManagedArtifact,
+        },
+        router::HarnessCapabilities,
+        state,
+        store::PackageId,
+        trust::AlwaysTrust,
+    };
+
+    use super::*;
+
+    /// An integration that counts every `inspect_receipt` call. The
+    /// difference between `doctor_fast` (no inspection) and `doctor`
+    /// (one inspection per receipt) is exactly how the vendor-CLI cost is
+    /// kept off the dashboard hot path.
+    struct CountingInspection {
+        inspected: Arc<AtomicUsize>,
+    }
+    impl IntegrationPort for CountingInspection {
+        fn id(&self) -> &'static str {
+            "counting"
+        }
+        fn capabilities(&self) -> HarnessCapabilities {
+            HarnessCapabilities::default()
+        }
+        fn exposure_plan(&self, _resource: &uze_core::project::Resource) -> ExposurePlan {
+            ExposurePlan {
+                representation: uze_core::capability::Representation::Standard,
+                route: uze_core::router::CompatibilityRoute::Unsupported,
+                verification: uze_core::router::VerificationStatus::Unverified,
+                mechanism: uze_core::exposure::ExposureMechanism::Unsupported {
+                    rationale: "test does not attach".to_owned(),
+                },
+                evidence: "test".to_owned(),
+            }
+        }
+        fn detect(&self) -> HarnessDetection {
+            HarnessDetection::default()
+        }
+        fn inspect_receipt(&self, _receipt: &AttachmentReceipt) -> AttachmentInspection {
+            self.inspected.fetch_add(1, Ordering::SeqCst);
+            AttachmentInspection {
+                state: AttachmentState::Matched,
+                reason: "test".to_owned(),
+            }
+        }
+    }
+
+    fn temp(label: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("uze-doctor-{label}-{}-{nonce}", std::process::id()))
+    }
+
+    fn write_plugin(root: &Path, name: &str) {
+        let dir = root.join(name);
+        fs::create_dir_all(dir.join("skills/uze-test")).unwrap();
+        fs::write(dir.join("plugin.json"), format!(r#"{{"name": "{name}"}}"#)).unwrap();
+        fs::write(dir.join("skills/uze-test/SKILL.md"), "# Test skill\n").unwrap();
+    }
+
+    #[test]
+    fn doctor_fast_skips_receipt_inspection_doctor_performs_it() {
+        let base = temp("fast-vs-deep");
+        let home = UzeHome::at(base.join("home"));
+        let inspected = Arc::new(AtomicUsize::new(0));
+        let app = UzeApplication::new(
+            home.clone(),
+            vec![Box::new(CountingInspection {
+                inspected: inspected.clone(),
+            })],
+        );
+        let package_root = base.join("flow");
+        write_plugin(&base, "flow");
+        app.add_plugin(
+            PackageSource::Local {
+                path: package_root.clone(),
+            },
+            &AlwaysTrust,
+        )
+        .unwrap();
+        let package_id =
+            PackageId::from_plugin_name("flow", &package_root.join("plugin.json")).unwrap();
+        state::record_receipt(
+            &home,
+            "flow:counting:native".to_owned(),
+            AttachmentReceipt {
+                package_id: package_id.as_str().to_owned(),
+                resource_identity: None,
+                integration: "counting".to_owned(),
+                strategy: "test".to_owned(),
+                artifact: ManagedArtifact::IntegrationOwned {
+                    kind: "test".to_owned(),
+                    selector: "flow".to_owned(),
+                    detail: Default::default(),
+                },
+            },
+        )
+        .unwrap();
+
+        let fast = app.doctor_fast();
+        assert!(
+            fast.attachments.is_empty(),
+            "the dashboard health must not pay for per-receipt inspection"
+        );
+        assert_eq!(
+            inspected.load(Ordering::SeqCst),
+            0,
+            "doctor_fast must never call inspect_receipt"
+        );
+
+        let deep = app.doctor();
+        assert_eq!(deep.attachments.len(), 1);
+        assert_eq!(
+            inspected.load(Ordering::SeqCst),
+            1,
+            "only the full doctor may run per-receipt inspections"
+        );
+        fs::remove_dir_all(&base).ok();
     }
 }

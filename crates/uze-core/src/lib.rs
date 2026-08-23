@@ -28,6 +28,7 @@ pub mod state;
 pub mod store;
 pub mod text_region;
 pub mod trust;
+pub mod workspace;
 
 pub use acquisition::{MaterializedPackage, PackageSource, Provenance, ResolvedSource};
 pub use bundle::ImportedBundle;

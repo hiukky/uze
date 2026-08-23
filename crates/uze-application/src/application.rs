@@ -40,6 +40,7 @@ mod context;
 mod doctor;
 mod lifecycle;
 mod marketplace;
+mod overview;
 mod project_environment;
 mod read_models;
 
@@ -48,6 +49,13 @@ pub use project_environment::{
     InstallReport, ProjectEnvironment, ProjectEnvironmentPlan, ProjectLockStatus,
     ProjectPluginHealth, RemoveProjectPluginReport,
 };
+
+// Re-export overview read models for TUI/CLI access.
+pub use overview::{
+    MarketplaceState, MemoryState, OverviewMarketplace, OverviewWorkspaceSummary,
+    ProjectEnvironmentState, ProjectOverview,
+};
+pub use uze_core::workspace::WorkspaceKind;
 
 /// `LEGACY/PERSISTENT CONTEXT DELIVERY STRATEGY`. Harnesses that read a
 /// project's shared `AGENTS.md` only through an explicit bridge region
