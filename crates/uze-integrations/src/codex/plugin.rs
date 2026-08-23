@@ -11,6 +11,8 @@ use uze_core::{
     store::StoredPackage,
 };
 
+use crate::shared::path::normalize_declared_relative_path;
+
 /// Name of the local catalogue this integration publishes. A Codex identity,
 /// held by the Codex integration.
 pub(super) const MARKETPLACE_NAME: &str = "uze-local";
@@ -259,27 +261,6 @@ pub(super) fn write_catalogue(path: &Path, packages: &[StoredPackage]) -> Result
     )
 }
 
-/// Rejects a manifest-declared path that escapes the package root or carries
-/// no real content: empty, `.`, absolute, or containing a `..` component.
-/// Shared by both of `.codex-plugin/plugin.json`'s path-shaped fields
-/// (`skills`, `mcpServers`) — same discipline as Claude's per-entry
-/// normalization in `claude_exact_coverage`, applied here to a single
-/// declared path rather than an array of them.
-fn normalize_declared_path(raw: &str) -> Option<PathBuf> {
-    let trimmed = raw
-        .trim()
-        .trim_start_matches("./")
-        .trim_end_matches('/')
-        .to_owned();
-    if trimmed.is_empty() || trimmed == "." || Path::new(&trimmed).is_absolute() {
-        return None;
-    }
-    if trimmed.split('/').any(|component| component == "..") {
-        return None;
-    }
-    Some(PathBuf::from(trimmed))
-}
-
 /// Computes which of `resources` (already discovered by UZE's engine) are
 /// actually declared by `.codex-plugin/plugin.json` — the intersection
 /// ADR-013 §2 requires (`provided = discovered ∩ declared`), mirroring
@@ -312,12 +293,12 @@ pub(super) fn codex_exact_coverage(
     let declared_skills_dir = value
         .get("skills")
         .and_then(serde_json::Value::as_str)
-        .and_then(normalize_declared_path);
+        .and_then(normalize_declared_relative_path);
 
     let declared_mcp: std::collections::BTreeSet<String> = value
         .get("mcpServers")
         .and_then(serde_json::Value::as_str)
-        .and_then(normalize_declared_path)
+        .and_then(normalize_declared_relative_path)
         .and_then(|relative| fs::read(package.root.join(relative)).ok())
         .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
         .and_then(|document| {
@@ -669,6 +650,31 @@ mod codex_native_coverage_tests {
         let resources = vec![&r_m];
         let covered = codex_exact_coverage(&pkg, &resources);
         assert!(covered.is_empty());
+        let _ = fs::remove_dir_all(_root);
+    }
+
+    /// Regression companion to Claude's
+    /// `leading_slash_declaration_is_rejected_even_when_it_would_collide_with_a_real_skill`:
+    /// proves the shared `normalize_declared_relative_path` helper rejects
+    /// an absolute `skills` declaration through Codex's own call site too,
+    /// against a resource that actually exists at the path an unfixed
+    /// normalizer would have relativized it to.
+    #[test]
+    fn absolute_skills_declaration_is_rejected_even_when_it_would_collide_with_a_real_skill() {
+        let (_root, pkg) = make_package(
+            "absolute-skills-collision",
+            Some(r#""/skills/""#),
+            None,
+            None,
+        );
+        let r_a = skill_resource(&pkg, "skills", "a");
+        let resources = vec![&r_a];
+        let covered = codex_exact_coverage(&pkg, &resources);
+        assert!(
+            covered.is_empty(),
+            "`/skills/` is an absolute declaration and must never be silently relativized into \
+             covering the real `skills/a` resource: got {covered:?}"
+        );
         let _ = fs::remove_dir_all(_root);
     }
 

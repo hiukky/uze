@@ -112,11 +112,23 @@ impl<T: IntegrationPort> IntegrationPort for AlwaysPresent<T> {
             version: Some("9.9.9".to_owned()),
         }
     }
+    // Deliberately does NOT delegate to `self.0.provision(runner)`: every
+    // real integration's default/override `provision()` calls `self.detect()`
+    // on itself internally (see `IntegrationPort::provision`'s default body
+    // and `OpenCodeIntegration::provision`) — a call that resolves against
+    // the wrapped concrete type, not this wrapper's `detect()` override, and
+    // so re-probes the real environment regardless of the forced-present
+    // detection above. Returning a verified result built from `self.detect()`
+    // here keeps `provision()` and `detect()` consistent under the wrapper.
     fn provision(
         &self,
-        runner: &dyn ProcessRunner,
+        _runner: &dyn ProcessRunner,
     ) -> uze::Result<uze::provisioning::ProvisioningResult> {
-        self.0.provision(runner)
+        Ok(uze::provisioning::ProvisioningResult::verified(
+            uze::provisioning::ProvisionAction::None,
+            "test-always-present",
+            self.detect(),
+        ))
     }
     fn install(&self, home: &UzeHome, detection: &HarnessDetection) -> uze::Result<()> {
         self.0.install(home, detection)

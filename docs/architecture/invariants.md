@@ -50,6 +50,18 @@ harnesses untouched, and the failure observable through `doctor`.
 
 > `tests/vendor_neutral_core.rs::a_failed_publication_leaves_the_package_installed_and_says_so`
 
+### `uze-core` production logic never names a specific harness
+
+No line of `uze-core`'s production code (outside its own test fixtures)
+names Claude, Codex, Gemini, or OpenCode — as an identifier or a string
+literal. Strengthened by ADR-022: a foreign-format importer that once
+named Claude here (`ClaudePluginImporter`, acquisition-time, never
+delivery-time) was confirmed dead — unreachable from `Store::ingest` or
+any other production path — and removed; the invariant now holds with no
+carved-out exception.
+
+> `tests/integration_conformance.rs::core_never_names_a_vendor_harness`
+
 ---
 
 ## Acquisition and provenance (M2)
@@ -246,3 +258,4 @@ and set aside for a reason rather than forgotten.
 | plugin version resolver | `plugin.json` carries no version field yet; nothing depends on one |
 | marketplace federation | one official marketplace; combining several is unproven need |
 | Git sparse checkout for marketplace sources | the `marketplace.json` contract is shaped to allow acquiring only a resolved plugin's subtree later; not implemented |
+| reverse/foreign harness-format import | the acquisition contract is canonical `plugin.json` only (M2); a foreign-format importer (`ClaudePluginImporter`) existed as dead, unreachable code and was removed (ADR-022) — foreign import staying structurally separate from harness delivery is still the intended shape if it returns, but nothing is retained in production speculatively |

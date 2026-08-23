@@ -13,6 +13,8 @@ use uze_core::{
     store::StoredPackage,
 };
 
+use crate::shared::path::normalize_declared_relative_path;
+
 use super::CLAUDE_MARKETPLACE_NAME;
 
 pub(super) fn claude_marketplace_exists(
@@ -202,19 +204,14 @@ pub(super) fn claude_exact_coverage(
             let Some(raw) = entry.as_str() else {
                 continue;
             };
-            let normalized = raw
-                .trim_start_matches("./")
-                .trim_start_matches('/')
-                .trim_end_matches('/')
-                .to_owned();
-            if normalized.is_empty() || normalized == "." || Path::new(&normalized).is_absolute() {
+            // `normalize_declared_relative_path` rejects absolute/escaping/
+            // empty/dot-only declarations outright — see
+            // `crate::shared::path`'s own doc comment for why this must
+            // never strip a leading `/` and let it through as relative.
+            let Some(normalized) = normalize_declared_relative_path(raw) else {
                 continue;
-            }
-            if normalized.split('/').any(|c| c == "..") {
-                continue;
-            }
-            // Deduplicate and store.
-            declared_skill_dirs.insert(normalized);
+            };
+            declared_skill_dirs.insert(normalized.to_string_lossy().into_owned());
         }
     }
 
@@ -601,6 +598,46 @@ mod claude_native_coverage_tests {
         let covered = claude_exact_coverage(&pkg, &resources);
         // Only ./skills/a is valid; others contain .. or absolute or are normalized with ..
         assert_eq!(covered, BTreeSet::from([r_a.identity()]));
+        let _ = fs::remove_dir_all(_root);
+    }
+
+    /// Regression test for a real bug (see `crate::shared::path`'s own doc
+    /// comment): the previous per-entry normalization stripped a leading
+    /// `/` before checking `is_absolute()`, so `/skills/commit` silently
+    /// became the relative declaration `skills/commit` and was ACCEPTED —
+    /// wrongly covering a real skill that lives at exactly that path. The
+    /// escape-attempts test above never caught this because none of its
+    /// declared paths collided with a resource that actually exists;
+    /// this one deliberately does.
+    #[test]
+    fn leading_slash_declaration_is_rejected_even_when_it_would_collide_with_a_real_skill() {
+        let (_root, pkg) = make_package_with_plugin(
+            "leading-slash-collision",
+            r#"{"name":"test-pkg","skills":["/skills/commit"]}"#,
+        );
+        let commit = skill_resource(&pkg, "commit");
+        let resources = vec![&commit];
+        let covered = claude_exact_coverage(&pkg, &resources);
+        assert!(
+            covered.is_empty(),
+            "`/skills/commit` is an absolute declaration and must never be silently \
+             relativized into covering the real `skills/commit` resource: got {covered:?}"
+        );
+        let _ = fs::remove_dir_all(_root);
+    }
+
+    /// Same regression, guarding against whitespace padding defeating the
+    /// absolute check the same way a bare leading `/` would.
+    #[test]
+    fn whitespace_padded_absolute_declaration_is_also_rejected() {
+        let (_root, pkg) = make_package_with_plugin(
+            "whitespace-padded-absolute",
+            r#"{"name":"test-pkg","skills":["  /skills/commit  "]}"#,
+        );
+        let commit = skill_resource(&pkg, "commit");
+        let resources = vec![&commit];
+        let covered = claude_exact_coverage(&pkg, &resources);
+        assert!(covered.is_empty(), "got {covered:?}");
         let _ = fs::remove_dir_all(_root);
     }
 

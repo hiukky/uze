@@ -1,4 +1,21 @@
-//! Registry of standard and recognized foreign importers.
+//! The canonical-acquisition importer: recognizes the standard Agent
+//! Plugins manifest (`plugin.json`) and preserves its standard-native
+//! contents byte-for-byte into evidence and portable resources.
+//!
+//! **Foreign (vendor-authored) format import is not currently
+//! implemented.** A `ClaudePluginImporter` — recognizing a package that
+//! ships only a foreign `.claude-plugin/plugin.json`, with no canonical
+//! `plugin.json` of its own — existed here previously, structurally
+//! separate from `ClaudeIntegration` per this module's own original design
+//! intent (delivery-time vendor knowledge and acquisition-time
+//! foreign-format knowledge were deliberately kept apart — see ADR-022).
+//! It was removed by that same ADR: `Store::ingest` (the only real
+//! acquisition path) never called it, nothing in the CLI or
+//! `uze-application` reached it, and dead vendor-specific code sitting in
+//! this otherwise vendor-neutral crate cost more than it proved. If
+//! reverse/foreign-format import returns, it should be designed against a
+//! real acquisition requirement, in a boundary chosen deliberately then —
+//! not resurrected merely because this comment once existed.
 
 use std::path::{Path, PathBuf};
 
@@ -10,29 +27,20 @@ use crate::{
 };
 
 mod agent_plugin;
-mod claude_plugin;
 
 pub use agent_plugin::AgentPluginImporter;
-pub use claude_plugin::ClaudePluginImporter;
 
 /// Imports a representation owned by an external ecosystem into evidence and
 /// portable resources. This is distinct from `IntegrationPort`, which exposes
 /// already-composed resources to a harness.
+///
+/// `AgentPluginImporter` is, today, this trait's only implementor —
+/// `Store::ingest` depends on the trait rather than the concrete type on
+/// purpose (the acquisition/canonicalization contract is the stable thing;
+/// which canonical format satisfies it is not assumed to stay singular
+/// forever), not because a second implementor is expected imminently.
 pub trait ForeignImporter {
     fn import(&self, root: &Path) -> Result<Option<ImportedBundle>>;
-}
-
-pub fn import_bundle(root: impl AsRef<Path>) -> Result<ImportedBundle> {
-    let root = checked_root(root.as_ref())?;
-    for importer in [
-        &ClaudePluginImporter as &dyn ForeignImporter,
-        &AgentPluginImporter,
-    ] {
-        if let Some(imported) = importer.import(&root)? {
-            return Ok(imported);
-        }
-    }
-    Err(UzeError::MissingManifest(root))
 }
 
 pub(crate) fn import_from_manifest(
@@ -81,19 +89,6 @@ pub(crate) fn import_from_manifest(
         standard_items,
         optional_enhancements,
         compatibility_fallback: true,
-    })
-}
-
-fn checked_root(root: &Path) -> Result<PathBuf> {
-    if !root.exists() {
-        return Err(UzeError::MissingPath(root.to_path_buf()));
-    }
-    if !root.is_dir() {
-        return Err(UzeError::NotDirectory(root.to_path_buf()));
-    }
-    root.canonicalize().map_err(|source| UzeError::Read {
-        path: root.to_path_buf(),
-        source,
     })
 }
 
@@ -161,6 +156,11 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
+    /// Still-valid canonical invariant, now proven directly against the
+    /// live `AgentPluginImporter` — this used to go through the dead
+    /// multi-importer `import_bundle()` dispatcher (removed by ADR-022),
+    /// which added no coverage of its own beyond what calling the one
+    /// real importer directly already proves.
     #[test]
     fn imports_skills_without_changing_their_bytes() {
         let root = temp_bundle("roundtrip");
@@ -168,7 +168,7 @@ mod tests {
         fs::write(root.join("plugin.json"), "{\"name\":\"demo\"}\n").unwrap();
         let original = b"---\nname: review\n---\nKeep exact bytes.\n";
         fs::write(root.join("skills/review/SKILL.md"), original).unwrap();
-        let imported = import_bundle(&root).unwrap();
+        let imported = AgentPluginImporter.import(&root).unwrap().unwrap();
         assert_eq!(
             fs::read(&imported.standard_items[0].path).unwrap(),
             original
@@ -177,6 +177,10 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    /// Same reasoning: still a live, load-bearing safety invariant
+    /// (`Store::ingest` depends on it transitively), now exercised
+    /// directly against `AgentPluginImporter` instead of the removed
+    /// dispatcher.
     #[test]
     fn rejects_parent_directory_manifest_reference() {
         let root = temp_bundle("unsafe");
@@ -187,7 +191,7 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(
-            import_bundle(&root),
+            AgentPluginImporter.import(&root),
             Err(UzeError::UnsafePathReference { .. })
         ));
         fs::remove_dir_all(root).unwrap();

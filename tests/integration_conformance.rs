@@ -741,6 +741,147 @@ fn gemini_explicit_envelope_with_partial_declaration_is_never_topped_up_by_gener
 }
 
 // ============================================================================
+// Path safety hardening — PACKAGE_DELIVERY.
+// ============================================================================
+//
+// Regression coverage for a real bug found by the Path Safety +
+// Foreign Importer Cleanup audit: Claude's per-entry manifest-path
+// normalization used to strip a leading `/` before testing whether a
+// declaration was absolute, so `/skills/foo` silently became the relative
+// declaration `skills/foo` and was ACCEPTED — Codex's independently
+// written equivalent never did this. Both now share one fixed predicate
+// (`crate::shared::path::normalize_declared_relative_path`); this proves
+// the INVARIANT the fix restores, not either vendor's specific syntax:
+//
+//   An invalid/unsafe native manifest path can never be made valid by
+//   destructive normalization.
+//
+//   An invalid native coverage declaration must not suppress the
+//   resource's normal capability-level fallback.
+//
+// Gemini has no manifest-declared path field at all (its Skill coverage
+// is purely structural — see `gemini/extension.rs`), so it is exempt from
+// this section entirely, not silently assumed safe.
+
+fn assert_unsafe_declaration_never_covers_the_colliding_resource(
+    integration: &dyn IntegrationPort,
+    package: &StoredPackage,
+    resource: &Resource,
+    case: &str,
+) {
+    if let Some(plan) = integration.package_exposure_plan(package, &[resource]) {
+        assert!(
+            !plan
+                .provided_resource_identities
+                .contains(&resource.identity()),
+            "[{case}] an unsafe declaration must never cover the real resource it collides \
+             with, even though a destructive normalizer would have made them match"
+        );
+    }
+    // The resource must still be attachable through the normal
+    // capability-level fallback — an invalid declaration must never
+    // suppress delivery of a real, otherwise-valid capability.
+    let fallback = integration.exposure_plan(resource);
+    assert!(
+        !matches!(fallback.mechanism, ExposureMechanism::Unsupported { .. }),
+        "[{case}] a resource left uncovered by an invalid declaration must still route through \
+         normal fallback, never Unsupported"
+    );
+}
+
+#[test]
+fn claude_absolute_declaration_never_covers_colliding_resource_and_fallback_survives() {
+    let (root, package) = build_package(
+        "claude-path-safety-absolute",
+        "flow",
+        &[(
+            ".claude-plugin/plugin.json",
+            r#"{"name":"flow","skills":["/skills/commit"]}"#,
+        )],
+    );
+    let skill = skill_resource(&package, "skills", "commit");
+    let home = UzeHome::at(root.join("uze"));
+    let integration = ClaudeIntegration::new(root.join("claude"), home.clone());
+    mark_setup(&home, &integration);
+    assert_unsafe_declaration_never_covers_the_colliding_resource(
+        &integration,
+        &package,
+        &skill,
+        "claude/absolute",
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn claude_whitespace_padded_absolute_declaration_never_covers_colliding_resource() {
+    let (root, package) = build_package(
+        "claude-path-safety-padded",
+        "flow",
+        &[(
+            ".claude-plugin/plugin.json",
+            r#"{"name":"flow","skills":["  /skills/commit  "]}"#,
+        )],
+    );
+    let skill = skill_resource(&package, "skills", "commit");
+    let home = UzeHome::at(root.join("uze"));
+    let integration = ClaudeIntegration::new(root.join("claude"), home.clone());
+    mark_setup(&home, &integration);
+    assert_unsafe_declaration_never_covers_the_colliding_resource(
+        &integration,
+        &package,
+        &skill,
+        "claude/padded-absolute",
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn codex_absolute_declaration_never_covers_colliding_resource_and_fallback_survives() {
+    let (root, package) = build_package(
+        "codex-path-safety-absolute",
+        "flow",
+        &[(
+            ".codex-plugin/plugin.json",
+            r#"{"name":"flow","skills":"/skills/"}"#,
+        )],
+    );
+    let skill = skill_resource(&package, "skills", "commit");
+    let home = UzeHome::at(root.join("uze"));
+    let integration = CodexIntegration::new(root.join("agents"), home.clone());
+    mark_setup(&home, &integration);
+    assert_unsafe_declaration_never_covers_the_colliding_resource(
+        &integration,
+        &package,
+        &skill,
+        "codex/absolute",
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn codex_escaping_declaration_never_covers_colliding_resource_and_fallback_survives() {
+    let (root, package) = build_package(
+        "codex-path-safety-escape",
+        "flow",
+        &[(
+            ".codex-plugin/plugin.json",
+            r#"{"name":"flow","skills":"skills/../skills"}"#,
+        )],
+    );
+    let skill = skill_resource(&package, "skills", "commit");
+    let home = UzeHome::at(root.join("uze"));
+    let integration = CodexIntegration::new(root.join("agents"), home.clone());
+    mark_setup(&home, &integration);
+    assert_unsafe_declaration_never_covers_the_colliding_resource(
+        &integration,
+        &package,
+        &skill,
+        "codex/escape",
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+// ============================================================================
 // 7/8. attach → inspect Matched → detach → Missing, and destructive detach
 // blocked on Drifted/Conflict — LIFECYCLE (ADR-009).
 // ============================================================================
@@ -1129,38 +1270,23 @@ fn computing_a_package_exposure_plan_never_mutates_store_bytes_on_any_harness() 
 // 12. Core vendor neutrality remains intact — structural.
 // ============================================================================
 //
-// `uze-core`'s DELIVERY-time machinery — routing, receipts, detection
-// caching, state, `IntegrationPort` itself — must never learn a vendor's
-// name. Scans every non-test `.rs` file under `crates/uze-core/src/` for
-// the four harness names appearing as a live identifier or string literal
-// in production code, mirroring `tests/runtime_shim_boundary.rs`'s
+// `uze-core` production logic is vendor-neutral: no line of it may name a
+// specific harness. Scans every non-test `.rs` file under
+// `crates/uze-core/src/` for the four harness names appearing as a live
+// identifier or string literal, mirroring `tests/runtime_shim_boundary.rs`'s
 // technique for the shim-boundary invariant.
 //
-// Two deliberate scope narrowings, both found by running this test
-// against the unscoped version first and inspecting every hit rather than
-// assuming:
-//
-// 1. `#[cfg(test)]` module bodies are skipped. Core's own unit tests use
-//    realistic strings like `"claude-code"`/`"codex"` as illustrative
-//    fixture values for genuinely generic fields (`AttachmentReceipt.
-//    integration: String`) — that is not vendor coupling, it is a test
-//    picking a recognizable example over `"foo"`.
-// 2. `crates/uze-core/src/importers/` is skipped, narrowly and by name,
-//    not swept in with the rest of Core. `importers/claude_plugin.rs` is
-//    real, production, non-test code that names a vendor
-//    (`ClaudePluginImporter`, `"claude-plugin"`) — a genuine finding this
-//    test surfaced, not a false positive. It survives here because its
-//    own doc comment already states the distinction this audit confirms:
-//    "deliberately unrelated to ClaudeIntegration, which is a peer
-//    runtime adapter" — it recognizes a foreign, published manifest
-//    FORMAT at one-time acquisition/import, never at delivery, and never
-//    branches Core's own routing on it. Whether that acquisition-time
-//    exception should also be considered a violation of this repo's own
-//    README claim ("no harness name appears in uze-core") is a real,
-//    open question this suite deliberately leaves unresolved rather than
-//    silently deciding either way — flagged in the conformance audit
-//    report, not fixed here (refactoring `uze-core` is out of this
-//    suite's scope).
+// This invariant was strengthened by the Path Safety + Foreign Importer
+// Cleanup milestone (ADR-022): `crates/uze-core/src/importers/
+// claude_plugin.rs` used to be the one real, production exception (a
+// vendor-named foreign-format importer, confirmed dead — never reached by
+// `Store::ingest` or any other production path — and removed). With it
+// gone, this test needs only one scope narrowing, not two:
+// `#[cfg(test)]` module bodies are skipped, because Core's own unit tests
+// use realistic strings like `"claude-code"`/`"codex"` as illustrative
+// fixture values for genuinely generic fields (`AttachmentReceipt.
+// integration: String`) — that is not vendor coupling, it is a test
+// picking a recognizable example over `"foo"`.
 
 const VENDOR_NAMES: [&str; 4] = ["claude", "codex", "gemini", "opencode"];
 
@@ -1174,13 +1300,6 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        // Excludes both the `importers/` subdirectory and its sibling
-        // mod-root file `importers.rs` — see this test's own doc comment
-        // for why the foreign-format-import subsystem is out of scope.
-        let stem_is_importers = path.file_stem().and_then(|s| s.to_str()) == Some("importers");
-        if stem_is_importers {
-            continue;
-        }
         if path.is_dir() {
             rust_files(&path, out);
         } else if path.extension().is_some_and(|ext| ext == "rs") {
@@ -1260,9 +1379,8 @@ fn core_never_names_a_vendor_harness() {
 
     assert!(
         violations.is_empty(),
-        "uze-core's delivery-time machinery must never name a specific harness (production \
-         code only — test fixtures and crates/uze-core/src/importers/ are deliberately \
-         excluded; see this test's own doc comment):\n{}",
+        "uze-core production logic must never name a specific harness (test fixtures are \
+         deliberately excluded; see this test's own doc comment):\n{}",
         violations.join("\n")
     );
 }

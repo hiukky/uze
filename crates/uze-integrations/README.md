@@ -5,6 +5,16 @@ implements `uze-core::integration::IntegrationPort` — the only contract Core
 knows. No integration imports another; no harness name appears in
 `uze-core`, `uze-application`'s Store/Engine/Router layer, or any other
 integration. See `docs/adr/005-establish-peer-harness-integrations.md`.
+Enforced structurally, not just by convention: `tests/integration_conformance.rs::core_never_names_a_vendor_harness`.
+
+This is about *delivery*: canonical Store content projected out to each
+harness. Acquisition can, in principle, run the other direction — a
+foreign, vendor-authored artifact imported *into* canonical form — and
+that is a deliberately separate concern (`uze-core::importers`), not this
+crate's job even in principle. It is currently unimplemented in
+production: the one foreign importer this codebase ever had
+(`ClaudePluginImporter`) was confirmed dead and removed (ADR-022). Only
+the canonical `plugin.json` importer (`AgentPluginImporter`) is live.
 
 Per-harness detail lives in each integration's own README:
 

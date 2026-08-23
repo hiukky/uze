@@ -96,11 +96,19 @@ impl<T: IntegrationPort> IntegrationPort for AlwaysPresent<T> {
             version: Some("9.9.9".to_owned()),
         }
     }
+    // See `tests/exposure_naming.rs`'s identical override for why this must
+    // not delegate to `self.0.provision(runner)`: the wrapped integration's
+    // own `provision()` re-probes the real environment via `self.detect()`
+    // on itself, bypassing this wrapper's forced-present `detect()` override.
     fn provision(
         &self,
-        runner: &dyn ProcessRunner,
+        _runner: &dyn ProcessRunner,
     ) -> uze::Result<uze::provisioning::ProvisioningResult> {
-        self.0.provision(runner)
+        Ok(uze::provisioning::ProvisioningResult::verified(
+            uze::provisioning::ProvisionAction::None,
+            "test-always-present",
+            self.detect(),
+        ))
     }
     fn install(&self, home: &UzeHome, detection: &HarnessDetection) -> uze::Result<()> {
         self.0.install(home, detection)
