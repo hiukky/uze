@@ -61,7 +61,7 @@ pub(super) fn generated_root(uze_home: &UzeHome) -> PathBuf {
         .join("commands")
 }
 
-fn generated_command_dir(uze_home: &UzeHome, resource: &Resource) -> PathBuf {
+pub(super) fn generated_command_dir(uze_home: &UzeHome, resource: &Resource) -> PathBuf {
     let package_id = Resource::package_root(resource)
         .and_then(|root| root.file_name())
         .and_then(|name| name.to_str())
@@ -72,15 +72,42 @@ fn generated_command_dir(uze_home: &UzeHome, resource: &Resource) -> PathBuf {
     generated_root(uze_home).join(package_id).join(name)
 }
 
+pub(super) use generated_command_dir as generated_artifact_dir;
+
 /// Deterministically materializes (or refreshes) one command's delivered
-/// skill directory: `SKILL.md` with `name`/`description` frontmatter and
-/// the canonical prompt body verbatim, plus `agents/openai.yaml` carrying
-/// `policy.allow_implicit_invocation: false` so the model never
+/// skill directory: `SKILL.md` with the stable namespaced invocation label
+/// as its `name` (`flow:review`), `description` from the canonical
+/// frontmatter, the canonical prompt body verbatim, plus `agents/openai.yaml`
+/// carrying `policy.allow_implicit_invocation: false` so the model never
 /// auto-selects a Command. Idempotent and rebuilt wholesale — the directory
 /// is entirely UZE-owned and non-authoritative (ADR-013 §4).
 pub(super) fn materialize_generated_command(
     uze_home: &UzeHome,
     resource: &Resource,
+) -> Result<PathBuf> {
+    materialize_generated_skill_file(uze_home, resource, true)
+}
+
+/// Deterministically materializes (or refreshes) one Skill's delivered
+/// directory in the shared skills root: `SKILL.md` carrying the stable
+/// namespaced invocation label as its `name` and the canonical
+/// name/description/body preserved from the Store — **without** the
+/// explicit-only policy, so the Skill stays model-discoverable exactly as a
+/// plain Skill. Codex derives the model-visible name from frontmatter
+/// (verified against codex-cli 0.149.0), so namespacing the directory alone
+/// is not enough; the generated wrapper is the only way to show
+/// `flow:review` without rewriting the canonical bytes.
+pub(super) fn materialize_generated_skill(
+    uze_home: &UzeHome,
+    resource: &Resource,
+) -> Result<PathBuf> {
+    materialize_generated_skill_file(uze_home, resource, false)
+}
+
+fn materialize_generated_skill_file(
+    uze_home: &UzeHome,
+    resource: &Resource,
+    explicit_only: bool,
 ) -> Result<PathBuf> {
     let dir = generated_command_dir(uze_home, resource);
     if dir.exists() {
@@ -93,16 +120,10 @@ pub(super) fn materialize_generated_command(
         path: dir.clone(),
         source,
     })?;
-    fs::create_dir_all(dir.join("agents")).map_err(|source| UzeError::Write {
-        path: dir.join("agents"),
-        source,
-    })?;
-    let name = resource
-        .logical_capability_name()
-        .unwrap_or_else(|| resource.name());
+    let label = codex_invocation_label(resource).unwrap_or_else(|| resource.name());
     let (description, body) = parse_command_body(&resource.capability.payload);
     let mut skill = String::from("---\n");
-    skill.push_str(&format!("name: {name}\n"));
+    skill.push_str(&format!("name: {label}\n"));
     if let Some(description) = description {
         skill.push_str(&format!("description: {description}\n"));
     }
@@ -112,21 +133,40 @@ pub(super) fn materialize_generated_command(
         path: dir.join("SKILL.md"),
         source,
     })?;
-    fs::write(dir.join("agents/openai.yaml"), EXPLICIT_ONLY_POLICY_YAML).map_err(|source| {
-        UzeError::Write {
-            path: dir.join("agents/openai.yaml"),
+    if explicit_only {
+        fs::create_dir_all(dir.join("agents")).map_err(|source| UzeError::Write {
+            path: dir.join("agents"),
             source,
-        }
-    })?;
+        })?;
+        fs::write(dir.join("agents/openai.yaml"), EXPLICIT_ONLY_POLICY_YAML).map_err(|source| {
+            UzeError::Write {
+                path: dir.join("agents/openai.yaml"),
+                source,
+            }
+        })?;
+    }
     Ok(dir)
 }
 
-/// Codex derives a skill's user-facing identity from its directory name in
-/// `~/.agents/skills`, so the same bare-then-qualified candidates as
-/// Skills apply —  no extension (a directory, not a file).
+/// Codex's physical invocation label — the UZE semantic label
+/// (`flow:review`) verbatim: Codex accepted colon-named skills in
+/// codex-cli 0.149.0 (verified: `flow:review` appears in the model-visible
+/// list exactly as named, and the explicit-only policy keeps working).
+pub(super) fn codex_invocation_label(resource: &Resource) -> Option<String> {
+    use uze_core::integration::qualified_capability_name;
+    let uze_core::project::ResourceOrigin::Package { id, .. } = &resource.origin else {
+        return None;
+    };
+    let logical = resource.logical_capability_name()?;
+    Some(qualified_capability_name(id.as_str(), &logical))
+}
+
+/// Codex derives a skill's user-facing identity from its `name` (verified:
+/// frontmatter `name` wins over the directory name), so the single
+/// candidate is the stable namespaced label itself — no bare alias, no
+/// collision-dependent qualification (ADR-026).
 pub(super) fn codex_command_exposure_name_candidates(resource: &Resource) -> Vec<String> {
-    use uze_core::integration::short_then_qualified_exposure_name_candidates;
-    short_then_qualified_exposure_name_candidates(resource)
+    codex_invocation_label(resource).into_iter().collect()
 }
 
 impl CodexIntegration {
@@ -228,7 +268,7 @@ mod tests {
         );
         let dir = materialize_generated_command(&home, &resource).unwrap();
         let skill = fs::read_to_string(dir.join("SKILL.md")).unwrap();
-        assert!(skill.starts_with("---\nname: review\ndescription: Review code\n---\n"));
+        assert!(skill.starts_with("---\nname: flow:review\ndescription: Review code\n---\n"));
         assert!(skill.ends_with("\nReview this diff.\n"));
         // The explicit-only policy is the semantic load-bearing piece: it
         // keeps the model from auto-selecting a Command.

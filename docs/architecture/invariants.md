@@ -80,6 +80,25 @@ user invocation (`$name` / `/skills`) is preserving the Command semantics.
 > `tests/command_capability_conformance.rs::real_codex_dogfood_explicit_only_preserves_command_semantics`
 > `tests/command_capability_conformance.rs::same_name_skill_and_command_stay_distinct_on_codex`
 
+### Invocation labels are stable and presentation-only (ADR-026)
+
+Plugin capabilities exposed through UZE carry a stable, plugin-qualified
+invocation label (`<plugin>:<capability>`) as their single naming
+candidate: deterministic, predictable, independent of installation order
+and of which other plugins are installed, with no bare aliases. The label is
+a presentation concern — canonical Resource identity, Store bytes, package
+layout, coverage identities (`provided_resource_identities`) and capability
+bodies are untouched — and the vendor integration owns the physical
+encoding (Claude's native plugin namespace, Codex/OpenCode verbatim
+`flow:review`, Gemini's nested `flow/review.toml` path that the vendor
+turns into `/flow:review`).
+
+> `tests/invocation_labels.rs::installing_another_plugin_never_renames_an_existing_one`
+> `tests/invocation_labels.rs::labels_never_touch_canonical_identity_store_or_receipts`
+> `tests/invocation_labels.rs::claude_declares_plain_and_namespaces_natively_without_double_prefix`
+> `tests/invocation_labels.rs::physical_representations_preserve_the_semantic_label`
+> `tests/exposure_naming.rs::two_packages_with_the_same_skill_name_coexist_deterministically`
+
 ---
 
 ## Acquisition and provenance (M2)

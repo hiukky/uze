@@ -22,8 +22,7 @@ use uze_core::{
     integration::{
         AttachmentInspection, AttachmentReceipt, AttachmentState, HarnessDetection,
         IntegrationPort, ManagedArtifact, default_exposure_name_candidates,
-        detach_standard_receipt, inspect_standard_receipt,
-        short_then_qualified_exposure_name_candidates,
+        detach_standard_receipt, inspect_standard_receipt, qualified_exposure_name_candidates,
     },
     project::Resource,
     provisioning::{ProcessRunner, ProvisioningResult},
@@ -118,17 +117,18 @@ impl IntegrationPort for OpenCodeIntegration {
         &["opencode2"]
     }
 
-    /// OpenCode V2 discovers `~/.agents/skills` via path-derived ID and
-    /// exposes Skills as slash commands (`/id`) by default (`slash: true`
-    /// unless opted out). Its `.md` commands are likewise user-typed by
-    /// bare name (`/review`), so both get the bare-logical-first, then
-    /// qualified-fallback candidates (extension included for commands —
-    /// the physical file name a registry shows). MCP stays on the default
+    /// OpenCode derives a skill's ID from its path and a command's name
+    /// from its path relative to the commands directory — with no name
+    /// regex enforced in V2 — so UZE exposes the stable namespaced
+    /// invocation label verbatim (`flow:review`) as the single, deterministic
+    /// candidate for both Skills (physical directory name) and Commands
+    /// (physical file name, `.md` extension added). No bare alias, no
+    /// collision-dependent qualification (ADR-026). MCP stays on the default
     /// fully-qualified policy — capability naming policies are never mixed
     /// just because all are `Resource`s.
     fn exposure_name_candidates(&self, resource: &Resource) -> Vec<String> {
         match resource.capability.kind {
-            CapabilityKind::AgentSkill => short_then_qualified_exposure_name_candidates(resource),
+            CapabilityKind::AgentSkill => qualified_exposure_name_candidates(resource),
             CapabilityKind::Command => {
                 commands::opencode_command_exposure_name_candidates(resource)
             }
@@ -139,9 +139,8 @@ impl IntegrationPort for OpenCodeIntegration {
     /// Codex and Gemini CLI both discover Skills from this exact same
     /// `~/.agents/skills` directory (see their own overrides of this
     /// method), so a name this integration claims here must be treated as
-    /// claimed for them too — otherwise OpenCode's own preference for the
-    /// bare name collides with their always-qualified default, leaving two
-    /// symlinks for one skill in the one folder OpenCode scans.
+    /// claimed for them too — every member derives the same single
+    /// namespaced label, so the group always converges on one entry.
     fn shared_agent_skill_root(&self) -> Option<PathBuf> {
         Some(self.skills_dir.clone())
     }

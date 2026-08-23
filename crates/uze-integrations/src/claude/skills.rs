@@ -96,16 +96,27 @@ impl ClaudeIntegration {
 pub(super) fn materialize_shim(
     shim_root: &Path,
     skill_source_dir: &Path,
-    name: &str,
+    entry_name: &str,
+    namespace: Option<&str>,
 ) -> Result<()> {
     let plugin_dir = shim_root.join(".claude-plugin");
     fs::create_dir_all(&plugin_dir).map_err(|source| UzeError::Write {
         path: plugin_dir.clone(),
         source,
     })?;
+    // The manifest plugin `name` is what Claude uses to namespace
+    // components (plugins-reference: "This name is used for namespacing
+    // components"), so it must be the *namespace* (`flow`) while the shim
+    // directory carries the full stable label (`flow:review`). Together
+    // with the skill's own frontmatter `name` (`review`) Claude exposes
+    // `/flow:review` — never `/flow:flow:review` (ADR-026). A canonical
+    // SKILL.md without a `name` field relies on Claude's directory-name
+    // fallback for the skill name; packages should ship `name` frontmatter
+    // (documented residual risk).
+    let plugin_name = namespace.unwrap_or(entry_name);
     let manifest = serde_json::json!({
         "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
-        "name": name,
+        "name": plugin_name,
         "version": "0.1.0",
         "description": "UZE-managed skill, referencing the UZE store.",
         "skills": ["./"],

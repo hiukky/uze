@@ -41,7 +41,10 @@ mod skills;
 pub use mcp::detach_mcp_entry;
 
 use crate::shared::process::run_quiet;
-use commands::{codex_command_exposure_name_candidates, materialize_generated_command};
+use commands::{
+    codex_command_exposure_name_candidates, materialize_generated_command,
+    materialize_generated_skill,
+};
 use generate::{
     GENERATED_MARKETPLACE_NAME, GENERATED_PLUGIN_KIND, generatable, generated_catalogue_matches,
     generated_exact_coverage, generated_package_receipt, generated_root,
@@ -288,13 +291,16 @@ impl IntegrationPort for CodexIntegration {
         }
     }
 
-    /// Codex's command naming decision mirrors its Skills: the directory
-    /// name in `~/.agents/skills` is the user-facing identity, so bare
-    /// logical first, then fully qualified. MCP stays on the default
-    /// fully-qualified policy, and commands are never mixed with MCP naming
-    /// just because all are `Resource`s.
+    /// Codex's naming decision: every UZE-projected Skill and Command gets
+    /// its stable namespaced invocation label (`flow:review`) as the single
+    /// candidate — never a bare alias, never collision-dependent naming
+    /// (ADR-026). Codex accepts `:` in skill names (verified against
+    /// codex-cli 0.149.0). MCP stays on the default fully-qualified policy.
     fn exposure_name_candidates(&self, resource: &Resource) -> Vec<String> {
-        if resource.capability.kind == CapabilityKind::Command {
+        if matches!(
+            resource.capability.kind,
+            CapabilityKind::AgentSkill | CapabilityKind::Command
+        ) {
             return codex_command_exposure_name_candidates(resource);
         }
         default_exposure_name_candidates(resource)
@@ -336,8 +342,21 @@ impl IntegrationPort for CodexIntegration {
         let plan = self.exposure_plan(resource);
         match &plan.mechanism {
             ExposureMechanism::ManagedUserScopeReference { .. } => {
-                if resource.capability.kind == CapabilityKind::Command {
-                    materialize_generated_command(&self.uze_home, resource)?;
+                // Only materialize when this resource is the one that owns
+                // the physical entry. When the shared-root resolution reused
+                // another integration's receipt (resolved_artifact_target
+                // set), the existing artifact is authoritative and nothing
+                // new may replace it.
+                if resource.resolved_artifact_target.is_none() {
+                    match resource.capability.kind {
+                        CapabilityKind::Command => {
+                            materialize_generated_command(&self.uze_home, resource)?;
+                        }
+                        CapabilityKind::AgentSkill => {
+                            materialize_generated_skill(&self.uze_home, resource)?;
+                        }
+                        _ => {}
+                    }
                 }
                 Ok(Some(plan.mechanism.attach()?))
             }

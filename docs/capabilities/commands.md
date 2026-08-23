@@ -164,13 +164,35 @@ Store; delivery/receipts never mutate Store bytes.
 
 ## Naming
 
-Same principles as Skills: bare logical name first where the harness UX is
-the user-typed name (OpenCode `/review`, Gemini `/review`, Codex skill
-name), fully package-qualified on collision (`beta-review`). The file
-extension for file-based registries (`.md`, `.toml`) is a vendor naming
-constraint owned by each integration, never by Application. Resolution is
-deterministic via the existing first-unclaimed-candidate algorithm (see
-`tests/command_capability_conformance.rs`).
+Stable, plugin-qualified invocation labels (ADR-026): every UZE-projected
+Skill and Command gets exactly one candidate —
+
+```
+<plugin>:<capability>
+```
+
+Examples: `flow:review`, `openspec:proposal`, `security:audit`. No bare
+alias (`review` is never exposed alone) and no collision-dependent
+qualification: installing another plugin never renames an existing
+capability. The label is a presentation concern — canonical Resource
+identity (`package:flow:commands/review.md`), Store bytes, package layout
+and coverage identities are untouched.
+
+Physical encoding per harness (vendor owns syntax):
+
+| Harness | Commands | Skills |
+|---|---|---|
+| Claude Code | plugin declares plain `review`; Claude namespaces (`/flow:review`) | plugin declares plain `review`; Claude namespaces (`/flow:review`); shim fallback: dir `flow:review`, manifest plugin name `flow` |
+| Codex | generated explicit-only Skill named `flow:review` | generated wrapper SKILL.md `name: flow:review` (Codex uses frontmatter `name`, verified) |
+| OpenCode V2 | `commands/flow:review.md` | `~/.agents/skills/flow:review/` (path-derived ID) |
+| Gemini CLI | nested `commands/flow/review.toml` → vendor `/flow:review` | `~/.agents/skills/flow:review/` (shared root) |
+
+Same-name Skill + Command (one package): Claude vendor-merges and the skill
+wins; Codex keeps package-delivered skills inside the plugin (decomposed
+both-user-scope is deterministically blocked, never silently renamed);
+OpenCode and Gemini keep commands and skills in separate registries. UZE
+invents no canonical suffix disambiguation — reported, not papered over
+(ADR-026).
 
 ## Conformance
 

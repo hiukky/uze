@@ -266,7 +266,7 @@ fn opencode_delivers_command_natively_via_byte_identical_reference() {
     else {
         panic!("expected a managed reference, got {:?}", plan.mechanism);
     };
-    assert_eq!(entry_name, "review.md");
+    assert_eq!(entry_name, "workflow:review.md");
     assert_eq!(discovery_root, &root.join("config/opencode/commands"));
     // The reference points at the canonical bytes themselves: byte-identical.
     assert_eq!(
@@ -291,7 +291,11 @@ fn gemini_delivers_command_natively_via_generated_toml() {
     else {
         panic!("expected a managed file, got {:?}", plan.mechanism);
     };
-    assert_eq!(target_file, &root.join(".gemini/commands/review.toml"));
+    assert_eq!(
+        target_file,
+        &root.join(".gemini/commands/workflow/review.toml"),
+        "Gemini namespaces by nested path (vendor converts / to :)"
+    );
     assert!(
         expected_content
             .contains("description = \"Review code for correctness and missing tests\"")
@@ -319,7 +323,7 @@ fn codex_delivers_command_natively_via_explicit_only_skill() {
     let ExposureMechanism::ManagedUserScopeReference { entry_name, .. } = &plan.mechanism else {
         panic!("expected a managed reference, got {:?}", plan.mechanism);
     };
-    assert_eq!(entry_name, "review");
+    assert_eq!(entry_name, "workflow:review");
     assert!(
         plan.evidence.contains("NATIVE"),
         "the route must be reported honestly: {}",
@@ -483,21 +487,17 @@ exit 0
         "the package covers the Skill; no separate Skill receipt"
     );
 
-    let ManagedArtifact::SymlinkReference {
-        target: command_target,
-        ..
-    } = &command_receipt.artifact
-    else {
+    let ManagedArtifact::SymlinkReference { path, target } = &command_receipt.artifact else {
         panic!("expected symlink artifact");
     };
     assert!(
-        command_target.join("agents/openai.yaml").is_file(),
+        target.join("agents/openai.yaml").is_file(),
         "the Command artifact is explicit-only (not model-invocable)"
     );
     assert_eq!(
-        command_target.file_name().unwrap(),
-        "review",
-        "the user-facing bare name stays with the Command"
+        path.file_name().unwrap(),
+        "workflow:review",
+        "the user-facing stable namespaced label stays with the Command"
     );
 
     // Exact coverage claim: the plan provided the Skill identity, never the
@@ -921,7 +921,7 @@ fn command_fixture(root: &Path, package_id: &str) -> PathBuf {
 }
 
 #[test]
-fn same_named_commands_from_two_packages_resolve_deterministically() {
+fn same_named_commands_from_two_packages_are_independently_addressed() {
     let root = temp("collision");
     let agents_home = root.join("opencode-agents");
     let uze_home = UzeHome::at(root.join("uze-home"));
@@ -945,14 +945,21 @@ fn same_named_commands_from_two_packages_resolve_deterministically() {
     )
     .unwrap();
 
+    // Installation order cannot rename anything: each command keeps its
+    // own stable namespaced label (ADR-026). Installing beta leaves
+    // alpha:review.md untouched.
     let commands_dir = root.join("opencode-config/commands");
     assert!(
-        commands_dir.join("review.md").is_symlink(),
-        "first package keeps the bare name"
+        commands_dir.join("alpha:review.md").is_symlink(),
+        "alpha keeps its own namespaced label"
     );
     assert!(
-        commands_dir.join("beta-review.md").is_symlink(),
-        "second package resolves to its qualified name"
+        commands_dir.join("beta:review.md").is_symlink(),
+        "beta gets its own namespaced label, independently addressable"
+    );
+    assert!(
+        !commands_dir.join("review.md").exists(),
+        "no bare alias is created"
     );
     let receipts = state::receipts(&uze_home, None).unwrap();
     let mut names: Vec<String> = receipts
@@ -973,7 +980,7 @@ fn same_named_commands_from_two_packages_resolve_deterministically() {
     names.sort();
     assert_eq!(
         names,
-        vec!["beta-review.md".to_owned(), "review.md".to_owned()]
+        vec!["alpha:review.md".to_owned(), "beta:review.md".to_owned()]
     );
     fs::remove_dir_all(root).unwrap();
 }
@@ -1141,7 +1148,7 @@ fn skill_routing_and_receipt_identity_are_unchanged() {
     else {
         panic!("expected managed reference");
     };
-    assert_eq!(entry_name, "review");
+    assert_eq!(entry_name, "workflow:review");
     // A same-named Command does not collide with the Skill: distinct roots
     // and distinct receipt identities.
     let command = command_resources(&resources)[0].clone();
@@ -1150,7 +1157,7 @@ fn skill_routing_and_receipt_identity_are_unchanged() {
     else {
         panic!("expected managed reference");
     };
-    assert_eq!(entry_name, "review.md");
+    assert_eq!(entry_name, "workflow:review.md");
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -1251,10 +1258,12 @@ fn real_codex_dogfood_explicit_only_preserves_command_semantics() {
         valid.contains("normal: Run normal tasks N"),
         "a plain Skill stays implicitly discoverable in the model-visible list"
     );
-    // (2) Command: NOT implicitly discoverable.
+    // (2) Command: NOT implicitly discoverable — and its namespaced label
+    // (`workflow:review`) is what would appear if the policy ever failed.
     assert!(
-        !valid.contains("review: Review code for correctness and missing tests"),
-        "the explicit-only Command must not be offered to the model"
+        !valid.contains("workflow:review: Review code for correctness and missing tests")
+            && !valid.contains("review: Review code for correctness and missing tests"),
+        "the explicit-only, namespaced Command must not be offered to the model"
     );
 
     // Control: malformed policy metadata must restore the listing, proving
@@ -1262,8 +1271,8 @@ fn real_codex_dogfood_explicit_only_preserves_command_semantics() {
     fs::write(target.join("agents/openai.yaml"), "policy: [broken yaml\n").unwrap();
     let malformed = run_codex_prompt_input(&codex_home).expect("codex prompt-input runs");
     assert!(
-        malformed.contains("review: Review code for correctness and missing tests"),
-        "control: malformed policy metadata must not suppress the Command"
+        malformed.contains("workflow:review: Review code for correctness and missing tests"),
+        "control: malformed policy metadata must not suppress the namespaced Command"
     );
 
     // (6) Store immutability.

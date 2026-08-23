@@ -220,9 +220,9 @@ fn one_plugin_install_is_planned_once_for_native_and_decomposed_harnesses() {
             .unwrap();
     // No "uze-" collision-avoidance prefix any more (it never participated
     // in ownership). MCP stays fully qualified (package-logical) since its
-    // physical name is not user-visible; Skills now try bare logical first
-    // then qualified fallback — OpenCode V2's slash ID is path-derived, like
-    // Claude, so short names are user-visible there as well.
+    // physical name is not user-visible; Skills and Commands get their
+    // stable namespaced invocation label (ADR-026) — the path-derived
+    // OpenCode V2 slash ID, user-visible like Claude's.
     assert_eq!(
         config["mcp"]["uze-plugin-first-conformance-conformance"]["type"],
         "local"
@@ -232,8 +232,9 @@ fn one_plugin_install_is_planned_once_for_native_and_decomposed_harnesses() {
         "__UZE_MCP_FIXTURE_BINARY__"
     );
     assert!(
-        root.join("agents/skills/uze-plugin-first").is_symlink(),
-        "OpenCode V2 should expose the skill as bare logical first"
+        root.join("agents/skills/uze-plugin-first-conformance:uze-plugin-first")
+            .is_symlink(),
+        "OpenCode V2 should expose the skill under its stable namespaced label"
     );
     fs::remove_dir_all(root).unwrap();
 }

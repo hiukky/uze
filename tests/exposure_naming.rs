@@ -280,7 +280,7 @@ fn default_candidates_carry_no_uze_collision_prefix() {
 // --- Official /uze package: no special-case ---------------------------------
 
 #[test]
-fn package_uze_plus_skill_uze_naturally_gets_the_bare_name_uze_no_special_case() {
+fn package_uze_plus_skill_uze_naturally_gets_the_stable_label_no_special_case() {
     let root = temp("uze-natural");
     let (application, agents_home) = app_with_opencode(&root);
     install(&application, official_package());
@@ -290,7 +290,11 @@ fn package_uze_plus_skill_uze_naturally_gets_the_bare_name_uze_no_special_case()
         .map(|entry| entry.unwrap().file_name().to_str().unwrap().to_owned())
         .collect();
     names.sort();
-    assert_eq!(names, vec!["uze".to_owned()]);
+    assert_eq!(
+        names,
+        vec!["uze:uze".to_owned()],
+        "the official package gets the same stable namespaced label as any other plugin (ADR-026)"
+    );
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -308,10 +312,10 @@ fn a_legacy_uze_prefixed_receipt_is_reused_verbatim_never_recomputed_or_duplicat
 
     let summary = install(&application, package_dir);
     let skills_dir = agents_home.join("skills");
-    let fresh_path = skills_dir.join("review");
+    let fresh_path = skills_dir.join("legacy-pkg:review");
     assert!(
         fresh_path.is_symlink(),
-        "sanity: a fresh install with no collision claims the short name"
+        "sanity: a fresh install claims its stable namespaced label"
     );
 
     // Simulate a pre-refactor installation: physically rename the artifact
@@ -335,7 +339,7 @@ fn a_legacy_uze_prefixed_receipt_is_reused_verbatim_never_recomputed_or_duplicat
     // test isolates the legacy receipt reuse, not the presence of the default plugin.
     let before_filtered: Vec<String> = before_listing
         .iter()
-        .filter(|name| *name != "uze")
+        .filter(|name| *name != "uze:uze")
         .cloned()
         .collect();
     assert_eq!(before_filtered, vec![legacy_name.to_owned()]);
@@ -352,7 +356,7 @@ fn a_legacy_uze_prefixed_receipt_is_reused_verbatim_never_recomputed_or_duplicat
     after_listing.sort();
     let after_filtered: Vec<String> = after_listing
         .iter()
-        .filter(|name| *name != "uze")
+        .filter(|name| *name != "uze:uze")
         .cloned()
         .collect();
     assert_eq!(
@@ -362,7 +366,7 @@ fn a_legacy_uze_prefixed_receipt_is_reused_verbatim_never_recomputed_or_duplicat
     );
     // The default `uze` is expected alongside the legacy artifact after setup.
     assert!(
-        after_listing.contains(&"uze".to_owned()),
+        after_listing.contains(&"uze:uze".to_owned()),
         "default uze skill should be present alongside the legacy artifact"
     );
     fs::remove_dir_all(root).unwrap();
@@ -410,12 +414,13 @@ fn two_packages_with_the_same_skill_name_coexist_deterministically() {
         .map(|entry| entry.unwrap().file_name().to_str().unwrap().to_owned())
         .collect();
     names.sort();
-    // Deterministic: the first safely-attached resource claims the short
-    // name; a later one wanting the same name falls back to its
-    // package-qualified form. Not an ordering guarantee beyond that.
+    // Stable namespaced labels: each package's skill keeps its own
+    // `name:label` regardless of installation order and of the other
+    // package's presence (ADR-026). Installing `security` after `frontend`
+    // never renames `frontend:review`.
     assert_eq!(
         names,
-        vec!["review".to_owned(), "security-review".to_owned()]
+        vec!["frontend:review".to_owned(), "security:review".to_owned()]
     );
 
     // Removing one must not disturb the other.
@@ -424,7 +429,7 @@ fn two_packages_with_the_same_skill_name_coexist_deterministically() {
         .unwrap()
         .map(|entry| entry.unwrap().file_name().to_str().unwrap().to_owned())
         .collect();
-    assert_eq!(remaining, vec!["security-review".to_owned()]);
+    assert_eq!(remaining, vec!["security:review".to_owned()]);
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -436,10 +441,14 @@ fn a_foreign_artifact_occupying_the_short_name_is_never_overwritten() {
     let (application, agents_home) = app_with_opencode(&root);
     let package_dir = skill_fixture(&root.join("fixtures"), "security", "review");
 
-    // A foreign, non-UZE directory already occupies the exact short name
-    // UZE would otherwise claim.
-    fs::create_dir_all(agents_home.join("skills/review")).unwrap();
-    fs::write(agents_home.join("skills/review/SKILL.md"), "not ours").unwrap();
+    // A foreign, non-UZE directory already occupies the exact namespaced
+    // label UZE would claim.
+    fs::create_dir_all(agents_home.join("skills/security:review")).unwrap();
+    fs::write(
+        agents_home.join("skills/security:review/SKILL.md"),
+        "not ours",
+    )
+    .unwrap();
 
     let result =
         application.add_plugin(PackageSource::local(package_dir), &uze::trust::AlwaysTrust);
@@ -449,7 +458,7 @@ fn a_foreign_artifact_occupying_the_short_name_is_never_overwritten() {
          not a silent skip or an automatic fallback retry: {result:?}"
     );
     assert_eq!(
-        fs::read_to_string(agents_home.join("skills/review/SKILL.md")).unwrap(),
+        fs::read_to_string(agents_home.join("skills/security:review/SKILL.md")).unwrap(),
         "not ours",
         "the foreign artifact must be completely untouched"
     );
@@ -471,23 +480,23 @@ fn inspect_matched_missing_drifted_and_detach_all_still_work_under_new_naming() 
     assert_eq!(inspection.managed_state.matched, 1);
 
     // MISSING: remove the physical artifact by hand.
-    fs::remove_file(agents_home.join("skills/review")).unwrap();
+    fs::remove_file(agents_home.join("skills/acme:review")).unwrap();
     let inspection = application.inspect_plugin("acme").unwrap();
     assert_eq!(inspection.managed_state.missing, 1);
 
     // Re-add is idempotent: recreates exactly the same (existing-receipt)
     // artifact name.
     application.setup(None).unwrap();
-    assert!(agents_home.join("skills/review").is_symlink());
+    assert!(agents_home.join("skills/acme:review").is_symlink());
     let inspection = application.inspect_plugin("acme").unwrap();
     assert_eq!(inspection.managed_state.matched, 1);
 
     // DRIFTED: repoint the symlink elsewhere.
     let elsewhere = root.join("elsewhere");
     fs::create_dir_all(&elsewhere).unwrap();
-    fs::remove_file(agents_home.join("skills/review")).unwrap();
+    fs::remove_file(agents_home.join("skills/acme:review")).unwrap();
     #[cfg(unix)]
-    std::os::unix::fs::symlink(&elsewhere, agents_home.join("skills/review")).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, agents_home.join("skills/acme:review")).unwrap();
     let inspection = application.inspect_plugin("acme").unwrap();
     assert_eq!(inspection.managed_state.drifted, 1);
 
@@ -497,12 +506,12 @@ fn inspect_matched_missing_drifted_and_detach_all_still_work_under_new_naming() 
         uze::application::RemovePluginReport::Blocked { .. }
     ));
     assert_eq!(
-        fs::read_link(agents_home.join("skills/review")).unwrap(),
+        fs::read_link(agents_home.join("skills/acme:review")).unwrap(),
         elsewhere
     );
 
     // Fix it back, then remove cleanly; remove twice is a safe no-op.
-    fs::remove_file(agents_home.join("skills/review")).unwrap();
+    fs::remove_file(agents_home.join("skills/acme:review")).unwrap();
     application.setup(None).unwrap();
     assert!(matches!(
         application.remove_plugin("acme").unwrap(),

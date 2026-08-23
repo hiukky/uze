@@ -100,16 +100,17 @@ pub(super) fn generated_exact_coverage(
                 }
             }
             uze_core::capability::CapabilityKind::Command => {
-                let Some(direct_parent) = resource
-                    .capability
-                    .path
-                    .strip_prefix(&package.root)
-                    .ok()
-                    .and_then(|relative| relative.parent().map(|parent| parent.to_path_buf()))
+                let Some(relative) = resource.capability.path.strip_prefix(&package.root).ok()
                 else {
                     continue;
                 };
-                if direct_parent == std::path::Path::new("commands") {
+                // Gemini discovers an extension's commands as `.toml` files
+                // under its `commands/` directory, namespaced by nested
+                // path (`commands/flow/review.toml` → `/flow:review`); a
+                // canonical Command under the package's conventional
+                // `commands/` surface is exactly what this module generates
+                // for, so coverage and generation agree by construction.
+                if relative.starts_with("commands") {
                     provided.insert(resource.identity());
                 }
             }
@@ -217,7 +218,7 @@ pub(super) fn materialize_generated_extension(
 
     let commands_source = package.root.join("commands");
     if commands_source.is_dir() {
-        let commands_target = dir.join("commands");
+        let commands_target = dir.join("commands").join(package.id.as_str());
         fs::create_dir_all(&commands_target).map_err(|source| UzeError::Write {
             path: commands_target.clone(),
             source,

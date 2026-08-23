@@ -5,6 +5,7 @@ use std::{collections::BTreeMap, fs, path::PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    capability::CapabilityKind,
     error::Result,
     exposure::{ExposureMechanism, ExposurePlan, McpEnvironmentReference, PackageExposurePlan},
     harness_runtime::{HarnessRuntimeContribution, RuntimeContext},
@@ -479,10 +480,10 @@ pub trait IntegrationPort {
 /// `exposure_name_candidates`: one candidate, fully package-qualified,
 /// with no collision-avoidance prefix. A free function (not inlined into
 /// the trait default) so an integration that overrides the method for one
-/// capability kind (e.g. Claude's Skills) can still fall through to this
-/// exact same computation for another (e.g. Claude's MCP, which the
-/// milestone brief explicitly keeps on the default policy — "não misture
-/// Skill e MCP só porque ambos são Resources").
+/// capability kind can still fall through to this exact same computation
+/// for another (e.g. MCP, which deliberately stays on this policy while
+/// Skills/Commands move to stable namespaced labels — capability naming
+/// policies are never mixed just because all are `Resource`s).
 pub fn default_exposure_name_candidates(resource: &crate::project::Resource) -> Vec<String> {
     let crate::project::ResourceOrigin::Package { id, .. } = &resource.origin else {
         return Vec::new();
@@ -493,24 +494,35 @@ pub fn default_exposure_name_candidates(resource: &crate::project::Resource) -> 
     vec![format!("{}-{}", id.as_str(), logical)]
 }
 
-/// Shared by every integration whose harness UX genuinely depends on a
-/// Skill's physical name (Claude Code and OpenCode V2 both resolve a
-/// directory-derived command, e.g. `/uze`): the bare logical name first,
-/// falling back to the fully package-qualified name for collision
-/// avoidance. Non-Skill capabilities (e.g. MCP) stay on
-/// [`default_exposure_name_candidates`] — see each caller's own doc comment
-/// for why the two policies are never mixed just because both are
-/// `Resource`s.
-pub fn short_then_qualified_exposure_name_candidates(
-    resource: &crate::project::Resource,
-) -> Vec<String> {
+/// The stable, plugin-qualified invocation label (ADR-026):
+/// `<plugin>:<capability>`. This is a **presentation** label — it never
+/// replaces the canonical resource identity, the package layout, or the
+/// capability body. Deterministic and independent of which other plugins
+/// are installed.
+pub fn qualified_capability_name(package_id: &str, logical_name: &str) -> String {
+    format!("{package_id}:{logical_name}")
+}
+
+/// The single candidate for every UZE-projected Skill and Command: its own
+/// stable namespaced invocation label (`flow:review`), never a bare alias
+/// and never a collision-dependent qualification (ADR-026). One candidate
+/// by construction, so installation order and the presence of other plugins
+/// cannot change it. Non-Skill/Command capabilities (MCP) deliberately
+/// stay on [`default_exposure_name_candidates`].
+pub fn qualified_exposure_name_candidates(resource: &crate::project::Resource) -> Vec<String> {
     let crate::project::ResourceOrigin::Package { id, .. } = &resource.origin else {
         return Vec::new();
     };
+    if !matches!(
+        resource.capability.kind,
+        CapabilityKind::AgentSkill | CapabilityKind::Command
+    ) {
+        return Vec::new();
+    }
     let Some(logical) = resource.logical_capability_name() else {
         return Vec::new();
     };
-    vec![logical.clone(), format!("{}-{}", id.as_str(), logical)]
+    vec![qualified_capability_name(id.as_str(), &logical)]
 }
 
 /// Extracts the physical exposure name a receipt's artifact already claims,

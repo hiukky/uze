@@ -32,16 +32,23 @@ use crate::shared::command::{parse_command_body, toml_escape};
 use super::GeminiIntegration;
 use super::unsupported;
 
-/// Gemini's own naming decision: bare logical name first (`/review`), then
-/// fully package-qualified, with the `.toml` extension that makes the file
-/// discoverable — the extension and the `:` namespacing rule are vendor
-/// naming constraints, owned here, never in Application.
+/// Gemini's own naming decision, handled by the vendor: a command's name is
+/// its file path relative to the commands directory with path separators
+/// converted to colons — `commands/flow/review.toml` → `/flow:review`
+/// (official docs: "the path separator is converted to a colon"). UZE
+/// therefore materializes the stable namespaced label as a nested vendor
+/// path; Gemini itself produces the `flow:review` invocation form. No bare
+/// alias, no collision-dependent qualification (ADR-026).
 pub(super) fn gemini_command_exposure_name_candidates(resource: &Resource) -> Vec<String> {
-    use uze_core::integration::short_then_qualified_exposure_name_candidates;
-    short_then_qualified_exposure_name_candidates(resource)
-        .into_iter()
-        .map(|name| format!("{name}.toml"))
-        .collect()
+    use uze_core::integration::qualified_capability_name;
+    let uze_core::project::ResourceOrigin::Package { id, .. } = &resource.origin else {
+        return Vec::new();
+    };
+    let Some(logical) = resource.logical_capability_name() else {
+        return Vec::new();
+    };
+    let label = qualified_capability_name(id.as_str(), &logical);
+    vec![label.replace(':', "/") + ".toml"]
 }
 
 /// Deterministic TOML document for one canonical command, built from the

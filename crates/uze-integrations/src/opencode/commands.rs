@@ -24,15 +24,16 @@ use uze_core::{
 use super::OpenCodeIntegration;
 use super::unsupported;
 
-/// OpenCode's own naming decision: bare logical name first (it is what the
-/// user types after `/`), then fully package-qualified, with the `.md`
-/// extension that makes the physical entry discoverable — the extension is
-/// a vendor naming constraint, owned here, never in Application.
+/// OpenCode's own naming decision: the physical file name IS the command
+/// name, so the stable namespaced label is dropped into the file name
+/// verbatim (`flow:review.md`), never a bare alias and never a
+/// collision-dependent qualification (ADR-026). The `.md` extension is a
+/// vendor naming constraint, owned here, never in Application.
 pub(super) fn opencode_command_exposure_name_candidates(resource: &Resource) -> Vec<String> {
-    use uze_core::integration::short_then_qualified_exposure_name_candidates;
-    short_then_qualified_exposure_name_candidates(resource)
+    use uze_core::integration::qualified_exposure_name_candidates;
+    qualified_exposure_name_candidates(resource)
         .into_iter()
-        .map(|name| format!("{name}.md"))
+        .map(|label| format!("{label}.md"))
         .collect()
 }
 

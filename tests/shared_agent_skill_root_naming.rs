@@ -301,12 +301,12 @@ fn opencode_codex_and_gemini_share_exactly_one_symlink_for_the_same_skill() {
     let agents_home = root.join("agents-home");
     let uze_home = UzeHome::at(root.join("uze-home"));
 
-    // Codex and Gemini registered *before* OpenCode, deliberately: both use
-    // the always-qualified default policy in isolation, so if attach order
-    // alone decided the group's name, whichever of them resolves first
-    // would lock the shared folder onto "acme-review" before OpenCode ever
-    // got a chance to try its own preferred bare name. The fix must
-    // converge on OpenCode's preference regardless of this order.
+    // Codex and Gemini registered *before* OpenCode, deliberately: with the
+    // old bare-first/qualified-on-collision policy the attach order decided
+    // the group's physical name. The stable-label rule removes that hazard
+    // entirely: every member derives the SAME single namespaced candidate
+    // (`acme:review`), so whichever attaches first writes the one physical
+    // entry the group shares — no harness preference, no order sensitivity.
     let application = UzeApplication::new_with_runner(
         uze_home.clone(),
         vec![
@@ -348,11 +348,11 @@ fn opencode_codex_and_gemini_share_exactly_one_symlink_for_the_same_skill() {
         .collect();
     assert_eq!(
         entries,
-        vec!["review".to_owned()],
+        vec!["acme:review".to_owned()],
         "exactly one physical entry must exist for the one skill shared by \
          opencode/codex/gemini in ~/.agents/skills, not one per harness, and \
-         it must be OpenCode's preferred bare name even though Codex and \
-         Gemini attach first: {entries:?}"
+         it must be the stable namespaced label regardless of attach order: \
+         {entries:?}"
     );
 
     let inspection = application.inspect_plugin("acme").unwrap();

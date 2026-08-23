@@ -34,7 +34,7 @@ use uze_core::{
     integration::{
         AttachmentInspection, AttachmentReceipt, AttachmentState, HarnessDetection,
         IntegrationPort, ManagedArtifact, default_exposure_name_candidates,
-        detach_standard_receipt, inspect_standard_receipt,
+        detach_standard_receipt, inspect_standard_receipt, qualified_exposure_name_candidates,
     },
     project::Resource,
     provisioning::{ProcessRunner, ProvisioningResult},
@@ -240,16 +240,18 @@ impl IntegrationPort for GeminiIntegration {
         )
     }
 
-    /// Gemini's naming decision: a command's physical file name is what the
-    /// user types (`/review`), so bare logical first, then qualified. The
-    /// `.toml` suffix is a vendor naming constraint. Skills keep the shared
-    /// default; MCP stays fully qualified — capability naming policies are
-    /// never mixed just because all are `Resource`s.
+    /// Gemini's naming decision: commands nest under their plugin namespace
+    /// as vendor paths (Gemini converts the path separator to a colon, so
+    /// `flow/review.toml` → `/flow:review`); Skills in the shared root get
+    /// the stable namespaced label verbatim as their directory name. MCP
+    /// stays fully qualified — capability naming policies are never mixed
+    /// just because all are `Resource`s.
     fn exposure_name_candidates(&self, resource: &Resource) -> Vec<String> {
-        if resource.capability.kind == CapabilityKind::Command {
-            return commands::gemini_command_exposure_name_candidates(resource);
+        match resource.capability.kind {
+            CapabilityKind::Command => commands::gemini_command_exposure_name_candidates(resource),
+            CapabilityKind::AgentSkill => qualified_exposure_name_candidates(resource),
+            _ => default_exposure_name_candidates(resource),
         }
-        default_exposure_name_candidates(resource)
     }
 
     fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {

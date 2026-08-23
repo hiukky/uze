@@ -127,6 +127,19 @@ impl ExposureMechanism {
             source: source_error,
         })?;
         let target = discovery_root.join(entry_name);
+        // An entry name may carry vendor-namespacing path components (e.g.
+        // a harness whose namespaced physical representation is nested
+        // directories). Creating the entry's parent directory is generic
+        // filesystem preparation, not vendor syntax — the integration owns
+        // the shape, this method only makes the write possible.
+        if let Some(parent) = target.parent()
+            && parent != discovery_root
+        {
+            fs::create_dir_all(parent).map_err(|source_error| UzeError::Write {
+                path: parent.to_path_buf(),
+                source: source_error,
+            })?;
+        }
         match fs::symlink_metadata(&target) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
                 let current = fs::read_link(&target).map_err(|source_error| UzeError::Read {

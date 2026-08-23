@@ -50,12 +50,19 @@ impl OpenCodeIntegration {
             mechanism: ExposureMechanism::FilesystemProjection {
                 source,
                 target_relative: PathBuf::from(".agents/skills").join(
-                    resource
-                        .capability
-                        .path
-                        .parent()
-                        .and_then(Path::file_name)
-                        .expect("skill dir name"),
+                    self.exposure_name_candidates(resource)
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            resource
+                                .capability
+                                .path
+                                .parent()
+                                .and_then(Path::file_name)
+                                .expect("skill dir name")
+                                .to_string_lossy()
+                                .into_owned()
+                        }),
                 ),
             },
             evidence: "OpenCode setup has not completed; the existing project-scope projection remains a conformance fallback."

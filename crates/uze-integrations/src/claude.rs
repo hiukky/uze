@@ -24,8 +24,7 @@ use uze_core::{
     integration::{
         AttachmentInspection, AttachmentReceipt, AttachmentState, HarnessDetection,
         IntegrationPort, ManagedArtifact, PublicationStatus, default_exposure_name_candidates,
-        detach_standard_receipt, inspect_standard_receipt,
-        short_then_qualified_exposure_name_candidates,
+        detach_standard_receipt, inspect_standard_receipt, qualified_exposure_name_candidates,
     },
     project::Resource,
     provisioning::{ProcessRunner, ProcessSpec, ProvisioningResult},
@@ -317,19 +316,21 @@ impl IntegrationPort for ClaudeIntegration {
         }
     }
 
-    /// Claude Code is the one integration where a decomposed Skill's
-    /// physical directory name is what the user actually types
-    /// (`/<name>` — see `docs/capabilities/uze-skill.md`), so it alone
-    /// tries the bare logical name first. MCP deliberately stays on the
-    /// shared default (fully qualified only): its physical name never
-    /// reaches the terminal UX the same way, and mixing the two policies
-    /// just because both are `Resource`s would be exactly the "não
-    /// misture Skill e MCP" mistake the design explicitly rules out.
+    /// Claude namespaces plugin skills/commands itself (`/flow:review` for a
+    /// plugin named `flow` — see `docs/capabilities/commands.md`), so UZE
+    /// never materializes the namespace into the plugin: the plugin declares
+    /// the plain logical name and Claude owns the `plugin:` prefix. For the
+    /// capability-level fallback shim the physical directory name is the
+    /// stable namespaced label (ADR-026). MCP deliberately stays on the
+    /// shared default (fully qualified only) — its physical name never
+    /// reaches the terminal UX the same way, and mixing naming policies just
+    /// because both are `Resource`s would be exactly the "não misture Skill
+    /// e MCP" mistake the design explicitly rules out.
     fn exposure_name_candidates(&self, resource: &Resource) -> Vec<String> {
         if resource.capability.kind != CapabilityKind::AgentSkill {
             return default_exposure_name_candidates(resource);
         }
-        short_then_qualified_exposure_name_candidates(resource)
+        qualified_exposure_name_candidates(resource)
     }
 
     fn package_exposure_plan(
@@ -434,11 +435,13 @@ impl IntegrationPort for ClaudeIntegration {
                     .path
                     .parent()
                     .expect("SKILL.md has a parent");
-                // Read directly from the plan just built, rather than
-                // recomputing: the materialized shim's name must match
-                // exactly what the mechanism is about to place at, and the
-                // plan is already the single source of truth for that.
-                materialize_shim(source, skill_source_dir, entry_name)?;
+                // The shim's own plugin directory gets the stable namespaced
+                // label (`flow:review`), while the *manifest plugin name*
+                // stays the namespace (`flow`): Claude then exposes the
+                // skill as `/flow:review` (ADR-026) instead of double
+                // namespacing it (`/flow:flow:review`).
+                let namespace = resource_package_id(resource);
+                materialize_shim(source, skill_source_dir, entry_name, namespace.as_deref())?;
                 Ok(Some(plan.mechanism.attach()?))
             }
             ExposureMechanism::ManagedVendorConfig {
@@ -557,6 +560,16 @@ fn unsupported(resource: &Resource, rationale: &str) -> ExposurePlan {
             rationale: rationale.to_owned(),
         },
         evidence: rationale.to_owned(),
+    }
+}
+
+/// The plugin id of a package-owned resource — the namespace half of the
+/// stable invocation label (ADR-026). `None` for a project-owned resource,
+/// which has no managed attachment.
+fn resource_package_id(resource: &Resource) -> Option<String> {
+    match &resource.origin {
+        uze_core::project::ResourceOrigin::Package { id, .. } => Some(id.as_str().to_owned()),
+        uze_core::project::ResourceOrigin::Project { .. } => None,
     }
 }
 

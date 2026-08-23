@@ -63,3 +63,4 @@ never renumbered), using this structure (Michael Nygard style):
 - [023 — Marketplace Manifest Is agents.json](023-marketplace-manifest-is-agents-json.md)
 - [024 — Cache Attachment Inspection with Fingerprint + TTL Invalidation](024-cache-attachment-inspection-with-fingerprint-ttl-invalidation.md)
 - [025 — Commands as a First-Class Capability](025-commands-as-first-class-capability.md)
+- [026 — Stable Namespaced Invocation Labels](026-stable-namespaced-invocation-labels.md)

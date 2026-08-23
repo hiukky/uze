@@ -266,9 +266,21 @@ fn codex_prefers_managed_attachment_once_setup_state_is_recorded() {
         .unwrap()
         .expect("managed attachment path");
     assert!(attached.is_symlink());
+    // The managed reference points at UZE's generated wrapper skill
+    // (name = stable namespaced label `uze-agent-skill-conformance:uze-e2e`,
+    // body verbatim from the canonical Store SKILL.md) — never at the Store
+    // directory, because Codex derives the model-visible name from
+    // frontmatter and the canonical bytes are not rewritten.
+    let wrapped = fs::read_link(&attached).unwrap();
+    assert!(
+        wrapped.starts_with(home_root.join("state/attachments/codex/commands")),
+        "the symlink must target a Derived Artifact under $UZE_HOME: {}",
+        wrapped.display()
+    );
+    assert!(wrapped.join("SKILL.md").is_file());
     assert_eq!(
-        fs::read_link(&attached).unwrap(),
-        resource.capability.path.parent().unwrap().to_path_buf()
+        attached.file_name().unwrap(),
+        "uze-agent-skill-conformance:uze-e2e"
     );
 
     // Idempotent, and independent of Claude's own attachment state.
