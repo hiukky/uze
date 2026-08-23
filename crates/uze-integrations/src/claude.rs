@@ -269,13 +269,15 @@ impl IntegrationPort for ClaudeIntegration {
         package: &StoredPackage,
         _plan: &PackageExposurePlan,
     ) -> Result<Option<AttachmentReceipt>> {
+        let executable = self.provisioning_executable();
+        let executable = Path::new(&executable);
         let catalogue_root = self.catalogue_root();
-        if !claude_marketplace_exists(&self.command_home, &catalogue_root) {
-            run_claude_marketplace_add(&self.command_home, &catalogue_root)?;
+        if !claude_marketplace_exists(executable, &self.command_home, &catalogue_root) {
+            run_claude_marketplace_add(executable, &self.command_home, &catalogue_root)?;
         }
         let selector = format!("{}@{CLAUDE_MARKETPLACE_NAME}", package.id.as_str());
         // Idempotent: if already installed, return receipt without reinstalling.
-        if claude_plugin_installed(&self.command_home, &selector) {
+        if claude_plugin_installed(executable, &self.command_home, &selector) {
             return Ok(Some(claude_package_receipt(
                 self.id(),
                 package,
@@ -283,7 +285,7 @@ impl IntegrationPort for ClaudeIntegration {
                 &selector,
             )));
         }
-        match Command::new("claude")
+        match Command::new(executable)
             .env("HOME", &self.command_home)
             .args(["plugin", "install", &selector])
             .status()
@@ -357,7 +359,16 @@ impl IntegrationPort for ClaudeIntegration {
                 command,
                 args,
                 ..
-            } => attach_mcp_entry(&self.command_home, entry_name, command, args),
+            } => {
+                let executable = self.provisioning_executable();
+                attach_mcp_entry(
+                    Path::new(&executable),
+                    &self.command_home,
+                    entry_name,
+                    command,
+                    args,
+                )
+            }
             _ => Ok(None),
         }
     }
@@ -393,7 +404,9 @@ impl IntegrationPort for ClaudeIntegration {
                 let Some(package_root) = detail_path(detail, "package_root") else {
                     return plugin::blocked("plugin receipt has no package root".to_owned());
                 };
+                let executable = self.provisioning_executable();
                 inspect_claude_plugin(
+                    Path::new(&executable),
                     &self.command_home,
                     selector,
                     &marketplace_root,
@@ -411,14 +424,16 @@ impl IntegrationPort for ClaudeIntegration {
         }
         match &receipt.artifact {
             ManagedArtifact::VendorConfigEntry { entry_name, .. } => {
-                mcp::detach_mcp_entry(&self.command_home, entry_name)?;
+                let executable = self.provisioning_executable();
+                mcp::detach_mcp_entry(Path::new(&executable), &self.command_home, entry_name)?;
                 Ok(AttachmentInspection {
                     state: AttachmentState::Missing,
                     reason: "Claude managed MCP entry detached via CLI".to_owned(),
                 })
             }
             ManagedArtifact::IntegrationOwned { kind, selector, .. } if kind == "claude-plugin" => {
-                remove_claude_plugin(&self.command_home, selector)?;
+                let executable = self.provisioning_executable();
+                remove_claude_plugin(Path::new(&executable), &self.command_home, selector)?;
                 Ok(AttachmentInspection {
                     state: AttachmentState::Missing,
                     reason: "Claude native plugin detached".to_owned(),

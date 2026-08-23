@@ -57,15 +57,16 @@ impl ClaudeIntegration {
 }
 
 pub(super) fn attach_mcp_entry(
+    executable: &Path,
     command_home: &Path,
     entry_name: &str,
     command: &Path,
     args: &[String],
 ) -> Result<Option<PathBuf>> {
-    if mcp_entry_exists(command_home, entry_name) {
+    if mcp_entry_exists(executable, command_home, entry_name) {
         return Ok(Some(PathBuf::from(format!("mcp:{entry_name}"))));
     }
-    let status = Command::new("claude")
+    let status = Command::new(executable)
         .env("HOME", command_home)
         .args([
             "mcp",
@@ -94,8 +95,8 @@ pub(super) fn attach_mcp_entry(
 /// Idempotently checked before ever calling `claude mcp add` — Claude's
 /// overwrite behavior for a colliding, differently-configured name was not
 /// confirmed by research, so UZE never relies on it (see ADR-007).
-pub(super) fn mcp_entry_exists(command_home: &Path, entry_name: &str) -> bool {
-    Command::new("claude")
+pub(super) fn mcp_entry_exists(executable: &Path, command_home: &Path, entry_name: &str) -> bool {
+    Command::new(executable)
         .env("HOME", command_home)
         .args(["mcp", "get", entry_name])
         .output()
@@ -191,15 +192,15 @@ pub(super) fn inspect_claude_mcp(
 /// `HOME` for the same reason `attach_mcp_entry` does — never relies on the
 /// calling process's own environment.
 #[allow(dead_code)]
-pub fn detach_mcp_entry(command_home: &Path, entry_name: &str) -> Result<()> {
-    let status = Command::new("claude")
+pub fn detach_mcp_entry(executable: &Path, command_home: &Path, entry_name: &str) -> Result<()> {
+    let status = Command::new(executable)
         .env("HOME", command_home)
         .args(["mcp", "remove", entry_name])
         .status();
     match status {
         Ok(status) if status.success() => Ok(()),
         // Already absent is not an error — removal is idempotent.
-        Ok(_) if !mcp_entry_exists(command_home, entry_name) => Ok(()),
+        Ok(_) if !mcp_entry_exists(executable, command_home, entry_name) => Ok(()),
         Ok(status) => Err(UzeError::ExposureUnavailable(format!(
             "`claude mcp remove` exited with {status} for entry `{entry_name}`"
         ))),
@@ -212,7 +213,7 @@ pub fn detach_mcp_entry(command_home: &Path, entry_name: &str) -> Result<()> {
 /// Parses `{"command": "...", "args": [...]}` from a payload produced by
 /// `UzeEngine`'s MCP resource discovery (one server's config object,
 /// already extracted from `mcp.json`'s `mcpServers` map).
-fn parse_mcp_server_config(payload: &[u8]) -> Option<(PathBuf, Vec<String>)> {
+pub(super) fn parse_mcp_server_config(payload: &[u8]) -> Option<(PathBuf, Vec<String>)> {
     let value: serde_json::Value = serde_json::from_slice(payload).ok()?;
     let command = value.get("command")?.as_str()?.to_owned();
     let args = value

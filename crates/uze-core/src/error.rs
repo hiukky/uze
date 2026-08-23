@@ -99,6 +99,19 @@ pub enum UzeError {
     ReservedMarketplace(String),
     #[error("invalid plugin spec: {0}")]
     InvalidPluginSpec(String),
+    /// `uze remove` is strictly project-scoped (no fallback to machine-level
+    /// removal) — see ADR-019. Distinct from `PluginNotUsedByProject`: this
+    /// is "there is no project here to remove anything from."
+    #[error(
+        "no project environment found here; run `uze plugin remove {plugin}` to remove it from this machine"
+    )]
+    NoProjectEnvironment { plugin: String },
+    /// A project exists (an `agents.lock` was found) but does not declare
+    /// this plugin — distinct from `NoProjectEnvironment`.
+    #[error(
+        "`{plugin}` is not used by this project; run `uze plugin remove {plugin}` to remove it from this machine"
+    )]
+    PluginNotUsedByProject { plugin: String },
     #[error("runtime projection target already exists: {0}")]
     RuntimePathExists(PathBuf),
     #[error("runtime filesystem projection is unavailable on this platform: {0}")]

@@ -1,6 +1,11 @@
 # Project Agent Environment
 
 Status: Accepted
+Status note: partially superseded by docs/adr/019-explicit-project-machine-boundary-in-cli-command-grammar.md,
+narrowly — only the `remove` disambiguation behavior described in
+`openspec/changes/project-agent-environment/design.md`'s Decision #8 ("remove disambiguated by context:
+lock present + plugin in lock → project; else → global"). `uze remove` is now strictly project-scoped with
+no fallback to global removal. Every other decision in this ADR remains in effect, reaffirmed by ADR-019.
 
 ## Context
 

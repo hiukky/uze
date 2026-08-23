@@ -1639,6 +1639,32 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[test]
+    pub(crate) fn harness_inspect_finds_by_id_or_display_name_and_errors_on_unknown() {
+        let root = temp("harness-inspect");
+        let app = UzeApplication::new(UzeHome::at(&root), vec![Box::new(SymlinkIntegration)]);
+        // `SymlinkIntegration::id()` is "test"; it declares no `display_name`
+        // override, so both default to the same string here — the point is
+        // that lookup succeeds through the id path at all.
+        let by_id = app.harness_inspect("test").unwrap();
+        assert_eq!(by_id.integration, "test");
+        assert!(app.harness_inspect("does-not-exist").is_err());
+        // `harness_list` must return exactly the same data `harness_inspect`
+        // filters down to one entry from — same underlying computation.
+        let listed = app.harness_list();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].integration, by_id.integration);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    pub(crate) fn market_inspect_errors_on_an_unregistered_marketplace() {
+        let root = temp("market-inspect-unknown");
+        let app = UzeApplication::new(UzeHome::at(&root), Vec::new());
+        assert!(app.market_inspect("does-not-exist").is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
     #[cfg(unix)]
     #[test]
     pub(crate) fn add_failure_after_a_confirmed_attachment_leaves_reconcilable_ledger_evidence() {

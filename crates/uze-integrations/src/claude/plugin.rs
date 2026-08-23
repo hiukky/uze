@@ -15,8 +15,12 @@ use uze_core::{
 
 use super::CLAUDE_MARKETPLACE_NAME;
 
-pub(super) fn claude_marketplace_exists(command_home: &Path, root: &Path) -> bool {
-    let output = Command::new("claude")
+pub(super) fn claude_marketplace_exists(
+    executable: &Path,
+    command_home: &Path,
+    root: &Path,
+) -> bool {
+    let output = Command::new(executable)
         .env("HOME", command_home)
         .args(["plugin", "marketplace", "list", "--json"])
         .output();
@@ -46,8 +50,12 @@ pub(super) fn claude_marketplace_exists(command_home: &Path, root: &Path) -> boo
     })
 }
 
-pub(super) fn run_claude_marketplace_add(command_home: &Path, root: &Path) -> Result<()> {
-    match Command::new("claude")
+pub(super) fn run_claude_marketplace_add(
+    executable: &Path,
+    command_home: &Path,
+    root: &Path,
+) -> Result<()> {
+    match Command::new(executable)
         .env("HOME", command_home)
         .args(["plugin", "marketplace", "add"])
         .arg(root)
@@ -65,8 +73,12 @@ pub(super) fn run_claude_marketplace_add(command_home: &Path, root: &Path) -> Re
     }
 }
 
-pub(super) fn claude_plugin_installed(command_home: &Path, selector: &str) -> bool {
-    let Ok(output) = Command::new("claude")
+pub(super) fn claude_plugin_installed(
+    executable: &Path,
+    command_home: &Path,
+    selector: &str,
+) -> bool {
+    let Ok(output) = Command::new(executable)
         .env("HOME", command_home)
         .args(["plugin", "list", "--json"])
         .output()
@@ -249,17 +261,21 @@ pub(super) fn claude_exact_coverage(
 }
 
 pub(super) fn inspect_claude_plugin(
+    executable: &Path,
     command_home: &Path,
     selector: &str,
     marketplace_root: &Path,
     package_root: &Path,
 ) -> AttachmentInspection {
     // Verify marketplace still points at expected root.
-    let marketplace_list =
-        match claude_json(command_home, ["plugin", "marketplace", "list", "--json"]) {
-            Ok(value) => value,
-            Err(reason) => return blocked(reason),
-        };
+    let marketplace_list = match claude_json(
+        executable,
+        command_home,
+        ["plugin", "marketplace", "list", "--json"],
+    ) {
+        Ok(value) => value,
+        Err(reason) => return blocked(reason),
+    };
     let marketplace_name = selector.rsplit_once('@').map(|(_, name)| name);
     let Some(marketplace_name) = marketplace_name else {
         return blocked("plugin receipt selector has no marketplace identity".to_owned());
@@ -296,7 +312,7 @@ pub(super) fn inspect_claude_plugin(
         };
     }
     // Verify plugin installed.
-    let plugins = match claude_json(command_home, ["plugin", "list", "--json"]) {
+    let plugins = match claude_json(executable, command_home, ["plugin", "list", "--json"]) {
         Ok(value) => value,
         Err(reason) => return blocked(reason),
     };
@@ -333,10 +349,11 @@ pub(super) fn inspect_claude_plugin(
 }
 
 fn claude_json<const N: usize>(
+    executable: &Path,
     command_home: &Path,
     args: [&str; N],
 ) -> std::result::Result<serde_json::Value, String> {
-    let output = Command::new("claude")
+    let output = Command::new(executable)
         .env("HOME", command_home)
         .args(args)
         .output()
@@ -349,8 +366,12 @@ fn claude_json<const N: usize>(
         .map_err(|error| format!("Claude JSON is invalid: {error}"))
 }
 
-pub(super) fn remove_claude_plugin(command_home: &Path, selector: &str) -> Result<()> {
-    match Command::new("claude")
+pub(super) fn remove_claude_plugin(
+    executable: &Path,
+    command_home: &Path,
+    selector: &str,
+) -> Result<()> {
+    match Command::new(executable)
         .env("HOME", command_home)
         .args(["plugin", "uninstall", selector])
         .status()

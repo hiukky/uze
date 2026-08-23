@@ -114,7 +114,7 @@ fn inspect_reports_an_installed_plugin_without_vendor_writes() {
         .env("UZE_HOME", &home)
         .env("HOME", &home)
         .env("PATH", "/usr/bin:/bin")
-        .args(["add", package_fixture().to_str().unwrap()])
+        .args(["plugin", "install", package_fixture().to_str().unwrap()])
         .output()
         .unwrap();
     assert!(add.status.success());
@@ -123,7 +123,13 @@ fn inspect_reports_an_installed_plugin_without_vendor_writes() {
         .env("UZE_HOME", &home)
         .env("HOME", &home)
         .env("PATH", "/usr/bin:/bin")
-        .args(["inspect", "uze-agent-skill-conformance", "--format", "json"])
+        .args([
+            "plugin",
+            "inspect",
+            "uze-agent-skill-conformance",
+            "--format",
+            "json",
+        ])
         .output()
         .unwrap();
 
@@ -146,7 +152,8 @@ fn add_and_inspect_use_the_same_injected_uze_home() {
         .env("HOME", &home)
         .env("PATH", "/usr/bin:/bin")
         .args([
-            "add",
+            "plugin",
+            "install",
             package_fixture().to_str().unwrap(),
             "--format",
             "json",
@@ -162,7 +169,13 @@ fn add_and_inspect_use_the_same_injected_uze_home() {
         .env("UZE_HOME", &home)
         .env("HOME", &home)
         .env("PATH", "/usr/bin:/bin")
-        .args(["inspect", "uze-agent-skill-conformance", "--format", "json"])
+        .args([
+            "plugin",
+            "inspect",
+            "uze-agent-skill-conformance",
+            "--format",
+            "json",
+        ])
         .output()
         .unwrap();
     assert!(inspect.status.success());
@@ -271,7 +284,7 @@ fn setup_then_add_attaches_transparently_without_a_separate_sync_step() {
     assert!(doctor.matches("installed / verified").count() >= 2);
 
     // `uze add` alone attaches both, without any separate sync command.
-    let add = run(&["add", package_fixture().to_str().unwrap()]);
+    let add = run(&["plugin", "install", package_fixture().to_str().unwrap()]);
     assert!(add.contains("Attached to claude-code:"));
     assert!(add.contains("Attached to codex:"));
 
@@ -336,7 +349,7 @@ fn add_prepares_a_detected_opencode_and_attaches_without_prior_setup() {
         .env("UZE_HOME", &uze_home)
         .env("HOME", &home)
         .env("PATH", &path)
-        .args(["add", package_fixture().to_str().unwrap()])
+        .args(["plugin", "install", package_fixture().to_str().unwrap()])
         .output()
         .unwrap();
     assert!(
@@ -405,7 +418,7 @@ fn setup_then_add_attaches_the_mcp_fixture_idempotently_and_removal_works() {
     };
 
     run(&["setup"]);
-    let add = run(&["add", package.to_str().unwrap()]);
+    let add = run(&["plugin", "install", package.to_str().unwrap()]);
     assert!(add.contains("Attached to claude-code: mcp:uze-mcp-conformance-uze-conformance"));
     assert!(add.contains("Attached to codex: mcp:uze-mcp-conformance-uze-conformance"));
 
@@ -454,7 +467,7 @@ fn setup_then_add_attaches_the_mcp_fixture_idempotently_and_removal_works() {
     // real "already exists" overwrite behavior from either harness (the
     // fake script's `get` reports success, so `attach()` never re-invokes
     // `add`).
-    let second_add = run(&["add", package.to_str().unwrap()]);
+    let second_add = run(&["plugin", "install", package.to_str().unwrap()]);
     assert!(
         second_add.contains("Attached to claude-code: mcp:uze-mcp-conformance-uze-conformance")
     );
@@ -466,14 +479,18 @@ fn setup_then_add_attaches_the_mcp_fixture_idempotently_and_removal_works() {
     let _ = std::fs::remove_dir_all(mcp_package_dir);
 }
 
+/// `uze plugin remove` — the machine-level verb (renamed from the old,
+/// unnamespaced root `remove`, which used to reach this exact flow via an
+/// implicit fallback — see `plugin_remove_never_confused_with_project_remove`
+/// / ADR-019 for why that fallback is gone).
 #[test]
-fn remove_uses_the_package_centric_application_flow() {
+fn plugin_remove_uses_the_package_centric_application_flow() {
     let home = temporary_home("cli-remove");
     let add = Command::new(env!("CARGO_BIN_EXE_uze"))
         .env("UZE_HOME", &home)
         .env("HOME", &home)
         .env("PATH", "/usr/bin:/bin")
-        .args(["add", package_fixture().to_str().unwrap()])
+        .args(["plugin", "install", package_fixture().to_str().unwrap()])
         .output()
         .unwrap();
     assert!(add.status.success());
@@ -481,7 +498,13 @@ fn remove_uses_the_package_centric_application_flow() {
         .env("UZE_HOME", &home)
         .env("HOME", &home)
         .env("PATH", "/usr/bin:/bin")
-        .args(["remove", "uze-agent-skill-conformance", "--format", "json"])
+        .args([
+            "plugin",
+            "remove",
+            "uze-agent-skill-conformance",
+            "--format",
+            "json",
+        ])
         .output()
         .unwrap();
     assert!(remove.status.success());
@@ -489,7 +512,7 @@ fn remove_uses_the_package_centric_application_flow() {
     assert_eq!(report["outcome"], "REMOVED");
     let list = Command::new(env!("CARGO_BIN_EXE_uze"))
         .env("UZE_HOME", &home)
-        .args(["list", "--format", "json"])
+        .args(["plugin", "list", "--format", "json"])
         .output()
         .unwrap();
     assert!(list.status.success());
@@ -505,6 +528,73 @@ fn remove_uses_the_package_centric_application_flow() {
     assert!(
         non_default.is_empty(),
         "expected no non-default plugins after remove, got {plugins:?}"
+    );
+    let _ = std::fs::remove_dir_all(home);
+}
+
+/// ADR-019's central breaking change: root `uze remove` is strictly
+/// project-scoped. Run with no `agents.lock` anywhere in `home`'s ancestry
+/// (a plain temp dir, not a project), this must now fail loudly — never
+/// silently fall through to removing the machine-installed package, the
+/// pre-ADR-019 behavior `plugin_remove_uses_the_package_centric_application_flow`
+/// exercises deliberately instead.
+#[test]
+fn root_remove_no_longer_falls_back_to_global_removal() {
+    let home = temporary_home("cli-remove-no-fallback");
+    let add = Command::new(env!("CARGO_BIN_EXE_uze"))
+        .env("UZE_HOME", &home)
+        .env("HOME", &home)
+        .env("PATH", "/usr/bin:/bin")
+        .args(["plugin", "install", package_fixture().to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(add.status.success());
+
+    // `current_dir(&home)` matters here: this repo's own root (the ambient
+    // cwd `cargo test` runs from) has a real `agents.lock` of its own
+    // (UZE dogfoods itself) — running from there would resolve a *real*
+    // project root and hit `NotInLock` instead of the `NoLock` case this
+    // test targets. `home` is a fresh temp dir with no `agents.lock`,
+    // `AGENTS.md`, or `.git` anywhere in its ancestry.
+    let remove = Command::new(env!("CARGO_BIN_EXE_uze"))
+        .env("UZE_HOME", &home)
+        .env("HOME", &home)
+        .env("PATH", "/usr/bin:/bin")
+        .current_dir(&home)
+        .args(["remove", "uze-agent-skill-conformance"])
+        .output()
+        .unwrap();
+    assert!(
+        !remove.status.success(),
+        "root `remove` outside a project must fail, not silently succeed"
+    );
+    let stderr = String::from_utf8_lossy(&remove.stderr);
+    assert!(
+        stderr.contains("no project environment found"),
+        "expected a no-project-environment error, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("uze plugin remove"),
+        "error should point at the machine-level equivalent, got: {stderr}"
+    );
+
+    // The whole point: the machine-installed package must survive untouched.
+    let list = Command::new(env!("CARGO_BIN_EXE_uze"))
+        .env("UZE_HOME", &home)
+        .args(["plugin", "list", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(list.status.success());
+    let plugins = serde_json::from_slice::<serde_json::Value>(&list.stdout)
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .clone();
+    assert!(
+        plugins
+            .iter()
+            .any(|p| p["id"] == "uze-agent-skill-conformance"),
+        "package must survive a failed project-scoped remove, got {plugins:?}"
     );
     let _ = std::fs::remove_dir_all(home);
 }

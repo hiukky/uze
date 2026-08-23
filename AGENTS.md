@@ -50,12 +50,28 @@ cargo test --no-fail-fast
 - `playground/` — WSL/distro helpers (`make install-wsl-lab`)
 - `docs/` — `adr/`, `capabilities/`, `architecture/invariants.md`
 
-## UZE commands (project context)
+## UZE commands
+
+Root-level commands operate on the current project environment; `market`/
+`plugin`/`harness` operate on machine-level (`~/.uze`) resources — see
+`docs/adr/019-explicit-project-machine-boundary-in-cli-command-grammar.md`.
 
 ```bash
+# Project
+uze <plugin>@<market>       # make this project use a plugin; writes agents.lock
+uze install                 # reconcile the machine to agents.lock
+uze remove <plugin>         # remove a plugin from this project only
 uze status                  # is this project's context healthy?
 uze context inspect         # read-only: what's here, is it portable?
 uze context plan            # read-only: what would reconcile change?
 uze context reconcile       # writes: compose AGENTS.md + harness bridges
-uze list / uze inspect <id> / uze doctor
+
+# Machine
+uze market add|list|remove|inspect
+uze plugin install|list|inspect|remove|update
+uze harness list|inspect|setup
+
+# Diagnostics
+uze doctor
+uze setup [harness]
 ```

@@ -64,6 +64,18 @@ impl UzeApplication {
         Ok(out)
     }
 
+    /// One marketplace's own detail (source, plugin count) — distinct from
+    /// inspecting one plugin *within* a marketplace
+    /// (`inspect_marketplace_plugin`). Filters the same per-entry
+    /// computation `marketplace_list` already does down to one named entry;
+    /// no new state or invariant.
+    pub fn market_inspect(&self, name: &str) -> Result<MarketplaceSummary> {
+        self.marketplace_list()?
+            .into_iter()
+            .find(|entry| entry.name == name)
+            .ok_or_else(|| UzeError::UnknownPackage(format!("marketplace `{name}` not found")))
+    }
+
     pub fn plugin_install(
         &self,
         spec: &str,

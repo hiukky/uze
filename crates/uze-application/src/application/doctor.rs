@@ -34,30 +34,7 @@ impl UzeApplication {
             }
             Err(error) => (StoreHealth::Blocked(error.to_string()), Vec::new()),
         };
-        let installed = self.installed_packages();
-        let harnesses = self
-            .integrations
-            .iter()
-            .map(|integration| HarnessHealth {
-                integration: integration.id().to_owned(),
-                display_name: integration.display_name().to_owned(),
-                detection: self.detect_cached(integration.as_ref()),
-                setup: integration_status(integration.status(&self.home)),
-                strategy: state::get(&self.home, integration.id())
-                    .ok()
-                    .flatten()
-                    .map(|record| record.strategy),
-                provisioning: state::provisioning(&self.home, integration.id())
-                    .ok()
-                    .flatten(),
-                // Observed, not remembered. A package can be installed and
-                // reconciled while a harness still cannot see it, and that is
-                // exactly the state this field exists to surface.
-                publication: integration.publication(&installed),
-                capabilities: integration.capabilities(),
-                native_instructions: NATIVE_INSTRUCTION_INTEGRATIONS.contains(&integration.id()),
-            })
-            .collect();
+        let harnesses = self.harness_health();
         let attachments = plugins
             .iter()
             .map(|plugin: &PluginSummary| PackageManagedState {
@@ -84,6 +61,52 @@ impl UzeApplication {
             integration_state_error,
             provisioning_state_error,
         }
+    }
+
+    /// Per-harness detection/setup/provisioning detail — shared by
+    /// `doctor()` (the full report) and `harness_list`/`harness_inspect`
+    /// (the machine-level `harness` namespace's thin read models, which
+    /// slice this same computation rather than adding a second one).
+    fn harness_health(&self) -> Vec<HarnessHealth> {
+        let installed = self.installed_packages();
+        self.integrations
+            .iter()
+            .map(|integration| HarnessHealth {
+                integration: integration.id().to_owned(),
+                display_name: integration.display_name().to_owned(),
+                detection: self.detect_cached(integration.as_ref()),
+                setup: integration_status(integration.status(&self.home)),
+                strategy: state::get(&self.home, integration.id())
+                    .ok()
+                    .flatten()
+                    .map(|record| record.strategy),
+                provisioning: state::provisioning(&self.home, integration.id())
+                    .ok()
+                    .flatten(),
+                // Observed, not remembered. A package can be installed and
+                // reconciled while a harness still cannot see it, and that is
+                // exactly the state this field exists to surface.
+                publication: integration.publication(&installed),
+                capabilities: integration.capabilities(),
+                native_instructions: NATIVE_INSTRUCTION_INTEGRATIONS.contains(&integration.id()),
+            })
+            .collect()
+    }
+
+    pub fn harness_list(&self) -> Vec<HarnessHealth> {
+        self.harness_health()
+    }
+
+    /// Matches by either the stable integration id (`claude-code`) or the
+    /// display name people actually type (`claude`) — the same two names
+    /// `uze doctor`'s own output already shows side by side.
+    pub fn harness_inspect(&self, name: &str) -> Result<HarnessHealth> {
+        self.harness_health()
+            .into_iter()
+            .find(|harness| harness.integration == name || harness.display_name == name)
+            .ok_or_else(|| {
+                uze_core::UzeError::UnknownPackage(format!("harness `{name}` not found"))
+            })
     }
 
     pub fn status(&self, project_root: &std::path::Path) -> Result<StatusReport> {

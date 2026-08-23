@@ -41,58 +41,60 @@ pub enum PerformanceClass {
 /// exactly once — see `tests::every_cli_command_is_classified`, which
 /// fails by name (missing or stale) rather than silently passing.
 pub const CLASSIFICATION: &[(&str, PerformanceClass)] = &[
-    ("list", PerformanceClass::Budgeted),
-    ("inspect", PerformanceClass::Budgeted),
+    // Project scope (root-level).
     ("remove", PerformanceClass::Budgeted),
     ("status", PerformanceClass::Budgeted),
-    ("doctor", PerformanceClass::Budgeted),
     ("context inspect", PerformanceClass::Budgeted),
     ("context plan", PerformanceClass::Budgeted),
     ("context reconcile", PerformanceClass::Budgeted),
-    ("marketplace list", PerformanceClass::Budgeted),
-    ("marketplace remove", PerformanceClass::Budgeted),
-    ("plugin list", PerformanceClass::Budgeted),
-    ("plugin remove", PerformanceClass::Budgeted),
-    (
-        "add",
-        PerformanceClass::JustifiedSlow(
-            "acquires a package from a remote or local source and may install/attach to harnesses",
-        ),
-    ),
-    (
-        "update",
-        PerformanceClass::JustifiedSlow(
-            "re-resolves an installed plugin's source, a network operation for a non-local source",
-        ),
-    ),
     (
         "install",
         PerformanceClass::JustifiedSlow(
             "reconstructs the project's agent environment from agents.lock, acquiring packages",
         ),
     ),
+    // Machine scope: market.
+    ("market list", PerformanceClass::Budgeted),
+    ("market remove", PerformanceClass::Budgeted),
+    ("market inspect", PerformanceClass::Budgeted),
     (
-        "setup",
-        PerformanceClass::JustifiedSlow(
-            "provisions or updates harness executables through each harness's official installer",
-        ),
-    ),
-    (
-        "marketplace add",
+        "market add",
         PerformanceClass::JustifiedSlow(
             "adds a marketplace discovery source, which may be a remote URL",
         ),
     ),
+    // Machine scope: plugin.
+    ("plugin list", PerformanceClass::Budgeted),
+    ("plugin inspect", PerformanceClass::Budgeted),
+    ("plugin remove", PerformanceClass::Budgeted),
     (
         "plugin install",
         PerformanceClass::JustifiedSlow(
-            "installs a plugin via a marketplace, a network operation for a non-local source",
+            "installs a plugin via a marketplace, a network operation for a non-local source, or a \
+             direct source (local path/Git URL)",
         ),
     ),
     (
         "plugin update",
         PerformanceClass::JustifiedSlow(
             "re-resolves an installed plugin's source, a network operation for a non-local source",
+        ),
+    ),
+    // Machine scope: harness.
+    ("harness list", PerformanceClass::Budgeted),
+    ("harness inspect", PerformanceClass::Budgeted),
+    (
+        "harness setup",
+        PerformanceClass::JustifiedSlow(
+            "provisions or updates harness executables through each harness's official installer",
+        ),
+    ),
+    // Diagnostics.
+    ("doctor", PerformanceClass::Budgeted),
+    (
+        "setup",
+        PerformanceClass::JustifiedSlow(
+            "provisions or updates harness executables through each harness's official installer",
         ),
     ),
 ];
@@ -108,14 +110,6 @@ pub const CLASSIFICATION: &[(&str, PerformanceClass)] = &[
 /// `Budgeted` entry added here without updating that list is caught by a
 /// mismatch, not silently trusted.
 pub const BUDGETED_COMMAND_TESTS: &[(&str, &str)] = &[
-    (
-        "list",
-        "uze_application::application::tests::cache_warm_detect_cached_meets_the_performance_budget",
-    ),
-    (
-        "inspect",
-        "uze_application::application::tests::cache_warm_detect_cached_meets_the_performance_budget",
-    ),
     (
         "remove",
         "uze_application::application::tests::cache_warm_detect_cached_meets_the_performance_budget",
@@ -141,11 +135,15 @@ pub const BUDGETED_COMMAND_TESTS: &[(&str, &str)] = &[
         "uze_application::application::tests::cache_warm_detect_cached_meets_the_performance_budget",
     ),
     (
-        "marketplace list",
+        "market list",
         "uze_application::application::tests::cache_warm_detect_cached_meets_the_performance_budget",
     ),
     (
-        "marketplace remove",
+        "market remove",
+        "uze_application::application::tests::cache_warm_detect_cached_meets_the_performance_budget",
+    ),
+    (
+        "market inspect",
         "uze_application::application::tests::cache_warm_detect_cached_meets_the_performance_budget",
     ),
     (
@@ -153,7 +151,19 @@ pub const BUDGETED_COMMAND_TESTS: &[(&str, &str)] = &[
         "uze_application::application::tests::cache_warm_detect_cached_meets_the_performance_budget",
     ),
     (
+        "plugin inspect",
+        "uze_application::application::tests::cache_warm_detect_cached_meets_the_performance_budget",
+    ),
+    (
         "plugin remove",
+        "uze_application::application::tests::cache_warm_detect_cached_meets_the_performance_budget",
+    ),
+    (
+        "harness list",
+        "uze_application::application::tests::cache_warm_detect_cached_meets_the_performance_budget",
+    ),
+    (
+        "harness inspect",
         "uze_application::application::tests::cache_warm_detect_cached_meets_the_performance_budget",
     ),
 ];
