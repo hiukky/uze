@@ -214,6 +214,15 @@ impl UzeApplication {
         // harmless. This does not touch plugin *content*, only exposure —
         // distinct from the update question above.
         let _ = self.prepare_detected_integrations(None);
+        // Derived views refresh before attachment, same ordering `add_plugin`
+        // already relies on (`install_materialized`): a Generated Native
+        // Package's own catalogue (e.g. Claude's `generated/.claude-plugin/
+        // marketplace.json`) is written by `republish_all`, and native
+        // delivery below reads that view. Attaching first on a fresh/
+        // catalogue-less `UZE_HOME` made the vendor CLI's own `marketplace
+        // add` fail outright (`Marketplace file not found at .../
+        // marketplace.json`) — real-host dogfood caught this.
+        let _ = self.republish_all();
         let installed_ids: BTreeSet<&str> = bootstrap::DEFAULT_PLUGIN_IDS.iter().copied().collect();
         for package_id in self.store.package_ids().unwrap_or_default() {
             if !installed_ids.contains(package_id.as_str()) {
@@ -228,7 +237,6 @@ impl UzeApplication {
                 }
             }
         }
-        let _ = self.republish_all();
         Ok(installed_any)
     }
 
