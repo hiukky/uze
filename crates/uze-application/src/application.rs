@@ -20,10 +20,13 @@ use uze_core::{
     detection_cache::DetectionCache,
     exposure::{ExposurePlan, PackageExposurePlan},
     integration::{
-        AttachmentState, HarnessDetection, IntegrationPort, IntegrationStatus, PublicationStatus,
+        AttachmentInspection, AttachmentState, HarnessDetection, IntegrationPort,
+        IntegrationStatus, PublicationStatus,
     },
     provisioning::{ProcessRunner, ProvisionStatus, ProvisioningResult, SystemProcessRunner},
-    reconciliation::{PackageRemovalPlan, ReconciliationReport, reconcile_package},
+    reconciliation::{
+        PackageRemovalPlan, ReconciledReceipt, ReconciliationReport, reconcile_package,
+    },
     router::HarnessCapabilities,
     state,
     store::StoredPackage,
@@ -38,6 +41,7 @@ use crate::bootstrap;
 
 mod context;
 mod doctor;
+mod inspection_cache;
 mod lifecycle;
 mod marketplace;
 mod overview;
@@ -100,6 +104,7 @@ pub struct UzeApplication {
     integrations: Vec<Box<dyn IntegrationPort>>,
     runner: Box<dyn ProcessRunner>,
     detection_cache: DetectionCache,
+    inspection_cache: crate::application::inspection_cache::InspectionCache,
 }
 
 impl UzeApplication {
@@ -156,6 +161,7 @@ impl UzeApplication {
         Self {
             store: UzeStore::new(home.clone()),
             detection_cache: DetectionCache::new(&home),
+            inspection_cache: inspection_cache::InspectionCache::new(&home),
             home,
             integrations,
             runner,
@@ -240,12 +246,52 @@ impl UzeApplication {
                 continue;
             };
             for integration in &self.integrations {
-                if self.detect_cached(integration.as_ref()).present {
+                if self.detect_cached(integration.as_ref()).present
+                    && !self.attachment_effective(package.id.as_str(), integration.as_ref())?
+                {
                     self.attach_package_to(&package, integration.as_ref())?;
                 }
             }
         }
         Ok(installed_any)
+    }
+
+    /// Whether the bootstrap can consider `integration`'s delivery of
+    /// `package_id` already effective:
+    ///
+    /// - no receipt for this integration → not effective (attach);
+    /// - stat-able artifacts (skill symlinks) must still be physically in
+    ///   place — a vanished link is healed by a cheap re-attach (no
+    ///   vendor CLI involved);
+    /// - non-stat-able artifacts (vendor-native catalogues recorded
+    ///   through the vendor CLIs) are effective by receipt: re-running
+    ///   `codex/claude plugin add` on every invocation was the
+    ///   steady-state cost this guard removes, and a vendor-side loss is
+    ///   surfaced by the read-time inspection (anomalies are always
+    ///   re-inspected live) and healed by the explicit setup path.
+    fn attachment_effective(
+        &self,
+        package_id: &str,
+        integration: &dyn IntegrationPort,
+    ) -> Result<bool> {
+        let receipts = state::receipts(&self.home, Some(package_id))?;
+        let for_integration: Vec<_> = receipts
+            .into_iter()
+            .filter(|(_, receipt)| receipt.integration == integration.id())
+            .collect();
+        if for_integration.is_empty() {
+            return Ok(false);
+        }
+        for (_, receipt) in &for_integration {
+            if uze_core::integration::managed_artifact_fingerprint(&receipt.artifact).is_some()
+                && !uze_core::integration::managed_artifact_present(&receipt.artifact)
+            {
+                // A stat-able artifact that is not in place (or
+                // re-pointed): not effective, re-attach to heal.
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
     /// Installs default plugin `id` if it is not already in the Store.
@@ -800,6 +846,65 @@ impl UzeApplication {
             .map(|integration| integration.as_ref() as &dyn IntegrationPort)
             .collect::<Vec<_>>();
         reconcile_package(&self.home, package_id, &integrations)
+    }
+
+    /// The READ-ONLY cousin of `reconcile`: same report shape, but each
+    /// receipt's `Matched` verdict may come from the inspection cache
+    /// (ADR 024) instead of a live vendor-CLI probe. Anomalies are never
+    /// cached, so the report's warnings are always fresh. This is for
+    /// report/health surfaces only — removal planning and detach MUST keep
+    /// going through [`reconcile`](Self::reconcile), whose live verdict is
+    /// what makes ownership checks trustworthy.
+    pub(crate) fn reconcile_cached_report(&self, package_id: &str) -> ReconciliationReport {
+        let entries = match state::receipts(&self.home, Some(package_id)) {
+            Ok(entries) => entries,
+            Err(error) => {
+                return ReconciliationReport {
+                    package_id: package_id.to_owned(),
+                    receipts: Vec::new(),
+                    ledger_error: Some(error.to_string()),
+                };
+            }
+        };
+        let receipts = entries
+            .into_iter()
+            .map(|(ledger_key, receipt)| {
+                let fingerprint =
+                    uze_core::integration::managed_artifact_fingerprint(&receipt.artifact);
+                let inspection = match self
+                    .inspection_cache
+                    .get(&ledger_key, fingerprint.as_deref())
+                {
+                    Some(cached) => cached,
+                    None => {
+                        let live = self
+                            .integrations
+                            .iter()
+                            .find(|integration| integration.id() == receipt.integration)
+                            .map(|integration| integration.inspect_receipt(&receipt))
+                            .unwrap_or_else(|| AttachmentInspection {
+                                state: AttachmentState::Blocked,
+                                reason: format!(
+                                    "integration `{}` is unavailable",
+                                    receipt.integration
+                                ),
+                            });
+                        self.inspection_cache.put(&ledger_key, &live, fingerprint);
+                        live
+                    }
+                };
+                ReconciledReceipt {
+                    ledger_key,
+                    receipt,
+                    inspection,
+                }
+            })
+            .collect();
+        ReconciliationReport {
+            package_id: package_id.to_owned(),
+            receipts,
+            ledger_error: None,
+        }
     }
 }
 

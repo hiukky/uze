@@ -88,6 +88,14 @@ impl UzeHome {
         self.cache_dir().join("harness_detection.json")
     }
 
+    /// Cross-invocation cache of per-receipt attachment *read* results
+    /// (see `application::inspection_cache` and ADR 024). Same
+    /// reconstructable-optimization caveat as the detection cache: never
+    /// authoritative, and mutating paths always re-inspect live.
+    pub fn inspection_cache_path(&self) -> PathBuf {
+        self.cache_dir().join("inspection.json")
+    }
+
     pub fn runtime_dir(&self) -> PathBuf {
         self.root.join("runtime")
     }

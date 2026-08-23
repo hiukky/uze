@@ -1322,10 +1322,11 @@ mod tests {
     }
 
     #[test]
-    fn entering_doctor_route_requests_deep_health_once() {
-        // The dashboard starts with shallow health (no per-receipt vendor
-        // inspection); walking the sidebar into Doctor must upgrade it —
-        // exactly once, and never again after the deep report arrives.
+    fn entering_doctor_route_uses_the_cached_full_report() {
+        // Every refresh carries the full doctor (attachments included, via
+        // the inspection cache) — navigating to Doctor never needs a
+        // special "deep" request, and no screen ever shows a masked
+        // "unknown" placeholder for attachment health.
         let mut model = TuiModel {
             focus: Focus::Sidebar,
             ..TuiModel::default()
@@ -1341,13 +1342,11 @@ mod tests {
                 integration_state_error: None,
                 provisioning_state_error: None,
             }),
-            deep_doctor: false,
             ..RefreshData::default()
         });
-        assert!(!model.doctor_deep);
 
         // Sidebar order: Overview → Marketplace → Plugins → Context →
-        // Harnesses → Doctor.
+        // Harnesses → Doctor. No deep-request intent anywhere.
         let mut last_intent = Intent::None;
         for _ in 0..5 {
             last_intent = model.apply_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
@@ -1355,58 +1354,53 @@ mod tests {
         assert_eq!(model.route, Route::Doctor);
         assert_eq!(
             last_intent,
-            Intent::RefreshDoctor,
-            "entering Doctor with shallow health must request the full report"
-        );
-
-        // Deep report arrives; leaving and re-entering Doctor is free.
-        model.refreshed(RefreshData {
-            doctor: model.doctor.clone(),
-            deep_doctor: true,
-            ..RefreshData::default()
-        });
-        assert!(model.doctor_deep);
-        let _ = model.apply_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-        let intent = model.apply_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-        assert_eq!(
-            intent,
             Intent::None,
-            "a deep report must not be re-requested on every Doctor visit"
+            "entering Doctor must not spawn a second, separate deep reload"
         );
-        assert_eq!(model.route, Route::Doctor);
     }
 
     #[test]
-    fn doctor_route_refresh_is_deep_but_other_routes_stay_shallow() {
-        // The depth decision is a pure routing rule: `r` on Doctor
-        // refreshes the full report; everywhere else the cheap health.
-        let doctor_route = TuiModel {
-            route: Route::Doctor,
-            ..TuiModel::default()
-        };
-        assert!(doctor_route.refresh_depth());
-
-        let mut other = TuiModel::default();
-        assert!(!other.refresh_depth());
-        other.set_route(Route::Marketplace);
-        assert!(!other.refresh_depth());
-        // Even a shallow report present on the dashboard never claims to
-        // carry attachment checks.
-        other.refreshed(RefreshData {
-            doctor: Some(DoctorReport {
-                uze_home: PathBuf::from("/home"),
-                store: crate::application::StoreHealth::Ready,
-                plugins: Vec::new(),
-                harnesses: Vec::new(),
-                attachments: Vec::new(),
-                ledger_error: None,
-                integration_state_error: None,
-                provisioning_state_error: None,
-            }),
-            deep_doctor: false,
-            ..RefreshData::default()
+    fn attachment_health_is_never_unknown_after_a_refresh() {
+        use crate::application::{ManagedStateSummary, PackageManagedState};
+        // Every refresh carries the full doctor with attachments (served by
+        // the inspection cache), so the Plugins screen derives "ready"
+        // instead of showing the masked "unknown" placeholder.
+        let mut model = model_with_plugins(&["one"]);
+        model.route = Route::Plugins;
+        model.doctor = Some(DoctorReport {
+            uze_home: PathBuf::from("/home"),
+            store: crate::application::StoreHealth::Ready,
+            plugins: vec![plugin("one")],
+            harnesses: Vec::new(),
+            attachments: vec![PackageManagedState {
+                plugin: "one".to_owned(),
+                state: ManagedStateSummary {
+                    matched: 2,
+                    missing: 0,
+                    drifted: 0,
+                    conflicts: 0,
+                    blocked: 0,
+                    ledger_error: None,
+                },
+            }],
+            ledger_error: None,
+            integration_state_error: None,
+            provisioning_state_error: None,
         });
-        assert!(!other.doctor_deep);
+        let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| render(frame, &model, &mut hits))
+            .unwrap();
+        let rows = buffer_rows(&terminal);
+        assert!(
+            rows.iter().any(|row| row.contains("ready")),
+            "a refreshed report must render real health, got:\n{rows:#?}"
+        );
+        assert!(
+            !rows.iter().any(|row| row.contains("unknown")),
+            "attachment health must never read 'unknown' after a refresh"
+        );
     }
 
     #[test]
@@ -1459,8 +1453,8 @@ mod tests {
         });
         assert_eq!(
             intent,
-            Intent::RefreshDoctor,
-            "entering Doctor (titlebar health click) must request the full report"
+            Intent::None,
+            "the cached full report is already loaded; opening Doctor needs no reload"
         );
         assert_eq!(
             model.route,

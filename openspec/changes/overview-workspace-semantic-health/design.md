@@ -9,8 +9,9 @@ states are the product. Two constraints shape the design:
    context semantics; it must own the verdicts.
 2. **No new heavyweight machinery.** The Overview budget is
    millisecond-fast (ADR 018). Per-receipt attachment inspection spawns
-   vendor CLIs (measured at seconds) and deliberately stays on the
-   Doctor screen (`doctor_fast` vs `doctor`, already split for this).
+   vendor CLIs (measured at seconds); the report path serves those
+   verdicts through the inspection cache (ADR 024), so every screen —
+   not just the dashboard — sees real attachment state in steady state.
 
 ## Decisions
 

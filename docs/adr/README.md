@@ -61,3 +61,4 @@ never renumbered), using this structure (Michael Nygard style):
 - [021 — Extend Generated Native Projection to Codex and Gemini](021-extend-generated-native-projection-to-codex-and-gemini.md)
 - [022 — Remove the Dead Foreign Claude Plugin Importer](022-remove-dead-foreign-claude-plugin-importer.md)
 - [023 — Marketplace Manifest Is agents.json](023-marketplace-manifest-is-agents-json.md)
+- [024 — Cache Attachment Inspection with Fingerprint + TTL Invalidation](024-cache-attachment-inspection-with-fingerprint-ttl-invalidation.md)

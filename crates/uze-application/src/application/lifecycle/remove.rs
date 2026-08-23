@@ -17,6 +17,9 @@ use super::super::*;
 impl UzeApplication {
     pub fn remove_plugin(&self, id: &str) -> Result<RemovePluginReport> {
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.home)?;
+        // Removal changes vendor-visible state; cached inspection verdicts
+        // must not outlive it (ADR 024).
+        self.inspection_cache.invalidate();
         let report = self.detach_and_remove(id, false)?;
         if matches!(report, RemovePluginReport::Removed { .. }) {
             let _ = uze_core::state::plugin_marketplace_remove(&self.home, id);

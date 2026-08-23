@@ -15,8 +15,8 @@
 //!
 //! No Store writes, no acquisition, no network, no vendor CLI: every
 //! field is computable from the cwd + the current Store index in
-//! milliseconds (the full per-receipt vendor inspection stays in `doctor`
-//! and on the Doctor screen — see `doctor_fast`).
+//! milliseconds (full per-receipt vendor inspection stays on the Doctor
+//! report, where it is served by the inspection cache — see ADR 024).
 
 #![allow(clippy::empty_line_after_doc_comments)]
 

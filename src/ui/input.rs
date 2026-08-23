@@ -54,24 +54,12 @@ impl TuiModel {
     fn sidebar_key(&mut self, key: KeyEvent) -> Intent {
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => {
-                let next = ROUTES[(self.route.index() + 1) % ROUTES.len()];
-                let deep = self.route_change_needs_deep_health(next);
-                self.set_route(next);
-                if deep {
-                    Intent::RefreshDoctor
-                } else {
-                    Intent::None
-                }
+                self.set_route(ROUTES[(self.route.index() + 1) % ROUTES.len()]);
+                Intent::None
             }
             KeyCode::Char('k') | KeyCode::Up => {
-                let next = ROUTES[(self.route.index() + ROUTES.len() - 1) % ROUTES.len()];
-                let deep = self.route_change_needs_deep_health(next);
-                self.set_route(next);
-                if deep {
-                    Intent::RefreshDoctor
-                } else {
-                    Intent::None
-                }
+                self.set_route(ROUTES[(self.route.index() + ROUTES.len() - 1) % ROUTES.len()]);
+                Intent::None
             }
             KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => {
                 self.focus = Focus::Content;

@@ -16,12 +16,7 @@ use super::super::{content_area, render_screen_header};
 pub(crate) fn render_doctor(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
     let area = content_area(area);
     let issues = model.issues();
-    // A shallow doctor (the dashboard health) has no attachment checks
-    // yet — say so rather than claiming "all checks passed" while the
-    // full report loads on entry.
-    let (summary, summary_color) = if !model.doctor_deep {
-        ("attachment checks loading…".to_owned(), MUTED)
-    } else if issues.iter().any(|i| i.severity == Severity::High) {
+    let (summary, summary_color) = if issues.iter().any(|i| i.severity == Severity::High) {
         (
             format!(
                 "{} high, {} total",

@@ -28,7 +28,6 @@ pub struct AttachmentReceipt {
     pub strategy: String,
     pub artifact: ManagedArtifact,
 }
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ManagedArtifact {
@@ -832,4 +831,49 @@ pub fn assess_environment(
             }
         })
         .collect()
+}
+
+/// A cheap, vendor-neutral fingerprint of the filesystem surface an
+/// attachment lives on — the freshness half of the inspection cache
+/// (ADR 024), mirroring the detection cache's own fingerprint rule
+/// (ADR 018).
+///
+/// Only artifacts with a directly stat-able presence produce one:
+///
+/// - `SymlinkReference` → the managed link's own state (its mtime and the
+///   path it currently points at), always `Some` — a missing link is a
+///   real, checkable state (`"absent"`), not the absence of a fingerprint;
+/// - everything else (vendor config entries, integration-owned native
+///   catalogues, text regions) → `None`, because the state lives inside
+///   vendor files whose locations this layer deliberately does not know;
+///   those verdicts are bounded by TTL + mutation invalidation alone.
+pub fn managed_artifact_fingerprint(artifact: &ManagedArtifact) -> Option<String> {
+    if let ManagedArtifact::SymlinkReference { path, target } = artifact {
+        let state = fs::symlink_metadata(path)
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(u128::MAX); // absent/untimed: a state, never "no info"
+        let link = fs::read_link(path)
+            .map(|resolved| resolved.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        return Some(format!("{state}:{link}:{}", target.display()));
+    }
+    None
+}
+
+/// Whether a managed artifact is still physically in place. The cheap,
+/// vendor-neutral half of "is this attachment still effective": only a
+/// directly stat-able artifact can answer without touching vendor state
+/// (`SymlinkReference` — the link must exist and still point where the
+/// receipt says). Everything else is the owning integration's verdict, so
+/// the answer is `false` here and callers fall back to receipt existence.
+pub fn managed_artifact_present(artifact: &ManagedArtifact) -> bool {
+    if let ManagedArtifact::SymlinkReference { path, target } = artifact {
+        return fs::read_link(path)
+            .map(|resolved| resolved == *target)
+            .unwrap_or(false);
+    }
+    false
 }

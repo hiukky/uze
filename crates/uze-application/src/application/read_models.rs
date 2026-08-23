@@ -46,7 +46,7 @@ impl UzeApplication {
                 }
             })
             .collect();
-        let reconciliation = self.reconcile(package.id.as_str());
+        let reconciliation = self.reconcile_cached_report(package.id.as_str());
         Ok(PluginInspection {
             plugin: self.plugin_summary(&package)?,
             capabilities: resources

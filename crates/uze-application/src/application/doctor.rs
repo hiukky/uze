@@ -8,13 +8,19 @@ use super::*;
 
 impl UzeApplication {
     /// Full machine diagnostics: Store/state errors, harness detection,
-    /// plugin summaries, and **per-receipt attachment inspection** through
-    /// each integration (which may run vendor CLIs — e.g. `codex plugin
-    /// list`). That inspection is the "heavyweight" part of `doctor` and
-    /// the reason it belongs on the explicit diagnostics path only (see
-    /// ADR 018's performance budget): callers on a hot path — the TUI's
-    /// startup/refresh — use [`doctor_fast`](Self::doctor_fast) and let
-    /// the Doctor screen run this full report when it opens.
+    /// plugin summaries, and per-receipt attachment inspection. The
+    /// inspection half is backed by:
+    ///
+    /// - the in-process + on-disk inspection cache for `Matched` verdicts
+    ///   (ADR 024): steady-state runs are milliseconds;
+    /// - always-live re-inspection for anomalies, so a warning is never
+    ///   stale;
+    /// - cache invalidation on every mutation, so a verdict never outlives
+    ///   the change that produced the state it describes.
+    ///
+    /// The only slow path is a cold cache (one vendor-CLI probe per
+    /// receipt), which is exactly the honest cost of the first evidence —
+    /// paid once per TTL window, not on every screen.
     pub fn doctor(&self) -> DoctorReport {
         let mut report = self.doctor_shell();
         let attachments = report
@@ -22,24 +28,16 @@ impl UzeApplication {
             .iter()
             .map(|plugin: &PluginSummary| PackageManagedState {
                 plugin: plugin.id.clone(),
-                state: managed_state(&self.reconcile(&plugin.id)),
+                state: managed_state(&self.reconcile_cached_report(&plugin.id)),
             })
             .collect();
         report.attachments = attachments;
         report
     }
 
-    /// The millisecond-fast half of `doctor`: everything except
-    /// per-receipt attachment inspection (`attachments` stays empty).
-    /// Same shape, same machine question — the missing half is explicitly
-    /// "not checked yet", never folded into "checked and fine": the Doctor
-    /// route and the CLI `doctor` command use [`doctor`](Self::doctor),
-    /// the TUI dashboard/titlebar use this and upgrade on Doctor entry.
-    pub fn doctor_fast(&self) -> DoctorReport {
-        self.doctor_shell()
-    }
-
-    /// The shared cheap half of both `doctor` variants.
+    /// The cheap half of `doctor` — everything except per-receipt
+    /// attachment inspection (`attachments` left empty). Shared by
+    /// [`doctor`](Self::doctor), which adds the (cached) inspection layer.
     fn doctor_shell(&self) -> DoctorReport {
         let package_ids = self.store.package_ids();
         let (store, plugins) = match package_ids {
@@ -204,12 +202,26 @@ mod tests {
 
     use super::*;
 
-    /// An integration that counts every `inspect_receipt` call. The
-    /// difference between `doctor_fast` (no inspection) and `doctor`
-    /// (one inspection per receipt) is exactly how the vendor-CLI cost is
-    /// kept off the dashboard hot path.
+    /// An integration that counts every `inspect_receipt` call and reports
+    /// a configurable verdict. The matcher-vs-anomaly distinction is what
+    /// the inspection cache depends on (ADR 024): Matched is cached,
+    /// anomalies are always re-inspected.
     struct CountingInspection {
         inspected: Arc<AtomicUsize>,
+        verdict: AttachmentState,
+    }
+
+    impl CountingInspection {
+        fn counting(verdict: AttachmentState) -> (Self, Arc<AtomicUsize>) {
+            let inspected = Arc::new(AtomicUsize::new(0));
+            (
+                Self {
+                    inspected: inspected.clone(),
+                    verdict,
+                },
+                inspected,
+            )
+        }
     }
     impl IntegrationPort for CountingInspection {
         fn id(&self) -> &'static str {
@@ -235,7 +247,7 @@ mod tests {
         fn inspect_receipt(&self, _receipt: &AttachmentReceipt) -> AttachmentInspection {
             self.inspected.fetch_add(1, Ordering::SeqCst);
             AttachmentInspection {
-                state: AttachmentState::Matched,
+                state: self.verdict,
                 reason: "test".to_owned(),
             }
         }
@@ -256,8 +268,25 @@ mod tests {
         fs::write(dir.join("skills/uze-test/SKILL.md"), "# Test skill\n").unwrap();
     }
 
+    /// An app whose only integration is a fresh counting one sharing the
+    /// same `Arc` — so "another invocation" (a new `UzeApplication`) still
+    /// observes every live `inspect_receipt` call.
+    fn app_with_counter(
+        home: &UzeHome,
+        inspected: &Arc<AtomicUsize>,
+        verdict: AttachmentState,
+    ) -> UzeApplication {
+        UzeApplication::new(
+            home.clone(),
+            vec![Box::new(CountingInspection {
+                inspected: inspected.clone(),
+                verdict,
+            })],
+        )
+    }
+
     #[test]
-    fn doctor_fast_skips_receipt_inspection_doctor_performs_it() {
+    fn matched_inspection_is_cached_across_instances() {
         let base = temp("fast-vs-deep");
         let home = UzeHome::at(base.join("home"));
         let inspected = Arc::new(AtomicUsize::new(0));
@@ -265,6 +294,7 @@ mod tests {
             home.clone(),
             vec![Box::new(CountingInspection {
                 inspected: inspected.clone(),
+                verdict: AttachmentState::Matched,
             })],
         );
         let package_root = base.join("flow");
@@ -295,23 +325,128 @@ mod tests {
         )
         .unwrap();
 
-        let fast = app.doctor_fast();
-        assert!(
-            fast.attachments.is_empty(),
-            "the dashboard health must not pay for per-receipt inspection"
-        );
-        assert_eq!(
-            inspected.load(Ordering::SeqCst),
-            0,
-            "doctor_fast must never call inspect_receipt"
-        );
+        let first = app.doctor();
+        assert_eq!(first.attachments.len(), 1);
+        assert_eq!(inspected.load(Ordering::SeqCst), 1, "one cold inspection");
 
-        let deep = app.doctor();
-        assert_eq!(deep.attachments.len(), 1);
+        // Same instance: the in-process tier serves the verdict.
+        let _ = app.doctor();
+        assert_eq!(inspected.load(Ordering::SeqCst), 1);
+
+        // A fresh instance (e.g. the next TUI refresh): the on-disk tier
+        // serves it — no vendor CLI re-spawned.
+        let fresh = app_with_counter(&home, &inspected, AttachmentState::Matched);
+        let _ = fresh.doctor();
         assert_eq!(
             inspected.load(Ordering::SeqCst),
             1,
-            "only the full doctor may run per-receipt inspections"
+            "second invocation must not re-inspect a fresh Matched verdict"
+        );
+        fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn anomalies_are_never_cached_and_reinspected_every_time() {
+        let base = temp("anomaly");
+        let home = UzeHome::at(base.join("home"));
+        let (integration, inspected) = CountingInspection::counting(AttachmentState::Drifted);
+        let app = UzeApplication::new(home.clone(), vec![Box::new(integration)]);
+        let package_root = base.join("flow");
+        write_plugin(&base, "flow");
+        app.add_plugin(
+            PackageSource::Local {
+                path: package_root.clone(),
+            },
+            &AlwaysTrust,
+        )
+        .unwrap();
+        let package_id =
+            PackageId::from_plugin_name("flow", &package_root.join("plugin.json")).unwrap();
+        state::record_receipt(
+            &home,
+            "flow:counting:native".to_owned(),
+            AttachmentReceipt {
+                package_id: package_id.as_str().to_owned(),
+                resource_identity: None,
+                integration: "counting".to_owned(),
+                strategy: "test".to_owned(),
+                artifact: ManagedArtifact::IntegrationOwned {
+                    kind: "test".to_owned(),
+                    selector: "flow".to_owned(),
+                    detail: Default::default(),
+                },
+            },
+        )
+        .unwrap();
+
+        let report = app.doctor();
+        assert_eq!(report.attachments[0].state.drifted, 1);
+        assert_eq!(inspected.load(Ordering::SeqCst), 1);
+        let _ = app.doctor();
+        assert_eq!(
+            inspected.load(Ordering::SeqCst),
+            2,
+            "a drifted verdict must be re-checked live on every read"
+        );
+        // And it never persisted: a fresh instance re-inspects too.
+        let fresh = app_with_counter(&home, &inspected, AttachmentState::Drifted);
+        let _ = fresh.doctor();
+        assert_eq!(inspected.load(Ordering::SeqCst), 3);
+        fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn installation_invalidates_the_inspection_cache() {
+        let base = temp("invalidate-on-install");
+        let home = UzeHome::at(base.join("home"));
+        let (integration, inspected) = CountingInspection::counting(AttachmentState::Matched);
+        let app = UzeApplication::new(home.clone(), vec![Box::new(integration)]);
+        let package_root = base.join("flow");
+        write_plugin(&base, "flow");
+        app.add_plugin(
+            PackageSource::Local {
+                path: package_root.clone(),
+            },
+            &AlwaysTrust,
+        )
+        .unwrap();
+        let package_id =
+            PackageId::from_plugin_name("flow", &package_root.join("plugin.json")).unwrap();
+        state::record_receipt(
+            &home,
+            "flow:counting:native".to_owned(),
+            AttachmentReceipt {
+                package_id: package_id.as_str().to_owned(),
+                resource_identity: None,
+                integration: "counting".to_owned(),
+                strategy: "test".to_owned(),
+                artifact: ManagedArtifact::IntegrationOwned {
+                    kind: "test".to_owned(),
+                    selector: "flow".to_owned(),
+                    detail: Default::default(),
+                },
+            },
+        )
+        .unwrap();
+
+        let _ = app.doctor();
+        assert_eq!(inspected.load(Ordering::SeqCst), 1);
+
+        // Installing another package is a mutation: cached verdicts must
+        // not outlive it.
+        write_plugin(&base, "std");
+        app.add_plugin(
+            PackageSource::Local {
+                path: base.join("std"),
+            },
+            &AlwaysTrust,
+        )
+        .unwrap();
+        let _ = app.doctor();
+        assert_eq!(
+            inspected.load(Ordering::SeqCst),
+            2,
+            "a mutation must invalidate cached inspection verdicts"
         );
         fs::remove_dir_all(&base).ok();
     }

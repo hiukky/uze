@@ -42,6 +42,9 @@ impl UzeApplication {
         already_trusted: &[trust::ExecutableCapability],
         replacing_installed: bool,
     ) -> Result<AddPluginReport> {
+        // Any installation changes vendor-visible state; cached inspection
+        // verdicts must not outlive it (ADR 024).
+        self.inspection_cache.invalidate();
         // Trust is decided here — after the package is materialized and can
         // be inspected honestly, and strictly before anything is written to
         // the Store or shown to a harness. Neither the Store nor any
