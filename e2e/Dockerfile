@@ -37,7 +37,7 @@ RUN npm install --prefix /opt/opencode-runtime --omit=dev --no-audit --no-fund \
 
 COPY --from=uze-build /src/target/release/uze /usr/local/bin/uze
 COPY --from=uze-build /src/target/release/uze-mcp-conformance-fixture /usr/local/bin/uze-mcp-conformance-fixture
-COPY --from=uze-build /src/e2e/target/release/uze-conformance /usr/local/bin/uze-conformance
+COPY --from=uze-build /src/target/release/uze-conformance /usr/local/bin/uze-conformance
 COPY e2e/fixtures/plugin-first-conformance /opt/uze-fixtures/plugin-first-conformance
 COPY e2e/fixtures/native-skill-discovery /opt/uze-fixtures/native-skill-discovery
 COPY e2e/fixtures/gemini-native-conformance /opt/uze-fixtures/gemini-native-conformance

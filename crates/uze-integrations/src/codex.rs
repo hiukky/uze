@@ -248,7 +248,13 @@ impl IntegrationPort for CodexIntegration {
                 ["-c", "curl -fsSL https://chatgpt.com/codex/install.sh | sh"],
             )
             .with_inherited_output(),
-            ProcessSpec::new("codex", ["--upgrade"]).with_inherited_output(),
+            // Real-CLI dogfood against codex-cli 0.148.0 (the version this
+            // repo's own docs list as last-validated) found `--upgrade` is
+            // not a recognized flag — `codex --help` lists `update` as a
+            // subcommand instead. `research.md`'s original `--upgrade`
+            // finding predates that vendor rename; left as a historical
+            // record, not edited.
+            ProcessSpec::new("codex", ["update"]).with_inherited_output(),
             "official-native-installer",
         )
     }
