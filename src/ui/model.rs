@@ -62,6 +62,11 @@ pub(crate) enum Focus {
 pub(crate) enum Overlay {
     None,
     Help,
+    /// The Harnesses screen's own glossary — what each status/delivery/
+    /// compatibility label actually means. Opened by `?` while on that
+    /// route instead of the generic `Help` overlay, since the plain
+    /// keybinding list has nothing to say about what "Adapted" means.
+    HarnessHelp,
     ConfirmRemove {
         id: String,
         focus: usize,
@@ -360,6 +365,14 @@ impl TuiModel {
     pub(crate) fn set_route(&mut self, route: Route) {
         if route != Route::Marketplace {
             self.filtering = false;
+        }
+        // Harnesses opens straight onto its first entry's detail — the list
+        // is short and every row *is* the point of the screen, unlike
+        // Marketplace/Plugins, which need typing/browsing before a
+        // selection means anything.
+        if route == Route::Harnesses {
+            self.harnesses_selected = 0;
+            self.harnesses_drawer_open = true;
         }
         self.route = route;
     }

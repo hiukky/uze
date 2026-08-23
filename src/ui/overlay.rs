@@ -16,7 +16,7 @@ impl TuiModel {
     pub(crate) fn overlay_key(&mut self, key: KeyEvent) -> Intent {
         let overlay = self.overlay.clone();
         match (&overlay, key.code) {
-            (Overlay::Help, _) => {
+            (Overlay::Help, _) | (Overlay::HarnessHelp, _) => {
                 self.close_overlay();
                 Intent::None
             }
@@ -167,6 +167,115 @@ pub(crate) fn render_help(frame: &mut ratatui::Frame<'_>, area: Rect) {
             Line::from(Span::styled("any key to close", Style::default().fg(MUTED))),
         ],
         ACCENT,
+    );
+}
+
+/// The Harnesses screen's glossary — everything that screen's compact
+/// glyphs/labels stand for, written out in plain language. Kept separate
+/// from the generic `Help` keybinding overlay: this is reference material
+/// about what the data *means*, not what a key *does*.
+pub(crate) fn render_harness_help(frame: &mut ratatui::Frame<'_>, area: Rect) {
+    // Width covers the longest label ("Not implemented", 16 chars) plus at
+    // least one separating space — `{:<N}` never truncates or forces a gap
+    // once content already reaches N, so anything shorter than the longest
+    // label here would glue straight into the detail text that follows.
+    let entry = |glyph: &str, label: &str, color: Color, detail: &str| {
+        Line::from(vec![
+            Span::styled(
+                format!("{glyph} {label:<18}"),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(detail.to_owned(), Style::default().fg(MUTED)),
+        ])
+    };
+    let heading = |text: &str| {
+        Line::from(Span::styled(
+            text.to_owned(),
+            Style::default()
+                .fg(TEXT_BRIGHT)
+                .add_modifier(Modifier::BOLD),
+        ))
+    };
+    let lines = vec![
+        heading("STATUS"),
+        entry(
+            "✕",
+            "Not installed",
+            MUTED,
+            "The harness isn't on this machine at all.",
+        ),
+        entry(
+            "●",
+            "Installed",
+            WARNING,
+            "Detected, but UZE hasn't configured it — press s to run setup.",
+        ),
+        entry(
+            "✓",
+            "Configured",
+            ACCENT,
+            "UZE has set it up — ready to receive plugins.",
+        ),
+        Line::from(""),
+        heading("COMPATIBILITY (per capability, in the detail panel)"),
+        entry(
+            "√",
+            "Native",
+            ACCENT,
+            "Works directly, no adaptation needed.",
+        ),
+        entry(
+            "√",
+            "Bridged",
+            ACCENT,
+            "Routed through UZE's managed AGENTS.md bridge file.",
+        ),
+        entry(
+            "≈",
+            "Adapted",
+            WARNING,
+            "Works, converted from a different format.",
+        ),
+        entry(
+            "≈",
+            "Degraded",
+            WARNING,
+            "Works, but with reduced fidelity.",
+        ),
+        entry(
+            "—",
+            "Not supported",
+            DANGER,
+            "This harness has no route for it.",
+        ),
+        entry(
+            "—",
+            "Not implemented",
+            MUTED,
+            "UZE doesn't route this capability anywhere yet.",
+        ),
+        Line::from(""),
+        Line::from(Span::styled("any key to close", Style::default().fg(MUTED))),
+    ];
+    // `render_modal`'s fixed 76-column cap was built for the short one-line
+    // confirmations every other overlay uses — this glossary's longest
+    // lines need more room than that to avoid wrapping and losing the
+    // label/detail alignment, so size the popup off its own content instead
+    // (still bounded by the real terminal width on anything narrower).
+    let width = (lines.iter().map(Line::width).max().unwrap_or(0) as u16 + 4).min(area.width);
+    let height = (lines.len() as u16 + 4).min(area.height.saturating_sub(2));
+    let popup = Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    );
+    frame.render_widget(Clear, popup);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(modal_block(" Harness status ", ACCENT))
+            .wrap(ratatui::widgets::Wrap { trim: true }),
+        popup,
     );
 }
 

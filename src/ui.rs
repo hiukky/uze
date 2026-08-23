@@ -280,6 +280,7 @@ fn render(frame: &mut ratatui::Frame<'_>, model: &TuiModel, hits: &mut Vec<(Rect
     match &model.overlay {
         Overlay::None => {}
         Overlay::Help => overlay::render_help(frame, frame.area()),
+        Overlay::HarnessHelp => overlay::render_harness_help(frame, frame.area()),
         Overlay::ConfirmRemove { id, focus } => {
             overlay::render_confirm_remove(frame, frame.area(), id, *focus)
         }
@@ -600,7 +601,7 @@ fn route_hint(route: Route) -> &'static str {
             "↑↓ select · enter inspect · i install · a add marketplace · / search · esc close"
         }
         Route::Context => "a analyze · p apply",
-        Route::Harnesses => "↑↓ select · s setup · esc close",
+        Route::Harnesses => "↑↓ select · s setup · ? status · esc close",
         Route::Doctor => "r refresh · ? help",
     }
 }
@@ -700,16 +701,6 @@ pub(crate) fn health_style(health: &str) -> Style {
     }
 }
 
-fn setup_style(status: &str) -> Style {
-    if status.contains("verified") && !status.contains("unverified") {
-        Style::default().fg(SUCCESS)
-    } else if status.contains("unverified") {
-        Style::default().fg(WARNING)
-    } else {
-        Style::default().fg(MUTED)
-    }
-}
-
 fn route_style(route: &str) -> Style {
     match route {
         "native" => Style::default().fg(SUCCESS),
@@ -792,7 +783,7 @@ mod tests {
                         version: Some("1.0.0".to_owned()),
                     },
                     setup: "configured, verified".to_owned(),
-                    strategy: Some("native-user-scope-skills".to_owned()),
+                    strategy: Some("managed-user-scope-skills-dir".to_owned()),
                     provisioning: None,
                     publication: PublicationStatus::Published,
                     capabilities: HarnessCapabilities::default(),
@@ -862,6 +853,7 @@ mod tests {
         let base = model_with_data();
         let overlays = [
             Overlay::Help,
+            Overlay::HarnessHelp,
             Overlay::ConfirmRemove {
                 id: "one".to_owned(),
                 focus: 1,

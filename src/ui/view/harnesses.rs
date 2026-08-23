@@ -7,7 +7,7 @@
 
 use ratatui::{
     layout::Rect,
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Clear, Paragraph},
 };
@@ -18,9 +18,70 @@ use super::super::hit::Hit;
 use super::super::model::TuiModel;
 use super::super::{
     ACCENT, BASE, BORDER, DANGER, MUTED, SELECTED_BG, TEXT_BRIGHT, TEXT_SECONDARY, TEXT_TERTIARY,
-    WARNING, setup_style,
+    WARNING,
 };
 use super::super::{content_area, render_divided_row, render_screen_header};
+
+/// A harness's state collapses onto exactly one of three buckets for this
+/// list — `HarnessHealth` itself tracks a finer distinction (whether the
+/// last explicit `uze setup` run specifically *verified* the binary, vs.
+/// configuration that only ever happened implicitly through `uze add`), but
+/// that's an audit-trail detail for the drawer, not something a glance at
+/// the list needs: either way the harness is equally ready to receive
+/// plugins. New states here should earn their place the same way — only
+/// when the list needs to tell the user to act differently, not because the
+/// underlying data happens to distinguish something.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HarnessStatus {
+    /// The binary isn't on this machine at all.
+    NotInstalled,
+    /// Detected, but UZE has never configured it (`uze setup` or an
+    /// implicit `uze add` preparation).
+    Installed,
+    /// UZE has configured it — ready to receive plugins.
+    Configured,
+}
+
+impl HarnessStatus {
+    fn from(harness: &HarnessHealth) -> Self {
+        if !harness.detection.present {
+            Self::NotInstalled
+        } else if harness.setup.contains("not configured") {
+            Self::Installed
+        } else {
+            Self::Configured
+        }
+    }
+
+    fn glyph(self) -> &'static str {
+        match self {
+            Self::NotInstalled => "✕",
+            Self::Installed => "●",
+            Self::Configured => "✓",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::NotInstalled => "Not installed",
+            Self::Installed => "Installed",
+            Self::Configured => "Configured",
+        }
+    }
+
+    fn color(self) -> Color {
+        match self {
+            Self::NotInstalled => MUTED,
+            Self::Installed => WARNING,
+            Self::Configured => ACCENT,
+        }
+    }
+}
+
+/// A row's status text stops this many columns short of the row's right
+/// edge — otherwise, with the drawer open, it lands flush against the
+/// drawer's own border with no breathing room.
+const ROW_RIGHT_PAD: usize = 2;
 
 pub(crate) fn render_harnesses(
     frame: &mut ratatui::Frame<'_>,
@@ -30,9 +91,24 @@ pub(crate) fn render_harnesses(
 ) {
     let area = content_area(area);
     let count = model.doctor.as_ref().map_or(0, |d| d.harnesses.len());
+    // The drawer overlays from the right rather than sharing a permanent
+    // split, but the header/list still need to lay out *around* it when
+    // it's open — otherwise their own right-aligned content runs straight
+    // under the drawer and gets clipped mid-word by its Clear. Split evenly
+    // rather than a fixed width: the list only ever needs two short columns
+    // (name, status), while the drawer's own content (Delivery strings,
+    // COMPATIBILITY rows) is what actually needs the room.
+    let drawer_open = model.harnesses_drawer_open && model.selected_harness().is_some();
+    let drawer_width = if drawer_open { area.width / 2 } else { 0 };
+    let list_area = Rect::new(
+        area.x,
+        area.y,
+        area.width.saturating_sub(drawer_width),
+        area.height,
+    );
     let content = render_screen_header(
         frame,
-        area,
+        list_area,
         "Harnesses",
         "detected agents",
         Some(Span::styled(
@@ -49,8 +125,8 @@ pub(crate) fn render_harnesses(
             );
         }
         Some(doctor) => {
-            // Same table-row style as Context: name / detail / right-aligned
-            // status, each row underlined by a hairline divider.
+            // One status column, right-aligned — name / status, each row
+            // underlined by a hairline divider.
             let mut y = content.y;
             let bottom = content.y + content.height;
             for (index, harness) in doctor.harnesses.iter().enumerate() {
@@ -59,48 +135,28 @@ pub(crate) fn render_harnesses(
                 }
                 let selected = index == model.harnesses_selected;
                 let name_fg = if selected { TEXT_BRIGHT } else { TEXT_TERTIARY };
-                let (status_text, status_fg) = if harness.detection.present {
-                    ("Installed", ACCENT)
-                } else {
-                    ("Not detected", MUTED)
-                };
-                // `harness.setup` is "not configured" / "installed / unverified"
-                // / "installed / verified" — a distinct axis from the status
-                // column beside it (is the harness *detected on this
-                // machine*, vs. has *UZE's own setup* been run and verified
-                // for it). The "installed / " prefix on the latter two just
-                // repeats the status column's own "Installed" text right
-                // next to it, so it's dropped here — the CLI's `uze doctor`
-                // output keeps the full phrase since it has no adjacent
-                // status column to read it against.
-                let detail = if harness.detection.present {
-                    harness
-                        .setup
-                        .strip_prefix("installed / ")
-                        .unwrap_or(&harness.setup)
-                        .to_owned()
-                } else {
-                    "Not detected in this environment".to_owned()
-                };
+                let status = HarnessStatus::from(harness);
 
+                let name = Span::styled(
+                    format!("{:<16}", harness.display_name),
+                    Style::default().fg(name_fg),
+                );
+                let status_span = Span::styled(
+                    format!("{} {}", status.glyph(), status.label()),
+                    Style::default().fg(status.color()),
+                );
+                let used = name.width() + status_span.width() + ROW_RIGHT_PAD;
+                let gap = (content.width as usize).saturating_sub(used);
                 let mut spans = vec![
-                    Span::styled(
-                        format!("{:<16}", harness.display_name),
-                        Style::default().fg(name_fg),
-                    ),
-                    Span::styled(format!("{detail:<44}"), Style::default().fg(MUTED)),
-                    Span::styled(format!("{status_text:>10}"), Style::default().fg(status_fg)),
+                    name,
+                    Span::raw(" ".repeat(gap)),
+                    status_span,
+                    Span::raw(" ".repeat(ROW_RIGHT_PAD)),
                 ];
                 if selected {
                     for span in &mut spans {
                         span.style = span.style.bg(SELECTED_BG);
                     }
-                    let used: usize = spans.iter().map(|s| s.width()).sum();
-                    let gap = (content.width as usize).saturating_sub(used);
-                    spans.push(Span::styled(
-                        " ".repeat(gap),
-                        Style::default().bg(SELECTED_BG),
-                    ));
                 }
 
                 hits.push((
@@ -112,15 +168,17 @@ pub(crate) fn render_harnesses(
         }
     }
 
-    if model.harnesses_drawer_open
-        && let Some(harness) = model.selected_harness()
-    {
+    if drawer_open && let Some(harness) = model.selected_harness() {
         render_harness_drawer(frame, area, harness);
     }
 }
 
 fn render_harness_drawer(frame: &mut ratatui::Frame<'_>, area: Rect, harness: &HarnessHealth) {
-    let width = 46.min(area.width);
+    let status = HarnessStatus::from(harness);
+    // Matches `render_harnesses`'s own `drawer_width` — an even split, not a
+    // fixed cap, so the list and drawer never disagree about where the
+    // boundary sits.
+    let width = area.width / 2;
     let drawer = Rect::new(area.x + area.width - width, area.y, width, area.height);
     frame.render_widget(Clear, drawer);
     frame.render_widget(
@@ -162,15 +220,19 @@ fn render_harness_drawer(frame: &mut ratatui::Frame<'_>, area: Rect, harness: &H
         ]),
         Line::from(vec![
             Span::styled(format!("{:<12}", "Status"), Style::default().fg(MUTED)),
-            Span::styled(harness.setup.clone(), setup_style(&harness.setup)),
+            Span::styled(
+                format!("{} {}", status.glyph(), status.label()),
+                Style::default().fg(status.color()),
+            ),
         ]),
         Line::from(vec![
             Span::styled(format!("{:<12}", "Delivery"), Style::default().fg(MUTED)),
             Span::styled(
                 harness
                     .strategy
-                    .clone()
-                    .unwrap_or_else(|| "not configured".to_owned()),
+                    .as_deref()
+                    .map(friendly_delivery)
+                    .unwrap_or("Not configured yet"),
                 Style::default().fg(TEXT_TERTIARY),
             ),
         ]),
@@ -199,6 +261,21 @@ fn render_harness_drawer(frame: &mut ratatui::Frame<'_>, area: Rect, harness: &H
         ]));
     }
     frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// `harness.strategy` carries the internal identifier `install()` recorded
+/// (see each `IntegrationPort::install` impl) — meant for state/receipts,
+/// not a reader. Every identifier currently in use gets a plain-language
+/// translation here; an integration adding a new one shows up as the raw
+/// identifier rather than silently, so a gap is obvious instead of hidden.
+fn friendly_delivery(strategy: &str) -> &str {
+    match strategy {
+        "managed-user-scope-skills-dir" => "Skills folder (UZE-managed)",
+        "native-user-scope-skills-plus-managed-mcp-config" => {
+            "Native skills + MCP config (UZE-managed)"
+        }
+        other => other,
+    }
 }
 
 /// One row per capability UZE knows about, in the order a reader would care

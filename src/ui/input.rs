@@ -23,7 +23,11 @@ impl TuiModel {
         }
         match key.code {
             KeyCode::Char('?') => {
-                self.overlay = Overlay::Help;
+                self.overlay = if self.route == Route::Harnesses {
+                    Overlay::HarnessHelp
+                } else {
+                    Overlay::Help
+                };
                 Intent::None
             }
             KeyCode::Char('q') => Intent::Quit,
