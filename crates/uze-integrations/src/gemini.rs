@@ -42,12 +42,17 @@ use uze_core::{
 };
 
 mod extension;
+mod generate;
 mod mcp;
 mod provision;
 mod skills;
 
 use extension::{
     extension_name, gemini_exact_coverage, inspect_linked_extension, linked_extension, run_gemini,
+};
+use generate::{
+    GENERATED_LINKED_EXTENSION, generatable, generated_exact_coverage, generated_extension_receipt,
+    materialize_generated_extension, remove_generated_extension_by_id,
 };
 use mcp::attach_mcp_entry;
 use provision::{detect_binary, provision_npm};
@@ -100,6 +105,80 @@ impl GeminiIntegration {
         resolve_real_executable(&["gemini"], &self.uze_home.shims_dir())
             .map(|path| path.to_string_lossy().into_owned())
             .unwrap_or_else(|| "gemini".to_owned())
+    }
+
+    /// Links a package whose source ships its own `gemini-extension.json`
+    /// directly from the Store. Unchanged behavior — extracted verbatim
+    /// from the pre-generation `attach_package`.
+    ///
+    /// `link` rather than `install`, deliberately, and this is a real
+    /// trade-off worth stating rather than hiding: Gemini documents `link`
+    /// as a *development* workflow. UZE uses it as its managed integration
+    /// mechanism because `install` copies the package into
+    /// ~/.gemini/extensions — which would make a second copy of bytes the
+    /// Store already owns, break install-once, and risk a detach removing
+    /// content UZE could no longer distinguish from the original. `link`
+    /// keeps the Store the single copy, is non-interactive with
+    /// `--consent`, and leaves the stored package untouched on uninstall
+    /// (confirmed empirically against 0.56.0).
+    fn attach_explicit_extension(
+        &self,
+        executable: &str,
+        package: &StoredPackage,
+    ) -> Result<Option<AttachmentReceipt>> {
+        let extension_name = extension_name(&package.root)?;
+        if linked_extension(executable, &self.command_home, &extension_name).is_some() {
+            return Ok(Some(self.receipt(package, &extension_name)));
+        }
+        let status = Command::new(executable)
+            .env("HOME", &self.command_home)
+            .args(["extensions", "link"])
+            .arg(&package.root)
+            .arg("--consent")
+            .status();
+        match status {
+            Ok(status) if status.success() => Ok(Some(self.receipt(package, &extension_name))),
+            Ok(status) => Err(UzeError::ExposureUnavailable(format!(
+                "`gemini extensions link` exited with {status} for `{extension_name}`"
+            ))),
+            Err(error) => Err(UzeError::ExposureUnavailable(format!(
+                "failed to run `gemini extensions link` for `{extension_name}`: {error}"
+            ))),
+        }
+    }
+
+    /// Links a package with no author-provided envelope from a UZE-owned
+    /// derived directory, materializing (or refreshing) its generated
+    /// extension first. No marketplace/catalogue is needed for Gemini
+    /// either way — `link` points straight at whichever directory
+    /// (Store-owned or UZE-generated) actually carries the manifest.
+    fn attach_generated_extension(
+        &self,
+        executable: &str,
+        package: &StoredPackage,
+    ) -> Result<Option<AttachmentReceipt>> {
+        let dir = materialize_generated_extension(&self.uze_home, package)?;
+        let extension_name = package.id.as_str();
+        if linked_extension(executable, &self.command_home, extension_name).is_some() {
+            return Ok(Some(generated_extension_receipt(self.id(), package, &dir)));
+        }
+        let status = Command::new(executable)
+            .env("HOME", &self.command_home)
+            .args(["extensions", "link"])
+            .arg(&dir)
+            .arg("--consent")
+            .status();
+        match status {
+            Ok(status) if status.success() => {
+                Ok(Some(generated_extension_receipt(self.id(), package, &dir)))
+            }
+            Ok(status) => Err(UzeError::ExposureUnavailable(format!(
+                "`gemini extensions link` exited with {status} for `{extension_name}`"
+            ))),
+            Err(error) => Err(UzeError::ExposureUnavailable(format!(
+                "failed to run `gemini extensions link` for `{extension_name}`: {error}"
+            ))),
+        }
     }
 }
 
@@ -179,20 +258,37 @@ impl IntegrationPort for GeminiIntegration {
         package: &StoredPackage,
         resources: &[&Resource],
     ) -> Option<PackageExposurePlan> {
-        if !package.root.join("gemini-extension.json").is_file() {
+        if package.root.join("gemini-extension.json").is_file() {
+            // An extension's `mcpServers` live inside its own manifest
+            // (declared inline, by name) and its skills inside its own
+            // conventional `skills/` directory — Gemini owns exactly those,
+            // not everything the Engine happened to discover in the same
+            // package tree.
+            let provided = gemini_exact_coverage(package, resources);
+            return Some(PackageExposurePlan {
+                package_id: package.id.clone(),
+                route: CompatibilityRoute::Native,
+                verification: VerificationStatus::Unverified,
+                provided_resource_identities: provided,
+                evidence: "The preserved external gemini-extension.json is linked directly from the UZE store through `gemini extensions link`, for exactly the skills/mcpServers it declares; undeclared resources fall back to individual attachment."
+                    .to_owned(),
+            });
+        }
+        // No author-provided envelope. Check whether UZE can safely
+        // synthesize one (ADR-020/ADR-021, refining ADR-013 §2: Explicit
+        // Native Package/Extension > Generated Native Package/Extension >
+        // Native Capability > Safe Adaptation > Unsupported). Stays
+        // read-only either way.
+        if !generatable(package) {
             return None;
         }
-        // An extension's `mcpServers` live inside its own manifest (declared
-        // inline, by name) and its skills inside its own conventional
-        // `skills/` directory — Gemini owns exactly those, not everything the
-        // Engine happened to discover in the same package tree.
-        let provided = gemini_exact_coverage(package, resources);
+        let provided = generated_exact_coverage(package, resources);
         Some(PackageExposurePlan {
             package_id: package.id.clone(),
             route: CompatibilityRoute::Native,
             verification: VerificationStatus::Unverified,
             provided_resource_identities: provided,
-            evidence: "The preserved external gemini-extension.json is linked directly from the UZE store through `gemini extensions link`, for exactly the skills/mcpServers it declares; undeclared resources fall back to individual attachment."
+            evidence: "No gemini-extension.json was provided. UZE synthesizes one deterministically into a UZE-owned derived directory (never the Store) covering exactly the package's conventional skills/ directory and mcp.json-declared servers, linked directly from that derived directory."
                 .to_owned(),
         })
     }
@@ -207,36 +303,11 @@ impl IntegrationPort for GeminiIntegration {
         package: &StoredPackage,
         _plan: &PackageExposurePlan,
     ) -> Result<Option<AttachmentReceipt>> {
-        let extension_name = extension_name(&package.root)?;
-        // `link` rather than `install`, deliberately, and this is a real
-        // trade-off worth stating rather than hiding: Gemini documents
-        // `link` as a *development* workflow. UZE uses it as its managed
-        // integration mechanism because `install` copies the package into
-        // ~/.gemini/extensions — which would make a second copy of bytes the
-        // Store already owns, break install-once, and risk a detach removing
-        // content UZE could no longer distinguish from the original. `link`
-        // keeps the Store the single copy, is non-interactive with
-        // `--consent`, and leaves the stored package untouched on uninstall
-        // (confirmed empirically against 0.56.0).
         let executable = self.provisioning_executable();
-        if linked_extension(&executable, &self.command_home, &extension_name).is_some() {
-            return Ok(Some(self.receipt(package, &extension_name)));
+        if package.root.join("gemini-extension.json").is_file() {
+            return self.attach_explicit_extension(&executable, package);
         }
-        let status = Command::new(&executable)
-            .env("HOME", &self.command_home)
-            .args(["extensions", "link"])
-            .arg(&package.root)
-            .arg("--consent")
-            .status();
-        match status {
-            Ok(status) if status.success() => Ok(Some(self.receipt(package, &extension_name))),
-            Ok(status) => Err(UzeError::ExposureUnavailable(format!(
-                "`gemini extensions link` exited with {status} for `{extension_name}`"
-            ))),
-            Err(error) => Err(UzeError::ExposureUnavailable(format!(
-                "failed to run `gemini extensions link` for `{extension_name}`: {error}"
-            ))),
-        }
+        self.attach_generated_extension(&executable, package)
     }
 
     fn attach(&self, resource: &Resource) -> Result<Option<PathBuf>> {
@@ -267,7 +338,7 @@ impl IntegrationPort for GeminiIntegration {
                 kind,
                 selector,
                 detail,
-            } if kind == LINKED_EXTENSION => {
+            } if kind == LINKED_EXTENSION || kind == GENERATED_LINKED_EXTENSION => {
                 let Some(source) = detail_path(detail, "source_path") else {
                     return blocked("extension receipt has no expected source path".to_owned());
                 };
@@ -309,7 +380,7 @@ impl IntegrationPort for GeminiIntegration {
         let executable = self.provisioning_executable();
         match &receipt.artifact {
             ManagedArtifact::IntegrationOwned { kind, selector, .. }
-                if kind == LINKED_EXTENSION =>
+                if kind == LINKED_EXTENSION || kind == GENERATED_LINKED_EXTENSION =>
             {
                 // Uninstalling a *linked* extension removes only Gemini's own
                 // reference. The stored package this integration never owns
@@ -320,6 +391,13 @@ impl IntegrationPort for GeminiIntegration {
                     &["extensions", "uninstall", selector],
                     "gemini extensions uninstall",
                 )?;
+                if kind == GENERATED_LINKED_EXTENSION {
+                    // The generated envelope directory is a Derived Artifact
+                    // (ADR-013 §4): non-authoritative, rebuildable, and
+                    // never the canonical Store — safe to remove outright
+                    // now that Gemini no longer references it.
+                    remove_generated_extension_by_id(&self.uze_home, &receipt.package_id)?;
+                }
             }
             ManagedArtifact::VendorConfigEntry { entry_name, .. } => {
                 run_gemini(

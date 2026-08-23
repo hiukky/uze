@@ -7,14 +7,16 @@
 //!   A plugin author should not need to know every harness format.
 //!   UZE owns porting and delivery.
 //!
-//! Claude is the proven tracer bullet (ADR-020, Generated Native Package):
-//! the fixture's single Skill, with no envelope of its own, still becomes
-//! one native Claude plugin via a UZE-synthesized envelope. Codex and
-//! Gemini generated-native delivery are NOT_IMPLEMENTED in this milestone
-//! (see the final report) — both correctly fall back to Native Capability
-//! (direct Skill decomposition), never a fabricated package. OpenCode has
-//! no package concept at all and is expected to decompose unconditionally
-//! — asymmetry across harnesses is expected, not a defect (spec §9).
+//! Claude was the first proven tracer bullet (ADR-020, Generated Native
+//! Package) and Codex/Gemini now close the same gap (ADR-021, Generated
+//! Native Package/Extension): the fixture's single Skill, with no vendor
+//! envelope of its own, becomes one native Claude plugin, one native Codex
+//! plugin, and one native Gemini extension — each via its own
+//! UZE-synthesized, integration-owned envelope, never a Store mutation.
+//! OpenCode has no package concept at all and is expected to decompose
+//! unconditionally into Native Capability — asymmetry across harnesses is
+//! expected there, not a defect (spec §9): it is the one harness with no
+//! native package/extension format to synthesize into in the first place.
 
 use std::path::PathBuf;
 
@@ -106,33 +108,29 @@ fn one_canonical_package_reaches_every_harness_through_its_most_native_safe_repr
         "the commit Skill must be exactly covered by the generated package"
     );
 
-    // --- Codex: NOT_IMPLEMENTED this milestone → Native Capability ------
-    // No `.codex-plugin/plugin.json` and Codex generated-native delivery
-    // is out of scope for this milestone (spec §15 Phase C) — Codex must
-    // still deliver the Skill, just at the capability level, never
-    // silently drop it.
+    // --- Codex: NATIVE PACKAGE (Generated) -------------------------------
     let codex = CodexIntegration::new(root.join("agents-home"), home.clone());
     mark_setup(&home, &codex);
+    let codex_plan = codex
+        .package_exposure_plan(&package, &resources)
+        .expect("Codex must synthesize a native envelope for an eligible, envelope-less package");
+    assert_eq!(codex_plan.route, CompatibilityRoute::Native);
     assert!(
-        codex.package_exposure_plan(&package, &resources).is_none(),
-        "Codex generated-native delivery is NOT_IMPLEMENTED this milestone"
+        codex_plan.provides(commit_skill),
+        "the commit Skill must be exactly covered by the generated package"
     );
-    let codex_plan = codex.exposure_plan(commit_skill);
-    assert_ne!(codex_plan.route, CompatibilityRoute::Unsupported);
-    assert!(matches!(
-        codex_plan.mechanism,
-        ExposureMechanism::ManagedUserScopeReference { .. }
-    ));
 
-    // --- Gemini: NOT_IMPLEMENTED this milestone → Native Capability -----
+    // --- Gemini: NATIVE EXTENSION (Generated) ----------------------------
     let gemini = GeminiIntegration::new(root.join("agents-home"), home.clone());
     mark_setup(&home, &gemini);
+    let gemini_plan = gemini
+        .package_exposure_plan(&package, &resources)
+        .expect("Gemini must synthesize a native envelope for an eligible, envelope-less package");
+    assert_eq!(gemini_plan.route, CompatibilityRoute::Native);
     assert!(
-        gemini.package_exposure_plan(&package, &resources).is_none(),
-        "Gemini generated-native delivery is NOT_IMPLEMENTED this milestone"
+        gemini_plan.provides(commit_skill),
+        "the commit Skill must be exactly covered by the generated extension"
     );
-    let gemini_plan = gemini.exposure_plan(commit_skill);
-    assert_ne!(gemini_plan.route, CompatibilityRoute::Unsupported);
 
     // --- OpenCode: no package concept at all, by design (spec §9) -------
     let opencode = OpenCodeIntegration::new(

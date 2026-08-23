@@ -2,6 +2,11 @@
 
 Status: Accepted
 
+Status note: [ADR-021](021-extend-generated-native-projection-to-codex-and-gemini.md)
+extends this decision's Codex/Gemini scope limitation (see this ADR's
+"Scope of this decision" paragraph below) — both now also have Generated
+Native Package/Extension, completing the hierarchy this ADR introduced.
+
 Refines: [ADR-013 (Native Projection Principle)](013-adopt-native-projection-principle.md) §2.
 Note on numbering: authored in a worktree isolated from a concurrent session
 that independently claimed `019` for an unrelated CLI-grammar change; `020`

@@ -518,6 +518,12 @@ fn run(cli: Cli) -> Result<()> {
                                         plan.route,
                                         plan.provided_resource_identities.len()
                                     );
+                                    // `evidence` already distinguishes explicit
+                                    // vs. generated (or any other route-specific
+                                    // provenance an integration wants to state)
+                                    // in its own words — no vendor enum needed
+                                    // to surface that here.
+                                    println!("    {}", plan.evidence);
                                 }
                                 for attachment in &report.attachments {
                                     println!(
@@ -719,6 +725,7 @@ fn run_shorthand(app: &UzeApplication, args: Vec<String>) -> Result<()> {
                     plan.route,
                     plan.provided_resource_identities.len()
                 );
+                println!("  {}", plan.evidence);
             }
         }
         OutputFormat::Json => print_json(&report),

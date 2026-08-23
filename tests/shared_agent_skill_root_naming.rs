@@ -9,10 +9,14 @@
 //! which scans the whole directory, as a duplicate `/uze` and `/uze-uze`
 //! slash command.
 //!
-//! Deterministic by construction: a `NoopProcessRunner` means no real
-//! `opencode`/`codex`/`gemini` binary is ever spawned. Detection is forced
-//! to present via an `AlwaysPresent` wrapper so the suite does not depend on
-//! host binaries.
+//! Deterministic by construction: a `NoopProcessRunner` covers `.provision()`,
+//! detection is forced present via an `AlwaysPresent` wrapper, and — since
+//! this fixture's one Skill now also qualifies for Generated Native
+//! Package/Extension (ADR-020/ADR-021), which shells out to the real
+//! `codex`/`gemini` executable directly via `Command::new`, bypassing the
+//! injected `ProcessRunner` — a stateful fake `codex`/`gemini` pair
+//! (`fake_codex_and_gemini_bin_dir`) is prepended to `PATH` for the
+//! duration of the test. No real host binary is ever spawned.
 
 use std::{
     fs,
@@ -134,6 +138,137 @@ impl<T: IntegrationPort> IntegrationPort for AlwaysPresent<T> {
     }
 }
 
+/// Writes fake, STATEFUL `codex`/`gemini` executables that understand
+/// exactly the subcommands this test's package-level delivery invokes —
+/// `plugin marketplace add/list --json`, `plugin add/list --json`,
+/// `extensions link --consent`, `extensions list --output-format=json` —
+/// well enough for a full attach-then-inspect round trip to report Matched,
+/// deterministically and without touching any real harness state.
+///
+/// Since this fixture's one Skill has no vendor envelope, it now qualifies
+/// for Generated Native Package/Extension (ADR-020/ADR-021) —
+/// `attach_package` shells out to the real, PATH-resolved executable via
+/// `Command::new`, not through the injected `ProcessRunner` this file
+/// already uses for `.provision()`, so without this the test would
+/// accidentally depend on the developer's real, locally-installed
+/// `codex`/`gemini` (see spec §18: "any test that accidentally shells to
+/// the developer's real harness is a test bug" — and CI has neither
+/// binary installed). Returns a PATH prefix to prepend ahead of the real
+/// one.
+#[cfg(unix)]
+fn fake_codex_and_gemini_bin_dir(root: &Path) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = root.join("fake-bin");
+    let state = dir.join("state");
+    fs::create_dir_all(&state).unwrap();
+
+    // Codex: persists the marketplace root/name (read back out of the real
+    // catalogue file this test's own generated-envelope code wrote — the
+    // fake never invents a name) and the installed selector/source across
+    // calls, then answers `list --json` truthfully from that state.
+    let codex_script = format!(
+        r#"#!/bin/sh
+state="{state}"
+case "$1 $2" in
+  "plugin marketplace")
+    case "$3" in
+      add)
+        root="$4"
+        name=$(sed -n 's/.*"name" *: *"\([^"]*\)".*/\1/p' "$root/.agents/plugins/marketplace.json" | head -1)
+        printf '%s' "$name" > "$state/marketplace_name"
+        printf '%s' "$root" > "$state/marketplace_root"
+        exit 0
+        ;;
+      list)
+        if [ -f "$state/marketplace_root" ]; then
+          name=$(cat "$state/marketplace_name")
+          root=$(cat "$state/marketplace_root")
+          printf '{{"marketplaces":[{{"name":"%s","root":"%s"}}]}}' "$name" "$root"
+        else
+          printf '{{"marketplaces":[]}}'
+        fi
+        exit 0
+        ;;
+    esac
+    ;;
+  "plugin add")
+    selector="$3"
+    root=$(cat "$state/marketplace_root" 2>/dev/null)
+    id="${{selector%%@*}}"
+    printf '%s' "$selector" > "$state/installed_selector"
+    printf '%s/%s' "$root" "$id" > "$state/installed_source"
+    exit 0
+    ;;
+  "plugin list")
+    if [ -f "$state/installed_selector" ]; then
+      selector=$(cat "$state/installed_selector")
+      name=$(cat "$state/marketplace_name" 2>/dev/null)
+      source=$(cat "$state/installed_source")
+      printf '{{"installed":[{{"pluginId":"%s","enabled":true,"installed":true,"marketplaceName":"%s","path":"%s"}}]}}' "$selector" "$name" "$source"
+    else
+      printf '{{"installed":[]}}'
+    fi
+    exit 0
+    ;;
+  "plugin remove")
+    rm -f "$state/marketplace_name" "$state/marketplace_root" "$state/installed_selector" "$state/installed_source"
+    exit 0
+    ;;
+esac
+exit 0
+"#,
+        state = state.display(),
+    );
+
+    // Gemini: persists the linked extension's name (read from the
+    // generated `gemini-extension.json` it was pointed at) and source
+    // directory, then answers `extensions list` truthfully from that state.
+    let gemini_script = format!(
+        r#"#!/bin/sh
+state="{state}"
+case "$1" in
+  extensions)
+    case "$2" in
+      link)
+        dir="$3"
+        name=$(sed -n 's/.*"name" *: *"\([^"]*\)".*/\1/p' "$dir/gemini-extension.json" | head -1)
+        printf '%s' "$name" > "$state/extension_name"
+        printf '%s' "$dir" > "$state/extension_source"
+        exit 0
+        ;;
+      list)
+        if [ -f "$state/extension_name" ]; then
+          name=$(cat "$state/extension_name")
+          source=$(cat "$state/extension_source")
+          printf '[{{"name":"%s","installMetadata":{{"source":"%s","type":"link"}},"isActive":true}}]' "$name" "$source"
+        else
+          printf '[]'
+        fi
+        exit 0
+        ;;
+      uninstall)
+        rm -f "$state/extension_name" "$state/extension_source"
+        exit 0
+        ;;
+    esac
+    ;;
+esac
+exit 0
+"#,
+        state = state.display(),
+    );
+
+    for (name, script) in [("codex", codex_script), ("gemini", gemini_script)] {
+        let path = dir.join(name);
+        fs::write(&path, script).unwrap();
+        let mut permissions = fs::metadata(&path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&path, permissions).unwrap();
+    }
+    dir
+}
+
 fn skill_fixture(root: &Path, package_id: &str, skill_name: &str) -> PathBuf {
     let dir = root.join(package_id);
     fs::create_dir_all(dir.join("skills").join(skill_name)).unwrap();
@@ -184,6 +319,15 @@ fn opencode_codex_and_gemini_share_exactly_one_symlink_for_the_same_skill() {
         Box::new(NoopProcessRunner),
     );
 
+    let fake_bin = fake_codex_and_gemini_bin_dir(&root);
+    let original_path = std::env::var("PATH").unwrap();
+    // SAFETY: this file has exactly one test, so no concurrent access to
+    // the process-global `PATH` within this binary; restored immediately
+    // after use.
+    unsafe {
+        std::env::set_var("PATH", format!("{}:{}", fake_bin.display(), original_path));
+    }
+
     let package_dir = skill_fixture(&root.join("fixtures"), "acme", "review");
     application
         .add_plugin(PackageSource::local(package_dir), &uze::trust::AlwaysTrust)
@@ -205,10 +349,25 @@ fn opencode_codex_and_gemini_share_exactly_one_symlink_for_the_same_skill() {
 
     let inspection = application.inspect_plugin("acme").unwrap();
     assert_eq!(
-        inspection.managed_state.matched, 3,
+        inspection.managed_state.matched,
+        3,
         "all three harnesses must still each have a matched receipt, even \
-         though they share one physical artifact"
+         though they share one physical artifact: {:?}",
+        inspection
+            .reconciliation
+            .receipts
+            .iter()
+            .map(|r| (
+                r.receipt.integration.clone(),
+                r.inspection.state,
+                r.inspection.reason.clone()
+            ))
+            .collect::<Vec<_>>()
     );
 
+    // SAFETY: restoring the process-global PATH this test overrode above.
+    unsafe {
+        std::env::set_var("PATH", original_path);
+    }
     fs::remove_dir_all(root).unwrap();
 }

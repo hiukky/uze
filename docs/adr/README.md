@@ -51,3 +51,4 @@ never renumbered), using this structure (Michael Nygard style):
 - [011 — Split UZE into a layered Cargo workspace](011-split-uze-into-layered-cargo-workspace.md)
 - [018 — Cache harness detection with fingerprint + TTL invalidation](018-cache-harness-detection-with-fingerprint-ttl-invalidation.md)
 - [020 — Generated Native Package Projection](020-generated-native-package-projection.md)
+- [021 — Extend Generated Native Projection to Codex and Gemini](021-extend-generated-native-projection-to-codex-and-gemini.md)

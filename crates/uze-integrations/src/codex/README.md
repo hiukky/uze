@@ -3,15 +3,18 @@
 Peer integration for OpenAI Codex CLI. Transparent attachment: Agent Skills
 via a persistent user-scope symlink (`~/.agents/skills/<name>`), MCP via
 `codex mcp add` (global only — no `--scope` flag exists), and a native
-plugin path via a UZE-generated local marketplace catalogue
-(`~/.agents/plugins/marketplace.json` in the Store, referenced by
-`codex plugin marketplace add`).
+plugin path — either the package's own explicit `.codex-plugin/plugin.json`
+via a UZE-generated local marketplace catalogue
+(`~/.agents/plugins/marketplace.json` under the Store, referenced by
+`codex plugin marketplace add`), or, absent one, a UZE-synthesized envelope
+in a second, UZE-owned marketplace (Generated Native Package, ADR-021).
 
 ## Support
 
 | Surface | Status | Delivery | Evidence |
 |---|---|---|---|
-| Native Package | Supported, exact coverage | `.codex-plugin/plugin.json` → generated catalogue → `codex plugin add` | CODE_FACT + TESTED (11 tests) + EMPIRICAL (config/install only) |
+| Native Package (explicit) | Supported, exact coverage | `.codex-plugin/plugin.json` → generated catalogue → `codex plugin add` | CODE_FACT + TESTED (11 tests) + EMPIRICAL (config/install only) |
+| Native Package (generated) | Supported, exact coverage | Second `uze-local-generated` catalogue (own root, path-containment-safe) → `codex plugin add` (ADR-021) | CODE_FACT + TESTED (15 tests) + EMPIRICAL — real-binary dogfood (Codex 0.148.0): attach → inspect (Matched) → detach (Missing) → reinstall (Matched) |
 | Skills | Supported | Persistent symlink, `~/.agents/skills/<name>` | EMPIRICAL (behavioral, ADR-006) |
 | MCP | Supported (config), unproven behaviorally | `codex mcp add` → `~/.codex/config.toml` | EMPIRICAL (configuration), UNKNOWN (discovery), gap (behavioral) |
 | Context (AGENTS.md) | Native, out of this crate's scope | Codex reads `AGENTS.md` directly | DOCUMENTED |
@@ -44,7 +47,32 @@ one IntegrationOwned receipt (kind: "marketplace-plugin")
 provided = discovered ∩ declared (skills dir, mcpServers file) — see Native package
 ```
 
-Without a `.codex-plugin/plugin.json`, Skills and MCP decompose individually
+```
+Store package (no explicit envelope, but skills/ dir and/or root mcp.json present)  [Generated, ADR-021]
+        │
+        ▼
+$UZE_HOME/state/attachments/codex/generated/<id>/.codex-plugin/plugin.json
+   (UZE-synthesized: skills="./skills/" symlinked from the Store,
+    mcpServers="./.mcp.json" symlinked to the package's own root mcp.json)
+        │
+        ▼
+$UZE_HOME/.../generated/.agents/plugins/marketplace.json  ("uze-local-generated",
+   rooted at the generated dir itself — Codex rejects source.path escaping
+   whatever root it was pointed at, so generated package dirs live directly
+   under it, not under a Store-relative path)
+        │
+        ▼
+codex plugin marketplace add <generated root> (once) → codex plugin add <id>@uze-local-generated
+        │
+        ▼
+one IntegrationOwned{kind:"marketplace-plugin-generated", detail.origin:"generated"} receipt
+   (detail.package_root = the GENERATED dir, not the Store root — Codex
+    reports the generated dir back as the installed source; recording the
+    Store root here would read as permanent drift. A real defect this
+    milestone's dogfood caught before it shipped — see ADR-021.)
+```
+
+Without either kind of envelope, Skills and MCP decompose individually
 through the same symlink/`codex mcp add` mechanisms described above.
 
 ## Native package
@@ -67,6 +95,14 @@ dropped. `attach_package` then ensures the derived catalogue is registered as
 a Codex marketplace and runs `codex plugin add <id>@uze-local`, idempotent
 via a pre-check against `codex plugin list --json`.
 
+**Generated Native Package** (`codex/generate.rs`, ADR-021): mirrors
+Claude's `claude/generate.rs` structurally, adapted to Codex's own manifest
+shape — `skills` as a single directory string (not an inline list),
+`mcpServers` as an external-file reference rather than embedding servers
+inline. `generatable()`/`generated_exact_coverage()` use the same
+capability-based eligibility rule as Claude's (a single Skill or MCP server
+alone qualifies); an explicit envelope, even malformed, always wins.
+
 ## Fallbacks
 
 - **Skills**, pre-setup: `ExposureMechanism::FilesystemProjection` into the
@@ -87,7 +123,8 @@ does nothing with it, and nothing here anticipates that it should.
 |---|---|---|---|
 | Skill symlink | `SymlinkReference` (standard) | Standard | Standard |
 | MCP entry | `VendorConfigEntry` | `codex mcp get --json`; absence = exit 1 + stable stderr string, any other non-zero stays `Blocked` | `codex mcp remove` |
-| Native plugin | `IntegrationOwned{kind:"marketplace-plugin"}` | `codex plugin marketplace list --json` + `codex plugin list --json`, checked before every destructive call (ADR-009) | `codex plugin remove` |
+| Native plugin (explicit) | `IntegrationOwned{kind:"marketplace-plugin"}` | `codex plugin marketplace list --json` + `codex plugin list --json`, checked before every destructive call (ADR-009) | `codex plugin remove` |
+| Native plugin (generated) | `IntegrationOwned{kind:"marketplace-plugin-generated"}` | Same `inspect_codex_plugin` (marketplace-root-agnostic) | Same `remove_plugin`, plus `remove_generated_package_by_id` (Derived Artifact) |
 
 MCP inspection is fully structured (`--json`), unlike Claude's raw-file read
 — a genuine advantage of Codex's CLI surface.
@@ -108,21 +145,25 @@ MCP inspection is fully structured (`--json`), unlike Claude's raw-file read
 
 ## Evidence
 
-- Tests: 13 (`codex::mcp::mcp_tests`: 1, `codex::plugin::plugin_tests`: 1,
+- Tests: 28 (`codex::mcp::mcp_tests`: 1, `codex::plugin::plugin_tests`: 1,
   `codex::plugin::codex_native_coverage_tests`: 11 — full declaration,
   subset, Store-extra-skill, Store-extra-MCP, manifest-references-missing
   file, malformed MCP file, unexpected field shape, `..` escape, absolute
-  path, empty declaration, partial-coverage-plus-fallback coexistence), all
-  passing. `tests/plugin_first_vertical_slice.rs` re-confirmed green under
-  the new intersection logic.
-- Real harness version last empirically validated (per ADRs): Codex CLI
-  0.148.0. A `codex` 0.148.0 binary is present in this session's environment
-  but was not exercised live for this fix: `codex_exact_coverage` is a pure
-  function already validated against the exact real fixture manifest shape
-  (`e2e/fixtures/plugin-first-conformance/.codex-plugin/plugin.json`), so a
-  live `codex plugin add` run would add side-effect risk without adding
-  coverage-computation evidence.
-- Sources: ADR-005, ADR-006, ADR-007, ADR-008, ADR-009, ADR-013,
+  path, empty declaration, partial-coverage-plus-fallback coexistence —
+  `codex::generate::generated_native_tests`: 15, mirroring Claude's
+  generated-native matrix), all passing.
+  `tests/plugin_first_vertical_slice.rs`/`tests/north_star_flow_fixture.rs`
+  re-confirmed green under the generated route.
+- Real harness version empirically validated live this milestone: Codex CLI
+  **0.148.0**, isolated `HOME`/`UZE_HOME`, no credentials. A full generated
+  -native lifecycle (attach → inspect Matched → detach Missing → reinstall
+  Matched) was run against the real binary and caught a genuine receipt
+  defect (`package_root` recorded as the Store path instead of the
+  installed generated directory — see ADR-021) before it shipped; the
+  explicit-native path's install/attach was separately confirmed live via
+  `tests/shared_agent_skill_root_naming.rs`'s original (now-faked-for-CI)
+  real-binary run.
+- Sources: ADR-005, ADR-006, ADR-007, ADR-008, ADR-009, ADR-013, ADR-021,
   `docs/capabilities/agents.md`.
 
 ## Next

@@ -79,19 +79,6 @@ pub struct ClaudeIntegration {
     /// gets a consistent, isolated value.
     command_home: std::path::PathBuf,
     uze_home: UzeHome,
-    /// Test-only escape hatch from PATH-based executable resolution. `None`
-    /// in every production path (`new`/`from_env` never set it), so
-    /// `provisioning_executable()` keeps resolving the real binary via
-    /// `resolve_real_executable` as normal. Exists because a test's own
-    /// isolated `UzeHome` only excludes *its own* `shims_dir` from that
-    /// resolution — on a machine where `uze setup claude` has genuinely run
-    /// (the real `~/.uze/shims/claude` sitting earlier on the *real* `$PATH`
-    /// the test process inherited), resolution would silently walk past the
-    /// test's fixtures and invoke the operator's live shim instead. No test
-    /// should ever depend on what happens to be installed on the machine
-    /// running it; this makes the executable an explicit, injected fact
-    /// instead of a discovered one.
-    executable_override: Option<std::path::PathBuf>,
 }
 
 impl ClaudeIntegration {
@@ -104,19 +91,7 @@ impl ClaudeIntegration {
             skills_dir: claude_home.join("skills"),
             command_home,
             uze_home,
-            executable_override: None,
         }
-    }
-
-    /// Pins the executable `provisioning_executable()` returns, bypassing
-    /// PATH/shim resolution entirely. Test-only in practice (production
-    /// composition roots never call this), but a genuine public method
-    /// rather than a `#[cfg(test)]` item: integration tests under `tests/`
-    /// construct this type through the compiled library, not the crate's
-    /// own internal test module.
-    pub fn with_executable_override(mut self, executable: std::path::PathBuf) -> Self {
-        self.executable_override = Some(executable);
-        self
     }
 
     /// Convenience constructor for the CLI composition root. Unused when
@@ -153,9 +128,6 @@ impl ClaudeIntegration {
     /// updates. Falls back to the bare name (previous behavior) if no real
     /// binary can be found outside the shims directory.
     fn provisioning_executable(&self) -> String {
-        if let Some(executable) = &self.executable_override {
-            return executable.to_string_lossy().into_owned();
-        }
         resolve_real_executable(&["claude"], &self.uze_home.shims_dir())
             .map(|path| path.to_string_lossy().into_owned())
             .unwrap_or_else(|| "claude".to_owned())

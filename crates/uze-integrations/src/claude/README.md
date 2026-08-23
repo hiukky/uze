@@ -1,16 +1,21 @@
 # Claude Code Integration
 
-Peer integration for Claude Code. Delivers a UZE package either as one native
-plugin (when the package ships `.claude-plugin/plugin.json`) or decomposed
-into a managed Skill symlink plus a registered MCP server. The only
-integration in this crate with a runtime-projection mechanism (`--add-dir`
-delivery of `AGENTS.md`, independent of package delivery).
+Peer integration for Claude Code. Delivers a UZE package as one native
+plugin — either the package's own explicit `.claude-plugin/plugin.json`
+(Explicit Native Package), or, absent one, a UZE-synthesized envelope
+covering the package's conventional `skills/`/`mcp.json` surface (Generated
+Native Package, ADR-020) — or, when neither surface is safely
+representable, decomposed into a managed Skill symlink plus a registered
+MCP server. The only integration in this crate with a runtime-projection
+mechanism (`--add-dir` delivery of `AGENTS.md`, independent of package
+delivery).
 
 ## Support
 
 | Surface | Status | Delivery | Evidence |
 |---|---|---|---|
-| Plugin (native) | SUPPORTED | Derived marketplace catalogue → `claude plugin install` | EMPIRICAL (marketplace/install config confirmed live 2026-08-20 per ADR-013); CLI-shelling functions have no unit test |
+| Plugin (native, explicit) | SUPPORTED | Derived marketplace catalogue → `claude plugin install` | EMPIRICAL (marketplace/install config confirmed live 2026-08-20 per ADR-013); CLI-shelling functions have no unit test |
+| Plugin (native, generated) | SUPPORTED | Second, UZE-owned `uze-local-generated` catalogue → `claude plugin install` (ADR-020) | TESTED (17 tests, `claude::generate::generated_native_tests`) + CODE_FACT |
 | Skills | SUPPORTED | Native envelope (VIA_PACKAGE) or managed skills-dir symlink (NATIVE_CAPABILITY) | EMPIRICAL — real `claude -p` run returned the exact proof token end-to-end (ADR-006) |
 | MCP | SUPPORTED (config), PARTIAL (behavioral) | Native envelope (VIA_PACKAGE) or `claude mcp add --scope user --transport stdio` (SAFE_ADAPTATION) | EMPIRICAL for config/discovery (`claude mcp get`/`list` confirmed `✔ Connected` live, ADR-007); a real tool call needed a non-default `--allowedTools=mcp__...` flag and a secondary headless-discovery quirk was never fully closed |
 | Context (runtime) | EXPERIMENTAL | `--add-dir` + `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1` (RUNTIME_PROJECTION) | EMPIRICAL — extensive real-CLI evidence (ADR-014); `/compact` retention across a session is the one open gap |
@@ -26,7 +31,7 @@ assuming the envelope covers everything — see [Package coverage](#package-cove
 ## Delivery
 
 ```
-Store plugin (.claude-plugin/plugin.json present)
+Store plugin (.claude-plugin/plugin.json present)          [Explicit Native Package]
         │
         ▼
 store/.claude-plugin/marketplace.json   (derived, republish_packages)
@@ -46,7 +51,28 @@ Skill/MCP resources NOT declared: fall through to the paths below, unchanged
 ```
 
 ```
-Store plugin (no envelope, or resource undeclared by the envelope)
+Store plugin (no explicit envelope, but skills/ dir and/or mcp.json present)  [Generated Native Package, ADR-020]
+        │
+        ▼
+$UZE_HOME/state/attachments/claude/generated/<id>/.claude-plugin/plugin.json
+   (UZE-synthesized: name/version/description from canonical plugin.json,
+    skills symlinked from the Store, mcp.json's mcpServers copied verbatim)
+        │
+        ▼
+$UZE_HOME/.../generated/.claude-plugin/marketplace.json   ("uze-local-generated")
+        │
+        ▼
+claude plugin marketplace add (once) → claude plugin install <id>@uze-local-generated
+        │
+        ▼
+one IntegrationOwned{kind:"claude-plugin-generated", detail.origin:"generated"} receipt
+        │
+        ▼
+provided = discovered ∩ (conventional skills/ ∪ mcp.json's mcpServers) — same exact-coverage discipline as explicit
+```
+
+```
+Store plugin (no envelope of either kind, or resource undeclared by one)
         │
         ├── Skill → managed shim (.claude-plugin/plugin.json + SKILL.md
         │            symlink) at $UZE_HOME state dir → symlinked once into
@@ -82,10 +108,26 @@ is unit-tested (11 tests in `claude::plugin::claude_native_coverage_tests`).
 The marketplace/install/list/uninstall CLI-shelling functions themselves
 (`claude_marketplace_exists`, `run_claude_marketplace_add`,
 `claude_plugin_installed`, `attach_package`, `inspect_claude_plugin`,
-`remove_claude_plugin`) are **not** unit-tested — they shell out to
-`Command::new("claude")` directly rather than through the crate's injectable
-`ProcessRunner` trait, so only a real `claude` binary (or an opt-in
-conformance suite outside this crate) exercises them today.
+`remove_claude_plugin`) are **not** unit-tested — they shell out to the
+resolved `claude` executable directly (via `provisioning_executable()`,
+never a bare `Command::new("claude")` — see Runtime shim boundary below)
+rather than through the crate's injectable `ProcessRunner` trait, so only a
+real `claude` binary (or an opt-in conformance suite outside this crate)
+exercises them today.
+
+**Generated Native Package** (`claude/generate.rs`, ADR-020): when no
+explicit envelope exists, `generatable()` checks for a conventional
+`skills/` directory and/or root `mcp.json`; `generated_exact_coverage()`
+computes the same discovered-∩-declared intersection structurally, against
+those conventions rather than a re-parsed manifest — generation and
+coverage agree by construction, since the same module writes both.
+Eligibility is capability-based, not resource-count-based: a single Skill
+or a single MCP server alone already qualifies (ADR-020). Generation is
+read-only inside `package_exposure_plan`; `materialize_generated_package`
+(called only from `attach_package`) rebuilds the derived envelope
+wholesale on every call — deterministic, idempotent, never touching the
+Store package. An explicit envelope, even malformed, always wins; presence
+alone (not validity) decides the branch.
 
 ## Fallbacks
 
@@ -122,7 +164,8 @@ long-term is explicitly undecided (ADR-014 Consequences).
 
 | Receipt | Inspect | Detach | Drift-safe |
 |---|---|---|---|
-| `IntegrationOwned{kind:"claude-plugin"}` | `inspect_claude_plugin` — `claude plugin marketplace list --json` + `plugin list --json`, checks marketplace root + installed + enabled | `claude plugin uninstall <selector>` | Yes — MATCHED only when marketplace root, installed, and enabled all agree |
+| `IntegrationOwned{kind:"claude-plugin"}` (explicit) | `inspect_claude_plugin` — `claude plugin marketplace list --json` + `plugin list --json`, checks marketplace root + installed + enabled | `claude plugin uninstall <selector>` | Yes — MATCHED only when marketplace root, installed, and enabled all agree |
+| `IntegrationOwned{kind:"claude-plugin-generated"}` (generated) | Same `inspect_claude_plugin` (marketplace-root-agnostic) | Same `remove_claude_plugin`, plus `remove_generated_package_by_id` (Derived Artifact, safe to delete unconditionally) | Yes — identical inspection path to explicit |
 | `SymlinkReference` (Skill shim) | standard receipt inspection (`inspect_standard_receipt`) | standard detach + `cleanup_unused_shim` GC if the shim is now unreferenced | Yes |
 | `VendorConfigEntry` (MCP) | `inspect_claude_mcp` — read-only `~/.claude.json` parse, exact command+args match | `claude mcp remove <name>` | Yes — Blocked (not silently accepted) if the receipt requests cwd/env/enabled state this integration can't verify |
 
@@ -149,13 +192,13 @@ reasoning holds, not confirmed by a dedicated test.
 
 ## Evidence
 
-- Tests: 23/23 passing in `claude::{lifecycle_tests, plugin::claude_native_coverage_tests, runtime::runtime_projection_tests}` (verified this audit).
+- Tests: 40/40 passing in `claude::{lifecycle_tests, plugin::claude_native_coverage_tests, runtime::runtime_projection_tests, generate::generated_native_tests}` (23 pre-existing + 17 generated-native, verified this milestone).
 - Real harness version last validated: Claude Code **2.1.239** — the exact binary present in this environment (`claude --version` reconfirmed live during this audit, matches ADR-006/007/013/014's tested version).
-- Source: `docs/adr/{006,007,009,013,014}-*.md`.
+- Source: `docs/adr/{006,007,009,013,014,020}-*.md`.
 
 ## Next
 
-1. Add unit coverage for the native-plugin CLI functions (`inspect_claude_plugin`, `attach_package`) via a fake/injectable process boundary, matching how `provision_cli` already uses `ProcessRunner`.
+1. Add unit coverage for the native-plugin CLI functions (`inspect_claude_plugin`, `attach_package`) via a fake/injectable process boundary, matching how `provision_cli` already uses `ProcessRunner`. (An `executable_override` escape hatch was added and then removed this milestone for the generated-native pass — it ended up with zero call sites once PATH-based test isolation solved the actual failing tests more directly; worth reconsidering if this item is picked up for real.)
 2. Close the MCP headless-discovery/behavioral gap from ADR-007's last entry.
 3. Verify or refute the `package_root`-not-compared observation above with a dedicated drift test.
 4. Resolve persistent-bridge vs. runtime-projection precedence for Claude context delivery (ADR-014 Future Work).

@@ -436,22 +436,21 @@ fn setup_then_add_attaches_the_mcp_fixture_idempotently_and_removal_works() {
 
     run(&["setup"]);
     // This fixture (`agent-plugin-mcp`) has only `mcp.json`, no `skills/`
-    // and no `.claude-plugin/plugin.json` — under Generated Native Package
-    // (ADR-020) an MCP-only package is just as eligible as a Skill-only
-    // one, so Claude receives package-level delivery covering the one MCP
-    // resource; Codex, which has no envelope of any kind and never
-    // implements package-level Claude-style generation, still attaches at
-    // the resource level exactly as before.
+    // and no `.claude-plugin/plugin.json`/`.codex-plugin/plugin.json` —
+    // under Generated Native Package (ADR-020/ADR-021) an MCP-only package
+    // is just as eligible as a Skill-only one, so BOTH Claude and Codex now
+    // receive package-level delivery covering the one MCP resource — no
+    // resource-level `mcp add` for either.
     let add = run(&["plugin", "install", package.to_str().unwrap()]);
     assert!(add.contains("Package delivery to claude-code:"));
-    assert!(add.contains("Attached to codex: mcp:uze-mcp-conformance-uze-conformance"));
+    assert!(add.contains("Package delivery to codex:"));
 
     let mcp_state = fake_bin.join("mcp-state");
     assert!(
-        mcp_state
+        !mcp_state
             .join("uze-mcp-conformance-uze-conformance")
             .is_file(),
-        "codex's mcp add should still have touched the fake state file"
+        "the MCP resource is now covered by package delivery on both harnesses, so neither should have run a resource-level `mcp add`"
     );
     let ledger: serde_json::Value =
         serde_json::from_slice(&std::fs::read(uze_home.join("state/attachments.json")).unwrap())
@@ -459,16 +458,16 @@ fn setup_then_add_attaches_the_mcp_fixture_idempotently_and_removal_works() {
     let receipts = ledger["receipts"].as_object().unwrap();
     assert!(receipts.len() >= 2);
     // With the default `uze` seeded, attachments also contain its own
-    // package-level Claude receipt (the default package is generatable
-    // too, see the skill-fixture CLI test); filter to this MCP package's
-    // receipts before asserting their shape.
+    // package-level receipts (the default package is generatable too, see
+    // the skill-fixture CLI test); filter to this MCP package's receipts
+    // before asserting their shape.
     let mcp_receipts: Vec<_> = receipts
         .values()
         .filter(|receipt| receipt["package_id"] == "uze-mcp-conformance")
         .collect();
     assert!(
         mcp_receipts.len() >= 2,
-        "expected at least 2 receipts for the MCP package (claude package-level + codex resource-level), got {mcp_receipts:?}"
+        "expected at least 2 receipts for the MCP package (claude + codex, both package-level), got {mcp_receipts:?}"
     );
     let claude_receipt = mcp_receipts
         .iter()
@@ -487,18 +486,20 @@ fn setup_then_add_attaches_the_mcp_fixture_idempotently_and_removal_works() {
         .find(|r| r["integration"] == "codex")
         .expect("codex receipt missing");
     assert_eq!(
-        codex_receipt["artifact"]["VENDOR_CONFIG_ENTRY"]["entry_name"],
-        "uze-mcp-conformance-uze-conformance",
-        "codex has no envelope for this package and must keep resource-level MCP delivery: {codex_receipt:?}"
+        codex_receipt["artifact"]["INTEGRATION_OWNED"]["kind"], "marketplace-plugin-generated",
+        "codex's receipt for an envelope-less MCP-only package must be the generated package kind, not a resource-level VendorConfigEntry: {codex_receipt:?}"
+    );
+    assert_eq!(
+        codex_receipt["artifact"]["INTEGRATION_OWNED"]["origin"],
+        "generated"
     );
 
-    // Idempotent: `plugin install` a second time does not fail. Claude's
-    // package delivery re-resolves to the same already-installed selector
-    // (no reinstall); Codex's `attach()` never re-invokes `mcp add` because
-    // the fake script's `get` already reports success.
+    // Idempotent: `plugin install` a second time does not fail. Both
+    // integrations' package delivery re-resolves to the same
+    // already-installed selector — no reinstall, no resource-level replay.
     let second_add = run(&["plugin", "install", package.to_str().unwrap()]);
     assert!(second_add.contains("Package delivery to claude-code:"));
-    assert!(second_add.contains("Attached to codex: mcp:uze-mcp-conformance-uze-conformance"));
+    assert!(second_add.contains("Package delivery to codex:"));
 
     let _ = std::fs::remove_dir_all(home);
     let _ = std::fs::remove_dir_all(uze_home);
