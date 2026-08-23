@@ -83,6 +83,13 @@ impl HarnessStatus {
 /// drawer's own border with no breathing room.
 const ROW_RIGHT_PAD: usize = 2;
 
+/// Width of the drawer's label column, shared by the key/value rows (
+/// `Version`, `Status`, …) and the COMPATIBILITY rows. The longest label
+/// in use is "Provisioning" (12 chars), so 14 guarantees at least a
+/// two-space gap — a fixed pad equal to the longest label would glue the
+/// value flush against it.
+const LABEL_COL: usize = 14;
+
 pub(crate) fn render_harnesses(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
@@ -208,7 +215,7 @@ fn render_harness_drawer(frame: &mut ratatui::Frame<'_>, area: Rect, harness: &H
         )),
         Line::from(""),
         Line::from(vec![
-            Span::styled(format!("{:<12}", "Version"), Style::default().fg(MUTED)),
+            label_span("Version", Style::default().fg(MUTED)),
             Span::styled(
                 harness
                     .detection
@@ -219,14 +226,14 @@ fn render_harness_drawer(frame: &mut ratatui::Frame<'_>, area: Rect, harness: &H
             ),
         ]),
         Line::from(vec![
-            Span::styled(format!("{:<12}", "Status"), Style::default().fg(MUTED)),
+            label_span("Status", Style::default().fg(MUTED)),
             Span::styled(
                 format!("{} {}", status.glyph(), status.label()),
                 Style::default().fg(status.color()),
             ),
         ]),
         Line::from(vec![
-            Span::styled(format!("{:<12}", "Delivery"), Style::default().fg(MUTED)),
+            label_span("Delivery", Style::default().fg(MUTED)),
             Span::styled(
                 harness
                     .strategy
@@ -239,10 +246,7 @@ fn render_harness_drawer(frame: &mut ratatui::Frame<'_>, area: Rect, harness: &H
     ];
     if let Some(provisioning) = &harness.provisioning {
         lines.push(Line::from(vec![
-            Span::styled(
-                format!("{:<12}", "Provisioning"),
-                Style::default().fg(MUTED),
-            ),
+            label_span("Provisioning", Style::default().fg(MUTED)),
             Span::styled(
                 format!("{:?} ({:?})", provisioning.status, provisioning.action),
                 Style::default().fg(TEXT_TERTIARY),
@@ -256,11 +260,17 @@ fn render_harness_drawer(frame: &mut ratatui::Frame<'_>, area: Rect, harness: &H
     )));
     for (label, status, style) in compatibility_rows(harness) {
         lines.push(Line::from(vec![
-            Span::styled(format!("{label:<10}"), Style::default().fg(TEXT_SECONDARY)),
+            label_span(label, Style::default().fg(TEXT_SECONDARY)),
             Span::styled(status, style),
         ]));
     }
     frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// A drawer key/value row's label, padded to the shared `LABEL_COL` column
+/// so every row's value starts at the same x position.
+fn label_span(label: &str, style: Style) -> Span<'static> {
+    Span::styled(format!("{label:<width$}", width = LABEL_COL), style)
 }
 
 /// `harness.strategy` carries the internal identifier `install()` recorded
