@@ -265,7 +265,10 @@ fn setup_then_add_attaches_transparently_without_a_separate_sync_step() {
     // Idempotent: a second `uze setup` does not fail or duplicate state.
     run(&["setup"]);
     let doctor = run(&["doctor"]);
-    assert!(doctor.matches("installed / unverified").count() >= 2);
+    // Both fake harnesses' provisioning reported `Verified` above ("ready
+    // (update; version ...)"), and `status()` reflects that once recorded —
+    // see `IntegrationPort::status`'s doc comment.
+    assert!(doctor.matches("installed / verified").count() >= 2);
 
     // `uze add` alone attaches both, without any separate sync command.
     let add = run(&["add", package_fixture().to_str().unwrap()]);

@@ -4,63 +4,75 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Paragraph, Wrap},
 };
 
 use crate::application::DoctorReport;
 
 use super::super::model::TuiModel;
-use super::super::{DANGER, MUTED, SUCCESS, WARNING, surface_block};
+use super::super::{ACCENT, DANGER, MUTED, WARNING};
+use super::super::{content_area, render_divided_row, render_screen_header};
 
 pub(crate) fn render_doctor(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
-    let mut lines = Vec::new();
+    let area = content_area(area);
     let issues = model.issues();
-    if issues.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "Healthy",
-            Style::default().fg(SUCCESS).add_modifier(Modifier::BOLD),
-        )));
-    } else {
-        lines.push(Line::from(Span::styled(
-            format!("{} issue(s)", issues.len()),
-            Style::default().fg(WARNING).add_modifier(Modifier::BOLD),
-        )));
-        lines.push(Line::from(""));
-        for severity in [Severity::High, Severity::Medium, Severity::Low] {
-            let matching: Vec<&Issue> = issues.iter().filter(|i| i.severity == severity).collect();
-            if matching.is_empty() {
-                continue;
-            }
-            lines.push(Line::from(Span::styled(
-                severity.label(),
-                severity.style().add_modifier(Modifier::BOLD),
-            )));
-            for issue in matching {
-                lines.push(Line::from(vec![
-                    Span::raw("  "),
-                    Span::raw(issue.message.clone()),
-                ]));
-            }
-        }
-    }
-    if let Some(doctor) = &model.doctor {
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
+    let (summary, summary_color) = if issues.iter().any(|i| i.severity == Severity::High) {
+        (
             format!(
-                "{} plugins  ·  {} harnesses  ·  {:?} store",
-                doctor.plugins.len(),
-                doctor.harnesses.len(),
-                doctor.store
+                "{} high, {} total",
+                issues
+                    .iter()
+                    .filter(|i| i.severity == Severity::High)
+                    .count(),
+                issues.len()
             ),
-            Style::default().fg(MUTED),
-        )));
-    }
-    frame.render_widget(
-        Paragraph::new(lines)
-            .block(surface_block(" Doctor"))
-            .wrap(Wrap { trim: true }),
+            DANGER,
+        )
+    } else if !issues.is_empty() {
+        (format!("{} warning(s)", issues.len()), WARNING)
+    } else {
+        ("all checks passed".to_owned(), ACCENT)
+    };
+    let content = render_screen_header(
+        frame,
         area,
+        "Doctor",
+        "diagnostics",
+        Some(Span::styled(summary, Style::default().fg(summary_color))),
     );
+
+    let groups = doctor_groups(model.doctor.as_ref());
+    let mut y = content.y;
+    let bottom = content.y + content.height;
+    for (name, checks) in groups {
+        if checks.is_empty() || y >= bottom {
+            continue;
+        }
+        frame.render_widget(
+            ratatui::widgets::Paragraph::new(Span::styled(
+                name,
+                Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
+            )),
+            Rect::new(content.x, y, content.width, 1),
+        );
+        y += 1;
+        for check in checks {
+            if y >= bottom {
+                break;
+            }
+            let (symbol, color) = match check.status {
+                CheckStatus::Pass => ("✓", ACCENT),
+                CheckStatus::Warn => ("!", WARNING),
+                CheckStatus::Fail => ("✕", DANGER),
+            };
+            let line = Line::from(vec![
+                Span::styled(format!("{symbol} "), Style::default().fg(color)),
+                Span::styled(format!("{:<40}", check.label), Style::default().fg(color)),
+                Span::styled(check.detail.clone(), Style::default().fg(MUTED)),
+            ]);
+            y = render_divided_row(frame, content, y, line);
+        }
+        y += 1;
+    }
 }
 
 // --- Doctor severity classification -----------------------------------------
@@ -72,27 +84,10 @@ pub(crate) enum Severity {
     Low,
 }
 
-impl Severity {
-    fn label(self) -> &'static str {
-        match self {
-            Severity::High => "High",
-            Severity::Medium => "Medium",
-            Severity::Low => "Low",
-        }
-    }
-
-    fn style(self) -> Style {
-        match self {
-            Severity::High => Style::default().fg(DANGER),
-            Severity::Medium => Style::default().fg(WARNING),
-            Severity::Low => Style::default().fg(MUTED),
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub(crate) struct Issue {
     pub(crate) severity: Severity,
+    #[allow(dead_code)]
     message: String,
 }
 
@@ -174,4 +169,124 @@ pub(crate) fn classify_doctor(doctor: Option<&DoctorReport>) -> Vec<Issue> {
     }
     issues.sort_by_key(|issue| issue.severity);
     issues
+}
+
+// --- Doctor screen's own full checklist (pass + fail) -----------------------
+//
+// `classify_doctor` above only surfaces problems (it backs the titlebar's
+// "N issue(s)" count). The Doctor screen itself, like the design, shows a
+// full checklist — passing checks included — grouped the same way the
+// underlying `DoctorReport` is already organized: store-wide state, one row
+// per harness, one row per plugin's attachment health and update state.
+
+enum CheckStatus {
+    Pass,
+    Warn,
+    Fail,
+}
+
+struct Check {
+    label: String,
+    detail: String,
+    status: CheckStatus,
+}
+
+fn doctor_groups(doctor: Option<&DoctorReport>) -> Vec<(&'static str, Vec<Check>)> {
+    let Some(doctor) = doctor else {
+        return Vec::new();
+    };
+
+    let mut store = Vec::new();
+    for (label, error) in [
+        ("Attachment ledger", &doctor.ledger_error),
+        ("Integration state", &doctor.integration_state_error),
+        ("Provisioning state", &doctor.provisioning_state_error),
+    ] {
+        store.push(match error {
+            Some(error) => Check {
+                label: format!("{label} unreadable"),
+                detail: error.clone(),
+                status: CheckStatus::Fail,
+            },
+            None => Check {
+                label: format!("{label} readable"),
+                detail: String::new(),
+                status: CheckStatus::Pass,
+            },
+        });
+    }
+
+    let mut harnesses = Vec::new();
+    for harness in &doctor.harnesses {
+        if !harness.detection.present {
+            continue;
+        }
+        let configured = !harness.setup.contains("not configured");
+        harnesses.push(Check {
+            label: format!("{} detected", harness.display_name),
+            detail: harness
+                .detection
+                .version
+                .clone()
+                .map(|v| format!("v{v}"))
+                .unwrap_or_default(),
+            status: if configured {
+                CheckStatus::Pass
+            } else {
+                CheckStatus::Warn
+            },
+        });
+        if !configured {
+            harnesses.push(Check {
+                label: format!("{} not configured", harness.display_name),
+                detail: "Run uze setup".to_owned(),
+                status: CheckStatus::Warn,
+            });
+        }
+    }
+
+    let mut plugins = Vec::new();
+    for package in &doctor.attachments {
+        let state = &package.state;
+        if state.conflicts > 0 || state.blocked > 0 {
+            plugins.push(Check {
+                label: format!("{} has conflicts", package.plugin),
+                detail: format!("{} conflict(s), {} blocked", state.conflicts, state.blocked),
+                status: CheckStatus::Fail,
+            });
+        } else if state.drifted > 0 {
+            plugins.push(Check {
+                label: format!("{} drifted", package.plugin),
+                detail: format!("{} attachment(s) drifted", state.drifted),
+                status: CheckStatus::Warn,
+            });
+        } else if state.missing > 0 {
+            plugins.push(Check {
+                label: format!("{} missing attachments", package.plugin),
+                detail: format!("{} attachment(s) missing", state.missing),
+                status: CheckStatus::Warn,
+            });
+        } else {
+            plugins.push(Check {
+                label: format!("{} attached cleanly", package.plugin),
+                detail: String::new(),
+                status: CheckStatus::Pass,
+            });
+        }
+    }
+    for plugin in &doctor.plugins {
+        if plugin.update_available == Some(true) {
+            plugins.push(Check {
+                label: format!("{} update available", plugin.id),
+                detail: "Run uze update".to_owned(),
+                status: CheckStatus::Warn,
+            });
+        }
+    }
+
+    vec![
+        ("Store", store),
+        ("Harnesses", harnesses),
+        ("Plugins", plugins),
+    ]
 }

@@ -128,6 +128,10 @@ pub(crate) struct TuiModel {
     /// `marketplace_plugins`. Resolve through `selected_marketplace_plugin`.
     pub(crate) marketplace_selected: usize,
     pub(crate) marketplace_detail: Option<MarketplacePluginDetail>,
+    /// Whether the plugin-detail drawer is currently slid into view. Opens
+    /// on selection, closes on `Esc` — the list panel reclaims the full
+    /// width while it's closed, mirroring the design's slide-in drawer.
+    pub(crate) marketplace_drawer_open: bool,
     /// Live substring filter over plugin/marketplace name, typed while
     /// `filtering` is true (`/` in the Marketplace route).
     pub(crate) marketplace_filter: String,
@@ -137,6 +141,9 @@ pub(crate) struct TuiModel {
     pub(crate) collapsed_marketplaces: BTreeSet<String>,
 
     pub(crate) harnesses_selected: usize,
+    pub(crate) harnesses_drawer_open: bool,
+
+    pub(crate) plugin_drawer_open: bool,
 
     pub(crate) doctor: Option<DoctorReport>,
 
@@ -167,10 +174,13 @@ impl Default for TuiModel {
             marketplace_plugins: Vec::new(),
             marketplace_selected: 0,
             marketplace_detail: None,
+            marketplace_drawer_open: false,
             marketplace_filter: String::new(),
             filtering: false,
             collapsed_marketplaces: BTreeSet::new(),
             harnesses_selected: 0,
+            harnesses_drawer_open: false,
+            plugin_drawer_open: false,
             doctor: None,
             context_root: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             context_status: None,
@@ -213,6 +223,27 @@ impl TuiModel {
             .marketplace_visible_indices()
             .get(self.marketplace_selected)?;
         self.marketplace_plugins.get(raw_index)
+    }
+
+    /// An `Intent` that fetches the currently selected marketplace plugin's
+    /// detail (the drawer's RESOURCES section), or `Intent::None` if it's
+    /// already cached — arrow-key navigation and mouse clicks both open the
+    /// drawer without going through `open_or_act`'s Enter path, so without
+    /// this they'd leave RESOURCES stuck on "loading…" for any selection
+    /// that was never explicitly Entered.
+    pub(crate) fn marketplace_inspect_intent(&self) -> super::worker::Intent {
+        let Some(plugin) = self.selected_marketplace_plugin() else {
+            return super::worker::Intent::None;
+        };
+        if self.marketplace_detail.as_ref().is_some_and(|detail| {
+            detail.summary.name == plugin.name && detail.summary.marketplace == plugin.marketplace
+        }) {
+            return super::worker::Intent::None;
+        }
+        super::worker::Intent::InspectMarketplacePlugin {
+            name: plugin.name.clone(),
+            marketplace: plugin.marketplace.clone(),
+        }
     }
 
     /// Expands/collapses one marketplace group and re-clamps the selection
@@ -281,6 +312,7 @@ impl TuiModel {
 
     pub(crate) fn move_selection(&mut self, delta: isize) {
         let len = self.list_len();
+        let route = self.route;
         let Some(selected) = self.selected_mut() else {
             return;
         };
@@ -289,6 +321,15 @@ impl TuiModel {
             return;
         }
         *selected = (*selected as isize + delta).clamp(0, len as isize - 1) as usize;
+        // Marketplace/Harnesses reveal their drawer as soon as something is
+        // selected — matches the design's click-to-select-and-open — while
+        // Plugins keeps its drawer opt-in via Enter, since opening it there
+        // also kicks off an async inspect fetch.
+        match route {
+            Route::Marketplace => self.marketplace_drawer_open = true,
+            Route::Harnesses => self.harnesses_drawer_open = true,
+            _ => {}
+        }
     }
 
     pub(crate) fn refreshed(&mut self, data: RefreshData) {

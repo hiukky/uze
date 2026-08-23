@@ -1,22 +1,28 @@
 //! TUI view — Plugins route.
+//!
+//! A flat, two-line-per-row list (name + source/health on the first line,
+//! description on the second) — the design shows no split/drawer here at
+//! all. `Enter` still opens a detail drawer with the deliveries/managed
+//! state UZE already computes; the design just never depicts that state,
+//! not that the app shouldn't offer it.
 
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Paragraph},
 };
 
-use crate::application::PluginSummary;
-
-use crate::application::DoctorReport;
+use crate::application::{DoctorReport, PluginSummary};
 
 use super::super::hit::Hit;
 use super::super::model::TuiModel;
 use super::super::{
-    ACCENT, DANGER, MUTED, SELECTED_BG, SUCCESS, WARNING, health_style, route_style, surface_block,
+    ACCENT, BASE, BLUE, BORDER, MUTED, SELECTED_BG, TEXT_BRIGHT, TEXT_DIM, TEXT_SECONDARY, WARNING,
+    health_style, route_style,
 };
-use super::{push_capability_table, render_status_card};
+use super::super::{content_area, render_screen_header};
+use super::resource_summary;
 
 pub(crate) fn render_plugins(
     frame: &mut ratatui::Frame<'_>,
@@ -24,144 +30,200 @@ pub(crate) fn render_plugins(
     model: &TuiModel,
     hits: &mut Vec<(Rect, Hit)>,
 ) {
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .spacing(1)
-        .constraints([Constraint::Percentage(46), Constraint::Percentage(54)])
-        .split(area);
+    let content = content_area(area);
+    let content = render_screen_header(
+        frame,
+        content,
+        "Plugins",
+        "installed plugins",
+        Some(Span::styled(
+            format!("{} installed", model.plugins.len()),
+            Style::default().fg(MUTED),
+        )),
+    );
 
-    let block = surface_block(format!(" Plugins  {} installed ", model.plugins.len()));
-    let inner = block.inner(columns[0]);
-    frame.render_widget(block, columns[0]);
     if model.plugins.is_empty() {
         frame.render_widget(
             Paragraph::new(vec![
                 Line::from(Span::styled(
                     "No plugins installed",
-                    Style::default().add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(TEXT_BRIGHT)
+                        .add_modifier(Modifier::BOLD),
                 )),
                 Line::from(Span::styled(
                     "Open Marketplace to install one.",
                     Style::default().fg(MUTED),
                 )),
-            ])
-            .wrap(Wrap { trim: true }),
-            inner,
+            ]),
+            content,
         );
     } else {
-        // Fixed column widths, mirroring the Marketplace list: every column
-        // pads to its own widest value across the panel, so Official/Update
-        // available/health line up instead of drifting with each plugin
-        // id's length.
-        let id_width = model
-            .plugins
-            .iter()
-            .map(|plugin| plugin.id.chars().count())
-            .max()
-            .unwrap_or(0);
-        let items: Vec<ListItem> = model
-            .plugins
-            .iter()
-            .enumerate()
-            .map(|(index, plugin)| {
-                plugin_row(
-                    plugin,
-                    index == model.plugins_selected,
-                    model,
-                    id_width,
-                    inner.width,
-                )
-            })
-            .collect();
-        frame.render_widget(List::new(items), inner);
-        for index in 0..model.plugins.len() {
-            let row = Rect::new(inner.x, inner.y + index as u16, inner.width, 1);
-            if row.y < inner.y + inner.height {
-                hits.push((row, Hit::PluginRow(index)));
+        let mut y = content.y;
+        for (index, plugin) in model.plugins.iter().enumerate() {
+            if y + 1 >= content.y + content.height {
+                break;
             }
+            let selected = index == model.plugins_selected;
+            let rect = Rect::new(content.x, y, content.width, 2);
+            render_plugin_row(frame, rect, plugin, selected, model, hits, index);
+            // A blank row between blocks — otherwise one plugin's
+            // description sits directly against the next plugin's name
+            // with no breathing room at all.
+            y += 3;
         }
     }
-    render_plugin_detail(frame, columns[1], model);
+
+    if model.plugin_drawer_open
+        && let Some(plugin) = model.selected_plugin()
+    {
+        render_plugin_drawer(frame, area_for_drawer(area), model, plugin);
+    }
 }
 
-/// Widest badge text in each fixed slot, so a shorter/absent badge still
-/// reserves its column's width and the next one doesn't drift.
-const OFFICIAL_WIDTH: usize = "Official".len();
-const UPDATE_WIDTH: usize = "Update available".len();
+/// The drawer overlays from the *original* (unshrunk) route area, matching
+/// how Marketplace/Harnesses anchor theirs — `content_area` already insets
+/// once for the list; re-deriving here keeps the drawer's own inset
+/// independent of how much of that area the header consumed.
+fn area_for_drawer(area: Rect) -> Rect {
+    content_area(area)
+}
 
-fn plugin_row<'a>(
-    plugin: &'a PluginSummary,
+fn render_plugin_row(
+    frame: &mut ratatui::Frame<'_>,
+    rect: Rect,
+    plugin: &PluginSummary,
     selected: bool,
     model: &TuiModel,
-    id_width: usize,
-    row_width: u16,
-) -> ListItem<'a> {
-    let marker = if selected { "› " } else { "  " };
-    let style = if selected {
-        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
-    } else {
-        Style::default()
-    };
-    let is_official = plugin.source.starts_with("embedded:");
-    let id = format!("{:<id_width$}", plugin.id);
-    let official = format!(
-        "{:<OFFICIAL_WIDTH$}",
-        if is_official { "Official" } else { "" }
-    );
-    let update = format!(
-        "{:<UPDATE_WIDTH$}",
-        if plugin.update_available == Some(true) {
-            "Update available"
-        } else {
-            ""
-        }
-    );
+    hits: &mut Vec<(Rect, Hit)>,
+    index: usize,
+) {
     let health = plugin_health(model.doctor.as_ref(), &plugin.id);
-    let mut spans = vec![
-        Span::styled(marker, style),
-        Span::styled(id, style),
-        Span::raw("  "),
-        Span::styled(official, Style::default().fg(ACCENT)),
-        Span::raw("  "),
-        Span::styled(update, Style::default().fg(WARNING)),
+    let is_official = plugin.source.starts_with("embedded:");
+    // The marketplace catalog already knows this plugin's *marketplace*
+    // name ("ai", "uze-official") — resolving through it beats showing
+    // `plugin.source`'s raw value, which for a local/git install is a full
+    // filesystem path or URL, far too noisy for a single list row.
+    let catalog_marketplace = model
+        .marketplace_plugins
+        .iter()
+        .find(|m| m.name == plugin.id)
+        .map(|m| m.marketplace.clone());
+    // Official gets the same "✓ Official" badge the Marketplace tree shows
+    // for its group header, not the literal "uze-official" string — the
+    // badge is the point, the raw marketplace name is an implementation
+    // detail nobody needs staring back at them from every plugin row.
+    let (source_label, source_color) = if is_official {
+        ("✓ Official".to_owned(), BLUE)
+    } else if let Some(marketplace) = catalog_marketplace {
+        (marketplace, TEXT_DIM)
+    } else {
+        // Not from any known marketplace (an ad-hoc git/local `uze add`) —
+        // fall back to the source string's last path segment rather than
+        // the full path.
+        let label = plugin
+            .source
+            .rsplit(['/', '\\'])
+            .next()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(&plugin.source)
+            .to_owned();
+        (label, TEXT_DIM)
+    };
+
+    let name_fg = if selected {
+        TEXT_BRIGHT
+    } else {
+        TEXT_SECONDARY
+    };
+    let left = vec![Span::styled(
+        plugin.id.clone(),
+        Style::default().fg(name_fg),
+    )];
+    let right = vec![
+        Span::styled(source_label, Style::default().fg(source_color)),
         Span::raw("  "),
         Span::styled(health, health_style(health)),
     ];
+    let used: usize = left.iter().chain(right.iter()).map(|s| s.width()).sum();
+    let gap = (rect.width as usize).saturating_sub(used);
+    let mut name_spans = left;
+    name_spans.push(Span::raw(" ".repeat(gap.max(2))));
+    name_spans.extend(right);
+
+    // Best-effort description: cross-referenced from the marketplace catalog
+    // by name — `PluginSummary` itself carries none, and nothing here
+    // invents one for a plugin the catalog doesn't recognize (an ad-hoc
+    // git/local install, most often).
+    let description = model
+        .marketplace_plugins
+        .iter()
+        .find(|m| m.name == plugin.id)
+        .and_then(|m| m.description.clone())
+        .unwrap_or_default();
+    let mut desc_spans = vec![Span::styled(description, Style::default().fg(MUTED))];
+
     if selected {
-        // The highlight covers the whole row (background included), matching
-        // the Marketplace list's selected treatment.
-        for span in &mut spans {
+        for span in name_spans.iter_mut().chain(desc_spans.iter_mut()) {
             span.style = span.style.bg(SELECTED_BG);
         }
-        let used: usize = spans.iter().map(|s| s.width()).sum();
-        let gap = (row_width as usize).saturating_sub(used);
-        spans.push(Span::styled(
-            " ".repeat(gap),
-            Style::default().bg(SELECTED_BG),
-        ));
+        for spans in [&mut name_spans, &mut desc_spans] {
+            let used: usize = spans.iter().map(|s| s.width()).sum();
+            let gap = (rect.width as usize).saturating_sub(used);
+            spans.push(Span::styled(
+                " ".repeat(gap),
+                Style::default().bg(SELECTED_BG),
+            ));
+        }
     }
-    ListItem::new(Line::from(spans))
+
+    let top = Rect::new(rect.x, rect.y, rect.width, 1);
+    let bottom = Rect::new(rect.x, rect.y + 1, rect.width, 1);
+    frame.render_widget(Paragraph::new(Line::from(name_spans)), top);
+    frame.render_widget(Paragraph::new(Line::from(desc_spans)), bottom);
+    hits.push((rect, Hit::PluginRow(index)));
 }
 
-fn render_plugin_detail(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
-    let Some(plugin) = model.selected_plugin() else {
-        frame.render_widget(Paragraph::new("").block(surface_block(" Plugin")), area);
-        return;
-    };
-    // Status card pinned to the bottom, main content scrolling above it —
-    // mirrors the Marketplace detail pane's layout.
-    let sections = Layout::default()
-        .direction(Direction::Vertical)
-        .spacing(1)
-        .constraints([Constraint::Min(6), Constraint::Length(4)])
-        .split(area);
+fn render_plugin_drawer(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    model: &TuiModel,
+    plugin: &PluginSummary,
+) {
+    let width = 52.min(area.width);
+    let drawer = Rect::new(
+        area.x + area.width - width,
+        area.y - 1,
+        width,
+        area.height + 1,
+    );
+    frame.render_widget(Clear, drawer);
+    frame.render_widget(
+        Block::default()
+            .borders(Borders::LEFT)
+            .border_style(Style::default().fg(BORDER))
+            .style(Style::default().bg(BASE)),
+        drawer,
+    );
+    let inner = Rect::new(
+        drawer.x + 2,
+        drawer.y + 1,
+        drawer.width - 3,
+        drawer.height - 1,
+    );
 
     let is_official = plugin.source.starts_with("embedded:");
     let mut lines = vec![
-        Line::from(vec![Span::styled(
+        Line::from(Span::styled(
+            "PLUGIN",
+            Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
             &plugin.id,
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-        )]),
+            Style::default()
+                .fg(TEXT_BRIGHT)
+                .add_modifier(Modifier::BOLD),
+        )),
         Line::from(""),
         Line::from(Span::styled(
             if is_official {
@@ -174,13 +236,16 @@ fn render_plugin_detail(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiM
         Line::from(""),
         Line::from(vec![
             Span::styled("Capabilities  ", Style::default().fg(MUTED)),
-            Span::raw(plugin.capability_count.to_string()),
+            Span::styled(
+                plugin.capability_count.to_string(),
+                Style::default().fg(TEXT_SECONDARY),
+            ),
         ]),
         Line::from(vec![
             Span::styled("Update        ", Style::default().fg(MUTED)),
             match plugin.update_available {
                 Some(true) => Span::styled("Available", Style::default().fg(WARNING)),
-                Some(false) => Span::styled("Up to date", Style::default().fg(SUCCESS)),
+                Some(false) => Span::styled("Up to date", Style::default().fg(ACCENT)),
                 None => Span::styled("Unknown", Style::default().fg(MUTED)),
             },
         ]),
@@ -190,13 +255,16 @@ fn render_plugin_detail(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiM
     {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            "Resources",
+            "RESOURCES",
             Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
         )));
-        push_capability_table(&mut lines, &inspection.capabilities);
+        lines.push(Line::from(Span::styled(
+            resource_summary(&inspection.capabilities),
+            Style::default().fg(TEXT_SECONDARY),
+        )));
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            "Available in",
+            "AVAILABLE IN",
             Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
         )));
         for delivery in &inspection.deliveries {
@@ -214,8 +282,8 @@ fn render_plugin_detail(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiM
                 });
             lines.push(Line::from(vec![
                 Span::styled(
-                    format!("  {:<12}", delivery.integration),
-                    Style::default().add_modifier(Modifier::BOLD),
+                    format!("  {:<12}", delivery.display_name),
+                    Style::default().fg(TEXT_SECONDARY),
                 ),
                 Span::styled(route, route_style(route)),
             ]));
@@ -226,7 +294,7 @@ fn render_plugin_detail(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiM
             Span::styled("Managed  ", Style::default().fg(MUTED)),
             Span::styled(
                 format!("{} matched", state.matched),
-                Style::default().fg(SUCCESS),
+                Style::default().fg(ACCENT),
             ),
             Span::styled(
                 format!(
@@ -237,34 +305,7 @@ fn render_plugin_detail(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiM
             ),
         ]));
     }
-    frame.render_widget(
-        Paragraph::new(lines)
-            .block(surface_block(" Selected plugin"))
-            .wrap(Wrap { trim: true }),
-        sections[0],
-    );
-
-    let health = plugin_health(model.doctor.as_ref(), &plugin.id);
-    let (color, headline, subtitle) = match (health, plugin.update_available) {
-        (_, Some(true)) => (
-            WARNING,
-            "Update available",
-            "A newer marketplace revision is ready",
-        ),
-        ("ready", _) => (SUCCESS, "Installed", "Ready to use in your projects"),
-        ("missing", _) => (
-            WARNING,
-            "Missing",
-            "Not attached to any detected harness yet",
-        ),
-        ("needs attention", _) => (
-            DANGER,
-            "Needs attention",
-            "Drifted, conflicting, or blocked — see Doctor",
-        ),
-        _ => (MUTED, "Unknown", "No health record for this plugin yet"),
-    };
-    render_status_card(frame, sections[1], color, headline, subtitle);
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 fn exposure_route_label(plan: &crate::exposure::ExposurePlan) -> &'static str {

@@ -232,7 +232,11 @@ pub(crate) fn spawn_startup(home: UzeHome, sender: Sender<WorkerResult>, context
 
 fn load_refresh_data(home: UzeHome, context_root: &std::path::Path) -> Result<RefreshData> {
     let app = tui_application(home)?;
-    let plugins = app.list_plugins()?;
+    let mut plugins = app.list_plugins()?;
+    // Official plugins always lead the list — a stable sort keeps every
+    // other ordering (whatever `list_plugins` returns) untouched within
+    // each of the two groups.
+    plugins.sort_by_key(|plugin| !plugin.source.starts_with("embedded:"));
     let doctor = app.doctor();
     let marketplace_count = app.marketplace_list()?.len();
     let marketplace_plugins = app.list_marketplace_plugins()?;

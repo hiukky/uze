@@ -1,26 +1,32 @@
 //! TUI view — Marketplace route.
 //!
-//! Rendered as a two-level tree: each registered marketplace is a
-//! collapsible group header (click to expand/collapse), with its plugins
-//! indented underneath. A live filter box narrows both by plugin and by
-//! marketplace name. Selection indexes the *visible* sequence
-//! (`TuiModel::marketplace_visible_indices`) — headers, spacers, and
-//! collapsed/filtered-out plugins are a pure rendering/navigation concern
-//! layered on top of the flat, already-grouped `marketplace_plugins` Vec.
+//! Rendered as a tree: each registered marketplace is a collapsible group
+//! header (click the chevron to expand/collapse), with its plugins
+//! indented underneath using `├─`/`└─` prefixes. A live filter box narrows
+//! both by plugin and by marketplace name. Selection indexes the *visible*
+//! sequence (`TuiModel::marketplace_visible_indices`) — headers, spacers,
+//! and collapsed/filtered-out plugins are a pure rendering/navigation
+//! concern layered on top of the flat, already-grouped `marketplace_plugins`
+//! Vec. The detail drawer overlays the list from the right rather than
+//! sharing a permanent static split — see `TuiModel::marketplace_drawer_open`.
 
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    layout::Rect,
+    style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Paragraph},
 };
 
 use crate::application::MarketplacePluginSummary;
 
 use super::super::hit::Hit;
 use super::super::model::TuiModel;
-use super::super::{ACCENT, MUTED, SELECTED_BG, SUCCESS, SURFACE_RAISED, WARNING, surface_block};
-use super::{push_capability_table, render_status_card};
+use super::super::{
+    ACCENT, BASE, BLUE, BORDER, MUTED, SELECTED_BG, TEXT_BRIGHT, TEXT_DIM, TEXT_FAINT,
+    TEXT_PRIMARY, TEXT_SECONDARY, WARNING,
+};
+use super::super::{content_area, render_screen_header};
+use super::{render_status_line, resource_summary};
 
 /// Both status labels are 9 characters (`Installed`/`Available`), but that's
 /// incidental — pad explicitly so alignment holds even if a future status
@@ -28,7 +34,9 @@ use super::{push_capability_table, render_status_card};
 const STATUS_WIDTH: usize = 9;
 
 /// One line of the rendered tree. Only `Plugin` is selectable/clickable;
-/// `Header` toggles its group's collapse state; `Spacer` is pure air.
+/// `Header` toggles its group's collapse state; `Spacer` is a blank gap
+/// between groups — siblings within one group stay directly adjacent, no
+/// gap at all, so the tree reads as tight and continuous.
 enum Row<'a> {
     Header {
         marketplace: &'a str,
@@ -37,17 +45,16 @@ enum Row<'a> {
         is_official: bool,
     },
     Spacer,
-    /// `usize` is a position in the *visible* sequence, not a raw index
+    /// `position` is an index in the *visible* sequence, not a raw index
     /// into `marketplace_plugins` — see `TuiModel::marketplace_visible_indices`.
-    Plugin(usize, &'a MarketplacePluginSummary),
+    /// `is_last` picks `└─` vs `├─` among this group's *visible* siblings.
+    Plugin {
+        position: usize,
+        plugin: &'a MarketplacePluginSummary,
+        is_last: bool,
+    },
 }
 
-/// Groups `model.marketplace_plugins` for display: every marketplace still
-/// gets a header (so a fully-collapsed or fully-filtered-out group doesn't
-/// just vanish without a trace while filtering is inactive), but a group
-/// with zero visible plugins is dropped entirely once the filter is doing
-/// real work — an empty header with nothing under it is more confusing
-/// than informative once you're actively narrowing the list.
 fn build_rows(model: &TuiModel) -> Vec<Row<'_>> {
     let visible = model.marketplace_visible_indices();
     let position_of: std::collections::HashMap<usize, usize> = visible
@@ -56,39 +63,57 @@ fn build_rows(model: &TuiModel) -> Vec<Row<'_>> {
         .map(|(position, &raw)| (raw, position))
         .collect();
     let filtering_active = !model.marketplace_filter.trim().is_empty();
-    let mut has_visible: std::collections::HashSet<&str> = std::collections::HashSet::new();
+
+    // Consecutive-run grouping: `list_marketplace_plugins` already emits
+    // official-first then each registered marketplace's plugins together,
+    // so adjacent-match grouping preserves that order without re-sorting.
+    let mut groups: Vec<(&str, Vec<(usize, &MarketplacePluginSummary)>)> = Vec::new();
     for (raw, plugin) in model.marketplace_plugins.iter().enumerate() {
-        if position_of.contains_key(&raw) {
-            has_visible.insert(plugin.marketplace.as_str());
+        let marketplace = plugin.marketplace.as_str();
+        match groups.last_mut() {
+            Some((name, items)) if *name == marketplace => items.push((raw, plugin)),
+            _ => groups.push((marketplace, vec![(raw, plugin)])),
         }
     }
 
-    let mut rows = Vec::with_capacity(model.marketplace_plugins.len() * 2);
-    let mut current: Option<&str> = None;
-    for (raw, plugin) in model.marketplace_plugins.iter().enumerate() {
-        let marketplace = plugin.marketplace.as_str();
-        if filtering_active && !has_visible.contains(marketplace) {
+    // A blank spacer row follows every plugin row (and a childless header),
+    // matching the design's own per-row vertical padding — without it,
+    // rows/groups read as glued directly to their badges/siblings with no
+    // breathing room at all.
+    let mut rows = Vec::new();
+    for (marketplace, items) in &groups {
+        let visible_items: Vec<&(usize, &MarketplacePluginSummary)> = items
+            .iter()
+            .filter(|(raw, _)| position_of.contains_key(raw))
+            .collect();
+        if filtering_active && visible_items.is_empty() {
             continue;
         }
-        if current != Some(marketplace) {
-            if current.is_some() {
+        rows.push(Row::Header {
+            marketplace,
+            collapsed: model.collapsed_marketplaces.contains(*marketplace),
+            all_installed: !items.is_empty() && items.iter().all(|(_, p)| p.installed),
+            is_official: *marketplace == "uze-official",
+        });
+        let count = visible_items.len();
+        if count == 0 {
+            rows.push(Row::Spacer);
+            continue;
+        }
+        for (i, (raw, plugin)) in visible_items.into_iter().enumerate() {
+            let is_last = i + 1 == count;
+            rows.push(Row::Plugin {
+                position: position_of[raw],
+                plugin,
+                is_last,
+            });
+            // Siblings stay directly adjacent — no gap, no connector row —
+            // so the tree reads as tight and continuous. Only after the
+            // group's *last* plugin (whose `└─` already closes the branch)
+            // does a blank row separate it from whatever comes next.
+            if is_last {
                 rows.push(Row::Spacer);
             }
-            let group: Vec<&MarketplacePluginSummary> = model
-                .marketplace_plugins
-                .iter()
-                .filter(|p| p.marketplace == marketplace)
-                .collect();
-            rows.push(Row::Header {
-                marketplace,
-                collapsed: model.collapsed_marketplaces.contains(marketplace),
-                all_installed: !group.is_empty() && group.iter().all(|p| p.installed),
-                is_official: marketplace == "uze-official",
-            });
-            current = Some(marketplace);
-        }
-        if let Some(&position) = position_of.get(&raw) {
-            rows.push(Row::Plugin(position, plugin));
         }
     }
     rows
@@ -100,40 +125,40 @@ pub(crate) fn render_marketplace(
     model: &TuiModel,
     hits: &mut Vec<(Rect, Hit)>,
 ) {
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .spacing(1)
-        .constraints([Constraint::Percentage(46), Constraint::Percentage(54)])
-        .split(area);
-
-    let title = if model.marketplace_count == 0 {
-        " Marketplace".to_owned()
-    } else {
-        format!(
-            " Marketplace  ·  {} source{}",
-            model.marketplace_count,
-            if model.marketplace_count == 1 {
-                ""
-            } else {
-                "s"
-            }
+    let full_area = content_area(area);
+    let trailer = (model.marketplace_count > 0).then(|| {
+        Span::styled(
+            format!(
+                "{} source{}",
+                model.marketplace_count,
+                if model.marketplace_count == 1 {
+                    ""
+                } else {
+                    "s"
+                }
+            ),
+            Style::default().fg(MUTED),
         )
-    };
-    let block = surface_block(title);
-    let panel_inner = block.inner(columns[0]);
-    frame.render_widget(block, columns[0]);
+    });
+    let content =
+        render_screen_header(frame, full_area, "Marketplace", "browse & install", trailer);
 
-    let sections = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(2), Constraint::Min(3)])
-        .split(panel_inner);
-    render_filter_box(frame, sections[0], model);
-    let inner = sections[1];
+    let filter_area = Rect::new(content.x, content.y, content.width, 2);
+    render_filter_box(frame, filter_area, model);
+    let list_area = Rect::new(
+        content.x,
+        content.y + 3,
+        content.width,
+        content.height.saturating_sub(3),
+    );
 
     if model.marketplace_plugins.is_empty() {
         frame.render_widget(
-            Paragraph::new("No marketplace plugins available.").wrap(Wrap { trim: true }),
-            inner,
+            Paragraph::new(Span::styled(
+                "No marketplace plugins available.",
+                Style::default().fg(MUTED),
+            )),
+            list_area,
         );
     } else {
         let name_width = model
@@ -142,19 +167,44 @@ pub(crate) fn render_marketplace(
             .map(|plugin| plugin.name.chars().count())
             .max()
             .unwrap_or(0);
+        // One shared "label column" width — headers ("{chevron} {name}")
+        // and plugin rows ("  {tree-prefix}{name}") pad to the same total
+        // so Status lands in the same column for every row, table-style,
+        // instead of drifting with each row's own leading text length.
+        let header_label_width = model
+            .marketplace_plugins
+            .iter()
+            .map(|plugin| plugin.marketplace.as_str())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .map(|marketplace| {
+                let display = if marketplace == "uze-official" {
+                    "uze"
+                } else {
+                    marketplace
+                };
+                2 + display.chars().count()
+            })
+            .max()
+            .unwrap_or(0);
+        let plugin_label_width = 5 + name_width;
+        let label_width = header_label_width.max(plugin_label_width);
         let rows = build_rows(model);
         if rows.is_empty() {
             frame.render_widget(
-                Paragraph::new(format!(
-                    "No plugins match \"{}\".",
-                    model.marketplace_filter.trim()
-                ))
-                .wrap(Wrap { trim: true }),
-                inner,
+                Paragraph::new(Span::styled(
+                    format!("No plugins match \"{}\".", model.marketplace_filter.trim()),
+                    Style::default().fg(MUTED),
+                )),
+                list_area,
             );
         } else {
-            let mut items: Vec<ListItem> = Vec::with_capacity(rows.len());
             for (render_row, row) in rows.iter().enumerate() {
+                let y = list_area.y + render_row as u16;
+                if y >= list_area.y + list_area.height {
+                    break;
+                }
+                let rect = Rect::new(list_area.x, y, list_area.width, 1);
                 match row {
                     Row::Header {
                         marketplace,
@@ -162,79 +212,71 @@ pub(crate) fn render_marketplace(
                         all_installed,
                         is_official,
                     } => {
-                        items.push(ListItem::new(header_line(
-                            marketplace,
-                            *collapsed,
-                            *all_installed,
-                            *is_official,
-                        )));
-                        let rect = Rect::new(inner.x, inner.y + render_row as u16, inner.width, 1);
-                        if rect.y < inner.y + inner.height {
-                            hits.push((
-                                rect,
-                                Hit::MarketplaceGroupToggle((*marketplace).to_owned()),
-                            ));
-                        }
+                        frame.render_widget(
+                            Paragraph::new(header_line(
+                                marketplace,
+                                *collapsed,
+                                *all_installed,
+                                *is_official,
+                                label_width,
+                            )),
+                            rect,
+                        );
+                        hits.push((rect, Hit::MarketplaceGroupToggle((*marketplace).to_owned())));
                     }
-                    Row::Spacer => items.push(ListItem::new(Line::from(""))),
-                    Row::Plugin(position, plugin) => {
-                        items.push(plugin_row(
-                            plugin,
-                            *position == model.marketplace_selected,
-                            name_width,
-                            inner.width,
-                        ));
-                        let rect = Rect::new(inner.x, inner.y + render_row as u16, inner.width, 1);
-                        if rect.y < inner.y + inner.height {
-                            hits.push((rect, Hit::MarketplaceRow(*position)));
-                        }
+                    Row::Spacer => {}
+                    Row::Plugin {
+                        position,
+                        plugin,
+                        is_last,
+                    } => {
+                        frame.render_widget(
+                            Paragraph::new(plugin_line(
+                                plugin,
+                                *is_last,
+                                *position == model.marketplace_selected,
+                                name_width,
+                                label_width,
+                                list_area.width,
+                            )),
+                            rect,
+                        );
+                        hits.push((rect, Hit::MarketplaceRow(*position)));
                     }
                 }
             }
-            frame.render_widget(List::new(items), inner);
         }
     }
 
-    render_marketplace_detail(frame, columns[1], model, hits);
+    if model.marketplace_drawer_open
+        && let Some(plugin) = model.selected_marketplace_plugin()
+    {
+        render_marketplace_drawer(frame, full_area, model, plugin, hits);
+    }
 }
 
 fn render_filter_box(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
-    // The filter is a raised input slab — brighter than the panel surface
-    // it sits on — with no border. While filtering, the slab stays raised
-    // and the text turns into a live input; otherwise it reads as a hint.
-    let slab = if model.filtering {
-        SELECTED_BG
-    } else {
-        SURFACE_RAISED
-    };
-    let block = Block::default().style(Style::default().bg(slab));
+    let block = Block::default()
+        .borders(Borders::BOTTOM)
+        .border_style(Style::default().fg(if model.filtering { ACCENT } else { BORDER }));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
     let text = if model.marketplace_filter.is_empty() {
         Line::from(Span::styled(
             "Filter marketplaces…",
             Style::default().fg(MUTED),
         ))
     } else {
-        let mut spans = vec![Span::raw(model.marketplace_filter.clone())];
+        let mut spans = vec![Span::styled(
+            model.marketplace_filter.clone(),
+            Style::default().fg(TEXT_PRIMARY),
+        )];
         if model.filtering {
             spans.push(Span::styled("▏", Style::default().fg(ACCENT)));
         }
         Line::from(spans)
     };
-    frame.render_widget(Paragraph::new(text).block(block), area);
-}
-
-/// A pill-style chip — solid background, black text, one space of padding
-/// each side — for the group header's aggregate badges. Plain colored text
-/// (no chip) is used everywhere else; this is deliberately reserved for
-/// the header row so the two badge styles stay visually distinct.
-fn pill(text: &str, bg: Color) -> Span<'static> {
-    Span::styled(
-        format!(" {text} "),
-        Style::default()
-            .fg(Color::Black)
-            .bg(bg)
-            .add_modifier(Modifier::BOLD),
-    )
+    frame.render_widget(Paragraph::new(text), inner);
 }
 
 fn header_line<'a>(
@@ -242,47 +284,70 @@ fn header_line<'a>(
     collapsed: bool,
     all_installed: bool,
     is_official: bool,
+    label_width: usize,
 ) -> Line<'a> {
     let chevron = if collapsed { "▸" } else { "▾" };
+    // Display-only: "uze-official" reads oddly right above a child plugin
+    // that's *also* named "uze" — the badge below already says "Official",
+    // so the "-official" suffix in the header is pure redundancy. The
+    // underlying name (used for toggling, hit-testing, filtering) is
+    // untouched — this only affects what's drawn.
+    let display_name = if is_official { "uze" } else { marketplace };
+    // The name is padded to `label_width` (minus the 2-wide "{chevron} "
+    // that precedes it) so "Installed" lands in the same column as every
+    // plugin row's own Status, table-style, rather than trailing right
+    // after however long this particular name happens to be.
     let mut spans = vec![
-        Span::styled(format!("{chevron} "), Style::default().fg(MUTED)),
+        Span::styled(format!("{chevron} "), Style::default().fg(TEXT_DIM)),
         Span::styled(
-            marketplace.to_owned(),
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            format!(
+                "{:<width$}",
+                display_name,
+                width = label_width.saturating_sub(2)
+            ),
+            Style::default()
+                .fg(TEXT_BRIGHT)
+                .add_modifier(Modifier::BOLD),
         ),
     ];
-    // Explicit `Color::Reset` rather than a bare unstyled `Span::raw` — some
-    // terminals/multiplexers don't emit a background-reset escape between
-    // two adjacent styled spans unless one is actually present, which reads
-    // as the pills bleeding into each other with no visible gap.
-    let gap = || Span::styled("  ", Style::default().bg(Color::Reset));
     if all_installed {
-        spans.push(gap());
-        spans.push(pill("Installed", SUCCESS));
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled("Installed", Style::default().fg(ACCENT)));
     }
     if is_official {
-        spans.push(gap());
-        spans.push(pill("Default", ACCENT));
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled("✓ Official", Style::default().fg(BLUE)));
     }
     Line::from(spans)
 }
 
 /// Widest text each fixed slot after Status ever holds, so a row without
-/// that badge still reserves its column and the next one doesn't drift —
-/// same recipe as the Plugins route's own fixed columns.
-const OFFICIAL_WIDTH: usize = "Official".len();
+/// that badge still reserves its column and the next one doesn't drift.
 const UPDATE_WIDTH: usize = "Update available".len();
 
-fn plugin_row<'a>(
+fn plugin_line<'a>(
     plugin: &'a MarketplacePluginSummary,
+    is_last: bool,
     selected: bool,
     name_width: usize,
+    label_width: usize,
     row_width: u16,
-) -> ListItem<'a> {
+) -> Line<'a> {
+    let prefix = if is_last { "└─ " } else { "├─ " };
+    // This row's own leading width (border + " " + prefix + name) is
+    // `5 + name_width`; when some header's name is longer, `label_width`
+    // exceeds that — pad the extra into the gap before Status so it still
+    // lands in the same column as every header's own badge.
+    let extra_pad = label_width.saturating_sub(5 + name_width);
     let name_style = if selected {
-        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
+        Style::default().fg(TEXT_BRIGHT)
     } else {
-        Style::default()
+        Style::default().fg(TEXT_SECONDARY)
+    };
+    let status_style = if plugin.installed {
+        Style::default().fg(ACCENT)
+    } else {
+        Style::default().fg(TEXT_DIM)
     };
     let name = format!("{:<name_width$}", plugin.name);
     let status = format!(
@@ -291,19 +356,6 @@ fn plugin_row<'a>(
             "Installed"
         } else {
             "Available"
-        }
-    );
-    let status_style = if plugin.installed {
-        Style::default().fg(SUCCESS)
-    } else {
-        Style::default().fg(MUTED)
-    };
-    let official = format!(
-        "{:<OFFICIAL_WIDTH$}",
-        if plugin.marketplace == "uze-official" {
-            "Official"
-        } else {
-            ""
         }
     );
     let update = format!(
@@ -315,16 +367,17 @@ fn plugin_row<'a>(
         }
     );
     let mut spans = vec![
-        Span::styled(if selected { "  › " } else { "    " }, name_style),
+        Span::styled(
+            if selected { "│" } else { " " },
+            Style::default().fg(ACCENT),
+        ),
+        Span::styled(format!(" {prefix}"), Style::default().fg(TEXT_FAINT)),
         Span::styled(name, name_style),
-        Span::raw("  "),
+        Span::raw(" ".repeat(2 + extra_pad)),
         Span::styled(status, status_style),
-        Span::raw("  "),
-        Span::styled(official, Style::default().fg(MUTED)),
         Span::raw("  "),
         Span::styled(update, Style::default().fg(WARNING)),
     ];
-
     if selected {
         for span in &mut spans {
             span.style = span.style.bg(SELECTED_BG);
@@ -336,88 +389,111 @@ fn plugin_row<'a>(
             Style::default().bg(SELECTED_BG),
         ));
     }
-    ListItem::new(Line::from(spans))
+    Line::from(spans)
 }
 
-fn render_marketplace_detail(
+fn render_marketplace_drawer(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
     model: &TuiModel,
+    plugin: &MarketplacePluginSummary,
     hits: &mut Vec<(Rect, Hit)>,
 ) {
-    let Some(plugin) = model.selected_marketplace_plugin() else {
-        frame.render_widget(Paragraph::new("").block(surface_block(" Plugin")), area);
-        return;
-    };
+    let width = 52.min(area.width);
+    let drawer = Rect::new(
+        area.x + area.width - width,
+        area.y - 1,
+        width,
+        area.height + 1,
+    );
+    frame.render_widget(Clear, drawer);
+    frame.render_widget(
+        Block::default()
+            .borders(Borders::LEFT)
+            .border_style(Style::default().fg(BORDER))
+            .style(Style::default().bg(BASE)),
+        drawer,
+    );
 
-    // Status card pinned to the bottom, main content scrolling above it.
-    let sections = Layout::default()
-        .direction(Direction::Vertical)
-        .spacing(1)
-        .constraints([Constraint::Min(6), Constraint::Length(4)])
-        .split(area);
+    let sections_x = drawer.x + 2;
+    let sections_width = drawer.width.saturating_sub(3);
+    let status_height = 3;
+    let body = Rect::new(
+        sections_x,
+        drawer.y + 1,
+        sections_width,
+        drawer.height.saturating_sub(2 + status_height),
+    );
+    let status_area = Rect::new(
+        sections_x,
+        body.y + body.height,
+        sections_width,
+        status_height,
+    );
 
     let mut lines = vec![
-        Line::from(vec![Span::styled(
+        Line::from(Span::styled(
+            "PLUGIN",
+            Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
             &plugin.name,
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-        )]),
+            Style::default()
+                .fg(TEXT_BRIGHT)
+                .add_modifier(Modifier::BOLD),
+        )),
         Line::from(""),
         Line::from(Span::styled(
             plugin.description.clone().unwrap_or_default(),
-            Style::default().fg(MUTED),
+            Style::default().fg(TEXT_SECONDARY),
         )),
     ];
     if !plugin.keywords.is_empty() {
         lines.push(Line::from(Span::styled(
             plugin.keywords.join(", "),
-            Style::default().fg(MUTED),
+            Style::default().fg(TEXT_DIM),
         )));
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "Source",
+        "SOURCE",
         Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
     )));
-    let source_row_y = area.y + lines.len() as u16 + 1;
+    let source_row_y = body.y + lines.len() as u16;
     lines.push(Line::from(vec![
-        Span::raw(plugin.marketplace.clone()),
-        Span::raw("   "),
+        Span::styled(
+            plugin.marketplace.clone(),
+            Style::default().fg(TEXT_PRIMARY),
+        ),
+        Span::raw("  "),
         Span::styled("↗", Style::default().fg(MUTED)),
     ]));
-    // The external-link glyph jumps the Marketplace list to this plugin's
-    // group. Registering the whole row (not just the glyph) keeps the
-    // click target usable without measuring exact glyph offsets.
-    if source_row_y < area.y + area.height {
+    if source_row_y < body.y + body.height {
         hits.push((
-            Rect::new(area.x, source_row_y, area.width, 1),
+            Rect::new(body.x, source_row_y, body.width, 1),
             Hit::JumpToMarketplace(plugin.marketplace.clone()),
         ));
     }
     lines.push(Line::from(""));
 
     lines.push(Line::from(Span::styled(
-        "Resources",
+        "RESOURCES",
         Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
     )));
-    if let Some(detail) = &model.marketplace_detail
+    let resources = if let Some(detail) = &model.marketplace_detail
         && detail.summary.name == plugin.name
         && detail.summary.marketplace == plugin.marketplace
     {
-        push_capability_table(&mut lines, &detail.capabilities);
+        resource_summary(&detail.capabilities)
     } else {
-        lines.push(Line::from(Span::styled(
-            "  loading…",
-            Style::default().fg(MUTED),
-        )));
-    }
+        "loading…".to_owned()
+    };
+    lines.push(Line::from(Span::styled(
+        resources,
+        Style::default().fg(TEXT_PRIMARY),
+    )));
 
-    frame.render_widget(
-        Paragraph::new(lines)
-            .block(surface_block(" Plugin"))
-            .wrap(Wrap { trim: true }),
-        sections[0],
-    );
+    frame.render_widget(Paragraph::new(lines), body);
 
     let (color, headline, subtitle) = if plugin.installed {
         if plugin.update_available == Some(true) {
@@ -427,10 +503,10 @@ fn render_marketplace_detail(
                 "A newer revision is ready in this marketplace",
             )
         } else {
-            (SUCCESS, "Installed", "Ready to use in your projects")
+            (ACCENT, "Installed", "Ready to use in your projects")
         }
     } else {
         (MUTED, "Not installed", "Press i to install this plugin")
     };
-    render_status_card(frame, sections[1], color, headline, subtitle);
+    render_status_line(frame, status_area, color, headline, subtitle);
 }

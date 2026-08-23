@@ -856,6 +856,9 @@ pub struct CapabilityDelivery {
 #[derive(Clone, Debug, Serialize)]
 pub struct HarnessDelivery {
     pub integration: String,
+    /// The name a person recognizes (`IntegrationPort::display_name`) —
+    /// display only, mirrors `HarnessHealth::display_name`.
+    pub display_name: String,
     pub package_plan: Option<PackageExposurePlan>,
     pub capabilities: Vec<CapabilityDelivery>,
 }
@@ -980,6 +983,10 @@ pub enum StoreHealth {
 #[derive(Clone, Debug, Serialize)]
 pub struct HarnessHealth {
     pub integration: String,
+    /// The name a person recognizes (`IntegrationPort::display_name`) —
+    /// display only. `integration` above stays the stable id everything
+    /// else (setup, state, doctor matching) is keyed on.
+    pub display_name: String,
     pub detection: HarnessDetection,
     pub setup: String,
     pub strategy: Option<String>,
@@ -1035,6 +1042,9 @@ pub enum HarnessContextDelivery {
 #[derive(Clone, Debug, Serialize)]
 pub struct HarnessContextStatus {
     pub integration: String,
+    /// The name a person recognizes (`IntegrationPort::display_name`) —
+    /// display only, mirrors `HarnessHealth::display_name`.
+    pub display_name: String,
     pub delivery: HarnessContextDelivery,
 }
 

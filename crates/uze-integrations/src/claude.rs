@@ -19,7 +19,7 @@ use uze_core::{
     Result, UzeError,
     capability::CapabilityKind,
     exposure::{ExposureMechanism, ExposurePlan, PackageExposurePlan},
-    harness_runtime::RuntimeContext,
+    harness_runtime::{RuntimeContext, resolve_real_executable},
     home::UzeHome,
     integration::{
         AttachmentInspection, AttachmentReceipt, AttachmentState, HarnessDetection,
@@ -108,6 +108,24 @@ impl ClaudeIntegration {
         self.catalogue_root()
             .join(".claude-plugin/marketplace.json")
     }
+
+    /// The real `claude` executable, resolved explicitly rather than through
+    /// a bare `Command::new("claude")` PATH lookup. Once `uze setup claude`
+    /// has ever succeeded, `~/.uze/shims` sits ahead of the real binary on
+    /// `PATH` (see `UzeApplication::ensure_runtime_shim`), so a bare lookup
+    /// here would re-enter UZE's own runtime shim instead of the vendor CLI.
+    /// The shim then prepends `--add-dir <dir>` before whatever argument
+    /// follows — for `["update"]`, since `--add-dir` is a variadic option,
+    /// the real CLI swallows `update` into that directory list instead of
+    /// recognizing it as a subcommand, and falls through to its default
+    /// action: starting a full interactive session instead of checking for
+    /// updates. Falls back to the bare name (previous behavior) if no real
+    /// binary can be found outside the shims directory.
+    fn provisioning_executable(&self) -> String {
+        resolve_real_executable(&["claude"], &self.uze_home.shims_dir())
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "claude".to_owned())
+    }
 }
 
 impl IntegrationPort for ClaudeIntegration {
@@ -119,6 +137,10 @@ impl IntegrationPort for ClaudeIntegration {
     /// receipts and state records carry.
     fn aliases(&self) -> &'static [&'static str] {
         &["claude"]
+    }
+
+    fn display_name(&self) -> &'static str {
+        "claude"
     }
 
     fn capabilities(&self) -> HarnessCapabilities {
@@ -134,7 +156,7 @@ impl IntegrationPort for ClaudeIntegration {
     }
 
     fn detect(&self) -> HarnessDetection {
-        detect_binary("claude")
+        detect_binary(&self.provisioning_executable())
     }
 
     /// `id()` is `claude-code`; the binary people actually have on `PATH`
@@ -160,16 +182,17 @@ impl IntegrationPort for ClaudeIntegration {
     }
 
     fn provision(&self, runner: &dyn ProcessRunner) -> Result<ProvisioningResult> {
+        let executable = self.provisioning_executable();
         provision_cli(
             runner,
-            "claude",
+            &executable,
             self.detect(),
             ProcessSpec::new(
                 "sh",
                 ["-c", "curl -fsSL https://claude.ai/install.sh | bash"],
             )
             .with_inherited_output(),
-            ProcessSpec::new("claude", ["update"]).with_inherited_output(),
+            ProcessSpec::new(executable.clone(), ["update"]).with_inherited_output(),
             "official-native-installer",
         )
     }

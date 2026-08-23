@@ -8,10 +8,11 @@
 //! `harness_runtime::resolve_real_executable`) — not here, and not through
 //! any symlink this module creates.
 
-use std::process::Command;
+use std::{path::Path, process::Command};
 
 use uze_core::{
     Result,
+    harness_runtime::resolve_real_executable,
     integration::HarnessDetection,
     provisioning::{ProcessRunner, ProcessSpec, ProvisionAction, ProvisioningResult},
 };
@@ -19,13 +20,26 @@ use uze_core::{
 /// Resolves whichever name currently answers to `--version`: `opencode`
 /// (the canonical alias, once created) first, then `opencode2` (the raw v2
 /// binary name) as a fallback for a fresh v2 install that has no alias yet.
-pub(super) fn resolve_opencode_binary() -> Option<(&'static str, HarnessDetection)> {
-    let primary = detect_binary("opencode");
-    if primary.present {
-        return Some(("opencode", primary));
+///
+/// Resolved explicitly via `resolve_real_executable` (excluding
+/// `shims_dir`) rather than a bare `Command::new("opencode")` PATH lookup —
+/// once `uze setup opencode` has ever succeeded, `~/.uze/shims` sits ahead
+/// of the real binary on `PATH` (see `UzeApplication::ensure_runtime_shim`
+/// and the identical rationale on `ClaudeIntegration::provisioning_executable`),
+/// so a bare lookup could re-enter UZE's own runtime shim instead of the
+/// vendor CLI.
+pub(super) fn resolve_opencode_binary(shims_dir: &Path) -> Option<(String, HarnessDetection)> {
+    if let Some(path) = resolve_real_executable(&["opencode"], shims_dir) {
+        let path = path.to_string_lossy().into_owned();
+        let detection = detect_binary(&path);
+        if detection.present {
+            return Some((path, detection));
+        }
     }
-    let fallback = detect_binary("opencode2");
-    fallback.present.then_some(("opencode2", fallback))
+    let path = resolve_real_executable(&["opencode2"], shims_dir)?;
+    let path = path.to_string_lossy().into_owned();
+    let detection = detect_binary(&path);
+    detection.present.then_some((path, detection))
 }
 
 pub(super) fn detect_binary(program: &str) -> HarnessDetection {
@@ -46,6 +60,7 @@ pub(super) fn detect_binary(program: &str) -> HarnessDetection {
 pub(super) fn provision_opencode(
     runner: &dyn ProcessRunner,
     detect: impl Fn() -> HarnessDetection,
+    shims_dir: &Path,
 ) -> Result<ProvisioningResult> {
     if !cfg!(unix) {
         return Ok(ProvisioningResult::blocked(
@@ -53,7 +68,7 @@ pub(super) fn provision_opencode(
         ));
     }
     let method = "official-install-script";
-    let resolved = resolve_opencode_binary();
+    let resolved = resolve_opencode_binary(shims_dir);
     let before = resolved
         .as_ref()
         .map(|(_, detection)| detection.clone())
@@ -64,7 +79,7 @@ pub(super) fn provision_opencode(
         ProvisionAction::Install
     };
     let command = match &resolved {
-        Some((which, _)) => ProcessSpec::new(*which, ["upgrade"]).with_inherited_output(),
+        Some((which, _)) => ProcessSpec::new(which.clone(), ["upgrade"]).with_inherited_output(),
         None => ProcessSpec::new(
             "sh",
             ["-c", "curl -fsSL https://opencode.ai/v2/install | bash"],
@@ -155,14 +170,15 @@ mod provision_tests {
         // installed) that real resolution fails and `Verified` is
         // unreachable no matter what the mock records; skip rather than
         // assert a status this test has no way to produce here.
-        if resolve_opencode_binary().is_none() {
+        let root = temp("provision");
+        let uze_home = UzeHome::at(root.join("uze"));
+        if resolve_opencode_binary(&uze_home.shims_dir()).is_none() {
             return;
         }
-        let root = temp("provision");
         let integration = OpenCodeIntegration::new(
             root.join("agents"),
             root.join("config/opencode.json"),
-            UzeHome::at(root.join("uze")),
+            uze_home,
         );
         let runner = RecordingRunner {
             commands: std::sync::Mutex::new(Vec::new()),

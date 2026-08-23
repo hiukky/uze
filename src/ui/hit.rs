@@ -47,14 +47,21 @@ impl TuiModel {
                 Intent::None
             }
             Hit::PluginRow(index) => {
+                // Selecting only — same as arrow-key navigation. The
+                // richer async inspect fetch (deliveries/managed state,
+                // the "Inspecting…" status flash) is reserved for an
+                // explicit Enter, so clicking through the list to browse
+                // doesn't fire a fetch — and the noisy status line with
+                // it — on every single click.
                 self.plugins_selected = index;
                 self.focus = Focus::Content;
-                self.open_or_act()
+                Intent::None
             }
             Hit::MarketplaceRow(index) => {
                 self.marketplace_selected = index;
+                self.marketplace_drawer_open = true;
                 self.focus = Focus::Content;
-                self.open_or_act()
+                self.marketplace_inspect_intent()
             }
             Hit::MarketplaceGroupToggle(marketplace) => {
                 self.marketplace_toggle_group(&marketplace);
@@ -70,12 +77,14 @@ impl TuiModel {
                 {
                     self.marketplace_selected = position;
                 }
+                self.marketplace_drawer_open = true;
                 self.set_route(Route::Marketplace);
                 self.focus = Focus::Content;
-                Intent::None
+                self.marketplace_inspect_intent()
             }
             Hit::HarnessRow(index) => {
                 self.harnesses_selected = index;
+                self.harnesses_drawer_open = true;
                 self.focus = Focus::Content;
                 Intent::None
             }

@@ -84,7 +84,7 @@ impl IntegrationPort for OpenCodeIntegration {
         }
     }
     fn detect(&self) -> HarnessDetection {
-        resolve_opencode_binary()
+        resolve_opencode_binary(&self.uze_home.shims_dir())
             .map(|(_, detection)| detection)
             .unwrap_or_default()
     }
@@ -137,7 +137,7 @@ impl IntegrationPort for OpenCodeIntegration {
     /// UZE's canonical `opencode` invocation is the PATH shim's job
     /// (`runtime_executable_aliases`), not provisioning's.
     fn provision(&self, runner: &dyn ProcessRunner) -> Result<ProvisioningResult> {
-        provision_opencode(runner, || self.detect())
+        provision_opencode(runner, || self.detect(), &self.uze_home.shims_dir())
     }
     fn install(&self, home: &UzeHome, detection: &HarnessDetection) -> Result<()> {
         fs::create_dir_all(&self.skills_dir).map_err(|source| UzeError::Write {

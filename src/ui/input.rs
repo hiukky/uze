@@ -73,15 +73,29 @@ impl TuiModel {
             }
             KeyCode::Char('j') | KeyCode::Down => {
                 self.move_selection(1);
-                Intent::None
+                if self.route == Route::Marketplace {
+                    self.marketplace_inspect_intent()
+                } else {
+                    Intent::None
+                }
             }
             KeyCode::Char('k') | KeyCode::Up => {
                 self.move_selection(-1);
-                Intent::None
+                if self.route == Route::Marketplace {
+                    self.marketplace_inspect_intent()
+                } else {
+                    Intent::None
+                }
             }
             KeyCode::Esc => {
-                self.plugin_detail = None;
-                self.marketplace_detail = None;
+                // Slides the open drawer away — the fetched detail stays
+                // cached, so reopening the same selection is instant.
+                match self.route {
+                    Route::Marketplace => self.marketplace_drawer_open = false,
+                    Route::Harnesses => self.harnesses_drawer_open = false,
+                    Route::Plugins => self.plugin_drawer_open = false,
+                    _ => {}
+                }
                 Intent::None
             }
             KeyCode::Enter => self.open_or_act(),
@@ -164,15 +178,20 @@ impl TuiModel {
     /// already-visible detail pane, since there is no deeper read model.
     pub(crate) fn open_or_act(&mut self) -> Intent {
         match self.route {
-            Route::Plugins => self
-                .selected_plugin()
-                .map_or(Intent::None, |p| Intent::InspectPlugin(p.id.clone())),
-            Route::Marketplace => self
-                .selected_marketplace_plugin()
-                .map_or(Intent::None, |p| Intent::InspectMarketplacePlugin {
-                    name: p.name.clone(),
-                    marketplace: p.marketplace.clone(),
-                }),
+            Route::Plugins => {
+                let Some(id) = self.selected_plugin().map(|plugin| plugin.id.clone()) else {
+                    return Intent::None;
+                };
+                self.plugin_drawer_open = true;
+                Intent::InspectPlugin(id)
+            }
+            Route::Marketplace => {
+                if self.selected_marketplace_plugin().is_none() {
+                    return Intent::None;
+                }
+                self.marketplace_drawer_open = true;
+                self.marketplace_inspect_intent()
+            }
             _ => Intent::None,
         }
     }
@@ -183,12 +202,20 @@ impl TuiModel {
             MouseEventKind::ScrollDown if self.overlay == Overlay::None => {
                 self.focus = Focus::Content;
                 self.move_selection(1);
-                Intent::None
+                if self.route == Route::Marketplace {
+                    self.marketplace_inspect_intent()
+                } else {
+                    Intent::None
+                }
             }
             MouseEventKind::ScrollUp if self.overlay == Overlay::None => {
                 self.focus = Focus::Content;
                 self.move_selection(-1);
-                Intent::None
+                if self.route == Route::Marketplace {
+                    self.marketplace_inspect_intent()
+                } else {
+                    Intent::None
+                }
             }
             _ => Intent::None,
         }

@@ -40,6 +40,7 @@ impl UzeApplication {
                     .collect();
                 HarnessDelivery {
                     integration: integration.id().to_owned(),
+                    display_name: integration.display_name().to_owned(),
                     package_plan,
                     capabilities,
                 }

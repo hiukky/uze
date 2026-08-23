@@ -26,7 +26,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Padding, Paragraph, Wrap},
+    widgets::{Block, Borders, Padding, Paragraph, Wrap},
 };
 
 use crate::{
@@ -76,30 +76,35 @@ fn tui_application(home: UzeHome) -> Result<UzeApplication> {
     UzeApplication::from_env_with_runner(home, Box::new(SilentProcessRunner))
 }
 
-// Compact, low-chrome, deliberately desaturated palette. Full-saturation
-// ANSI Cyan/Green/Yellow/Red read as a generic "AI product" look and fight
-// whatever theme the terminal is already set to; these are toned down —
-// closer to the terminal's own default foreground with a hint of hue —
-// so real lifecycle states stay legible without shouting over the theme.
-const ACCENT: Color = Color::Rgb(135, 155, 175);
-/// ANSI `DarkGray` (bright-black, palette index 8) reads as near-invisible
-/// against a true-black terminal background in many color schemes — this
-/// is a genuine mid-gray instead, so secondary text stays legible without
-/// competing with primary text.
-const MUTED: Color = Color::Rgb(150, 150, 160);
-const SUCCESS: Color = Color::Rgb(140, 170, 145);
-const WARNING: Color = Color::Rgb(195, 165, 115);
-const DANGER: Color = Color::Rgb(190, 115, 110);
+// Exact palette from the imported design (`UZE TUI.dc.html`), not a
+// generic terminal-app palette: a near-black backdrop, warm off-white
+// text, and one signature accent (soft sage green) doubling as the
+// success/native/pass color everywhere, per the design's own `levelColor`.
+// Structure comes from thin hairline dividers (1px rgba-white borders in
+// the source), never from filled surface slabs or boxed panels.
+const BASE: Color = Color::Rgb(10, 12, 13); // #0a0c0d
+const TEXT_BRIGHT: Color = Color::Rgb(242, 240, 234); // #f2f0ea — headings, active state
+const TEXT_PRIMARY: Color = Color::Rgb(230, 228, 222); // #e6e4de — body default
+const TEXT_SECONDARY: Color = Color::Rgb(168, 166, 160); // #a8a6a0 — descriptions
+const TEXT_TERTIARY: Color = Color::Rgb(201, 199, 192); // #c9c7c0 — key/value content
+const MUTED: Color = Color::Rgb(107, 113, 118); // #6b7176 — labels, eyebrows
+const TEXT_DIM: Color = Color::Rgb(91, 96, 101); // #5b6065 — versions, source tags
+const TEXT_FAINT: Color = Color::Rgb(61, 66, 71); // #3d4247 — tree-prefix glyphs
+const ACCENT: Color = Color::Rgb(143, 209, 158); // #8fd19e — the one signature hue
+const SUCCESS: Color = ACCENT;
+const WARNING: Color = Color::Rgb(224, 181, 103); // #e0b567 (amber)
+const DANGER: Color = Color::Rgb(224, 118, 95); // #e0765f (red)
+const BLUE: Color = Color::Rgb(125, 151, 201); // #7d97c9 — "Default" tag only
 
-// Structure comes from background contrast, not borders: the app paints a
-// dark backdrop, and every region that holds content is a slightly lighter
-// slab. `SURFACE` is a panel/sidebar slab; `SURFACE_RAISED` is the top
-// layer (inputs, dialogs, status cards); `SELECTED_BG` is one step brighter
-// still, so a selection reads as "this row is raised".
-const BASE: Color = Color::Rgb(14, 15, 18);
-const SURFACE: Color = Color::Rgb(22, 24, 28);
-const SURFACE_RAISED: Color = Color::Rgb(32, 35, 40);
-const SELECTED_BG: Color = Color::Rgb(48, 50, 58);
+/// Hairline dividers — solid approximations of the design's
+/// `rgba(255,255,255,a)` borders, pre-blended over `BASE` since ratatui has
+/// no alpha compositing. `BORDER_FAINT` (a≈0.05) separates list rows;
+/// `BORDER` (a≈0.08) sits under the titlebar and around the sidebar/inputs.
+const BORDER_FAINT: Color = Color::Rgb(22, 24, 25);
+const BORDER: Color = Color::Rgb(30, 31, 32);
+/// The Marketplace/Harnesses selected-row tint — `rgba(143,209,158,0.09)`
+/// (the accent itself, barely-there) pre-blended over `BASE`.
+const SELECTED_BG: Color = Color::Rgb(22, 30, 26);
 
 const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -220,25 +225,31 @@ fn io_error(source: io::Error) -> crate::UzeError {
 // --- Rendering ----------------------------------------------------------
 
 fn render(frame: &mut ratatui::Frame<'_>, model: &TuiModel, hits: &mut Vec<(Rect, Hit)>) {
-    // The whole screen sits on the base backdrop; every region that holds
-    // content is a lighter slab painted on top of it, so structure comes
-    // from surfaces rather than a grid of borders.
+    // Edge to edge horizontally (no left/right inset — matches the design's
+    // `width:100%`), but with one blank row top and bottom: on a browser
+    // canvas `height:100vh` reads as flush; in a real terminal, text
+    // sitting on row 0 with nothing above it reads as clipped/cramped, not
+    // "inset like a window". One flat backdrop for the entire frame — no
+    // panel ever paints its own background; every division is a hairline
+    // border or padding, never a filled slab.
     frame.render_widget(
-        Block::default().style(Style::default().bg(BASE)),
+        Block::default().style(Style::default().bg(BASE).fg(TEXT_PRIMARY)),
         frame.area(),
     );
-    // A margin around the whole app keeps every surface — sidebar included —
-    // off the raw terminal edge, so the backdrop reads as "the app is inset",
-    // the way a window is inset from its desktop.
+    let area = Rect::new(
+        frame.area().x,
+        frame.area().y + 1,
+        frame.area().width,
+        frame.area().height.saturating_sub(2),
+    );
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .margin(1)
         .constraints([
             Constraint::Length(2),
             Constraint::Min(3),
             Constraint::Length(2),
         ])
-        .split(frame.area());
+        .split(area);
     render_titlebar(frame, rows[0], model);
 
     let narrow = rows[1].width < 90;
@@ -247,7 +258,7 @@ fn render(frame: &mut ratatui::Frame<'_>, model: &TuiModel, hits: &mut Vec<(Rect
     } else if narrow {
         18
     } else {
-        26
+        27
     };
     let columns = Layout::default()
         .direction(Direction::Horizontal)
@@ -288,49 +299,52 @@ fn render(frame: &mut ratatui::Frame<'_>, model: &TuiModel, hits: &mut Vec<(Rect
 }
 
 fn render_titlebar(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
-    // No border and no surface: the titlebar is just the app's name and
-    // status sitting on the backdrop, so it doesn't compete with the
-    // content slabs below.
+    let block = Block::default()
+        .borders(Borders::BOTTOM)
+        .border_style(Style::default().fg(BORDER));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
     let issues = model.issues().len();
     let mut left = vec![
         Span::styled(
-            "UZE",
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            " UZE",
+            Style::default()
+                .fg(TEXT_BRIGHT)
+                .add_modifier(Modifier::BOLD),
         ),
-        Span::raw("   "),
+        Span::raw("  "),
+        Span::styled("│", Style::default().fg(BORDER)),
+        Span::raw("  "),
     ];
-    let status_color = if model.doctor.is_none() {
+    if model.doctor.is_none() {
         let frame = SPINNER_FRAMES[model.tick % SPINNER_FRAMES.len()];
         left.push(Span::styled(
             format!("{frame} "),
             Style::default().fg(MUTED),
         ));
         left.push(Span::styled("checking…", Style::default().fg(MUTED)));
-        None
     } else if issues == 0 {
+        left.push(Span::styled("● ", Style::default().fg(SUCCESS)));
         left.push(Span::styled("healthy", Style::default().fg(SUCCESS)));
-        Some(SUCCESS)
     } else {
+        left.push(Span::styled("● ", Style::default().fg(WARNING)));
         left.push(Span::styled(
             format!("{issues} issue(s)"),
             Style::default().fg(WARNING),
         ));
-        Some(WARNING)
-    };
-    if let Some(color) = status_color {
-        left.push(Span::raw("  "));
-        left.push(Span::styled("●", Style::default().fg(color)));
     }
 
-    // Path and branch sit together as one right-aligned group — not path
-    // centered with branch off on its own further right — so the titlebar
-    // reads as two blocks (status on the left, project identity on the
-    // right) instead of three scattered pieces.
+    // Path and branch, plain muted text with a faint dot separator — the
+    // design colors neither with the accent; this is identity chrome, not
+    // a call to action.
     let mut right = vec![Span::styled(
         display_project_path(&model.context_root),
-        Style::default().fg(ACCENT),
+        Style::default().fg(MUTED),
     )];
     if let Some(branch) = git_branch(&model.context_root) {
+        right.push(Span::raw("  "));
+        right.push(Span::styled("·", Style::default().fg(TEXT_FAINT)));
         right.push(Span::raw("  "));
         right.push(Span::styled(branch, Style::default().fg(MUTED)));
     }
@@ -341,10 +355,12 @@ fn render_titlebar(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel)
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Min(10), Constraint::Percentage(45)])
-        .split(area);
+        .split(inner);
     frame.render_widget(Paragraph::new(Line::from(left)), columns[0]);
     frame.render_widget(
-        Paragraph::new(Line::from(right)).alignment(ratatui::layout::Alignment::Right),
+        Paragraph::new(Line::from(right))
+            .alignment(ratatui::layout::Alignment::Right)
+            .block(Block::default().padding(Padding::new(0, 1, 0, 0))),
         columns[1],
     );
 }
@@ -384,6 +400,11 @@ fn route_subtitle(route: Route) -> &'static str {
     }
 }
 
+/// The inactive nav label color (`#9a9892` in the design) — close to but
+/// distinct from the other muted tones used elsewhere, so it's its own
+/// constant rather than reusing `MUTED`/`TEXT_SECONDARY`.
+const NAV_INACTIVE: Color = Color::Rgb(154, 152, 146);
+
 fn render_sidebar(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
@@ -391,12 +412,12 @@ fn render_sidebar(
     narrow: bool,
     hits: &mut Vec<(Rect, Hit)>,
 ) {
-    // The sidebar is a full-height surface slab: no border, just a
-    // background one step lighter than the backdrop, so the division from
-    // the content column is a surface edge rather than a drawn line.
+    // No fill, just a hairline right border — the sidebar sits on the same
+    // backdrop as everything else; only a thin divider marks the edge.
     let block = Block::default()
-        .style(Style::default().bg(SURFACE))
-        .padding(Padding::new(2, 1, 1, 0));
+        .borders(Borders::RIGHT)
+        .border_style(Style::default().fg(BORDER_FAINT))
+        .padding(Padding::new(1, 1, 1, 0));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -411,113 +432,61 @@ fn render_sidebar(
         Some(rect)
     };
 
-    if let Some(rect) = row(1) {
-        frame.render_widget(
-            Paragraph::new(Span::styled(
-                "NAVIGATION",
-                Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
-            )),
-            rect,
-        );
-    }
-    row(1); // spacer
     for route in ROUTES {
-        // The active route always carries the highlight bar — matches a
-        // tab/nav convention where "what's open" stays visible regardless
-        // of where keyboard focus currently is; bold is reserved for
-        // "the sidebar itself has focus right now, arrow keys move here".
+        // Selection reads as a left border accent, not a filled bar — the
+        // design never gives the sidebar a background tint at all.
         let selected = route == model.route;
-        let bold = selected && model.focus == Focus::Sidebar;
+        let border = if selected {
+            // A full box-drawing "│", not the thin eighth-block "▏" — the
+            // latter renders inconsistently (a sliver, sometimes
+            // misaligned) across terminal fonts; "│" is universally
+            // supported and reads as a clean solid line.
+            Span::styled("│", Style::default().fg(ACCENT))
+        } else {
+            Span::raw(" ")
+        };
 
         if narrow {
-            // Single-row labels only — no room for a subtitle line here.
             let Some(rect) = row(1) else { break };
-            let fg = if selected { Color::White } else { MUTED };
+            let fg = if selected { TEXT_BRIGHT } else { NAV_INACTIVE };
             let mut style = Style::default().fg(fg);
             if selected {
-                style = style.bg(SELECTED_BG);
-            }
-            if bold {
                 style = style.add_modifier(Modifier::BOLD);
             }
-            let padded = pad_line(route.label(), rect.width as usize, style);
-            frame.render_widget(Paragraph::new(padded), rect);
+            let line = Line::from(vec![border, Span::styled(route.label(), style)]);
+            frame.render_widget(Paragraph::new(line), rect);
             hits.push((rect, Hit::Route(route)));
             continue;
         }
 
-        // Taller, two-line rows — label, then a muted subtitle — with the
-        // highlight bar (when selected) covering both, plus a blank spacer
-        // row after so items read as distinct blocks rather than a cramped
-        // stack.
         let Some(label_rect) = row(1) else { break };
         let subtitle_rect = row(1);
-        row(1); // spacer between items
+        row(1); // breathing room between items
 
-        let label_fg = if selected { Color::White } else { Color::Gray };
+        let label_fg = if selected { TEXT_BRIGHT } else { NAV_INACTIVE };
         let mut label_style = Style::default().fg(label_fg);
         if selected {
-            label_style = label_style.bg(SELECTED_BG);
-        }
-        if bold {
             label_style = label_style.add_modifier(Modifier::BOLD);
         }
         frame.render_widget(
-            Paragraph::new(pad_line(
-                route.label(),
-                label_rect.width as usize,
-                label_style,
-            )),
+            Paragraph::new(Line::from(vec![
+                border,
+                Span::raw(" "),
+                Span::styled(route.label(), label_style),
+            ])),
             label_rect,
         );
         hits.push((label_rect, Hit::Route(route)));
 
         if let Some(subtitle_rect) = subtitle_rect {
-            let mut subtitle_style = Style::default().fg(MUTED);
-            if selected {
-                subtitle_style = subtitle_style.bg(SELECTED_BG);
-            }
-            let subtitle_text = format!("  {}", route_subtitle(route));
-            frame.render_widget(
-                Paragraph::new(pad_line(
-                    &subtitle_text,
-                    subtitle_rect.width as usize,
-                    subtitle_style,
-                )),
-                subtitle_rect,
-            );
+            let line = Line::from(vec![
+                Span::raw("  "),
+                Span::styled(route_subtitle(route), Style::default().fg(TEXT_DIM)),
+            ]);
+            frame.render_widget(Paragraph::new(line), subtitle_rect);
             hits.push((subtitle_rect, Hit::Route(route)));
         }
     }
-
-    // Quick Actions and Status were both dropped: Quick Actions only
-    // repeated the shortcuts the global footer already shows on every
-    // screen, and Status duplicated the Marketplace count already visible
-    // in that panel's own title plus a Doctor summary nobody used from
-    // here — an actual problem belongs in the titlebar's health indicator
-    // (top-left "healthy" / "N issue(s)"), not a second count buried in
-    // the sidebar.
-
-    // Footer pinned to the very bottom, only when there's still room —
-    // never overlaps the sections above on a short terminal. No version
-    // here either — see `render_titlebar`'s note, it lives in the global
-    // footer only.
-    if bottom > y {
-        let footer_rect = Rect::new(inner.x, bottom - 1, inner.width, 1);
-        frame.render_widget(
-            Paragraph::new(Span::styled("UZE", Style::default().fg(MUTED))),
-            footer_rect,
-        );
-    }
-}
-
-/// Pads `text` with trailing spaces to `width` columns under one `style` —
-/// used to paint a selection highlight across a whole row's background,
-/// not just behind the characters it happens to contain.
-fn pad_line(text: &str, width: usize, style: Style) -> Line<'static> {
-    let used = ratatui::text::Span::raw(text).width();
-    let padding = " ".repeat(width.saturating_sub(used));
-    Line::from(Span::styled(format!("{text}{padding}"), style))
 }
 
 // --- Shared helpers ---------------------------------------------------------
@@ -547,8 +516,13 @@ fn hint_spans(hint: &str) -> Vec<Span<'static>> {
 }
 
 fn render_footer(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
-    // No border above the footer either — the hint line just sits on the
-    // backdrop below the content slabs.
+    let block = Block::default()
+        .borders(Borders::TOP)
+        .border_style(Style::default().fg(BORDER_FAINT))
+        .padding(Padding::new(1, 1, 0, 0));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
     let version = format!("v{}", env!("CARGO_PKG_VERSION"));
     let columns = Layout::default()
         .direction(Direction::Horizontal)
@@ -556,13 +530,13 @@ fn render_footer(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
             Constraint::Min(10),
             Constraint::Length(version.len() as u16),
         ])
-        .split(area);
+        .split(inner);
     frame.render_widget(
         Paragraph::new(footer(model)).wrap(Wrap { trim: true }),
         columns[0],
     );
     frame.render_widget(
-        Paragraph::new(Span::styled(version, Style::default().fg(MUTED)))
+        Paragraph::new(Span::styled(version, Style::default().fg(TEXT_DIM)))
             .alignment(ratatui::layout::Alignment::Right),
         columns[1],
     );
@@ -620,32 +594,105 @@ fn footer(model: &TuiModel) -> Text<'static> {
 
 fn route_hint(route: Route) -> &'static str {
     match route {
-        Route::Overview => "tab sidebar · r/g refresh · ? help · q quit",
-        Route::Plugins => {
-            "↑↓/jk select · enter inspect · u update · r remove · tab sidebar · ? help"
-        }
+        Route::Overview => "r refresh · ? help",
+        Route::Plugins => "↑↓ select · enter details · u update · r remove",
         Route::Marketplace => {
-            "↑↓ select · enter inspect · i install · a add marketplace · / search · esc back"
+            "↑↓ select · enter inspect · i install · a add marketplace · / search · esc close"
         }
-        Route::Context => "a analyze · p apply · tab sidebar · ? help",
-        Route::Harnesses => "↑↓/jk select · s setup · tab sidebar · ? help",
-        Route::Doctor => "tab sidebar · r/g refresh · ? help",
+        Route::Context => "a analyze · p apply",
+        Route::Harnesses => "↑↓ select · s setup · esc close",
+        Route::Doctor => "r refresh · ? help",
     }
 }
 
-/// The borderless surface every content panel sits on: no box around the
-/// content — just a background slab one step lighter than the backdrop, a
-/// bold title on its first line, and one column of breathing room. Division
-/// between regions comes from surface contrast, not drawn lines.
-fn surface_block(title: impl Into<Line<'static>>) -> Block<'static> {
-    Block::default()
-        .title(title)
-        .title_style(Style::default().fg(ACCENT).add_modifier(Modifier::BOLD))
-        .style(Style::default().bg(SURFACE))
-        .padding(Padding::new(1, 1, 1, 0))
+/// Every content screen's outer inset — the design's `padding: 36px 44px`
+/// on each route's root div, translated to terminal cells. No border, no
+/// background: content just sits indented on the shared backdrop.
+pub(crate) fn content_area(area: Rect) -> Rect {
+    Rect::new(
+        area.x + 2,
+        area.y + 1,
+        area.width.saturating_sub(4),
+        area.height.saturating_sub(1),
+    )
 }
 
-fn health_style(health: &str) -> Style {
+/// Every screen's header: a bold bright title, a muted subtitle on the
+/// next line, and an optional right-aligned trailer on the title's own
+/// row (item count, doctor summary, source count — whatever that route
+/// reports). Exactly the two-line header shape every route in the design
+/// uses. Returns the area still available below the header plus its own
+/// blank spacer row.
+pub(crate) fn render_screen_header(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    title: &str,
+    subtitle: &str,
+    trailer: Option<Span<'static>>,
+) -> Rect {
+    let title_style = Style::default()
+        .fg(TEXT_BRIGHT)
+        .add_modifier(Modifier::BOLD);
+    let title_row = Rect::new(area.x, area.y, area.width, 1);
+    if let Some(trailer) = trailer {
+        let trailer_width = trailer.width() as u16;
+        let columns = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Min(1), Constraint::Length(trailer_width)])
+            .split(title_row);
+        frame.render_widget(Paragraph::new(Span::styled(title, title_style)), columns[0]);
+        frame.render_widget(
+            Paragraph::new(trailer).alignment(ratatui::layout::Alignment::Right),
+            columns[1],
+        );
+    } else {
+        frame.render_widget(Paragraph::new(Span::styled(title, title_style)), title_row);
+    }
+    if area.height > 1 {
+        let subtitle_row = Rect::new(area.x, area.y + 1, area.width, 1);
+        frame.render_widget(
+            Paragraph::new(Span::styled(subtitle, Style::default().fg(MUTED))),
+            subtitle_row,
+        );
+    }
+    let consumed = 3.min(area.height);
+    Rect::new(
+        area.x,
+        area.y + consumed,
+        area.width,
+        area.height.saturating_sub(consumed),
+    )
+}
+
+/// Draws one content row and, when there's room for it, a hairline
+/// `BORDER_FAINT` divider directly beneath — the design's
+/// `border-bottom: 1px solid rgba(255,255,255,0.05)` under every list row
+/// (Overview activity, Plugins, Context, Doctor checks, compat rows).
+/// Returns the y position immediately after the divider.
+pub(crate) fn render_divided_row(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    y: u16,
+    line: Line<'_>,
+) -> u16 {
+    if y >= area.y + area.height {
+        return y;
+    }
+    frame.render_widget(Paragraph::new(line), Rect::new(area.x, y, area.width, 1));
+    let divider_y = y + 1;
+    if divider_y < area.y + area.height {
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                "─".repeat(area.width as usize),
+                Style::default().fg(BORDER_FAINT),
+            )),
+            Rect::new(area.x, divider_y, area.width, 1),
+        );
+    }
+    divider_y + 1
+}
+
+pub(crate) fn health_style(health: &str) -> Style {
     match health {
         "ready" => Style::default().fg(SUCCESS),
         "missing" | "unknown" => Style::default().fg(WARNING),
@@ -739,6 +786,7 @@ mod tests {
             harnesses: vec![
                 HarnessHealth {
                     integration: "claude".to_owned(),
+                    display_name: "claude".to_owned(),
                     detection: HarnessDetection {
                         present: true,
                         version: Some("1.0.0".to_owned()),
@@ -752,6 +800,7 @@ mod tests {
                 },
                 HarnessHealth {
                     integration: "codex".to_owned(),
+                    display_name: "codex".to_owned(),
                     detection: HarnessDetection::default(),
                     setup: "not configured".to_owned(),
                     strategy: None,
@@ -964,7 +1013,11 @@ mod tests {
     }
 
     #[test]
-    fn mouse_click_on_plugin_row_selects_and_inspects() {
+    fn mouse_click_on_plugin_row_only_selects_no_fetch() {
+        // Clicking a row must behave like arrow-key navigation — select
+        // only, no async inspect fetch (and the "Inspecting…" status flash
+        // that comes with it) on every single click. Enter still fetches
+        // explicitly — see `content_navigation_and_inspect_intent`.
         let mut model = model_with_plugins(&["one", "two"]);
         model.hits = vec![
             (Rect::new(0, 0, 20, 1), Hit::PluginRow(0)),
@@ -977,7 +1030,7 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
         assert_eq!(model.plugins_selected, 1);
-        assert_eq!(intent, Intent::InspectPlugin("two".to_owned()));
+        assert_eq!(intent, Intent::None);
     }
 
     #[test]
@@ -1059,7 +1112,17 @@ mod tests {
             KeyCode::Char('k'),
         ] {
             let intent = model.apply_key(KeyEvent::new(key, KeyModifiers::NONE));
-            assert_eq!(intent, Intent::None);
+            // Marketplace navigation may dispatch a read-only inspect fetch
+            // (keeps the drawer's RESOURCES section populated as selection
+            // moves) — that's not a mutation, so only reject the intents
+            // that actually write something.
+            assert!(
+                matches!(
+                    intent,
+                    Intent::None | Intent::InspectMarketplacePlugin { .. }
+                ),
+                "navigation must never produce a mutating intent, got {intent:?}"
+            );
         }
     }
 

@@ -10,6 +10,7 @@ use crate::{
     harness_runtime::{HarnessRuntimeContribution, RuntimeContext},
     home::UzeHome,
     project::EffectiveEnvironment,
+    provisioning::ProvisionStatus,
     router::{HarnessCapabilities, RouteDecision, route},
     runtime::RuntimeSupport,
     state,
@@ -128,6 +129,16 @@ pub enum PublicationStatus {
 
 pub trait IntegrationPort {
     fn id(&self) -> &'static str;
+
+    /// The name a person recognizes — shown anywhere a harness is displayed
+    /// to a human (`uze doctor`, the TUI). Defaults to `id()`; an
+    /// integration overrides this when its stable id carries a disambiguator
+    /// (`id()` and state/receipts must stay keyed on that id regardless —
+    /// this is display-only and never used for lookup or matching).
+    fn display_name(&self) -> &'static str {
+        self.id()
+    }
+
     fn capabilities(&self) -> HarnessCapabilities;
 
     fn runtime_support(&self) -> RuntimeSupport {
@@ -284,12 +295,30 @@ pub trait IntegrationPort {
         Ok(())
     }
 
-    /// Current installed/managed status, for `uze doctor`. The default
-    /// reads whatever `install` recorded through the shared `state` module.
+    /// Current installed/managed status, for `uze doctor`. The default reads
+    /// whatever `install` recorded through the shared `state` module for
+    /// "configured at all", then upgrades that to `InstalledVerified` when
+    /// the most recent `uze setup` provisioning attempt actually confirmed
+    /// the binary works (`ProvisionStatus::Verified`, recorded separately by
+    /// `provision_and_prepare` via `state::record_provisioning`) — without
+    /// this, a harness whose setup was genuinely verified would read back as
+    /// merely "unverified" forever, since `install`'s own record tracks
+    /// nothing beyond a bare installed flag.
     fn status(&self, home: &UzeHome) -> IntegrationStatus {
-        match state::get(home, self.id()).ok().flatten() {
-            Some(record) if record.installed => IntegrationStatus::InstalledUnverified,
-            _ => IntegrationStatus::NotConfigured,
+        let Some(record) = state::get(home, self.id()).ok().flatten() else {
+            return IntegrationStatus::NotConfigured;
+        };
+        if !record.installed {
+            return IntegrationStatus::NotConfigured;
+        }
+        let verified = state::provisioning(home, self.id())
+            .ok()
+            .flatten()
+            .is_some_and(|provisioning| provisioning.status == ProvisionStatus::Verified);
+        if verified {
+            IntegrationStatus::InstalledVerified
+        } else {
+            IntegrationStatus::InstalledUnverified
         }
     }
 

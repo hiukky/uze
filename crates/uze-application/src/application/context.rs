@@ -79,6 +79,7 @@ impl UzeApplication {
             if !self.detect_cached(integration.as_ref()).present {
                 harnesses.push(HarnessContextStatus {
                     integration: id.to_owned(),
+                    display_name: integration.display_name().to_owned(),
                     delivery: HarnessContextDelivery::NotDetected,
                 });
                 continue;
@@ -86,6 +87,7 @@ impl UzeApplication {
             if is_native {
                 harnesses.push(HarnessContextStatus {
                     integration: id.to_owned(),
+                    display_name: integration.display_name().to_owned(),
                     delivery: HarnessContextDelivery::Native,
                 });
                 continue;
@@ -99,6 +101,7 @@ impl UzeApplication {
             .state;
             harnesses.push(HarnessContextStatus {
                 integration: id.to_owned(),
+                display_name: integration.display_name().to_owned(),
                 delivery: HarnessContextDelivery::Bridge {
                     needed: observation.has_any_matched_contribution(),
                     state,

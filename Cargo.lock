@@ -2002,7 +2002,7 @@ dependencies = [
 
 [[package]]
 name = "uze"
-version = "0.0.0-alpha.9"
+version = "0.0.0-alpha.10"
 dependencies = [
  "clap",
  "crossterm",
@@ -2021,7 +2021,7 @@ dependencies = [
 
 [[package]]
 name = "uze-application"
-version = "0.0.0-alpha.9"
+version = "0.0.0-alpha.10"
 dependencies = [
  "serde",
  "serde_json",
@@ -2031,7 +2031,7 @@ dependencies = [
 
 [[package]]
 name = "uze-conformance"
-version = "0.0.0-alpha.9"
+version = "0.0.0-alpha.10"
 dependencies = [
  "serde",
  "serde_json",
@@ -2039,7 +2039,7 @@ dependencies = [
 
 [[package]]
 name = "uze-core"
-version = "0.0.0-alpha.9"
+version = "0.0.0-alpha.10"
 dependencies = [
  "noyalib",
  "serde",
@@ -2049,7 +2049,7 @@ dependencies = [
 
 [[package]]
 name = "uze-integrations"
-version = "0.0.0-alpha.9"
+version = "0.0.0-alpha.10"
 dependencies = [
  "serde_json",
  "uze-core",

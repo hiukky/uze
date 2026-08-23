@@ -40,6 +40,7 @@ impl UzeApplication {
             .iter()
             .map(|integration| HarnessHealth {
                 integration: integration.id().to_owned(),
+                display_name: integration.display_name().to_owned(),
                 detection: self.detect_cached(integration.as_ref()),
                 setup: integration_status(integration.status(&self.home)),
                 strategy: state::get(&self.home, integration.id())

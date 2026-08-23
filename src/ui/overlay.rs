@@ -5,12 +5,12 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Padding, Paragraph},
+    widgets::{Block, Borders, Clear, Padding, Paragraph},
 };
 
 use super::model::{Focus, Overlay, TrustedRetry, TuiModel};
 use super::worker::{Intent, TrustGrant};
-use super::{ACCENT, DANGER, MUTED, SURFACE_RAISED, WARNING};
+use super::{ACCENT, BASE, BORDER, DANGER, MUTED, TEXT_BRIGHT, WARNING};
 
 impl TuiModel {
     pub(crate) fn overlay_key(&mut self, key: KeyEvent) -> Intent {
@@ -186,17 +186,19 @@ pub(crate) fn render_confirm_remove(
         height,
     );
 
+    frame.render_widget(Clear, popup);
+
     let cancel_style = if focus == 0 {
         Style::default()
             .fg(Color::Black)
-            .bg(Color::White)
+            .bg(TEXT_BRIGHT)
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(MUTED)
     };
     let remove_style = if focus == 1 {
         Style::default()
-            .fg(Color::White)
+            .fg(TEXT_BRIGHT)
             .bg(DANGER)
             .add_modifier(Modifier::BOLD)
     } else {
@@ -268,6 +270,7 @@ pub(crate) fn render_protected_plugin(frame: &mut ratatui::Frame<'_>, area: Rect
         width,
         height,
     );
+    frame.render_widget(Clear, popup);
     let lines = vec![
         Line::from(vec![
             Span::styled(
@@ -360,6 +363,7 @@ pub(crate) fn render_add_marketplace(frame: &mut ratatui::Frame<'_>, area: Rect,
         width,
         height,
     );
+    frame.render_widget(Clear, popup);
     let block = modal_block(" Add marketplace ", ACCENT);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
@@ -457,6 +461,7 @@ fn render_modal(
         width,
         height,
     );
+    frame.render_widget(Clear, popup);
     frame.render_widget(
         Paragraph::new(lines)
             .block(modal_block(format!(" {title} "), color))
@@ -465,13 +470,18 @@ fn render_modal(
     );
 }
 
-/// The modal dialog surface: a raised slab (no border, no `Clear` needed —
-/// its own background paints the whole popup rect opaque) with a colored
-/// bold title on its first line.
+/// The modal dialog surface: `BASE`-colored (so it reads as "still part of
+/// this app", not a different layer) with a thin hairline border — the
+/// only place in the whole UI a content box gets a full border, since a
+/// dialog genuinely needs to visually separate from whatever is behind it.
+/// Callers must render `Clear` over `popup` first so leftover content
+/// underneath can't bleed through.
 fn modal_block(title: impl Into<Line<'static>>, color: Color) -> Block<'static> {
     Block::default()
         .title(title)
         .title_style(Style::default().fg(color).add_modifier(Modifier::BOLD))
-        .style(Style::default().bg(SURFACE_RAISED))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(BORDER))
+        .style(Style::default().bg(BASE))
         .padding(Padding::new(1, 1, 1, 0))
 }
