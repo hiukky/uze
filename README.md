@@ -46,7 +46,7 @@ Claude Codex OpenCode Gemini
 
 | Harness | Plugin delivery | Skills | MCP | Context | Runtime |
 |---|---|---|---|---|---|
-| Claude Code | Adapted | ✅ | ✅ | Bridged | ◌ Experimental |
+| Claude Code | Native plugin | ✅ | ✅ | Bridged | ◌ Experimental |
 | Codex | Native plugin | ✅ | ✅ | Native | — |
 | OpenCode | Native capabilities | ✅ | ✅ | Native | — |
 | Gemini CLI | Native extension | ✅ | ✅ | Bridged | — |

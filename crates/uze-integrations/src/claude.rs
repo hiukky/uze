@@ -224,11 +224,11 @@ impl IntegrationPort for ClaudeIntegration {
 
     fn capabilities(&self) -> HarnessCapabilities {
         HarnessCapabilities {
-            adaptable: [CapabilityKind::AgentSkill, CapabilityKind::Mcp]
+            native: [CapabilityKind::AgentSkill, CapabilityKind::Mcp]
                 .into_iter()
                 .collect(),
             verification: VerificationStatus::Unverified,
-            evidence: "Claude Code auto-loads a skills-dir plugin from <claude_home>/skills/<name>/. A symlinked entry there was empirically confirmed loaded via `claude plugin validate`/`plugin list`. `claude mcp add --scope user` registers an MCP server globally, documented and confirmed non-interactive. Behavioral (prompted) verification for either remains a separate opt-in conformance probe."
+            evidence: "Claude Code consumes UZE's derived marketplaces: a package shipping .claude-plugin/plugin.json is installed as a native plugin covering its declared skills/mcpServers (`claude plugin install <sel>@uze-local`, empirically confirmed via `claude plugin validate`/`plugin list`); one without gets a deterministically synthesized envelope published through the generated-only `uze-local-generated` marketplace (ADR-020). Capability-level shims (`<claude_home>/skills` reference, `claude mcp add`) remain only as fallback for resources outside the envelope's coverage. Behavioral (prompted) verification remains a separate opt-in conformance probe."
                 .to_owned(),
             ..HarnessCapabilities::default()
         }

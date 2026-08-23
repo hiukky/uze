@@ -188,9 +188,11 @@ impl IntegrationPort for GeminiIntegration {
 
     fn capabilities(&self) -> HarnessCapabilities {
         HarnessCapabilities {
-            direct_standard: [CapabilityKind::AgentSkill].into_iter().collect(),
-            adaptable: [CapabilityKind::Mcp].into_iter().collect(),
-            evidence: "Gemini CLI reads Agent Skills from the shared `~/.agents/skills` root directly, and accepts stdio MCP servers through its own `gemini mcp add --scope user`."
+            native: [CapabilityKind::AgentSkill, CapabilityKind::Mcp]
+                .into_iter()
+                .collect(),
+            verification: VerificationStatus::Unverified,
+            evidence: "Gemini CLI consumes UZE's linked extensions: a package shipping gemini-extension.json is linked straight from the Store via `gemini extensions link`; one without gets a deterministically synthesized extension linked from a UZE-owned derived directory (ADR-021) — both deliver the extension's conventional skills/ and declared mcpServers natively (confirmed against real Gemini CLI 0.56.0 dogfood). Capability-level fallback (`gemini mcp add --scope user`) remains only for resources outside the extension's coverage."
                 .to_owned(),
             ..HarnessCapabilities::default()
         }

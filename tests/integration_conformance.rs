@@ -186,7 +186,10 @@ fn assert_basic_identity_contract(integration: &dyn IntegrationPort) {
     );
     let capabilities = integration.capabilities();
     assert!(
-        !capabilities.direct_standard.is_empty() || !capabilities.adaptable.is_empty(),
+        !(capabilities.direct_standard.is_empty()
+            && capabilities.native.is_empty()
+            && capabilities.adaptable.is_empty()
+            && capabilities.degraded.is_empty()),
         "{}: capabilities() must declare at least one representable capability kind",
         integration.id()
     );
@@ -197,6 +200,52 @@ fn assert_basic_identity_contract(integration: &dyn IntegrationPort) {
     );
 }
 
+/// Claude, Codex, and Gemini deliver Skills and MCP as their own native
+/// package/extension — explicit or generated envelope, ADR-013 §2 / ADR-020
+/// / ADR-021 — so both kinds must be declared `native`, never `adaptable`.
+/// The capability-level shims (skills-dir reference, `mcp add`) are the
+/// fallback for resources outside the envelope's coverage, not the primary
+/// route; declaring them primary is exactly the "UI says Adapted while
+/// delivery is Native" drift this assertion exists to catch.
+fn assert_native_skill_and_mcp(integration: &dyn IntegrationPort) {
+    let capabilities = integration.capabilities();
+    for kind in [CapabilityKind::AgentSkill, CapabilityKind::Mcp] {
+        assert!(
+            capabilities.native.contains(&kind),
+            "{}: {kind:?} must be declared native (package/extension delivery)",
+            integration.id()
+        );
+        assert!(
+            !capabilities.adaptable.contains(&kind),
+            "{}: {kind:?} must not be declared adaptable — capability-level shims are the \
+             fallback, not the primary route",
+            integration.id()
+        );
+    }
+}
+
+/// OpenCode has no package-level native concept (deliberate, ADR-020's
+/// non-goal, unchanged by ADR-021): Skills are consumed natively from the
+/// shared `~/.agents/skills` discovery root (direct standard), MCP is
+/// adapted through the managed `opencode.json` `mcp` config.
+fn assert_opencode_native_skill_adapted_mcp(integration: &dyn IntegrationPort) {
+    let capabilities = integration.capabilities();
+    assert!(
+        capabilities
+            .direct_standard
+            .contains(&CapabilityKind::AgentSkill),
+        "opencode: AgentSkill must be declared direct_standard (native shared-root discovery)"
+    );
+    assert!(
+        capabilities.adaptable.contains(&CapabilityKind::Mcp),
+        "opencode: MCP must be declared adaptable (managed opencode.json config)"
+    );
+    assert!(
+        capabilities.native.is_empty(),
+        "opencode: no capability kind may be declared native (no package-level concept exists)"
+    );
+}
+
 #[test]
 fn claude_reports_stable_identity_and_capabilities() {
     let root = temp("identity-claude");
@@ -204,6 +253,7 @@ fn claude_reports_stable_identity_and_capabilities() {
     let integration = ClaudeIntegration::new(root.join("claude"), home.clone());
     mark_setup(&home, &integration);
     assert_basic_identity_contract(&integration);
+    assert_native_skill_and_mcp(&integration);
     let _ = fs::remove_dir_all(root);
 }
 
@@ -214,6 +264,7 @@ fn codex_reports_stable_identity_and_capabilities() {
     let integration = CodexIntegration::new(root.join("agents"), home.clone());
     mark_setup(&home, &integration);
     assert_basic_identity_contract(&integration);
+    assert_native_skill_and_mcp(&integration);
     let _ = fs::remove_dir_all(root);
 }
 
@@ -224,6 +275,7 @@ fn gemini_reports_stable_identity_and_capabilities() {
     let integration = GeminiIntegration::new(root.join("agents"), home.clone());
     mark_setup(&home, &integration);
     assert_basic_identity_contract(&integration);
+    assert_native_skill_and_mcp(&integration);
     let _ = fs::remove_dir_all(root);
 }
 
@@ -236,6 +288,7 @@ fn opencode_reports_stable_identity_and_capabilities() {
         UzeHome::at(root.join("uze")),
     );
     assert_basic_identity_contract(&integration);
+    assert_opencode_native_skill_adapted_mcp(&integration);
     let _ = fs::remove_dir_all(root);
 }
 

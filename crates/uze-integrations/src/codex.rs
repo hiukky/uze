@@ -206,11 +206,11 @@ impl IntegrationPort for CodexIntegration {
 
     fn capabilities(&self) -> HarnessCapabilities {
         HarnessCapabilities {
-            adaptable: [CapabilityKind::AgentSkill, CapabilityKind::Mcp]
+            native: [CapabilityKind::AgentSkill, CapabilityKind::Mcp]
                 .into_iter()
                 .collect(),
             verification: VerificationStatus::Unverified,
-            evidence: "Codex documents a cwd-independent USER-scope Agent Skill directory (<agents_home>/skills) that follows symlinks; UZE places a managed reference there once setup completes. `codex mcp add` registers an MCP server globally (no --scope flag exists; global is the only destination), confirmed non-interactive and format-preserving."
+            evidence: "Codex consumes UZE's derived marketplaces: a package shipping .codex-plugin/plugin.json is added as a native plugin covering its declared skills/mcpServers (`codex plugin add <sel>@uze-local`); one without gets a deterministically synthesized envelope published through the generated-only `uze-local-generated` marketplace (ADR-021) — both confirmed against real Codex 0.148.0 dogfood (`codex plugin list --json`). Capability-level fallbacks (USER-scope `~/.agents/skills` reference, `codex mcp add`) remain only for resources outside the envelope's coverage."
                 .to_owned(),
             ..HarnessCapabilities::default()
         }
