@@ -1,0 +1,13 @@
+version: 1
+marketplaces:
+  ghost:
+    source:
+      type: path
+      path: /nonexistent/ghost-market
+plugins:
+  ghost:
+    source:
+      type: marketplace
+      marketplace: ghost
+      plugin: ghost
+    resolved: {}

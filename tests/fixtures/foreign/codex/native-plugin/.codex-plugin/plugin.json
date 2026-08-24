@@ -1,0 +1,7 @@
+{
+  "name": "uze-plugin-first-conformance",
+  "version": "1.0.0",
+  "description": "Codex-native envelope for the UZE plugin-first conformance slice",
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json"
+}

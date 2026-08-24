@@ -1,0 +1,6 @@
+{
+  "name": "claude-native-fixture",
+  "version": "1.0.0",
+  "description": "Vendor-native Claude envelope fixture",
+  "skills": "./skills/"
+}

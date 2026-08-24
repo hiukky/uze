@@ -17,6 +17,7 @@ members = [
   "crates/uze-core",
   "crates/uze-integrations",
   "crates/uze-application",
+  "crates/uze-test-support",
   "e2e",
 ]
 default-members = ["."]
@@ -44,6 +45,11 @@ indicatif = "0.17"
 rmcp = { version = "3", features = ["server", "transport-io", "macros"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std"] }
 schemars = "1"
+
+[dev-dependencies]
+# Shared test infrastructure (TestEnvironment, FakeHarness, fixtures,
+# scenario builder) — see crates/uze-test-support and tests/README.md.
+uze-test-support = { path = "crates/uze-test-support" }
 
 [[bin]]
 name = "uze-mcp-conformance-fixture"

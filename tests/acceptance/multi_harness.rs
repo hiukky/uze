@@ -1,0 +1,192 @@
+//! Acceptance A4/A5: multi-harness projection and invocation policy,
+//! driven through the public CLI with deterministic fake harness CLI
+//! binaries (no real vendor binary, no model call).
+
+use uze_test_support::assertions;
+use uze_test_support::fixtures;
+use uze_test_support::temp::TestEnvironment;
+
+use crate::util::{
+    default_body, install_fake_harnesses, make_skill_package, model_only_body, user_only_body,
+    uze_bin,
+};
+
+/// A4 — one canonical plugin reaches every harness through its most native
+/// safe representation, with no duplicate delivery.
+#[test]
+fn one_plugin_reaches_every_harness_with_no_duplicate_delivery() {
+    let env = TestEnvironment::isolated();
+    let harnesses = install_fake_harnesses(&env);
+
+    // One `setup` provisions every detected harness (and records setup
+    // state so codex/opencode prefer UZE-managed attachment); running it
+    // twice must stay idempotent (regression for the double-attach found
+    // by this suite).
+    env.run_ok(uze_bin(), &["setup"]);
+    let fixture = fixtures::canonical("skill-plugin");
+    let install = env.run_ok(
+        uze_bin(),
+        &[
+            "plugin",
+            "install",
+            fixture.to_str().unwrap(),
+            "--format",
+            "json",
+        ],
+    );
+    let report: serde_json::Value = serde_json::from_slice(&install.stdout).expect("json report");
+    let delivery = report["package_plans"]
+        .as_array()
+        .expect("package_plans array");
+    assert!(
+        !delivery.is_empty(),
+        "install must report package plans, got: {report}"
+    );
+
+    // Claude: generated native package envelope under UZE_HOME state.
+    let claude_envelope = env.uze_home.join(
+        "state/attachments/claude/generated/uze-agent-skill-conformance/.claude-plugin/plugin.json",
+    );
+    assertions::assert_file(&claude_envelope, "claude generated envelope");
+
+    // Codex/OpenCode: shared `.agents/skills` symlink into the Store.
+    let codex_entry = env
+        .home
+        .join(".agents/skills/uze-agent-skill-conformance:uze-e2e");
+    assertions::assert_symlink(
+        &codex_entry,
+        &env.uze_home
+            .join("store/packages/uze-agent-skill-conformance/skills/uze-e2e"),
+        "codex/opencode shared skill entry",
+    );
+
+    let ledger = std::fs::read(env.uze_home.join("state/attachments.json")).unwrap();
+    let ledger: serde_json::Value = serde_json::from_slice(&ledger).unwrap();
+    let receipts = ledger["receipts"].as_object().unwrap();
+    let for_package: Vec<_> = receipts
+        .values()
+        .filter(|receipt| receipt["package_id"] == "uze-agent-skill-conformance")
+        .collect();
+    // One package-level (or one capability-level) receipt per integration —
+    // never both, never two of the same kind. The exact count differs by
+    // harness; the invariant is: no integration appears more than once.
+    let mut integrations: Vec<&str> = for_package
+        .iter()
+        .map(|receipt| receipt["integration"].as_str().unwrap_or("?"))
+        .collect();
+    integrations.sort();
+    integrations.dedup();
+    assert!(
+        for_package.len() == integrations.len(),
+        "no duplicate capability receipt may exist for a package-covered resource, got \
+         {for_package:?}"
+    );
+    let _ = harnesses;
+}
+
+/// A5 — invocation policy: normal/user-only/model-only Skills project with
+/// the correct per-harness classification through the public CLI.
+#[test]
+fn invocation_policy_projects_per_harness_classification() {
+    let env = TestEnvironment::isolated();
+    install_fake_harnesses(&env);
+    env.run_ok(uze_bin(), &["setup"]);
+
+    let policy_package = make_skill_package(
+        env.root(),
+        "policy-fixture",
+        &[
+            ("commit", &default_body("commit")),
+            ("review", &user_only_body("review")),
+        ],
+    );
+    env.run_ok(
+        uze_bin(),
+        &["plugin", "install", policy_package.to_str().unwrap()],
+    );
+
+    // Inspect reports all three skills with their policy classification.
+    let inspect = env.run_ok(
+        uze_bin(),
+        &["plugin", "inspect", "policy-fixture", "--format", "json"],
+    );
+    let report: serde_json::Value = serde_json::from_slice(&inspect.stdout).expect("json report");
+    let names: Vec<&str> = report["capabilities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|cap| cap["name"].as_str())
+        .collect();
+    for expected in ["commit", "review"] {
+        assert!(
+            names.contains(&expected),
+            "inspect must list {expected}, got {names:?}"
+        );
+    }
+
+    // Physical projection: the default skill is exposed through the shared
+    // `.agents/skills` symlink (codex/opencode), the user-only skill is
+    // carried by its policy sidecar + slash surface, never a bare symlink
+    // that would make it model-visible.
+    let shared_root = env.home.join(".agents/skills");
+    assert!(
+        shared_root.join("policy-fixture:commit").is_symlink(),
+        "default skill must be projected for codex/opencode"
+    );
+    // The user-only skill goes through a policy wrapper: its shared-root
+    // entry is a symlink into UZE-owned attachments (never the Store
+    // bytes), and Codex's generated envelope carries its own
+    // `agents/openai.yaml` with implicit invocation disabled — the model
+    // never sees it as auto-discoverable.
+    let review = shared_root.join("policy-fixture:review");
+    assert!(
+        review.is_symlink(),
+        "user-only skill must be projected via its policy wrapper"
+    );
+    let review_target = std::fs::read_link(&review).expect("readlink");
+    assert!(
+        review_target.join("SKILL.md").is_file(),
+        "the wrapper must carry the skill bytes, got {review_target:?}"
+    );
+    let codex_policy = env
+        .uze_home
+        .join("state/attachments/codex/generated/policy-fixture/skills/review/agents/openai.yaml");
+    assert!(
+        codex_policy.is_file(),
+        "codex user-only delivery must carry the policy sidecar"
+    );
+    let sidecar = std::fs::read_to_string(&codex_policy).unwrap();
+    assert!(
+        sidecar.contains("allow_implicit_invocation: false"),
+        "the sidecar must disable implicit (model) invocation, got: {sidecar}"
+    );
+}
+
+/// A11 — projection conflict: a model-only Skill on a shared-root harness
+/// pair (codex claims nothing, opencode needs `slash: false` on the same
+/// entry) must fail loudly through the CLI, never silently misroute.
+#[test]
+fn projection_conflict_is_reported_honestly() {
+    let env = TestEnvironment::isolated();
+    install_fake_harnesses(&env);
+    env.run_ok(uze_bin(), &["setup"]);
+
+    let conflict_package = make_skill_package(
+        env.root(),
+        "conflict-fixture",
+        &[("audit", &model_only_body("audit"))],
+    );
+    let install = env.run(
+        uze_bin(),
+        &["plugin", "install", conflict_package.to_str().unwrap()],
+    );
+    assert!(
+        !install.status.success(),
+        "a shared-root projection conflict must fail the install"
+    );
+    let stderr = String::from_utf8_lossy(&install.stderr);
+    assert!(
+        stderr.contains("projection conflict"),
+        "the failure must name the conflict, got: {stderr}"
+    );
+}

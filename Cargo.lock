@@ -2017,6 +2017,7 @@ dependencies = [
  "uze-application",
  "uze-core",
  "uze-integrations",
+ "uze-test-support",
 ]
 
 [[package]]
@@ -2054,6 +2055,10 @@ dependencies = [
  "serde_json",
  "uze-core",
 ]
+
+[[package]]
+name = "uze-test-support"
+version = "0.0.0-alpha.14"
 
 [[package]]
 name = "version_check"

@@ -75,10 +75,12 @@ need to).
 - `e2e` — conformance fixtures and a real-binary test harness
   (`e2e/src/harness.rs`, `tier.rs`) for exercising uze against actual
   vendor CLIs, not just isolated unit state.
-- `tests/` — vendor-neutral, cross-crate invariant tests (run as
-  `cargo test`'s top-level integration tests, one file per concern —
-  `package_containment.rs`, `vendor_neutral_core.rs`,
-  `runtime_shim_boundary.rs`, `invocation_labels.rs`, etc.).
+- `tests/` — domain-organized integration suites (one `main.rs` per
+  domain: `cli/`, `memory/`, `packages/`, `workspace/`, `lifecycle/`,
+  `projection/`, `integrations/`, `acceptance/`), shared test
+  infrastructure in `crates/uze-test-support` (isolated `TestEnvironment`,
+  `FakeHarness`, canonical/scenario fixtures), and the taxonomy documented
+  in `tests/README.md` (L0-L4).
 - `playground/` — WSL/distro install helpers (`make install-wsl-lab`) and a
   default local plugin used for manual dogfooding.
 - `docs/adr/` — numbered architecture decision records (read before making

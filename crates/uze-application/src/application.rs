@@ -1631,12 +1631,12 @@ mod tests {
 
     pub(crate) fn fixture() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../tests/fixtures/packages/agent-plugin-skill")
+            .join("../../tests/fixtures/canonical/skill-plugin")
     }
 
     pub(crate) fn multi_mcp_fixture() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../tests/fixtures/packages/multi-mcp-plugin")
+            .join("../../tests/fixtures/canonical/multi-mcp-plugin")
     }
 
     #[test]
@@ -1882,8 +1882,7 @@ mod tests {
     }
 
     pub(crate) fn mcp_fixture() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../tests/fixtures/packages/agent-plugin-mcp")
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/canonical/mcp-plugin")
     }
 
     // --- Marketplace bootstrap: install-only, never silent-update --------

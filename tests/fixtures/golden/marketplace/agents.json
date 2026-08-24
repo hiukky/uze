@@ -1,0 +1,11 @@
+{
+  "name": "golden",
+  "description": "The canonical UZE marketplace used by the golden acceptance environment.",
+  "plugins": [
+    {
+      "name": "flow",
+      "source": "./plugins/flow",
+      "description": "Canonical skill plugin (commit review flow)."
+    }
+  ]
+}

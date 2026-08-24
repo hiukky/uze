@@ -1,7 +1,0 @@
-{
-  "mcpServers": {
-    "example": {
-      "command": "example-mcp-server"
-    }
-  }
-}

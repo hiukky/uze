@@ -40,58 +40,79 @@ impl UzeApplication {
         let resources: Vec<_> = environment.resources.iter().collect();
         let mut provided = BTreeSet::new();
         if let Some(plan) = integration.package_exposure_plan(package, &resources) {
-            // Migration: decomposed → native. Detach covered capability receipts
-            // that are now provided by the package, but only if they are
-            // safely detachable. Any Drifted/Conflict/Blocked blocks migration
-            // and also blocks duplicate native attach to avoid duplication.
-            let existing: Vec<(String, uze_core::integration::AttachmentReceipt)> =
-                state::receipts(&self.home, Some(package.id.as_str()))?
-                    .into_iter()
-                    .filter(|(_, r)| {
-                        r.integration == integration.id() && r.resource_identity.is_some()
-                    })
-                    .collect();
-            let mut covered_existing = Vec::new();
-            for (key, receipt) in &existing {
-                if let Some(identity) = &receipt.resource_identity
-                    && plan.provided_resource_identities.contains(identity)
-                {
-                    covered_existing.push((key.clone(), receipt.clone()));
-                }
-            }
-            let mut migration_blocked = false;
-            for (_, receipt) in &covered_existing {
-                let inspection = integration.inspect_receipt(receipt);
-                if matches!(
-                    inspection.state,
-                    AttachmentState::Drifted | AttachmentState::Conflict | AttachmentState::Blocked
-                ) {
-                    migration_blocked = true;
-                    break;
-                }
-            }
-            if migration_blocked {
-                // Keep decomposed delivery; do not attach native to avoid duplication.
-                provided = BTreeSet::new();
+            // Idempotency guard: a package-level receipt already recorded
+            // for this integration that still inspects Matched means the
+            // vendor install verb already ran. Re-running it is not safely
+            // idempotent — Antigravity's preflight refuses an existing
+            // same-name import UZE has to prove it owns again, and a
+            // truthful `agy plugin list` would turn every second
+            // `setup`/attach into a hard failure (found by the acceptance
+            // suite with a truthful fake CLI).
+            let already_attached = state::receipts(&self.home, Some(package.id.as_str()))?
+                .into_iter()
+                .any(|(_, receipt)| {
+                    receipt.integration == integration.id()
+                        && receipt.resource_identity.is_none()
+                        && integration.inspect_receipt(&receipt).state == AttachmentState::Matched
+                });
+            if already_attached {
+                provided = plan.provided_resource_identities.clone();
             } else {
-                for (key, receipt) in covered_existing {
-                    let inspection = integration.inspect_receipt(&receipt);
-                    if inspection.state == AttachmentState::Matched {
-                        let detached = integration.detach_receipt(&receipt)?;
-                        if detached.state == AttachmentState::Missing {
-                            state::forget_receipt(&self.home, &key)?;
-                        }
-                    } else if inspection.state == AttachmentState::Missing {
-                        state::forget_receipt(&self.home, &key)?;
+                // Migration: decomposed → native. Detach covered capability receipts
+                // that are now provided by the package, but only if they are
+                // safely detachable. Any Drifted/Conflict/Blocked blocks migration
+                // and also blocks duplicate native attach to avoid duplication.
+                let existing: Vec<(String, uze_core::integration::AttachmentReceipt)> =
+                    state::receipts(&self.home, Some(package.id.as_str()))?
+                        .into_iter()
+                        .filter(|(_, r)| {
+                            r.integration == integration.id() && r.resource_identity.is_some()
+                        })
+                        .collect();
+                let mut covered_existing = Vec::new();
+                for (key, receipt) in &existing {
+                    if let Some(identity) = &receipt.resource_identity
+                        && plan.provided_resource_identities.contains(identity)
+                    {
+                        covered_existing.push((key.clone(), receipt.clone()));
                     }
                 }
-                if let Some(receipt) = integration.attach_package(package, &plan)? {
-                    state::record_receipt(
-                        &self.home,
-                        package_receipt_key(package.id.as_str(), integration.id()),
-                        receipt,
-                    )?;
-                    provided = plan.provided_resource_identities;
+                let mut migration_blocked = false;
+                for (_, receipt) in &covered_existing {
+                    let inspection = integration.inspect_receipt(receipt);
+                    if matches!(
+                        inspection.state,
+                        AttachmentState::Drifted
+                            | AttachmentState::Conflict
+                            | AttachmentState::Blocked
+                    ) {
+                        migration_blocked = true;
+                        break;
+                    }
+                }
+                if migration_blocked {
+                    // Keep decomposed delivery; do not attach native to avoid duplication.
+                    provided = BTreeSet::new();
+                } else {
+                    for (key, receipt) in covered_existing {
+                        let inspection = integration.inspect_receipt(&receipt);
+                        if inspection.state == AttachmentState::Matched {
+                            let detached = integration.detach_receipt(&receipt)?;
+                            if detached.state == AttachmentState::Missing {
+                                state::forget_receipt(&self.home, &key)?;
+                            }
+                        } else if inspection.state == AttachmentState::Missing {
+                            state::forget_receipt(&self.home, &key)?;
+                        }
+                    }
+                    if let Some(receipt) = integration.attach_package(package, &plan)? {
+                        state::record_receipt(
+                            &self.home,
+                            package_receipt_key(package.id.as_str(), integration.id()),
+                            receipt,
+                        )?;
+                        provided = plan.provided_resource_identities;
+                    }
                 }
             }
         }
