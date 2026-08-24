@@ -376,7 +376,7 @@ fn run(cli: Cli) -> Result<()> {
                     }
                 }
                 Err(e) => {
-                    spinner.finish_with_message("Failed");
+                    spinner.finish_and_clear();
                     progress::error(&format!("Failed to install environment: {e}"));
                     return Err(e);
                 }
@@ -391,14 +391,14 @@ fn run(cli: Cli) -> Result<()> {
             let report = match app.remove_project_plugin(&plugin, &current_dir) {
                 Ok(report) => report,
                 Err(e) => {
-                    spinner.finish_with_message("Failed");
+                    spinner.finish_and_clear();
                     progress::error(&format!("Failed to remove {plugin}: {e}"));
                     return Err(e);
                 }
             };
             match report {
                 RemoveProjectPluginReport::Removed { .. } => {
-                    spinner.finish_with_message("Removed from project");
+                    spinner.finish_and_clear();
                     match format {
                         OutputFormat::Text => {
                             progress::success(&format!("Removed {plugin} from project"));
@@ -414,11 +414,11 @@ fn run(cli: Cli) -> Result<()> {
                 // PluginNotUsedByProject}` through the same `uze: {error}`
                 // path every other failure in this program uses.
                 RemoveProjectPluginReport::NoLock => {
-                    spinner.finish_with_message("Failed");
+                    spinner.finish_and_clear();
                     return Err(uze::UzeError::NoProjectEnvironment { plugin });
                 }
                 RemoveProjectPluginReport::NotInLock { .. } => {
-                    spinner.finish_with_message("Failed");
+                    spinner.finish_and_clear();
                     return Err(uze::UzeError::PluginNotUsedByProject { plugin });
                 }
             }
@@ -458,15 +458,15 @@ fn run(cli: Cli) -> Result<()> {
                 let spinner = progress::spinner("Adding marketplace...");
                 match app.marketplace_add(&source) {
                     Ok(true) => {
-                        spinner.finish_with_message("Marketplace added");
+                        spinner.finish_and_clear();
                         progress::success(&format!("Added marketplace from {source}"));
                     }
                     Ok(false) => {
-                        spinner.finish_with_message("Already added");
+                        spinner.finish_and_clear();
                         progress::success(&format!("Marketplace from {source} is already added"));
                     }
                     Err(e) => {
-                        spinner.finish_with_message("Failed");
+                        spinner.finish_and_clear();
                         progress::error(&format!("Failed to add marketplace: {e}"));
                         return Err(e);
                     }
@@ -511,7 +511,7 @@ fn run(cli: Cli) -> Result<()> {
                 };
                 match installed {
                     Ok(report) => {
-                        spinner.finish_with_message("Plugin installed");
+                        spinner.finish_and_clear();
                         match format {
                             OutputFormat::Text => {
                                 progress::success(&format!(
@@ -533,7 +533,7 @@ fn run(cli: Cli) -> Result<()> {
                         }
                     }
                     Err(e) => {
-                        spinner.finish_with_message("Failed");
+                        spinner.finish_and_clear();
                         progress::error(&format!("Failed to install plugin: {e}"));
                         return Err(e);
                     }

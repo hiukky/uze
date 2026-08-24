@@ -10,7 +10,7 @@ pub fn spinner(message: &str) -> ProgressBar {
     pb.enable_steady_tick(Duration::from_millis(120));
     pb.set_style(
         ProgressStyle::default_spinner()
-            .tick_strings(&["⠋", "⠙", "", "⠸", "⠼", "⠴", "⠦", "", "⠇", "⠏"])
+            .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
             .template("{spinner:.cyan} {msg}")
             .unwrap(),
     );
