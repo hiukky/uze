@@ -39,9 +39,10 @@ tests/_fixtures (single canonical source)
 composed canonical package ──> real `uze` setup/install ──> real harness ──> vendor's own report
 ```
 
-The Lab consumes the **same** `canonical/`, `foreign/` and `golden/` fixtures
-`golden_environment_is_healthy` uses; it never maintains a second canonical
-tree. Vendor-native envelope bytes come from `fixtures/foreign/codex/…`; the
+The Lab consumes the **single fixture tree** `tests/_fixtures` (canonical,
+foreign, scenarios, golden, plus the C1 control and the shared MCP fixture
+server) — the same fixtures `golden_environment_is_healthy` uses; there is
+no separate conformance fixture tree at all. Vendor-native envelope bytes come from `fixtures/foreign/codex/…`; the
 Lab composes them with canonical skill/MCP bytes (and injects per-run proof
 values) because no canonical package ships every delivery shape at once —
 composed by the runner, not duplicated on disk.
@@ -73,8 +74,8 @@ Opt-in. Distinguish `MODEL_FAILURE` (capability not exercised) from
 | Harness | Version (recorded by R6 evidence) | Package-native | Skill | Invocation policy | MCP | Lifecycle | L2 status (this refactor) |
 |---|---|---|---|---|---|---|---|
 | Claude | latest-at-build | generated package (`claude-plugin-generated`) | generated envelope skills | no model-free surface → UNVERIFIED | `claude mcp list`: **connected** | remove/reinstall ✓ | all primary scenarios PASS (host 2.1.241 also green) |
-| Codex | latest-at-build | generated + explicit envelope (`uze-store` / `uze-local`) | plugin list installed+enabled | `codex debug prompt-input` — default listed; user-only **listed in multi-harness shared root** (see Known Gaps) | `codex mcp list --json` returns no plugin-server entries → UNVERIFIED, not a pass | ✓ | R1/R3/R5/R6/G1 PASS; R2/R4 see Known Gaps |
-| OpenCode | latest-at-build (V1 channel) | N/A (no package-level native concept) | `debug skill` resolved symlink | no model-free surface → UNVERIFIED | `mcp list` connected | ✓ | container verdict only (host binary is the V2 preview) |
+| Codex | latest-at-build | generated + explicit envelope (`uze-store` / `uze-local`) | plugin list installed+enabled | `codex debug prompt-input` — default listed; user-only excluded everywhere (single- and multi-harness) | `codex mcp list --json` returns no plugin-server entries → UNVERIFIED, not a pass | ✓ | R1/R3/R5/R6/G1 PASS + R2b PASS (both orders); R4 UNVERIFIED |
+| OpenCode | latest-at-build (V1 channel — official; the V2 preview channel was dropped by project decision) | N/A (no package-level native concept) | `debug skill` resolves the shared superset entry (with Codex's `agents/openai.yaml` beside it — proven harmless) | no model-free surface → UNVERIFIED | `mcp list` connected | ✓ | R1/R4/R6/G1 PASS + R2b PASS (both orders; shared entry loaded and listed) |
 | Antigravity | latest-at-build | `agy plugin install` staged copy + `plugin list` imports | import manifest components | no model-free surface → UNVERIFIED | per-plugin `mcpServers` component (global `agy mcp list` is empty) | ✓ incl. R7 idempotency | all PASS (real 1.1.19) |
 
 ## Isolation
@@ -102,7 +103,7 @@ every scenario uses.
 ## Running
 
 ```bash
-docker compose --env-file e2e/.env -f e2e/compose.yaml build harness
+docker compose --env-file conformance/.env -f conformance/compose.yaml build harness
 
 # L2 — offline, no credential, every declared harness (release gate).
 docker run --rm --network none \
@@ -113,12 +114,12 @@ docker run --rm --network none \
   uze-e2e-lab:latest uze-conformance l2
 
 # L4 — needs the gateway up and a provider key supplied to it only.
-docker compose --env-file e2e/.env -f e2e/compose.yaml up -d gateway
-docker compose --env-file e2e/.env -f e2e/compose.yaml run --rm harness \
+docker compose --env-file conformance/.env -f conformance/compose.yaml up -d gateway
+docker compose --env-file conformance/.env -f conformance/compose.yaml run --rm harness \
   uze-conformance l4
 
 # Every level, including the control.
-docker compose --env-file e2e/.env -f e2e/compose.yaml run --rm harness \
+docker compose --env-file conformance/.env -f conformance/compose.yaml run --rm harness \
   uze-conformance all
 ```
 
@@ -130,7 +131,7 @@ On a developer machine with real harness CLIs, the same runner works against
 the host binaries for quick exploration:
 
 ```bash
-cargo run --manifest-path e2e/Cargo.toml -- l2 \
+cargo run --manifest-path conformance/Cargo.toml -- l2 \
   --root /tmp/uze-lab --uze target/debug/uze \
   --mcp-binary target/debug/uze-mcp-conformance-fixture
 ```
@@ -166,14 +167,16 @@ the image is a fresh `latest` snapshot by construction. The deterministic
   and 0.149.1). Codex exposes no model-free enumeration of plugin MCP
   servers → R4 records UNVERIFIED with this reason. Connectivity is unproven
   for Codex by design.
-- **User-only Skill policy across shared-root harnesses (REAL FINDING)**: in
-  multi-harness delivery, OpenCode owns the shared `.agents/skills` entry and
-  Codex's `agents/openai.yaml` exclusion sidecar lives in Codex's generated
-  copy — which Codex's prompt-input does not read, so a user-only Skill is
-  **listed** in the model-visible prompt. Single-harness Codex delivery (the
-  main suite's dogfood) correctly hides it. This is a cross-harness policy
-  preservation gap, not a localized defect; fixing it needs coordination
-  between shared-root integrations. Lab evidence: R2 `CAPABILITY_FAILURE`.
+- **User-only Skill policy across shared-root harnesses — RESOLVED**: the
+  shared `.agents/skills` entry is now always the **superset**
+  representation: SKILL.md adds OpenCode's own invocation controls, and the
+  same entry carries Codex's `agents/openai.yaml` policy sidecar whenever
+  the canonical `invoke.model` is false. Proven against real harnesses in
+  both setup orders (R2b): Codex's prompt-input excludes the user-only
+  Skill, and OpenCode loads the same entry (sidecar ignored, discovery
+  identical with/without it). A genuinely foreign entry with no encoding
+  still fails deterministically with `ProjectionConflict` — never a silent
+  policy loss.
 - **Claude policy surface**: no model-free CLI introspection for invocation
   policy → R2 UNVERIFIED for Claude.
 - **OpenCode channel decision**: the integration targets the **V1 channel**

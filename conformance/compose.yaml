@@ -38,7 +38,7 @@ services:
     profiles: ["manual"]
     build:
       context: ..
-      dockerfile: e2e/Dockerfile
+      dockerfile: conformance/Dockerfile
       # Latest-channel policy: no harness version args.
       args: {}
     depends_on:

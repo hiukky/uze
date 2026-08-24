@@ -22,7 +22,7 @@ use crate::{
 /// The canonical fixture skill's proof token. The compositor replaces it per
 /// run (see [`crate::fixture::compose_lab_package`]), so evidence is never
 /// attributable to stale bytes.
-pub const SKILL_PROOF_TOKEN: &str = "UZE_E2E_SKILL_PROOF_20260820";
+pub const SKILL_PROOF_TOKEN: &str = "UZE_CONFORMANCE_SKILL_PROOF_20260820";
 
 /// What every spawned process receives on top of HOME/UZE_HOME. The runner
 /// clears the ambient environment, so anything a harness needs must be

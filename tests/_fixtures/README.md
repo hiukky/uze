@@ -41,7 +41,7 @@ as its own format. One per vendor, minimal:
 
 - `claude/native-plugin/` — `.claude-plugin/plugin.json` envelope.
 - `codex/native-plugin/` — `.codex-plugin/plugin.json` envelope (copied
-  from the e2e lab's plugin-first-conformance shape).
+  from the conformance lab's legacy plugin-first-conformance shape).
 - `opencode/native-plugin/` — OpenCode has no plugin envelope; its native
   surface is the shared `.agents/skills` layout.
 - `antigravity/native-plugin/` — Antigravity reads the canonical
@@ -79,3 +79,17 @@ proves the current canonical product story end-to-end (see
 
 Only add a fixture a test actually consumes, and say why in this file. If a
 fixture loses every consumer, delete it — do not keep history in fixtures.
+
+## control/ e bin/ (a árvore é única)
+
+`tests/_fixtures/` é a **única árvore de fixtures do projeto** — para `tests/`
+e para o Lab (`conformance/`) — consumida via `uze-testkit` (com o override de
+runtime `UZE_TESTKIT_FIXTURES_ROOT` no container do Lab).
+
+- `control/native-skill-discovery/` — dado do **control C1 do Lab**: um
+  projeto com `.agents/skills/uze-e2e/` e **UZE ausente**. Não é canônico
+  (não é um pacote UZE-authored); mede o caminho harness/provider isolado.
+- `bin/mcp_conformance_fixture.rs` — **fonte do binário de teste**
+  `uze-mcp-conformance-fixture` (não um dado): compilado pelo `Cargo.toml`
+  raiz e compartilhado pelos testes da main (MCP fixture do `mcp-plugin`)
+  e pelo Lab (servidor MCP do scenario R4/B3).

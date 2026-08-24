@@ -5,7 +5,7 @@
 //! invoked, no credential is read, and nothing here is gated behind an opt-in
 //! environment variable — `cargo test` must be a complete gate for this tier.
 //!
-//! Real-harness evidence lives in the conformance lab under `e2e/`, which
+//! Real-harness evidence lives in the conformance lab under `conformance/`, which
 //! runs the actual CLIs inside a disposable container and classifies
 //! attachment, discovery and behavior as separate, non-conflatable tiers.
 //! Earlier revisions of this file welded opt-in harness probes onto the

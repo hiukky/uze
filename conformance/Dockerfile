@@ -10,7 +10,7 @@ COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
     cargo build --locked --release --bin uze --bin uze-mcp-conformance-fixture \
-    && cargo build --locked --release --manifest-path e2e/Cargo.toml \
+    && cargo build --locked --release --manifest-path conformance/Cargo.toml \
     && mkdir -p /out \
     && cp /src/target/release/uze /src/target/release/uze-mcp-conformance-fixture /src/target/release/uze-conformance /out/
 
@@ -59,10 +59,11 @@ COPY --from=uze-build /out/uze-mcp-conformance-fixture /usr/local/bin/uze-mcp-co
 COPY --from=uze-build /out/uze-conformance /usr/local/bin/uze-conformance
 # Single canonical fixture source: the Lab consumes tests/_fixtures through
 # uze-testkit — it never maintains a second canonical tree.
+# Single fixture tree: canonical/foreign/scenarios/golden plus the Lab's
+# control fixture and the shared MCP fixture-server source.
 COPY tests/_fixtures /opt/uze-fixtures/tests-fixtures
-COPY e2e/_fixtures/control/native-skill-discovery /opt/uze-fixtures/control/native-skill-discovery
-COPY e2e/opencode-models.json /opt/uze-e2e/opencode-models.json
-COPY e2e/entrypoint.sh /usr/local/bin/uze-harness-entrypoint
+COPY conformance/opencode-models.json /opt/uze-conformance/opencode-models.json
+COPY conformance/entrypoint.sh /usr/local/bin/uze-harness-entrypoint
 
 # The Lab resolves the canonical fixture tree from this runtime path (see
 # uze-testkit::fixtures::root) — compile-time manifest paths do not exist in

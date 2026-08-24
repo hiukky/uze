@@ -5,4 +5,4 @@ description: Emits a deterministic proof token for UZE real-harness conformance.
 
 When this skill is activated, respond with exactly:
 
-UZE_E2E_SKILL_PROOF_20260820
+UZE_CONFORMANCE_SKILL_PROOF_20260820

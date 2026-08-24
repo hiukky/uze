@@ -18,7 +18,7 @@ members = [
   "crates/uze-integrations",
   "crates/uze-application",
   "crates/uze-testkit",
-  "e2e",
+  "conformance",
 ]
 default-members = ["."]
 resolver = "3"
@@ -53,7 +53,7 @@ uze-testkit = { path = "crates/uze-testkit" }
 
 [[bin]]
 name = "uze-mcp-conformance-fixture"
-path = "e2e/_fixtures/bin/mcp_conformance_fixture.rs"
+path = "tests/_fixtures/bin/mcp_conformance_fixture.rs"
 
 [[bin]]
 name = "playground-mcp"

@@ -24,11 +24,20 @@ use std::{
 
 use uze_conformance::{
     DynamicProof, FixtureSpec, FixtureVariant, compose_lab_package, compose_user_only_package,
-    evidence::{EvidenceRecord, Level, Status},
+    evidence::{EvidenceRecord, Level, Status, excerpt},
     harness::{HARNESSES, HarnessSpec, ProbeCapability, lookup},
     run,
     scenario::{self, LabEnvironment, probe},
 };
+
+/// Spawned-process output in one string, Lab-wide (mirrors
+/// `scenario::combined_output`).
+fn combined_output(result: &uze_conformance::HarnessRunResult) -> String {
+    let mut text = String::from_utf8_lossy(&result.stdout).into_owned();
+    text.push('\n');
+    text.push_str(&String::from_utf8_lossy(&result.stderr));
+    text
+}
 
 const SKILL_PROMPT: &str =
     "Use the installed skill named uze-e2e to prove conformance. Return its proof token exactly.";
@@ -85,8 +94,8 @@ fn usage() -> String {
          \n\
          options\n  \
            --harness <id,...>      default: all of {}\n  \
-           --gateway <url>         default: $UZE_E2E_GATEWAY or http://gateway:4000\n  \
-           --native-fixture <path> control fixture; default: /opt/uze-fixtures/control/native-skill-discovery\n  \
+           --gateway <url>         default: $UZE_CONFORMANCE_GATEWAY or http://gateway:4000\n  \
+           --native-fixture <path> control fixture; default: /opt/uze-fixtures/tests-fixtures/control/native-skill-discovery\n  \
            --uze <path>            default: uze\n  \
            --mcp-binary <path>     default: /usr/local/bin/uze-mcp-conformance-fixture\n  \
            --root <path>           disposable run root; default: /work/runs\n  \
@@ -120,7 +129,7 @@ fn parse() -> Result<Options, String> {
     let mut options = Options {
         mode,
         harnesses: HARNESSES.iter().collect(),
-        gateway: std::env::var("UZE_E2E_GATEWAY")
+        gateway: std::env::var("UZE_CONFORMANCE_GATEWAY")
             .unwrap_or_else(|_| "http://gateway:4000".to_owned()),
         native_fixture: std::path::PathBuf::from(
             "/opt/uze-fixtures/control/native-skill-discovery",
@@ -363,6 +372,22 @@ fn main() -> ExitCode {
         }
     }
 
+    // R2b — the P1 shared-root coexistence property is cross-harness: one
+    // environment, both setups, both orders. Runs once per invocation when
+    // both harnesses are selected.
+    if options.mode.runs_l2()
+        && options
+            .harnesses
+            .iter()
+            .any(|harness| harness.id == "codex")
+        && options
+            .harnesses
+            .iter()
+            .any(|harness| harness.id == "opencode")
+    {
+        records.extend(run_l2_coexistence(&options));
+    }
+
     let l2_failed = records
         .iter()
         .any(|record| record.level == Level::L2 && !record.status.is_evidence());
@@ -403,6 +428,353 @@ fn main() -> ExitCode {
     } else {
         ExitCode::SUCCESS
     }
+}
+
+/// R2b — the P1 shared-root coexistence scenario: Codex and OpenCode share
+/// exactly one `~/.agents/skills` root, so the SAME canonical user-only
+/// Skill must (a) stay model-hidden for real Codex (`codex debug
+/// prompt-input`, zero model calls) and (b) load in real OpenCode without
+/// error — in BOTH setup orders. Run once per Lab invocation (it is a
+/// cross-harness property, not a per-harness one).
+fn run_l2_coexistence(options: &Options) -> Vec<EvidenceRecord> {
+    let mut records = Vec::new();
+    for order in ["codex-first", "opencode-first"] {
+        match prepare_coexistence(options, order) {
+            Err(detail) => {
+                for harness in ["codex", "opencode"] {
+                    records.push(blocked(
+                        lookup(harness).expect("lab harnesses exist"),
+                        &format!("R2b-user-only-shared-superset-{order}"),
+                        detail.clone(),
+                    ));
+                }
+            }
+            Ok((environment, normal_name, user_only_name)) => {
+                let (codex_status, codex_evidence) =
+                    codex_prompt_input_status(&environment, &normal_name, &user_only_name, order);
+                records.push(EvidenceRecord::new(
+            "codex",
+            &format!("R2b-user-only-shared-superset-{order}"),
+            Level::L2,
+            "invocation-policy",
+            codex_status,
+            "with Codex and OpenCode installed, the real Codex model-visible prompt still excludes the user-only Skill (the shared entry carries Codex's own policy sidecar)",
+            codex_evidence,
+            Duration::ZERO,
+        ));
+                records.push(opencode_coexistence_record(
+                    &environment,
+                    &user_only_name,
+                    order,
+                ));
+            }
+        }
+    }
+    records
+}
+
+/// Determines Codex's prompt-input verdict for one coexistence order.
+fn codex_prompt_input_status(
+    environment: &LabEnvironment,
+    normal_name: &str,
+    user_only_name: &str,
+    order: &str,
+) -> (Status, String) {
+    let result =
+        run(&environment.spec("codex", vec!["debug".to_owned(), "prompt-input".to_owned()]));
+    let (status, mut evidence) = match result {
+        Err(error) => (
+            Status::HarnessFailure,
+            format!("order {order}: codex probe failed: {error}"),
+        ),
+        Ok(result) if result.timed_out => (
+            Status::HarnessFailure,
+            format!("order {order}: codex prompt-input timed out"),
+        ),
+        Ok(result) if result.exit_code != Some(0) => (
+            Status::HarnessFailure,
+            format!(
+                "order {order}: codex prompt-input exited {:?}: {}",
+                result.exit_code,
+                excerpt(&combined_output(&result))
+            ),
+        ),
+        Ok(result) => {
+            let output = combined_output(&result);
+            if !output.contains(normal_name) {
+                (
+                    Status::CapabilityFailure,
+                    format!(
+                        "order {order}: default Skill {normal_name} missing from prompt input: {}",
+                        excerpt(&output)
+                    ),
+                )
+            } else if output.contains(user_only_name) {
+                (
+                    Status::CapabilityFailure,
+                    format!(
+                        "order {order}: user-only Skill {user_only_name} is model-visible (shared entry leaked the policy): {}",
+                        excerpt(&output)
+                    ),
+                )
+            } else {
+                (
+                    Status::Pass,
+                    format!(
+                        "order {order}: default Skill {normal_name} offered; user-only Skill {user_only_name} excluded ({:?})",
+                        result.elapsed
+                    ),
+                )
+            }
+        }
+    };
+    if status == Status::Pass {
+        evidence.push_str(&format!(
+            " | physical shared entry: {}",
+            superset_entry_capture(environment, user_only_name)
+        ));
+    }
+    (status, evidence)
+}
+
+/// The strongest deterministic OpenCode evidence available on the channel
+/// the Lab actually carries: the binary starts, and its native skill
+/// surface is consulted for the shared entry — the V1 channel reports it
+/// (`debug skill`), the V2 preview reports the same surface through its
+/// headless API (which answered `data: []` for filesystem skills, so
+/// discovery depth is recorded as an introspection gap, never a failure).
+fn opencode_coexistence_record(
+    environment: &LabEnvironment,
+    user_only_name: &str,
+    order: &str,
+) -> EvidenceRecord {
+    let started = Instant::now();
+    let harness = lookup("opencode").expect("lab harness registry has opencode");
+    let opencode_executable = harness.executable;
+    let claim = "the real OpenCode binary starts with the shared superset entry in place; its native skill surface is consulted and the depth achieved is reported honestly";
+    let version = run(&environment.spec(opencode_executable, vec!["--version".to_owned()]));
+    let mut parts = vec![format!("order {order}")];
+    let mut status = Status::Pass;
+    match version {
+        Ok(result) if result.exit_code == Some(0) => {
+            parts.push(format!(
+                "version: {}",
+                excerpt(&combined_output(&result)).trim().to_owned()
+            ));
+        }
+        Ok(result) => {
+            status = Status::HarnessFailure;
+            parts.push(format!(
+                "version probe exited {:?}: {}",
+                result.exit_code,
+                excerpt(&combined_output(&result))
+            ));
+        }
+        Err(error) => {
+            status = Status::HarnessFailure;
+            parts.push(format!("version probe failed: {error}"));
+        }
+    }
+    if status != Status::Pass {
+        parts.push(format!(
+            "shared entry: {}",
+            superset_entry_capture(environment, user_only_name)
+        ));
+        return EvidenceRecord::new(
+            "opencode",
+            &format!("R2b-user-only-shared-superset-{order}"),
+            Level::L2,
+            "skill",
+            status,
+            claim,
+            parts.join(" | "),
+            started.elapsed(),
+        );
+    }
+    match harness.probe_for(ProbeCapability::Skill) {
+        Some(skill_probe) => {
+            // The channel's native skill surface (V1: `debug skill`).
+            match probe(environment, harness, skill_probe, Some(user_only_name)) {
+                Ok(evidence) => {
+                    status = Status::Pass;
+                    parts.push(format!(
+                        "skill discovery PROVEN: {}",
+                        excerpt(&evidence).replace('\n', " ")
+                    ));
+                }
+                Err((capability_failure, reason)) => {
+                    status = capability_failure;
+                    parts.push(format!(
+                        "skill surface ({status:?}): {}",
+                        reason.replace('\n', " ")
+                    ));
+                }
+            }
+        }
+        None => {
+            // V2 preview: no `debug skill`; the channel's only headless
+            // skill surface is the HTTP API (it answered, but reported no
+            // filesystem skills on the channels probed — an introspection
+            // gap, never a failure).
+            let health = run(&environment.spec(
+                opencode_executable,
+                vec![
+                    "api".to_owned(),
+                    "--standalone".to_owned(),
+                    "GET".to_owned(),
+                    "/api/health".to_owned(),
+                ],
+            ));
+            let skills = run(&environment.spec(
+                opencode_executable,
+                vec![
+                    "api".to_owned(),
+                    "--standalone".to_owned(),
+                    "GET".to_owned(),
+                    "/api/skill".to_owned(),
+                ],
+            ));
+            match health {
+                Ok(result) if result.exit_code == Some(0) => {
+                    parts.push(format!(
+                        "headless API started: {}",
+                        excerpt(&combined_output(&result)).replace('\n', " ")
+                    ));
+                }
+                Ok(result) => {
+                    status = Status::HarnessFailure;
+                    parts.push(format!(
+                        "headless API exited {:?}: {}",
+                        result.exit_code,
+                        excerpt(&combined_output(&result)).replace('\n', " ")
+                    ));
+                }
+                Err(error) => {
+                    status = Status::HarnessFailure;
+                    parts.push(format!("headless API probe failed: {error}"));
+                }
+            }
+            if status == Status::Pass {
+                match skills {
+                    Ok(result) if result.exit_code == Some(0) => {
+                        let output = combined_output(&result);
+                        parts.push(format!(
+                            "skill listing surface: {}",
+                            excerpt(&output).replace('\n', " ")
+                        ));
+                        if output.contains("\"data\":[]") {
+                            status = Status::Unverified;
+                            parts.push(
+                                "skill discovery depth UNVERIFIED: the headless /api/skill answered but reported no filesystem skills (introspection gap, not a failure — see conformance README Known Gaps).".to_owned(),
+                            );
+                        } else {
+                            parts.push(
+                                "skill discovery: headless /api/skill reported filesystem skills"
+                                    .to_owned(),
+                            );
+                        }
+                    }
+                    Ok(result) => {
+                        status = Status::HarnessFailure;
+                        parts.push(format!(
+                            "skill listing surface exited {:?}: {}",
+                            result.exit_code,
+                            excerpt(&combined_output(&result)).replace('\n', " ")
+                        ));
+                    }
+                    Err(error) => {
+                        status = Status::HarnessFailure;
+                        parts.push(format!("skill listing surface failed: {error}"));
+                    }
+                }
+            }
+        }
+    }
+    parts.push(format!(
+        "shared entry: {}",
+        superset_entry_capture(environment, user_only_name)
+    ));
+    EvidenceRecord::new(
+        "opencode",
+        &format!("R2b-user-only-shared-superset-{order}"),
+        Level::L2,
+        "skill",
+        status,
+        claim,
+        parts.join(" | "),
+        started.elapsed(),
+    )
+}
+
+/// Captures the physical shared entry: symlink, resolved target, and the
+/// superset files Codex reads (agents/openai.yaml) and OpenCode reads
+/// (SKILL.md with its own encoding).
+fn superset_entry_capture(environment: &LabEnvironment, entry_name: &str) -> String {
+    let entry = environment.home.join(".agents/skills").join(entry_name);
+    let Ok(link) = std::fs::read_link(&entry) else {
+        return format!("{entry_name}: entry is not a managed symlink");
+    };
+    let skill = match std::fs::read_to_string(link.join("SKILL.md")) {
+        Ok(bytes) => bytes,
+        Err(error) => return format!("{entry_name}: SKILL.md unreadable: {error}"),
+    };
+    let mut capture = format!(
+        "{entry_name} -> {}; SKILL.md name: {}; OpenCode encoding: {}",
+        link.display(),
+        skill
+            .lines()
+            .find(|line| line.starts_with("name:"))
+            .unwrap_or("(none)"),
+        skill.contains("opencode/autoinvoke: false")
+    );
+    if link.join("agents/openai.yaml").is_file() {
+        capture.push_str("; Codex sidecar: present");
+    } else {
+        capture.push_str("; Codex sidecar: ABSENT");
+    }
+    capture
+}
+
+/// One disposable HOME with BOTH real harnesses set up (`uze setup codex`
+/// AND `uze setup opencode`) and the `flow` + canonical user-only
+/// `workflow` packages installed — the P1 coexistence shape.
+fn prepare_coexistence(
+    options: &Options,
+    order: &str,
+) -> Result<(LabEnvironment, String, String), String> {
+    let codex = lookup("codex").expect("lab harness registry has codex");
+    let environment = prepare_environment(options, codex, &format!("coex-{order}"), false)?;
+    let (first, second) = if order == "opencode-first" {
+        ("opencode", "codex")
+    } else {
+        ("codex", "opencode")
+    };
+    run_uze(&environment, &["setup", first])?;
+    run_uze(&environment, &["setup", second])?;
+    let normal = uze_testkit::fixtures::canonical("flow");
+    run_uze(
+        &environment,
+        &["plugin", "install", normal.to_str().unwrap_or_default()],
+    )?;
+    let stage = scenario::safe_root(&options.root, &format!("r2b-user-only-{order}"))?;
+    let user_only = stage.join("package");
+    compose_user_only_package(&user_only).map_err(|error| error.to_string())?;
+    run_uze(
+        &environment,
+        &["plugin", "install", user_only.to_str().unwrap_or_default()],
+    )?;
+    let entries = scenario::shared_entry_names(&environment, &["flow", "workflow"]);
+    let normal_name = entries
+        .iter()
+        .find(|name| name.starts_with("flow"))
+        .cloned()
+        .ok_or_else(|| "no shared-root entry for the default `flow` skill".to_owned())?;
+    let user_only_name = entries
+        .iter()
+        .find(|name| name.starts_with("workflow"))
+        .cloned()
+        .ok_or_else(|| "no shared-root entry for the user-only `workflow` skill".to_owned())?;
+    Ok((environment, normal_name, user_only_name))
 }
 
 fn run_l2(options: &Options, harness: &HarnessSpec) -> Vec<EvidenceRecord> {

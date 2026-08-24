@@ -10,9 +10,9 @@ the domain layout and the coverage matrices is
 |---|---|---|---|---|
 | **L0 — Unit** | `#[cfg(test)]` beside the code | the logic is wrong | nothing | always |
 | **L1 — Component/Contract** | `tests/` | UZE's observable behavior is wrong | nothing | always |
-| **L2 — Real-harness conformance** | `e2e/` | UZE, a real harness, or vendor semantics | the disposable Docker image | opt-in (release gate) |
+| **L2 — Real-harness conformance** | `conformance/` | UZE, a real harness, or vendor semantics | the disposable Docker image | opt-in (release gate) |
 | **L3 — Product acceptance** | `tests/acceptance/` | the public UZE flow is broken | nothing | always |
-| **L4 — Model behavioral** | `e2e/` | the model/provider path | gateway + credential | optional / manual |
+| **L4 — Model behavioral** | `conformance/` | the model/provider path | gateway + credential | optional / manual |
 
 `cargo test --workspace` runs L0, L1 and L3 completely. If it passes, the
 deterministic product contract holds (620 tests at the time of writing, with
@@ -23,7 +23,7 @@ delivered.
 ## L0 — Unit
 
 Ordinary Rust unit tests next to the code they cover. The Lab's own runner
-tests (`cargo test --manifest-path e2e/Cargo.toml`) are L0 for that crate:
+tests (`cargo test --manifest-path conformance/Cargo.toml`) are L0 for that crate:
 env clearing, timeouts, evidence classification, fixture composition and
 never a real harness.
 
@@ -46,11 +46,11 @@ from its public API purely to serve those tests. Both are gone.
 
 ## L2 — Real-harness conformance
 
-`e2e/` is a separate crate and a disposable Docker image. It runs the real
+`conformance/` is a separate crate and a disposable Docker image. It runs the real
 Claude Code, Codex, OpenCode and Antigravity CLIs against a real UZE
 installation, then records what each harness itself reports. It consumes the
 single canonical fixture source (`tests/_fixtures` via `uze-testkit`) and
-never duplicates it. Full detail in [`e2e/README.md`](../e2e/README.md).
+never duplicates it. Full detail in [`conformance/README.md`](../conformance/README.md).
 
 The Lab's own evidence levels are flat: **L2** (no model, no provider, no
 credential), **L4** (opt-in model behavior) and **CONTROL** scenarios that
@@ -59,7 +59,7 @@ verdict. Scenario set: R1-R7 plus G1 (golden chain) at L2, B1-B3 at L4, C1
 control.
 
 ```bash
-docker compose --env-file e2e/.env -f e2e/compose.yaml build harness
+docker compose --env-file conformance/.env -f conformance/compose.yaml build harness
 
 # offline, no credential, real harnesses
 docker run --rm --network none \
@@ -73,7 +73,7 @@ docker run --rm --network none \
 The runner's own unit tests are L0 for that crate:
 
 ```bash
-cargo test --manifest-path e2e/Cargo.toml
+cargo test --manifest-path conformance/Cargo.toml
 ```
 
 ## L3 — Product acceptance
@@ -95,7 +95,7 @@ by an L2 pass.
 
 ```text
 Does it need a real harness CLI?
-├── yes ──> e2e/, as an L2 or L4 scenario (see e2e/README.md)
+├── yes ──> conformance/, as an L2 or L4 scenario (see conformance/README.md)
 └── no
     └── Does it exercise a public UZE flow end to end?
         ├── yes ──> tests/acceptance/
@@ -117,7 +117,7 @@ probe while proving different things — Codex offers no model-free MCP health
 check for marketplace plugins, so its record is registration-level, while
 Claude and OpenCode report connectivity. The JSON evidence carries a `claim`
 string per probe for exactly this reason. Known gaps are listed in
-`e2e/README.md` and are reported as `Unverified`, never silently passed.
+`conformance/README.md` and are reported as `Unverified`, never silently passed.
 
 **A model failure is not an integration failure.** When a model declines to
 use a capability that L2 already proved present, the record says

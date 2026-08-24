@@ -5,13 +5,22 @@ This is the map of the whole suite: **what** is tested, **at which level**,
 passing test provides**. A green `cargo test` is not the story: the story is
 which cell of the matrices below is covered by which test file.
 
+## Boundary (naming)
+
+- `tests/` (incl. `tests/acceptance/`) = **deterministic product tests**:
+  L0/L1 contracts/components and L3 product acceptance. Owned by the main
+  suite; never requires a real harness.
+- `conformance/` = **external harness conformance** (the Lab): L2
+  real-harness/model-free evidence, L4 optional model behavior, CONTROL
+  when needed. Vendor-specific by design; never linked into `tests/`.
+
 ## Levels
 
 | Level | What it proves | Environment | Where |
 |---|---|---|---|
 | **L0 — Unit** | pure logic: parsing, normalization, identity, deterministic helpers | nothing real; trivial temp only | `#[cfg(test)]` inside `crates/*/src/**`, `src/**`; `tests/packages/*`, `tests/projection/*` helpers |
 | **L1 — Component/Contract** | a subsystem's contract on a real isolated filesystem, with a *fake* process boundary | isolated temp HOME/UZE_HOME, no developer state, fake harness CLIs only | `tests/{cli,memory,packages,workspace,lifecycle,projection}/**`, `tests/integrations/**` |
-| **L2 — Harness Conformance** | real vendor binary semantics, isolated HOME/UZE_HOME, no model calls | real vendor binary, skipped cleanly when absent (`UZE_REAL_HARNESS_TESTS`-style probe-and-skip) | `tests/integrations/harness/codex.rs::real_codex_dogfood...`; the `e2e/` container lab (Tiers 1-2) |
+| **L2 — Harness Conformance** | real vendor binary semantics, isolated HOME/UZE_HOME, no model calls | real vendor binary, skipped cleanly when absent (`UZE_REAL_HARNESS_TESTS`-style probe-and-skip) | `tests/integrations/harness/codex.rs::real_codex_dogfood...`; the `conformance/` container lab (Tiers 1-2) |
 | **L3 — Acceptance** | public user-level scenario end-to-end through the real `uze` binary | clean isolated `TestEnvironment` (real UZE binary, fake or controlled harness CLIs) | `tests/acceptance/**` |
 | **L4 — Manual/Model behavioral** | model-invocation or interactive-only behavior | manual/agentic eval, never CI | `tests/_fixtures/scenarios/eval/` (see `docs/capabilities/uze-skill.md`) |
 
@@ -20,7 +29,7 @@ Rules:
 - **L3 exercises the public path**: `uze` binary → Application → Store/Engine
   → Integration. No test recreates the implementation.
 - **Never call a real vendor CLI from ordinary CI**: L2 probes are
-  skip-if-absent by design; the `e2e/` lab is the verdict where real vendor
+  skip-if-absent by design; the `conformance/` lab is the verdict where real vendor
   behavior matters.
 - The same invariant at multiple levels is *good* (L0 exact-coverage
   helper + L3 "nothing missing after install"). Duplicates at the *same*
@@ -75,7 +84,7 @@ make test-real-harness                   # L2 probes that need real vendor binar
 ```
 
 Real-harness policy: a probe skips cleanly when the binary is absent
-(`real_codex_dogfood...`); the `e2e/` lab (Docker, offline L2) is the
+(`real_codex_dogfood...`); the `conformance/` lab (Docker, offline L2) is the
 place for real-vendor verdicts, and is never required for the ordinary
 suite.
 
@@ -96,8 +105,8 @@ suite.
 | Workspace (lock/root resolution) | ✓ | ✓ | — | ✓ |
 
 `✓*` = covered by the skip-if-absent real-Codex dogfood (L2 evidence when a
-binary exists) or the `e2e` lab (partial). `partial` = covered only at some
-levels or through the e2e lab, not by an in-repo test at that exact tier.
+binary exists) or the conformance lab (partial). `partial` = covered only at some
+levels or through the conformance lab, not by an in-repo test at that exact tier.
 
 `--` = deliberately absent: the invariant is proven at a lower tier and no
 real-vendor evidence exists in-repo (see the harness matrix below).
@@ -106,12 +115,12 @@ real-vendor evidence exists in-repo (see the harness matrix below).
 
 | Harness | Component (L1) | Real CLI (L2) | Acceptance (L3) |
 |---|---:|---:|---:|
-| Claude | ✓ | e2e lab (L2) — no in-repo probe | ✓ |
+| Claude | ✓ | conformance lab (L2) — no in-repo probe | ✓ |
 | Codex | ✓ | ✓ (`real_codex_dogfood...`, zero model calls, skip-if-absent) | ✓ |
-| OpenCode | ✓ | e2e lab (L2) | ✓ |
-| Antigravity | ✓ | e2e lab (L2) | ✓ |
+| OpenCode | ✓ | conformance lab (L2) | ✓ |
+| Antigravity | ✓ | conformance lab (L2) | ✓ |
 
-"e2e lab" = `e2e/` container lab L2 (offline, no credentials, runs
+"conformance lab" = `conformance/` container lab L2 (offline, no credentials, runs
 the real binaries) — the honest place for vendor-semantics verdicts.
 
 ## Acceptance scenarios (L3)

@@ -251,7 +251,7 @@ pub(super) fn write_catalogue(path: &Path, packages: &[StoredPackage]) -> Result
 /// Claude's `claude_exact_coverage` in `claude::plugin`. Unlike Claude's
 /// manifest, Codex's does not enumerate individual skills or inline MCP
 /// servers: `skills` names one directory whose entire subtree is covered
-/// (confirmed by `e2e/_fixtures/plugin-first-conformance/.codex-plugin/
+/// (confirmed by `tests/_fixtures/foreign/codex/native-plugin/.codex-plugin/
 /// plugin.json`: `"skills": "./skills/"`), and `mcpServers` names one
 /// external file (`"./.mcp.json"`) holding the standard Agent Plugins
 /// `{"mcpServers": {...}}` shape — so a server is declared by name, read

@@ -138,7 +138,7 @@ fn codex_policy_is_envelope_preservable(resource: &Resource) -> bool {
 /// description come from the package's own canonical `plugin.json`
 /// (`package.manifest`), never invented. `skills` is declared as the fixed
 /// `"./skills/"` convention (mirroring the real explicit-envelope fixture
-/// shape, `e2e/_fixtures/plugin-first-conformance/.codex-plugin/plugin.json`);
+/// shape, `tests/_fixtures/foreign/codex/native-plugin/.codex-plugin/plugin.json`);
 /// `mcpServers` names the generated `.mcp.json` sibling file, written only
 /// when the package actually has a root `mcp.json` to project.
 fn generated_manifest_document(package: &StoredPackage) -> serde_json::Value {

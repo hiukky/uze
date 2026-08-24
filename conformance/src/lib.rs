@@ -37,8 +37,8 @@ pub struct DynamicProof {
 impl DynamicProof {
     pub fn from_nonce(nonce: &str) -> Self {
         Self {
-            skill: format!("UZE_E2E_SKILL_{nonce}"),
-            mcp: format!("UZE_E2E_MCP_{nonce}"),
+            skill: format!("UZE_CONFORMANCE_SKILL_{nonce}"),
+            mcp: format!("UZE_CONFORMANCE_MCP_{nonce}"),
         }
     }
 }
@@ -88,7 +88,7 @@ const CODEX_ENVELOPE: &str = "plugin.json";
 /// The canonical skill fixture's static proof token; `compose_lab_package`
 /// replaces it with the materialization placeholder so each run's value is
 /// per-run, never stale.
-const CANONICAL_SKILL_PROOF_TOKEN: &str = "UZE_E2E_SKILL_PROOF_20260820";
+const CANONICAL_SKILL_PROOF_TOKEN: &str = "UZE_CONFORMANCE_SKILL_PROOF_20260820";
 
 /// Builds the Lab's canonical multi-capability package **from the single
 /// fixture source** (`tests/_fixtures`, via `uze-testkit`):
@@ -536,7 +536,7 @@ mod tests {
 
         assert_eq!(
             fs::read_to_string(destination.join("skills/proof/SKILL.md")).unwrap(),
-            "proof: UZE_E2E_SKILL_nonce-42"
+            "proof: UZE_CONFORMANCE_SKILL_nonce-42"
         );
         assert_eq!(
             fs::read_to_string(source.join("skills/proof/SKILL.md")).unwrap(),
@@ -562,7 +562,7 @@ mod tests {
             // route persists intact.
             assert_eq!(
                 server["args"],
-                serde_json::json!(["--proof", "UZE_E2E_MCP_nonce-42"])
+                serde_json::json!(["--proof", "UZE_CONFORMANCE_MCP_nonce-42"])
             );
         }
         let _ = fs::remove_dir_all(root);
@@ -639,7 +639,7 @@ mod tests {
         materialize_fixture(&destination, &run_dir, &spec(FixtureVariant::Full)).unwrap();
         let body = fs::read_to_string(run_dir.join("skills/uze-e2e/SKILL.md")).unwrap();
         assert!(
-            body.contains("UZE_E2E_SKILL_nonce-42"),
+            body.contains("UZE_CONFORMANCE_SKILL_nonce-42"),
             "per-run skill proof must be substituted: {body}"
         );
         let _ = fs::remove_dir_all(root);

@@ -72,9 +72,11 @@ need to).
   (`claude`, `codex`, `opencode`, `antigravity`)
   implementing the shared `IntegrationPort` from `uze-core`, plus `shared/`
   for cross-vendor process/path helpers.
-- `e2e` — conformance fixtures and a real-binary test harness
-  (`e2e/src/harness.rs`, `tier.rs`) for exercising uze against actual
-  vendor CLIs, not just isolated unit state.
+- `conformance/` — Harness Conformance Lab: real external-harness L2/L4
+  evidence (`conformance/src/{harness,scenario,evidence}.rs`) in a
+  disposable Docker environment. Vendor-specific by design; never linked
+  into the deterministic suite. Single fixture source: `tests/_fixtures`
+  (via `uze-testkit`).
 - `tests/` — domain-organized integration suites (one `main.rs` per
   domain: `cli/`, `memory/`, `packages/`, `workspace/`, `lifecycle/`,
   `projection/`, `integrations/`, `acceptance/`), shared test
