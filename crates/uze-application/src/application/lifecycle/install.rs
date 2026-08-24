@@ -99,6 +99,23 @@ impl UzeApplication {
                 .filter(|_| !unpublished.contains(integration.id()))
             {
                 package_plans.push((integration.id().to_owned(), plan.clone()));
+                // Idempotency: package-level receipt already Matched means the
+                // vendor verb already ran — re-running `agy plugin install`
+                // would hit preflight ("already has an imported plugin named
+                // `git`") even though UZE owns it. Skip attach and keep
+                // `provided` so capability-level attach is also skipped.
+                let already_attached = state::receipts(&self.home, Some(installed.id.as_str()))?
+                    .into_iter()
+                    .any(|(_, receipt)| {
+                        receipt.integration == integration.id()
+                            && receipt.resource_identity.is_none()
+                            && integration.inspect_receipt(&receipt).state
+                                == AttachmentState::Matched
+                    });
+                if already_attached {
+                    provided = plan.provided_resource_identities.clone();
+                    continue;
+                }
                 // Migration: if this package was previously decomposed, detach
                 // covered capability receipts that are now provided, but only
                 // if they are safely detachable.
