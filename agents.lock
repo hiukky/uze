@@ -5,9 +5,9 @@ marketplaces:
       type: path
       path: /home/hiukky/ai
 plugins:
-  flow:
+  git:
     source:
       type: marketplace
       marketplace: ai
-      plugin: flow
+      plugin: git
     resolved: {}
