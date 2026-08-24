@@ -1,6 +1,6 @@
 ---
-name: uze
-description: Makes this project's instructions context portable across Claude Code, Codex, OpenCode, and Antigravity CLI, using AGENTS.md as the shared baseline. Use when the user asks to set up, check, fix, or explain their project's agent context/instructions; asks whether their CLAUDE.md/GEMINI.md/AGENTS.md is portable between tools; wants an AGENTS.md created or reviewed; mentions switching between coding agents and losing context; or invokes /uze or $uze directly.
+name: init
+description: Makes this project's instructions context portable across Claude Code, Codex, OpenCode, and Antigravity CLI, using AGENTS.md as the shared baseline. Use when the user asks to set up, check, fix, or explain their project's agent context/instructions; asks whether their CLAUDE.md/GEMINI.md/AGENTS.md is portable between tools; wants an AGENTS.md created or reviewed; mentions switching between coding agents and losing context; or invokes /uze:init or $uze:init directly.
 slash: true
 metadata:
   opencode/autoinvoke: "true"

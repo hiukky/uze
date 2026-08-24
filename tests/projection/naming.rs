@@ -284,7 +284,7 @@ fn package_uze_plus_skill_uze_naturally_gets_the_stable_label_no_special_case() 
     names.sort();
     assert_eq!(
         names,
-        vec!["uze:uze".to_owned()],
+        vec!["uze:init".to_owned()],
         "the official package gets the same stable namespaced label as any other plugin (ADR-026)"
     );
     fs::remove_dir_all(root).unwrap();
@@ -334,7 +334,7 @@ fn a_legacy_named_receipt_is_migrated_to_the_stable_label_not_frozen_forever() {
     after_listing.sort();
     let after_filtered: Vec<String> = after_listing
         .iter()
-        .filter(|name| *name != "uze:uze")
+        .filter(|name| *name != "uze:init")
         .cloned()
         .collect();
     assert_eq!(

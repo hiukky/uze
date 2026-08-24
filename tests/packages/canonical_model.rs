@@ -113,9 +113,9 @@ fn the_official_package_contributes_exactly_one_agent_skill_resource() {
     let inspection = application.inspect_plugin("uze").unwrap();
     assert_eq!(inspection.capabilities.len(), 1);
     assert_eq!(inspection.capabilities[0].kind, CapabilityKind::AgentSkill);
-    // The skill's own logical name (its directory, `skills/uze`), not the
+    // The skill's own logical name (its directory, `skills/init`), not the
     // generic `SKILL.md` file name — a display-only read-model improvement.
-    assert_eq!(inspection.capabilities[0].name, "uze");
+    assert_eq!(inspection.capabilities[0].name, "init");
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -127,15 +127,15 @@ fn the_official_package_contributes_exactly_one_agent_skill_resource() {
 fn the_package_receives_no_special_treatment_a_renamed_copy_behaves_identically() {
     let root = temp("no-special-case");
     let renamed = root.join("renamed-copy");
-    fs::create_dir_all(renamed.join("skills/uze")).unwrap();
+    fs::create_dir_all(renamed.join("skills/init")).unwrap();
     fs::write(
         renamed.join("plugin.json"),
         r#"{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"totally-different-name"}"#,
     )
     .unwrap();
     fs::copy(
-        official_package().join("skills/uze/SKILL.md"),
-        renamed.join("skills/uze/SKILL.md"),
+        official_package().join("skills/init/SKILL.md"),
+        renamed.join("skills/init/SKILL.md"),
     )
     .unwrap();
 

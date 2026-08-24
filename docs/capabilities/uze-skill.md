@@ -1,11 +1,11 @@
-# The `/uze` Skill — agentic context orchestrator
+# The `/uze:init` Skill — agentic context orchestrator
 
 Status: **first vertical slice, implemented, 2026-08-21.** Companion to
 [context-manager.md](context-manager.md), which this Skill sits entirely on
 top of and never bypasses.
 
 ```
-              /uze (this Skill — plugins/uze/skills/uze/SKILL.md)
+              /uze:init (this Skill — plugins/uze/skills/init/SKILL.md)
                  reasoning / orchestration
         ┌────────────────┼────────────────┐
         ▼                ▼                ▼
@@ -21,7 +21,7 @@ top of and never bypasses.
 ```
 
 The Skill reasons. `uze` mutates. That boundary is enforced by the Skill's
-own instructions (`plugins/uze/skills/uze/SKILL.md`'s "Hard boundaries"
+own instructions (`plugins/uze/skills/init/SKILL.md`'s "Hard boundaries"
 section), not by anything in `uze-core` — the Core has no idea this Skill
 exists, and never will (see the vendor-neutrality/no-hardcoding proof
 below).
@@ -36,26 +36,18 @@ docs didn't cover it).
 
 | Harness | Discovery path (matches UZE's existing delivery unchanged) | How a user invokes it | Evidence |
 |---|---|---|---|
-| Claude Code | `~/.claude/skills/<entry>/SKILL.md` | Directory-name-driven: `/<entry-name>` (personal/project skills). After naming refactor, `uze` package delivers `uze` bare → `/uze`. Also autonomous, description-matched. | OFFICIAL (code.claude.com/docs/en/skills) + **EMPIRICAL** (pre-refactor listing was `uze-uze-uze`, post-refactor `uze`; verified via `exposure_name_candidates = [logical, qualified]` `claude.rs:152` + `TESTED` `exposure_naming:158`) |
-| Codex | `$HOME/.agents/skills/<entry>/SKILL.md` | `$uze` (frontmatter `name`, not the delivery directory) or autonomous. `/skills` lists, does not force. | OFFICIAL (learn.chatgpt.com/docs/build-skills) + **EMPIRICAL**: `codex debug prompt-input` (real binary, no credential) listed the installed skill as `- uze:` — the clean frontmatter name, confirmed identical to what the doc predicted |
-| OpenCode | `~/.agents/skills/<entry>/SKILL.md` (one of several aliases) | V1: model-invoked `skill({ name: "uze" })` autonomous only. **V2: `/uze` slash (skills listed as commands with `(Skill)` label) + autonomous.** | OFFICIAL (opencode.ai/docs/skills + opencode.ai/v2/docs/skills) + **EMPIRICAL**: `opencode debug skill` pre-refactor listed `"name": "uze"` against `".../skills/uze-uze-uze"`; V2 `slash` frontmatter `v2/docs/skills` + PR #11390 feat skills as slash commands |
+| Claude Code | `~/.claude/skills/<entry>/SKILL.md` | Directory-name-driven: `/<entry-name>` (personal/project skills). After rename, `uze` package delivers `init` → `/uze:init` (qualified) — also autonomous, description-matched. | OFFICIAL (code.claude.com/docs/en/skills) + **EMPIRICAL** (pre-refactor listing was `uze-uze-uze`, post-refactor `uze`→`uze:init` via `exposure_name_candidates = [logical, qualified]` `claude.rs:152` + `TESTED` `exposure_naming:158`) |
+| Codex | `$HOME/.agents/skills/<entry>/SKILL.md` | `$uze:init` (frontmatter `name: init`, qualified `uze:init`) or autonomous. `/skills` lists, does not force. | OFFICIAL (learn.chatgpt.com/docs/build-skills) + **EMPIRICAL**: `codex debug prompt-input` (real binary, no credential) listed the installed skill as `- init:` — the clean frontmatter name, confirmed identical to what the doc predicted |
+| OpenCode | `~/.agents/skills/<entry>/SKILL.md` (one of several aliases) | V1: model-invoked `skill({ name: "init" })` autonomous only. **V2: `/uze:init` slash (skills listed as commands with `(Skill)` label) + autonomous.** | OFFICIAL (opencode.ai/docs/skills + opencode.ai/v2/docs/skills) + **EMPIRICAL**: `opencode debug skill` pre-refactor listed `"name": "init"` against `".../skills/uze-init"`; V2 `slash` frontmatter `v2/docs/skills` + PR #11390 feat skills as slash commands |
 
-**Update pós-refactor (2026-08-21):** O naming colision-avoidance original
-(`uze-<package>-<skill>` → `uze-uze-uze` para este pacote) foi substituído por
-`short-or-qualified` via `IntegrationPort::exposure_name_candidates`
-(`crates/uze-core/src/integration.rs:359`, `crates/uze-integrations/src/claude.rs:152`).
-Claude tenta `[logical, "id-logical"]` → `uze` bare vence quando livre; demais
-integrações usam `["id-logical"] → uze-uze`. Antes, `uze-uze-uze` era o único nome
-possível para Claude e `/uze` não funcionava (`TESTED` `exposure_naming` legacy);
-depois, `uze-uze-uze` só persiste como **receipt legado** reutilizado verbatim
-(`application.rs:996` existing-receipt-wins), novos installs obtêm `/uze`. A
-uniformidade via `description` (autonomous trigger) permanece a mais portável,
-mas agora `/uze` literal **funciona em Claude Code** sem alias.
+**Update pós-refactor + rename para `init` (2026-08-24):** O naming original
+(`uze-<package>-<skill>` → `uze-uze-uze`) foi substituído por `short-or-qualified`
+(`crates/uze-core/src/integration.rs:359`, `claude.rs:152`). Claude tenta `[logical, "id-logical"]` → `init` ou `uze:init`; demais usam `["id-logical"] → uze:init`. Antes, `uze-uze-uze` era o único nome para `/uze`; depois, `uze` bare via `init` foi substituído por `uze:init` qualificado — `/uze:init` literal **funciona em Claude Code**. Receipts legados `uze-uze-uze` persistem verbatim (`application.rs:996`).
 
-**Observação:** Codex/OpenCode continuam usando frontmatter `name: uze`
-para invocação tool (`$uze` / `skill({name:"uze"})`), independentemente do
-diretório (`uze-uze` após refactor), e agora OpenCode V2 expõe Skills como
-`/uze` slash também (ver Fase 1 atualizada).
+**Observação:** Codex/OpenCode continuam usando frontmatter `name: init`
+para invocação tool (`$uze:init` / `skill({name:"init"})`), independentemente do
+diretório (`uze:init` após rename), e OpenCode V2 expõe Skills como
+`/uze:init` slash também (ver Fase 1 atualizada).
 
 CWD/project root, shell execution, and interactive confirmation were also
 confirmed for all four: every harness runs its shell/bash tool with cwd set
@@ -69,27 +61,27 @@ questions in ordinary conversation (OpenCode additionally has a dedicated
 ## Fase 2 — dogfooding proof: no special treatment anywhere
 
 `plugins/uze/` is an ordinary Agent Plugins 1.0 package: `plugin.json` +
-`skills/uze/SKILL.md`. It was installed with the exact same `uze add`
+`skills/init/SKILL.md`. It was installed with the exact same `uze add`
 command as any other package, in a fully isolated `$HOME`/`$UZE_HOME`, and
 delivered identically to Claude Code, Codex, OpenCode, and Antigravity CLI's
 existing Skill delivery mechanisms — the same `ManagedUserScopeReference`
 path every other Skill-only package already used before this milestone.
 
 ```
-# antes do refactor (legado, ainda reutilizado verbatim se já instalado)
+# antes do rename (legado, ainda reutilizado verbatim se já instalado)
 $ uze add ./plugins/uze --trust
 Installed plugin: uze
-Attached to claude-code: <home>/.claude/skills/uze-uze-uze
-Attached to codex: <home>/.agents/skills/uze-uze-uze
-Attached to opencode: <home>/.agents/skills/uze-uze-uze
+Attached to claude-code: <home>/.claude/skills/uze
+Attached to codex: <home>/.agents/skills/uze:init
+Attached to opencode: <home>/.agents/skills/uze:init
 
-# após refactor (builtin:uze, short-or-qualified)
-# novos installs: claude → uze bare (/uze), demais → uze-uze
+# após rename para init (atual)
+# novos installs: todos → uze:init (/uze:init, $uze:init)
 $ uze doctor
 plugins: [uze builtin:uze]
-Attached to claude-code: <home>/.claude/skills/uze -> state/attachments/claude/uze
-Attached to codex: <home>/.agents/skills/uze-uze -> store/.../skills/uze
-Attached to opencode: <home>/.agents/skills/uze-uze
+Attached to claude-code: <home>/.claude/skills/uze:init -> store/.../skills/init
+Attached to codex: <home>/.agents/skills/uze:init -> store/.../skills/init
+Attached to opencode: <home>/.agents/skills/uze:init
 ```
 
 **Structural proof it needed no hardcoding**
@@ -106,7 +98,7 @@ $ grep -rn '"uze"' crates/uze-core/src/store.rs crates/uze-core/src/engine.rs cr
 
 ## Fase 3 — responsibilities (enforced in the Skill's own text, not in code)
 
-The full boundary lives in `plugins/uze/skills/uze/SKILL.md`'s "Hard
+The full boundary lives in `plugins/uze/skills/init/SKILL.md`'s "Hard
 boundaries" section. Summary: the Skill may read files, analyze the
 project, propose content, ask questions, and write *user-owned* content
 (new `AGENTS.md` prose before it exists, content moved within a vendor file
@@ -147,9 +139,9 @@ Health
 
 | Step | Claude Code | Codex | OpenCode |
 |---|---|---|---|---|
-| Discovers (pós-refactor) | `~/.claude/skills/uze/` (legado `uze-uze-uze` ainda reutilizado se já existe) | `$HOME/.agents/skills/uze-uze/` | `~/.agents/skills/uze/` (V2 `slash:true`, legado `uze-uze` ainda reutilizado)
-| Identifies itself as | `uze` (directory-derived bare, legado `uze-uze-uze` se receipt legado) | `uze` (frontmatter-derived) | `uze` (frontmatter, também `/uze` slash em V2)
-| User can explicitly invoke via | `/uze` (legado `/uze-uze-uze` ainda funciona se instalado antes) | `$uze` | **V1:** *(autonomous only, skill tool)* / **V2:** `/uze` (skill listed as command `(Skill)`)
+| Discovers (pós-rename `init`) | `~/.claude/skills/uze:init/` (legado `uze`/`uze:uze` ainda reutilizado se já existe) | `$HOME/.agents/skills/uze:init/` | `~/.agents/skills/uze:init/` (V2 `slash:true`) |
+| Identifies itself as | `uze:init` (qualified, legado `uze` se receipt legado) | `init` (frontmatter, exposição `uze:init`) | `init` (frontmatter, também `/uze:init` slash em V2) |
+| User can explicitly invoke via | `/uze:init` (legado `/uze` ainda funciona se instalado antes) | `$uze:init` | **V1:** *(autonomous only, skill tool)* / **V2:** `/uze:init` (skill listed as command `(Skill)`) |
 | User can invoke via natural language | Yes | Yes | Yes (primary mechanism) | Yes (primary mechanism) |
 | Can call `uze` CLI | Yes (bash tool) | Yes (shell tool) | Yes (bash tool) | Yes (shell tool) |
 | Project root available | Yes, session cwd | Yes, session cwd | Yes, session cwd | Yes, session cwd |
@@ -165,7 +157,7 @@ it demonstrably isn't.
 
 ## Limitations (atualizado pós-refactor/builtin)
 
-- Pós-refactor, `/uze` **é literal em Claude Code** (`uze` bare via `[logical, qualified]` `claude.rs:152`, `TESTED` `exposure_naming:158`). Legado `uze-uze-uze` persiste só como receipt reutilizado verbatim. Em Codex `$uze`, OpenCode V1 autônomo `skill({name:"uze"})` / **V2 `/uze` slash** (`slash: true` default, PR #11390). Natural-language trigger via `description` permanece o mais uniforme. Nenhum Core change escondeu a assimetria anterior — o naming foi corrigido para short-or-qualified.
+- Pós-rename `init`, `/uze:init` **é literal em Claude Code** (`uze:init` qualified via `[logical, qualified]` `claude.rs:152`, `TESTED` `exposure_naming:158`). Legado `uze:uze` persiste só como receipt reutilizado verbatim. Em Codex `$uze:init`, OpenCode V1 autônomo `skill({name:"init"})` / **V2 `/uze:init` slash** (`slash: true` default, PR #11390). Natural-language trigger via `description` permanece o mais uniforme. Nenhum Core change escondeu a assimetria anterior — o naming foi corrigido para short-or-qualified.
 - The agentic reasoning quality (does the Skill draft a *good* `AGENTS.md`,
   classify content well) has no automated eval yet — see
   `tests/_fixtures/scenarios/eval/` (L4 fixture set) for the fixture set and
