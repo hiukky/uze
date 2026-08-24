@@ -87,11 +87,16 @@ identity remain separate concerns.
 - **Easier**: labels are predictable and inspectable; two plugins shipping
   the same capability name are independently addressable without any
   collision-derived renaming; read models can show origin immediately.
-- **Harder**: the old bare-first behavior is intentionally removed —
-  existing users see fully-qualified labels even without collisions; the
-  Codex skill delivery now generates wrapper artifacts (frontmatter `name`
-  is the vendor's label source, so renaming the directory alone was
-  insufficient); per-vendor encodings must stay documented.
+- **Harder** (cont.): legacy artifacts migrate automatically: at attach time,
+  an existing receipt whose physical name is no longer the current
+  deterministic candidate is migrated to the label when the artifact is
+  exactly UZE-owned (Matched → detach + re-attach), forgotten when `Missing`
+  or taken over by foreign content (`Conflict` — foreign content is never
+  touched), and left untouched when `Drifted`/`Blocked` (the user
+  intervened). This is what heals machines that installed plugins under the
+  pre-label naming policies, including the real double-source conflicts a
+  harness can report (`~/.agents/skills/<bare>` + linked generated
+  extension both providing the same skill name).
 - **Known vendor constraint (same-name Skill + Command).** One package may
   legitimately ship `skills/review` and `commands/review` — same label
   `flow:review`, distinct canonical identities. Not all harnesses can
@@ -102,7 +107,14 @@ identity remain separate concerns.
   - Codex: one user-scope skill registry; both artifacts want one physical
     entry. Package-delivered skills stay inside the plugin (no collision);
     decomposed same-name Skill+Command is blocked deterministically
-    (`ManagedEntryConflict`) rather than silently renamed;
+    (`ManagedEntryConflict`) rather than silently renamed. Note one real
+    consequence observed on live machines: a package shipping same-named
+    Skill and Command delivers the Command through Codex's explicit-only
+    adaptation and the Skill through OpenCode's shared-root delivery —
+    both want `flow:review` in the one `~/.agents/skills` root. The first
+    attached wins and the other fails deterministically; no silent
+    renaming occurs (when the attacher is unavailable, as with a harness
+    whose setup is incomplete, the winning entry simply stands).
   - OpenCode V2 and Gemini CLI: commands and skills are separate registries,
     so both coexist naturally.
   UZE deliberately invents **no** canonical disambiguation such as

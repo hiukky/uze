@@ -93,7 +93,7 @@ impl UzeApplication {
         }
         for resource in &resources {
             if !provided.contains(&resource.identity()) {
-                let resolved = self.resolve_exposure_name(resource, integration);
+                let resolved = self.resolve_exposure_name(resource, integration)?;
                 if let Some(receipt) = integration.attach_receipt(&resolved)? {
                     state::record_receipt(
                         &self.home,
@@ -110,16 +110,16 @@ impl UzeApplication {
         &self,
         resource: &Resource,
         integration: &dyn IntegrationPort,
-    ) -> Resource {
+    ) -> Result<Resource> {
         if !matches!(
             resource.capability.kind,
             CapabilityKind::AgentSkill | CapabilityKind::Command | CapabilityKind::Mcp
         ) {
-            return resource.clone();
+            return Ok(resource.clone());
         }
         let mut resolved = resource.clone();
         let Ok(all_receipts) = state::receipts(&self.home, None) else {
-            return resolved;
+            return Ok(resolved);
         };
         let resource_id = resource.identity();
         // Only Agent Skills live in a directory shared across integrations
@@ -137,18 +137,55 @@ impl UzeApplication {
                 other.id() == other_id && other.shared_agent_skill_root().as_ref() == Some(root)
             })
         };
-        if let Some((_, existing)) = all_receipts.iter().find(|(_, receipt)| {
+        if let Some((key, existing)) = all_receipts.iter().find(|(_, receipt)| {
             receipt.resource_identity.as_deref() == Some(resource_id.as_str())
                 && (receipt.integration == integration.id() || shares_root(&receipt.integration))
         }) {
-            resolved.resolved_exposure_name = managed_artifact_exposure_name(&existing.artifact);
-            resolved.resolved_artifact_target = match &existing.artifact {
-                uze_core::integration::ManagedArtifact::SymlinkReference { target, .. } => {
-                    Some(target.clone())
+            let existing_name = managed_artifact_exposure_name(&existing.artifact);
+            let current_candidate = integration
+                .exposure_name_candidates(resource)
+                .into_iter()
+                .next();
+            // Naming-schema migration (ADR-026): an existing receipt whose
+            // physical name is no longer the integration's current single
+            // deterministic candidate is a legacy artifact from a previous
+            // naming policy (bare-first or `pkg-name`). Migrate it to the
+            // stable label instead of freezing the legacy name forever:
+            //
+            // - Matched (UZE owns the artifact exactly) → detach the old
+            //   entry and re-attach under the current label;
+            // - Missing → forget the stale receipt;
+            // - Conflict → a foreign artifact occupies the old name: UZE
+            //   surrenders that name (foreign content is never touched) and
+            //   forgets the stale receipt;
+            // - Drifted / Blocked → leave untouched (the user intervened;
+            //   UZE attaches under the label without touching that entry).
+            if let (Some(old_name), Some(canonical_name)) = (&existing_name, &current_candidate)
+                && old_name != canonical_name
+            {
+                let inspection = integration.inspect_receipt(existing);
+                match inspection.state {
+                    AttachmentState::Matched => {
+                        if integration.detach_receipt(existing)?.state == AttachmentState::Missing {
+                            state::forget_receipt(&self.home, key)?;
+                        }
+                    }
+                    AttachmentState::Missing | AttachmentState::Conflict => {
+                        state::forget_receipt(&self.home, key)?;
+                    }
+                    AttachmentState::Drifted | AttachmentState::Blocked => {}
                 }
-                _ => None,
-            };
-            return resolved;
+                // Fall through to the fresh candidate below — do not reuse.
+            } else {
+                resolved.resolved_exposure_name = existing_name;
+                resolved.resolved_artifact_target = match &existing.artifact {
+                    uze_core::integration::ManagedArtifact::SymlinkReference { target, .. } => {
+                        Some(target.clone())
+                    }
+                    _ => None,
+                };
+                return Ok(resolved);
+            }
         }
         let claimed: BTreeSet<String> = all_receipts
             .iter()
@@ -183,6 +220,6 @@ impl UzeApplication {
             .find(|candidate| !claimed.contains(*candidate))
             .cloned()
             .or_else(|| candidates.last().cloned());
-        resolved
+        Ok(resolved)
     }
 }

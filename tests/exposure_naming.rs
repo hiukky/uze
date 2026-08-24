@@ -302,11 +302,11 @@ fn official_package() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("plugins/uze")
 }
 
-// --- Legacy receipt reuse ----------------------------------------------------
+// --- Legacy receipt migration (ADR-026) -------------------------------------
 
 #[test]
-fn a_legacy_uze_prefixed_receipt_is_reused_verbatim_never_recomputed_or_duplicated() {
-    let root = temp("legacy-reuse");
+fn a_legacy_named_receipt_is_migrated_to_the_stable_label_not_frozen_forever() {
+    let root = temp("legacy-migration");
     let (application, agents_home) = app_with_opencode(&root);
     let package_dir = skill_fixture(&root.join("fixtures"), "legacy-pkg", "review");
 
@@ -318,10 +318,10 @@ fn a_legacy_uze_prefixed_receipt_is_reused_verbatim_never_recomputed_or_duplicat
         "sanity: a fresh install claims its stable namespaced label"
     );
 
-    // Simulate a pre-refactor installation: physically rename the artifact
-    // to the legacy "uze-<package>-<skill>" shape and point the ledger
-    // receipt's path at it, exactly what an install performed before this
-    // milestone would have left on disk.
+    // Simulate an install performed under the previous naming policy:
+    // physically rename the artifact to the legacy "uze-<package>-<skill>"
+    // shape and point the ledger receipt's path at it, exactly what a
+    // pre-ADR-026 install would have left on disk.
     let legacy_name = "uze-legacy-pkg-review";
     let legacy_path = skills_dir.join(legacy_name);
     let target = fs::read_link(&fresh_path).unwrap();
@@ -330,23 +330,9 @@ fn a_legacy_uze_prefixed_receipt_is_reused_verbatim_never_recomputed_or_duplicat
     std::os::unix::fs::symlink(&target, &legacy_path).unwrap();
     rewrite_receipt_path(&root, &summary.id, &fresh_path, &legacy_path);
 
-    let mut before_listing: Vec<String> = fs::read_dir(&skills_dir)
-        .unwrap()
-        .map(|entry| entry.unwrap().file_name().to_str().unwrap().to_owned())
-        .collect();
-    before_listing.sort();
-    // Filter out the default `uze` skill which is now seeded on setup; the
-    // test isolates the legacy receipt reuse, not the presence of the default plugin.
-    let before_filtered: Vec<String> = before_listing
-        .iter()
-        .filter(|name| *name != "uze:uze")
-        .cloned()
-        .collect();
-    assert_eq!(before_filtered, vec![legacy_name.to_owned()]);
-
-    // Re-run setup/attach — must reuse the legacy receipt's name exactly,
-    // never compute the new short name and create a second artifact. The
-    // the default `uze` plugin may appear alongside it after setup seeds the default plugin.
+    // Re-run setup/attach — the legacy artifact is exactly UZE-owned
+    // (Matched), so it migrates to the stable label: the legacy entry is
+    // removed, one labeled entry exists, and no second artifact is created.
     application.setup(None).unwrap();
 
     let mut after_listing: Vec<String> = fs::read_dir(&skills_dir)
@@ -361,14 +347,59 @@ fn a_legacy_uze_prefixed_receipt_is_reused_verbatim_never_recomputed_or_duplicat
         .collect();
     assert_eq!(
         after_filtered,
-        vec![legacy_name.to_owned()],
-        "exactly one non-default artifact must exist, and it must still be the legacy one"
+        vec!["legacy-pkg:review".to_owned()],
+        "the legacy name migrates to the stable label; no duplicate artifact"
     );
-    // The default `uze` is expected alongside the legacy artifact after setup.
     assert!(
-        after_listing.contains(&"uze:uze".to_owned()),
-        "default uze skill should be present alongside the legacy artifact"
+        !legacy_path.exists(),
+        "the UZE-owned legacy symlink is removed by the migration"
     );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn a_legacy_name_taken_over_by_foreign_content_is_surrendered_and_relabeled() {
+    let root = temp("legacy-conflict");
+    let (application, agents_home) = app_with_opencode(&root);
+    let package_dir = skill_fixture(&root.join("fixtures"), "legacy-pkg", "review");
+
+    let summary = install(&application, package_dir);
+    let skills_dir = agents_home.join("skills");
+    let fresh_path = skills_dir.join("legacy-pkg:review");
+    assert!(fresh_path.is_symlink());
+
+    // Simulate the shape seen on real machines: a pre-ADR-026 bare entry
+    // whose name was later taken over by a real, user-owned skill directory.
+    let legacy_name = "review";
+    let legacy_path = skills_dir.join(legacy_name);
+    let target = fs::read_link(&fresh_path).unwrap();
+    fs::remove_file(&fresh_path).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&target, &legacy_path).unwrap();
+    rewrite_receipt_path(&root, &summary.id, &fresh_path, &legacy_path);
+    fs::remove_file(&legacy_path).unwrap();
+    fs::create_dir_all(&legacy_path).unwrap();
+    fs::write(legacy_path.join("SKILL.md"), "user's own skill").unwrap();
+
+    // Re-run setup — the foreign occupant keeps its content untouched; UZE
+    // attaches under its stable label and the stale receipt is forgotten.
+    application.setup(None).unwrap();
+    assert_eq!(
+        fs::read_to_string(legacy_path.join("SKILL.md")).unwrap(),
+        "user's own skill",
+        "foreign content is never touched"
+    );
+    assert!(
+        legacy_path.is_dir() && !legacy_path.is_symlink(),
+        "the user-owned directory remains exactly as it was"
+    );
+    assert!(
+        skills_dir.join("legacy-pkg:review").is_symlink(),
+        "UZE delivers under its stable labeled name"
+    );
+    let inspection = application.inspect_plugin(&summary.id).unwrap();
+    assert_eq!(inspection.managed_state.matched, 1);
+    assert_eq!(inspection.managed_state.conflicts, 0);
     fs::remove_dir_all(root).unwrap();
 }
 

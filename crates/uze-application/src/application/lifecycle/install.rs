@@ -161,7 +161,7 @@ impl UzeApplication {
             }
             for resource in &resources {
                 if !provided.contains(&resource.identity()) {
-                    let resolved = self.resolve_exposure_name(resource, integration.as_ref());
+                    let resolved = self.resolve_exposure_name(resource, integration.as_ref())?;
                     if let Some(receipt) = integration.attach_receipt(&resolved)? {
                         let location = receipt_location(&receipt);
                         state::record_receipt(
