@@ -1,77 +1,152 @@
-# UZE — Agent Context
+# AGENTS.md
 
-## Project overview
+This file provides guidance to agentic coding tools (Claude Code, Codex,
+OpenCode, Gemini CLI) when working with code in this repository.
 
-UZE is a local compatibility and distribution layer for the agent-plugin ecosystem.
-Deterministic Rust pillars (Harness Manager / Plugin Manager / Context Manager) plus
-an agentic `/uze` Skill. Package is the distribution unit; Store (`~/.uze/store`) owns
-bytes; Integrations own harness delivery. See `README.md` and `docs/architecture/invariants.md`.
+## What this is
 
-Workspace: `uze` (binary) + `crates/uze-core`, `crates/uze-integrations`,
-`crates/uze-application`, `e2e`. Edition 2024, MSRV 1.97. Version is
-`[workspace.package].version` in root `Cargo.toml` (currently `0.1.0-alpha.7`).
+uze is a Rust CLI: a compatibility and distribution layer for agentic tooling
+across harnesses (Claude Code, Codex, OpenCode, Gemini CLI). You install a
+plugin once; uze stores its bytes centrally and delivers it through each
+harness's most native mechanism — a real plugin where one exists, native
+capabilities where it doesn't, a safe adapter only as a last resort. It also
+maintains one project context file, `AGENTS.md`, and projects it into each
+harness's own bridge/config format instead of maintaining four separately.
 
-## Build / Test / Lint / Format
+This repository is itself the official uze marketplace: `agents.json` +
+`plugins/**` at the root, with `plugins/uze` (the `/uze` Skill) as the one
+official plugin today.
 
-All commands are workspace-rooted. CI gates (`ci.yml`) are the source of truth.
+## Commands
 
 ```bash
-make build        # cargo build --locked --bin uze  (debug)
-make release      # cargo build --locked --release --bin uze
-make install      # cargo install --path . --bin uze --locked --force  (into ~/.cargo/bin; set CARGO_INSTALL_ROOT to override)
-make version      # cargo run --quiet --bin uze -- --version
+cargo build --locked --bin uze                          # debug build
+cargo build --locked --release --bin uze                 # release build
+cargo install --path . --bin uze --locked --force         # install into ~/.cargo/bin (force-rebuild, no version bump)
+cargo run --quiet --bin uze -- --version
 
-make test         # cargo test --no-fail-fast
-make fmt          # cargo fmt
-make lint         # cargo clippy -- -D warnings   (CI uses --all-targets)
-make check        # cargo fmt --check && cargo clippy -- -D warnings && cargo test --no-fail-fast
+cargo test --no-fail-fast                                 # full workspace suite
+cargo test -p uze-core some_test_name                      # single crate / targeted test during iteration
+cargo test --test package_containment                       # one top-level integration test file (tests/*.rs)
 
-# Direct cargo equivalents
 cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test --no-fail-fast
+cargo clippy --all-targets -- -D warnings                  # CI uses --all-targets; plain `clippy -- -D warnings` is the Makefile default
+cargo llvm-cov --workspace --summary-only --fail-under-lines 64 --fail-under-regions 65 --html
 ```
 
-## Workspace conventions
+`Makefile` wraps all of the above (`make build`, `make test`, `make check`,
+etc. — run `make help` for the full list). `ci.yml` is the source of truth
+for what actually gates a merge; treat `make check` as a close local proxy,
+not a guarantee of parity.
 
-- **Single version source:** bump `[workspace.package].version` before any binary is copied/installed/released (`docs/versioning.md`). Dev rebuilds need not bump; distributed builds must.
-- **Store vs harness separation:** Store never writes harness artifacts; Integrations own vendor semantics (`docs/architecture/invariants.md`).
-- **Acquisition never executes package code:** no hooks/submodules, consent boundary (`--trust`) only for remote MCP `command`.
-- **Deterministic context:** `AGENTS.md` is the portable baseline. `CLAUDE.md`/`GEMINI.md` are bridged via `@AGENTS.md`; do not hand-edit managed regions.
-- **Package vs context independence:** `uze add`/`remove`/`update` are global (Store); `uze context inspect|plan|reconcile` are project-scoped. Neither touches the other's state.
-- **CLI commands must be fast, or explicitly justified otherwise:** a new command must be classified in `src/command_performance.rs` (`Budgeted` — low-millisecond, cache-backed — or `JustifiedSlow` with a stated reason); `cargo test --bin uze` fails by name if it's missing. See ADR 018 and `docs/adr/018-cache-harness-detection-with-fingerprint-ttl-invalidation.md`.
+Run the CLI itself with `cargo run --bin uze -- <args>` or `./target/debug/uze <args>` after a build; `uze` with no args launches the terminal UI.
 
-## Structure
+## Workspace layout
 
-- `src/` + `crates/uze-*/` — core/application/integrations
-- `tests/` — vendor-neutral invariants (`tests/vendor_neutral_core.rs` etc.)
-- `e2e/` — conformance fixtures
-- `plugins/uze/` — the `/uze` Skill (ordinary local package)
-- `playground/` — WSL/distro helpers (`make install-wsl-lab`)
-- `docs/` — `adr/`, `capabilities/`, `architecture/invariants.md`
+Cargo workspace, edition 2024, MSRV 1.97. Single version source:
+`[workspace.package].version` in the root `Cargo.toml` — every crate
+inherits it; bump it before any binary is distributed (dev rebuilds don't
+need to).
 
-## UZE commands
+- `.` (binary crate `uze`) — CLI parsing (`src/main.rs`), the terminal UI
+  (`src/ui.rs`, `src/ui/`), the runtime PATH shim (`src/shim.rs`), and
+  `src/command_performance.rs`.
+- `crates/uze-core` — harness-agnostic domain: package/capability model,
+  Store, Engine, Router, exposure planning, reconciliation, acquisition,
+  provisioning, trust. Depends on nothing harness-specific and must stay
+  that way (see Architecture below).
+- `crates/uze-application` — the product-facing facade
+  (`UzeApplication`) that orchestrates Core + Integrations into
+  install/remove/update/context lifecycle operations. `src/application.rs`
+  is the large orchestration surface; `src/application/lifecycle/` holds
+  the per-operation modules (add/install/remove/update/attach).
+- `crates/uze-integrations` — one module per harness
+  (`claude`, `codex`, `gemini`, `opencode`) implementing the shared
+  `IntegrationPort` from `uze-core`, plus `shared/` for cross-vendor
+  process/path helpers.
+- `e2e` — conformance fixtures and a real-binary test harness
+  (`e2e/src/harness.rs`, `tier.rs`) for exercising uze against actual
+  vendor CLIs, not just isolated unit state.
+- `tests/` — vendor-neutral, cross-crate invariant tests (run as
+  `cargo test`'s top-level integration tests, one file per concern —
+  `package_containment.rs`, `vendor_neutral_core.rs`,
+  `runtime_shim_boundary.rs`, `invocation_labels.rs`, etc.).
+- `playground/` — WSL/distro install helpers (`make install-wsl-lab`) and a
+  default local plugin used for manual dogfooding.
+- `docs/adr/` — numbered architecture decision records (read before making
+  a structural change; recent ones cover generated native-package
+  projection, Commands-as-capability, and invocation labels).
+- `docs/architecture/invariants.md` — properties the architecture actually
+  holds today, each tied to the specific test that proves it. Treat this as
+  the canonical list of "do not break this" behaviors.
+- `openspec/` — active/archived change proposals (spec-driven work log);
+  `openspec validate --all --strict` is part of the full gate set.
 
-Root-level commands operate on the current project environment; `market`/
-`plugin`/`harness` operate on machine-level (`~/.uze`) resources — see
-`docs/adr/019-explicit-project-machine-boundary-in-cli-command-grammar.md`.
+## Architecture
 
-```bash
-# Project
-uze <plugin>@<market>       # make this project use a plugin; writes agents.lock
-uze install                 # reconcile the machine to agents.lock
-uze remove <plugin>         # remove a plugin from this project only
-uze status                  # is this project's context healthy?
-uze context inspect         # read-only: what's here, is it portable?
-uze context plan            # read-only: what would reconcile change?
-uze context reconcile       # writes: compose AGENTS.md + harness bridges
+Dependency direction is one-way and enforced by tests, not just convention:
 
-# Machine
-uze market add|list|remove|inspect
-uze plugin install|list|inspect|remove|update
-uze harness list|inspect|setup
-
-# Diagnostics
-uze doctor
-uze setup [harness]
 ```
+CLI/TUI (src/)
+      ↓
+uze-application  (orchestration: add/install/remove/update/context)
+      ↓
+uze-core         (domain contracts: Package, Store, Engine, Router,
+      ↑           IntegrationPort, capability/exposure model)
+uze-integrations (Claude, Codex, Gemini, OpenCode — implement IntegrationPort)
+```
+
+`uze-core` production code never names a specific harness (Claude/Codex/
+Gemini/OpenCode) — enforced by
+`tests/integration_conformance.rs::core_never_names_a_vendor_harness`.
+Vendor-specific knowledge lives only in `uze-integrations`. A new harness
+should require no semantic change to Store, Engine, or Router — only a new
+`IntegrationPort` implementation.
+
+Key domain concepts (see `docs/architecture/invariants.md` for the guarded
+properties):
+
+- **Store** (`uze-core::store`) owns installed package bytes and is the
+  single source of truth; it never writes anything a harness reads, and
+  integrations never mutate it.
+- **Package vs. project context are independent**: `uze add`/`remove`/
+  `update`/`market`/`plugin`/`harness` are machine-scoped (`~/.uze`);
+  `uze context inspect|plan|reconcile` are project-scoped. Neither touches
+  the other's state — see `docs/adr/019-explicit-project-machine-boundary-in-cli-command-grammar.md`.
+- **Native > Generated Native > Safe Adaptation > Unsupported** delivery
+  precedence per capability per harness. "Native" means the harness offers
+  an officially supported mechanism preserving canonical semantics — not
+  necessarily the same physical primitive across vendors (ADR-025: a UZE
+  Command is Native on Codex via an explicit-invocation-only Skill).
+- **Derived artifacts are non-authoritative and rebuildable** — anything an
+  integration generates (a generated native package, a projected bridge
+  file) can be safely deleted and regenerated from the Store + Engine
+  alone.
+- **Receipts drive lifecycle safety**: every managed filesystem artifact
+  (symlink, generated directory, config entry) is tracked by a typed
+  receipt; drift or an unreadable ledger blocks destructive mutation rather
+  than authorizing one; removal always inspects current state before
+  detaching (inspect-before-detach).
+- **The runtime PATH shim** (`src/shim.rs`, `uze-core::harness_runtime`) is
+  an experimental mechanism that projects `AGENTS.md` into a harness
+  without writing into the project; it must never recursively invoke
+  itself — this is a named, tested boundary
+  (`tests/runtime_shim_boundary.rs`).
+- **`command_performance.rs`** enforces that every CLI leaf command is
+  classified as `Budgeted` (low-millisecond, cache-backed via
+  `UzeApplication::detect_cached`) or `JustifiedSlow` with a stated reason;
+  an unclassified command fails `cargo test` by name
+  (`tests::every_cli_command_is_classified`). Classify any new command you
+  add here.
+- **Project context bridging**: `AGENTS.md` is the portable baseline for
+  project instructions. `CLAUDE.md`/`GEMINI.md` are generated bridges
+  (`@AGENTS.md`) produced by `uze context reconcile` — don't hand-edit
+  their managed regions in a *project uze manages*; this repository's own
+  root `CLAUDE.md`/`AGENTS.md` are the exception, maintained directly since
+  this is uze's own source, not a uze-managed target project.
+
+`IntegrationPort` (in `uze-core::integration`) is intentionally kept as one
+trait proven by conformance tests across all four harnesses, rather than
+split into per-capability traits (`PackageDelivery`, `SkillDelivery`, …) —
+that fragmentation has been considered and rejected absent a concrete
+implementation problem forcing it.
