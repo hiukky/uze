@@ -98,16 +98,16 @@ impl IntegrationPort for OpenCodeIntegration {
         vec!["opencode", "opencode2"]
     }
 
-    /// OpenCode's v2 installer names the binary `opencode2`, not `opencode`.
-    /// Rather than a UZE-managed symlink alias placed next to the real
-    /// binary (outside `$UZE_HOME`), the generic PATH shim resolves straight
-    /// to whichever name is actually present — see `runtime_executable_aliases`.
+    /// The V1 channel installs the canonical `opencode` binary, so the
+    /// generic PATH shim resolves it directly — no vendor alias to
+    /// reconcile. (The V2 channel named the binary `opencode2`; that gap is
+    /// intentionally out of scope while UZE targets V1.)
     fn supports_runtime_integration(&self) -> bool {
         true
     }
 
     fn runtime_executable_aliases(&self) -> &'static [&'static str] {
-        &["opencode2"]
+        &[]
     }
 
     /// OpenCode derives a skill's ID from its path (verified in the V2
@@ -133,11 +133,8 @@ impl IntegrationPort for OpenCodeIntegration {
         Some(self.skills_dir.clone())
     }
 
-    /// OpenCode's v2 installer names the binary `opencode2`; provisioning
-    /// installs or upgrades normally and reports success once either
-    /// `opencode` or `opencode2` resolves — reconciling the name gap with
-    /// UZE's canonical `opencode` invocation is the PATH shim's job
-    /// (`runtime_executable_aliases`), not provisioning's.
+    /// Provisioning targets the V1 channel (`opencode` canonical binary);
+    /// the PATH shim resolves it directly — no name gap to reconcile.
     fn provision(&self, runner: &dyn ProcessRunner) -> Result<ProvisioningResult> {
         provision_opencode(runner, || self.detect(), &self.uze_home.shims_dir())
     }

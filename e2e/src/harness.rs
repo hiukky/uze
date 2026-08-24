@@ -266,9 +266,9 @@ pub const HARNESSES: &[HarnessSpec] = &[
     HarnessSpec {
         id: "opencode",
         uze_name: "opencode",
-        // The latest channel installs the V2 preview binary (`opencode2`);
-        // the product detects either alias.
-        executable: "opencode2",
+        // The V1 channel installs the canonical `opencode` binary (the
+        // target surface of the integration; see uze-integrations/opencode).
+        executable: "opencode",
         // OpenCode has no package-level native concept: Skills are consumed
         // from the shared `.agents/skills` discovery root (symlink) and MCP
         // through the managed `opencode.json` config.

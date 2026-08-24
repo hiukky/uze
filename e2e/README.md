@@ -52,6 +52,7 @@ composed by the runner, not duplicated on disk.
 |---|---|---|
 | R1 | canonical Skill discovery | the real harness recognizes the UZE-delivered Skill |
 | R2 | user-only invocation policy | the harness's model-visible prompt is honest about who may invoke (Codex `debug prompt-input`) |
+| R2b | Codex+OpenCode shared-root coexistence | ONE `~/.agents/skills` entry serves both real harnesses: Codex's model-visible prompt excludes the user-only Skill (superset sidecar) and OpenCode loads the same entry — both setup orders |
 | R3 | package-native install | the harness's own registry reports the UZE-installed package |
 | R4 | MCP registration/discovery | the harness registers — and where possible connects — the UZE-delivered server |
 | R5 | lifecycle remove/reinstall | the harness agrees at every phase |
@@ -175,13 +176,17 @@ the image is a fresh `latest` snapshot by construction. The deterministic
   between shared-root integrations. Lab evidence: R2 `CAPABILITY_FAILURE`.
 - **Claude policy surface**: no model-free CLI introspection for invocation
   policy → R2 UNVERIFIED for Claude.
-- **OpenCode (latest channel = V2 preview)**: the channel now ships
-  `opencode2` (verified `0.0.0-beta-18050`); `opencode2 mcp list` hangs
-  (>120s, no headless output) and `debug` exposes no `skill` subcommand.
-  L2 records the resulting HarnessFailure/InfraFailure honestly — no pass
-  is invented for a channel that is not headless-friendly. The product's
-  V1-era `debug skill` evidence is superseded by this channel state, not
-  by a fake pass.
+- **OpenCode channel decision**: the integration targets the **V1 channel**
+  (canonical `opencode`, measured green: R1/R4/R5/R6/G1 PASS on `1.18.22`).
+  The V2 channel (`opencode2`, beta `0.0.0-beta-18050`) regressed every
+  surface UZE uses, verified in the Lab container: `opencode2 mcp list`
+  ignores `~/.config/opencode/opencode.json` even though the config is
+  schema-correct (and does not list a server its own `mcp add` just wrote;
+  `mcp add` targets the cwd instead of the global config), and `debug`
+  exposes no `skill` subcommand. Upstream regression, not a UZE defect;
+  revisit when the V2 channel stabilizes — the integration flip is two
+  lines (installer URL + executable aliases) and the Lab will report the
+  change automatically (R1/R4 flip from failure to Pass).
 - **MCP depth asymmetry**: Claude/OpenCode prove connectivity, Codex and
   Antigravity prove registration only.
 - **Lab vs main-suite residuals**: update-lifecycle L3, legacy fake script in

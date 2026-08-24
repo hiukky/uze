@@ -1,12 +1,9 @@
 //! OpenCode automatic provisioning and binary detection.
 //!
-//! OpenCode's v2 installer names the binary `opencode2`; provisioning
-//! installs or upgrades normally and reports success once either name
-//! resolves. Reconciling that name with UZE's canonical `opencode`
-//! invocation happens at launch time, in the generic PATH shim
-//! (`OpenCodeIntegration::runtime_executable_aliases`, resolved by
-//! `harness_runtime::resolve_real_executable`) — not here, and not through
-//! any symlink this module creates.
+//! Target channel: the V1 installer (`https://opencode.ai/install`), which
+//! installs the canonical `opencode` binary — the surface UZE's delivery
+//! semantics were validated against (global `~/.config/opencode/opencode.json`
+//! `mcp` config, shared `~/.agents/skills`, `debug skill` discovery).
 
 use std::{path::Path, process::Command};
 
@@ -82,7 +79,7 @@ pub(super) fn provision_opencode(
         Some((which, _)) => ProcessSpec::new(which.clone(), ["upgrade"]).with_inherited_output(),
         None => ProcessSpec::new(
             "sh",
-            ["-c", "curl -fsSL https://opencode.ai/v2/install | bash"],
+            ["-c", "curl -fsSL https://opencode.ai/install | bash"],
         )
         .with_inherited_output(),
     };
@@ -202,7 +199,7 @@ mod provision_tests {
             assert_eq!(commands[0].arguments, ["upgrade"]);
         } else {
             assert_eq!(commands[0].program, "sh");
-            assert!(commands[0].arguments[1].contains("opencode.ai/v2/install"));
+            assert!(commands[0].arguments[1].contains("opencode.ai/install"));
         }
         assert_eq!(commands.len(), 1);
     }
