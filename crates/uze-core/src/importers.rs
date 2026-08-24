@@ -69,8 +69,11 @@ pub(crate) fn import_from_manifest(
     }
 
     let mut optional_enhancements = Vec::new();
+    // `commands/` is deliberately NOT here (ADR-030): explicit-action
+    // semantics are carried by a Skill's `invoke:` invocation policy, and
+    // a vendor-authored `commands/` directory inside an explicit plugin
+    // envelope is delivered natively — never re-discovered canonically.
     for (directory, kind) in [
-        ("commands", CapabilityKind::Command),
         ("agents", CapabilityKind::Agent),
         ("hooks", CapabilityKind::Hook),
     ] {

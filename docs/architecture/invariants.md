@@ -63,28 +63,69 @@ carved-out exception.
 
 > `tests/integration_conformance.rs::core_never_names_a_vendor_harness`
 
-### Native means preserved semantics, not identical primitives (ADR-025)
+### Native means preserved semantics, not identical primitives (ADR-025, refined by ADR-030)
 
 A route is **Native** when a harness offers a first-class, officially
 supported mechanism that preserves the canonical semantics of the
 capability. It does **not** require the same vendor name, file format, or
 physical primitive across vendors: UZE models user-visible semantics, and
 the same canonical capability may legitimately be Native on every harness
-through differently-named primitives. In particular, a UZE Command is
-Native on Codex via that harness's official explicit-invocation-only Skill
-(`agents/openai.yaml` → `policy.allow_implicit_invocation: false`) even
-though the physical artifact is a Skill — the canonical identity remains
-`CapabilityKind::Command`, the model cannot auto-select it, and explicit
-user invocation (`$name` / `/skills`) is preserving the Command semantics.
-The same definition is what makes Antigravity's Command route **Adapted**
-rather than Native: its only primitive is commands→Skills conversion and
-Skills are model-discoverable, so the explicit-only property is not
-preserved — the loss is declared, never silently covered.
+through differently-named primitives. The canonical capability is the
+Skill, and its semantics are *who may invoke it* (invocation policy,
+ADR-030). A user-only Skill is Native on Claude Code via
+`disable-model-invocation: true` and on Codex via
+`agents/openai.yaml` → `policy.allow_implicit_invocation: false`, even
+though both deliver a Skill-shaped artifact; a vendor `Command` is only a
+projection detail it may be generated from. The same definition is what
+makes Antigravity's non-default policies **Adapted** rather than Native:
+its only primitive is Skills that are both model-discoverable and
+slash-invocable, so neither half of a non-default policy is preserved —
+the loss is declared in the evidence, never silently covered. Package
+exact coverage is semantic-aware: an envelope only claims a Skill when the
+policy is actually preserved (`provided = discovered ∩ safely
+representable`).
 
-> `tests/command_capability_conformance.rs::codex_delivers_command_natively_via_explicit_only_skill`
-> `tests/command_capability_conformance.rs::real_codex_dogfood_explicit_only_preserves_command_semantics`
-> `tests/command_capability_conformance.rs::same_name_skill_and_command_stay_distinct_on_codex`
-> `tests/command_capability_conformance.rs::antigravity_delivers_command_adapted_via_converted_skill`
+> `tests/skill_invocation_conformance.rs::codex_routes_every_combination_honestly`
+> `tests/skill_invocation_conformance.rs::antigravity_routes_every_combination_honestly`
+> `tests/skill_invocation_conformance.rs::opencode_routes_every_combination_natively`
+> `tests/skill_invocation_conformance.rs::claude_routes_every_combination_at_capability_level`
+> `tests/skill_invocation_conformance.rs::codex_generated_package_never_claims_a_model_only_skill`
+> `tests/skill_invocation_conformance.rs::antigravity_generated_package_never_claims_a_user_only_skill`
+> `tests/skill_invocation_conformance.rs::claude_generated_package_covers_a_user_only_skill_and_materializes_the_marker`
+> `crates/uze-integrations/src/claude/plugin.rs::claude_native_coverage_tests::explicit_user_only_skill_with_the_vendor_marker_is_covered`
+> `crates/uze-integrations/src/claude/plugin.rs::claude_native_coverage_tests::explicit_user_only_skill_without_the_vendor_marker_is_not_covered`
+> `crates/uze-integrations/src/claude/generate.rs::generated_native_tests::user_only_skill_is_materialized_with_the_claude_marker`
+
+### A Skill nobody may invoke is never projected (ADR-030)
+
+`invoke: {model: false, user: false}` is invalid — it is parsed and kept
+explicit (never silently defaulted to a model-visible or user-visible
+combination), every integration routes it Unsupported, and no receipt,
+symlink or generated file is ever created for it.
+
+> `tests/skill_invocation_conformance.rs::invalid_policy_never_creates_a_receipt_anywhere`
+> `crates/uze-core/src/skill.rs::invalid_combination_is_kept_explicit_never_defaulted`
+
+### Existing Skills without `invoke:` behave exactly as before (ADR-030)
+
+The canonical default is model+user; a SKILL.md with no `invoke:` block is
+discovered with no parsed policy (defaults apply), delivered byte-preserving
+where it always was, and never gains a policy sidecar it did not declare.
+
+> `tests/skill_invocation_conformance.rs::default_skill_package_installs_cleanly_on_every_harness_as_before`
+> `tests/skill_invocation_conformance.rs::absent_invoke_block_defaults_to_model_and_user_and_behaves_as_before`
+> `crates/uze-core/src/project.rs::skill_without_invocation_block_defaults_and_is_not_reattached`
+
+### A reused shared-root entry never silently loses an invocation policy
+
+Codex and OpenCode share `~/.agents/skills`. When one harness reuses the
+other's physical entry, the artifact must still carry the reusing
+harness's own invocation encoding — otherwise the attach fails
+deterministically (`ProjectionConflict`) instead of silently degrading a
+user-only or model-only policy.
+
+> `tests/skill_invocation_conformance.rs::model_only_skill_shared_root_detects_cross_integration_policy_loss`
+> `tests/skill_invocation_conformance.rs::user_only_skill_installs_cleanly_with_codex_and_opencode`
 
 ### Invocation labels are stable and presentation-only (ADR-026)
 

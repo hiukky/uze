@@ -51,9 +51,9 @@
 //! Split by concern: [`provision`] (official installer + detection),
 //! [`plugin`] (explicit plugin delivery + `agy plugin list` inspection),
 //! [`generate`] (generated plugin for canonical-MCP translation),
-//! [`skills`] (managed global-skills reference), [`commands`] (generated
-//! command-as-skill adaptation) and [`mcp`] (`agy mcp add` registration).
-//! This file is the composition root.
+//! [`skills`] (managed global-skills reference, invocation-policy-aware)
+//! and [`mcp`] (`agy mcp add` registration). This file is the composition
+//! root.
 
 use std::{collections::BTreeMap, fs, path::Path, path::PathBuf};
 
@@ -75,7 +75,6 @@ use uze_core::{
     store::StoredPackage,
 };
 
-mod commands;
 mod generate;
 mod mcp;
 mod plugin;
@@ -184,17 +183,18 @@ impl IntegrationPort for AntigravityIntegration {
             native: [CapabilityKind::AgentSkill, CapabilityKind::Mcp]
                 .into_iter()
                 .collect(),
-            // Antigravity has NO independent custom-command primitive: the
-            // official migration path converts legacy commands to
-            // Skills, and Skills are model-discoverable with no observable
-            // explicit-only mechanism (verified against agy 1.1.19;
-            // `commands: N processed (converted to skills)`). Per ADR-025,
-            // Native requires preserving the canonical Command semantics —
-            // the explicit-only property degrades here, so Command is
-            // declared Adaptable, never Native.
-            adaptable: [CapabilityKind::Command].into_iter().collect(),
+            // Non-default invocation policies are ADAPTED, never Native:
+            // Antigravity has no explicit-invocation-only mechanism and no
+            // way to hide a Skill from the model or the user's slash
+            // surface (verified against agy 1.1.19 — the official
+            // migration path converts legacy commands to Skills, which are
+            // both model-discoverable and slash-invocable). Per ADR-030,
+            // Native requires preserving the canonical invocation policy;
+            // the non-default half degrades here. This is declared through
+            // the per-resource exposure plan, kept honest per policy — a
+            // default model+user Skill is fully Native.
             verification: VerificationStatus::Unverified,
-            evidence: "Antigravity CLI consumes UZE's native plugins: the canonical package itself is a valid plugin (plugin.json name/description; extra fields tolerated), so an envelope-less package is installed straight from the Store via `agy plugin install`; one with a canonical mcp.json gets a deterministically synthesized plugin carrying a translated mcp_config.json, installed from a UZE-owned derived directory (verified against real agy 1.1.19 dogfood: validate → install → list → uninstall). Commands are ADAPTED through Antigravity's official commands→Skills conversion (verified against 1.1.19); no explicit-invocation-only mechanism exists. MCP falls back to `agy mcp add` (global ~/.gemini/config/mcp_config.json) for resources outside plugin coverage. AGENTS.md is read natively (official docs: identical workspace context rules), so context needs no bridge."
+            evidence: "Antigravity CLI consumes UZE's native plugins: the canonical package itself is a valid plugin (plugin.json name/description; extra fields tolerated), so an envelope-less package is installed straight from the Store via `agy plugin install`; one with a canonical mcp.json gets a deterministically synthesized plugin carrying a translated mcp_config.json, installed from a UZE-owned derived directory (verified against real agy 1.1.19 dogfood: validate → install → list → uninstall). Non-default invocation policies are ADAPTED (no explicit-invocation-only mechanism exists; Skills stay model-discoverable and slash-invocable — verified against 1.1.19). MCP falls back to `agy mcp add` (global ~/.gemini/config/mcp_config.json) for resources outside plugin coverage. AGENTS.md is read natively (official docs: identical workspace context rules), so context needs no bridge."
                 .to_owned(),
             ..HarnessCapabilities::default()
         }
@@ -259,18 +259,15 @@ impl IntegrationPort for AntigravityIntegration {
         )
     }
 
-    /// Antigravity's naming decision: every UZE-projected Skill and Command
-    /// gets its stable namespaced invocation label (`flow:review`) as the
-    /// single candidate — never a bare alias, never collision-dependent
-    /// naming (ADR-026). `agy plugin validate` accepts `:` in skill names
+    /// Antigravity's naming decision: every UZE-projected Skill gets its
+    /// stable namespaced invocation label (`flow:review`) as the single
+    /// candidate — never a bare alias, never collision-dependent naming
+    /// (ADR-026). `agy plugin validate` accepts `:` in skill names
     /// (verified against 1.1.19). MCP stays on the default fully-qualified
     /// policy — capability naming policies are never mixed.
     fn exposure_name_candidates(&self, resource: &Resource) -> Vec<String> {
-        if matches!(
-            resource.capability.kind,
-            CapabilityKind::AgentSkill | CapabilityKind::Command
-        ) {
-            return commands::antigravity_command_exposure_name_candidates(resource);
+        if resource.capability.kind == CapabilityKind::AgentSkill {
+            return skills::antigravity_skill_exposure_name_candidates(resource);
         }
         default_exposure_name_candidates(resource)
     }
@@ -284,11 +281,10 @@ impl IntegrationPort for AntigravityIntegration {
         }
         match resource.capability.kind {
             CapabilityKind::AgentSkill => self.skill_exposure_plan(resource),
-            CapabilityKind::Command => self.command_exposure_plan(resource),
             CapabilityKind::Mcp => self.mcp_exposure_plan(resource),
             _ => unsupported(
                 resource,
-                "Antigravity attachment is only modeled for Agent Skills, Commands, and MCP servers.",
+                "Antigravity attachment is only modeled for Agent Skills and MCP servers.",
             ),
         }
     }
@@ -321,7 +317,7 @@ impl IntegrationPort for AntigravityIntegration {
                 route: CompatibilityRoute::Native,
                 verification: VerificationStatus::Unverified,
                 provided_resource_identities: provided,
-                evidence: "The canonical package's own plugin.json is a valid Antigravity plugin manifest, but its MCP servers live in canonical mcp.json, which the plugin system does not read. UZE synthesizes a deterministic plugin (plugin.json + mcp_config.json translation + symlinked skills/commands) into a UZE-owned derived directory and installs that — never the Store."
+                evidence: "The canonical package's own plugin.json is a valid Antigravity plugin manifest, but its MCP servers live in canonical mcp.json, which the plugin system does not read. UZE synthesizes a deterministic plugin (plugin.json + mcp_config.json translation + symlinked skills/) into a UZE-owned derived directory and installs that — never the Store."
                     .to_owned(),
             });
         }
@@ -331,7 +327,7 @@ impl IntegrationPort for AntigravityIntegration {
             route: CompatibilityRoute::Native,
             verification: VerificationStatus::Unverified,
             provided_resource_identities: provided,
-            evidence: "The canonical plugin.json is a valid Antigravity plugin manifest, so the package is installed whole, straight from the UZE store, through `agy plugin install`; its conventional skills/ and commands/ (converted to skills by the CLI) plus any author-shipped mcp_config.json are what it declares. Undeclared resources fall back to individual attachment."
+            evidence: "The canonical plugin.json is a valid Antigravity plugin manifest, so the package is installed whole, straight from the UZE store, through `agy plugin install`; its conventional skills/ plus any author-shipped mcp_config.json are what it declares (default-policy Skills only — a non-default invoke policy degrades and is delivered capability-level, reported honestly). Undeclared resources fall back to individual attachment."
                 .to_owned(),
         })
     }
@@ -358,19 +354,13 @@ impl IntegrationPort for AntigravityIntegration {
         let plan = self.exposure_plan(resource);
         match &plan.mechanism {
             ExposureMechanism::ManagedUserScopeReference { .. } => {
-                // Materialize the generated projection first — and only when
+                // Materialize the generated wrapper first — and only when
                 // this resource owns the physical entry (a resolved shared
                 // artifact is authoritative; nothing new may replace it).
-                if resource.resolved_artifact_target.is_none() {
-                    match resource.capability.kind {
-                        CapabilityKind::Command => {
-                            commands::materialize_generated_command(&self.uze_home, resource)?;
-                        }
-                        CapabilityKind::AgentSkill => {
-                            commands::materialize_generated_skill(&self.uze_home, resource)?;
-                        }
-                        _ => {}
-                    }
+                if resource.resolved_artifact_target.is_none()
+                    && resource.capability.kind == CapabilityKind::AgentSkill
+                {
+                    skills::materialize_generated_skill(&self.uze_home, resource)?;
                 }
                 Ok(Some(plan.mechanism.attach()?))
             }

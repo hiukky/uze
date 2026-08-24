@@ -55,15 +55,6 @@ pub enum ManagedArtifact {
         region_identity: String,
         expected_content: String,
     },
-    /// UZE owns one whole generated file inside a vendor-managed directory.
-    /// See `ExposureMechanism::ManagedFile` and `crate::managed_file`, which
-    /// every safety rule for this variant lives in. Content is the entire
-    /// ownership proof; the variant carries no knowledge of what
-    /// `expected_content` means or which harness reads it.
-    ManagedFile {
-        path: PathBuf,
-        expected_content: String,
-    },
     /// A delivery whose ownership proof only the owning integration can
     /// interpret. The Core routes it by `receipt.integration`, never reads
     /// `detail`, and refuses to inspect or detach it generically.
@@ -345,9 +336,6 @@ pub trait IntegrationPort {
             ExposureMechanism::ManagedTextRegion { .. } => {
                 Ok(Some(plan.mechanism.attach_text_region()?))
             }
-            ExposureMechanism::ManagedFile { .. } => {
-                Ok(Some(plan.mechanism.attach_managed_file()?))
-            }
             _ => Ok(None),
         }
     }
@@ -449,13 +437,6 @@ pub trait IntegrationPort {
                 region_identity,
                 expected_content,
             },
-            ExposureMechanism::ManagedFile {
-                target_file,
-                expected_content,
-            } => ManagedArtifact::ManagedFile {
-                path: target_file,
-                expected_content,
-            },
             _ => return Ok(None),
         };
         Ok(Some(AttachmentReceipt {
@@ -503,20 +484,17 @@ pub fn qualified_capability_name(package_id: &str, logical_name: &str) -> String
     format!("{package_id}:{logical_name}")
 }
 
-/// The single candidate for every UZE-projected Skill and Command: its own
-/// stable namespaced invocation label (`flow:review`), never a bare alias
-/// and never a collision-dependent qualification (ADR-026). One candidate
-/// by construction, so installation order and the presence of other plugins
-/// cannot change it. Non-Skill/Command capabilities (MCP) deliberately
-/// stay on [`default_exposure_name_candidates`].
+/// The single candidate for every UZE-projected Skill: its own stable
+/// namespaced invocation label (`flow:review`), never a bare alias and
+/// never a collision-dependent qualification (ADR-026). One candidate by
+/// construction, so installation order and the presence of other plugins
+/// cannot change it. Other capabilities (MCP) deliberately stay on
+/// [`default_exposure_name_candidates`].
 pub fn qualified_exposure_name_candidates(resource: &crate::project::Resource) -> Vec<String> {
     let crate::project::ResourceOrigin::Package { id, .. } = &resource.origin else {
         return Vec::new();
     };
-    if !matches!(
-        resource.capability.kind,
-        CapabilityKind::AgentSkill | CapabilityKind::Command
-    ) {
+    if resource.capability.kind != CapabilityKind::AgentSkill {
         return Vec::new();
     }
     let Some(logical) = resource.logical_capability_name() else {
@@ -537,9 +515,6 @@ pub fn managed_artifact_exposure_name(artifact: &ManagedArtifact) -> Option<Stri
             path.file_name()?.to_str().map(str::to_owned)
         }
         ManagedArtifact::VendorConfigEntry { entry_name, .. } => Some(entry_name.clone()),
-        // A managed file is one physical file with one name of its own, so
-        // it participates in naming resolution like a symlink does.
-        ManagedArtifact::ManagedFile { path, .. } => path.file_name()?.to_str().map(str::to_owned),
         // A text region spans a *portion* of a shared file, not a dedicated
         // entry; an integration-owned artifact's naming is opaque to the
         // Core by design.
@@ -583,10 +558,6 @@ pub fn inspect_standard_receipt(receipt: &AttachmentReceipt) -> AttachmentInspec
             region_identity,
             expected_content,
         } => crate::text_region::inspect(target_file, region_identity, expected_content),
-        ManagedArtifact::ManagedFile {
-            path,
-            expected_content,
-        } => crate::managed_file::inspect(path, expected_content),
         _ => AttachmentInspection {
             state: AttachmentState::Blocked,
             reason: "integration must inspect this vendor artifact".to_owned(),
@@ -608,15 +579,6 @@ pub fn detach_standard_receipt(receipt: &AttachmentReceipt) -> Result<Attachment
         // own destructive write, per the same ADR-009 discipline the rest of
         // this function applies below for a symlink.
         return crate::text_region::detach(target_file, region_identity, expected_content);
-    }
-    if let ManagedArtifact::ManagedFile {
-        path,
-        expected_content,
-    } = &receipt.artifact
-    {
-        // `managed_file::detach` holds the same re-inspect-before-write
-        // discipline for a whole-file artifact.
-        return crate::managed_file::detach(path, expected_content);
     }
     let inspection = inspect_standard_receipt(receipt);
     if inspection.state != AttachmentState::Matched {
@@ -655,7 +617,6 @@ pub fn receipt_location(receipt: &AttachmentReceipt) -> PathBuf {
             region_identity,
             ..
         } => PathBuf::from(format!("{}#{region_identity}", target_file.display())),
-        ManagedArtifact::ManagedFile { path, .. } => path.clone(),
         ManagedArtifact::IntegrationOwned { kind, selector, .. } => {
             PathBuf::from(format!("{kind}:{selector}"))
         }

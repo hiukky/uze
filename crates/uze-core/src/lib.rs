@@ -15,7 +15,6 @@ pub mod home;
 pub mod importer;
 pub mod importers;
 pub mod integration;
-pub mod managed_file;
 pub mod persistence;
 pub mod project;
 pub mod project_lock;
@@ -25,6 +24,7 @@ pub mod reconciliation;
 pub mod router;
 pub mod runtime;
 pub mod shell_path;
+pub mod skill;
 pub mod state;
 pub mod store;
 pub mod text_region;
@@ -34,11 +34,12 @@ pub mod workspace;
 pub use acquisition::{MaterializedPackage, PackageSource, Provenance, ResolvedSource};
 pub use bundle::ImportedBundle;
 pub use engine::UzeEngine;
-pub use error::{Result, UzeError};
+pub use error::{ProjectionConflictDetails, Result, UzeError};
 pub use exposure::{ExposureMechanism, ExposurePlan, PackageExposurePlan, PreparedExposure};
 pub use home::UzeHome;
 pub use project::{
     EffectiveEnvironment, ResolvedProject, Resource, ResourceOrigin, resolve_project,
     resolve_project_resources,
 };
+pub use skill::SkillInvocationPolicy;
 pub use store::{PackageId, StoredPackage, UzeStore};

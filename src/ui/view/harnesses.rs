@@ -305,7 +305,6 @@ fn compatibility_rows(harness: &HarnessHealth) -> Vec<(&'static str, &'static st
     };
     let routed = [
         ("Skills", CapabilityKind::AgentSkill),
-        ("Commands", CapabilityKind::Command),
         ("MCP", CapabilityKind::Mcp),
     ]
     .into_iter()

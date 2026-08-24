@@ -12,11 +12,11 @@ discovery directory and the global `mcp` object in `opencode.json`.
 |---|---|---|---|
 | Plugin (package-level) | Unsupported (by design) | — no native envelope exists to consume | CODE_FACT |
 | Skills | Supported | Native — managed symlink in `~/.agents/skills` | EMPIRICAL (OpenCode 1.18.18, 2026-08-20, real behavioral proof-token run — see ADR-006) |
+| Skill invocation policy | Supported, native for every combination | Generated wrapper SKILL.md with `metadata.opencode/autoinvoke: false` (model=false) / `slash: false` (user=false); the vendor Command primitive is never needed (ADR-030) | DOCUMENTED (OpenCode V2 skills docs); wrapper syntax follows the documented `metadata: { opencode/autoinvoke: <bool> }` shape |
 | MCP | Supported | Adapted — direct write to `opencode.json`'s `mcp.<name>` | TESTED (config-level); no behavioral/CLI-discovery probe recorded for OpenCode in any ADR |
 | Instructions/Context | Native (outside this crate) | Reads `AGENTS.md` directly, no bridge needed | DOCUMENTED (ADR-014) |
 | Agents | Not implemented | `CapabilityKind::Agent` is import-only, routed to no integration | CODE_FACT |
 | Hooks | Not implemented | `CapabilityKind::Hook` is import-only, routed to no integration | CODE_FACT |
-| Commands | Not implemented | Research-only, not modeled as a capability at all | DOCUMENTED (`docs/capabilities/commands.md`) |
 | Runtime projection | None | `runtime_contribution`/`supports_runtime_integration` never overridden — inherits passthrough default | CODE_FACT |
 
 ## Delivery

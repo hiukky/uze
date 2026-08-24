@@ -26,7 +26,8 @@ use uze_core::{
 /// deliberately distinct from `MARKETPLACE_NAME` ("uze-local", reserved for
 /// explicit envelopes and never touched here) so a generated envelope can
 /// never be confused with, or silently override, an author-provided one.
-pub(super) const GENERATED_MARKETPLACE_NAME: &str = "uze-local-generated";
+/// Named "uze-store" (shorter than the original "uze-local-generated").
+pub(super) const GENERATED_MARKETPLACE_NAME: &str = "uze-store";
 
 /// The `kind` this module stamps on its own receipts. Distinct from
 /// `marketplace-plugin` (the explicit-envelope kind) so a receipt's own
@@ -67,12 +68,19 @@ pub(super) fn generatable(package: &StoredPackage) -> bool {
 }
 
 /// The intersection ADR-013 §2 requires (`provided = discovered ∩
-/// declared`), computed against the STRUCTURAL surface a generated manifest
-/// declares — not by re-parsing a manifest this same module just wrote, so
-/// generation and coverage agree by construction. Identical rule to
-/// Claude's `generated_exact_coverage`: a Skill is covered iff it lives
-/// under the package's conventional `skills/` directory; an MCP server is
-/// covered iff its name appears in the package's own `mcp.json`.
+/// declared`), computed against the SEMANTIC surface a generated manifest
+/// can preserve — not by re-parsing a manifest this same module just wrote,
+/// so generation and coverage agree by construction (ADR-030 §13).
+///
+/// A Skill is covered iff it lives under the package's conventional
+/// `skills/` directory AND its `invoke:` policy can be preserved by the
+/// generated envelope: default and user-only (the envelope materializes the
+/// `agents/openai.yaml` sidecar) qualify; model-only degrades on Codex
+/// (explicit `$skill` invocation cannot be disabled) and is therefore never
+/// claimed — it falls through to capability-level delivery, which reports
+/// the Degradation honestly; the invalid combination is never claimed
+/// either. An MCP server is covered iff its name appears in the package's
+/// own `mcp.json`.
 pub(super) fn generated_exact_coverage(
     package: &StoredPackage,
     resources: &[&Resource],
@@ -99,7 +107,7 @@ pub(super) fn generated_exact_coverage(
                 let Some(parent) = relative.parent() else {
                     continue;
                 };
-                if parent.starts_with("skills") {
+                if parent.starts_with("skills") && codex_policy_is_envelope_preservable(resource) {
                     provided.insert(resource.identity());
                 }
             }
@@ -114,6 +122,16 @@ pub(super) fn generated_exact_coverage(
         }
     }
     provided
+}
+
+/// Whether the generated envelope can preserve one Skill's canonical
+/// invocation policy for Codex (ADR-030 §13). All valid combinations except
+/// model-only qualify: Codex's own `agents/openai.yaml` sidecar covers
+/// `model=false`, the default needs nothing, and `user=false` cannot be
+/// enforced anywhere on Codex.
+fn codex_policy_is_envelope_preservable(resource: &Resource) -> bool {
+    let policy = resource.skill_invocation();
+    !policy.is_invalid() && !(policy.model && !policy.user)
 }
 
 /// The generated `.codex-plugin/plugin.json` document. Name/version/
@@ -199,15 +217,173 @@ pub(super) fn materialize_generated_package(
         source,
     })?;
 
-    let skills_source = package.root.join("skills");
-    if skills_source.is_dir() {
-        symlink(&skills_source, &dir.join("skills"))?;
-    }
+    materialize_generated_skills(package, &dir)?;
     let mcp_source = package.root.join("mcp.json");
     if mcp_source.is_file() {
         symlink(&mcp_source, &dir.join(".mcp.json"))?;
     }
     Ok(dir)
+}
+
+/// Materializes the generated envelope's `skills/` surface (ADR-030 §13).
+/// Default-policy skills stay byte-preserving whole-directory symlinks; a
+/// user-only Skill gets its own UZE-owned directory with a materialized
+/// SKILL.md (canonical name/description/body) plus Codex's
+/// `agents/openai.yaml` invocation-policy sidecar — the same Derived
+/// Artifact discipline as the capability-level wrapper, applied at package
+/// level. Invalid or model-only Skills are never materialized here and are
+/// excluded from coverage.
+fn materialize_generated_skills(package: &StoredPackage, envelope_dir: &Path) -> Result<()> {
+    if !package.root.join("skills").is_dir() {
+        return Ok(());
+    }
+    let resources = uze_core::engine::package_resources_at(&package.id, &package.root)?;
+    for resource in resources.into_iter().filter(|resource| {
+        resource.capability.kind == uze_core::capability::CapabilityKind::AgentSkill
+    }) {
+        let policy = resource.skill_invocation();
+        if policy.is_invalid() || (policy.model && !policy.user) {
+            continue;
+        }
+        let canonical_dir = resource
+            .capability
+            .path
+            .parent()
+            .expect("SKILL.md has a parent");
+        let skill_name = resource
+            .logical_capability_name()
+            .unwrap_or_else(|| resource.name());
+        let target_dir = envelope_dir.join("skills").join(&skill_name);
+        fs::create_dir_all(target_dir.parent().expect("skill dir has a parent")).map_err(
+            |source_error| UzeError::Write {
+                path: target_dir
+                    .parent()
+                    .expect("skill dir has a parent")
+                    .to_path_buf(),
+                source: source_error,
+            },
+        )?;
+        if policy.is_default() {
+            match fs::symlink_metadata(&target_dir) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    let current =
+                        fs::read_link(&target_dir).map_err(|source_error| UzeError::Read {
+                            path: target_dir.clone(),
+                            source: source_error,
+                        })?;
+                    if current != canonical_dir {
+                        fs::remove_dir_all(&target_dir).map_err(|source_error| {
+                            UzeError::Write {
+                                path: target_dir.clone(),
+                                source: source_error,
+                            }
+                        })?;
+                        symlink(canonical_dir, &target_dir)?;
+                    }
+                }
+                Ok(_) => return Err(UzeError::ManagedEntryConflict(target_dir.clone())),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    symlink(canonical_dir, &target_dir)?;
+                }
+                Err(error) => {
+                    return Err(UzeError::Read {
+                        path: target_dir.clone(),
+                        source: error,
+                    });
+                }
+            }
+            continue;
+        }
+        materialize_user_only_skill_dir(&target_dir, canonical_dir, &skill_name, &policy)?;
+    }
+    Ok(())
+}
+
+/// Writes one materialized user-only Skill directory: SKILL.md with the
+/// canonical identity/description/body plus Codex's policy sidecar, with
+/// every other canonical file still referenced.
+fn materialize_user_only_skill_dir(
+    target_dir: &Path,
+    canonical_dir: &Path,
+    skill_name: &str,
+    policy: &uze_core::skill::SkillInvocationPolicy,
+) -> Result<()> {
+    match fs::symlink_metadata(target_dir) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            fs::remove_file(target_dir).map_err(|source_error| UzeError::Write {
+                path: target_dir.to_path_buf(),
+                source: source_error,
+            })?;
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(UzeError::Read {
+                path: target_dir.to_path_buf(),
+                source: error,
+            });
+        }
+    }
+    fs::create_dir_all(target_dir).map_err(|source_error| UzeError::Write {
+        path: target_dir.to_path_buf(),
+        source: source_error,
+    })?;
+    let bytes = fs::read(canonical_dir.join("SKILL.md")).map_err(|error| UzeError::Read {
+        path: canonical_dir.join("SKILL.md"),
+        source: error,
+    })?;
+    let (description, body) = crate::shared::skill::parse_skill_body(&bytes);
+    let name = crate::shared::skill::frontmatter_value(&bytes, "name")
+        .unwrap_or_else(|| skill_name.to_owned());
+    let mut document = String::from("---\n");
+    document.push_str(&format!("name: {name}\n"));
+    if let Some(description) = description {
+        let escaped = crate::shared::skill::escape_yaml_double_quoted(&description);
+        document.push_str(&format!("description: \"{escaped}\"\n"));
+    }
+    document.push_str("---\n");
+    document.push_str(&body);
+    fs::write(target_dir.join("SKILL.md"), document).map_err(|source_error| UzeError::Write {
+        path: target_dir.join("SKILL.md"),
+        source: source_error,
+    })?;
+    let policy_file = target_dir.join("agents/openai.yaml");
+    if !policy.model {
+        fs::create_dir_all(policy_file.parent().expect("policy file has a parent")).map_err(
+            |source_error| UzeError::Write {
+                path: policy_file
+                    .parent()
+                    .expect("policy file has a parent")
+                    .to_path_buf(),
+                source: source_error,
+            },
+        )?;
+        fs::write(&policy_file, super::skills::EXPLICIT_ONLY_POLICY_YAML).map_err(
+            |source_error| UzeError::Write {
+                path: policy_file,
+                source: source_error,
+            },
+        )?;
+    }
+    for entry in fs::read_dir(canonical_dir).map_err(|error| UzeError::Read {
+        path: canonical_dir.to_path_buf(),
+        source: error,
+    })? {
+        let entry = entry.map_err(|error| UzeError::Read {
+            path: canonical_dir.to_path_buf(),
+            source: error,
+        })?;
+        let name = entry.file_name();
+        if name == "SKILL.md" {
+            continue;
+        }
+        let source = entry.path();
+        let target = target_dir.join(&name);
+        if !target.exists() && !target.is_symlink() {
+            symlink(&source, &target)?;
+        }
+    }
+    Ok(())
 }
 
 /// Removes one package's generated envelope directory by id alone — used at
@@ -550,10 +726,12 @@ mod generated_native_tests {
         );
         assert!(dir.starts_with(uze_home.state_dir()));
         assert!(dir.join(".codex-plugin/plugin.json").is_file());
-        assert!(dir.join("skills").is_symlink());
+        // Default-policy skills stay byte-preserving whole-directory
+        // symlinks; `skills/` itself is now a real envelope subdirectory.
+        assert!(dir.join("skills/commit").is_symlink());
         assert_eq!(
-            fs::read_link(dir.join("skills")).unwrap(),
-            pkg.root.join("skills")
+            fs::read_link(dir.join("skills/commit")).unwrap(),
+            pkg.root.join("skills/commit")
         );
         assert!(dir.join(".mcp.json").is_symlink());
         assert_eq!(

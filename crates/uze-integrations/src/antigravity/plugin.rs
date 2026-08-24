@@ -80,12 +80,14 @@ pub(super) fn declared_servers(path: &Path) -> BTreeSet<String> {
 /// Antigravity plugin — the intersection ADR-013 §2 requires
 /// (`provided = discovered ∩ declared`), mirroring the other
 /// integrations' exact-coverage functions. Antigravity's schema declares
-/// no `skills`/`commands` paths at all: coverage is structural — a Skill
-/// is covered iff its directory lives under the fixed `skills/`
-/// subdirectory, a canonical Command iff it lives under `commands/` (the
-/// CLI converts those to Skills at load — verified: `commands : N processed
-/// (converted to skills)`), and an MCP server iff its name is declared in
-/// the root `mcp_config.json` (a missing or malformed file contributes no
+/// no `skills` paths at all: coverage is structural, and semantic-aware
+/// (ADR-030 §13) — a Skill is covered iff its directory lives under the
+/// fixed `skills/` subdirectory AND its canonical `invoke:` policy is the
+/// default, because Antigravity has no explicit-only mechanism and Skills
+/// stay model-discoverable and slash-invocable; a non-default policy falls
+/// through to capability-level delivery, which reports the degradation
+/// honestly. An MCP server is covered iff its name is declared in the
+/// root `mcp_config.json` (a missing or malformed file contributes no
 /// coverage; it never errors).
 pub(super) fn exact_coverage(package: &StoredPackage, resources: &[&Resource]) -> BTreeSet<String> {
     let declared_mcp = author_mcp_config_servers(package);
@@ -93,12 +95,9 @@ pub(super) fn exact_coverage(package: &StoredPackage, resources: &[&Resource]) -
     for resource in resources {
         match resource.capability.kind {
             uze_core::capability::CapabilityKind::AgentSkill => {
-                if under_conventional_dir(&resource.capability.path, &package.root, "skills") {
-                    provided.insert(resource.identity());
-                }
-            }
-            uze_core::capability::CapabilityKind::Command => {
-                if under_conventional_dir(&resource.capability.path, &package.root, "commands") {
+                if under_conventional_dir(&resource.capability.path, &package.root, "skills")
+                    && resource.skill_invocation().is_default()
+                {
                     provided.insert(resource.identity());
                 }
             }
@@ -496,20 +495,24 @@ mod plugin_tests {
         )
     }
 
-    fn command_resource(pkg: &StoredPackage, dir: &str, name: &str) -> Resource {
-        let path = pkg.root.join(dir).join(format!("{name}.md"));
+    fn policy_skill_resource(
+        pkg: &StoredPackage,
+        dir: &str,
+        name: &str,
+        payload: &str,
+    ) -> Resource {
+        let path = pkg.root.join(dir).join(name).join("SKILL.md");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, format!("---\ndescription: {name}\n---\n\nBody.\n")).unwrap();
-        Resource::from_package_named(
+        fs::write(&path, payload).unwrap();
+        Resource::from_package(
             pkg.id.clone(),
             pkg.root.clone(),
             Capability {
-                kind: CapabilityKind::Command,
+                kind: CapabilityKind::AgentSkill,
                 representation: Representation::Standard,
                 path,
-                payload: Vec::new(),
+                payload: payload.as_bytes().to_vec(),
             },
-            name.to_owned(),
         )
     }
 
@@ -556,8 +559,9 @@ mod plugin_tests {
         serde_json::json!({"imports":[{"name": name, "source":"antigravity", "components":["skills"]}]})
     }
 
-    /// A. Conventional skill + declared MCP + conventional command → covered;
-    /// skill outside `skills/` → not covered.
+    /// A. Conventional default-policy skill + declared MCP → covered; skill
+    /// outside `skills/` → not covered; a non-default policy Skill → never
+    /// claimed (semantic degradation, ADR-030 §13).
     #[test]
     fn explicit_coverage_covers_exactly_the_conventional_and_declared_surface() {
         let (_root, pkg) = make_package("explicit-full", r#"{"name":"flow"}"#);
@@ -568,15 +572,24 @@ mod plugin_tests {
         .unwrap();
         let r_skill = skill_resource(&pkg, "skills", "commit");
         let r_out = skill_resource(&pkg, "extra", "outside");
-        let r_cmd = command_resource(&pkg, "commands", "review");
+        let r_user_only = policy_skill_resource(
+            &pkg,
+            "skills",
+            "review",
+            "---\nname: review\ninvoke:\n  model: false\n  user: true\n---\nBody.\n",
+        );
         let r_mcp = mcp_resource(&pkg, "mcp-a");
-        let resources = vec![&r_skill, &r_out, &r_cmd, &r_mcp];
+        let resources = vec![&r_skill, &r_out, &r_user_only, &r_mcp];
         let covered = exact_coverage(&pkg, &resources);
         assert_eq!(
             covered,
-            BTreeSet::from([r_skill.identity(), r_cmd.identity(), r_mcp.identity()])
+            BTreeSet::from([r_skill.identity(), r_mcp.identity()])
         );
         assert!(!covered.contains(&r_out.identity()));
+        assert!(
+            !covered.contains(&r_user_only.identity()),
+            "a non-default policy degrades on Antigravity and must never be claimed as native coverage"
+        );
         let _ = fs::remove_dir_all(_root);
     }
 

@@ -31,7 +31,6 @@ use uze_core::{
     store::StoredPackage,
 };
 
-mod commands;
 mod generate;
 mod mcp;
 mod plugin;
@@ -41,10 +40,6 @@ mod skills;
 pub use mcp::detach_mcp_entry;
 
 use crate::shared::process::run_quiet;
-use commands::{
-    codex_command_exposure_name_candidates, materialize_generated_command,
-    materialize_generated_skill,
-};
 use generate::{
     GENERATED_MARKETPLACE_NAME, GENERATED_PLUGIN_KIND, generatable, generated_catalogue_matches,
     generated_exact_coverage, generated_package_receipt, generated_root,
@@ -56,6 +51,7 @@ use plugin::{
     marketplace_exists, publishable, remove_plugin, run_codex, write_catalogue,
 };
 use provision::{detect_binary, provision_cli};
+use skills::codex_skill_exposure_name_candidates;
 
 /// Codex peer integration. Its transparent-attachment strategy is a
 /// UZE-managed reference at `<agents_home>/skills/<name>` (see ADR-006):
@@ -170,7 +166,7 @@ impl CodexIntegration {
     }
 
     /// Installs a package with no author-provided envelope through the
-    /// second, UZE-owned `uze-local-generated` marketplace, materializing
+    /// second, UZE-owned `uze-store` marketplace, materializing
     /// (or refreshing) its generated envelope directory first.
     fn attach_generated_package(
         &self,
@@ -202,6 +198,36 @@ impl CodexIntegration {
             &selector,
         )))
     }
+
+    /// Materializes this Skill's wrapper when this resource owns the shared
+    /// entry; when the shared-root resolution reused another integration's
+    /// artifact, verifies that the reused artifact still carries Codex's own
+    /// invocation encoding for a user-only Skill — otherwise the canonical
+    /// `invoke.model=false` would silently degrade into model visibility.
+    fn materialize_or_verify_skill(&self, resource: &Resource) -> Result<()> {
+        let policy = resource.skill_invocation();
+        let Some(target) = &resource.resolved_artifact_target else {
+            return skills::materialize_generated_skill(&self.uze_home, resource).map(|_| ());
+        };
+        if policy.is_invalid() {
+            return Ok(());
+        }
+        if !policy.model && !target.join("agents/openai.yaml").is_file() {
+            let entry = resource
+                .resolved_exposure_name
+                .clone()
+                .map(|name| self.skills_dir.join(name))
+                .unwrap_or_else(|| target.to_path_buf());
+            return Err(projection_conflict(
+                resource,
+                &entry,
+                target,
+                "Codex needs agents/openai.yaml with policy.allow_implicit_invocation: false for a user-only Skill",
+                self.id(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl IntegrationPort for CodexIntegration {
@@ -211,15 +237,11 @@ impl IntegrationPort for CodexIntegration {
 
     fn capabilities(&self) -> HarnessCapabilities {
         HarnessCapabilities {
-            native: [
-                CapabilityKind::AgentSkill,
-                CapabilityKind::Mcp,
-                CapabilityKind::Command,
-            ]
-            .into_iter()
-            .collect(),
+            native: [CapabilityKind::AgentSkill, CapabilityKind::Mcp]
+                .into_iter()
+                .collect(),
             verification: VerificationStatus::Unverified,
-            evidence: "Codex consumes UZE's derived marketplaces: a package shipping .codex-plugin/plugin.json is added as a native plugin covering its declared skills/mcpServers (`codex plugin add <sel>@uze-local`); one without gets a deterministically synthesized envelope published through the generated-only `uze-local-generated` marketplace (ADR-021) — both confirmed against real Codex 0.148.0 dogfood (`codex plugin list --json`). Commands are NATIVE via Codex's official explicit-invocation-only Skill mechanism: a canonical Command becomes a generated user-invokable Skill carrying `agents/openai.yaml` → `policy.allow_implicit_invocation: false` (Codex Build skills documentation; empirically honored by codex-cli 0.149.0 via `codex debug prompt-input` — the skill leaves the model-visible list only when that policy file is present and well-formed), so the model cannot auto-select it while explicit `$skill` invocation keeps working. Per ADR-025, Native means an officially supported primitive that preserves the canonical capability semantics — not an identical vendor file format or primitive name. Capability-level fallbacks (USER-scope `~/.agents/skills` reference, `codex mcp add`) remain only for resources outside the envelope's coverage."
+            evidence: "Codex consumes UZE's derived marketplaces: a package shipping .codex-plugin/plugin.json is added as a native plugin covering its declared skills/mcpServers (`codex plugin add <sel>@uze-local`); one without gets a deterministically synthesized envelope published through the generated-only `uze-store` marketplace (ADR-021) — both confirmed against real Codex 0.148.0 dogfood (`codex plugin list --json`). Invocation policy is translated into Codex's own agents/openai.yaml → policy.allow_implicit_invocation: false for a canonical user-only Skill (Codex Build skills documentation; empirically honored by codex-cli 0.149.0 via `codex debug prompt-input`); the user=false combination is honestly Degraded since Codex has no documented way to disable explicit `$skill` invocation. Per ADR-025/ADR-030, Native means an officially supported primitive that preserves the canonical capability semantics — not an identical vendor file format. Capability-level fallbacks (USER-scope `~/.agents/skills` reference, `codex mcp add`) remain only for resources outside the envelope's coverage."
                 .to_owned(),
             ..HarnessCapabilities::default()
         }
@@ -282,26 +304,22 @@ impl IntegrationPort for CodexIntegration {
         }
         match resource.capability.kind {
             CapabilityKind::AgentSkill => self.skill_exposure_plan(resource),
-            CapabilityKind::Command => self.command_exposure_plan(resource),
             CapabilityKind::Mcp => self.mcp_exposure_plan(resource),
             _ => unsupported(
                 resource,
-                "Codex attachment is only modeled for Agent Skills, Commands, and MCP servers.",
+                "Codex attachment is only modeled for Agent Skills and MCP servers.",
             ),
         }
     }
 
-    /// Codex's naming decision: every UZE-projected Skill and Command gets
-    /// its stable namespaced invocation label (`flow:review`) as the single
-    /// candidate — never a bare alias, never collision-dependent naming
-    /// (ADR-026). Codex accepts `:` in skill names (verified against
-    /// codex-cli 0.149.0). MCP stays on the default fully-qualified policy.
+    /// Codex's naming decision: every UZE-projected Skill gets its stable
+    /// namespaced invocation label (`flow:review`) as the single candidate —
+    /// never a bare alias, never collision-dependent naming (ADR-026). Codex
+    /// accepts `:` in skill names (verified against codex-cli 0.149.0). MCP
+    /// stays on the default fully-qualified policy.
     fn exposure_name_candidates(&self, resource: &Resource) -> Vec<String> {
-        if matches!(
-            resource.capability.kind,
-            CapabilityKind::AgentSkill | CapabilityKind::Command
-        ) {
-            return codex_command_exposure_name_candidates(resource);
+        if resource.capability.kind == CapabilityKind::AgentSkill {
+            return codex_skill_exposure_name_candidates(resource);
         }
         default_exposure_name_candidates(resource)
     }
@@ -346,17 +364,11 @@ impl IntegrationPort for CodexIntegration {
                 // the physical entry. When the shared-root resolution reused
                 // another integration's receipt (resolved_artifact_target
                 // set), the existing artifact is authoritative and nothing
-                // new may replace it.
-                if resource.resolved_artifact_target.is_none() {
-                    match resource.capability.kind {
-                        CapabilityKind::Command => {
-                            materialize_generated_command(&self.uze_home, resource)?;
-                        }
-                        CapabilityKind::AgentSkill => {
-                            materialize_generated_skill(&self.uze_home, resource)?;
-                        }
-                        _ => {}
-                    }
+                // new may replace it — but a user-only Skills must still
+                // carry THIS integration's encoding, or the reuse would
+                // silently drop the invocation policy (ADR-030 §25).
+                if resource.capability.kind == CapabilityKind::AgentSkill {
+                    self.materialize_or_verify_skill(resource)?;
                 }
                 Ok(Some(plan.mechanism.attach()?))
             }
@@ -508,7 +520,7 @@ impl IntegrationPort for CodexIntegration {
                 if detached.state == AttachmentState::Missing
                     && let ManagedArtifact::SymlinkReference { target, .. } = &receipt.artifact
                 {
-                    self.cleanup_unused_command_adaptation(target)?;
+                    self.cleanup_unused_skill_adaptation(target)?;
                 }
                 return Ok(detached);
             }
@@ -530,4 +542,32 @@ fn unsupported(resource: &Resource, rationale: &str) -> ExposurePlan {
         },
         evidence: rationale.to_owned(),
     }
+}
+
+/// Deterministic, pre-attach projection conflict: the shared
+/// `~/.agents/skills` entry this resource would reuse is already owned by
+/// another integration's artifact that cannot preserve this integration's
+/// invocation encoding (ADR-030 §25 — never degrade silently).
+fn projection_conflict(
+    resource: &Resource,
+    entry: &std::path::Path,
+    reused_target: &std::path::Path,
+    requirement: &str,
+    integration: &str,
+) -> UzeError {
+    let requested_target = resource
+        .capability
+        .path
+        .parent()
+        .map(|parent| parent.to_path_buf())
+        .unwrap_or_else(|| resource.capability.path.clone());
+    UzeError::ProjectionConflict(Box::new(uze_core::error::ProjectionConflictDetails {
+        entry: entry.to_path_buf(),
+        requested: format!("{} ({requirement})", resource.identity()),
+        requested_integration: integration.to_owned(),
+        requested_target,
+        existing: format!("{} ({requirement})", resource.identity()),
+        existing_integration: "shared-root owner".to_owned(),
+        existing_target: reused_target.to_path_buf(),
+    }))
 }

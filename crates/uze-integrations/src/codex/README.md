@@ -14,13 +14,13 @@ in a second, UZE-owned marketplace (Generated Native Package, ADR-021).
 | Surface | Status | Delivery | Evidence |
 |---|---|---|---|
 | Native Package (explicit) | Supported, exact coverage | `.codex-plugin/plugin.json` → generated catalogue → `codex plugin add` | CODE_FACT + TESTED (11 tests) + EMPIRICAL (config/install only) |
-| Native Package (generated) | Supported, exact coverage | Second `uze-local-generated` catalogue (own root, path-containment-safe) → `codex plugin add` (ADR-021) | CODE_FACT + TESTED (15 tests) + EMPIRICAL — real-binary dogfood (Codex 0.148.0): attach → inspect (Matched) → detach (Missing) → reinstall (Matched) |
+| Native Package (generated) | Supported, exact coverage | Second `uze-store` catalogue (own root, path-containment-safe) → `codex plugin add` (ADR-021) | CODE_FACT + TESTED (15 tests) + EMPIRICAL — real-binary dogfood (Codex 0.148.0): attach → inspect (Matched) → detach (Missing) → reinstall (Matched) |
 | Skills | Supported | Persistent symlink, `~/.agents/skills/<name>` | EMPIRICAL (behavioral, ADR-006) |
+| Skill invocation policy | Supported (model=false) / Degraded (user=false) | Generated wrapper + `agents/openai.yaml` → `policy.allow_implicit_invocation: false`; no way to hide a skill from explicit `$skill` invocation — stated honestly (ADR-030) | DOCUMENTED (Codex Build skills docs) + EMPIRICAL (verified against codex-cli 0.149.0 via `codex debug prompt-input`) |
 | MCP | Supported (config), unproven behaviorally | `codex mcp add` → `~/.codex/config.toml` | EMPIRICAL (configuration), UNKNOWN (discovery), gap (behavioral) |
 | Context (AGENTS.md) | Native, out of this crate's scope | Codex reads `AGENTS.md` directly | DOCUMENTED |
 | Agents | Not implemented (also a real Codex vendor gap) | — | DOCUMENTED |
 | Hooks | Not implemented (research-only project-wide) | — | DOCUMENTED |
-| Commands | Not implemented | — | DOCUMENTED |
 | Runtime Integration | None | Passthrough (trait default) | CODE_FACT |
 
 ## Delivery
@@ -56,13 +56,13 @@ $UZE_HOME/state/attachments/codex/generated/<id>/.codex-plugin/plugin.json
     mcpServers="./.mcp.json" symlinked to the package's own root mcp.json)
         │
         ▼
-$UZE_HOME/.../generated/.agents/plugins/marketplace.json  ("uze-local-generated",
+$UZE_HOME/.../generated/.agents/plugins/marketplace.json  ("uze-store",
    rooted at the generated dir itself — Codex rejects source.path escaping
    whatever root it was pointed at, so generated package dirs live directly
    under it, not under a Store-relative path)
         │
         ▼
-codex plugin marketplace add <generated root> (once) → codex plugin add <id>@uze-local-generated
+codex plugin marketplace add <generated root> (once) → codex plugin add <id>@uze-store
         │
         ▼
 one IntegrationOwned{kind:"marketplace-plugin-generated", detail.origin:"generated"} receipt

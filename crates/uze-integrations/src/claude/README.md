@@ -15,18 +15,19 @@ delivery).
 | Surface | Status | Delivery | Evidence |
 |---|---|---|---|
 | Plugin (native, explicit) | SUPPORTED | Derived marketplace catalogue → `claude plugin install` | EMPIRICAL (marketplace/install config confirmed live 2026-08-20 per ADR-013); CLI-shelling functions have no unit test |
-| Plugin (native, generated) | SUPPORTED | Second, UZE-owned `uze-local-generated` catalogue → `claude plugin install` (ADR-020) | TESTED (17 tests, `claude::generate::generated_native_tests`) + CODE_FACT |
+| Plugin (native, generated) | SUPPORTED | Second, UZE-owned `uze-store` catalogue → `claude plugin install` (ADR-020) | TESTED (`claude::generate::generated_native_tests`) + CODE_FACT |
 | Skills | SUPPORTED | Native envelope (VIA_PACKAGE) or managed skills-dir symlink (NATIVE_CAPABILITY) | EMPIRICAL — real `claude -p` run returned the exact proof token end-to-end (ADR-006) |
 | MCP | SUPPORTED (config), PARTIAL (behavioral) | Native envelope (VIA_PACKAGE) or `claude mcp add --scope user --transport stdio` (SAFE_ADAPTATION) | EMPIRICAL for config/discovery (`claude mcp get`/`list` confirmed `✔ Connected` live, ADR-007); a real tool call needed a non-default `--allowedTools=mcp__...` flag and a secondary headless-discovery quirk was never fully closed |
 | Context (runtime) | EXPERIMENTAL | `--add-dir` + `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1` (RUNTIME_PROJECTION) | EMPIRICAL — extensive real-CLI evidence (ADR-014); `/compact` retention across a session is the one open gap |
 | Agents | NOT_IMPLEMENTED | — `CapabilityKind::Agent` is recognized only by `uze-core::importers`, never routed here | CODE_FACT |
 | Hooks | NOT_IMPLEMENTED | — `CapabilityKind::Hook` same as above | CODE_FACT |
-| Commands | NOT_IMPLEMENTED | — Claude itself merged Commands into Skills upstream; UZE never modeled Commands separately | DOCUMENTED (`docs/capabilities/commands.md`) |
+| Skill invocation policy | SUPPORTED | Canonical `invoke: {model,user}` is translated into Claude's own SKILL.md frontmatter: `disable-model-invocation: true` (model=false) and `user-invocable: false` (user=false). Generated envelopes materialize those markers; an explicit envelope is only claimed as covered when the author's own bytes already carry them (never rewritten) — ADR-030 | EMPIRICAL — real `claude -p` run, `UZE_BYPASS=1` against the actual `materialize_generated_package` output, proved both explicit `/name` invocation and model-auto-invocation-blocked (marker technique carried over from ADR-028) |
 
 Claude is the only harness whose package coverage computation
 (`claude_exact_coverage`) actually intersects the manifest's declared
-`skills`/`mcpServers` against what UZE separately discovered, rather than
-assuming the envelope covers everything — see [Package coverage](#package-coverage).
+`skills`/`mcpServers` against what UZE separately discovered, and gates
+each Skill on its canonical invocation policy being preserved — see
+[Package coverage](#package-coverage).
 
 ## Delivery
 
@@ -59,10 +60,10 @@ $UZE_HOME/state/attachments/claude/generated/<id>/.claude-plugin/plugin.json
     skills symlinked from the Store, mcp.json's mcpServers copied verbatim)
         │
         ▼
-$UZE_HOME/.../generated/.claude-plugin/marketplace.json   ("uze-local-generated")
+$UZE_HOME/.../generated/.claude-plugin/marketplace.json   ("uze-store")
         │
         ▼
-claude plugin marketplace add (once) → claude plugin install <id>@uze-local-generated
+claude plugin marketplace add (once) → claude plugin install <id>@uze-store
         │
         ▼
 one IntegrationOwned{kind:"claude-plugin-generated", detail.origin:"generated"} receipt
@@ -102,8 +103,15 @@ contents — see their READMEs).
 Path handling in `claude_exact_coverage` rejects `..`/absolute/empty
 declarations, deduplicates repeats, and tolerates a malformed manifest by
 returning empty coverage (the plugin still installs, just with
-`provided_resource_identities` empty — nothing silently claimed). All of this
-is unit-tested (11 tests in `claude::plugin::claude_native_coverage_tests`).
+`provided_resource_identities` empty — nothing silently claimed). A Skill
+additionally requires (ADR-030) that its canonical `invoke:` policy is
+actually preserved by the bytes the author shipped before it counts as
+covered — `model: false` needs the author's own
+`disable-model-invocation: true`, `user: false` needs `user-invocable:
+false`, and the invalid combination is never covered. A path match alone
+is not proof the harness won't auto-invoke it, and UZE never rewrites
+explicit-envelope content. All of this is unit-tested
+(`claude::plugin::claude_native_coverage_tests`).
 
 The marketplace/install/list/uninstall CLI-shelling functions themselves
 (`claude_marketplace_exists`, `run_claude_marketplace_add`,
@@ -128,6 +136,18 @@ read-only inside `package_exposure_plan`; `materialize_generated_package`
 wholesale on every call — deterministic, idempotent, never touching the
 Store package. An explicit envelope, even malformed, always wins; presence
 alone (not validity) decides the branch.
+
+Default-policy `skills/` entries are still whole-directory symlinks to the
+Store (byte-preserving). A Skill with a non-default `invoke:` policy
+(ADR-030) is materialized as one real, UZE-owned SKILL.md per Skill
+instead: it carries the canonical `name`/`description` (description
+re-quoted as a safely escaped YAML double-quoted scalar — never
+raw-interpolated, so no description content can forge or duplicate a
+frontmatter key) plus the injected markers for whichever half of the
+policy Claude needs (`disable-model-invocation: true`, `user-invocable:
+false`), then the canonical body verbatim — with every other file in the
+canonical skill directory still referenced. The invalid policy
+(`model: false, user: false`) is never materialized nor claimed.
 
 ## Fallbacks
 
@@ -192,9 +212,15 @@ reasoning holds, not confirmed by a dedicated test.
 
 ## Evidence
 
-- Tests: 40/40 passing in `claude::{lifecycle_tests, plugin::claude_native_coverage_tests, runtime::runtime_projection_tests, generate::generated_native_tests}` (23 pre-existing + 17 generated-native, verified this milestone).
-- Real harness version last validated: Claude Code **2.1.239** — the exact binary present in this environment (`claude --version` reconfirmed live during this audit, matches ADR-006/007/013/014's tested version).
-- Source: `docs/adr/{006,007,009,013,014,020}-*.md`.
+- Tests: 50/50 passing in `claude::{lifecycle_tests, plugin::claude_native_coverage_tests, runtime::runtime_projection_tests, generate::generated_native_tests}`.
+- Real harness version last validated: Claude Code **2.1.241** — the exact
+  binary present in this environment (`claude --version` reconfirmed live
+  during the ADR-028 audit). The `disable-model-invocation` marker
+  technique was proven against a real model turn on this same binary, both
+  for a hand-built probe plugin and for the actual output of
+  `materialize_generated_package` against a real UZE package; ADR-030 now
+  applies the same technique to canonical user-only Skills.
+- Source: `docs/adr/{006,007,009,013,014,020,028,030}-*.md`.
 
 ## Next
 

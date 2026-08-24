@@ -7,7 +7,11 @@ use std::collections::BTreeSet;
 use uze_core::{
     Result,
     capability::CapabilityKind,
-    integration::{AttachmentState, IntegrationPort, managed_artifact_exposure_name},
+    exposure::ExposureMechanism,
+    integration::{
+        AttachmentReceipt, AttachmentState, IntegrationPort, ManagedArtifact,
+        managed_artifact_exposure_name, receipt_location,
+    },
     project::Resource,
     state,
     store::StoredPackage,
@@ -113,7 +117,7 @@ impl UzeApplication {
     ) -> Result<Resource> {
         if !matches!(
             resource.capability.kind,
-            CapabilityKind::AgentSkill | CapabilityKind::Command | CapabilityKind::Mcp
+            CapabilityKind::AgentSkill | CapabilityKind::Mcp
         ) {
             return Ok(resource.clone());
         }
@@ -123,9 +127,7 @@ impl UzeApplication {
         };
         let resource_id = resource.identity();
         // Only Agent Skills live in a directory shared across integrations
-        // (Codex, OpenCode all read `~/.agents/skills`); a
-        // Command's registry (e.g. OpenCode's user-global commands dir) is
-        // per-integration, so no shared-root group applies to it.
+        // (Codex, OpenCode all read `~/.agents/skills`).
         let shared_root = (resource.capability.kind == CapabilityKind::AgentSkill)
             .then(|| integration.shared_agent_skill_root())
             .flatten();
@@ -215,11 +217,78 @@ impl UzeApplication {
                     })
             })
             .unwrap_or_else(|| integration.exposure_name_candidates(resource));
-        resolved.resolved_exposure_name = candidates
+        if let Some(free) = candidates
             .iter()
             .find(|candidate| !claimed.contains(*candidate))
             .cloned()
-            .or_else(|| candidates.last().cloned());
-        Ok(resolved)
+        {
+            resolved.resolved_exposure_name = Some(free);
+            return Ok(resolved);
+        }
+        // Every candidate is already claimed. The reuse path above already
+        // returned for the same-resource case (identical canonical identity
+        // sharing one physical entry across shared-root harnesses), so a
+        // claimed name here must belong to a DIFFERENT canonical resource —
+        // e.g. a legacy Command-era receipt and a Skill both projecting
+        // `flow:commit` into the shared `~/.agents/skills` root, or two
+        // distinct resources converging on one label: one physical entry,
+        // incompatible representations. That is a projection ownership
+        // conflict, not drift; report it deterministically before any
+        // attach, instead of handing the conflicting name back and failing
+        // later with a misleading `ManagedEntryDrift`. (ADR-029; with only
+        // one canonical Skill kind, same-name resource collisions are
+        // structurally gone — the residual case is legacy receipts.)
+        let entry = candidates
+            .last()
+            .cloned()
+            .expect("naming plans always have at least one candidate");
+        let claimant = all_receipts
+            .iter()
+            .filter(|(_, receipt)| {
+                receipt.integration == integration.id() || shares_root(&receipt.integration)
+            })
+            .find_map(|(_, receipt)| {
+                (managed_artifact_exposure_name(&receipt.artifact).as_deref()
+                    == Some(entry.as_str()))
+                .then_some(receipt)
+            });
+        let Some(claimant) = claimant else {
+            // Defensive fallback (should be unreachable): retain the
+            // previous behavior rather than panicking on ledger drift.
+            resolved.resolved_exposure_name = Some(entry);
+            return Ok(resolved);
+        };
+        let requested_target = match integration.exposure_plan(resource).mechanism {
+            ExposureMechanism::ManagedUserScopeReference { source, .. } => source,
+            _ => resource.capability.path.clone(),
+        };
+        Err(UzeError::ProjectionConflict(Box::new(
+            uze_core::error::ProjectionConflictDetails {
+                entry: integration
+                    .shared_agent_skill_root()
+                    .map(|root| root.join(&entry))
+                    .unwrap_or_else(|| PathBuf::from(&entry)),
+                requested: resource.identity(),
+                requested_integration: integration.id().to_owned(),
+                requested_target,
+                existing: claimant
+                    .resource_identity
+                    .clone()
+                    .unwrap_or_else(|| claimant.package_id.clone()),
+                existing_integration: claimant.integration.clone(),
+                existing_target: artifact_owned_target(claimant),
+            },
+        )))
+    }
+}
+
+/// The physical artifact a receipt's entry points at — the symlink target
+/// for a reference, the file itself for a managed file, and the receipt
+/// location for anything else (diagnostic-only, never owned data).
+fn artifact_owned_target(receipt: &AttachmentReceipt) -> PathBuf {
+    match &receipt.artifact {
+        ManagedArtifact::SymlinkReference { target, .. } => target.clone(),
+
+        _ => receipt_location(receipt),
     }
 }

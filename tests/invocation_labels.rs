@@ -1,17 +1,20 @@
 //! Stable Namespaced Invocation Labels (ADR-026) — conformance contract.
 //!
-//! Every UZE-projected Skill and Command gets a stable, plugin-qualified
-//! invocation label (`<plugin>:<capability>`, e.g. `flow:review`) as its
-//! single candidate — deterministic, independent of installation order and
-//! of which other plugins are installed, with no bare aliases in v0. The
-//! label is a *presentation* concern: canonical Resource identity, Store
-//! bytes, package layout, coverage identities and capability bodies are
-//! never touched. Each harness encodes the label in its own physical
+//! Every UZE-projected Skill gets a stable, plugin-qualified invocation
+//! label (`<plugin>:<capability>`, e.g. `flow:review`) as its single
+//! candidate — deterministic, independent of installation order and of
+//! which other plugins are installed, with no bare aliases in v0. The label
+//! is a *presentation* concern: canonical Resource identity, Store bytes,
+//! package layout, coverage identities and capability bodies are never
+//! touched. Each harness encodes the label in its own physical
 //! representation (vendor owns physical syntax): Claude via its native
 //! plugin namespace, Codex verbatim (`flow:review` — verified against
-//! codex-cli 0.149.0), OpenCode verbatim (`flow:review.md`), Antigravity
-//! verbatim (`flow:review` — `agy plugin validate` accepts `:` in skill
-//! names).
+//! codex-cli 0.149.0), OpenCode verbatim as the physical directory name
+//! (its skill ID comes from the path), Antigravity verbatim
+//! (`flow:review` — `agy plugin validate` accepts `:` in skill names).
+//!
+//! The canonical model has ONE Skill kind (ADR-030); the label is the
+//! same `<plugin>:<skill>` for every invocation policy.
 
 use std::{
     fs,
@@ -79,13 +82,6 @@ fn stored_workflow(label: &str) -> (PathBuf, UzeHome, StoredPackage, Vec<Resourc
         .compose(std::slice::from_ref(&package.id))
         .unwrap();
     (root, home, package, environment.resources)
-}
-
-fn commands_of(resources: &[Resource]) -> &Resource {
-    resources
-        .iter()
-        .find(|r| r.capability.kind == CapabilityKind::Command)
-        .unwrap()
 }
 
 fn skills_of(resources: &[Resource]) -> &Resource {
@@ -186,7 +182,6 @@ fn label_is_plugin_namespace_plus_capability_name_and_stable() {
     );
 
     let (root, _home, _package, resources) = stored_workflow("label-stable");
-    let command = commands_of(&resources);
     let skill = skills_of(&resources);
     for integration in [
         Box::new(ClaudeIntegration::new(
@@ -207,8 +202,8 @@ fn label_is_plugin_namespace_plus_capability_name_and_stable() {
             UzeHome::at(&root),
         )) as Box<dyn IntegrationPort>,
     ] {
-        let first = integration.exposure_name_candidates(command);
-        let second = integration.exposure_name_candidates(command);
+        let first = integration.exposure_name_candidates(skill);
+        let second = integration.exposure_name_candidates(skill);
         assert_eq!(first, second, "the label must be stable per integration");
         assert_eq!(
             first.len(),
@@ -216,8 +211,6 @@ fn label_is_plugin_namespace_plus_capability_name_and_stable() {
             "exactly one candidate, never bare+qualified"
         );
     }
-    // Skill and Command are distinct resources and keep distinct labels-style
-    // candidates (same textual label, distinct canonical identity).
     let opencode = OpenCodeIntegration::new(
         root.join("agents"),
         root.join("config/opencode/opencode.json"),
@@ -231,24 +224,6 @@ fn label_is_plugin_namespace_plus_capability_name_and_stable() {
 }
 
 // --- 3-5. Installation order and coexisting same-named capabilities ---------
-
-fn command_fixture(root: &Path, package_id: &str) -> PathBuf {
-    let dir = root.join(package_id);
-    fs::create_dir_all(dir.join("commands")).unwrap();
-    fs::write(
-        dir.join("plugin.json"),
-        format!(
-            r#"{{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"{package_id}"}}"#
-        ),
-    )
-    .unwrap();
-    fs::write(
-        dir.join("commands/review.md"),
-        format!("---\ndescription: review for {package_id}\n---\n\nBody.\n"),
-    )
-    .unwrap();
-    dir
-}
 
 fn skill_fixture(root: &Path, package_id: &str, skill_name: &str) -> PathBuf {
     let dir = root.join(package_id);
@@ -286,47 +261,47 @@ fn app_with_opencode(root: &Path) -> (UzeApplication, PathBuf) {
 #[test]
 fn installing_another_plugin_never_renames_an_existing_one() {
     let root = temp("order-stability");
-    let (application, _agents_home) = app_with_opencode(&root);
+    let (application, agents_home) = app_with_opencode(&root);
 
     application
         .add_plugin(
-            PackageSource::local(command_fixture(&root.join("f"), "alpha")),
+            PackageSource::local(skill_fixture(&root.join("f"), "alpha", "review")),
             &uze::trust::AlwaysTrust,
         )
         .unwrap();
-    let commands_dir = root.join("opencode-config/commands");
-    let alpha_before = commands_dir.join("alpha:review.md");
+    let skills_dir = agents_home.join("skills");
+    let alpha_before = skills_dir.join("alpha:review");
     assert!(alpha_before.is_symlink());
 
-    // Installing a second plugin with the SAME capability name must not
-    // rename or disturb the first (state B: flow + beta).
+    // Installing a second plugin with the SAME logical name must not rename
+    // or disturb the first.
     application
         .add_plugin(
-            PackageSource::local(command_fixture(&root.join("f"), "beta")),
+            PackageSource::local(skill_fixture(&root.join("f"), "beta", "review")),
             &uze::trust::AlwaysTrust,
         )
         .unwrap();
     assert!(alpha_before.is_symlink(), "alpha:review is untouched");
-    assert!(commands_dir.join("beta:review.md").is_symlink());
+    assert!(skills_dir.join("beta:review").is_symlink());
 
     // Reverse order yields the exact same labels per plugin.
     let root2 = temp("order-reverse");
-    let (application2, _) = app_with_opencode(&root2);
+    let (application2, agents2) = app_with_opencode(&root2);
     application2
         .add_plugin(
-            PackageSource::local(command_fixture(&root2.join("f"), "beta")),
+            PackageSource::local(skill_fixture(&root2.join("f"), "beta", "review")),
             &uze::trust::AlwaysTrust,
         )
         .unwrap();
     application2
         .add_plugin(
-            PackageSource::local(command_fixture(&root2.join("f"), "alpha")),
+            PackageSource::local(skill_fixture(&root2.join("f"), "alpha", "review")),
             &uze::trust::AlwaysTrust,
         )
         .unwrap();
-    let commands2 = root2.join("opencode-config/commands");
-    assert!(commands2.join("alpha:review.md").is_symlink());
-    assert!(commands2.join("beta:review.md").is_symlink());
+    let skills2 = agents2.join("skills");
+    assert!(skills2.join("alpha:review").is_symlink());
+    assert!(skills2.join("beta:review").is_symlink());
     fs::remove_dir_all(root).unwrap();
     fs::remove_dir_all(root2).unwrap();
 }
@@ -362,14 +337,14 @@ fn same_named_skills_from_two_packages_are_independently_addressable() {
 #[test]
 fn labels_never_touch_canonical_identity_store_or_receipts() {
     let (root, home, package, resources) = stored_workflow("invariants");
-    let command = commands_of(&resources);
-    let canonical_identity = command.identity();
-    assert!(canonical_identity.contains("commands/review.md"));
-    assert_eq!(command.logical_capability_name().as_deref(), Some("review"));
+    let skill = skills_of(&resources);
+    let canonical_identity = skill.identity();
+    assert!(canonical_identity.contains("skills/review/SKILL.md"));
+    assert_eq!(skill.logical_capability_name().as_deref(), Some("review"));
 
     let codex = CodexIntegration::new(root.join("agents"), home.clone());
     mark_setup(&home, &codex);
-    let receipt = codex.attach_receipt(command).unwrap().expect("attaches");
+    let receipt = codex.attach_receipt(skill).unwrap().expect("attaches");
     // Receipts keep the canonical identity; the label lives only in the
     // physical artifact name.
     assert_eq!(
@@ -382,11 +357,11 @@ fn labels_never_touch_canonical_identity_store_or_receipts() {
     assert_eq!(path.file_name().unwrap(), "workflow:review");
     // Store bytes stay byte-identical.
     assert_eq!(
-        fs::read(package.root.join("commands/review.md")).unwrap(),
-        fs::read(workflow_fixture().join("commands/review.md")).unwrap()
+        fs::read(package.root.join("skills/review/SKILL.md")).unwrap(),
+        fs::read(workflow_fixture().join("skills/review/SKILL.md")).unwrap()
     );
     assert!(
-        !package.root.join("commands/agents").exists(),
+        !package.root.join("state").exists() && !package.root.join("attachments").exists(),
         "derived artifacts never land in the Store"
     );
     fs::remove_dir_all(root).unwrap();
@@ -405,10 +380,10 @@ fn claude_declares_plain_and_namespaces_natively_without_double_prefix() {
     assert_eq!(plan.route, CompatibilityRoute::Native);
     // UZE never materializes the namespace into the plugin: coverage
     // identities stay canonical and the generated manifest keeps the plain
-    // `commands`/`skills` surfaces (Claude itself produces `/workflow:review`).
+    // `skills` surface (Claude itself produces `/workflow:review`).
     for identity in &plan.provided_resource_identities {
         assert!(
-            identity.contains("commands/review.md") || identity.contains("skills/review/SKILL.md"),
+            identity.contains("skills/review/SKILL.md"),
             "coverage stays on canonical identities: {identity}"
         );
         assert!(
@@ -460,9 +435,10 @@ fn claude_shim_namespace_matches_plugin_and_never_double_prefixes() {
 #[test]
 fn physical_representations_preserve_the_semantic_label() {
     let (root, home, _package, resources) = stored_workflow("physical");
-    let command = commands_of(&resources);
+    let skill = skills_of(&resources);
 
-    // OpenCode: flat colon file name.
+    // OpenCode: the physical directory name IS the label (skill ID comes
+    // from the path, not the frontmatter).
     let opencode = OpenCodeIntegration::new(
         root.join("agents"),
         root.join("config/opencode/opencode.json"),
@@ -470,15 +446,15 @@ fn physical_representations_preserve_the_semantic_label() {
     );
     mark_setup(&home, &opencode);
     assert_eq!(
-        opencode.exposure_name_candidates(command),
-        vec!["workflow:review.md"]
+        opencode.exposure_name_candidates(skill),
+        vec!["workflow:review"]
     );
 
     // Codex: verbatim colon label.
     let codex = CodexIntegration::new(root.join("agents"), home.clone());
     mark_setup(&home, &codex);
     assert_eq!(
-        codex.exposure_name_candidates(command),
+        codex.exposure_name_candidates(skill),
         vec!["workflow:review"]
     );
 
@@ -487,7 +463,7 @@ fn physical_representations_preserve_the_semantic_label() {
     let antigravity = AntigravityIntegration::new(root.join("agents"), home.clone());
     mark_setup(&home, &antigravity);
     assert_eq!(
-        antigravity.exposure_name_candidates(command),
+        antigravity.exposure_name_candidates(skill),
         vec!["workflow:review"]
     );
     fs::remove_dir_all(root).unwrap();
@@ -496,37 +472,40 @@ fn physical_representations_preserve_the_semantic_label() {
 // --- 13-14. Coverage identities unchanged -----------------------------------
 
 #[test]
-fn generated_and_explicit_package_coverage_keep_canonical_identities() {
-    // Generated route: workflow package, Claude + Antigravity.
+fn package_coverage_keeps_canonical_identities() {
     let (root, home, package, resources) = stored_workflow("coverage-generated");
     let resources: Vec<_> = resources.iter().collect();
+    // Claude's generated envelope preserves the user-only policy (marker
+    // injection) and covers exactly the one Skill, on its canonical identity.
     let claude = ClaudeIntegration::new(root.join("claude"), home.clone());
     let plan = claude
         .package_exposure_plan(&package, &resources)
         .expect("generatable");
-    assert_eq!(plan.provided_resource_identities.len(), 2);
+    assert_eq!(plan.provided_resource_identities.len(), 1);
+    // Antigravity cannot preserve the user-only policy in a native plugin,
+    // so it covers NOTHING at package level (honest semantic coverage).
     let antigravity = AntigravityIntegration::new(root.join("agents"), home.clone());
     let aplan = antigravity
         .package_exposure_plan(&package, &resources)
         .expect("natively expressible");
-    assert_eq!(aplan.provided_resource_identities.len(), 2);
-    for identity in plan
-        .provided_resource_identities
-        .iter()
-        .chain(aplan.provided_resource_identities.iter())
-    {
+    assert_eq!(
+        aplan.provided_resource_identities.len(),
+        0,
+        "user-only semantics degrade on Antigravity; never claimed as covered"
+    );
+    for identity in plan.provided_resource_identities.iter() {
         assert!(
-            identity.contains("commands/review.md:") || identity.contains("skills/review/"),
-            "coverage identity stays canonical and distinct per kind: {identity}"
+            identity.contains("skills/review/SKILL.md"),
+            "coverage identity stays canonical: {identity}"
         );
     }
     fs::remove_dir_all(root).unwrap();
 }
 
-// --- 15-16. MCP unchanged; Skill vs Command identity distinct ---------------
+// --- 15-16. MCP unchanged ---------------------------------------------------
 
 #[test]
-fn mcp_naming_unchanged_and_skill_vs_command_identities_stay_distinct() {
+fn mcp_naming_is_unchanged() {
     let root = temp("mcp-unchanged");
     let store = UzeStore::new(UzeHome::at(&root));
     let mcp_fixture =
@@ -548,12 +527,7 @@ fn mcp_naming_unchanged_and_skill_vs_command_identities_stay_distinct() {
         vec!["uze-mcp-conformance-uze-conformance".to_owned()]
     );
 
-    let (root2, _home, _package, resources) = stored_workflow("kinds-distinct");
-    assert_ne!(
-        commands_of(&resources).identity(),
-        skills_of(&resources).identity(),
-        "same logical name, different kinds — identities never conflate"
-    );
+    let (root2, _home, _package, resources) = stored_workflow("skill-label");
     assert_eq!(
         skills_of(&resources).logical_capability_name().as_deref(),
         Some("review")

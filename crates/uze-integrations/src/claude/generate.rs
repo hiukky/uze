@@ -10,13 +10,23 @@
 //! capability-level decomposition by itself — only the absence of anything
 //! UZE can safely represent does.
 //!
-//! Safe synthesis is deliberately structural, not semantic (ADR-013's "no
-//! universal projection abstraction", and this milestone's non-goals): the
-//! generated manifest declares the package's whole conventional `skills/`
-//! directory (mirroring Codex's own `"./skills/"` convention) and its
-//! `mcp.json`'s `mcpServers` object verbatim — nothing is translated,
-//! reinterpreted, or invented beyond name/version/description already
-//! declared in the package's own canonical `plugin.json`.
+//! Safe synthesis is deliberately structural for the default model+user
+//! policy: the generated manifest declares the package's whole conventional
+//! `skills/` directory (mirroring Codex's own `"./skills/"` convention)
+//! verbatim, and its `mcp.json`'s `mcpServers` object verbatim — nothing is
+//! translated, reinterpreted, or invented beyond name/version/description
+//! already declared in the package's own canonical `plugin.json`.
+//!
+//! A Skill whose canonical `invoke:` policy is not the default is the one
+//! deliberate exception (ADR-030, absorbing ADR-028's technique): Claude
+//! has no vendor-neutral `invoke:` concept, but it does honor its own
+//! frontmatter fields (`disable-model-invocation: true` → user-only;
+//! `user-invocable: false` → model-only), so the generated envelope
+//! materializes one real SKILL.md per non-default Skill carrying those
+//! markers — never a symlink — while preserving the canonical
+//! name/description/body. Still a Derived Artifact (ADR-013 §4) under
+//! `$UZE_HOME`, never the Store: only the physical representation of the
+//! Skill changed, not its ownership.
 
 use std::{collections::BTreeSet, fs, path::Path, path::PathBuf};
 
@@ -32,8 +42,10 @@ use uze_core::{
 /// deliberately distinct from `CLAUDE_MARKETPLACE_NAME` ("uze-local", which
 /// stays reserved for explicit envelopes and is never touched by this
 /// module) so a generated envelope can never be confused with, or silently
-/// override, an author-provided one.
-pub(super) const GENERATED_MARKETPLACE_NAME: &str = "uze-local-generated";
+/// override, an author-provided one. Named "uze-store" (shorter than the
+/// original "uze-local-generated", which cluttered Claude's `/plugin` UI
+/// with a namespace suffix on every generated plugin's display name).
+pub(super) const GENERATED_MARKETPLACE_NAME: &str = "uze-store";
 
 /// The `kind` this module stamps on its own receipts. Distinct from
 /// `claude-plugin` (the explicit-envelope kind) even though both are
@@ -60,24 +72,26 @@ fn generated_package_dir_for_id(uze_home: &UzeHome, package_id: &str) -> PathBuf
 
 /// Whether this package has anything UZE can safely represent as a
 /// generated native envelope: no explicit envelope of its own, and at
-/// least one of the three structural surfaces UZE synthesizes from (a
-/// conventional `skills/` directory, a canonical `commands/` directory, or
-/// a root `mcp.json`).
+/// least one of the two structural surfaces UZE synthesizes from (a
+/// conventional `skills/` directory, or a root `mcp.json`).
 pub(super) fn generatable(package: &StoredPackage) -> bool {
     !package.root.join(".claude-plugin/plugin.json").is_file()
-        && (package.root.join("skills").is_dir()
-            || package.root.join("commands").is_dir()
-            || package.root.join("mcp.json").is_file())
+        && (package.root.join("skills").is_dir() || package.root.join("mcp.json").is_file())
 }
 
 /// The intersection ADR-013 §2 requires (`provided = discovered ∩
-/// declared`), computed against the STRUCTURAL surface a generated manifest
-/// declares — not by re-parsing a manifest this same module just wrote, so
-/// generation and coverage agree by construction. A Skill is covered iff it
-/// lives under the package's conventional `skills/` directory; a Command
-/// iff it lives under the conventional `commands/` directory (the same
-/// surface the generated envelope materializes); an MCP server is covered
-/// iff its name appears in the package's own `mcp.json`.
+/// declared`), computed against the SEMANTIC surface a generated manifest
+/// can preserve — not by re-parsing a manifest this same module just
+/// wrote, so generation and coverage agree by construction.
+///
+/// A Skill is covered iff it lives under the package's conventional
+/// `skills/` directory AND its canonical `invoke:` policy can be preserved
+/// by the generated envelope (ADR-030 §13): every valid combination is
+/// preservable (the generated wrapper injects Claude's own
+/// `disable-model-invocation`/`user-invocable` markers), while the invalid
+/// combination is never silently claimed — it falls through to
+/// capability-level delivery, which refuses it honestly. An MCP server is
+/// covered iff its name appears in the package's own `mcp.json`.
 pub(super) fn generated_exact_coverage(
     package: &StoredPackage,
     resources: &[&Resource],
@@ -104,21 +118,7 @@ pub(super) fn generated_exact_coverage(
                 let Some(parent) = relative.parent() else {
                     continue;
                 };
-                if parent.starts_with("skills") {
-                    provided.insert(resource.identity());
-                }
-            }
-            uze_core::capability::CapabilityKind::Command => {
-                let Some(direct_parent) = resource
-                    .capability
-                    .path
-                    .strip_prefix(&package.root)
-                    .ok()
-                    .and_then(|relative| relative.parent().map(|parent| parent.to_path_buf()))
-                else {
-                    continue;
-                };
-                if direct_parent == std::path::Path::new("commands") {
+                if parent.starts_with("skills") && !resource.skill_invocation().is_invalid() {
                     provided.insert(resource.identity());
                 }
             }
@@ -153,14 +153,6 @@ fn generated_manifest_document(package: &StoredPackage) -> serde_json::Value {
 
     if package.root.join("skills").is_dir() {
         document["skills"] = serde_json::json!(["./skills"]);
-    }
-
-    if package.root.join("commands").is_dir() {
-        // Claude's `commands` manifest field *replaces* the default
-        // `commands/` scan, and `commands/` is also the default location —
-        // declaring the conventional path explicitly keeps the generated
-        // manifest self-describing without changing what is discovered.
-        document["commands"] = serde_json::json!(["./commands"]);
     }
 
     if let Some(servers) = fs::read(package.root.join("mcp.json"))
@@ -231,15 +223,136 @@ pub(super) fn materialize_generated_package(
         source,
     })?;
 
-    let skills_source = package.root.join("skills");
-    if skills_source.is_dir() {
-        symlink(&skills_source, &dir.join("skills"))?;
-    }
-    let commands_source = package.root.join("commands");
-    if commands_source.is_dir() {
-        symlink(&commands_source, &dir.join("commands"))?;
-    }
+    materialize_generated_skills(package, &dir)?;
     Ok(dir)
+}
+
+/// Materializes the generated envelope's `skills/` surface.
+///
+/// A Skill whose canonical `invoke:` policy is the default is symlinked
+/// wholesale (byte-preserving, the Store stays the single source of
+/// truth). A Skill with a non-default policy gets one UZE-owned
+/// materialized SKILL.md carrying the canonical name/description/body plus
+/// Claude's own invocation markers — every other file in the canonical
+/// skill directory stays referenced — because Claude has no `invoke:`
+/// concept of its own. The invalid policy is never materialized and is
+/// excluded from coverage, so generation and coverage keep agreeing by
+/// construction (ADR-030 §13).
+fn materialize_generated_skills(package: &StoredPackage, envelope_dir: &Path) -> Result<()> {
+    if !package.root.join("skills").is_dir() {
+        return Ok(());
+    }
+    let resources = uze_core::engine::package_resources_at(&package.id, &package.root)?;
+    for resource in resources.into_iter().filter(|resource| {
+        resource.capability.kind == uze_core::capability::CapabilityKind::AgentSkill
+    }) {
+        let policy = resource.skill_invocation();
+        if policy.is_invalid() {
+            continue;
+        }
+        let canonical_dir = resource
+            .capability
+            .path
+            .parent()
+            .expect("SKILL.md has a parent");
+        let skill_name = resource
+            .logical_capability_name()
+            .unwrap_or_else(|| resource.name());
+        let target_dir = envelope_dir.join("skills").join(&skill_name);
+        fs::create_dir_all(target_dir.parent().expect("skill dir has a parent")).map_err(
+            |source_error| UzeError::Write {
+                path: target_dir
+                    .parent()
+                    .expect("skill dir has a parent")
+                    .to_path_buf(),
+                source: source_error,
+            },
+        )?;
+        if policy.is_default() {
+            // Byte-preserving: the whole canonical directory is referenced.
+            match fs::symlink_metadata(&target_dir) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    let current =
+                        fs::read_link(&target_dir).map_err(|source_error| UzeError::Read {
+                            path: target_dir.clone(),
+                            source: source_error,
+                        })?;
+                    if current != canonical_dir {
+                        fs::remove_dir_all(&target_dir).map_err(|source_error| {
+                            UzeError::Write {
+                                path: target_dir.clone(),
+                                source: source_error,
+                            }
+                        })?;
+                        symlink(canonical_dir, &target_dir)?;
+                    }
+                }
+                Ok(_) => return Err(UzeError::ManagedEntryConflict(target_dir.clone())),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    symlink(canonical_dir, &target_dir)?;
+                }
+                Err(error) => {
+                    return Err(UzeError::Read {
+                        path: target_dir.clone(),
+                        source: error,
+                    });
+                }
+            }
+            continue;
+        }
+        match fs::symlink_metadata(&target_dir) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                fs::remove_file(&target_dir).map_err(|source_error| UzeError::Write {
+                    path: target_dir.clone(),
+                    source: source_error,
+                })?;
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(UzeError::Read {
+                    path: target_dir.clone(),
+                    source: error,
+                });
+            }
+        }
+        fs::create_dir_all(&target_dir).map_err(|source_error| UzeError::Write {
+            path: target_dir.clone(),
+            source: source_error,
+        })?;
+        let bytes = fs::read(canonical_dir.join("SKILL.md")).map_err(|error| UzeError::Read {
+            path: canonical_dir.join("SKILL.md"),
+            source: error,
+        })?;
+        let document = super::skills::claude_wrapper_skill_document(&bytes, &policy, &skill_name);
+        fs::write(target_dir.join("SKILL.md"), document).map_err(|source_error| {
+            UzeError::Write {
+                path: target_dir.join("SKILL.md"),
+                source: source_error,
+            }
+        })?;
+        // Everything else in the canonical skill directory stays referenced:
+        // a materialized SKILL.md must not silently drop scripts/references.
+        for entry in fs::read_dir(canonical_dir).map_err(|error| UzeError::Read {
+            path: canonical_dir.to_path_buf(),
+            source: error,
+        })? {
+            let entry = entry.map_err(|error| UzeError::Read {
+                path: canonical_dir.to_path_buf(),
+                source: error,
+            })?;
+            let name = entry.file_name();
+            if name == "SKILL.md" {
+                continue;
+            }
+            let source = entry.path();
+            let target = target_dir.join(&name);
+            if !target.exists() && !target.is_symlink() {
+                symlink(&source, &target)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Removes one package's generated envelope directory by id alone — used at
@@ -612,10 +725,12 @@ mod generated_native_tests {
         );
         assert!(dir.starts_with(uze_home.state_dir()));
         assert!(dir.join(".claude-plugin/plugin.json").is_file());
-        assert!(dir.join("skills").is_symlink());
+        // Default-policy skills stay byte-preserving whole-directory
+        // symlinks; `skills/` itself is now a real envelope subdirectory.
+        assert!(dir.join("skills/commit").is_symlink());
         assert_eq!(
-            fs::read_link(dir.join("skills")).unwrap(),
-            pkg.root.join("skills")
+            fs::read_link(dir.join("skills/commit")).unwrap(),
+            pkg.root.join("skills/commit")
         );
         let manifest: serde_json::Value =
             serde_json::from_slice(&fs::read(dir.join(".claude-plugin/plugin.json")).unwrap())
@@ -940,6 +1055,178 @@ mod generated_native_tests {
             !generated_root(&uze_home).join(pkg.id.as_str()).exists(),
             "generation must never be attempted when an explicit envelope file is present"
         );
+        let _ = fs::remove_dir_all(_root);
+    }
+
+    // --- ADR-030: invocation policy drives envelope materialization -----
+
+    fn add_invoke(pkg: &StoredPackage, skill_dir: &str, invoke: &str, description: &str) {
+        let dir = pkg.root.join("skills").join(skill_dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("SKILL.md"),
+            format!("---\nname: {skill_dir}\ndescription: {description}\ninvoke:\n{invoke}---\n\nSkill body.\n"),
+        )
+        .unwrap();
+    }
+
+    fn plain_skill(pkg: &StoredPackage, skill_dir: &str) -> Resource {
+        Resource::from_package(
+            pkg.id.clone(),
+            pkg.root.clone(),
+            Capability {
+                kind: CapabilityKind::AgentSkill,
+                representation: Representation::Standard,
+                path: pkg.root.join("skills").join(skill_dir).join("SKILL.md"),
+                payload: fs::read(pkg.root.join("skills").join(skill_dir).join("SKILL.md"))
+                    .unwrap(),
+            },
+        )
+    }
+
+    #[test]
+    fn user_only_skill_is_materialized_with_the_claude_marker() {
+        let (_root, pkg) = make_plain_package("policy-user-only", false);
+        add_invoke(
+            &pkg,
+            "review",
+            "  model: false\n  user: true\n",
+            "Review code",
+        );
+        let uze_home = UzeHome::at(_root.join("uze"));
+        let dir = materialize_generated_package(&uze_home, &pkg).unwrap();
+
+        let skill_file = dir.join("skills/review/SKILL.md");
+        assert!(
+            !skill_file.is_symlink(),
+            "a non-default policy Skill is materialized, never symlinked"
+        );
+        let content = fs::read_to_string(&skill_file).unwrap();
+        assert!(
+            content.contains("disable-model-invocation: true\n"),
+            "model=false must translate into Claude's user-only marker: {content}"
+        );
+        assert!(content.contains("name: review\n"));
+        assert!(content.contains("description: \"Review code\"\n"));
+        assert!(content.ends_with("---\n\nSkill body.\n"));
+        let _ = fs::remove_dir_all(_root);
+    }
+
+    #[test]
+    fn model_only_skill_is_materialized_with_the_catalog_hiding_marker() {
+        let (_root, pkg) = make_plain_package("policy-model-only", false);
+        add_invoke(
+            &pkg,
+            "legacy",
+            "  model: true\n  user: false\n",
+            "Legacy knowledge",
+        );
+        let uze_home = UzeHome::at(_root.join("uze"));
+        let dir = materialize_generated_package(&uze_home, &pkg).unwrap();
+        let content = fs::read_to_string(dir.join("skills/legacy/SKILL.md")).unwrap();
+        assert!(
+            content.contains("user-invocable: false\n"),
+            "user=false must translate into Claude's catalog-hiding marker: {content}"
+        );
+        let _ = fs::remove_dir_all(_root);
+    }
+
+    #[test]
+    fn invalid_policy_skill_is_never_materialized_nor_covered() {
+        let (_root, pkg) = make_plain_package("policy-invalid", false);
+        add_invoke(
+            &pkg,
+            "dead",
+            "  model: false\n  user: false\n",
+            "Uninvokable",
+        );
+        let r_dead = plain_skill(&pkg, "dead");
+        let uze_home = UzeHome::at(_root.join("uze"));
+        let dir = materialize_generated_package(&uze_home, &pkg).unwrap();
+        assert!(
+            !dir.join("skills/dead").exists(),
+            "a Skill nobody may invoke is never written into the generated envelope"
+        );
+        let covered = generated_exact_coverage(&pkg, &[&r_dead]);
+        assert!(
+            covered.is_empty(),
+            "invalid policy is never claimed as covered"
+        );
+        let _ = fs::remove_dir_all(_root);
+    }
+
+    #[test]
+    fn materialized_skill_keeps_auxiliary_files_referenced() {
+        let (_root, pkg) = make_plain_package("policy-aux", false);
+        add_invoke(&pkg, "deploy", "  model: false\n  user: true\n", "Deploy");
+        fs::create_dir_all(pkg.root.join("skills/deploy/scripts")).unwrap();
+        fs::write(pkg.root.join("skills/deploy/scripts/run.sh"), "#!/bin/sh\n").unwrap();
+        let uze_home = UzeHome::at(_root.join("uze"));
+        let dir = materialize_generated_package(&uze_home, &pkg).unwrap();
+        assert!(
+            dir.join("skills/deploy/scripts").is_symlink(),
+            "auxiliary files stay referenced, never silently dropped"
+        );
+        assert!(dir.join("skills/deploy/SKILL.md").is_file());
+        let _ = fs::remove_dir_all(_root);
+    }
+
+    /// A description crafted to look like it could inject a second
+    /// frontmatter key — in particular one that would override the real
+    /// marker with `false` — must stay inert, safely escaped inside its own
+    /// quoted scalar. The generated marker line must appear exactly once,
+    /// and it must be `true`.
+    #[test]
+    fn tricky_description_cannot_forge_or_duplicate_the_marker() {
+        let (_root, pkg) = make_plain_package("policy-tricky", false);
+        let tricky = "Has: a colon, \"quotes\", a\nnewline, and disable-model-invocation: false";
+        let dir = pkg.root.join("skills/review");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("SKILL.md"),
+            format!("---\nname: review\ndescription: {tricky}\ninvoke:\n  model: false\n  user: true\n---\n\nBody.\n"),
+        )
+        .unwrap();
+        let uze_home = UzeHome::at(_root.join("uze"));
+        materialize_generated_package(&uze_home, &pkg).unwrap();
+        let generated = generated_root(&uze_home).join(pkg.id.as_str());
+        let content = fs::read_to_string(generated.join("skills/review/SKILL.md")).unwrap();
+        assert_eq!(
+            content.matches("disable-model-invocation").count(),
+            1,
+            "the marker must appear exactly once, never forged or duplicated by the description"
+        );
+        assert!(content.contains("disable-model-invocation: true\n"));
+        assert!(!content.contains("disable-model-invocation: false"));
+        assert!(content.ends_with("---\n\nBody.\n"));
+        let _ = fs::remove_dir_all(_root);
+    }
+
+    #[test]
+    fn policy_materialization_is_deterministic_across_rebuilds() {
+        let (_root, pkg) = make_plain_package("policy-deterministic", false);
+        add_invoke(
+            &pkg,
+            "review",
+            "  model: false\n  user: true\n",
+            "Review code",
+        );
+        let uze_home = UzeHome::at(_root.join("uze"));
+        materialize_generated_package(&uze_home, &pkg).unwrap();
+        let first = fs::read(
+            generated_root(&uze_home)
+                .join(pkg.id.as_str())
+                .join("skills/review/SKILL.md"),
+        )
+        .unwrap();
+        materialize_generated_package(&uze_home, &pkg).unwrap();
+        let second = fs::read(
+            generated_root(&uze_home)
+                .join(pkg.id.as_str())
+                .join("skills/review/SKILL.md"),
+        )
+        .unwrap();
+        assert_eq!(first, second);
         let _ = fs::remove_dir_all(_root);
     }
 

@@ -1,12 +1,16 @@
 # Commands as a First-Class Capability
 
-Status: Accepted
+Status: Superseded by [ADR-030 (Skill + Invocation Policy replace the canonical Command)](030-skill-plus-invocation-policy.md)
 
 Refines: [ADR-013 (Native Projection Principle)](013-adopt-native-projection-principle.md) §2,
 [ADR-008 (Plugin First, Capability Aware delivery)](008-adopt-plugin-first-capability-aware-delivery.md).
 Supersedes the "do not model Commands" recommendation of the 2026-08-21 M3
 research pass (`docs/capabilities/commands.md`), on updated official
 evidence.
+
+This decision is retained as history: the canonical model it introduced
+(`CapabilityKind::Command`, `commands/`) was removed by ADR-030 before any
+released state depended on it.
 
 ## Context
 
@@ -148,11 +152,12 @@ anywhere. The M3 landscape paper itself flagged `Action` as a
   from the public enum (the only prior reference was a validation-only
   importer mapping for `commands/` directories, which now maps to
   `Command`).
-- **Core neutrality preserved**: the new `ManagedFile` artifact
-  (`ExposureMechanism::ManagedFile` / `ManagedArtifact::ManagedFile`) is
-  opaque, content-agnostic ownership of one whole generated file in a
-  vendor directory — no vendor field, no command vocabulary, no template
-  language.
+- **Core neutrality preserved** (historical note: the `ManagedFile` artifact
+  this decision introduced — (`ExposureMechanism::ManagedFile` /
+  `ManagedArtifact::ManagedFile`), opaque, content-agnostic ownership of
+  one whole generated file in a vendor directory — no vendor field, no
+  command vocabulary, no template language — was removed by ADR-030 once
+  its only consumers, the Command projections, were gone.)
 - **Codex explicit-only is load-bearing**: the adapted Skill always ships
   `agents/openai.yaml` with `policy.allow_implicit_invocation: false`; a
   Command delivered without it would silently become model-selectable. The

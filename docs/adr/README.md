@@ -62,5 +62,9 @@ never renumbered), using this structure (Michael Nygard style):
 - [022 — Remove the Dead Foreign Claude Plugin Importer](022-remove-dead-foreign-claude-plugin-importer.md)
 - [023 — Marketplace Manifest Is agents.json](023-marketplace-manifest-is-agents-json.md)
 - [024 — Cache Attachment Inspection with Fingerprint + TTL Invalidation](024-cache-attachment-inspection-with-fingerprint-ttl-invalidation.md)
-- [025 — Commands as a First-Class Capability](025-commands-as-first-class-capability.md)
+- [025 — Commands as a First-Class Capability](025-commands-as-first-class-capability.md) — superseded (ADR-030)
 - [026 — Stable Namespaced Invocation Labels](026-stable-namespaced-invocation-labels.md)
+- [027 — Antigravity CLI is the Google-family v0 harness; Gemini CLI removed](027-antigravity-primary-google-family-harness.md)
+- [028 — Claude Command Explicit Invocation via Generated Frontmatter](028-claude-command-explicit-invocation-via-generated-frontmatter.md) — superseded
+- [029 — Projection Conflicts at Naming Time](029-projection-conflicts-at-naming-time.md)
+- [030 — Skill + Invocation Policy replace the canonical Command](030-skill-plus-invocation-policy.md)

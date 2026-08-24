@@ -1,6 +1,6 @@
 //! Capability compatibility routing without named harness rules.
 //!
-//! # What "Native" means (ADR-025)
+//! # What "Native" means (ADR-025, refined by ADR-030)
 //!
 //! A route is **Native** when the harness provides a first-class,
 //! officially supported mechanism that preserves the *canonical semantics*
@@ -9,11 +9,15 @@
 //! may implement one canonical capability under different names; both are
 //! Native if each preserves the semantics through a supported primitive.
 //! UZE models user-visible semantics, never one-to-one vendor type names:
-//! e.g. UZE Command reaches Claude as a plugin `commands/` file, OpenCode
-//! as a `.md` command, and Codex as an
-//! official *explicit-invocation-only Skill* — all Native, all the same
-//! canonical capability. (A route that must emulate or degrade through a
-//! mechanism the harness does not intend for that capability is
+//! the canonical capability is always the Skill, and its semantics are
+//! *who may invoke it* (invocation policy, ADR-030). A user-only Skill
+//! reaches Claude as a Skill with `disable-model-invocation: true`,
+//! Codex as a Skill with an `agents/openai.yaml` policy sidecar, OpenCode
+//! as a Skill with `metadata.opencode/autoinvoke: false`, and Antigravity
+//! as an ordinary Skill whose model visibility cannot be disabled — the
+//! first three are Native for that policy, the fourth is `Adaptable`
+//! because the semantics degrade. (A route that must emulate or degrade
+//! through a mechanism the harness does not intend for that capability is
 //! `Adaptable`; see `CompatibilityRoute`.)
 
 use std::collections::BTreeSet;

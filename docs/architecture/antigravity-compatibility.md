@@ -105,9 +105,12 @@ Key baseline facts:
    eliminated.
 5. AGENTS.md behavior contradicts migration docs — **NO** (docs confirm
    native `AGENTS.md`; context route Native).
-6. Commands preserve canonical semantics — **NO, deliberately**: explicit-only
-   degrades; Command is **Adapted**, not Native (the one semantic loss,
-   documented and declared honestly).
+6. Non-default invocation policies preserve canonical semantics — **NO,
+   deliberately**: Antigravity has no explicit-only mechanism and no
+   user-catalog suppression (skills are model-discoverable and
+   slash-invocable), so a user-only or model-only canonical Skill is
+   **Adapted**, not Native — the one semantic loss, documented and
+   declared in the plan evidence (ADR-030).
 7. MCP lifecycle manageable — **YES** (verified verbs + JSON config).
 8. Store vendor-specific changes — **NO**.
 9. Core learns Antigravity concepts — **NO** (zero `uze-core` changes).

@@ -51,13 +51,16 @@ pub(super) fn canonical_mcp_servers(package: &StoredPackage) -> Option<BTreeSet<
     (!entries.is_empty()).then_some(entries)
 }
 
-/// The intersection ADR-013 §2 requires, computed against the STRUCTURAL
-/// surface a generated plugin declares: canonical `skills/` and `commands/`
-/// are carried verbatim (the CLI converts `commands/*.md` to Skills at
-/// load, exactly like the vendor's own legacy-conversion path), and the
-/// MCP servers
-/// declared in canonical `mcp.json` are translated into the generated
-/// `mcp_config.json`. Coverage and generation agree by construction.
+/// The intersection ADR-013 §2 requires, computed against the SEMANTIC
+/// surface a generated plugin preserves: canonical `skills/` are carried
+/// verbatim, and the MCP servers declared in canonical `mcp.json` are
+/// translated into the generated `mcp_config.json`. Coverage is
+/// semantic-aware (ADR-030 §13): a Skill is covered only when its
+/// `invoke:` policy is the default — Antigravity has no explicit-only
+/// mechanism and cannot hide a Skill from the model or the user, so a
+/// non-default policy degrades and is never claimed; it falls through to
+/// capability-level delivery, which reports it honestly. Coverage and
+/// generation agree by construction.
 pub(super) fn generated_exact_coverage(
     package: &StoredPackage,
     resources: &[&Resource],
@@ -67,12 +70,9 @@ pub(super) fn generated_exact_coverage(
     for resource in resources {
         match resource.capability.kind {
             uze_core::capability::CapabilityKind::AgentSkill => {
-                if under(package, &resource.capability.path, "skills") {
-                    provided.insert(resource.identity());
-                }
-            }
-            uze_core::capability::CapabilityKind::Command => {
-                if under(package, &resource.capability.path, "commands") {
+                if under(package, &resource.capability.path, "skills")
+                    && resource.skill_invocation().is_default()
+                {
                     provided.insert(resource.identity());
                 }
             }
@@ -161,10 +161,12 @@ fn translated_mcp_config(package: &StoredPackage) -> serde_json::Value {
 /// Materializes (or refreshes) one package's generated plugin directory.
 /// Idempotent and deterministic: recreated wholesale from the Store package
 /// on every call — the directory is entirely UZE-owned and
-/// non-authoritative (ADR-013 §4). `skills/` and `commands/` are symlinked
+/// non-authoritative (ADR-013 §4). Default-policy `skills/` are symlinked
 /// to the Store's own bytes, never copied (the vendor's install verb
 /// dereferences them when it stages its copy); canonical MCP servers are
-/// translated into the vendor `mcp_config.json`.
+/// translated into the vendor `mcp_config.json`. `commands/` is no longer a
+/// canonical surface (ADR-030): a vendor-authored `commands/` directory is
+/// only ever delivered through an explicit plugin the author shipped.
 pub(super) fn materialize_generated_plugin(
     uze_home: &UzeHome,
     package: &StoredPackage,
@@ -193,10 +195,6 @@ pub(super) fn materialize_generated_plugin(
     let skills_source = package.root.join("skills");
     if skills_source.is_dir() {
         symlink(&skills_source, &dir.join("skills"))?;
-    }
-    let commands_source = package.root.join("commands");
-    if commands_source.is_dir() {
-        symlink(&commands_source, &dir.join("commands"))?;
     }
     if canonical_mcp_servers(package).is_some() {
         let mcp = translated_mcp_config(package);
@@ -271,12 +269,6 @@ mod generated_native_tests {
             "---\nname: commit\n---\n",
         )
         .unwrap();
-        fs::create_dir_all(pkg_root.join("commands")).unwrap();
-        fs::write(
-            pkg_root.join("commands/review.md"),
-            "---\ndescription: Review\n---\n\nBody\n",
-        )
-        .unwrap();
         fs::write(
             pkg_root.join("plugin.json"),
             r#"{"name":"flow","version":"1.2.0","description":"Vendor-neutral flow package"}"#,
@@ -320,21 +312,6 @@ mod generated_native_tests {
         )
     }
 
-    fn command_resource(pkg: &StoredPackage) -> Resource {
-        let path = pkg.root.join("commands/review.md");
-        Resource::from_package_named(
-            pkg.id.clone(),
-            pkg.root.clone(),
-            Capability {
-                kind: CapabilityKind::Command,
-                representation: Representation::Standard,
-                path,
-                payload: Vec::new(),
-            },
-            "review".to_owned(),
-        )
-    }
-
     fn mcp_resource(pkg: &StoredPackage, name: &str) -> Resource {
         let path = pkg.root.join("mcp.json");
         Resource::from_package_named(
@@ -368,9 +345,8 @@ mod generated_native_tests {
     fn package_with_canonical_mcp_takes_the_generated_route() {
         let (root, pkg) = make_package_with_mcp("plan-generated");
         let r_skill = skill_resource(&pkg);
-        let r_cmd = command_resource(&pkg);
         let r_mcp = mcp_resource(&pkg, "mcp-a");
-        let resources = vec![&r_skill, &r_cmd, &r_mcp];
+        let resources = vec![&r_skill, &r_mcp];
         let uze_home = UzeHome::at(root.join("uze"));
         let integration = AntigravityIntegration::new(root.join("agents"), uze_home.clone());
         let plan = integration
@@ -379,11 +355,50 @@ mod generated_native_tests {
         assert_eq!(plan.route, uze_core::router::CompatibilityRoute::Native);
         assert_eq!(
             plan.provided_resource_identities,
-            BTreeSet::from([r_skill.identity(), r_cmd.identity(), r_mcp.identity()])
+            BTreeSet::from([r_skill.identity(), r_mcp.identity()])
         );
         assert!(
             !generated_root(&uze_home).join("flow").exists(),
             "planning must stay read-only"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// ADR-030 §13: a non-default invoke policy cannot be preserved by the
+    /// Antigravity plugin (no explicit-only mechanism), so it is never
+    /// claimed in the native package plan — it falls through to
+    /// capability-level delivery, which reports the degradation.
+    #[test]
+    fn non_default_policy_skill_is_never_claimed_by_the_generated_route() {
+        let (root, pkg) = make_package_with_mcp("plan-policy");
+        let user_only = Resource::from_package(
+            pkg.id.clone(),
+            pkg.root.clone(),
+            Capability {
+                kind: CapabilityKind::AgentSkill,
+                representation: Representation::Standard,
+                path: pkg.root.join("skills/commit/SKILL.md"),
+                payload: b"---\nname: commit\ninvoke:\n  model: false\n  user: true\n---\n"
+                    .to_vec(),
+            },
+        );
+        let r_mcp = mcp_resource(&pkg, "mcp-a");
+        let resources = vec![&user_only, &r_mcp];
+        let uze_home = UzeHome::at(root.join("uze"));
+        let integration = AntigravityIntegration::new(root.join("agents"), uze_home.clone());
+        let plan = integration
+            .package_exposure_plan(&pkg, &resources)
+            .expect("generated route still applies via MCP");
+        assert_eq!(
+            plan.provided_resource_identities,
+            BTreeSet::from([r_mcp.identity()]),
+            "only the MCP server is claimed; the degraded user-only Skill is not"
+        );
+        let fallback = integration.exposure_plan(&user_only);
+        assert_eq!(
+            fallback.route,
+            uze_core::router::CompatibilityRoute::Adaptable,
+            "the capability-level fallback reports the degradation honestly"
         );
         let _ = fs::remove_dir_all(root);
     }
@@ -404,7 +419,10 @@ mod generated_native_tests {
             serde_json::from_slice(&fs::read(dir.join("plugin.json")).unwrap()).unwrap();
         assert_eq!(manifest["name"], "flow");
         assert!(dir.join("skills").is_symlink());
-        assert!(dir.join("commands").is_symlink());
+        assert!(
+            !dir.join("commands").exists(),
+            "commands/ is no longer a canonical surface; the generated plugin never carries it"
+        );
         let mcp: serde_json::Value =
             serde_json::from_slice(&fs::read(dir.join("mcp_config.json")).unwrap()).unwrap();
         assert_eq!(mcp["mcpServers"]["mcp-a"]["command"], "a");

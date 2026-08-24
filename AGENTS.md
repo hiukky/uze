@@ -41,6 +41,14 @@ not a guarantee of parity.
 
 Run the CLI itself with `cargo run --bin uze -- <args>` or `./target/debug/uze <args>` after a build; `uze` with no args launches the terminal UI.
 
+## Code style
+
+Keep the code clean and self-documenting. Prefer expressive names and small,
+focused functions over explanatory comments. Add a comment only when it
+explains a non-obvious *why* — the rationale behind a decision, an invariant,
+a workaround, or a subtle constraint the code alone cannot convey. Never
+restate what the code already says; write intent, not implementation.
+
 ## Workspace layout
 
 Cargo workspace, edition 2024, MSRV 1.97. Single version source:
@@ -75,7 +83,7 @@ need to).
   default local plugin used for manual dogfooding.
 - `docs/adr/` — numbered architecture decision records (read before making
   a structural change; recent ones cover generated native-package
-  projection, Commands-as-capability, and invocation labels).
+  projection, Skill invocation policy, and invocation labels).
 - `docs/architecture/invariants.md` — properties the architecture actually
   holds today, each tied to the specific test that proves it. Treat this as
   the canonical list of "do not break this" behaviors.
@@ -110,6 +118,11 @@ properties):
 - **Store** (`uze-core::store`) owns installed package bytes and is the
   single source of truth; it never writes anything a harness reads, and
   integrations never mutate it.
+- **One Skill capability; invocation policy is its semantics**: explicit
+  user action vs. background knowledge is the `invoke: {model, user}`
+  block in SKILL.md (ADR-030), never a second capability kind — no
+  canonical `Command`, no `commands/` surface. Integrations translate the
+  policy into vendor-specific encodings; Store bytes stay verbatim.
 - **Package vs. project context are independent**: `uze add`/`remove`/
   `update`/`market`/`plugin`/`harness` are machine-scoped (`~/.uze`);
   `uze context inspect|plan|reconcile` are project-scoped. Neither touches
@@ -117,8 +130,10 @@ properties):
 - **Native > Generated Native > Safe Adaptation > Unsupported** delivery
   precedence per capability per harness. "Native" means the harness offers
   an officially supported mechanism preserving canonical semantics — not
-  necessarily the same physical primitive across vendors (ADR-025: a UZE
-  Command is Native on Codex via an explicit-invocation-only Skill).
+  necessarily the same physical primitive across vendors. The canonical
+  capability is the Skill; its portable semantics are *who may invoke it*
+  (invocation policy, ADR-030), and each integration translates that policy
+  into the vendor's own encoding.
 - **Derived artifacts are non-authoritative and rebuildable** — anything an
   integration generates (a generated native package, a projected bridge
   file) can be safely deleted and regenerated from the Store + Engine

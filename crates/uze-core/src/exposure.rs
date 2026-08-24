@@ -86,20 +86,6 @@ pub enum ExposureMechanism {
         region_identity: String,
         expected_content: String,
     },
-    /// UZE owns one *whole* generated file inside a vendor-managed
-    /// directory (e.g. a harness's user-scope commands directory), whose
-    /// content — a format translation of canonical Store bytes — only the
-    /// owning integration knows how to produce. `expected_content` is
-    /// computed deterministically at planning time and is the entire
-    /// ownership proof: the file is UZE's iff its bytes match exactly. See
-    /// `crate::managed_file`, which owns every safety rule for this variant
-    /// and is as vendor-neutral as `crate::text_region`. The managed file is
-    /// always a Derived Artifact (ADR-013 §4), never canonical, never
-    /// inside the Store.
-    ManagedFile {
-        target_file: PathBuf,
-        expected_content: String,
-    },
     Unsupported {
         rationale: String,
     },
@@ -181,23 +167,6 @@ impl ExposureMechanism {
             ));
         };
         crate::text_region::attach(target_file, region_identity, expected_content)?;
-        Ok(target_file.clone())
-    }
-
-    /// Idempotently creates or verifies the file a `ManagedFile` mechanism
-    /// describes. Only valid for that variant; delegates entirely to
-    /// `crate::managed_file`, which owns every safety rule.
-    pub fn attach_managed_file(&self) -> Result<PathBuf> {
-        let ExposureMechanism::ManagedFile {
-            target_file,
-            expected_content,
-        } = self
-        else {
-            return Err(UzeError::ExposureUnavailable(
-                "this exposure mechanism is not a managed file".to_owned(),
-            ));
-        };
-        crate::managed_file::attach(target_file, expected_content)?;
         Ok(target_file.clone())
     }
 
@@ -406,18 +375,6 @@ impl ExposurePlan {
                 // persistent, package-lifecycle artifact created once via
                 // `attach_text_region`/`IntegrationPort::attach`, not a
                 // per-session projection this type prepares or tears down.
-                Ok(PreparedExposure {
-                    working_directory: workspace.to_path_buf(),
-                    arguments: Vec::new(),
-                    runtime_directory: None,
-                    managed: None,
-                })
-            }
-            ExposureMechanism::ManagedFile { target_file, .. } => {
-                // Same rationale as the other persistent managed artifacts:
-                // a generated vendor file is created once at attach time
-                // and is not session-scoped.
-                let _ = target_file;
                 Ok(PreparedExposure {
                     working_directory: workspace.to_path_buf(),
                     arguments: Vec::new(),

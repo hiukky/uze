@@ -273,7 +273,7 @@ fn codex_prefers_managed_attachment_once_setup_state_is_recorded() {
     // frontmatter and the canonical bytes are not rewritten.
     let wrapped = fs::read_link(&attached).unwrap();
     assert!(
-        wrapped.starts_with(home_root.join("state/attachments/codex/commands")),
+        wrapped.starts_with(home_root.join("state/attachments/codex/skills")),
         "the symlink must target a Derived Artifact under $UZE_HOME: {}",
         wrapped.display()
     );

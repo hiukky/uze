@@ -327,9 +327,11 @@ fn setup_then_add_attaches_transparently_without_a_separate_sync_step() {
             .is_file(),
         "the fixture's generated Claude envelope should exist"
     );
+    // Default-policy skills stay byte-preserving per-skill symlinks inside
+    // the envelope's own `skills/` directory (ADR-030).
     assert!(
         generated_root
-            .join("uze-agent-skill-conformance/skills")
+            .join("uze-agent-skill-conformance/skills/uze-e2e")
             .is_symlink(),
         "the generated envelope should reference the Store's skills/ by symlink, not a copy"
     );

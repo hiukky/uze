@@ -122,6 +122,17 @@ pub enum UzeError {
     ManagedEntryConflict(PathBuf),
     #[error("a managed entry has drifted and was preserved at {0}")]
     ManagedEntryDrift(PathBuf),
+    /// Two distinct canonical resources need the same vendor-visible
+    /// physical entry with incompatible representations — a projection
+    /// ownership conflict (e.g. a legacy receipt and a Skill both
+    /// projecting `flow:commit` into the shared `~/.agents/skills` root,
+    /// or a reused artifact that cannot carry the reusing integration's
+    /// invocation encoding). Distinct from `ManagedEntryDrift`: nothing
+    /// drifted; the conflict is deterministically detectable before any
+    /// attachment happens.
+    #[error("{0}")]
+    ProjectionConflict(Box<ProjectionConflictDetails>),
+
     #[error(
         "a managed text region's content differs from what was requested; user content at {0} was preserved"
     )]
@@ -143,6 +154,36 @@ pub enum UzeError {
         program: String,
         source: std::io::Error,
     },
+}
+
+/// Payload of [`UzeError::ProjectionConflict`], boxed so `UzeError` stays
+/// under Clippy's `result_large_err` threshold.
+#[derive(Debug)]
+pub struct ProjectionConflictDetails {
+    pub entry: PathBuf,
+    pub requested: String,
+    pub requested_integration: String,
+    pub requested_target: PathBuf,
+    pub existing: String,
+    pub existing_integration: String,
+    pub existing_target: PathBuf,
+}
+
+impl std::fmt::Display for ProjectionConflictDetails {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "projection conflict at `{}`: {} ({}) cannot be exposed from {} because {} ({}) already \
+             owns this entry (target {}); remove or rename one of the capabilities",
+            self.entry.display(),
+            self.requested,
+            self.requested_integration,
+            self.requested_target.display(),
+            self.existing,
+            self.existing_integration,
+            self.existing_target.display()
+        )
+    }
 }
 
 pub type Result<T> = std::result::Result<T, UzeError>;

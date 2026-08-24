@@ -290,21 +290,43 @@ fn antigravity_reports_stable_identity_and_capabilities() {
     mark_setup(&home, &integration);
     assert_basic_identity_contract(&integration);
     assert_native_skill_and_mcp(&integration);
-    // Command is ADAPTED, not Native: Antigravity's only custom-command
-    // representation is its commands→Skills conversion, and Skills are
-    // model-discoverable with no observable explicit-only mechanism — the
-    // canonical Command's explicit-only property degrades (ADR-025), so
-    // declaring it Native would be exactly the declared-vs-delivered drift
-    // this suite exists to catch.
-    let capabilities = integration.capabilities();
-    assert!(
-        capabilities.adaptable.contains(&CapabilityKind::Command),
-        "antigravity: Command must be declared adaptable (commands→skills conversion, no explicit-only mechanism)"
+    // Invocation policy is the semantic dimension (ADR-030): Antigravity
+    // has NO way to hide a Skill from the model or the user's slash
+    // surface, so a canonical user-only Skill must route Adaptable with
+    // the degradation stated — never Native, never silently model-visible
+    // while claiming coverage. There is no canonical `Command` kind to
+    // declare; a vendor Command may only ever be a projection detail.
+    let (_root2, package) = build_package(
+        "antigravity-policy",
+        "flow",
+        &[(
+            "skills/review/SKILL.md",
+            "---\nname: review\n---\n\nBody.\n",
+        )],
+    );
+    let user_only = Resource::from_package(
+        package.id.clone(),
+        package.root.clone(),
+        Capability {
+            kind: CapabilityKind::AgentSkill,
+            representation: Representation::Standard,
+            path: package.root.join("skills/review/SKILL.md"),
+            payload: b"---\nname: review\ninvoke:\n  model: false\n  user: true\n---\n\nBody.\n"
+                .to_vec(),
+        },
+    );
+    let plan = integration.exposure_plan(&user_only);
+    assert_eq!(
+        plan.route,
+        uze_core::router::CompatibilityRoute::Adaptable,
+        "antigravity: a user-only Skill degrades honestly (no explicit-only mechanism)"
     );
     assert!(
-        !capabilities.native.contains(&CapabilityKind::Command),
-        "antigravity: Command must never be declared native"
+        plan.evidence
+            .contains("invoke.model=false cannot be enforced"),
+        "the degradation must be stated in the evidence, never hidden"
     );
+    let _ = fs::remove_dir_all(_root2);
     let _ = fs::remove_dir_all(root);
 }
 

@@ -218,30 +218,6 @@ pub(super) fn claude_exact_coverage(
         }
     }
 
-    // Claude's `commands` manifest field *replaces* the default `commands/`
-    // scan: declared file/directory paths are the surface; absent, the
-    // conventional `commands/` directory is. The same shape rules as
-    // `skills` apply (a normalizer that rejects absolute/escaping paths),
-    // with the replace-vs-add difference honored.
-    let mut declared_command_paths: Option<BTreeSet<String>> = None;
-    if let Some(commands) = value.get("commands") {
-        let mut paths: BTreeSet<String> = BTreeSet::new();
-        let declarations: Vec<&serde_json::Value> = match commands {
-            serde_json::Value::String(_) => vec![commands],
-            serde_json::Value::Array(values) => values.iter().collect(),
-            _ => Vec::new(),
-        };
-        for entry in declarations {
-            let Some(raw) = entry.as_str() else {
-                continue;
-            };
-            if let Some(normalized) = normalize_declared_relative_path(raw) {
-                paths.insert(normalized.to_string_lossy().into_owned());
-            }
-        }
-        declared_command_paths = Some(paths);
-    }
-
     let mut provided = BTreeSet::new();
     for resource in resources {
         match resource.capability.kind {
@@ -257,33 +233,34 @@ pub(super) fn claude_exact_coverage(
                     continue;
                 };
                 // Parent is like "skills/skill-a"
-                if declared_skill_dirs.contains(&parent) {
-                    provided.insert(resource.identity());
-                }
-            }
-            uze_core::capability::CapabilityKind::Command => {
-                let Some(relative) = resource.capability.path.strip_prefix(&package.root).ok()
-                else {
+                if !declared_skill_dirs.contains(&parent) {
                     continue;
+                }
+                // A path match alone is not enough (ADR-030 §13): UZE never
+                // rewrites an author's explicit-envelope content, so the
+                // delivered bytes are whatever the canonical SKILL.md itself
+                // contains, and Claude's defaults are model+user. A Skill is
+                // only honestly claimed as covered when its canonical
+                // `invoke:` policy matches what the shipped bytes declare to
+                // Claude:
+                //   - default policy  → Claude's own defaults apply;
+                //   - model=false     → the bytes must already carry
+                //     `disable-model-invocation: true`;
+                //   - user=false      → the bytes must already carry
+                //     `user-invocable: false`;
+                //   - invalid         → never covered (falls through to
+                //     capability-level delivery, which refuses it).
+                let policy = resource.skill_invocation();
+                let preserved = if policy.is_invalid() {
+                    false
+                } else if !policy.model {
+                    crate::shared::skill::has_disable_model_invocation(&resource.capability.payload)
+                } else if !policy.user {
+                    crate::shared::skill::has_user_invocable_false(&resource.capability.payload)
+                } else {
+                    true
                 };
-                let relative_string = relative.to_string_lossy().into_owned();
-                let direct_parent = relative.parent().map(|p| p.to_string_lossy().into_owned());
-                let covered = match &declared_command_paths {
-                    // Manifest declares the surface: a command is covered
-                    // iff its own path or its direct parent is declared.
-                    Some(paths) => {
-                        paths.contains(&relative_string)
-                            || direct_parent
-                                .as_deref()
-                                .is_some_and(|parent| paths.contains(parent))
-                    }
-                    // No declaration: the default `commands/` directory is
-                    // the command surface — covered iff directly inside it.
-                    None => direct_parent
-                        .as_deref()
-                        .is_some_and(|parent| parent == "commands"),
-                };
-                if covered {
+                if preserved {
                     provided.insert(resource.identity());
                 }
             }
@@ -491,9 +468,17 @@ mod claude_native_coverage_tests {
     }
 
     fn skill_resource(pkg: &uze_core::store::StoredPackage, skill: &str) -> Resource {
+        skill_resource_with(pkg, skill, &format!("---\nname: {skill}\n---\n"))
+    }
+
+    fn skill_resource_with(
+        pkg: &uze_core::store::StoredPackage,
+        skill: &str,
+        body: &str,
+    ) -> Resource {
         let path = pkg.root.join(format!("skills/{skill}/SKILL.md"));
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, format!("---\nname: {skill}\n---\n")).unwrap();
+        fs::write(&path, body).unwrap();
         Resource::from_package(
             pkg.id.clone(),
             pkg.root.clone(),
@@ -501,7 +486,7 @@ mod claude_native_coverage_tests {
                 kind: CapabilityKind::AgentSkill,
                 representation: Representation::Standard,
                 path: path.clone(),
-                payload: Vec::new(),
+                payload: body.as_bytes().to_vec(),
             },
         )
     }
@@ -522,6 +507,88 @@ mod claude_native_coverage_tests {
             },
             name.to_owned(),
         )
+    }
+
+    /// ADR-030 §13: an explicit envelope Skill is only claimed as covered
+    /// when the canonical `invoke:` policy is actually preserved by the
+    /// vendor bytes the author shipped — UZE never rewrites
+    /// explicit-envelope content, and Claude's defaults are model+user.
+    #[test]
+    fn explicit_user_only_skill_with_the_vendor_marker_is_covered() {
+        let (_root, pkg) = make_package_with_plugin(
+            "policy-marker",
+            r#"{"name":"test-pkg","skills":["./skills/review"]}"#,
+        );
+        let r = skill_resource_with(
+            &pkg,
+            "review",
+            "---\ndescription: Review\ndisable-model-invocation: true\ninvoke:\n  model: false\n  user: true\n---\nBody.\n",
+        );
+        let covered = claude_exact_coverage(&pkg, &[&r]);
+        assert_eq!(covered, BTreeSet::from([r.identity()]));
+        let _ = fs::remove_dir_all(_root);
+    }
+
+    #[test]
+    fn explicit_user_only_skill_without_the_vendor_marker_is_not_covered() {
+        let (_root, pkg) = make_package_with_plugin(
+            "policy-no-marker",
+            r#"{"name":"test-pkg","skills":["./skills/review"]}"#,
+        );
+        let r = skill_resource_with(
+            &pkg,
+            "review",
+            "---\ndescription: Review\ninvoke:\n  model: false\n  user: true\n---\nBody.\n",
+        );
+        let covered = claude_exact_coverage(&pkg, &[&r]);
+        assert!(
+            covered.is_empty(),
+            "a path-matched user-only Skill must not be claimed as covered without its own disable-model-invocation marker"
+        );
+        let _ = fs::remove_dir_all(_root);
+    }
+
+    #[test]
+    fn explicit_model_only_skill_requires_user_invocable_false() {
+        let (_root, pkg) = make_package_with_plugin(
+            "policy-model-only",
+            r#"{"name":"test-pkg","skills":["./skills/legacy"]}"#,
+        );
+        let covered_with = skill_resource_with(
+            &pkg,
+            "legacy",
+            "---\nuser-invocable: false\ninvoke:\n  model: true\n  user: false\n---\nBody.\n",
+        );
+        assert_eq!(
+            claude_exact_coverage(&pkg, &[&covered_with]),
+            BTreeSet::from([covered_with.identity()])
+        );
+        let covered_without = skill_resource_with(
+            &pkg,
+            "legacy",
+            "---\ninvoke:\n  model: true\n  user: false\n---\nBody.\n",
+        );
+        assert!(
+            claude_exact_coverage(&pkg, &[&covered_without]).is_empty(),
+            "model-only semantics degrade without the vendor's own user-invocable: false marker"
+        );
+        let _ = fs::remove_dir_all(_root);
+    }
+
+    #[test]
+    fn explicit_invalid_policy_skill_is_never_covered() {
+        let (_root, pkg) = make_package_with_plugin(
+            "policy-invalid",
+            r#"{"name":"test-pkg","skills":["./skills/dead"]}"#,
+        );
+        let r = skill_resource_with(
+            &pkg,
+            "dead",
+            "---\ninvoke:\n  model: false\n  user: false\n---\nBody.\n",
+        );
+        let covered = claude_exact_coverage(&pkg, &[&r]);
+        assert!(covered.is_empty());
+        let _ = fs::remove_dir_all(_root);
     }
 
     #[test]

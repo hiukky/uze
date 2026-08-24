@@ -39,7 +39,7 @@ All mutating vendor commands run through `shared::process::capture`:
   never a primary log stream.
 
 Rejected alternative: `--verbose` passthrough of vendor output. The vendor
-CLI's vocabulary (marketplace names like `uze-local-generated`, installed
+CLI's vocabulary (marketplace names like `uze-store`, installed
 roots) is exactly what confused the user; UZE's read models already state
 the same facts in UZE's terms, and a `doctor`/`inspect` view is the right
 place for raw system evidence.
@@ -48,7 +48,7 @@ place for raw system evidence.
 
 `render_add_report` prints, per plan: `{harness}: {route}` plus
 `({location})` when an attachment was recorded for that harness — e.g.
-`claude-code: native (claude-plugin-generated:flow@uze-local-generated)`.
+`claude-code: native (claude-plugin-generated:flow@uze-store)`.
 Attachments that are not package delivery (Agent Skill symlinks in the
 shared skills root, like opencode's) still get their own line:
 `{harness}: attached at {location}`. Nothing is dropped from the default

@@ -218,11 +218,10 @@ fn one_plugin_install_is_planned_once_for_native_and_decomposed_harnesses() {
     let config: serde_json::Value =
         serde_json::from_slice(&fs::read(root.join("config/opencode/opencode.json")).unwrap())
             .unwrap();
-    // No "uze-" collision-avoidance prefix any more (it never participated
-    // in ownership). MCP stays fully qualified (package-logical) since its
-    // physical name is not user-visible; Skills and Commands get their
-    // stable namespaced invocation label (ADR-026) — the path-derived
-    // OpenCode V2 slash ID, user-visible like Claude's.
+    // MCP stays fully qualified (package-logical) since its physical name
+    // is not user-visible; Skills get their stable namespaced invocation
+    // label (ADR-026) — the path-derived OpenCode V2 slash ID, user-visible
+    // like Claude's.
     assert_eq!(
         config["mcp"]["uze-plugin-first-conformance-conformance"]["type"],
         "local"
