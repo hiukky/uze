@@ -2,6 +2,8 @@
 name = "uze-testkit"
 version.workspace = true
 edition = "2024"
+license.workspace = true
+authors.workspace = true
 publish = false
 description = "Shared, harness-agnostic test infrastructure for the UZE workspace (TestEnvironment, FakeHarness, fixtures, scenario builder, assertions)."
 

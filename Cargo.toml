@@ -4,7 +4,8 @@ version.workspace = true
 edition = "2024"
 rust-version = "1.97"
 description = "Standards-first agent project composition"
-license = "MIT"
+license.workspace = true
+authors.workspace = true
 # UZE is not published to crates.io. Native Cargo field (independent of
 # cargo-release's own `publish = false` in release.toml) so `cargo publish`
 # itself refuses, and its manifest-completeness checks (repository/
@@ -27,6 +28,8 @@ resolver = "3"
 # UZE v0 is released as SemVer pre-releases. Increment this value before
 # producing any distributable binary; every workspace crate inherits it.
 version = "0.0.0-alpha.14"
+license = "Apache-2.0"
+authors = ["Romullo Sousa (hiukky)"]
 
 [dependencies]
 uze-core = { path = "crates/uze-core" }

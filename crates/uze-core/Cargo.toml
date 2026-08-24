@@ -4,7 +4,8 @@ version.workspace = true
 edition = "2024"
 rust-version = "1.97"
 description = "Harness-agnostic package, capability, lifecycle, and integration contracts for UZE"
-license = "MIT"
+license.workspace = true
+authors.workspace = true
 publish = false
 
 [dependencies]
