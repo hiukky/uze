@@ -37,11 +37,11 @@ they survive independently of any one code comment:
   instructions, alongside or instead of a bridge, is expected and
   supported — see `derive_warnings`' "expected and supported, not a gap"
   case.
-- **Claude/Gemini bridges are implementation mechanisms, not canonical
-  context.** The bridge region (`@AGENTS.md`) exists only so those two
-  harnesses reach the same canonical content Codex/OpenCode already read
-  directly. The bridge itself carries no content of its own and is never
-  the source of truth — `AGENTS.md` is.
+- **Claude's bridge is an implementation mechanism, not canonical
+  context.** The bridge region (`@AGENTS.md`) exists only so that one
+  harness reaches the same canonical content Codex/OpenCode/Antigravity
+  already read directly. The bridge itself carries no content of its own
+  and is never the source of truth — `AGENTS.md` is.
 
 ## Why a separate boundary
 
@@ -130,11 +130,11 @@ content for each of the three recognized files — the smallest split that
 answers Fase 3's question without inventing a larger taxonomy.
 
 `HarnessContextDelivery` is three cases, not five: `Native` (Codex,
-OpenCode — reads `AGENTS.md` directly), `Bridge { needed, state }` (Claude
-Code, Gemini CLI — `state` is always checked, even when `needed` is false,
-so a stale-but-present bridge is visible rather than silently folded into
-"not needed"), and `NotDetected` (the harness isn't on this machine at all
-— never counted as a gap).
+OpenCode, Antigravity — reads `AGENTS.md` directly), `Bridge { needed,
+state }` (Claude Code — `state` is always checked, even when `needed` is
+false, so a stale-but-present bridge is visible rather than silently folded
+into "not needed"), and `NotDetected` (the harness isn't on this machine at
+all — never counted as a gap).
 
 **Proven zero-write** by filesystem-snapshot equality across every state a
 project can be in: absent, populated-and-matched, drifted, orphaned, and
@@ -201,8 +201,8 @@ this phase hold, each backed by an existing or new test:
 | Reconciling twice is idempotent | `reconciling_repeatedly_never_duplicates_regions_or_bridges` |
 | Bridge is derived state | `context_reconcile`'s bridge loop recomputes `needed` from `agents_md_report.has_any_matched_contribution()` every call — never reads a stored receipt |
 | No bridge without a matched contribution | same |
-| Codex/OpenCode receive no extra artifact | `NATIVE_INSTRUCTION_INTEGRATIONS` never appears in `BRIDGE_INTEGRATIONS`; confirmed empirically via `codex debug prompt-input` |
-| Claude/Gemini receive only the minimal bridge | `INSTRUCTION_BRIDGE_CONTENT = "@AGENTS.md"`, one line |
+| Codex/OpenCode/Antigravity receive no extra artifact | `NATIVE_INSTRUCTION_INTEGRATIONS` never appears in `BRIDGE_INTEGRATIONS`; confirmed empirically via `codex debug prompt-input` |
+| Claude receives only the minimal bridge | `INSTRUCTION_BRIDGE_CONTENT = "@AGENTS.md"`, one line |
 | Package Store stays global | `context_operations_never_alter_the_installed_package_set` |
 | No Integration gains Project lifecycle semantics | `IntegrationPort` trait is unmodified; `grep` proof below |
 
@@ -275,9 +275,9 @@ purely a *client* of the same three functions this milestone ships.
 $ grep -inE "claude|codex|opencode|gemini" crates/uze-core/src/text_region.rs crates/uze-core/src/context.rs
 (zero matches, anywhere — code, doc comments, and tests alike)
 
-$ grep -n "claude-code\|CLAUDE.md\|GEMINI.md\|\"gemini\"\|\"codex\"\|\"opencode\"" crates/uze-application/src/application.rs
-41:    &[("claude-code", "CLAUDE.md"), ("gemini", "GEMINI.md")];    # BRIDGE_INTEGRATIONS
-57:const NATIVE_INSTRUCTION_INTEGRATIONS: &[&str] = &["codex", "opencode"];
+$ grep -n "claude-code\|CLAUDE.md\|GEMINI.md\|\"antigravity\"\|\"codex\"\|\"opencode\"" crates/uze-application/src/application.rs
+41:    &[("claude-code", "CLAUDE.md")];    # BRIDGE_INTEGRATIONS
+57:const NATIVE_INSTRUCTION_INTEGRATIONS: &[&str] = &["codex", "opencode", "antigravity"];
 631:        let sources: Vec<InstructionSourceObservation> = ["AGENTS.md", "CLAUDE.md", "GEMINI.md"]
 ```
 

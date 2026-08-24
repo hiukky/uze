@@ -29,7 +29,7 @@ use std::{
 };
 
 use uze::integrations::{
-    claude::ClaudeIntegration, codex::CodexIntegration, gemini::GeminiIntegration,
+    antigravity::AntigravityIntegration, claude::ClaudeIntegration, codex::CodexIntegration,
     opencode::OpenCodeIntegration,
 };
 use uze::{
@@ -276,38 +276,117 @@ fn opencode_delivers_command_natively_via_byte_identical_reference() {
     fs::remove_dir_all(root).unwrap();
 }
 
+// --- 4. Command adaptation marked Adapted -----------------------------------
+
 #[test]
-fn gemini_delivers_command_natively_via_generated_toml() {
-    let (root, home, _package, resources) = stored_workflow("gemini-native");
-    let gemini = GeminiIntegration::new(root.join("agents"), home.clone());
-    mark_setup(&home, &gemini);
-    let command = *command_resources(&resources).first().unwrap();
-    let plan = gemini.exposure_plan(command);
-    assert_eq!(plan.route, CompatibilityRoute::Native);
-    let ExposureMechanism::ManagedFile {
-        target_file,
-        expected_content,
-    } = &plan.mechanism
-    else {
-        panic!("expected a managed file, got {:?}", plan.mechanism);
+fn antigravity_delivers_command_adapted_via_converted_skill() {
+    let (root, home, _package, resources) = stored_workflow("antigravity-adapted");
+    let antigravity = AntigravityIntegration::new(root.join("agents"), home.clone());
+    mark_setup(&home, &antigravity);
+    let command = command_resources(&resources)[0].clone();
+    let plan = antigravity.exposure_plan(&command);
+    // ADAPTED, deliberately: the vendor's only command representation is
+    // commands→Skills conversion, and Skills are model-discoverable with no
+    // observable explicit-only mechanism (see the capability declaration).
+    assert_eq!(plan.route, CompatibilityRoute::Adaptable);
+    let ExposureMechanism::ManagedUserScopeReference { entry_name, .. } = &plan.mechanism else {
+        panic!("expected a managed reference, got {:?}", plan.mechanism);
     };
-    assert_eq!(
-        target_file,
-        &root.join(".gemini/commands/workflow/review.toml"),
-        "Gemini namespaces by nested path (vendor converts / to :)"
-    );
+    assert_eq!(entry_name, "workflow:review");
     assert!(
-        expected_content
-            .contains("description = \"Review code for correctness and missing tests\"")
-    );
-    assert!(
-        expected_content.contains("prompt = \"\\nReview the current changes"),
-        "the prompt holds the canonical body (after its frontmatter block): {expected_content}"
+        plan.evidence.contains("ADAPTED"),
+        "the route must be reported honestly: {}",
+        plan.evidence
     );
     fs::remove_dir_all(root).unwrap();
 }
 
-// --- 4. Command adaptation marked Adapted -----------------------------------
+/// Audit contract (Antigravity command semantics): the generated artifact
+/// is a plain SKILL.md carrying the stable namespaced label — and, unlike
+/// Codex's explicit-only policy file, there is NO mechanism to keep the
+/// model from auto-selecting it. That absence is exactly what makes the
+/// route Adapted rather than Native, and it must stay literal in the test:
+/// no eventual vendor policy file may be silently assumed here.
+#[test]
+fn antigravity_generated_command_artifact_has_no_explicit_only_marker() {
+    let (root, home, _package, resources) = stored_workflow("antigravity-explicit-only-absent");
+    let antigravity = AntigravityIntegration::new(root.join("agents"), home.clone());
+    mark_setup(&home, &antigravity);
+    let command = command_resources(&resources)[0].clone();
+    let command_receipt = antigravity
+        .attach_receipt(&command)
+        .unwrap()
+        .expect("attaches");
+    let ManagedArtifact::SymlinkReference { target, .. } = &command_receipt.artifact else {
+        panic!("expected symlink artifact");
+    };
+    let skill = fs::read_to_string(target.join("SKILL.md")).unwrap();
+    assert!(
+        skill.starts_with("---\nname: workflow:review\n"),
+        "the generated Command-as-Skill carries the stable namespaced label"
+    );
+    assert!(
+        !target.join("agents/openai.yaml").exists(),
+        "Antigravity has no explicit-only mechanism; the absence is the semantic degradation \
+         that justifies the Adapted route"
+    );
+    assert!(
+        !target.join("agents").exists(),
+        "no agent policy directory of any kind may be invented"
+    );
+    // The canonical identity is untouched by the physical adaptation.
+    assert_eq!(
+        command_receipt.resource_identity.as_deref().unwrap(),
+        command.identity(),
+        "the receipt keeps the canonical Command resource identity"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Same-name Skill and Command on Antigravity: at CAPABILITY level they
+/// collide — the vendor's global skills root is a flat slash-command
+/// namespace (`workflow:review` can name only one entry, regardless of
+/// kind), so the second attach is surfaced as a conflict/drift rather than
+/// silently double-delivered. This is exactly why the PRIMARY route is
+/// package-level (a native plugin carries both surfaces in one bundle);
+/// the capability level is the fallback, and its limitation is reported,
+/// not hidden.
+#[cfg(unix)]
+#[test]
+fn same_name_skill_and_command_collision_is_surfaced_on_antigravity_at_capability_level() {
+    let (root, home, _package, resources) = stored_workflow("antigravity-same-name");
+    let antigravity = AntigravityIntegration::new(root.join("agents"), home.clone());
+    mark_setup(&home, &antigravity);
+    let command = command_resources(&resources)[0].clone();
+    let skill = skill_resources(&resources)[0].clone();
+    // First attach wins the physical entry.
+    let command_receipt = antigravity
+        .attach_receipt(&command)
+        .unwrap()
+        .expect("attaches");
+    assert_eq!(
+        antigravity.inspect_receipt(&command_receipt).state,
+        AttachmentState::Matched
+    );
+    // Second attach with the same label under the flat vendor namespace is
+    // refused — the managed-entry machinery surfaces it as drift/conflict,
+    // never as a duplicate delivery.
+    let second = antigravity.attach_receipt(&skill);
+    assert!(
+        second.is_err(),
+        "same-named Skill and Command must collide at the capability level: {second:?}"
+    );
+    // The first delivery stays intact and detachable.
+    assert_eq!(
+        antigravity.inspect_receipt(&command_receipt).state,
+        AttachmentState::Matched
+    );
+    assert_eq!(
+        antigravity.detach_receipt(&command_receipt).unwrap().state,
+        AttachmentState::Missing
+    );
+    fs::remove_dir_all(root).unwrap();
+}
 
 #[test]
 fn codex_delivers_command_natively_via_explicit_only_skill() {
@@ -669,10 +748,10 @@ fn explicit_envelope_absent_commands_field_uses_conventional_commands_dir() {
 fn generated_command_artifacts_are_deterministic() {
     let (root, home, _package, resources) = stored_workflow("determinism");
     let command = command_resources(&resources)[0].clone();
-    let gemini = GeminiIntegration::new(root.join("agents"), home.clone());
-    mark_setup(&home, &gemini);
-    let first = gemini.exposure_plan(&command);
-    let second = gemini.exposure_plan(&command);
+    let antigravity = AntigravityIntegration::new(root.join("agents"), home.clone());
+    mark_setup(&home, &antigravity);
+    let first = antigravity.exposure_plan(&command);
+    let second = antigravity.exposure_plan(&command);
     assert_eq!(
         first, second,
         "two plans from the same resource are identical"
@@ -808,55 +887,27 @@ fn codex_generated_package_cannot_cover_commands_so_they_fall_back() {
 
 // --- 9. Uncovered Command falls back ---------------------------------------
 
-fn gemini_explicit_package(label: &str) -> (PathBuf, StoredPackage) {
-    let root = temp(label);
-    let store = UzeStore::new(UzeHome::at(&root));
-    let pkg_root = root.join("src");
-    fs::create_dir_all(pkg_root.join("skills/a")).unwrap();
-    fs::create_dir_all(pkg_root.join("commands")).unwrap();
-    fs::write(
-        pkg_root.join("plugin.json"),
-        r#"{"name":"gemini-explicit"}"#,
-    )
-    .unwrap();
-    fs::write(
-        pkg_root.join("gemini-extension.json"),
-        r#"{"name":"gemini-explicit","mcpServers":{}}"#,
-    )
-    .unwrap();
-    fs::write(pkg_root.join("skills/a/SKILL.md"), "skill a").unwrap();
-    fs::write(pkg_root.join("commands/review.md"), "command review").unwrap();
-    let package = install(&store, pkg_root.clone()).unwrap();
-    (root, package)
-}
-
 #[test]
-fn gemini_explicit_extension_does_not_claim_commands_and_fallback_delivers() {
-    let (root, package) = gemini_explicit_package("gemini-fallback");
-    let home = UzeHome::at(&root);
-    let environment = UzeEngine::new(UzeStore::new(home.clone()))
-        .compose(std::slice::from_ref(&package.id))
-        .unwrap();
-    let gemini = GeminiIntegration::new(root.join("agents"), home.clone());
-    mark_setup(&home, &gemini);
-    let command = command_resources(&environment.resources)[0].clone();
-    let resources: Vec<_> = environment.resources.iter().collect();
-    // The explicit extension represents vendor TOML, not canonical .md
-    // commands — no blanket claim.
-    let plan = gemini
+fn antigravity_generated_package_covers_commands_and_fallback_is_adapted() {
+    // Antigravity's generated plugin does carry the canonical commands/
+    // surface (the CLI converts it to Skills at load), so a covered Command
+    // is a package-level delivery; the equivalent uncovered case for the
+    // antigravity-specific shape is covered by the conformance suite's
+    // precedence test.
+    let (root, home, package, resources) = stored_workflow("antigravity-generated");
+    let antigravity = AntigravityIntegration::new(root.join("agents"), home.clone());
+    mark_setup(&home, &antigravity);
+    let resources: Vec<_> = resources.iter().collect();
+    let plan = antigravity
         .package_exposure_plan(&package, &resources)
-        .expect("explicit extension always plans");
+        .expect("workflow is natively expressible");
+    assert_eq!(plan.route, CompatibilityRoute::Native);
+    let command =
+        command_resources(&resources.iter().map(|r| (*r).clone()).collect::<Vec<_>>())[0].clone();
     assert!(
-        !plan.provides(&command),
-        "an explicit extension's commands are vendor TOML, never canonical .md resources"
+        plan.provides(&command),
+        "the canonical commands/ surface is delivered (converted to Skills at load)"
     );
-    // Fallback delivers it natively at the capability level.
-    let fallback = gemini.exposure_plan(&command);
-    assert_eq!(fallback.route, CompatibilityRoute::Native);
-    assert!(matches!(
-        fallback.mechanism,
-        ExposureMechanism::ManagedFile { .. }
-    ));
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -1021,29 +1072,6 @@ fn opencode_command_lifecycle_attach_matched_detach_missing() {
 }
 
 #[test]
-fn gemini_command_lifecycle_attach_matched_detach_missing() {
-    let (root, home, _package, resources) = stored_workflow("lifecycle-gemini");
-    let gemini = GeminiIntegration::new(root.join("agents"), home.clone());
-    mark_setup(&home, &gemini);
-    let command = command_resources(&resources)[0].clone();
-    let receipt = gemini.attach_receipt(&command).unwrap().expect("not None");
-    assert_eq!(
-        gemini.inspect_receipt(&receipt).state,
-        AttachmentState::Matched
-    );
-    let ManagedArtifact::ManagedFile { path, .. } = &receipt.artifact else {
-        panic!("expected managed-file artifact");
-    };
-    assert!(path.is_file());
-    assert_eq!(
-        gemini.detach_receipt(&receipt).unwrap().state,
-        AttachmentState::Missing
-    );
-    assert!(!path.exists());
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
 fn codex_command_lifecycle_attach_matched_detach_missing_with_cleanup() {
     let (root, home, _package, resources) = stored_workflow("lifecycle-codex");
     let codex = CodexIntegration::new(root.join("agents"), home.clone());
@@ -1085,6 +1113,52 @@ fn codex_command_lifecycle_attach_matched_detach_missing_with_cleanup() {
     fs::remove_dir_all(root).unwrap();
 }
 
+#[test]
+fn antigravity_command_lifecycle_attach_matched_detach_missing_with_cleanup() {
+    let (root, home, _package, resources) = stored_workflow("lifecycle-antigravity");
+    let antigravity = AntigravityIntegration::new(root.join("agents"), home.clone());
+    mark_setup(&home, &antigravity);
+    let command = command_resources(&resources)[0].clone();
+    let receipt = antigravity
+        .attach_receipt(&command)
+        .unwrap()
+        .expect("not None");
+    assert_eq!(
+        antigravity.inspect_receipt(&receipt).state,
+        AttachmentState::Matched
+    );
+    let ManagedArtifact::SymlinkReference { target, .. } = &receipt.artifact else {
+        panic!("expected symlink artifact");
+    };
+    // The delivered Skill is a Derived Artifact under $UZE_HOME, never the
+    // Store.
+    assert!(
+        target.starts_with(
+            uze_home_state(&home)
+                .join("attachments")
+                .join("antigravity")
+                .join("skills")
+        )
+    );
+    assert!(
+        target.join("SKILL.md").is_file(),
+        "the generated SKILL.md preserves the command identity and body"
+    );
+    assert!(
+        !target.join("agents").exists(),
+        "no explicit-only policy directory — the Adapted route is honest about that"
+    );
+    assert_eq!(
+        antigravity.detach_receipt(&receipt).unwrap().state,
+        AttachmentState::Missing
+    );
+    assert!(
+        !target.exists(),
+        "unreferenced derived artifact is cleaned up"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
 fn uze_home_state(home: &UzeHome) -> PathBuf {
     home.state_dir()
 }
@@ -1108,21 +1182,18 @@ fn store_bytes_are_never_touched_by_command_discovery_or_delivery() {
     let (root, home, package, resources) = stored_workflow("store-bytes");
     let original = fs::read(package.root.join("commands/review.md")).unwrap();
     let command = command_resources(&resources)[0].clone();
-    let gemini = GeminiIntegration::new(root.join("agents"), home.clone());
-    mark_setup(&home, &gemini);
-    let plan = gemini.exposure_plan(&command);
+    let antigravity = AntigravityIntegration::new(root.join("agents"), home.clone());
+    mark_setup(&home, &antigravity);
+    let plan = antigravity.exposure_plan(&command);
     let _ = plan;
-    // Attach Gemini's generated TOML — must only write outside the Store.
-    let receipt = gemini.attach_receipt(&command).unwrap();
+    // Attach Antigravity's generated Skill — must only write outside the
+    // Store.
+    let receipt = antigravity.attach_receipt(&command).unwrap();
     let _ = receipt;
     assert_eq!(
         fs::read(package.root.join("commands/review.md")).unwrap(),
         original,
         "the canonical command bytes in the Store are untouched"
-    );
-    assert!(
-        !package.root.join("commands/review.toml").exists(),
-        "generated vendor representation never lands in the Store"
     );
     fs::remove_dir_all(root).unwrap();
 }

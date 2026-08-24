@@ -4,8 +4,8 @@
 //! The central proof this file exists for: inspection and planning are
 //! genuinely zero-write, in every state a real project can be in, including
 //! states UZE never created (Fase 6 — a project that already has its own
-//! CLAUDE.md/GEMINI.md/AGENTS.md, written entirely by hand, long before UZE
-//! ever touched it).
+//! CLAUDE.md/AGENTS.md, written entirely by hand, long before UZE ever
+//! touched it).
 
 use std::{
     fs,
@@ -26,7 +26,7 @@ use uze::{
 #[test]
 fn status_reports_healthy_with_zero_issues_once_reconciled() {
     let root = temp("status-healthy");
-    let application = app(&root, true, true);
+    let application = app(&root, true);
     install(&application, fixture_a());
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();
@@ -42,7 +42,7 @@ fn status_reports_healthy_with_zero_issues_once_reconciled() {
 #[test]
 fn status_surfaces_a_missing_bridge_as_an_issue_before_reconcile() {
     let root = temp("status-issue");
-    let application = app(&root, true, false);
+    let application = app(&root, true);
     install(&application, fixture_a());
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();
@@ -55,7 +55,7 @@ fn status_surfaces_a_missing_bridge_as_an_issue_before_reconcile() {
 #[test]
 fn status_distinguishes_installed_from_contributing_here() {
     let root = temp("status-counts");
-    let application = app(&root, false, false);
+    let application = app(&root, false);
     install(&application, fixture_a());
     // A second, Skill-only package: installed globally, but contributes no
     // Instruction resource, so it must not count as "contributing here".
@@ -122,19 +122,15 @@ impl IntegrationPort for StubBridgeHarness {
     }
 }
 
-fn app(root: &Path, claude_present: bool, gemini_present: bool) -> UzeApplication {
+/// Claude Code is the one bridged harness in v0 (every other v0 harness
+/// reads `AGENTS.md` natively); this stub stands in for it.
+fn app(root: &Path, claude_present: bool) -> UzeApplication {
     UzeApplication::new(
         UzeHome::at(root.join("uze-home")),
-        vec![
-            Box::new(StubBridgeHarness {
-                stub_id: "claude-code",
-                present: claude_present,
-            }),
-            Box::new(StubBridgeHarness {
-                stub_id: "gemini",
-                present: gemini_present,
-            }),
-        ],
+        vec![Box::new(StubBridgeHarness {
+            stub_id: "claude-code",
+            present: claude_present,
+        })],
     )
 }
 
@@ -184,7 +180,7 @@ fn harness_delivery<'a>(
 #[test]
 fn context_inspect_never_writes_anything_in_a_populated_project() {
     let root = temp("inspect-snapshot");
-    let application = app(&root, true, true);
+    let application = app(&root, true);
     install(&application, fixture_a());
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();
@@ -204,7 +200,7 @@ fn context_inspect_never_writes_anything_in_a_populated_project() {
 #[test]
 fn context_plan_never_writes_anything() {
     let root = temp("plan-snapshot");
-    let application = app(&root, true, false);
+    let application = app(&root, true);
     install(&application, fixture_a());
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();
@@ -226,7 +222,7 @@ fn context_plan_never_writes_anything() {
 #[test]
 fn a_project_with_only_claude_md_is_vendor_locked() {
     let root = temp("claude-only");
-    let application = app(&root, true, false);
+    let application = app(&root, true);
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();
     fs::write(project.join("CLAUDE.md"), "# My Claude-only instructions\n").unwrap();
@@ -247,7 +243,7 @@ fn a_project_with_only_claude_md_is_vendor_locked() {
 #[test]
 fn agents_md_plus_a_bridging_claude_md_is_portable() {
     let root = temp("portable");
-    let application = app(&root, true, false);
+    let application = app(&root, true);
     install(&application, fixture_a());
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();
@@ -265,40 +261,9 @@ fn agents_md_plus_a_bridging_claude_md_is_portable() {
 }
 
 #[test]
-fn claude_and_gemini_with_different_content_and_no_agents_md_warn_about_divergence() {
-    let root = temp("divergent-vendor");
-    let application = app(&root, true, true);
-    let project = root.join("project");
-    fs::create_dir_all(&project).unwrap();
-    fs::write(project.join("CLAUDE.md"), "Claude-specific instructions.\n").unwrap();
-    fs::write(
-        project.join("GEMINI.md"),
-        "Totally different Gemini instructions.\n",
-    )
-    .unwrap();
-
-    let status = application.context_inspect(&project).unwrap();
-    assert!(matches!(
-        status.portability,
-        Portability::VendorLocked { .. }
-    ));
-    if let Portability::VendorLocked { files } = &status.portability {
-        assert_eq!(files.len(), 2);
-    }
-    assert!(
-        status
-            .warnings
-            .iter()
-            .any(|warning| warning.contains("divergent")),
-        "expected a divergence warning, got: {:?}",
-        status.warnings
-    );
-}
-
-#[test]
 fn an_absent_bridge_harness_shows_not_detected_not_a_gap() {
     let root = temp("not-detected");
-    let application = app(&root, true, false); // Gemini absent
+    let application = app(&root, false); // Claude Code absent
     install(&application, fixture_a());
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();
@@ -306,7 +271,7 @@ fn an_absent_bridge_harness_shows_not_detected_not_a_gap() {
 
     let status = application.context_inspect(&project).unwrap();
     assert!(matches!(
-        harness_delivery(&status, "gemini"),
+        harness_delivery(&status, "claude-code"),
         HarnessContextDelivery::NotDetected
     ));
     // An absent harness must never turn Portable into PartiallyPortable.
@@ -319,7 +284,7 @@ fn an_absent_bridge_harness_shows_not_detected_not_a_gap() {
 #[test]
 fn scenario_a_manual_claude_md_survives_untouched() {
     let root = temp("scenario-a");
-    let application = app(&root, true, false);
+    let application = app(&root, true);
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();
     fs::write(
@@ -342,33 +307,19 @@ fn scenario_a_manual_claude_md_survives_untouched() {
     assert!(claude_source.managed_region_identities.is_empty());
 }
 
-/// B) GEMINI.md with manual content, no AGENTS.md.
+/// C) An unrecognized manual vendor file (not a UZE-bridged surface) is
+/// left alone by both inspection and planning.
 #[test]
-fn scenario_b_manual_gemini_md_survives_untouched() {
-    let root = temp("scenario-b");
-    let application = app(&root, false, true);
+fn scenario_c_unrecognized_vendor_file_survives_untouched() {
+    let root = temp("scenario-c");
+    let application = app(&root, true);
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();
     fs::write(
-        project.join("GEMINI.md"),
-        "My hand-written Gemini instructions.\n",
+        project.join("VENDOR-NOTES.md"),
+        "Notes, unrelated to UZE.\n",
     )
     .unwrap();
-
-    let before = fs::read(project.join("GEMINI.md")).unwrap();
-    application.context_inspect(&project).unwrap();
-    assert_eq!(fs::read(project.join("GEMINI.md")).unwrap(), before);
-}
-
-/// C) CLAUDE.md + GEMINI.md, different manual content, no AGENTS.md.
-#[test]
-fn scenario_c_two_divergent_manual_files_both_survive() {
-    let root = temp("scenario-c");
-    let application = app(&root, true, true);
-    let project = root.join("project");
-    fs::create_dir_all(&project).unwrap();
-    fs::write(project.join("CLAUDE.md"), "Claude notes.\n").unwrap();
-    fs::write(project.join("GEMINI.md"), "Gemini notes, unrelated.\n").unwrap();
 
     let before = snapshot(&project);
     application.context_inspect(&project).unwrap();
@@ -380,7 +331,7 @@ fn scenario_c_two_divergent_manual_files_both_survive() {
 #[test]
 fn scenario_d_manual_agents_md_with_no_packages_is_left_alone() {
     let root = temp("scenario-d");
-    let application = app(&root, false, false);
+    let application = app(&root, false);
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();
     fs::write(project.join("AGENTS.md"), "My own project conventions.\n").unwrap();
@@ -406,7 +357,7 @@ fn scenario_d_manual_agents_md_with_no_packages_is_left_alone() {
 #[test]
 fn scenario_e_manual_agents_md_plus_uze_region_coexist() {
     let root = temp("scenario-e");
-    let application = app(&root, false, false);
+    let application = app(&root, false);
     install(&application, fixture_a());
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();
@@ -438,7 +389,7 @@ fn scenario_e_manual_agents_md_plus_uze_region_coexist() {
 #[test]
 fn scenario_f_manual_claude_md_content_plus_bridge_coexist() {
     let root = temp("scenario-f");
-    let application = app(&root, true, false);
+    let application = app(&root, true);
     install(&application, fixture_a());
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();
@@ -474,32 +425,23 @@ fn scenario_f_manual_claude_md_content_plus_bridge_coexist() {
     assert!(!agents_content.contains("personal Claude workflow"));
 }
 
-/// All three recognized files present at once, fully reconciled: exactly
-/// the "everything together" state Fase 10 asks for, on top of the
+/// Both recognized files present at once, fully reconciled: exactly the
+/// "everything together" state Fase 10 asks for, on top of the
 /// per-scenario A–F coverage above.
 #[test]
-fn all_three_recognized_files_together_are_fully_portable() {
-    let root = temp("all-three");
-    let application = app(&root, true, true);
+fn all_recognized_files_together_are_fully_portable() {
+    let root = temp("all-recognized");
+    let application = app(&root, true);
     install(&application, fixture_a());
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();
-    fs::write(
-        project.join("CLAUDE.md"),
-        "## My Claude-only workflow notes\n",
-    )
-    .unwrap();
-    fs::write(
-        project.join("GEMINI.md"),
-        "## My Gemini-only workflow notes\n",
-    )
-    .unwrap();
+    fs::write(project.join("CLAUDE.md"), "## My Claude workflow notes\n").unwrap();
 
     application.context_reconcile(&project).unwrap();
     let status = application.context_inspect(&project).unwrap();
 
     assert!(matches!(status.portability, Portability::Portable));
-    for file_name in ["AGENTS.md", "CLAUDE.md", "GEMINI.md"] {
+    for file_name in ["AGENTS.md", "CLAUDE.md"] {
         let source = status
             .sources
             .iter()
@@ -510,16 +452,11 @@ fn all_three_recognized_files_together_are_fully_portable() {
     assert!(
         fs::read_to_string(project.join("CLAUDE.md"))
             .unwrap()
-            .contains("My Claude-only workflow notes")
+            .contains("My Claude workflow notes")
     );
-    assert!(
-        fs::read_to_string(project.join("GEMINI.md"))
-            .unwrap()
-            .contains("My Gemini-only workflow notes")
-    );
-    // Two warnings expected: CLAUDE.md and GEMINI.md each carry content
-    // beyond their bridge, which is legitimate and disclosed, not a gap.
-    assert_eq!(status.warnings.len(), 2);
+    // One warning expected: CLAUDE.md carries content beyond its bridge,
+    // which is legitimate and disclosed, not a gap.
+    assert_eq!(status.warnings.len(), 1);
 }
 
 // --- context operations never touch the Store -------------------------------
@@ -527,7 +464,7 @@ fn all_three_recognized_files_together_are_fully_portable() {
 #[test]
 fn context_operations_never_alter_the_installed_package_set() {
     let root = temp("store-untouched");
-    let application = app(&root, true, true);
+    let application = app(&root, true);
     install(&application, fixture_a());
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();

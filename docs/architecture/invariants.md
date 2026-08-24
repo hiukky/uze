@@ -27,9 +27,10 @@ when it is rebuilt are decisions of the integration that owns the harness.
 
 ### Adding a harness requires no semantic change to Store, Engine, Router or the package model
 
-Proven by adding a fourth harness with a materially different native delivery:
-Codex needs a published catalogue, Gemini CLI needs none, and both go through
-the same `IntegrationPort`.
+Proven by adding a fifth harness with a materially different native delivery:
+Codex needs a published catalogue, Antigravity CLI needs neither but
+*copies* (its `agy plugin install` stages bytes — no link verb exists), and
+both go through the same `IntegrationPort`.
 
 > `tests/vendor_neutral_core.rs::the_store_contains_no_source_mechanism_semantics`
 > `tests/vendor_neutral_core.rs::no_core_module_depends_on_acquisition`
@@ -37,7 +38,7 @@ the same `IntegrationPort`.
 ### Package publication and package-native delivery are independent
 
 `republish_packages` maintains a derived view; `attach_package` performs a
-native delivery. Codex uses both. Gemini uses only the second — its
+native delivery. Codex uses both. Antigravity uses only the second — its
 `republish_packages` is never overridden.
 
 > `tests/vendor_neutral_core.rs::a_derived_view_is_rebuilt_from_the_package_set_alone`
@@ -53,9 +54,9 @@ harnesses untouched, and the failure observable through `doctor`.
 ### `uze-core` production logic never names a specific harness
 
 No line of `uze-core`'s production code (outside its own test fixtures)
-names Claude, Codex, Gemini, or OpenCode — as an identifier or a string
-literal. Strengthened by ADR-022: a foreign-format importer that once
-named Claude here (`ClaudePluginImporter`, acquisition-time, never
+names Claude, Codex, OpenCode, or Antigravity — as an identifier or
+a string literal. Strengthened by ADR-022: a foreign-format importer that
+once named Claude here (`ClaudePluginImporter`, acquisition-time, never
 delivery-time) was confirmed dead — unreachable from `Store::ingest` or
 any other production path — and removed; the invariant now holds with no
 carved-out exception.
@@ -75,10 +76,15 @@ Native on Codex via that harness's official explicit-invocation-only Skill
 though the physical artifact is a Skill — the canonical identity remains
 `CapabilityKind::Command`, the model cannot auto-select it, and explicit
 user invocation (`$name` / `/skills`) is preserving the Command semantics.
+The same definition is what makes Antigravity's Command route **Adapted**
+rather than Native: its only primitive is commands→Skills conversion and
+Skills are model-discoverable, so the explicit-only property is not
+preserved — the loss is declared, never silently covered.
 
 > `tests/command_capability_conformance.rs::codex_delivers_command_natively_via_explicit_only_skill`
 > `tests/command_capability_conformance.rs::real_codex_dogfood_explicit_only_preserves_command_semantics`
 > `tests/command_capability_conformance.rs::same_name_skill_and_command_stay_distinct_on_codex`
+> `tests/command_capability_conformance.rs::antigravity_delivers_command_adapted_via_converted_skill`
 
 ### Invocation labels are stable and presentation-only (ADR-026)
 
@@ -89,9 +95,8 @@ and of which other plugins are installed, with no bare aliases. The label is
 a presentation concern — canonical Resource identity, Store bytes, package
 layout, coverage identities (`provided_resource_identities`) and capability
 bodies are untouched — and the vendor integration owns the physical
-encoding (Claude's native plugin namespace, Codex/OpenCode verbatim
-`flow:review`, Gemini's nested `flow/review.toml` path that the vendor
-turns into `/flow:review`).
+encoding (Claude's native plugin namespace, Codex/OpenCode/Antigravity
+verbatim `flow:review`).
 
 > `tests/invocation_labels.rs::installing_another_plugin_never_renames_an_existing_one`
 > `tests/invocation_labels.rs::labels_never_touch_canonical_identity_store_or_receipts`

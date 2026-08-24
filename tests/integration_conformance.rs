@@ -1,6 +1,6 @@
 //! Integration Conformance Test Suite.
 //!
-//! Formalizes behavioral invariants that Claude, Codex, Gemini, and
+//! Formalizes behavioral invariants that Claude, Codex, Antigravity, and
 //! OpenCode already share — proven independently, per-integration, before
 //! this suite existed — as a single, reusable set of assertions taken
 //! against `&dyn IntegrationPort`. This is deliberately **not** a new
@@ -18,10 +18,10 @@
 //! Duplication Analysis for the concrete divergence found).
 //!
 //! **What this suite deliberately does NOT assert** (per its own brief):
-//! Gemini's manifest shape is never checked against Claude's or Codex's;
+//! a vendor's manifest shape is never checked against another's;
 //! OpenCode is never asked for package-level delivery (it has none, by
 //! design); no publication/catalogue model is assumed identical across
-//! vendors (Gemini and OpenCode publish nothing at all, and that's
+//! vendors (Antigravity and OpenCode publish nothing at all, and that's
 //! correct). Every assertion below is phrased as an *outcome* invariant
 //! (route, coverage set, lifecycle state) — never as "the JSON must look
 //! like X."
@@ -53,7 +53,7 @@ use uze::{
 };
 
 use uze::integrations::{
-    claude::ClaudeIntegration, codex::CodexIntegration, gemini::GeminiIntegration,
+    antigravity::AntigravityIntegration, claude::ClaudeIntegration, codex::CodexIntegration,
     opencode::OpenCodeIntegration,
 };
 
@@ -200,9 +200,10 @@ fn assert_basic_identity_contract(integration: &dyn IntegrationPort) {
     );
 }
 
-/// Claude, Codex, and Gemini deliver Skills and MCP as their own native
-/// package/extension — explicit or generated envelope, ADR-013 §2 / ADR-020
-/// / ADR-021 — so both kinds must be declared `native`, never `adaptable`.
+/// Claude, Codex, and Antigravity deliver Skills and MCP as their own
+/// native package/plugin — explicit or generated envelope, ADR-013 §2 /
+/// ADR-020 / ADR-021 — so both kinds must be declared `native`, never
+/// `adaptable`.
 /// The capability-level shims (skills-dir reference, `mcp add`) are the
 /// fallback for resources outside the envelope's coverage, not the primary
 /// route; declaring them primary is exactly the "UI says Adapted while
@@ -269,17 +270,6 @@ fn codex_reports_stable_identity_and_capabilities() {
 }
 
 #[test]
-fn gemini_reports_stable_identity_and_capabilities() {
-    let root = temp("identity-gemini");
-    let home = UzeHome::at(root.join("uze"));
-    let integration = GeminiIntegration::new(root.join("agents"), home.clone());
-    mark_setup(&home, &integration);
-    assert_basic_identity_contract(&integration);
-    assert_native_skill_and_mcp(&integration);
-    let _ = fs::remove_dir_all(root);
-}
-
-#[test]
 fn opencode_reports_stable_identity_and_capabilities() {
     let root = temp("identity-opencode");
     let integration = OpenCodeIntegration::new(
@@ -292,24 +282,52 @@ fn opencode_reports_stable_identity_and_capabilities() {
     let _ = fs::remove_dir_all(root);
 }
 
+#[test]
+fn antigravity_reports_stable_identity_and_capabilities() {
+    let root = temp("identity-antigravity");
+    let home = UzeHome::at(root.join("uze"));
+    let integration = AntigravityIntegration::new(root.join("agents"), home.clone());
+    mark_setup(&home, &integration);
+    assert_basic_identity_contract(&integration);
+    assert_native_skill_and_mcp(&integration);
+    // Command is ADAPTED, not Native: Antigravity's only custom-command
+    // representation is its commands→Skills conversion, and Skills are
+    // model-discoverable with no observable explicit-only mechanism — the
+    // canonical Command's explicit-only property degrades (ADR-025), so
+    // declaring it Native would be exactly the declared-vs-delivered drift
+    // this suite exists to catch.
+    let capabilities = integration.capabilities();
+    assert!(
+        capabilities.adaptable.contains(&CapabilityKind::Command),
+        "antigravity: Command must be declared adaptable (commands→skills conversion, no explicit-only mechanism)"
+    );
+    assert!(
+        !capabilities.native.contains(&CapabilityKind::Command),
+        "antigravity: Command must never be declared native"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
 // ============================================================================
 // 2/4/5. Package coverage matrix + generated native projection +
 // uncovered-capability fallback — PACKAGE_DELIVERY.
 // ============================================================================
 //
 // One shared invariant, exercised identically for Claude, Codex, and
-// Gemini (OpenCode has no package-level native concept at all — never
+// Antigravity (OpenCode has no package-level native concept at all — never
 // asked for one, per this suite's own brief): `provided_resource_identities`
 // must be an exact `discovered ∩ safely-representable` intersection, never
 // a "manifest/structural surface exists → cover everything" shortcut, and
 // every resource NOT in that set must still resolve to a non-Unsupported
 // individual `exposure_plan` — never silently dropped.
 //
-// These fixtures ship NO vendor envelope, so for Claude/Codex/Gemini this
-// exercises the GENERATED route (ADR-020/ADR-021) — the same coverage
-// invariant applies whether the envelope is explicit or synthesized, and
-// proving it against the generated route is what item 4 asks for. Item 3
-// (explicit precedence) gets its own, separately-enveloped fixtures below.
+// These fixtures ship no vendor envelope beyond the canonical manifest, so
+// for Claude/Codex this exercises the GENERATED route (ADR-020/ADR-021)
+// while for Antigravity the canonical plugin.json IS the vendor manifest
+// (generation only kicks in for canonical-MCP translation) — the same
+// coverage invariant applies either way, and proving it is what item 4
+// asks for. Item 3 (explicit precedence) gets its own,
+// separately-enveloped fixtures below.
 
 fn assert_exact_package_coverage(
     integration: &dyn IntegrationPort,
@@ -589,13 +607,12 @@ fn codex_explicit_coverage_path_escape_is_rejected() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// Gemini: no explicit `gemini-extension.json` → generated route. Gemini's
-/// own Skill-coverage rule is structural (no `skills` manifest field
-/// exists at all, explicit or generated — confirmed by
-/// `gemini/extension.rs`), which is exactly why this suite never asserts
-/// Gemini's manifest shape against Claude's/Codex's: only the *outcome*
-/// (exact coverage, uncovered-resource fallback) is asserted here.
-fn gemini_coverage_fixture(
+/// Antigravity: the canonical `plugin.json` IS the explicit envelope (and
+/// the vendor manifest), so the same "envelope-less package" fixture takes
+/// the GENERATED route only when canonical `mcp.json` needs translating —
+/// which is exactly this fixture's shape (skill + mcp.json). Coverage and
+/// the uncovered-resource fallback behave exactly like the other vendors'.
+fn antigravity_coverage_fixture(
     label: &str,
     skill_dirs: &[&str],
     with_extra_skill: bool,
@@ -626,52 +643,64 @@ fn gemini_coverage_fixture(
 }
 
 #[test]
-fn gemini_generated_coverage_full() {
+fn antigravity_generated_coverage_full() {
     let (root, package, resources, expected) =
-        gemini_coverage_fixture("gemini-full", &["commit"], false, true);
+        antigravity_coverage_fixture("antigravity-full", &["commit"], false, true);
     let refs: Vec<&Resource> = resources.iter().collect();
     let home = UzeHome::at(root.join("uze"));
-    let integration = GeminiIntegration::new(root.join("agents"), home.clone());
+    let integration = AntigravityIntegration::new(root.join("agents"), home.clone());
     mark_setup(&home, &integration);
-    assert_exact_package_coverage(&integration, &package, &refs, &expected, "gemini/full");
+    assert_exact_package_coverage(&integration, &package, &refs, &expected, "antigravity/full");
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn gemini_generated_coverage_subset_plus_extra_discovered() {
+fn antigravity_generated_coverage_subset_plus_extra_discovered() {
     let (root, package, resources, expected) =
-        gemini_coverage_fixture("gemini-subset", &["commit", "deploy"], true, true);
+        antigravity_coverage_fixture("antigravity-subset", &["commit", "deploy"], true, true);
     let refs: Vec<&Resource> = resources.iter().collect();
     let home = UzeHome::at(root.join("uze"));
-    let integration = GeminiIntegration::new(root.join("agents"), home.clone());
+    let integration = AntigravityIntegration::new(root.join("agents"), home.clone());
     mark_setup(&home, &integration);
-    assert_exact_package_coverage(&integration, &package, &refs, &expected, "gemini/subset");
+    assert_exact_package_coverage(
+        &integration,
+        &package,
+        &refs,
+        &expected,
+        "antigravity/subset",
+    );
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn gemini_explicit_coverage_malformed_envelope_yields_empty_mcp_but_no_crash() {
-    // Gemini's Skill coverage is structural, not manifest-declared (see
-    // this fixture builder's own doc comment) — a malformed manifest still
-    // covers the Skill, but never fabricates MCP coverage it can't parse.
+fn antigravity_explicit_coverage_malformed_manifest_yields_no_native_plan() {
+    // A malformed canonical plugin.json is an unreadable vendor manifest:
+    // no explicit route, and generation is never consulted to paper over it
+    // (plugging the malformed manifest with a synthesized one would be
+    // exactly the "silently displaced explicit envelope" this suite
+    // forbids). The resource still routes through capability-level
+    // delivery.
     let (root, package) = build_package(
-        "gemini-malformed",
+        "antigravity-malformed",
         "flow",
-        &[("gemini-extension.json", "{not json")],
+        &[("plugin.json", "{not json")],
     );
     let skill = skill_resource(&package, "skills", "commit");
     let resources = vec![&skill];
     let home = UzeHome::at(root.join("uze"));
-    let integration = GeminiIntegration::new(root.join("agents"), home.clone());
+    let integration = AntigravityIntegration::new(root.join("agents"), home.clone());
     mark_setup(&home, &integration);
-    let plan = integration
-        .package_exposure_plan(&package, &resources)
-        .expect("a present, even malformed, explicit envelope still takes the explicit route");
-    assert_eq!(plan.route, CompatibilityRoute::Native);
-    assert_eq!(
-        plan.provided_resource_identities,
-        BTreeSet::from([skill.identity()])
+    assert!(
+        integration
+            .package_exposure_plan(&package, &resources)
+            .is_none(),
+        "malformed canonical manifest must never be silently displaced by generation"
     );
+    let fallback = integration.exposure_plan(&skill);
+    assert!(!matches!(
+        fallback.mechanism,
+        ExposureMechanism::Unsupported { .. }
+    ));
     let _ = fs::remove_dir_all(root);
 }
 
@@ -681,7 +710,7 @@ fn gemini_explicit_coverage_malformed_envelope_yields_empty_mcp_but_no_crash() {
 //
 // Presence of an explicit envelope — not its validity — decides the
 // branch. An explicit envelope, even a malformed one, must never be
-// silently displaced by generation. Claude/Codex/Gemini's malformed-
+// silently displaced by generation. Claude/Codex's malformed-
 // envelope cases above already prove "explicit still wins when malformed";
 // this section adds the complementary case: an explicit envelope that
 // declares LESS than generation would, proving generation is never
@@ -762,34 +791,47 @@ fn codex_explicit_envelope_with_partial_declaration_is_never_topped_up_by_genera
 }
 
 #[test]
-fn gemini_explicit_envelope_with_partial_declaration_is_never_topped_up_by_generation() {
+fn antigravity_explicit_envelope_with_partial_declaration_is_never_topped_up_by_generation() {
+    // Antigravity's explicit envelope is the canonical plugin.json itself.
+    // When the author ALSO ships a vendor mcp_config.json declaring a
+    // subset, generation (which would translate the full canonical
+    // mcp.json) must never be consulted: coverage is exactly the declared
+    // subset, and the undeclared MCP resource falls back individually.
     let (root, package) = build_package(
-        "gemini-precedence",
+        "antigravity-precedence",
         "flow",
         &[
-            ("gemini-extension.json", r#"{"name":"flow"}"#),
-            ("mcp.json", r#"{"mcpServers":{"mcp-a":{"command":"a"}}}"#),
+            (
+                "mcp.json",
+                r#"{"mcpServers":{"mcp-a":{"command":"a"},"mcp-b":{"command":"b"}}}"#,
+            ),
+            (
+                "mcp_config.json",
+                r#"{"mcpServers":{"mcp-b":{"command":"b"}}}"#,
+            ),
         ],
     );
     let skill = skill_resource(&package, "skills", "commit");
-    let mcp = mcp_resource(&package, "mcp-a", r#"{"command":"a"}"#);
-    let resources = vec![&skill, &mcp];
+    let mcp_declared = mcp_resource(&package, "mcp-b", r#"{"command":"b"}"#);
+    let mcp_undeclared = mcp_resource(&package, "mcp-a", r#"{"command":"a"}"#);
+    let resources = vec![&skill, &mcp_declared, &mcp_undeclared];
     let home = UzeHome::at(root.join("uze"));
-    let integration = GeminiIntegration::new(root.join("agents"), home.clone());
+    let integration = AntigravityIntegration::new(root.join("agents"), home.clone());
     mark_setup(&home, &integration);
     let plan = integration
         .package_exposure_plan(&package, &resources)
-        .expect("explicit envelope present");
-    // Gemini's Skill coverage is structural either way, so the skill is
-    // still covered here — the invariant this proves is narrower but
-    // still real: the explicit envelope's absence of an `mcpServers` key
-    // must not fall back to generation's "read the root mcp.json" rule.
+        .expect("the author-shipped mcp_config.json keeps the explicit route");
     assert_eq!(
         plan.provided_resource_identities,
-        BTreeSet::from([skill.identity()]),
-        "gemini-extension.json declares no mcpServers, and that absence must not be papered \
-         over by generation reading the root mcp.json instead"
+        BTreeSet::from([skill.identity(), mcp_declared.identity()]),
+        "explicit declaration's own subset must never be topped up by what generation would \
+         have covered from the canonical mcp.json"
     );
+    let fallback = integration.exposure_plan(&mcp_undeclared);
+    assert!(!matches!(
+        fallback.mechanism,
+        ExposureMechanism::Unsupported { .. }
+    ));
     let _ = fs::remove_dir_all(root);
 }
 
@@ -812,8 +854,8 @@ fn gemini_explicit_envelope_with_partial_declaration_is_never_topped_up_by_gener
 //   An invalid native coverage declaration must not suppress the
 //   resource's normal capability-level fallback.
 //
-// Gemini has no manifest-declared path field at all (its Skill coverage
-// is purely structural — see `gemini/extension.rs`), so it is exempt from
+// Antigravity has no manifest-declared path field at all (its coverage is
+// purely structural — see `antigravity/plugin.rs`), so it is exempt from
 // this section entirely, not silently assumed safe.
 
 fn assert_unsafe_declaration_never_covers_the_colliding_resource(
@@ -1063,12 +1105,12 @@ fn codex_skill_lifecycle_and_drift_safety() {
 
 #[cfg(unix)]
 #[test]
-fn gemini_skill_lifecycle_and_drift_safety() {
-    let (pkg_root, package) = build_package("lifecycle-gemini-pkg", "flow", &[]);
+fn antigravity_skill_lifecycle_and_drift_safety() {
+    let (pkg_root, package) = build_package("lifecycle-antigravity-pkg", "flow", &[]);
     let skill = skill_resource(&package, "skills", "commit");
-    let root = temp("lifecycle-gemini");
+    let root = temp("lifecycle-antigravity");
     let home = UzeHome::at(root.join("uze"));
-    let integration = GeminiIntegration::new(root.join("agents"), home.clone());
+    let integration = AntigravityIntegration::new(root.join("agents"), home.clone());
     mark_setup(&home, &integration);
     assert_skill_lifecycle_and_drift_safety(&integration, &skill);
     let _ = fs::remove_dir_all(root);
@@ -1097,44 +1139,38 @@ fn opencode_skill_lifecycle_and_drift_safety() {
 // 9. Shared agent skill root convergence — SKILL.
 // ============================================================================
 //
-// Codex, Gemini, and OpenCode all discover Skills from the same physical
+// Codex and OpenCode both discover Skills from the same physical
 // `~/.agents/skills` directory; Claude's is exclusive. This is the
-// statically-provable half of the convergence invariant: the three that
+// statically-provable half of the convergence invariant: the two that
 // claim a shared root must actually report the identical path when
 // constructed against the identical `agents_home`, and Claude must report
-// none. The dynamic half — that naming resolution actually avoids a
-// duplicate physical entry when more than one of the three attaches the
-// same skill — is a `UzeApplication`-level concern
-// (`resolve_exposure_name`, `pub(crate)`, unreachable from here) already
-// proven end-to-end by `tests/shared_agent_skill_root_naming.rs`; this
-// suite does not re-derive that heavier test, only its prerequisite.
+// none (Antigravity's root is exclusive too). The dynamic half — that
+// naming resolution actually avoids a duplicate physical entry when more
+// than one of them attaches the same skill — is a `UzeApplication`-level
+// concern (`resolve_exposure_name`, `pub(crate)`, unreachable from here)
+// already proven end-to-end by `tests/shared_agent_skill_root_naming.rs`;
+// this suite does not re-derive that heavier test, only its prerequisite.
 
 #[test]
-fn codex_gemini_opencode_agree_on_the_shared_skill_root() {
+fn codex_opencode_agree_on_the_shared_skill_root() {
     let root = temp("shared-root-agree");
     let agents_home = root.join("agents-home");
     let uze_home = UzeHome::at(root.join("uze"));
     let codex = CodexIntegration::new(agents_home.clone(), uze_home.clone());
-    let gemini = GeminiIntegration::new(agents_home.clone(), uze_home.clone());
     let opencode = OpenCodeIntegration::new(
         agents_home.clone(),
         root.join("opencode-config.json"),
         uze_home,
     );
     let codex_root = codex.shared_agent_skill_root();
-    let gemini_root = gemini.shared_agent_skill_root();
     let opencode_root = opencode.shared_agent_skill_root();
     assert!(
-        codex_root.is_some() && gemini_root.is_some() && opencode_root.is_some(),
-        "all three must opt into shared-root awareness"
+        codex_root.is_some() && opencode_root.is_some(),
+        "both must opt into shared-root awareness"
     );
     assert_eq!(
-        codex_root, gemini_root,
-        "Codex and Gemini must agree on the physical shared skills directory"
-    );
-    assert_eq!(
-        gemini_root, opencode_root,
-        "Gemini and OpenCode must agree on the physical shared skills directory"
+        codex_root, opencode_root,
+        "Codex and OpenCode must agree on the physical shared skills directory"
     );
     let _ = fs::remove_dir_all(root);
 }
@@ -1147,7 +1183,22 @@ fn claude_has_no_shared_skill_root_by_design() {
         integration.shared_agent_skill_root(),
         None,
         "Claude's skills directory is exclusive, not shared with any peer — this must stay \
-         None, never forced into symmetry with Codex/Gemini/OpenCode"
+         None, never forced into symmetry with Codex/OpenCode"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn antigravity_has_no_shared_skill_root_by_design() {
+    let root = temp("antigravity-exclusive-root");
+    let integration =
+        AntigravityIntegration::new(root.join("agents"), UzeHome::at(root.join("uze")));
+    assert_eq!(
+        integration.shared_agent_skill_root(),
+        None,
+        "Antigravity's global skills root is exclusive (~/.gemini/antigravity-cli/skills), \
+         never the shared ~/.agents/skills — it must stay None, never forced into symmetry \
+         with Codex/OpenCode"
     );
     let _ = fs::remove_dir_all(root);
 }
@@ -1200,8 +1251,8 @@ fn upstream_executable_resolution_never_recurses_through_the_runtime_shim() {
             "9.9.9 (Real Claude)",
         ),
         ("codex", "codex-cli POISON", "codex-cli 9.9.9"),
-        ("gemini", "0.0.1-POISON", "9.9.9"),
         ("opencode", "opencode2 vPOISON", "opencode2 v9.9.9"),
+        ("agy", "1.0.0-POISON", "1.1.19"),
     ] {
         write_fake_executable(&shims_dir, name, poison);
         write_fake_executable(&real_dir, name, real);
@@ -1225,17 +1276,17 @@ fn upstream_executable_resolution_never_recurses_through_the_runtime_shim() {
 
     let claude = ClaudeIntegration::new(root.join("claude"), uze_home.clone());
     let codex = CodexIntegration::new(root.join("agents"), uze_home.clone());
-    let gemini = GeminiIntegration::new(root.join("agents"), uze_home.clone());
     let opencode = OpenCodeIntegration::new(
         root.join("agents"),
         root.join("opencode-config.json"),
-        uze_home,
+        uze_home.clone(),
     );
+    let antigravity = AntigravityIntegration::new(root.join("agents"), uze_home.clone());
 
     let claude_detection = claude.detect();
     let codex_detection = codex.detect();
-    let gemini_detection = gemini.detect();
     let opencode_detection = opencode.detect();
+    let antigravity_detection = antigravity.detect();
 
     // SAFETY: restoring the process-global PATH this test overrode above.
     unsafe {
@@ -1253,14 +1304,14 @@ fn upstream_executable_resolution_never_recurses_through_the_runtime_shim() {
         "Codex detect() must resolve the real binary, never its own shim"
     );
     assert_eq!(
-        gemini_detection.version.as_deref(),
-        Some("9.9.9"),
-        "Gemini detect() must resolve the real binary, never its own shim"
-    );
-    assert_eq!(
         opencode_detection.version.as_deref(),
         Some("v9.9.9"),
         "OpenCode detect() must resolve the real binary, never its own shim"
+    );
+    assert_eq!(
+        antigravity_detection.version.as_deref(),
+        Some("1.1.19"),
+        "Antigravity detect() must resolve the real binary, never its own shim"
     );
 
     let _ = fs::remove_dir_all(root);
@@ -1273,7 +1324,7 @@ fn upstream_executable_resolution_never_recurses_through_the_runtime_shim() {
 // integration's own unit tests already prove `materialize_generated_*`
 // never mutates the Store package directory
 // (`materialize_generated_package_never_writes_into_the_store_package` and
-// its Codex/Gemini equivalents). Re-asserted here as an explicit,
+// its Codex/Antigravity equivalents). Re-asserted here as an explicit,
 // cross-harness statement rather than left implicit.
 // ============================================================================
 
@@ -1305,10 +1356,10 @@ fn computing_a_package_exposure_plan_never_mutates_store_bytes_on_any_harness() 
     let uze_home = UzeHome::at(root.join("uze"));
     let claude = ClaudeIntegration::new(root.join("claude"), uze_home.clone());
     let codex = CodexIntegration::new(root.join("agents"), uze_home.clone());
-    let gemini = GeminiIntegration::new(root.join("agents"), uze_home);
+    let antigravity = AntigravityIntegration::new(root.join("agents"), uze_home);
     let _ = claude.package_exposure_plan(&package, &refs);
     let _ = codex.package_exposure_plan(&package, &refs);
-    let _ = gemini.package_exposure_plan(&package, &refs);
+    let _ = antigravity.package_exposure_plan(&package, &refs);
 
     let after = snapshot(&package.root);
     assert_eq!(
@@ -1341,7 +1392,7 @@ fn computing_a_package_exposure_plan_never_mutates_store_bytes_on_any_harness() 
 // integration: String`) — that is not vendor coupling, it is a test
 // picking a recognizable example over `"foo"`.
 
-const VENDOR_NAMES: [&str; 4] = ["claude", "codex", "gemini", "opencode"];
+const VENDOR_NAMES: [&str; 4] = ["claude", "codex", "opencode", "antigravity"];
 
 fn core_src_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("crates/uze-core/src")
@@ -1454,12 +1505,14 @@ fn is_word_boundary_match(haystack: &str, start: usize, len: usize) -> bool {
 // The invariant lives in `UzeApplication::attach_package_to`
 // (`pub(crate)`, unreachable directly from here), so this is exercised
 // through the one public entry point that reaches it: `add_plugin`. Fake,
-// always-succeeding `claude`/`codex`/`gemini` executables stand in for the
+// always-succeeding `claude`/`codex`/`agy` executables stand in for the
 // real CLIs — `add_plugin` never calls `provision()` (only explicit `uze
 // setup` does; see `UzeApplication::install_materialized`'s own doc
 // comment, "Explicit setup is the only path allowed to provision or
 // update an executable"), so this never risks a real installer running,
-// unlike a naive manual dogfood of `uze setup` would.
+// unlike a naive manual dogfood of `uze setup` would. The fake `agy`
+// stages the plugin copy exactly like the real verb does, so the
+// integration's fingerprint ownership proof works end-to-end.
 
 /// `add_plugin` never calls `.provision()` (only explicit `uze setup`
 /// does), so this is never exercised — present only so `add_plugin`'s
@@ -1484,13 +1537,19 @@ fn fake_always_succeeding_bin_dir(root: &Path) -> PathBuf {
     let dir = root.join("fake-bin");
     fs::create_dir_all(&dir).unwrap();
     let script = r#"#!/bin/sh
+if [ "$1" = "plugin" ]; then
+  case "$2" in
+    list) echo '{"imports":[]}'; exit 0 ;;
+    install) mkdir -p "$HOME/.gemini/config/plugins/flow" && cp -R "$3/." "$HOME/.gemini/config/plugins/flow/"; exit 0 ;;
+  esac
+fi
 case "$*" in
   *--json*) echo '{"marketplaces":[],"installed":[],"plugins":[]}' ;;
   *--output-format=json*) echo '[]' ;;
 esac
 exit 0
 "#;
-    for name in ["claude", "codex", "gemini"] {
+    for name in ["claude", "codex", "agy"] {
         let path = dir.join(name);
         fs::write(&path, script).unwrap();
         let mut permissions = fs::metadata(&path).unwrap().permissions();
@@ -1525,7 +1584,7 @@ fn no_duplicate_capability_receipt_when_a_package_covers_the_resource() {
                 root.join("agents-home"),
                 uze_home.clone(),
             )),
-            Box::new(GeminiIntegration::new(
+            Box::new(AntigravityIntegration::new(
                 root.join("agents-home"),
                 uze_home.clone(),
             )),
@@ -1548,7 +1607,7 @@ fn no_duplicate_capability_receipt_when_a_package_covers_the_resource() {
 
     let receipts = state::receipts(&uze_home, Some(report.plugin.id.as_str())).unwrap();
 
-    for vendor in ["claude-code", "codex", "gemini"] {
+    for vendor in ["claude-code", "codex", "antigravity"] {
         let for_vendor: Vec<_> = receipts
             .iter()
             .filter(|(_, receipt)| receipt.integration == vendor)

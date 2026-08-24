@@ -40,8 +40,8 @@ and every resource routes through per-capability `exposure_plan` instead.
 
 None. This is a deliberate architectural fact, not a gap: OpenCode has no
 documented external plugin manifest UZE could preserve-and-consume the way
-Claude's `.claude-plugin/plugin.json`, Codex's `.codex-plugin/plugin.json`,
-or Gemini's `gemini-extension.json` are consumed. Package coverage
+Claude's `.claude-plugin/plugin.json` or Codex's `.codex-plugin/plugin.json`
+are consumed. Package coverage
 (`provided_resource_identities`) is not applicable here.
 
 ## Fallbacks
@@ -117,11 +117,11 @@ workaround.
   tests when `opencode`/`opencode2` genuinely exists on the test machine's
   real `PATH` — see Evidence.
 - Skill naming policy (bare-name-first, like Claude) is deliberately
-  claimed for Codex/Gemini too, since all three share the same
+  claimed for Codex too, since the two share the same
   `~/.agents/skills` discovery root — see
   `shared_agent_skill_root`/`exposure_name_candidates`'s doc comments. A
   bug in that shared-claim logic would manifest as a naming collision
-  across three integrations at once, not just here.
+  across two integrations at once, not just here.
 
 ## Evidence
 

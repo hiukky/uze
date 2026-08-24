@@ -98,7 +98,7 @@ pub fn package_resources_at(id: &PackageId, root: &std::path::Path) -> Result<Ve
 /// (ADR-025) derives the slash-command name from.
 ///
 /// Deliberately flat and non-recursive: nested directories are a
-/// vendor-naming concern (OpenCode `team/review`, Gemini `/gcp:sync`) that
+/// vendor-naming concern (e.g. OpenCode `team/review`) that
 /// an integration may resolve at delivery; the canonical v0 model is one
 /// file = one command. Discovery is also symlink-safe by construction —
 /// symlinked entries are skipped, not followed, matching

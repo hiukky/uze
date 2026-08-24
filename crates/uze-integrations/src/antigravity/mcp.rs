@@ -1,7 +1,10 @@
-//! Gemini CLI MCP server registration and inspection — `gemini mcp add
-//! --scope user`, with `gemini mcp list` having no machine-readable output,
-//! so inspection reads the one expected `mcpServers.<name>` entry directly
-//! out of `~/.gemini/settings.json`.
+//! Antigravity CLI MCP server registration and inspection — `agy mcp add
+//! <name> <command> [args...]` (global scope; flags must precede the name
+//! in 1.1.19), with `agy mcp list` being human-readable only, so inspection
+//! reads the one expected `mcpServers.<name>` entry directly out of
+//! `~/.gemini/config/mcp_config.json` — the vendor's dedicated, sparse
+//! MCP profile (Antigravity separately MCP from settings.json; legacy
+//! inline declarations are gone).
 
 use std::{fs, path::Path, path::PathBuf};
 
@@ -14,11 +17,11 @@ use uze_core::{
     state,
 };
 
-use super::GeminiIntegration;
-use super::{blocked, unsupported};
+use super::AntigravityIntegration;
+use super::unsupported;
 use crate::shared::process::{capture, failed_message, is_cli_safe_token};
 
-impl GeminiIntegration {
+impl AntigravityIntegration {
     pub(super) fn mcp_exposure_plan(&self, resource: &Resource) -> ExposurePlan {
         let Some(entry_name) = resource
             .resolved_exposure_name
@@ -30,19 +33,19 @@ impl GeminiIntegration {
         if !is_cli_safe_token(&entry_name) {
             return unsupported(
                 resource,
-                "MCP server name would be parsed as a flag by `gemini mcp add`, not a name; refusing to attach.",
+                "MCP server name would be parsed as a flag by `agy mcp add`, not a name; refusing to attach.",
             );
         }
         if !state::is_installed(&self.uze_home, self.id()) {
             return unsupported(
                 resource,
-                "Gemini setup has not completed, so no managed MCP entry exists yet.",
+                "Antigravity setup has not completed, so no managed MCP entry exists yet.",
             );
         }
         let Some((command, args)) = stdio_command(resource) else {
             return unsupported(
                 resource,
-                "Gemini MCP attachment is only modeled for a stdio command/args server.",
+                "Antigravity MCP attachment is only modeled for a stdio command/args server.",
             );
         };
         ExposurePlan {
@@ -58,7 +61,7 @@ impl GeminiIntegration {
                 environment: Vec::new(),
                 enabled: None,
             },
-            evidence: "UZE registers the store-owned MCP server once via `gemini mcp add --scope user --transport stdio`, writing to ~/.gemini/settings.json's mcpServers. The Gemini MCP runtime remains native."
+            evidence: "UZE registers the store-owned MCP server once via `agy mcp add <name> <command> [args...]`, writing to ~/.gemini/config/mcp_config.json's mcpServers. The Antigravity MCP runtime remains native."
                 .to_owned(),
         }
     }
@@ -71,42 +74,46 @@ pub(super) fn attach_mcp_entry(
     command: &Path,
     args: &[String],
 ) -> Result<Option<PathBuf>> {
-    // Checked before ever calling `mcp add`: Gemini's overwrite behavior for
-    // a colliding, differently-configured name is unconfirmed, so UZE never
-    // relies on it (same discipline as ADR-007 for the other peers).
+    // Checked before ever calling `mcp add`: Antigravity's verb is
+    // add-or-update (help text: "Add or update an MCP server
+    // configuration"), so a colliding, differently-configured name would be
+    // silently overwritten — UZE never relies on that (same discipline as
+    // ADR-007 for the other peers).
     if mcp_entry_exists(command_home, entry_name) {
-        return Ok(Some(PathBuf::from(format!("mcp:{entry_name}"))));
+        return Err(UzeError::ExposureUnavailable(format!(
+            "Antigravity already has an MCP server named `{entry_name}` that UZE does not own; refusing to overwrite it"
+        )));
     }
     let mut mcp_args: Vec<std::ffi::OsString> = vec![
         std::ffi::OsString::from("mcp"),
         std::ffi::OsString::from("add"),
-        std::ffi::OsString::from("--scope"),
-        std::ffi::OsString::from("user"),
-        std::ffi::OsString::from("--transport"),
-        std::ffi::OsString::from("stdio"),
         std::ffi::OsString::from(entry_name),
     ];
     mcp_args.push(command.as_os_str().to_owned());
     mcp_args.extend(args.iter().map(std::ffi::OsString::from));
     let output = capture(Path::new(executable), command_home, &mcp_args).map_err(|error| {
         UzeError::ExposureUnavailable(format!(
-            "failed to run `gemini mcp add` for entry `{entry_name}`: {error}"
+            "failed to run `agy mcp add` for entry `{entry_name}`: {error}"
         ))
     })?;
     if !output.status.success() {
         return Err(UzeError::ExposureUnavailable(failed_message(
-            &format!("gemini mcp add `{entry_name}`"),
+            &format!("agy mcp add `{entry_name}`"),
             &output,
         )));
     }
     Ok(Some(PathBuf::from(format!("mcp:{entry_name}"))))
 }
 
-fn mcp_entry_exists(command_home: &Path, entry_name: &str) -> bool {
-    read_user_mcp_entry(&command_home.join(".gemini/settings.json"), entry_name).is_some()
+fn mcp_config_path(command_home: &Path) -> PathBuf {
+    command_home.join(".gemini/config/mcp_config.json")
 }
 
-fn read_user_mcp_entry(path: &Path, entry_name: &str) -> Option<serde_json::Value> {
+fn mcp_entry_exists(command_home: &Path, entry_name: &str) -> bool {
+    read_mcp_entry(&mcp_config_path(command_home), entry_name).is_some()
+}
+
+fn read_mcp_entry(path: &Path, entry_name: &str) -> Option<serde_json::Value> {
     let bytes = fs::read(path).ok()?;
     let config: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
     config
@@ -116,11 +123,8 @@ fn read_user_mcp_entry(path: &Path, entry_name: &str) -> Option<serde_json::Valu
         .cloned()
 }
 
-/// `gemini mcp list` has no machine-readable output, so inspection reads the
-/// one expected `mcpServers.<name>` entry out of user settings. Attachment
-/// and removal still go through the official CLI verbs.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn inspect_gemini_mcp(
+pub(super) fn inspect_antigravity_mcp(
     path: &Path,
     entry_name: &str,
     transport: &str,
@@ -132,13 +136,14 @@ pub(super) fn inspect_gemini_mcp(
 ) -> AttachmentInspection {
     if transport != "stdio" || cwd.is_some() || !environment.is_empty() || enabled.is_some() {
         return blocked(
-            "Gemini MCP receipt requests state this integration cannot verify safely".to_owned(),
+            "Antigravity MCP receipt requests state this integration cannot verify safely"
+                .to_owned(),
         );
     }
     if !path.exists() {
         return AttachmentInspection {
             state: AttachmentState::Missing,
-            reason: "Gemini user settings are missing".to_owned(),
+            reason: "Antigravity MCP config is missing".to_owned(),
         };
     }
     let bytes = match fs::read(path) {
@@ -146,18 +151,18 @@ pub(super) fn inspect_gemini_mcp(
         Err(error) => return blocked(error.to_string()),
     };
     if serde_json::from_slice::<serde_json::Value>(&bytes).is_err() {
-        return blocked("Gemini user settings are malformed".to_owned());
+        return blocked("Antigravity MCP config is malformed".to_owned());
     }
-    let Some(entry) = read_user_mcp_entry(path, entry_name) else {
+    let Some(entry) = read_mcp_entry(path, entry_name) else {
         return AttachmentInspection {
             state: AttachmentState::Missing,
-            reason: "Gemini MCP entry is absent".to_owned(),
+            reason: "Antigravity MCP entry is absent".to_owned(),
         };
     };
-    inspect_gemini_mcp_value(&entry, command, args)
+    inspect_antigravity_mcp_value(&entry, command, args)
 }
 
-fn inspect_gemini_mcp_value(
+fn inspect_antigravity_mcp_value(
     entry: &serde_json::Value,
     command: &Path,
     args: &[String],
@@ -166,7 +171,7 @@ fn inspect_gemini_mcp_value(
     if actual_command != command.to_str() {
         return AttachmentInspection {
             state: AttachmentState::Drifted,
-            reason: "Gemini MCP command differs from receipt".to_owned(),
+            reason: "Antigravity MCP command differs from receipt".to_owned(),
         };
     }
     let actual_args: Vec<&str> = entry
@@ -182,22 +187,36 @@ fn inspect_gemini_mcp_value(
     if actual_args != args.iter().map(String::as_str).collect::<Vec<_>>() {
         return AttachmentInspection {
             state: AttachmentState::Drifted,
-            reason: "Gemini MCP args differ from receipt".to_owned(),
+            reason: "Antigravity MCP args differ from receipt".to_owned(),
         };
     }
-    // The receipt declares no env, cwd or explicit enabled state, so any of
-    // them present is state UZE did not create and cannot claim.
-    for unexpected in ["env", "cwd"] {
+    // The receipt declares no env or cwd, so any of them present is state
+    // UZE did not create and cannot claim.
+    for unexpected in ["env", "cwd", "headers"] {
         if entry.get(unexpected).is_some_and(|value| !value.is_null()) {
             return AttachmentInspection {
                 state: AttachmentState::Drifted,
-                reason: format!("Gemini MCP entry carries an unexpected `{unexpected}`"),
+                reason: format!("Antigravity MCP entry carries an unexpected `{unexpected}`"),
             };
+        }
+    }
+    // `disabled: true` is a user preference on an entry UZE still owns
+    // (same rationale as every vendor's enablement field); a non-boolean
+    // `disabled` is state this integration cannot interpret.
+    if let Some(disabled) = entry.get("disabled") {
+        match disabled.as_bool() {
+            Some(_) => {}
+            None => {
+                return AttachmentInspection {
+                    state: AttachmentState::Blocked,
+                    reason: "Antigravity MCP entry has a non-boolean `disabled`".to_owned(),
+                };
+            }
         }
     }
     AttachmentInspection {
         state: AttachmentState::Matched,
-        reason: "Gemini MCP entry matches receipt".to_owned(),
+        reason: "Antigravity MCP entry matches receipt".to_owned(),
     }
 }
 
@@ -218,13 +237,20 @@ pub(super) fn stdio_command(resource: &Resource) -> Option<(PathBuf, Vec<String>
     Some((PathBuf::from(command), args))
 }
 
+fn blocked(reason: String) -> AttachmentInspection {
+    AttachmentInspection {
+        state: AttachmentState::Blocked,
+        reason,
+    }
+}
+
 #[cfg(test)]
 mod mcp_tests {
     use std::path::Path;
 
     use uze_core::integration::AttachmentState;
 
-    use super::inspect_gemini_mcp_value;
+    use super::inspect_antigravity_mcp_value;
 
     fn entry(command: &str, args: &[&str]) -> serde_json::Value {
         serde_json::json!({ "command": command, "args": args })
@@ -233,7 +259,7 @@ mod mcp_tests {
     #[test]
     fn a_matching_mcp_entry_is_matched() {
         assert_eq!(
-            inspect_gemini_mcp_value(
+            inspect_antigravity_mcp_value(
                 &entry("/bin/server", &["--serve"]),
                 Path::new("/bin/server"),
                 &["--serve".to_owned()],
@@ -246,7 +272,7 @@ mod mcp_tests {
     #[test]
     fn a_changed_command_or_args_is_drift_not_a_match() {
         assert_eq!(
-            inspect_gemini_mcp_value(
+            inspect_antigravity_mcp_value(
                 &entry("/bin/other", &["--serve"]),
                 Path::new("/bin/server"),
                 &["--serve".to_owned()],
@@ -255,7 +281,7 @@ mod mcp_tests {
             AttachmentState::Drifted
         );
         assert_eq!(
-            inspect_gemini_mcp_value(
+            inspect_antigravity_mcp_value(
                 &entry("/bin/server", &["--different"]),
                 Path::new("/bin/server"),
                 &["--serve".to_owned()],
@@ -270,8 +296,28 @@ mod mcp_tests {
         let mut value = entry("/bin/server", &[]);
         value["env"] = serde_json::json!({ "TOKEN": "x" });
         assert_eq!(
-            inspect_gemini_mcp_value(&value, Path::new("/bin/server"), &[]).state,
+            inspect_antigravity_mcp_value(&value, Path::new("/bin/server"), &[]).state,
             AttachmentState::Drifted
+        );
+    }
+
+    #[test]
+    fn a_user_disable_is_a_preference_not_an_ownership_signal() {
+        let mut value = entry("/bin/server", &[]);
+        value["disabled"] = serde_json::json!(true);
+        assert_eq!(
+            inspect_antigravity_mcp_value(&value, Path::new("/bin/server"), &[]).state,
+            AttachmentState::Matched
+        );
+    }
+
+    #[test]
+    fn a_non_boolean_disabled_is_blocked_not_guessed() {
+        let mut value = entry("/bin/server", &[]);
+        value["disabled"] = serde_json::json!("yes");
+        assert_eq!(
+            inspect_antigravity_mcp_value(&value, Path::new("/bin/server"), &[]).state,
+            AttachmentState::Blocked
         );
     }
 }

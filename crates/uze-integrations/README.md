@@ -1,6 +1,6 @@
 # UZE Integrations
 
-Peer harness integrations: Claude Code, Codex, OpenCode, Gemini CLI. Each
+Peer harness integrations: Claude Code, Codex, OpenCode, Antigravity CLI. Each
 implements `uze-core::integration::IntegrationPort` — the only contract Core
 knows. No integration imports another; no harness name appears in
 `uze-core`, `uze-application`'s Store/Engine/Router layer, or any other
@@ -21,7 +21,7 @@ Per-harness detail lives in each integration's own README:
 - [Claude Code](src/claude/README.md)
 - [Codex](src/codex/README.md)
 - [OpenCode](src/opencode/README.md)
-- [Gemini CLI](src/gemini/README.md)
+- [Antigravity CLI](src/antigravity/README.md)
 
 This document is the cross-harness view only.
 
@@ -29,16 +29,16 @@ This document is the cross-harness view only.
 
 Status: **PROVEN** (real-CLI behavioral evidence) · **SUPPORTED** (implemented, config/logic-level evidence only) · **PARTIAL** (implemented, a real gap or unclosed verification tier) · **EXPERIMENTAL** (implemented, no behavioral evidence, self-described as conformance-only) · **NOT_IMPLEMENTED**.
 
-| Surface | Claude | Codex | OpenCode | Gemini |
+| Surface | Claude | Codex | OpenCode | Antigravity |
 |---|---|---|---|---|
-| Package | **PROVEN** (config) — Native Plugin, `claude plugin install` | **SUPPORTED** — Native Plugin, `codex plugin add`; exact coverage, see below | **N/A** — no native envelope exists to consume (deliberate) | **SUPPORTED** — Native Extension, `gemini extensions link`; exact coverage, see below |
-| Skills | **PROVEN** — via package or managed symlink, real behavioral proof-token run | **PROVEN** — managed symlink, real behavioral proof-token run | **PROVEN** — managed symlink, real behavioral proof-token run (v1.18.18) | **SUPPORTED** — managed symlink, DOCUMENTED native root, no behavioral run |
-| MCP | **PARTIAL** — config/discovery PROVEN live, behavioral tool-call gap open | **PARTIAL** — config PROVEN, discovery inconclusive (vendor JSON has no connectivity field), behavioral blocked by an approval gate | **SUPPORTED** — TESTED only, zero recorded conformance run of any tier | **SUPPORTED** — TESTED only, zero recorded conformance run of any tier |
-| Context (AGENTS.md) | **PARTIAL** — `--add-dir` runtime projection, extensive real-CLI evidence, one open gap (`/compact` retention) | Native (reads `AGENTS.md` directly) — DOCUMENTED, outside this crate | Native (reads `AGENTS.md` directly) — DOCUMENTED, outside this crate | Reads its own `GEMINI.md`; the `AGENTS.md` bridge lives in `uze-application`, outside this crate |
-| Agents | NOT_IMPLEMENTED | NOT_IMPLEMENTED (also a real, open Codex *vendor* gap — plugins can't declare subagents today) | NOT_IMPLEMENTED | NOT_IMPLEMENTED |
-| Hooks | NOT_IMPLEMENTED | NOT_IMPLEMENTED | NOT_IMPLEMENTED | NOT_IMPLEMENTED |
-| Commands | NOT_IMPLEMENTED (Claude itself merged Commands into Skills upstream) | NOT_IMPLEMENTED | NOT_IMPLEMENTED | NOT_IMPLEMENTED |
-| Runtime Integration | Yes — the only harness with a projection mechanism (`--add-dir`) | None (passthrough default) | None (passthrough default; see note below) | None (passthrough default) |
+| Package | **PROVEN** (config) — Native Plugin, `claude plugin install` | **SUPPORTED** — Native Plugin, `codex plugin add`; exact coverage, see below | **N/A** — no native envelope exists to consume (deliberate) | **SUPPORTED** — Native Plugin, `agy plugin install`; the canonical `plugin.json` IS the vendor manifest; exact coverage, real-binary dogfood (1.1.19) |
+| Skills | **PROVEN** — via package or managed symlink, real behavioral proof-token run | **PROVEN** — managed symlink, real behavioral proof-token run | **PROVEN** — managed symlink, real behavioral proof-token run (v1.18.18) | **SUPPORTED** — via plugin (native) or managed global-skills symlink; DOCUMENTED root, no behavioral run |
+| MCP | **PARTIAL** — config/discovery PROVEN live, behavioral tool-call gap open | **PARTIAL** — config PROVEN, discovery inconclusive (vendor JSON has no connectivity field), behavioral blocked by an approval gate | **SUPPORTED** — TESTED only, zero recorded conformance run of any tier | **SUPPORTED** — native plugin `mcp_config.json` + `agy mcp add` fallback; real-binary dogfood |
+| Context (AGENTS.md) | **PARTIAL** — `--add-dir` runtime projection, extensive real-CLI evidence, one open gap (`/compact` retention) | Native (reads `AGENTS.md` directly) — DOCUMENTED, outside this crate | Native (reads `AGENTS.md` directly) — DOCUMENTED, outside this crate | **Native** (reads `AGENTS.md` and `GEMINI.md`; official docs: identical context rules) — no bridge generated |
+| Agents | NOT_IMPLEMENTED | NOT_IMPLEMENTED (also a real, open Codex *vendor* gap — plugins can't declare subagents today) | NOT_IMPLEMENTED | NOT_IMPLEMENTED (vendor supports `agents/` — future surface) |
+| Hooks | NOT_IMPLEMENTED | NOT_IMPLEMENTED | NOT_IMPLEMENTED | NOT_IMPLEMENTED (vendor supports `hooks.json` — future surface) |
+| Commands | NOT_IMPLEMENTED (Claude itself merged Commands into Skills upstream) | NOT_IMPLEMENTED | NOT_IMPLEMENTED | **ADAPTED** — routes through the vendor's official commands→Skills conversion; explicit-only property degrades (declared, never hidden) |
+| Runtime Integration | Yes — the only harness with a projection mechanism (`--add-dir`) | None (passthrough default) | None (passthrough default; see note below) | None (passthrough default; no shim) |
 
 Agents/Hooks/Commands are `NOT_IMPLEMENTED` project-wide, not per-harness gaps:
 `CapabilityKind::{Agent, Hook, Action}` are recognized only by
@@ -69,8 +69,12 @@ Claude:  Store plugin → derived marketplace.json → `claude plugin install`
 Codex:   Store plugin → derived marketplace.json → `codex plugin add`
            → Codex-owned cache → 1 receipt → Skill/MCP: VIA_PACKAGE (exact ∩)
 
-Gemini:  Store plugin → `gemini extensions link --consent` (no copy, no catalogue)
-           → Gemini's own registry → 1 receipt → Skill/MCP: VIA_PACKAGE (exact ∩)
+Antigravity: Store plugin (canonical plugin.json IS the vendor manifest)
+           → `agy plugin install` → staged copy at ~/.gemini/config/plugins/
+           (+ import_manifest.json registration) → 1 receipt → Skill/MCP:
+           VIA_PACKAGE (exact ∩); MCP-bearing packages get a generated
+           envelope translating canonical mcp.json → mcp_config.json
+           (registry-free — no catalogue)
 
 OpenCode: Store plugin → no native step → decompose →
            Skill: symlink into ~/.agents/skills
@@ -97,13 +101,12 @@ this as a real intersection rather than a presence check:
   appears there. Either field independently degrades to "no coverage" on
   absence, malformed content, or an escaping/absolute path, rather than
   erroring. 11 dedicated tests.
-- **Gemini** (`gemini_exact_coverage`): `gemini-extension.json` declares no
-  `skills` field at all (confirmed by
-  `e2e/fixtures/gemini-native-conformance/gemini-extension.json`) — Skill
-  coverage is convention-based, a skill is covered iff it lives under the
-  extension root's fixed `skills/` subdirectory. `mcpServers` is declared
-  inline as a name-keyed object (unlike Codex's external-file reference). 8
-  dedicated tests.
+- **Antigravity** (`antigravity/plugin.rs`): the canonical `plugin.json` is
+  the vendor manifest, so coverage is structural — a skill is covered iff it
+  lives under the package's fixed `skills/`, a canonical command iff under
+  `commands/` (the CLI converts it to a Skill at load), and an MCP server
+  iff declared in `mcp_config.json` (or, for the generated route, present
+  in canonical `mcp.json`). 17 dedicated tests.
 
 Each was traced through `UzeApplication::attach_package_to`
 (`crates/uze-application/src/application/lifecycle/attach.rs`), which skips
@@ -120,14 +123,12 @@ guarded for all three, not just Claude.
 |---|---|---|---|---|
 | Claude | Real intersection (`claude_exact_coverage`) | Yes — undeclared resources fall through | Yes | 12 tests |
 | Codex | Real intersection (`codex_exact_coverage`) | Yes — undeclared resources fall through | Yes | 11 tests |
-| Gemini | Real intersection (`gemini_exact_coverage`) | Yes — undeclared resources fall through | Yes | 8 tests |
+| Antigravity | Real intersection (structural `skills/`/`commands/` + declared/translated MCP) | Yes — undeclared resources fall through | Yes | 17 tests (coverage/plan/generated) |
 | OpenCode | N/A — no native package tier exists | N/A | N/A | N/A |
 
-None of this was exercised against a real `codex`/`gemini` CLI for this fix:
-each coverage function is pure and was validated against the exact real
+Each coverage function is pure and was validated against the exact real
 fixture manifest shapes already used elsewhere in this repository's
-conformance suite, so a live install/link run would add side-effect risk
-without adding coverage-computation evidence.
+conformance suite.
 
 ## Lifecycle safety (ADR-009)
 
@@ -147,7 +148,7 @@ struct).
 
 Only Claude has a runtime-projection mechanism (`--add-dir` delivery of
 `AGENTS.md`, ADR-014) — extensively EMPIRICALLY verified, one open gap
-(`/compact` retention). Codex, OpenCode, and Gemini inherit
+(`/compact` retention). Codex, OpenCode, and Antigravity inherit
 `IntegrationPort`'s passthrough defaults and do nothing with the shim/dispatch
 machinery ADR-014 also gives them for free.
 
@@ -160,8 +161,8 @@ not made by this audit or any of its forks. The change adds a new
 `OpenCodeIntegration::supports_runtime_integration()` to `true`,
 generalizing the Claude-only PATH-shim mechanism to resolve OpenCode's
 `opencode2`-named v2 binary without a physical symlink. ADR-014 explicitly
-does not anticipate this ("only if and when [Codex, OpenCode, or Gemini] has
-a real runtime-projection need of its own — nothing here requires or
+does not anticipate this ("only if and when [Codex, OpenCode, or Antigravity]
+has a real runtime-projection need of its own — nothing here requires or
 anticipates that"). The workspace briefly failed to compile mid-edit
 (missing `use std::fs`/`PathBuf` in `opencode/provision.rs`) and now builds
 again; `cargo test -p uze-integrations --lib` currently reports **38**
@@ -192,8 +193,7 @@ not vendor changelogs):
 | Claude Code | 2.1.239 | ADR-006/007/013/014; re-confirmed live during this audit (`claude --version`, the only harness binary installed in this environment) |
 | Codex CLI | 0.148.0 | ADR-005/006/007/008 |
 | OpenCode | 1.18.18 | ADR-005/006 — predates the `opencode`/`opencode2` v2 binary split this crate's provisioning code now handles; no re-validation against a v2 install is recorded |
-| Gemini CLI | 0.56.0 | Module doc comment (`gemini.rs`) — no dated ADR entry, no behavioral run recorded anywhere |
+| Antigravity CLI | 1.1.19 | ADR-027 — real-binary dogfood in an isolated `$HOME` (attach → MATCHED → detach → Missing → reinstall) |
 
-No codex/opencode/gemini binary was installed in the environment this audit
-ran in, so none of the above was independently re-verified this pass beyond
-Claude's version string.
+The real-binary dogfood for Antigravity was run against an isolated
+`$HOME`/`UZE_HOME`; no developer harness configuration was touched.

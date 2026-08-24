@@ -2,8 +2,8 @@
 //! terminal.
 //!
 //! Every mutating vendor command (`plugin marketplace add`, `plugin add`,
-//! `plugin remove`, `extensions link`, `mcp add`, ...) used to run with
-//! inherited stdio, so Codex/Claude/Gemini progress banners, spinners,
+//! `plugin remove`, `install`, `mcp add`, ...) used to run with
+//! inherited stdio, so Codex/Claude progress banners, spinners,
 //! consent narratives and warnings were written straight over UZE's own
 //! output — and over the TUI's alternate screen, corrupting its layout.
 //!

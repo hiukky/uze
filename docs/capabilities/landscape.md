@@ -5,6 +5,18 @@ Portability). This is documentation of external ecosystem behavior and an
 architectural recommendation, not an implementation and not an authorization to
 implement.
 
+> **2026-08-23 update:** the Google-family v0 harness is now
+> **Antigravity CLI** (`agy`) — see ADR-027 and
+> `docs/architecture/antigravity-compatibility.md` (the migration-audit
+> record). The Gemini CLI integration was removed from the codebase.
+> The research below predates Antigravity (the
+> matrices name four harnesses including the removed one); Antigravity's own
+> data lives in the compatibility map. Where this document's claims are
+> superseded (e.g. "Convergent shape between Claude/…" for hooks and
+> the commands table), the compatibility map and the implementation-status
+> table below are authoritative.
+
+
 North star, repeated because every section below is judged against it:
 
 > **Semantics before syntax.** Two harnesses sharing a format is not
@@ -40,11 +52,11 @@ document to answer "is this real yet."
 
 | Capability | Status | Evidence |
 |---|---|---|
-| Skills | **IMPLEMENTED** | Real delivery to Claude Code, Codex, OpenCode, Gemini CLI. |
+| Skills | **IMPLEMENTED** | Real delivery to Claude Code, Codex, OpenCode and Antigravity CLI. |
 | MCP | **IMPLEMENTED** | Real delivery to all four. |
-| Instructions | **IMPLEMENTED / Context Manager** | Codex: native, **empirically confirmed** (`codex debug prompt-input`, no credential). OpenCode: native, documented + L1-tested, not re-confirmed live this session — declared limitation, not inflated. Claude Code / Gemini CLI: bridge (`@AGENTS.md`) implemented and tested at the file level; model-level resolution **unverified** (would need credentials). See [context-manager.md](context-manager.md). |
-| Hooks | RESEARCHED | Partial portable subset justified for Claude↔Gemini only; not implemented. See [hooks.md](hooks.md). |
-| Commands | **IMPLEMENTED** (v0) | First-class capability, delivered natively to Claude Code (plugin `commands/`), OpenCode V2 (user-global `.md`), Gemini CLI (generated `.toml`), and Codex (official explicit-invocation-only Skill per ADR-025's semantics definition of Native). See [commands.md](commands.md) — supersedes the 2026-08-21 "converging to skills, do not model" recommendation (ADR-025). Exposed under stable namespaced invocation labels `<plugin>:<capability>` (ADR-026). |
+| Instructions | **IMPLEMENTED / Context Manager** | Codex: native, **empirically confirmed** (`codex debug prompt-input`, no credential). OpenCode: native, documented + L1-tested. Antigravity: native (reads `AGENTS.md` and `GEMINI.md` — official docs: identical workspace context rules; no bridge generated). Claude Code: bridge (`@AGENTS.md`) implemented and tested at the file level; model-level resolution **unverified** (would need credentials). See [context-manager.md](context-manager.md). |
+| Commands | **IMPLEMENTED** (v0) | First-class capability, delivered natively to Claude Code (plugin `commands/`), OpenCode V2 (user-global `.md`), and Codex (official explicit-invocation-only Skill per ADR-025's semantics definition of Native), and ADAPTED to Antigravity (official commands→Skills conversion; explicit-only property degrades, declared). See [commands.md](commands.md) — supersedes the 2026-08-21 "converging to skills, do not model" recommendation (ADR-025). Exposed under stable namespaced invocation labels `<plugin>:<capability>` (ADR-026). |
+| Hooks | RESEARCHED | Partial portable subset justified for the pair of harnesses that support declarative JSON hooks; not implemented. See [hooks.md](hooks.md). |
 | Agents | RESEARCH | Real cross-vendor semantic gaps (isolation, nesting, package format); native pass-through only. See [agents.md](agents.md). |
 | Memory | FUTURE / Context Manager | Not researched or implemented; the Context Manager boundary is where it would land if pursued — see [context-manager.md](context-manager.md)'s future-`/uze` section. |
 

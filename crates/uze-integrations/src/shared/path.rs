@@ -17,10 +17,9 @@
 //! (`skills: [...]` vs `skills: "..."`, one array entry vs one whole
 //! directory, an inline object vs an external file reference) stays
 //! entirely vendor-specific — Claude's and Codex's own manifest schemas
-//! differ in that shape, and this function has no opinion on it. Gemini
-//! has no path-declaration field to validate at all (its Skill coverage
-//! is purely structural — see `gemini/extension.rs`), so it never calls
-//! this module.
+//! differ in that shape, and this function has no opinion on it. Both
+//! Antigravity's and Claude's/Codex's coverage functions that read a
+//! structural surface rather than a declared path never call this module.
 
 use std::path::{Path, PathBuf};
 

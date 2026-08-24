@@ -136,10 +136,10 @@ impl IntegrationPort for OpenCodeIntegration {
         }
     }
 
-    /// Codex and Gemini CLI both discover Skills from this exact same
-    /// `~/.agents/skills` directory (see their own overrides of this
+    /// Codex also discovers Skills from this exact same
+    /// `~/.agents/skills` directory (see its own override of this
     /// method), so a name this integration claims here must be treated as
-    /// claimed for them too — every member derives the same single
+    /// claimed for it too — every member derives the same single
     /// namespaced label, so the group always converges on one entry.
     fn shared_agent_skill_root(&self) -> Option<PathBuf> {
         Some(self.skills_dir.clone())

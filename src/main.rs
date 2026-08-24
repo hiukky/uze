@@ -234,7 +234,7 @@ struct ShorthandArgs {
 
 fn main() {
     // Checked before any `clap` parsing, on `argv[0]` alone: a process
-    // invoked as `claude`/`codex`/`opencode`/`gemini` (via the symlink
+    // invoked as `claude`/`codex`/`opencode` (via the symlink
     // `ensure_runtime_shim` creates at `~/.uze/shims/<name>`) never reaches
     // the ordinary `uze` subcommand grammar at all. `shim::run` diverges —
     // it always either `exec`s the real binary or exits.

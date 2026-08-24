@@ -252,7 +252,11 @@ mod tests {
     #[test]
     fn empty_cache_returns_none() {
         let cache = DetectionCache::at(temp_cache_path("empty"));
-        assert!(cache.get("gemini", &["/nonexistent/gemini"]).is_none());
+        assert!(
+            cache
+                .get("antigravity", &["/nonexistent/antigravity"])
+                .is_none()
+        );
     }
 
     #[test]
@@ -280,9 +284,9 @@ mod tests {
             present: true,
             version: Some("9.9.9".to_owned()),
         };
-        DetectionCache::at(cache_path.clone()).put("gemini", &[path_str], detection.clone());
+        DetectionCache::at(cache_path.clone()).put("antigravity", &[path_str], detection.clone());
         let fresh = DetectionCache::at(cache_path);
-        assert_eq!(fresh.get("gemini", &[path_str]), Some(detection));
+        assert_eq!(fresh.get("antigravity", &[path_str]), Some(detection));
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -348,7 +352,11 @@ mod tests {
     #[test]
     fn missing_cache_file_is_fail_open() {
         let cache = DetectionCache::at(PathBuf::from("/nonexistent/dir/harness_detection.json"));
-        assert!(cache.get("gemini", &["/nonexistent/gemini"]).is_none());
+        assert!(
+            cache
+                .get("antigravity", &["/nonexistent/antigravity"])
+                .is_none()
+        );
     }
 
     #[test]
@@ -357,7 +365,11 @@ mod tests {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, b"not json").unwrap();
         let cache = DetectionCache::at(path.clone());
-        assert!(cache.get("gemini", &["/nonexistent/gemini"]).is_none());
+        assert!(
+            cache
+                .get("antigravity", &["/nonexistent/antigravity"])
+                .is_none()
+        );
         let _ = fs::remove_file(&path);
     }
 }

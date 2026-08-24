@@ -33,7 +33,7 @@ use uze_core::{
     trust::{self, TrustAuthority, TrustOutcome, TrustRequest},
 };
 use uze_integrations::{
-    claude::ClaudeIntegration, codex::CodexIntegration, gemini::GeminiIntegration,
+    antigravity::AntigravityIntegration, claude::ClaudeIntegration, codex::CodexIntegration,
     opencode::OpenCodeIntegration,
 };
 
@@ -61,13 +61,13 @@ pub use overview::{
 };
 pub use uze_core::workspace::WorkspaceKind;
 
-/// `LEGACY/PERSISTENT CONTEXT DELIVERY STRATEGY`. Harnesses that read a
+/// `PERSISTENT CONTEXT DELIVERY STRATEGY`. Harnesses that read a
 /// project's shared `AGENTS.md` only through an explicit bridge region
 /// written into their own native file *inside the project's working tree*,
 /// rather than natively — see `docs/capabilities/instructions-design.md`
-/// Fase 4. Codex and OpenCode are deliberately absent: both read
-/// `AGENTS.md` directly, so `context_reconcile` never needs to write
-/// anything into a Codex- or OpenCode-specific file at all. This list is
+/// Fase 4. Codex, OpenCode and Antigravity are deliberately absent: all
+/// three read `AGENTS.md` directly, so `context_reconcile` never needs to
+/// write anything into a vendor-specific file at all. This list is
 /// explicit, hardcoded vendor knowledge — appropriate here, in the
 /// composition root that already names every concrete integration by type,
 /// and not something `uze-core` or `IntegrationPort` needs to know.
@@ -79,24 +79,26 @@ pub use uze_core::workspace::WorkspaceKind;
 /// decision pending an empirical interactive comparison — see the
 /// Checkpoint 2 report. Do not remove or fold this into the experimental
 /// path without that comparison.
-const BRIDGE_INTEGRATIONS: &[(&str, &str)] =
-    &[("claude-code", "CLAUDE.md"), ("gemini", "GEMINI.md")];
+const BRIDGE_INTEGRATIONS: &[(&str, &str)] = &[("claude-code", "CLAUDE.md")];
 
 /// Fixed, package-independent region identity: the bridge is shared
 /// infrastructure for however many packages currently contribute to
 /// `AGENTS.md`, never owned by one of them (see Fase C.5 of the design).
 const INSTRUCTION_BRIDGE_IDENTITY: &str = "instruction-bridge";
 
-/// The vendor-documented import syntax both Claude Code and Gemini CLI
-/// share for pulling another Markdown file's content into their own native
-/// instructions file (`@AGENTS.md`).
+/// The vendor-documented import syntax Claude Code uses for pulling another
+/// Markdown file's content into its own native instructions file
+/// (`@AGENTS.md`).
 const INSTRUCTION_BRIDGE_CONTENT: &str = "@AGENTS.md";
 
 /// Harnesses that read a project's shared `AGENTS.md` directly, with no
 /// artifact of their own — reported here purely for `context_inspect`'s
-/// benefit (Codex/OpenCode still never appear in `BRIDGE_INTEGRATIONS`,
-/// since `context_reconcile` genuinely writes nothing for them).
-const NATIVE_INSTRUCTION_INTEGRATIONS: &[&str] = &["codex", "opencode"];
+/// benefit (Codex/OpenCode/Antigravity still never appear in
+/// `BRIDGE_INTEGRATIONS`, since `context_reconcile` genuinely writes
+/// nothing for them). Antigravity CLI reads `AGENTS.md` (and `GEMINI.md`)
+/// directly per its official docs: the context route is Native and no
+/// `@AGENTS.md` bridge is ever generated for it.
+const NATIVE_INSTRUCTION_INTEGRATIONS: &[&str] = &["codex", "opencode", "antigravity"];
 
 pub struct UzeApplication {
     home: UzeHome,
@@ -117,10 +119,11 @@ impl UzeApplication {
                 Box::new(ClaudeIntegration::from_env(home.clone())?),
                 Box::new(CodexIntegration::from_env(home.clone())?),
                 Box::new(OpenCodeIntegration::from_env(home.clone())?),
-                // EXPERIMENTAL / CONFORMANCE. Registered to exercise the
-                // vendor-neutral core against a fourth, differently shaped
-                // harness; not a v0 support claim. See integrations/gemini.rs.
-                Box::new(GeminiIntegration::from_env(home)?),
+                // v0 primary Google-family harness: Antigravity CLI. The
+                // canonical package is itself a valid Antigravity plugin,
+                // so it needs no author-provided vendor envelope (see
+                // integrations/antigravity.rs).
+                Box::new(AntigravityIntegration::from_env(home)?),
             ],
         ))
     }
@@ -144,7 +147,7 @@ impl UzeApplication {
                 Box::new(ClaudeIntegration::from_env(home.clone())?),
                 Box::new(CodexIntegration::from_env(home.clone())?),
                 Box::new(OpenCodeIntegration::from_env(home.clone())?),
-                Box::new(GeminiIntegration::from_env(home)?),
+                Box::new(AntigravityIntegration::from_env(home)?),
             ],
             runner,
         ))
@@ -686,7 +689,7 @@ impl UzeApplication {
     ///
     /// The same reuse extends to a *different* integration's receipt for
     /// this identical resource when the two integrations report the same
-    /// `shared_agent_skill_root` (OpenCode, Codex, and Gemini CLI all read
+    /// `shared_agent_skill_root` (OpenCode and Codex all read
     /// `~/.agents/skills`): reusing that name means the second integration's
     /// attach writes the very same symlink rather than a second one next to
     /// it, so a directory one harness scans in full never ends up listing
@@ -1053,7 +1056,7 @@ pub struct SetupResult {
     /// and `ensure_runtime_shim` created/refreshed its PATH shim as an
     /// ordinary part of this `setup` call — see `BRIDGE_INTEGRATIONS`'s
     /// doc comment for how this relates to the existing, still-default,
-    /// persistent `CLAUDE.md`/`GEMINI.md` bridge. `None` for every
+    /// persistent `CLAUDE.md` bridge. `None` for every
     /// integration with no runtime-integration story (not an error).
     pub runtime_shim: Option<RuntimeShimSetup>,
 }
@@ -2091,8 +2094,8 @@ mod tests {
 
     // --- cli-performance: detect_cached / DetectionCache integration ---
     // See ADR 018 and specs/cli-performance/spec.md. `FakeIntegration`
-    // stands in for a slow harness (like `gemini`, ~2-11s per real
-    // `--version` invocation) without spawning a real subprocess, and its
+    // stands in for a slow harness (a real vendor `--version` probe costs
+    // seconds) without spawning a real subprocess, and its
     // shared `Arc<AtomicUsize>` counter is what these tests assert
     // against: the whole point of `detect_cached` is that this counter
     // stays at 1 no matter how many call sites, command executions, or
@@ -2261,7 +2264,7 @@ mod tests {
 
     #[test]
     fn cache_warm_detect_cached_meets_the_performance_budget() {
-        // Stands in for `gemini --version`'s real-world 2-11s cost
+        // Stands in for a real vendor `--version` probe's second-scale cost
         // without spawning a subprocess (see proposal.md's measurements).
         const SLOW_HARNESS_DELAY: Duration = Duration::from_millis(500);
         const BUDGET: Duration = Duration::from_millis(50);

@@ -217,7 +217,7 @@ pub trait IntegrationPort {
     /// The physical directory this integration's harness reads Agent Skills
     /// from, when — and only when — that directory is durably shared with
     /// one or more *other* integrations rather than owned exclusively by
-    /// this one. OpenCode, Codex, and Gemini CLI all discover Skills from
+    /// this one. OpenCode and Codex both discover Skills from
     /// the same `~/.agents/skills` root, so naming resolution must treat a
     /// name already claimed there by any one of them as claimed for all;
     /// otherwise each independently-computed candidate list produces its

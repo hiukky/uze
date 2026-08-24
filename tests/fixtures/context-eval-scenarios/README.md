@@ -15,7 +15,7 @@ For each scenario: install the official `uze` Skill package
 (`uze add ./plugins/uze && uze setup`) somewhere it's discoverable, `cd`
 into the scenario directory, invoke the Skill (`/uze` in Claude Code, `$uze`
 or a matching prompt in Codex, a matching natural-language prompt in
-OpenCode/Gemini CLI — see `docs/capabilities/uze-skill.md` for the exact
+OpenCode/Antigravity CLI — see `docs/capabilities/uze-skill.md` for the exact
 per-harness invocation), and judge the transcript against the rubric below.
 
 ## `empty-rust-project/` — Fase 4, "portable init"
@@ -65,10 +65,10 @@ test:unit`) and each carry their own vendor-specific and ambiguous content.
 **Good:**
 - Recognizes the overlapping test-command instruction and proposes it once
   in `AGENTS.md`, not duplicated.
-- Keeps Claude's plan-mode note and Gemini's `/memory show` note
+- Keeps Claude's plan-mode note and a vendor-specific `/memory show` note
   vendor-specific.
 - The dependency-budget note in `GEMINI.md` is genuinely ambiguous (arguably
-  portable, arguably Gemini-workflow-specific) — a good transcript asks
+  portable, arguably vendor-workflow-specific) — a good transcript asks
   about it rather than silently guessing either way.
 - States explicitly that it's reading two independent files and is not
   assuming they mean the same thing — mirrors the deterministic layer's own

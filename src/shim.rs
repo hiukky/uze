@@ -1,7 +1,7 @@
 //! PATH shim entry point.
 //!
 //! This is the part of `uze` that runs when the binary is invoked under a
-//! symlinked name (`claude`, `codex`, `opencode`, `gemini`) rather than as
+//! symlinked name (`claude`, `codex`, `opencode`) rather than as
 //! `uze` itself — see `UzeApplication::ensure_runtime_shim`, which is what
 //! creates that symlink at `~/.uze/shims/<name>` as an ordinary part of
 //! `uze setup <harness>`, for whichever integrations opt in.
@@ -16,7 +16,7 @@
 //!
 //! `RUNTIME INFRASTRUCTURE`, not `CONTEXT DELIVERY POLICY` — this file
 //! neither knows nor cares whether runtime projection ever replaces the
-//! existing persistent `CLAUDE.md`/`GEMINI.md` bridge; it only launches
+//! existing persistent `CLAUDE.md` bridge; it only launches
 //! whatever the integration decided.
 
 use std::{
@@ -31,11 +31,10 @@ use uze::{
     integration::IntegrationPort,
 };
 use uze_integrations::{
-    claude::ClaudeIntegration, codex::CodexIntegration, gemini::GeminiIntegration,
-    opencode::OpenCodeIntegration,
+    claude::ClaudeIntegration, codex::CodexIntegration, opencode::OpenCodeIntegration,
 };
 
-const KNOWN_SHIM_NAMES: &[&str] = &["claude", "codex", "opencode", "gemini"];
+const KNOWN_SHIM_NAMES: &[&str] = &["claude", "codex", "opencode"];
 
 /// `None` when this process was not invoked through one of the known shim
 /// names — the ordinary `uze <subcommand>` path in `main()` continues
@@ -132,9 +131,9 @@ fn build_integration(shim_name: &str, home: &UzeHome) -> Option<Box<dyn Integrat
         "opencode" => OpenCodeIntegration::from_env(home.clone())
             .ok()
             .map(|integration| Box::new(integration) as Box<dyn IntegrationPort>),
-        "gemini" => GeminiIntegration::from_env(home.clone())
-            .ok()
-            .map(|integration| Box::new(integration) as Box<dyn IntegrationPort>),
+        // `antigravity` never opts into a runtime shim
+        // (`supports_runtime_integration` stays false), so there is no arm
+        // for it here — and none is needed.
         _ => None,
     }
 }

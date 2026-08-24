@@ -39,7 +39,6 @@ docs didn't cover it).
 | Claude Code | `~/.claude/skills/<entry>/SKILL.md` | Directory-name-driven: `/<entry-name>` (personal/project skills). After naming refactor, `uze` package delivers `uze` bare → `/uze`. Also autonomous, description-matched. | OFFICIAL (code.claude.com/docs/en/skills) + **EMPIRICAL** (pre-refactor listing was `uze-uze-uze`, post-refactor `uze`; verified via `exposure_name_candidates = [logical, qualified]` `claude.rs:152` + `TESTED` `exposure_naming:158`) |
 | Codex | `$HOME/.agents/skills/<entry>/SKILL.md` | `$uze` (frontmatter `name`, not the delivery directory) or autonomous. `/skills` lists, does not force. | OFFICIAL (learn.chatgpt.com/docs/build-skills) + **EMPIRICAL**: `codex debug prompt-input` (real binary, no credential) listed the installed skill as `- uze:` — the clean frontmatter name, confirmed identical to what the doc predicted |
 | OpenCode | `~/.agents/skills/<entry>/SKILL.md` (one of several aliases) | V1: model-invoked `skill({ name: "uze" })` autonomous only. **V2: `/uze` slash (skills listed as commands with `(Skill)` label) + autonomous.** | OFFICIAL (opencode.ai/docs/skills + opencode.ai/v2/docs/skills) + **EMPIRICAL**: `opencode debug skill` pre-refactor listed `"name": "uze"` against `".../skills/uze-uze-uze"`; V2 `slash` frontmatter `v2/docs/skills` + PR #11390 feat skills as slash commands |
-| Gemini CLI | `~/.agents/skills/<entry>/SKILL.md` alias (confirmed in `skillManager.ts`) | Autonomous; `/skills` is a management command (list/link/enable/disable per `skillsCommand.ts`), not per-skill invocation. | SOURCE_CONFIRMED (`packages/core/src/skills/{skillLoader,skillManager}.ts`, `packages/cli/src/ui/commands/skillsCommand.ts`) — frontmatter `name`/`description` parsed directly, independent of directory, by the same code path OpenCode's pattern uses; **not independently re-run live this session**, so the exact tool-facing identifier for Gemini specifically is treated as a strong hypothesis, not confirmed to the same empirical standard as Codex/OpenCode |
 
 **Update pós-refactor (2026-08-21):** O naming colision-avoidance original
 (`uze-<package>-<skill>` → `uze-uze-uze` para este pacote) foi substituído por
@@ -72,7 +71,7 @@ questions in ordinary conversation (OpenCode additionally has a dedicated
 `plugins/uze/` is an ordinary Agent Plugins 1.0 package: `plugin.json` +
 `skills/uze/SKILL.md`. It was installed with the exact same `uze add`
 command as any other package, in a fully isolated `$HOME`/`$UZE_HOME`, and
-delivered identically to Claude Code, Codex, OpenCode, and Gemini CLI's
+delivered identically to Claude Code, Codex, OpenCode, and Antigravity CLI's
 existing Skill delivery mechanisms — the same `ManagedUserScopeReference`
 path every other Skill-only package already used before this milestone.
 
@@ -83,7 +82,6 @@ Installed plugin: uze
 Attached to claude-code: <home>/.claude/skills/uze-uze-uze
 Attached to codex: <home>/.agents/skills/uze-uze-uze
 Attached to opencode: <home>/.agents/skills/uze-uze-uze
-Attached to gemini: <home>/.agents/skills/uze-uze-uze
 
 # após refactor (builtin:uze, short-or-qualified)
 # novos installs: claude → uze bare (/uze), demais → uze-uze
@@ -92,7 +90,6 @@ plugins: [uze builtin:uze]
 Attached to claude-code: <home>/.claude/skills/uze -> state/attachments/claude/uze
 Attached to codex: <home>/.agents/skills/uze-uze -> store/.../skills/uze
 Attached to opencode: <home>/.agents/skills/uze-uze
-Attached to gemini: <home>/.agents/skills/uze-uze
 ```
 
 **Structural proof it needed no hardcoding**
@@ -139,7 +136,6 @@ Harnesses
   claude-code  bridged (Matched)
   codex        native
   opencode     native
-  gemini       bridged (Matched)
 Packages
   1 installed
   1 contributing here
@@ -149,11 +145,11 @@ Health
 
 ## Fase 13 — self-hosting proof
 
-| Step | Claude Code | Codex | OpenCode | Gemini CLI |
+| Step | Claude Code | Codex | OpenCode |
 |---|---|---|---|---|
-| Discovers (pós-refactor) | `~/.claude/skills/uze/` (legado `uze-uze-uze` ainda reutilizado se já existe) | `$HOME/.agents/skills/uze-uze/` | `~/.agents/skills/uze/` (V2 `slash:true`, legado `uze-uze` ainda reutilizado) | `~/.agents/skills/uze-uze/` alias |
-| Identifies itself as | `uze` (directory-derived bare, legado `uze-uze-uze` se receipt legado) | `uze` (frontmatter-derived) | `uze` (frontmatter, também `/uze` slash em V2) | `uze` (frontmatter-derived, by source inspection) |
-| User can explicitly invoke via | `/uze` (legado `/uze-uze-uze` ainda funciona se instalado antes) | `$uze` | **V1:** *(autonomous only, skill tool)* / **V2:** `/uze` (skill listed as command `(Skill)`) | *(autonomous only; `/skills` gestiona)* |
+| Discovers (pós-refactor) | `~/.claude/skills/uze/` (legado `uze-uze-uze` ainda reutilizado se já existe) | `$HOME/.agents/skills/uze-uze/` | `~/.agents/skills/uze/` (V2 `slash:true`, legado `uze-uze` ainda reutilizado)
+| Identifies itself as | `uze` (directory-derived bare, legado `uze-uze-uze` se receipt legado) | `uze` (frontmatter-derived) | `uze` (frontmatter, também `/uze` slash em V2)
+| User can explicitly invoke via | `/uze` (legado `/uze-uze-uze` ainda funciona se instalado antes) | `$uze` | **V1:** *(autonomous only, skill tool)* / **V2:** `/uze` (skill listed as command `(Skill)`)
 | User can invoke via natural language | Yes | Yes | Yes (primary mechanism) | Yes (primary mechanism) |
 | Can call `uze` CLI | Yes (bash tool) | Yes (shell tool) | Yes (bash tool) | Yes (shell tool) |
 | Project root available | Yes, session cwd | Yes, session cwd | Yes, session cwd | Yes, session cwd |
@@ -169,17 +165,13 @@ it demonstrably isn't.
 
 ## Limitations (atualizado pós-refactor/builtin)
 
-- Pós-refactor, `/uze` **é literal em Claude Code** (`uze` bare via `[logical, qualified]` `claude.rs:152`, `TESTED` `exposure_naming:158`). Legado `uze-uze-uze` persiste só como receipt reutilizado verbatim. Em Codex `$uze`, OpenCode V1 autônomo `skill({name:"uze"})` / **V2 `/uze` slash** (`slash: true` default, PR #11390), Gemini autônomo. Natural-language trigger via `description` permanece o mais uniforme. Nenhum Core change escondeu a assimetria anterior — o naming foi corrigido para short-or-qualified.
-- Gemini CLI's exact tool-facing identifier was not independently
-  re-confirmed live this session (unlike Codex/OpenCode); the claim rests
-  on source-code inspection, one level below the empirical standard applied
-  to the other three.
+- Pós-refactor, `/uze` **é literal em Claude Code** (`uze` bare via `[logical, qualified]` `claude.rs:152`, `TESTED` `exposure_naming:158`). Legado `uze-uze-uze` persiste só como receipt reutilizado verbatim. Em Codex `$uze`, OpenCode V1 autônomo `skill({name:"uze"})` / **V2 `/uze` slash** (`slash: true` default, PR #11390). Natural-language trigger via `description` permanece o mais uniforme. Nenhum Core change escondeu a assimetria anterior — o naming foi corrigido para short-or-qualified.
 - The agentic reasoning quality (does the Skill draft a *good* `AGENTS.md`,
   classify content well) has no automated eval yet — see
   `tests/fixtures/context-eval-scenarios/` for the fixture set and rubric a
   future runner (or manual pass) should use.
 - No cross-harness automated test exercises the Skill actually running
-  inside a live Claude/Codex/OpenCode/Gemini session end-to-end (that would
+  inside a live Claude/Codex/OpenCode session end-to-end (that would
   require credentials); the deterministic contract (install, discovery,
   JSON shape, ownership) is tested, the reasoning is not.
 

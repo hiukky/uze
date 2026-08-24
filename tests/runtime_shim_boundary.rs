@@ -2,11 +2,11 @@
 //! §13, ADR-014): "UZE runtime shims are USER ENTRY boundaries. Internal
 //! integration code must invoke upstream harness binaries directly."
 //!
-//! A bare `Command::new("claude"|"codex"|"gemini"|"opencode")` PATH lookup
+//! A bare `Command::new("claude"|"codex"|"opencode"|"agy")` PATH lookup
 //! from inside `uze-integrations` risks recursing into UZE's own
 //! `~/.uze/shims/<vendor>` once `uze setup <harness>` has ever run (it can
 //! sit ahead of the real binary on `$PATH`) — the exact bug this milestone
-//! generalized the fix for, from Claude alone to Codex and Gemini too, and
+//! generalized the fix for, from Claude alone to Codex too, and
 //! caught a real regression of by re-checking here. This test scans every
 //! `.rs` source file under `crates/uze-integrations/src/` and fails if any
 //! non-comment line spawns a vendor binary by its bare literal name instead
@@ -22,7 +22,7 @@
 
 use std::{fs, path::Path};
 
-const VENDOR_NAMES: [&str; 4] = ["claude", "codex", "gemini", "opencode"];
+const VENDOR_NAMES: [&str; 4] = ["claude", "codex", "opencode", "agy"];
 
 fn integrations_src_dir() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("crates/uze-integrations/src")

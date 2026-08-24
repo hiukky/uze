@@ -85,7 +85,9 @@ fn app(root: &Path) -> UzeApplication {
             Box::new(StubIntegration {
                 stub_id: "opencode",
             }),
-            Box::new(StubIntegration { stub_id: "gemini" }),
+            Box::new(StubIntegration {
+                stub_id: "antigravity",
+            }),
         ],
     )
 }

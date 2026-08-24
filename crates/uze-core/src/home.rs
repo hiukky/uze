@@ -104,8 +104,8 @@ impl UzeHome {
         self.runtime_dir().join(integration).join(session)
     }
 
-    /// Where the PATH shim (`claude`, `codex`, `opencode`, `gemini`, …)
-    /// lives. Never on `PATH` unless the operator has explicitly enabled
+    /// Where the PATH shim (`claude`, `codex`, `opencode`, `antigravity`,
+    /// …) lives. Never on `PATH` unless the operator has explicitly enabled
     /// runtime integration and added it themselves — UZE does not edit
     /// shell rc files.
     pub fn shims_dir(&self) -> PathBuf {

@@ -115,8 +115,8 @@ implemented and tested. Full report in the session record; summary here.
   `exposure_plan` signature changes. The one place vendor knowledge
   legitimately exists is a single explicit constant in
   `uze-application/src/application.rs`:
-  `BRIDGE_INTEGRATIONS = [("claude-code", "CLAUDE.md"), ("gemini", "GEMINI.md")]`
-  — Codex and OpenCode are deliberately absent from it, because they need
+  `BRIDGE_INTEGRATIONS = [("claude-code", "CLAUDE.md")]`
+  — Codex, OpenCode and Antigravity are deliberately absent from it, because they need
   nothing beyond the shared file.
 
 **Empirical (L2a) evidence, no credentials required:** `codex debug
@@ -129,7 +129,7 @@ debug surfaces (`debug config`, `debug agent <name>`) do not expose
 instructions content pre-session, so its native `AGENTS.md` preference is
 confirmed by design-time documentation research and by this session's L1
 tests, not re-confirmed live — reported as such, not inflated to
-`VERIFIED`. Claude Code and Gemini CLI's bridge mechanism (`@AGENTS.md`
+`VERIFIED`. Claude Code's bridge mechanism (`@AGENTS.md`
 import) is implemented and tested at the file level only; confirming a real
 model actually resolves the import requires credentials this session did
 not use, so that leg stays `UNVERIFIED` at the conversational tier.

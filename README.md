@@ -18,7 +18,7 @@ each harness supports — a real plugin where one exists, native capabilities
 where it doesn't, a safe adapter only as a last resort.
 
 One project context (`AGENTS.md`) replaces separately maintained `.claude`,
-`.codex`, `.opencode`, and Gemini configuration. uze keeps a single source
+`.codex`, `.opencode`, and Antigravity's config area under `~/.gemini`. uze keeps a single source
 of truth and projects it to each harness safely.
 
 ```text
@@ -26,9 +26,9 @@ Marketplace / Project
         │
         ▼
        uze
-   ┌────┼────┬────────┐
+   ┌────┼────┬─────────┐
    ▼    ▼    ▼         ▼
-Claude Codex OpenCode Gemini
+Claude Codex OpenCode Antigravity
 ```
 
 ## Why uze
@@ -49,7 +49,7 @@ Claude Codex OpenCode Gemini
 | Claude Code | Native plugin | ✅ | ✅ | Bridged | ◌ Experimental |
 | Codex | Native plugin | ✅ | ✅ | Native | — |
 | OpenCode | Native capabilities | ✅ | ✅ | Native | — |
-| Gemini CLI | Native extension | ✅ | ✅ | Bridged | — |
+| Antigravity CLI | Native plugin | ✅ | ✅ | Native | — |
 
 `✅` Ready/native · `◐` Partial/adapted · `◌` Experimental · `—` Not
 implemented. "Native" means a real, first-class mechanism per harness, not
@@ -58,6 +58,14 @@ for exactly what each cell means and its evidence, or
 [`crates/uze-integrations/README.md`](crates/uze-integrations/README.md) for
 the evidence-graded, per-harness compatibility audit (status per surface,
 package-coverage safety, lifecycle, and each integration's own README).
+
+> **Antigravity CLI** is the Google-family v0 harness (ADR-027). The
+> canonical package is itself a valid Antigravity plugin — no
+> Antigravity-specific files required from the author. Commands route
+> through Antigravity's official commands→Skills conversion (`◐`): user
+> invocation is native, the model-discoverable property degrades and is
+> reported honestly. Context is **Native**: Antigravity reads `AGENTS.md`
+> (and `GEMINI.md`) directly, so no `@AGENTS.md` bridge is generated.
 
 | Capability | Status |
 |---|---|
@@ -70,7 +78,7 @@ package-coverage safety, lifecycle, and each integration's own README).
 ## Today
 
 - Harness manager — detect, provision, and set up Claude Code, Codex,
-  OpenCode, and Gemini CLI.
+  OpenCode, and Antigravity CLI.
 - Plugin manager — install once, store bytes, deliver natively per harness.
 - Context manager — one `AGENTS.md`, projected to each harness's own
   mechanism.

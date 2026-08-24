@@ -1,22 +1,22 @@
 //! Regression coverage for the cross-harness naming collision fixed
-//! alongside `IntegrationPort::shared_agent_skill_root`: OpenCode, Codex,
-//! and Gemini CLI all discover Agent Skills from the same physical
-//! `~/.agents/skills` directory. Before the fix, OpenCode's own
-//! `short_then_qualified` naming policy (bare name first) and Codex/Gemini's
-//! always-qualified default policy each computed a name independently, so
-//! installing a package attached to all three left *two* symlinks for the
-//! identical skill sitting in that one shared folder — visible to OpenCode,
-//! which scans the whole directory, as a duplicate `/uze` and `/uze-uze`
-//! slash command.
+//! alongside `IntegrationPort::shared_agent_skill_root`: OpenCode and Codex
+//! both discover Agent Skills from the same physical `~/.agents/skills`
+//! directory (Antigravity's global-skills root is exclusive, and Claude's
+//! is too). Before the fix, OpenCode's own `short_then_qualified` naming
+//! policy (bare name first) and Codex's always-qualified default policy
+//! each computed a name independently, so installing a package attached to
+//! both left *two* symlinks for the identical skill sitting in that one
+//! shared folder — visible to OpenCode, which scans the whole directory, as
+//! a duplicate `/uze` and `/uze-uze` slash command.
 //!
 //! Deterministic by construction: a `NoopProcessRunner` covers `.provision()`,
 //! detection is forced present via an `AlwaysPresent` wrapper, and — since
 //! this fixture's one Skill now also qualifies for Generated Native
 //! Package/Extension (ADR-020/ADR-021), which shells out to the real
-//! `codex`/`gemini` executable directly via `Command::new`, bypassing the
-//! injected `ProcessRunner` — a stateful fake `codex`/`gemini` pair
-//! (`fake_codex_and_gemini_bin_dir`) is prepended to `PATH` for the
-//! duration of the test. No real host binary is ever spawned.
+//! `codex` executable directly via `Command::new`, bypassing the injected
+//! `ProcessRunner` — a stateful fake `codex` binary
+//! (`fake_codex_bin_dir`) is prepended to `PATH` for the duration of the
+//! test. No real host binary is ever spawned.
 
 use std::{
     fs,
@@ -24,9 +24,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use uze::integrations::{
-    codex::CodexIntegration, gemini::GeminiIntegration, opencode::OpenCodeIntegration,
-};
+use uze::integrations::{codex::CodexIntegration, opencode::OpenCodeIntegration};
 use uze::{
     PackageSource, UzeApplication, UzeHome,
     exposure::{ExposurePlan, PackageExposurePlan},
@@ -146,25 +144,23 @@ impl<T: IntegrationPort> IntegrationPort for AlwaysPresent<T> {
     }
 }
 
-/// Writes fake, STATEFUL `codex`/`gemini` executables that understand
-/// exactly the subcommands this test's package-level delivery invokes —
-/// `plugin marketplace add/list --json`, `plugin add/list --json`,
-/// `extensions link --consent`, `extensions list --output-format=json` —
-/// well enough for a full attach-then-inspect round trip to report Matched,
+/// Writes a fake, STATEFUL `codex` executable that understands exactly the
+/// subcommands this test's package-level delivery invokes —
+/// `plugin marketplace add/list --json`, `plugin add/list --json` — well
+/// enough for a full attach-then-inspect round trip to report Matched,
 /// deterministically and without touching any real harness state.
 ///
-/// Since this fixture's one Skill has no vendor envelope, it now qualifies
-/// for Generated Native Package/Extension (ADR-020/ADR-021) —
-/// `attach_package` shells out to the real, PATH-resolved executable via
-/// `Command::new`, not through the injected `ProcessRunner` this file
-/// already uses for `.provision()`, so without this the test would
-/// accidentally depend on the developer's real, locally-installed
-/// `codex`/`gemini` (see spec §18: "any test that accidentally shells to
-/// the developer's real harness is a test bug" — and CI has neither
-/// binary installed). Returns a PATH prefix to prepend ahead of the real
-/// one.
+/// Since this fixture's one Skill has no vendor envelope, it qualifies for
+/// Generated Native Package (ADR-020/ADR-021) — `attach_package` shells out
+/// to the real, PATH-resolved executable via `Command::new`, not through the
+/// injected `ProcessRunner` this file already uses for `.provision()`, so
+/// without this the test would accidentally depend on the developer's real,
+/// locally-installed `codex` (see spec §18: "any test that accidentally
+/// shells to the developer's real harness is a test bug" — and CI has
+/// neither binary installed). Returns a PATH prefix to prepend ahead of the
+/// real one.
 #[cfg(unix)]
-fn fake_codex_and_gemini_bin_dir(root: &Path) -> PathBuf {
+fn fake_codex_bin_dir(root: &Path) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
 
     let dir = root.join("fake-bin");
@@ -229,51 +225,11 @@ exit 0
         state = state.display(),
     );
 
-    // Gemini: persists the linked extension's name (read from the
-    // generated `gemini-extension.json` it was pointed at) and source
-    // directory, then answers `extensions list` truthfully from that state.
-    let gemini_script = format!(
-        r#"#!/bin/sh
-state="{state}"
-case "$1" in
-  extensions)
-    case "$2" in
-      link)
-        dir="$3"
-        name=$(sed -n 's/.*"name" *: *"\([^"]*\)".*/\1/p' "$dir/gemini-extension.json" | head -1)
-        printf '%s' "$name" > "$state/extension_name"
-        printf '%s' "$dir" > "$state/extension_source"
-        exit 0
-        ;;
-      list)
-        if [ -f "$state/extension_name" ]; then
-          name=$(cat "$state/extension_name")
-          source=$(cat "$state/extension_source")
-          printf '[{{"name":"%s","installMetadata":{{"source":"%s","type":"link"}},"isActive":true}}]' "$name" "$source"
-        else
-          printf '[]'
-        fi
-        exit 0
-        ;;
-      uninstall)
-        rm -f "$state/extension_name" "$state/extension_source"
-        exit 0
-        ;;
-    esac
-    ;;
-esac
-exit 0
-"#,
-        state = state.display(),
-    );
-
-    for (name, script) in [("codex", codex_script), ("gemini", gemini_script)] {
-        let path = dir.join(name);
-        fs::write(&path, script).unwrap();
-        let mut permissions = fs::metadata(&path).unwrap().permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&path, permissions).unwrap();
-    }
+    let path = dir.join("codex");
+    fs::write(&path, codex_script).unwrap();
+    let mut permissions = fs::metadata(&path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&path, permissions).unwrap();
     dir
 }
 
@@ -296,14 +252,14 @@ fn skill_fixture(root: &Path, package_id: &str, skill_name: &str) -> PathBuf {
 }
 
 #[test]
-fn opencode_codex_and_gemini_share_exactly_one_symlink_for_the_same_skill() {
-    let root = temp("three-harness");
+fn opencode_and_codex_share_exactly_one_symlink_for_the_same_skill() {
+    let root = temp("two-harness");
     let agents_home = root.join("agents-home");
     let uze_home = UzeHome::at(root.join("uze-home"));
 
-    // Codex and Gemini registered *before* OpenCode, deliberately: with the
-    // old bare-first/qualified-on-collision policy the attach order decided
-    // the group's physical name. The stable-label rule removes that hazard
+    // Codex registered *before* OpenCode, deliberately: with the old
+    // bare-first/qualified-on-collision policy the attach order decided the
+    // group's physical name. The stable-label rule removes that hazard
     // entirely: every member derives the SAME single namespaced candidate
     // (`acme:review`), so whichever attaches first writes the one physical
     // entry the group shares — no harness preference, no order sensitivity.
@@ -311,10 +267,6 @@ fn opencode_codex_and_gemini_share_exactly_one_symlink_for_the_same_skill() {
         uze_home.clone(),
         vec![
             Box::new(AlwaysPresent(CodexIntegration::new(
-                agents_home.clone(),
-                uze_home.clone(),
-            ))),
-            Box::new(AlwaysPresent(GeminiIntegration::new(
                 agents_home.clone(),
                 uze_home.clone(),
             ))),
@@ -327,7 +279,7 @@ fn opencode_codex_and_gemini_share_exactly_one_symlink_for_the_same_skill() {
         Box::new(NoopProcessRunner),
     );
 
-    let fake_bin = fake_codex_and_gemini_bin_dir(&root);
+    let fake_bin = fake_codex_bin_dir(&root);
     let original_path = std::env::var("PATH").unwrap();
     // SAFETY: this file has exactly one test, so no concurrent access to
     // the process-global `PATH` within this binary; restored immediately
@@ -350,7 +302,7 @@ fn opencode_codex_and_gemini_share_exactly_one_symlink_for_the_same_skill() {
         entries,
         vec!["acme:review".to_owned()],
         "exactly one physical entry must exist for the one skill shared by \
-         opencode/codex/gemini in ~/.agents/skills, not one per harness, and \
+         opencode/codex in ~/.agents/skills, not one per harness, and \
          it must be the stable namespaced label regardless of attach order: \
          {entries:?}"
     );
@@ -358,8 +310,8 @@ fn opencode_codex_and_gemini_share_exactly_one_symlink_for_the_same_skill() {
     let inspection = application.inspect_plugin("acme").unwrap();
     assert_eq!(
         inspection.managed_state.matched,
-        3,
-        "all three harnesses must still each have a matched receipt, even \
+        2,
+        "both harnesses must still each have a matched receipt, even \
          though they share one physical artifact: {:?}",
         inspection
             .reconciliation

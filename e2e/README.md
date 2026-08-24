@@ -63,13 +63,15 @@ exits non-zero when any tier fails.
 | Claude Code | — | managed user-scope reference | `claude mcp add --scope user` | v0 |
 | Codex | local marketplace catalogue (published) | managed user-scope reference | `codex mcp add` | v0 |
 | OpenCode | — | managed user-scope reference (standard) | `opencode.json` `mcp.*` | v0 |
-| Gemini CLI | `extensions link` at the store (no catalogue) | managed user-scope reference (standard) | `gemini mcp add --scope user` | **experimental** |
+| Antigravity CLI | `agy plugin install` (canonical `plugin.json` is the vendor manifest; staged copy at ~/.gemini/config/plugins) | managed global-skills reference (CLI-specific root) | `agy mcp add` | v0 (real-binary dogfood 1.1.19) |
 
-Codex and Gemini deliver a whole package natively through incompatible
-mechanisms — one needs a published catalogue, the other needs none — through
-the same `IntegrationPort`. That pair is the evidence that package publication
+Codex and Antigravity deliver a whole package natively through incompatible
+mechanisms — the first needs a published catalogue, the second needs none
+and copies — through the same `IntegrationPort`. That pair (with Claude
+joining the no-catalogue side) is the evidence that package publication
 and package-native delivery are independent concepts rather than one
-Codex-shaped one.
+Codex-shaped one. See `docs/architecture/antigravity-compatibility.md`
+for the full Antigravity map (historical migration-audit record, ADR-027).
 
 ## Adding a harness
 
@@ -108,46 +110,6 @@ preflight against `api.anthropic.com` that ignores `ANTHROPIC_BASE_URL`, so it
 cannot start on the internal network. Headless `claude -p` routes through the
 gateway there without issue, which is what every tier uses.
 
-## Gemini CLI — experimental, and what it cost
-
-Gemini CLI is registered as an **EXPERIMENTAL / CONFORMANCE** fourth harness.
-It exists to test whether the vendor-neutral core generalises, not as a v0
-support claim. Three findings from that work are recorded here rather than
-left in code comments, because each is a deliberate limitation someone will
-otherwise rediscover the hard way.
-
-**1. `gemini extensions link` is used as a managed integration mechanism,
-though Gemini positions it as a development workflow.** The alternative,
-`gemini extensions install`, copies the package into `~/.gemini/extensions` —
-a second copy of bytes the Store already owns. That breaks install-once and
-makes a later detach unable to distinguish UZE's copy from content the user
-put there. `link` keeps the Store the single copy, runs non-interactively with
-`--consent`, and leaves the stored package untouched on uninstall (verified).
-The trade-off is real: UZE depends on a verb the vendor documents for
-development.
-
-**2. Enabled/disabled is a user preference, not an ownership signal, so it
-takes no part in safe detach.** It is also not observable: the listing's
-`isActive` stays `true` after `gemini extensions disable` (0.56.0), with the
-real state living in `extension-enablement.json` as path-scoped override
-globs. Reimplementing that resolution would mean guessing at vendor internals.
-And even if it were observable, treating "disabled" as drift would stop
-`uze remove` from detaching UZE's own extension — worse behaviour, not safer.
-Ownership is proven by identity, source and install type.
-
-**3. A Skill delivered outside an extension has no model-free discovery in
-Gemini.** There is no `gemini skills list`; skills only appear in the listing
-when they belong to an installed extension. The lab therefore declares no
-probe for `SYMLINK_REFERENCE` on Gemini and the tier records `Unverified`,
-rather than fabricating evidence from a command that proves something else.
-
-Two smaller notes: `gemini extensions list --output-format=json` writes its
-payload to **stderr** in 0.56.0, and a user-scope MCP server is suppressed
-entirely in an untrusted folder, so its connection state is not a stable
-signal. Gemini has no gateway-routable behavioural tier — a model turn needs a
-real Google account — so its `behavior` spec is `None` and L2b records it as
-`Unverified` instead of skipping it silently.
-
 ## Known coverage gaps
 
 Recorded rather than papered over, because two harnesses reporting
@@ -160,10 +122,6 @@ Recorded rather than papered over, because two harnesses reporting
   are probed one level deeper and do report connectivity.
 - **The tool-name budget check is a floor, not a guarantee.** See
   `TOOL_NAME_RESERVE` in `src/tier.rs`.
-- **Gemini proves registration, not connectivity, for MCP.** `gemini mcp list`
-  emits no machine-readable output, and a user-scope server is disabled
-  outright in an untrusted folder, so the probe asserts the entry is listed as
-  stdio and says exactly that in its claim.
 - **UZE does not plumb an `mcp.json` `env` block** into its vendor-config
   writes (`environment` is recorded as an empty reference list in all three
   integrations), so the fixture proof travels in `args`, the one channel every

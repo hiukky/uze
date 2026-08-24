@@ -9,8 +9,9 @@
 //! never touched. Each harness encodes the label in its own physical
 //! representation (vendor owns physical syntax): Claude via its native
 //! plugin namespace, Codex verbatim (`flow:review` — verified against
-//! codex-cli 0.149.0), OpenCode verbatim (`flow:review.md`), Gemini via
-//! nested vendor paths (`flow/review.toml` → `/flow:review`).
+//! codex-cli 0.149.0), OpenCode verbatim (`flow:review.md`), Antigravity
+//! verbatim (`flow:review` — `agy plugin validate` accepts `:` in skill
+//! names).
 
 use std::{
     fs,
@@ -19,13 +20,13 @@ use std::{
 };
 
 use uze::integrations::{
-    claude::ClaudeIntegration, codex::CodexIntegration, gemini::GeminiIntegration,
+    antigravity::AntigravityIntegration, claude::ClaudeIntegration, codex::CodexIntegration,
     opencode::OpenCodeIntegration,
 };
 use uze::{
     PackageSource, Resource, UzeApplication, UzeEngine, UzeHome, UzeStore,
     capability::CapabilityKind,
-    exposure::{ExposureMechanism, ExposurePlan, PackageExposurePlan},
+    exposure::{ExposurePlan, PackageExposurePlan},
     integration::{
         AttachmentInspection, AttachmentReceipt, HarnessDetection, IntegrationPort,
         ManagedArtifact, qualified_capability_name,
@@ -201,7 +202,7 @@ fn label_is_plugin_namespace_plus_capability_name_and_stable() {
             root.join("config/opencode/opencode.json"),
             UzeHome::at(&root),
         )) as Box<dyn IntegrationPort>,
-        Box::new(GeminiIntegration::new(
+        Box::new(AntigravityIntegration::new(
             root.join("agents"),
             UzeHome::at(&root),
         )) as Box<dyn IntegrationPort>,
@@ -473,24 +474,20 @@ fn physical_representations_preserve_the_semantic_label() {
         vec!["workflow:review.md"]
     );
 
-    // Gemini: nested vendor path (Gemini converts path separator to colon).
-    let gemini = GeminiIntegration::new(root.join("agents"), home.clone());
-    mark_setup(&home, &gemini);
-    assert_eq!(
-        gemini.exposure_name_candidates(command),
-        vec!["workflow/review.toml"]
-    );
-    let plan = gemini.exposure_plan(command);
-    let ExposureMechanism::ManagedFile { target_file, .. } = &plan.mechanism else {
-        panic!("expected managed file");
-    };
-    assert!(target_file.ends_with("commands/workflow/review.toml"));
-
     // Codex: verbatim colon label.
     let codex = CodexIntegration::new(root.join("agents"), home.clone());
     mark_setup(&home, &codex);
     assert_eq!(
         codex.exposure_name_candidates(command),
+        vec!["workflow:review"]
+    );
+
+    // Antigravity: verbatim colon label (vendor name pattern accepts `:` in
+    // skill names — verified against agy's own `plugin validate`).
+    let antigravity = AntigravityIntegration::new(root.join("agents"), home.clone());
+    mark_setup(&home, &antigravity);
+    assert_eq!(
+        antigravity.exposure_name_candidates(command),
         vec!["workflow:review"]
     );
     fs::remove_dir_all(root).unwrap();
@@ -500,7 +497,7 @@ fn physical_representations_preserve_the_semantic_label() {
 
 #[test]
 fn generated_and_explicit_package_coverage_keep_canonical_identities() {
-    // Generated: workflow package, Claude + Gemini.
+    // Generated route: workflow package, Claude + Antigravity.
     let (root, home, package, resources) = stored_workflow("coverage-generated");
     let resources: Vec<_> = resources.iter().collect();
     let claude = ClaudeIntegration::new(root.join("claude"), home.clone());
@@ -508,15 +505,15 @@ fn generated_and_explicit_package_coverage_keep_canonical_identities() {
         .package_exposure_plan(&package, &resources)
         .expect("generatable");
     assert_eq!(plan.provided_resource_identities.len(), 2);
-    let gemini = GeminiIntegration::new(root.join("agents"), home.clone());
-    let gplan = gemini
+    let antigravity = AntigravityIntegration::new(root.join("agents"), home.clone());
+    let aplan = antigravity
         .package_exposure_plan(&package, &resources)
-        .expect("generatable");
-    assert_eq!(gplan.provided_resource_identities.len(), 2);
+        .expect("natively expressible");
+    assert_eq!(aplan.provided_resource_identities.len(), 2);
     for identity in plan
         .provided_resource_identities
         .iter()
-        .chain(gplan.provided_resource_identities.iter())
+        .chain(aplan.provided_resource_identities.iter())
     {
         assert!(
             identity.contains("commands/review.md:") || identity.contains("skills/review/"),

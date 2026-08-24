@@ -1,5 +1,5 @@
 //! OpenCode Agent Skill exposure — natively discovers a UZE-managed symlink
-//! at `~/.agents/skills`, the same shared root Codex and Gemini CLI use.
+//! at `~/.agents/skills`, the same shared root Codex uses.
 
 use std::path::{Path, PathBuf};
 

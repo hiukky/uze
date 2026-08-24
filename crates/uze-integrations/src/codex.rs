@@ -229,9 +229,9 @@ impl IntegrationPort for CodexIntegration {
         detect_binary(&self.provisioning_executable())
     }
 
-    /// OpenCode and Gemini CLI also discover Skills from this exact same
-    /// `~/.agents/skills` directory; see `OpenCodeIntegration`'s override of
-    /// the same method for why this must be reported.
+    /// OpenCode also discovers Skills from this exact same
+    /// `~/.agents/skills` directory; see `OpenCodeIntegration`'s override
+    /// of the same method for why this must be reported.
     fn shared_agent_skill_root(&self) -> Option<PathBuf> {
         Some(self.skills_dir.clone())
     }

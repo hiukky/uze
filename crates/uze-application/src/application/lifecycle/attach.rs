@@ -123,7 +123,7 @@ impl UzeApplication {
         };
         let resource_id = resource.identity();
         // Only Agent Skills live in a directory shared across integrations
-        // (Codex, Gemini, OpenCode all read `~/.agents/skills`); a
+        // (Codex, OpenCode all read `~/.agents/skills`); a
         // Command's registry (e.g. OpenCode's user-global commands dir) is
         // per-integration, so no shared-root group applies to it.
         let shared_root = (resource.capability.kind == CapabilityKind::AgentSkill)
@@ -199,7 +199,7 @@ impl UzeApplication {
         // `shared_root` prefers the resource's bare logical name first (only
         // OpenCode does today, for its V2 slash-command UX), that preference
         // governs for the whole group — otherwise whichever of
-        // Codex/Gemini/OpenCode attaches before OpenCode would lock the
+        // Codex/OpenCode attaches before OpenCode would lock the
         // group onto the always-qualified fallback via the reuse check
         // above, even though the bare name was free.
         let candidates = shared_root

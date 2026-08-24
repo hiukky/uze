@@ -1,15 +1,15 @@
 //! The official-installer provisioning flow shared, byte-for-byte except a
-//! display label, between Claude Code and Codex: both install/update via a
-//! shelled installer script, then verify with `<executable> --version`. No
+//! display label, between Claude Code, Codex, and Antigravity CLI: each
+//! installs/updates via a shelled installer script (or the harness's own
+//! update verb), then verifies with `<executable> --version`. No
 //! vendor knowledge lives here — every vendor-specific fact (the install/
 //! update commands themselves, the executable name, the display label used
 //! in the platform-support message) is a parameter the caller supplies.
 //!
-//! Gemini (`npm install -g`, hardcoded package name, no injected
-//! `ProcessSpec`) and OpenCode (its own `opencode`/`opencode2` alias
-//! resolution) were compared against this shape during the audit that
-//! produced this module and found to diverge in real, load-bearing ways —
-//! not merely different constants — so neither was folded in here.
+//! OpenCode (its own `opencode`/`opencode2` alias resolution) was compared
+//! against this shape during the audit that produced this module and found
+//! to diverge in real, load-bearing ways — not merely different constants —
+//! so it was not folded in here.
 
 use uze_core::{
     Result,

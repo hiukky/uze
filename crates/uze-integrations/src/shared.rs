@@ -14,8 +14,8 @@
 //! by design, not merged here.
 //!
 //! Not part of this crate's public API: every integration composition root
-//! (`claude.rs`, `codex.rs`, `gemini.rs`, `opencode.rs`) is still the only
-//! thing `uze-application` or any downstream crate ever names.
+//! (`claude.rs`, `codex.rs`, `opencode.rs`, `antigravity.rs`) is still the
+//! only thing `uze-application` or any downstream crate ever names.
 
 pub(crate) mod command;
 pub(crate) mod path;

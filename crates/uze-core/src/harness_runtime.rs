@@ -12,7 +12,7 @@
 //!
 //! This is `RUNTIME INFRASTRUCTURE`, not `CONTEXT DELIVERY POLICY`: building
 //! this does not by itself decide that runtime projection replaces the
-//! existing project-root `CLAUDE.md`/`GEMINI.md` bridge
+//! existing project-root `CLAUDE.md` bridge
 //! (`uze-application`'s `BRIDGE_INTEGRATIONS`) — that remains a separate,
 //! later decision pending empirical comparison.
 

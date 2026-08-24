@@ -322,43 +322,38 @@ pub const HARNESSES: &[HarnessSpec] = &[
         }),
     },
     HarnessSpec {
-        // EXPERIMENTAL / CONFORMANCE fourth harness. Present to exercise the
-        // vendor-neutral core against a differently shaped native delivery:
-        // Gemini is linked straight at the stored package and needs no
-        // catalogue, so its integration leaves `republish_packages` at the
-        // default. Not a v0 support claim.
-        id: "gemini",
-        uze_name: "gemini",
-        executable: "gemini",
+        id: "antigravity",
+        uze_name: "antigravity",
+        executable: "agy",
         probes: &[
             (
                 ArtifactKind::IntegrationOwned,
                 Probe {
-                    // Emits its JSON payload on stderr in 0.56.0; the tier
-                    // reads combined output, so this stays correct either way.
-                    arguments: &["extensions", "list", "--output-format=json"],
-                    required: &["\"type\": \"link\"", "\"isActive\": true"],
+                    // `agy plugin list` is machine-readable JSON on stdout
+                    // (verified against 1.1.19): the attached plugin name
+                    // appears inside `imports` if and only if the install
+                    // registered it.
+                    arguments: &["plugin", "list"],
+                    required: &["\"imports\"", "\"name\""],
                     matches_attached_name: true,
-                    claim: "Gemini reports the UZE-linked extension as active and installed by link, pointing at the UZE store",
+                    claim: "Antigravity lists the UZE-staged plugin registration in its own import manifest",
                 },
             ),
             (
                 ArtifactKind::VendorConfigEntry,
                 Probe {
-                    // `gemini mcp list` has no machine-readable output, and a
-                    // server's connection state additionally depends on
-                    // folder trust — so this is registration evidence, not
-                    // connectivity evidence, and says so.
+                    // `agy mcp list` is human-readable; a stdio server shows
+                    // its type — registration evidence, not connectivity.
                     arguments: &["mcp", "list"],
                     required: &["stdio"],
                     matches_attached_name: true,
-                    claim: "Gemini lists the UZE-registered MCP server in its user scope (registration only: `gemini mcp list` emits no machine-readable state)",
+                    claim: "Antigravity lists the UZE-registered MCP server in its global config (registration only: `agy mcp list` shows no connection state)",
                 },
             ),
-            // No probe is declared for SYMLINK_REFERENCE: Gemini offers no
-            // model-free way to list skills discovered outside an extension.
-            // The tier records that as Unverified rather than inventing
-            // evidence for it.
+            // No probe is declared for SYMLINK_REFERENCE: Antigravity offers
+            // no model-free way to list skills discovered outside a plugin
+            // (`/skills` is TUI-only). The tier records that as Unverified
+            // rather than inventing evidence for it.
         ],
         behavior: None,
     },

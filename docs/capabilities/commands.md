@@ -41,14 +41,17 @@ plugin/
 |---|---|---|---|---|---|
 | Claude Code | Yes (plugin `commands/` dir + manifest `commands` field; `~/.claude/commands` legacy still works; vendor has *merged* the concept into Skills — a command file and a skill file both create `/name`) | flat `.md` | `$ARGUMENTS` | explicit/generated native plugin | **NATIVE** (package) |
 | OpenCode V2 | Yes (`~/.config/opencode/commands/`, `.opencode/commands/`, config `commands` key) | `.md` + frontmatter (`description`, `agent`, `model`, `subtask`=ignored) | `$ARGUMENTS`, `$1..$N`; `` !`cmd` `` shell interpolation | managed symlink to canonical file | **NATIVE** (direct standard) |
-| Gemini CLI | Yes (`~/.gemini/commands/*.toml`, project-level, extension `commands/` dir) | TOML (`prompt` required, `description` optional) | `{{args}}`; `!{...}` (shell, confirmed before run); `@{...}` (file) | generated user-scope TOML; generated extension commands | **NATIVE** (generated) |
 | Codex | **No custom-command format** — `~/.codex/prompts/*.md` officially **deprecated** in favor of Skills — but an official **explicit-invocation-only Skill** mechanism exists | `SKILL.md` + `agents/openai.yaml` (`policy.allow_implicit_invocation: false`) | — (out of v0 scope) | generated user-invokable Skill with explicit-only policy | **NATIVE** (official explicit-only Skill) |
+| Antigravity CLI | **No custom-command format** — its official migration path converts legacy commands to Skills (`commands: N legacy commands converted to skills`, verified against agy 1.1.19); Skills are model-discoverable with **no observable explicit-only mechanism** | `SKILL.md` (generated from canonical `.md`; converted `commands/*.md` inside plugins become Skills at load) | — (out of v0 scope) | generated Skill (stable namespaced label; no policy file) | **ADAPTED** (user invocation native; explicit-only property degrades — declared, never hidden) |
 
 Per-harness classification: Claude `NATIVE` (package), OpenCode `NATIVE`
-(direct), Gemini `NATIVE` (generated), Codex `NATIVE` (official
+(direct), Codex `NATIVE` (official
 explicit-invocation-only Skill mechanism — semantics preserved through a
 supported primitive, per the definition below; the physical artifact is a
-Skill, the canonical identity stays `Command`). Never `UNKNOWN`-by-default:
+Skill, the canonical identity stays `Command`), Antigravity `ADAPTED`
+(commands→Skills conversion is the only primitive and Skills are
+model-discoverable — the explicit-only property is unprovable, so the route
+is declared Adapted, not Native). Never `UNKNOWN`-by-default:
 each is stated from current official behavior.
 
 ## Routing & coverage
@@ -63,10 +66,11 @@ Exact package coverage is mandatory and per-surface:
 - Claude generated envelope covers `skills/` + `commands/` + `mcp.json`
   servers — nothing else; an explicit envelope covers only what its
   `commands` field / conventional `commands/` directory declares.
-- Gemini generated extension covers commands it can represent (canonical
-  `.md` translated to `.toml`); an **explicit** extension never claims
-  canonical commands (its commands are vendor TOML) — those fall back to
-  capability-level generated user-scope TOML.
+- Antigravity's canonical manifest IS the vendor plugin manifest, and its
+  generated envelope carries the conventional `commands/` surface, which
+  the CLI converts to Skills at load — coverage and generation agree by
+  construction; resources outside the covered surfaces fall back per
+  resource.
 - Codex generated plugin cannot represent commands at all (its native
   format has no command surface); commands fall back to the NATIVE
   explicit-invocation-only Skill route — never blanket-covered.
@@ -78,7 +82,6 @@ Not portable in v0, and deliberately not translated:
 | Harness | Placeholder |
 |---|---|
 | OpenCode | `$ARGUMENTS`, `$1..$N` |
-| Gemini | `{{args}}` (shell-escaped inside `!{...}`) |
 | Claude | `$ARGUMENTS` |
 
 No proven, safe universal mapping exists; a canonical placeholder would be
@@ -121,30 +124,31 @@ UNVERIFIED, not invented.
 
 ## Semantic matrix (UZE Command vs harness surfaces)
 
-| Semantic property | UZE Command | Claude (plugin `commands/`) | Codex (explicit-only Skill) | OpenCode (`.md` command) | Gemini (`.toml` command) |
+| Semantic property | UZE Command | Claude (plugin `commands/`) | Codex (explicit-only Skill) | OpenCode (`.md` command) | Antigravity (commands→Skills) |
 |---|---|---|---|---|---|
-| Explicit invocation | required | ✓ `/name` | ✓ `$name` / `/skills` (official; TUI UNVERIFIED headless) | ✓ `/name` | ✓ `/name` |
-| Auto model invocation disabled | required | ✓ `disable-model-invocation` (documented for plugin skills/commands) | ✓ `allow_implicit_invocation: false` (proven) | ✓ commands are a user-typed registry, not model-discovered | ✓ commands are a user-typed registry |
-| Stable identity | required | ✓ | ✓ (skill name = command name; UZE identity stays `Command`) | ✓ | ✓ |
-| Prompt body | required | ✓ verbatim | ✓ verbatim | ✓ verbatim | ✓ verbatim (TOML) |
-| Description | desired | ✓ | ✓ | ✓ frontmatter | ✓ TOML |
+| Explicit invocation | required | ✓ `/name` | ✓ `$name` / `/skills` (official; TUI UNVERIFIED headless) | ✓ `/name` | ✓ `/name` (Skills convert to slash commands) |
+| Auto model invocation disabled | required | ✓ `disable-model-invocation` (documented for plugin skills/commands) | ✓ `allow_implicit_invocation: false` (proven) | ✓ commands are a user-typed registry, not model-discovered | ✗ **Skills are model-discoverable; no explicit-only mechanism** — the semantic loss that makes the route **ADAPTED** |
+| Stable identity | required | ✓ | ✓ (skill name = command name; UZE identity stays `Command`) | ✓ | ✓ (generated wrapper keeps the label) |
+| Prompt body | required | ✓ verbatim | ✓ verbatim | ✓ verbatim | ✓ verbatim (SKILL.md) |
+| Description | desired | ✓ | ✓ | ✓ frontmatter | ✓ frontmatter |
 | Structured args | out of scope v0 | — | — | — | — |
 
 Under the semantic definition — *NATIVE = the harness provides a
 first-class supported mechanism that preserves the canonical capability
-semantics, even if the primitive is named differently* — every row above
-is NATIVE; Codex's explicit-only Skill is the official Codex mechanism for
-*explicit user workflows* and UZE uses it directly, with no emulation or
-degradation of any current canonical semantic. This definition is
-formalized in ADR-025, in `docs/architecture/invariants.md`, and on
-`CompatibilityRoute::Native` itself.
+semantics, even if the primitive is named differently* — every row except
+Antigravity's "auto model invocation disabled" is NATIVE; Codex's
+explicit-only Skill is the official Codex mechanism for *explicit user
+workflows* and UZE uses it directly, and Antigravity's lost explicit-only
+property is exactly what makes its route ADAPTED (declared, never hidden).
+This definition is formalized in ADR-025, in
+`docs/architecture/invariants.md`, and on `CompatibilityRoute::Native`
+itself.
 
 ## Security
 
 Generated commands are **prompt-oriented only**. UZE never produces:
 - OpenCode shell interpolation (`` !`cmd` `` — runs outside the agent
   permission flow per official docs);
-- Gemini `!{...}` shell execution or `@{...}` file injection.
 
 Vendor-specific syntax an author ships inside a canonical body is preserved
 verbatim as author evidence (never generated, never rewritten). This is
@@ -155,9 +159,9 @@ an explicit trust policy.
 
 Commands use the existing AttachmentReceipt/reconciliation architecture —
 no separate ledger. Package-level delivery (Claude generated/explicit
-plugin, Gemini generated extension) → one package receipt, no
-capability-level receipts; standalone delivery (OpenCode symlink, Gemini
-user TOML, Codex adapted Skill) → normal capability receipts with
+plugin, Antigravity generated plugin) → one package receipt, no
+capability-level receipts; standalone delivery (OpenCode symlink, Codex
+adapted Skill, Antigravity adapted Skill) → normal capability receipts with
 attach/inspect (Matched/Drifted/Missing)/detach semantics. Generated
 artifacts are Derived Artifacts (ADR-013 §4) under `$UZE_HOME`, never the
 Store; delivery/receipts never mutate Store bytes.
@@ -185,12 +189,14 @@ Physical encoding per harness (vendor owns syntax):
 | Claude Code | plugin declares plain `review`; Claude namespaces (`/flow:review`) | plugin declares plain `review`; Claude namespaces (`/flow:review`); shim fallback: dir `flow:review`, manifest plugin name `flow` |
 | Codex | generated explicit-only Skill named `flow:review` | generated wrapper SKILL.md `name: flow:review` (Codex uses frontmatter `name`, verified) |
 | OpenCode V2 | `commands/flow:review.md` | `~/.agents/skills/flow:review/` (path-derived ID) |
-| Gemini CLI | nested `commands/flow/review.toml` → vendor `/flow:review` | `~/.agents/skills/flow:review/` (shared root) |
+| Antigravity CLI | generated Skill named `flow:review` (packages: vendor converts at load) | generated wrapper SKILL.md `name: flow:review` |
 
 Same-name Skill + Command (one package): Claude vendor-merges and the skill
 wins; Codex keeps package-delivered skills inside the plugin (decomposed
 both-user-scope is deterministically blocked, never silently renamed);
-OpenCode and Gemini keep commands and skills in separate registries. UZE
+OpenCode keeps commands and skills in separate registries, and on
+Antigravity the capability-level fallback surfaces the vendor's flat
+slash-command namespace collision rather than inventing a suffix. UZE
 invents no canonical suffix disambiguation — reported, not papered over
 (ADR-026).
 

@@ -15,10 +15,10 @@
 //! `expected_content`; this module is content-agnostic by construction.
 //!
 //! This is the delivery mechanism for generated vendor representation that
-//! cannot be a reference to Store bytes (e.g. Gemini's `commands/*.toml`,
-//! a format translation of the canonical markdown). The file it manages is
-//! a Derived Artifact (ADR-013 §4): recreatable, never canonical, and never
-//! inside the Store.
+//! cannot be a reference to Store bytes (e.g. a generated vendor command
+//! file, a format translation of the canonical markdown). The file it
+//! manages is a Derived Artifact (ADR-013 §4): recreatable, never
+//! canonical, and never inside the Store.
 
 use std::{fs, path::Path};
 

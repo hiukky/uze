@@ -1,6 +1,6 @@
 ---
 name: uze
-description: Makes this project's instructions context portable across Claude Code, Codex, OpenCode, and Gemini CLI, using AGENTS.md as the shared baseline. Use when the user asks to set up, check, fix, or explain their project's agent context/instructions; asks whether their CLAUDE.md/GEMINI.md/AGENTS.md is portable between tools; wants an AGENTS.md created or reviewed; mentions switching between coding agents and losing context; or invokes /uze or $uze directly.
+description: Makes this project's instructions context portable across Claude Code, Codex, OpenCode, and Antigravity CLI, using AGENTS.md as the shared baseline. Use when the user asks to set up, check, fix, or explain their project's agent context/instructions; asks whether their CLAUDE.md/GEMINI.md/AGENTS.md is portable between tools; wants an AGENTS.md created or reviewed; mentions switching between coding agents and losing context; or invokes /uze or $uze directly.
 slash: true
 metadata:
   opencode/autoinvoke: "true"
@@ -122,8 +122,9 @@ instruction in them, classify it:
   architecture notes, anything that would help *any* coding agent working
   on this repo. This is what you propose moving into `AGENTS.md`.
 - **Vendor-specific** — instructions that only make sense for that one
-  harness (e.g. "use Claude subagents for code review," a Gemini-specific
-  workflow). This stays in the vendor file, unchanged, below the bridge.
+  harness (e.g. "use Claude subagents for code review," a
+  vendor-specific workflow). This stays in the vendor file, unchanged,
+  below the bridge.
 - **Ambiguous** — you are not confident which bucket it belongs in. Ask
   the user (Step 3 groups these into one question, doesn't ask one at a
   time).
@@ -168,9 +169,9 @@ Proposed AGENTS.md content
 UZE plan (uze context plan)
   AGENTS.md   pkg  ATTACH
   CLAUDE.md   claude-code  ATTACH  (bridge: @AGENTS.md)
-  GEMINI.md   gemini       ATTACH  (bridge: @AGENTS.md)
   Codex       native, no artifact
   OpenCode    native, no artifact
+  Antigravity native, no artifact (reads AGENTS.md and GEMINI.md directly)
 
 Apply?
 ```
@@ -206,7 +207,7 @@ AGENTS.md   healthy
 Claude      bridged
 Codex       native
 OpenCode    native
-Gemini      bridged
+Antigravity native
 
 Portability: PORTABLE
 ```

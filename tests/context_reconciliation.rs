@@ -4,11 +4,10 @@
 //! it rather than reading it natively.
 //!
 //! Deterministic by construction: bridge-capable integrations here are test
-//! doubles with a controllable `detect()`, not the real `claude`/`gemini`
-//! binaries, so this suite passes identically whether or not those CLIs are
-//! installed on the machine running it. Real-CLI evidence is separate L2a
-//! research, not this tier's job — see the session's final report for that
-//! empirical spike.
+//! doubles with a controllable `detect()`, not the real CLIs, so this suite
+//! passes identically whether or not those binaries are installed on the
+//! machine running it. Real-CLI evidence is separate L2a research, not this
+//! tier's job — see the session's final report for that empirical spike.
 //!
 //! `uze add` is exercised here exactly as any other test uses it: nothing
 //! about it changes for Instructions. `context_reconcile` is a wholly
@@ -49,8 +48,8 @@ fn fixture_b() -> PathBuf {
         .join("tests/fixtures/packages/agent-plugin-instructions-b")
 }
 
-/// A deterministic stand-in for a bridge-capable harness (Claude Code /
-/// Gemini CLI): `context_reconcile` itself never calls
+/// A deterministic stand-in for the one bridge-capable harness (Claude
+/// Code): `context_reconcile` itself never calls
 /// `exposure_plan`/`attach_receipt` on it — it only reads `id()`/`detect()`
 /// directly. `add_plugin`'s pre-existing, unmodified per-resource loop does
 /// still call `exposure_plan` for every registered integration on every
@@ -94,19 +93,13 @@ impl IntegrationPort for StubBridgeHarness {
     }
 }
 
-fn app(root: &Path, claude_present: bool, gemini_present: bool) -> UzeApplication {
+fn app(root: &Path, claude_present: bool) -> UzeApplication {
     UzeApplication::new(
         UzeHome::at(root.join("uze-home")),
-        vec![
-            Box::new(StubBridgeHarness {
-                stub_id: "claude-code",
-                present: claude_present,
-            }),
-            Box::new(StubBridgeHarness {
-                stub_id: "gemini",
-                present: gemini_present,
-            }),
-        ],
+        vec![Box::new(StubBridgeHarness {
+            stub_id: "claude-code",
+            present: claude_present,
+        })],
     )
 }
 
@@ -132,7 +125,7 @@ fn bridge<'a>(report: &'a ContextReconciliationReport, integration: &str) -> &'a
 #[test]
 fn a_single_package_composes_agents_md_and_bridges_only_present_harnesses() {
     let root = temp("single-package");
-    let application = app(&root, true, true);
+    let application = app(&root, true);
     install(&application, fixture_a());
 
     let project = root.join("project");
@@ -140,7 +133,6 @@ fn a_single_package_composes_agents_md_and_bridges_only_present_harnesses() {
     // A: baseline — before reconciling, UZE has written nothing into the project.
     assert!(!project.join("AGENTS.md").exists());
     assert!(!project.join("CLAUDE.md").exists());
-    assert!(!project.join("GEMINI.md").exists());
 
     // B/C: decomposition + attach.
     let report = application.context_reconcile(&project).unwrap();
@@ -151,43 +143,35 @@ fn a_single_package_composes_agents_md_and_bridges_only_present_harnesses() {
     let content = agents_md_content(&project);
     assert!(content.contains("uze-instructions-fixture-a"));
 
-    // D: Codex/OpenCode receive nothing extra — no artifact beyond the
-    // shared AGENTS.md file itself is ever created for them.
+    // D: Codex/OpenCode/Antigravity receive nothing extra — no artifact
+    // beyond the shared AGENTS.md file itself is ever created for them.
     assert!(!project.join(".codex").exists());
     assert!(!project.join(".opencode").exists());
 
-    // Both bridge-capable harnesses were "present" in this test, so both get
-    // a real bridge, matched.
+    // The bridge-capable harness was "present", so it gets a real bridge,
+    // matched.
     assert_eq!(
         bridge(&report, "claude-code").state,
         AttachmentState::Matched
     );
-    assert_eq!(bridge(&report, "gemini").state, AttachmentState::Matched);
     let claude_md = fs::read_to_string(project.join("CLAUDE.md")).unwrap();
     assert!(claude_md.contains("@AGENTS.md"));
     assert!(claude_md.contains("uze:begin instruction-bridge"));
-    let gemini_md = fs::read_to_string(project.join("GEMINI.md")).unwrap();
-    assert!(gemini_md.contains("@AGENTS.md"));
     fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
 fn an_absent_bridge_harness_receives_no_bridge_file_at_all() {
     let root = temp("absent-harness");
-    // Claude present, Gemini absent from this machine.
-    let application = app(&root, true, false);
+    // Claude Code absent from this machine.
+    let application = app(&root, false);
     install(&application, fixture_a());
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();
 
-    let report = application.context_reconcile(&project).unwrap();
-    assert_eq!(
-        bridge(&report, "claude-code").state,
-        AttachmentState::Matched
-    );
-    assert!(project.join("CLAUDE.md").exists());
+    let _report = application.context_reconcile(&project).unwrap();
     assert!(
-        !project.join("GEMINI.md").exists(),
+        !project.join("CLAUDE.md").exists(),
         "an absent harness must never receive a bridge file"
     );
     fs::remove_dir_all(root).unwrap();
@@ -198,7 +182,7 @@ fn an_absent_bridge_harness_receives_no_bridge_file_at_all() {
 #[test]
 fn editing_outside_the_managed_region_stays_matched_editing_inside_becomes_drifted() {
     let root = temp("drift-scoping");
-    let application = app(&root, false, false);
+    let application = app(&root, false);
     install(&application, fixture_a());
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();
@@ -241,7 +225,7 @@ fn editing_outside_the_managed_region_stays_matched_editing_inside_becomes_drift
 #[test]
 fn a_matched_region_can_be_cleanly_removed_preserving_user_content() {
     let root = temp("clean-removal");
-    let application = app(&root, false, false);
+    let application = app(&root, false);
     install(&application, fixture_a());
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();
@@ -274,7 +258,7 @@ fn a_matched_region_can_be_cleanly_removed_preserving_user_content() {
 #[test]
 fn a_still_installed_packages_drifted_region_is_reported_and_never_rewritten() {
     let root = temp("drift-still-installed");
-    let application = app(&root, false, false);
+    let application = app(&root, false);
     install(&application, fixture_a());
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();
@@ -302,7 +286,7 @@ fn a_still_installed_packages_drifted_region_is_reported_and_never_rewritten() {
 fn an_orphaned_regions_cleanup_is_structural_not_content_verified_but_still_refuses_malformed_markers()
  {
     let root = temp("orphan-cleanup-shape");
-    let application = app(&root, false, false);
+    let application = app(&root, false);
     install(&application, fixture_a());
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();
@@ -340,7 +324,7 @@ fn an_orphaned_regions_cleanup_is_structural_not_content_verified_but_still_refu
 #[test]
 fn a_drifted_bridge_line_blocks_its_own_removal_even_after_the_last_package_is_gone() {
     let root = temp("bridge-drift-blocks");
-    let application = app(&root, true, false);
+    let application = app(&root, true);
     install(&application, fixture_a());
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();
@@ -369,7 +353,7 @@ fn a_drifted_bridge_line_blocks_its_own_removal_even_after_the_last_package_is_g
 #[test]
 fn two_packages_share_one_agents_md_and_exactly_one_bridge_per_harness() {
     let root = temp("two-packages");
-    let application = app(&root, true, true);
+    let application = app(&root, true);
     install(&application, fixture_a());
     install(&application, fixture_b());
     let project = root.join("project");
@@ -388,7 +372,7 @@ fn two_packages_share_one_agents_md_and_exactly_one_bridge_per_harness() {
     assert!(content.contains("uze-instructions-fixture-b"));
 
     // Exactly one bridge file per harness regardless of package count.
-    assert_eq!(report.bridges.len(), 2);
+    assert_eq!(report.bridges.len(), 1);
     let claude_md = fs::read_to_string(project.join("CLAUDE.md")).unwrap();
     assert_eq!(claude_md.matches("@AGENTS.md").count(), 1);
 
@@ -430,13 +414,11 @@ fn two_packages_share_one_agents_md_and_exactly_one_bridge_per_harness() {
         bridge(&report, "claude-code").state,
         AttachmentState::Missing
     );
-    assert_eq!(bridge(&report, "gemini").state, AttachmentState::Missing);
     assert_eq!(
         fs::read_to_string(project.join("CLAUDE.md")).unwrap(),
         "",
         "the bridge region is gone; the file it leaves behind is empty, not deleted"
     );
-    assert_eq!(fs::read_to_string(project.join("GEMINI.md")).unwrap(), "");
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -445,7 +427,7 @@ fn two_packages_share_one_agents_md_and_exactly_one_bridge_per_harness() {
 #[test]
 fn reconciling_repeatedly_never_duplicates_regions_or_bridges() {
     let root = temp("no-duplication");
-    let application = app(&root, true, false);
+    let application = app(&root, true);
     install(&application, fixture_a());
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();
@@ -473,7 +455,7 @@ fn reconciling_repeatedly_never_duplicates_regions_or_bridges() {
 #[test]
 fn a_project_root_that_does_not_exist_is_a_clean_error_not_a_write() {
     let root = temp("missing-project");
-    let application = app(&root, false, false);
+    let application = app(&root, false);
     let error = application
         .context_reconcile(&root.join("does-not-exist"))
         .unwrap_err();
@@ -483,7 +465,7 @@ fn a_project_root_that_does_not_exist_is_a_clean_error_not_a_write() {
 #[test]
 fn reconcile_never_touches_the_project_when_no_package_provides_instructions() {
     let root = temp("no-instructions");
-    let application = app(&root, true, true);
+    let application = app(&root, true);
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();
     fs::write(project.join("AGENTS.md"), "just my own notes\n").unwrap();
@@ -507,7 +489,7 @@ fn reconcile_never_touches_the_project_when_no_package_provides_instructions() {
 #[test]
 fn a_foreign_looking_managed_region_outside_our_naming_shape_is_left_untouched() {
     let root = temp("foreign-region");
-    let application = app(&root, false, false);
+    let application = app(&root, false);
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();
     fs::write(

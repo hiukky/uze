@@ -94,10 +94,10 @@ not "all resources," an honest set intersection. Undeclared resources are not
 marked `provided`, so they continue through normal `exposure_plan` fallback
 individually (Skill shim or MCP config entry) rather than silently
 disappearing. This is `ADR-013 §2`'s requirement implemented as written, and
-is the one integration in this crate that verifiably does so (Codex and
-Gemini both mark "all discovered resources" as provided the moment their
-respective manifest file exists, without reading its contents — see their
-READMEs).
+is the one integration in this crate that verifiably does so (other
+integrations' coverage may also mark "all discovered resources" as provided
+the moment their respective manifest file exists, without reading its
+contents — see their READMEs).
 
 Path handling in `claude_exact_coverage` rejects `..`/absolute/empty
 declarations, deduplicates repeats, and tolerates a malformed manifest by

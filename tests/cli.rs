@@ -65,11 +65,22 @@ fn fake_harness_bin_dir(label: &str) -> PathBuf {
         ("claude", "9.9.9 (Fake Claude)"),
         ("codex", "codex-cli 9.9.9"),
         ("opencode", "opencode 9.9.9"),
-        ("gemini", "gemini 9.9.9"),
+        ("agy", "agy 9.9.9"),
     ] {
         let path = dir.join(name);
         let script = format!(
             r#"#!/bin/sh
+if [ "$1" = "plugin" ]; then
+  case "$2" in
+    list) echo '{{"imports":[]}}'; exit 0 ;;
+    install)
+      mkdir -p "$HOME/.gemini/config/plugins"
+      cp -R "$3/." "$HOME/.gemini/config/plugins/$(basename "$3")/" 2>/dev/null || true
+      exit 0
+      ;;
+    uninstall) exit 0 ;;
+  esac
+fi
 if [ "$1" = "mcp" ]; then
   case "$2" in
     get)

@@ -1,12 +1,12 @@
 # AGENTS.md
 
 This file provides guidance to agentic coding tools (Claude Code, Codex,
-OpenCode, Gemini CLI) when working with code in this repository.
+OpenCode, Antigravity CLI) when working with code in this repository.
 
 ## What this is
 
 uze is a Rust CLI: a compatibility and distribution layer for agentic tooling
-across harnesses (Claude Code, Codex, OpenCode, Gemini CLI). You install a
+across harnesses (Claude Code, Codex, OpenCode, Antigravity CLI). You install a
 plugin once; uze stores its bytes centrally and delivers it through each
 harness's most native mechanism — a real plugin where one exists, native
 capabilities where it doesn't, a safe adapter only as a last resort. It also
@@ -61,9 +61,9 @@ need to).
   is the large orchestration surface; `src/application/lifecycle/` holds
   the per-operation modules (add/install/remove/update/attach).
 - `crates/uze-integrations` — one module per harness
-  (`claude`, `codex`, `gemini`, `opencode`) implementing the shared
-  `IntegrationPort` from `uze-core`, plus `shared/` for cross-vendor
-  process/path helpers.
+  (`claude`, `codex`, `opencode`, `antigravity`)
+  implementing the shared `IntegrationPort` from `uze-core`, plus `shared/`
+  for cross-vendor process/path helpers.
 - `e2e` — conformance fixtures and a real-binary test harness
   (`e2e/src/harness.rs`, `tier.rs`) for exercising uze against actual
   vendor CLIs, not just isolated unit state.
@@ -93,15 +93,16 @@ uze-application  (orchestration: add/install/remove/update/context)
       ↓
 uze-core         (domain contracts: Package, Store, Engine, Router,
       ↑           IntegrationPort, capability/exposure model)
-uze-integrations (Claude, Codex, Gemini, OpenCode — implement IntegrationPort)
+uze-integrations (Claude, Codex, Antigravity, OpenCode — implement IntegrationPort)
 ```
 
 `uze-core` production code never names a specific harness (Claude/Codex/
-Gemini/OpenCode) — enforced by
+OpenCode/Antigravity) — enforced by
 `tests/integration_conformance.rs::core_never_names_a_vendor_harness`.
 Vendor-specific knowledge lives only in `uze-integrations`. A new harness
 should require no semantic change to Store, Engine, or Router — only a new
-`IntegrationPort` implementation.
+`IntegrationPort` implementation. Antigravity CLI is the Google-family v0
+harness (ADR-027).
 
 Key domain concepts (see `docs/architecture/invariants.md` for the guarded
 properties):
@@ -139,7 +140,7 @@ properties):
   (`tests::every_cli_command_is_classified`). Classify any new command you
   add here.
 - **Project context bridging**: `AGENTS.md` is the portable baseline for
-  project instructions. `CLAUDE.md`/`GEMINI.md` are generated bridges
+  project instructions. `CLAUDE.md` is the one generated bridge
   (`@AGENTS.md`) produced by `uze context reconcile` — don't hand-edit
   their managed regions in a *project uze manages*; this repository's own
   root `CLAUDE.md`/`AGENTS.md` are the exception, maintained directly since

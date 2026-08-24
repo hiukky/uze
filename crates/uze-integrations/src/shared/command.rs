@@ -1,7 +1,7 @@
 //! Shared canonical-command reading for integrations that cannot deliver
 //! the canonical `commands/<name>.md` bytes as-is and must translate them
-//! into a vendor representation (Gemini's `commands/*.toml`, Codex's
-//! adapted SKILL.md).
+//! into a vendor representation (Codex's explicit-only SKILL.md,
+//! Antigravity's adapted SKILL.md).
 //!
 //! The canonical v0 command model (ADR-025) is deliberately minimal: an
 //! optional YAML-style frontmatter block whose only consumed field is
@@ -47,24 +47,6 @@ pub fn parse_command_body(bytes: &[u8]) -> (Option<String>, String) {
     (description, body.to_owned())
 }
 
-/// Escapes a string for a single-line TOML basic string (`"..."`). Always
-/// valid TOML for any input; used by Gemini's generated command TOML, whose
-/// prompt body may contain newlines and quotes.
-pub fn toml_escape(value: &str) -> String {
-    let mut escaped = String::with_capacity(value.len());
-    for character in value.chars() {
-        match character {
-            '\\' => escaped.push_str("\\\\"),
-            '"' => escaped.push_str("\\\""),
-            '\n' => escaped.push_str("\\n"),
-            '\r' => escaped.push_str("\\r"),
-            '\t' => escaped.push_str("\\t"),
-            other => escaped.push(other),
-        }
-    }
-    escaped
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -99,10 +81,5 @@ mod tests {
         let (description, body) = parse_command_body(bytes);
         assert_eq!(description, None);
         assert_eq!(body, "");
-    }
-
-    #[test]
-    fn toml_escaping_produces_valid_single_line_content() {
-        assert_eq!(toml_escape("a\nb\"c\\d"), "a\\nb\\\"c\\\\d");
     }
 }

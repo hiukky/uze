@@ -10,7 +10,7 @@
 //! Native if each preserves the semantics through a supported primitive.
 //! UZE models user-visible semantics, never one-to-one vendor type names:
 //! e.g. UZE Command reaches Claude as a plugin `commands/` file, OpenCode
-//! as a `.md` command, Gemini as a `.toml` command, and Codex as an
+//! as a `.md` command, and Codex as an
 //! official *explicit-invocation-only Skill* — all Native, all the same
 //! canonical capability. (A route that must emulate or degrade through a
 //! mechanism the harness does not intend for that capability is
