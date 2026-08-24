@@ -53,7 +53,7 @@ uze-testkit = { path = "crates/uze-testkit" }
 
 [[bin]]
 name = "uze-mcp-conformance-fixture"
-path = "e2e/fixtures/bin/mcp_conformance_fixture.rs"
+path = "e2e/_fixtures/bin/mcp_conformance_fixture.rs"
 
 [[bin]]
 name = "playground-mcp"

@@ -57,10 +57,10 @@ RUN mkdir -p /opt/opencode-runtime \
 
 COPY --from=uze-build /out/uze-mcp-conformance-fixture /usr/local/bin/uze-mcp-conformance-fixture
 COPY --from=uze-build /out/uze-conformance /usr/local/bin/uze-conformance
-# Single canonical fixture source: the Lab consumes tests/fixtures through
+# Single canonical fixture source: the Lab consumes tests/_fixtures through
 # uze-testkit — it never maintains a second canonical tree.
-COPY tests/fixtures /opt/uze-fixtures/tests-fixtures
-COPY e2e/fixtures/control/native-skill-discovery /opt/uze-fixtures/control/native-skill-discovery
+COPY tests/_fixtures /opt/uze-fixtures/tests-fixtures
+COPY e2e/_fixtures/control/native-skill-discovery /opt/uze-fixtures/control/native-skill-discovery
 COPY e2e/opencode-models.json /opt/uze-e2e/opencode-models.json
 COPY e2e/entrypoint.sh /usr/local/bin/uze-harness-entrypoint
 

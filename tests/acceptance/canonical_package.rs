@@ -1,5 +1,5 @@
 //! North Star v0 fixture (native-projection milestone, spec §10): one
-//! vendor-neutral canonical package — `tests/fixtures/canonical/flow/`, a
+//! vendor-neutral canonical package — `tests/_fixtures/canonical/flow/`, a
 //! `plugin.json` plus `skills/commit/SKILL.md`, absolutely no vendor
 //! manifests (`.claude-plugin/`, `.codex-plugin/`, `mcp_config.json`,
 //! `.opencode/`) — proving the product thesis empirically:

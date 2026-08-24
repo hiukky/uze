@@ -8,7 +8,7 @@
 //! no product-domain type ever references this crate.
 //!
 //! The Lab consumes the **single canonical fixture source** in
-//! `tests/fixtures` through `uze-testkit` (see [`compose_lab_package`]);
+//! `tests/_fixtures` through `uze-testkit` (see [`compose_lab_package`]);
 //! it never maintains a second canonical tree.
 
 pub mod evidence;
@@ -91,7 +91,7 @@ const CODEX_ENVELOPE: &str = "plugin.json";
 const CANONICAL_SKILL_PROOF_TOKEN: &str = "UZE_E2E_SKILL_PROOF_20260820";
 
 /// Builds the Lab's canonical multi-capability package **from the single
-/// fixture source** (`tests/fixtures`, via `uze-testkit`):
+/// fixture source** (`tests/_fixtures`, via `uze-testkit`):
 ///
 /// - canonical `skill-plugin` (the Skill, canonical bytes);
 /// - canonical `mcp-plugin`'s manifests (the MCP server, placeholder intact);

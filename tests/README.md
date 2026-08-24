@@ -13,7 +13,7 @@ which cell of the matrices below is covered by which test file.
 | **L1 — Component/Contract** | a subsystem's contract on a real isolated filesystem, with a *fake* process boundary | isolated temp HOME/UZE_HOME, no developer state, fake harness CLIs only | `tests/{cli,memory,packages,workspace,lifecycle,projection}/**`, `tests/integrations/**` |
 | **L2 — Harness Conformance** | real vendor binary semantics, isolated HOME/UZE_HOME, no model calls | real vendor binary, skipped cleanly when absent (`UZE_REAL_HARNESS_TESTS`-style probe-and-skip) | `tests/integrations/harness/codex.rs::real_codex_dogfood...`; the `e2e/` container lab (Tiers 1-2) |
 | **L3 — Acceptance** | public user-level scenario end-to-end through the real `uze` binary | clean isolated `TestEnvironment` (real UZE binary, fake or controlled harness CLIs) | `tests/acceptance/**` |
-| **L4 — Manual/Model behavioral** | model-invocation or interactive-only behavior | manual/agentic eval, never CI | `tests/fixtures/scenarios/eval/` (see `docs/capabilities/uze-skill.md`) |
+| **L4 — Manual/Model behavioral** | model-invocation or interactive-only behavior | manual/agentic eval, never CI | `tests/_fixtures/scenarios/eval/` (see `docs/capabilities/uze-skill.md`) |
 
 Rules:
 
@@ -39,7 +39,7 @@ tests/
 ├── integrations/    contract, capability+lifecycle conformance, runtime-shim boundary,
 │   ├── harness/     per-harness invocation-policy semantics (claude/codex/opencode/antigravity)
 ├── acceptance/      L3 scenarios (see below)
-└── fixtures/        canonical / foreign / scenarios / golden (see tests/fixtures/README.md)
+└── fixtures/        canonical / foreign / scenarios / golden (see tests/_fixtures/README.md)
 ```
 
 Each `tests/<domain>/main.rs` is the Cargo test target (directory-`main.rs`

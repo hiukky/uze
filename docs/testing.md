@@ -49,7 +49,7 @@ from its public API purely to serve those tests. Both are gone.
 `e2e/` is a separate crate and a disposable Docker image. It runs the real
 Claude Code, Codex, OpenCode and Antigravity CLIs against a real UZE
 installation, then records what each harness itself reports. It consumes the
-single canonical fixture source (`tests/fixtures` via `uze-testkit`) and
+single canonical fixture source (`tests/_fixtures` via `uze-testkit`) and
 never duplicates it. Full detail in [`e2e/README.md`](../e2e/README.md).
 
 The Lab's own evidence levels are flat: **L2** (no model, no provider, no

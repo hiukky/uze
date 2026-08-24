@@ -12,7 +12,7 @@
 //! - **Process simulation**: [`fake_harness::FakeHarness`] writes executable
 //!   scripts with a rule table and an invocation log, so integration tests
 //!   describe vendor behavior instead of inventing shell scripts inline.
-//! - **Fixtures**: [`fixtures`] resolves `tests/fixtures/{canonical,foreign,
+//! - **Fixtures**: [`fixtures`] resolves `tests/_fixtures/{canonical,foreign,
 //!   scenarios,golden}` at the canonical location no matter which crate's
 //!   test is compiling.
 //! - **Intent**: [`scenario::Scenario`] assembles a deliberate system state
@@ -33,7 +33,7 @@ use std::path::{Path, PathBuf};
 
 /// Absolute path of the workspace root: the directory whose `Cargo.toml`
 /// declares `[workspace]`, found by walking up from this crate's own
-/// manifest directory. All workspace-local test assets (`tests/fixtures`,
+/// manifest directory. All workspace-local test assets (`tests/_fixtures`,
 /// `plugins/uze`) are addressed from here, so tests never depend on which
 /// crate they compile in.
 pub fn workspace_root() -> PathBuf {

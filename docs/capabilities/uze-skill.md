@@ -168,7 +168,7 @@ it demonstrably isn't.
 - Pós-refactor, `/uze` **é literal em Claude Code** (`uze` bare via `[logical, qualified]` `claude.rs:152`, `TESTED` `exposure_naming:158`). Legado `uze-uze-uze` persiste só como receipt reutilizado verbatim. Em Codex `$uze`, OpenCode V1 autônomo `skill({name:"uze"})` / **V2 `/uze` slash** (`slash: true` default, PR #11390). Natural-language trigger via `description` permanece o mais uniforme. Nenhum Core change escondeu a assimetria anterior — o naming foi corrigido para short-or-qualified.
 - The agentic reasoning quality (does the Skill draft a *good* `AGENTS.md`,
   classify content well) has no automated eval yet — see
-  `tests/fixtures/scenarios/eval/` (L4 fixture set) for the fixture set and
+  `tests/_fixtures/scenarios/eval/` (L4 fixture set) for the fixture set and
   rubric a future runner (or manual pass) should use.
 - No cross-harness automated test exercises the Skill actually running
   inside a live Claude/Codex/OpenCode session end-to-end (that would

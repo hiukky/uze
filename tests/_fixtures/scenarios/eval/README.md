@@ -95,8 +95,8 @@ about; runs `reconcile` when `plan` already shows no changes.
 Pair this with the real fixture package it corresponds to:
 
 ```bash
-uze add tests/fixtures/canonical/instructions-a --trust
-cp tests/fixtures/scenarios/eval/drifted-region/AGENTS.md <project>/AGENTS.md
+uze add tests/_fixtures/canonical/instructions-a --trust
+cp tests/_fixtures/scenarios/eval/drifted-region/AGENTS.md <project>/AGENTS.md
 ```
 
 `uze context inspect` will report this region `DRIFTED` (the marker content

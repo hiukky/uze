@@ -7,7 +7,7 @@ fn package_fixture() -> PathBuf {
 /// Copies the MCP fixture package into `dest_dir` with its `mcp.json`
 /// placeholder command rewritten to the real, test-build-resolved path of
 /// the fixture MCP server binary — see
-/// `tests/fixtures/canonical/mcp-plugin/README.md`.
+/// `tests/_fixtures/canonical/mcp-plugin/README.md`.
 fn mcp_package_fixture_with_resolved_binary(dest_dir: &std::path::Path) -> PathBuf {
     let source = uze_testkit::fixtures::canonical("mcp-plugin");
     std::fs::create_dir_all(dest_dir).unwrap();

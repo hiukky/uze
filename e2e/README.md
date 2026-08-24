@@ -33,7 +33,7 @@ Every record carries its claim: `harness`, `scenario`, `level`,
 ## Architecture
 
 ```text
-tests/fixtures (single canonical source)
+tests/_fixtures (single canonical source)
         │  (via uze-testkit: fixture lookup, safe paths, real-home guards)
         ▼
 composed canonical package ──> real `uze` setup/install ──> real harness ──> vendor's own report

@@ -1,7 +1,7 @@
 //! Canonical fixture resolution.
 //!
-//! All persistent test inputs live under `tests/fixtures/` in four kinds
-//! (see `tests/fixtures/README.md`):
+//! All persistent test inputs live under `tests/_fixtures/` in four kinds
+//! (see `tests/_fixtures/README.md`):
 //!
 //! - `canonical/` — valid UZE-authored package/project inputs, small and
 //!   stable; the same directory the product itself would accept.
@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 
 use crate::workspace_root;
 
-/// `tests/fixtures/`.
+/// `tests/_fixtures/`.
 ///
 /// Resolved through `$UZE_TESTKIT_FIXTURES_ROOT` when set (the Lab image
 /// copies the canonical tree to a runtime path; compile-time paths do not
@@ -36,42 +36,42 @@ pub fn root() -> PathBuf {
         );
         return root;
     }
-    workspace_root().join("tests/fixtures")
+    workspace_root().join("tests/_fixtures")
 }
 
-/// `tests/fixtures/canonical/<name>`.
+/// `tests/_fixtures/canonical/<name>`.
 pub fn canonical(name: impl AsRef<Path>) -> PathBuf {
     root().join("canonical").join(name)
 }
 
-/// `tests/fixtures/foreign/<vendor>/<name>`.
+/// `tests/_fixtures/foreign/<vendor>/<name>`.
 pub fn foreign(vendor: impl AsRef<Path>, name: impl AsRef<Path>) -> PathBuf {
     root().join("foreign").join(vendor).join(name)
 }
 
-/// `tests/fixtures/scenarios/<name>`.
+/// `tests/_fixtures/scenarios/<name>`.
 pub fn scenario(name: impl AsRef<Path>) -> PathBuf {
     root().join("scenarios").join(name)
 }
 
-/// `tests/fixtures/golden/`.
+/// `tests/_fixtures/golden/`.
 pub fn golden() -> PathBuf {
     root().join("golden")
 }
 
-/// The official marketplace fixture (`tests/fixtures/golden/marketplace` if
+/// The official marketplace fixture (`tests/_fixtures/golden/marketplace` if
 /// present, else the repository's own `agents.json` directory root).
 pub fn marketplace() -> PathBuf {
     root().join("golden").join("marketplace")
 }
 
 /// The repository's own official plugin (`plugins/uze`) — a canonical
-/// package UZE ships and dogfoods, never copied into `tests/fixtures`.
+/// package UZE ships and dogfoods, never copied into `tests/_fixtures`.
 pub fn official_plugin() -> PathBuf {
     workspace_root().join("plugins/uze")
 }
 
-/// Asserts `path` (or one of its ancestors) lives under `tests/fixtures`,
+/// Asserts `path` (or one of its ancestors) lives under `tests/_fixtures`,
 /// for tests that copy fixture content around and want to fail loudly on a
 /// stale hard-coded path.
 pub fn assert_in_fixtures(path: &Path) {
@@ -79,7 +79,7 @@ pub fn assert_in_fixtures(path: &Path) {
     let checked = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     assert!(
         checked.starts_with(&fixtures_root),
-        "expected {} to live under tests/fixtures ({}); use uze_testkit::fixtures instead \
+        "expected {} to live under tests/_fixtures ({}); use uze_testkit::fixtures instead \
          of hard-coded paths",
         checked.display(),
         fixtures_root.display()
@@ -103,7 +103,7 @@ mod tests {
         assert_eq!(canonical("x"), override_dir.join("canonical/x"));
         drop(scope);
         // Without the override the workspace walk is authoritative again.
-        assert!(root().ends_with("tests/fixtures"));
+        assert!(root().ends_with("tests/_fixtures"));
         let _ = std::fs::remove_dir_all(&override_dir);
     }
 }
