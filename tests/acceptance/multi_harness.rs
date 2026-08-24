@@ -162,11 +162,15 @@ fn invocation_policy_projects_per_harness_classification() {
     );
 }
 
-/// A11 — projection conflict: a model-only Skill on a shared-root harness
-/// pair (codex claims nothing, opencode needs `slash: false` on the same
-/// entry) must fail loudly through the CLI, never silently misroute.
+/// A11 — shared-root superset: a model-only Skill on the Codex+OpenCode
+/// pair (Codex claims nothing in its envelope, OpenCode needs `slash:
+/// false` on the same entry) must install cleanly through the CLI, with the
+/// single shared entry carrying OpenCode's encoding — reusing the entry is
+/// only safe because the superset wrapper never silently drops a policy.
+/// Codex still reports its own user=false limitation honestly (Degraded);
+/// this is a physical representation fix, not a policy rewrite.
 #[test]
-fn projection_conflict_is_reported_honestly() {
+fn superset_shared_entry_keeps_both_integrations_preserved() {
     let env = TestEnvironment::isolated();
     install_fake_harnesses(&env);
     env.run_ok(uze_bin(), &["setup"]);
@@ -176,17 +180,28 @@ fn projection_conflict_is_reported_honestly() {
         "conflict-fixture",
         &[("audit", &model_only_body("audit"))],
     );
-    let install = env.run(
+    env.run_ok(
         uze_bin(),
         &["plugin", "install", conflict_package.to_str().unwrap()],
     );
+
+    let shared_entry = env.home.join(".agents/skills/conflict-fixture:audit");
     assert!(
-        !install.status.success(),
-        "a shared-root projection conflict must fail the install"
+        shared_entry.is_symlink(),
+        "one shared physical entry for the model-only Skill"
     );
-    let stderr = String::from_utf8_lossy(&install.stderr);
+    let target = std::fs::read_link(&shared_entry).expect("readlink");
+    let wrapper = std::fs::read_to_string(target.join("SKILL.md")).unwrap();
     assert!(
-        stderr.contains("projection conflict"),
-        "the failure must name the conflict, got: {stderr}"
+        wrapper.contains("slash: false"),
+        "the shared entry carries OpenCode's user-invocation suppression: {wrapper}"
+    );
+    assert!(
+        !wrapper.contains("opencode/autoinvoke"),
+        "model discovery stays enabled for a model-only Skill: {wrapper}"
+    );
+    assert!(
+        !target.join("agents/openai.yaml").exists(),
+        "no Codex policy sidecar for a model=true Skill"
     );
 }

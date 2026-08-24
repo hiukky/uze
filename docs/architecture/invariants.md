@@ -116,16 +116,23 @@ where it always was, and never gains a policy sidecar it did not declare.
 > `tests/skill_invocation_conformance.rs::absent_invoke_block_defaults_to_model_and_user_and_behaves_as_before`
 > `crates/uze-core/src/project.rs::skill_without_invocation_block_defaults_and_is_not_reattached`
 
-### A reused shared-root entry never silently loses an invocation policy
+### A shared-root entry always carries the superset of both encodings
 
-Codex and OpenCode share `~/.agents/skills`. When one harness reuses the
-other's physical entry, the artifact must still carry the reusing
-harness's own invocation encoding — otherwise the attach fails
-deterministically (`ProjectionConflict`) instead of silently degrading a
-user-only or model-only policy.
+Codex and OpenCode share `~/.agents/skills`. The one physical entry a
+non-default Skill gets is the **superset** representation: SKILL.md carries
+OpenCode's own invocation controls (`opencode/autoinvoke`, `slash`) AND the
+entry carries Codex's `agents/openai.yaml` policy sidecar whenever
+`invoke.model` is false — so whichever integration created the entry, the
+other's reuse verification passes and the canonical policy can never
+silently degrade into model visibility. A genuinely foreign artifact
+(a wrapper that predates the superset or carries no encoding) still fails
+deterministically (`ProjectionConflict`) instead of degrading a user-only
+or model-only policy.
 
-> `tests/skill_invocation_conformance.rs::model_only_skill_shared_root_detects_cross_integration_policy_loss`
-> `tests/skill_invocation_conformance.rs::user_only_skill_installs_cleanly_with_codex_and_opencode`
+> `tests/projection/shared_roots.rs::user_only_skill_codex_and_opencode_preserves_codex_policy`
+> `tests/projection/shared_roots.rs::model_only_skill_shared_root_reuse_carries_both_encodings`
+> `tests/projection/shared_roots.rs::foreign_shared_entry_without_opencode_encoding_still_conflicts`
+> `tests/integrations/harness/codex.rs::real_codex_dogfood_user_only_skill_stays_hidden_in_opencode_owned_shared_entry`
 
 ### Invocation labels are stable and presentation-only (ADR-026)
 

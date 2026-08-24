@@ -24,7 +24,13 @@
 //! - model=false,user=false → never projected (nobody can invoke it).
 //!
 //! The generated wrapper is always a Derived Artifact under `$UZE_HOME`,
-//! never the Store.
+//! never the Store. Because Codex and OpenCode consume the SAME physical
+//! `~/.agents/skills` entry, the wrapper is the superset representation
+//! (`crate::shared::skill::write_superset_skill_wrapper`): Codex's policy
+//! sidecar *and* OpenCode's own invocation controls, so the entry is
+//! correct whichever integration created it — single-harness behavior is
+//! unchanged, and the shared entry can never silently degrade into model
+//! visibility for either consumer (ADR-030 §25).
 
 use std::{fs, path::Path, path::PathBuf};
 
@@ -37,8 +43,6 @@ use uze_core::{
     router::{CompatibilityRoute, VerificationStatus},
     state,
 };
-
-use crate::shared::skill::parse_skill_body;
 
 use super::CodexIntegration;
 
@@ -73,62 +77,38 @@ pub(super) fn generated_skill_dir(uze_home: &UzeHome, resource: &Resource) -> Pa
 }
 
 /// Deterministically materializes (or refreshes) one Skill's delivered
-/// directory: `SKILL.md` carrying the stable namespaced invocation label as
-/// its `name` and the canonical name/description/body preserved from the
-/// Store — plus `agents/openai.yaml` with the implicit-invocation policy
-/// when the canonical `invoke.model` is `false`. Codex derives the
-/// model-visible name from frontmatter (verified against codex-cli
-/// 0.149.0), so namespacing the directory alone is not enough; the
-/// generated wrapper is the only way to show `flow:review` without
-/// rewriting the canonical bytes. Idempotent and rebuilt wholesale — the
-/// directory is entirely UZE-owned and non-authoritative (ADR-013 §4).
+/// directory — the shared-root superset representation
+/// (`crate::shared::skill::write_superset_skill_wrapper`): `SKILL.md`
+/// carrying the stable namespaced invocation label as its `name` with the
+/// canonical description/body preserved from the Store, plus
+/// `agents/openai.yaml` with the implicit-invocation policy when the
+/// canonical `invoke.model` is `false`. Codex derives the model-visible
+/// name from frontmatter (verified against codex-cli 0.149.0), so
+/// namespacing the directory alone is not enough; the generated wrapper is
+/// the only way to show `flow:review` without rewriting the canonical
+/// bytes. The wrapper also carries OpenCode's own invocation controls
+/// because this directory lives in the shared `~/.agents/skills` root —
+/// Codex ignores those fields, and OpenCode needs them when it reuses the
+/// same physical entry (ADR-030 §25). Idempotent and rebuilt wholesale —
+/// the directory is entirely UZE-owned and non-authoritative (ADR-013 §4).
 pub(super) fn materialize_generated_skill(
     uze_home: &UzeHome,
     resource: &Resource,
 ) -> Result<PathBuf> {
     let dir = generated_skill_dir(uze_home, resource);
-    if dir.exists() {
-        fs::remove_dir_all(&dir).map_err(|source| UzeError::Write {
-            path: dir.clone(),
-            source,
-        })?;
-    }
-    fs::create_dir_all(&dir).map_err(|source| UzeError::Write {
-        path: dir.clone(),
-        source,
-    })?;
+    let canonical_dir = resource
+        .capability
+        .path
+        .parent()
+        .expect("SKILL.md has a parent");
     let label = codex_invocation_label(resource).unwrap_or_else(|| resource.name());
-    let (description, body) = parse_skill_body(&resource.capability.payload);
-    let mut skill = String::from("---\n");
-    skill.push_str(&format!("name: {label}\n"));
-    if let Some(description) = description {
-        let escaped = crate::shared::skill::escape_yaml_double_quoted(&description);
-        skill.push_str(&format!("description: \"{escaped}\"\n"));
-    }
-    skill.push_str("---\n");
-    skill.push_str(&body);
-    fs::write(dir.join("SKILL.md"), skill).map_err(|source| UzeError::Write {
-        path: dir.join("SKILL.md"),
-        source,
-    })?;
-    let policy = resource.skill_invocation();
-    let policy_file = dir.join("agents/openai.yaml");
-    if policy_file.exists() {
-        fs::remove_file(&policy_file).map_err(|source| UzeError::Write {
-            path: policy_file.clone(),
-            source,
-        })?;
-    }
-    if !policy.model && !policy.is_invalid() {
-        fs::create_dir_all(dir.join("agents")).map_err(|source| UzeError::Write {
-            path: dir.join("agents"),
-            source,
-        })?;
-        fs::write(&policy_file, EXPLICIT_ONLY_POLICY_YAML).map_err(|source| UzeError::Write {
-            path: policy_file,
-            source,
-        })?;
-    }
+    crate::shared::skill::write_superset_skill_wrapper(
+        &dir,
+        canonical_dir,
+        &resource.capability.payload,
+        &label,
+        &resource.skill_invocation(),
+    )?;
     Ok(dir)
 }
 
@@ -289,7 +269,7 @@ mod tests {
     }
 
     #[test]
-    fn user_only_skill_wrapper_is_explicit_only_and_preserves_body() {
+    fn user_only_skill_wrapper_is_superset_and_preserves_body() {
         let root = std::env::temp_dir().join(format!("uze-codex-skill-{}", std::process::id()));
         let home = UzeHome::at(root.join("uze"));
         let resource = skill_resource(
@@ -299,13 +279,25 @@ mod tests {
         );
         let dir = materialize_generated_skill(&home, &resource).unwrap();
         let skill = fs::read_to_string(dir.join("SKILL.md")).unwrap();
-        assert!(skill.starts_with("---\nname: flow:review\ndescription: \"Review code\"\n---\n"));
+        assert!(skill.starts_with("---\nname: flow:review\ndescription: \"Review code\"\n"));
         assert!(skill.ends_with("\nReview this diff.\n"));
         // The explicit-only policy is the semantic load-bearing piece: it
         // keeps the model from auto-selecting a user-only Skill.
         assert_eq!(
             fs::read_to_string(dir.join("agents/openai.yaml")).unwrap(),
             EXPLICIT_ONLY_POLICY_YAML
+        );
+        // This wrapper lives in the shared root Codex and OpenCode both
+        // read, so it must carry OpenCode's own encoding too — Codex
+        // ignores the unknown frontmatter field (verified via `codex debug
+        // prompt-input`), OpenCode needs it when it reuses the entry.
+        assert!(
+            skill.contains("metadata:\n  opencode/autoinvoke: false\n"),
+            "the shared-root wrapper is the superset: {skill}"
+        );
+        assert!(
+            !skill.contains("slash: false"),
+            "user invocation stays enabled"
         );
         let _ = fs::remove_dir_all(root);
     }

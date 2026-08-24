@@ -18,6 +18,15 @@
 //! they exist only to translate the canonical `invoke:` policy into each
 //! harness's own surface (section 5 — no vendor field names in the
 //! canonical model).
+//!
+//! The one shared-root wrapper this module also writes
+//! ([`write_superset_skill_wrapper`]) is different by necessity: it lives
+//! in a directory Codex and OpenCode consume *together*, so its bytes are
+//! the superset of both vendors' encodings — never a canonical rewrite.
+
+use std::{fs, path::Path};
+
+use uze_core::{Result, UzeError, skill::SkillInvocationPolicy};
 
 /// Splits a canonical SKILL.md into `(description, body)`:
 ///
@@ -143,6 +152,145 @@ pub fn has_slash_false(bytes: &[u8]) -> bool {
 
 fn is_utf8(bytes: &[u8]) -> Option<&str> {
     std::str::from_utf8(bytes).ok()
+}
+
+/// Writes one shared-root Skill wrapper directory — the superset
+/// representation Codex and OpenCode both consume from their single shared
+/// `~/.agents/skills` physical entry:
+///
+/// ```text
+/// <wrapper>/
+/// ├── SKILL.md          stable namespaced label as `name`, canonical
+/// │                      description/body, plus OpenCode's own native
+/// │                      invocation controls (`opencode/autoinvoke`,
+/// │                      `slash`)
+/// └── agents/
+///     └── openai.yaml   Codex's explicit-only policy sidecar (model=false)
+/// ```
+///
+/// Every integration that shares the root materializes this exact content
+/// under its own `$UZE_HOME` wrapper directory, so whichever wrapper the
+/// shared symlink ends up pointing at, every consumer finds its own
+/// encoding — and the other integration's reuse verification passes instead
+/// of degrading the canonical `invoke:` policy (ADR-030 §25). The harness
+/// that does not own an encoding ignores it: Codex reads `name` and the
+/// policy sidecar and ignores OpenCode's frontmatter fields (verified via
+/// `codex debug prompt-input` against codex-cli 0.149.1); OpenCode derives
+/// the skill id from the path and ignores unknown files. The canonical
+/// bytes are never rewritten; anything else in the canonical skill
+/// directory stays referenced, not copied. Idempotent and rebuilt
+/// wholesale — the directory is entirely UZE-owned and non-authoritative
+/// (ADR-013 §4).
+pub fn write_superset_skill_wrapper(
+    dir: &Path,
+    canonical_dir: &Path,
+    canonical_bytes: &[u8],
+    label: &str,
+    policy: &SkillInvocationPolicy,
+) -> Result<()> {
+    if dir.exists() {
+        fs::remove_dir_all(dir).map_err(|source| UzeError::Write {
+            path: dir.to_path_buf(),
+            source,
+        })?;
+    }
+    fs::create_dir_all(dir).map_err(|source| UzeError::Write {
+        path: dir.to_path_buf(),
+        source,
+    })?;
+    let (description, body) = parse_skill_body(canonical_bytes);
+    let mut document = String::from("---\n");
+    document.push_str(&format!("name: {label}\n"));
+    if let Some(description) = description {
+        let escaped = escape_yaml_double_quoted(&description);
+        document.push_str(&format!("description: \"{escaped}\"\n"));
+    }
+    if !policy.user {
+        document.push_str("slash: false\n");
+    }
+    if !policy.model {
+        document.push_str("metadata:\n  opencode/autoinvoke: false\n");
+    }
+    document.push_str("---\n");
+    document.push_str(&body);
+    fs::write(dir.join("SKILL.md"), document).map_err(|source| UzeError::Write {
+        path: dir.join("SKILL.md"),
+        source,
+    })?;
+    if !policy.model {
+        let policy_file = dir.join("agents/openai.yaml");
+        if policy_file.exists() {
+            fs::remove_file(&policy_file).map_err(|source| UzeError::Write {
+                path: policy_file.clone(),
+                source,
+            })?;
+        }
+        fs::create_dir_all(policy_file.parent().expect("policy file has a parent")).map_err(
+            |source| UzeError::Write {
+                path: policy_file
+                    .parent()
+                    .expect("policy file has a parent")
+                    .to_path_buf(),
+                source,
+            },
+        )?;
+        fs::write(
+            &policy_file,
+            "policy:\n  allow_implicit_invocation: false\n",
+        )
+        .map_err(|source| UzeError::Write {
+            path: policy_file,
+            source,
+        })?;
+    }
+    // Everything else in the canonical skill directory stays referenced.
+    // An absent canonical directory (a Resource built without a real Store
+    // path, in unit-test contexts) simply has no extras to reference.
+    let entries = match fs::read_dir(canonical_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(source) => {
+            return Err(UzeError::Read {
+                path: canonical_dir.to_path_buf(),
+                source,
+            });
+        }
+    };
+    for entry in entries {
+        let entry = entry.map_err(|source| UzeError::Read {
+            path: canonical_dir.to_path_buf(),
+            source,
+        })?;
+        let entry_name = entry.file_name();
+        if entry_name == "SKILL.md" {
+            continue;
+        }
+        if entry_name == "agents" {
+            // The canonical skill may ship its own `agents/` support files;
+            // they stay canonical (and a canonical `agents/openai.yaml` is
+            // the author's, never re-derived here).
+            continue;
+        }
+        let source = entry.path();
+        let target = dir.join(&entry_name);
+        if !target.exists() && !target.is_symlink() {
+            symlink(&source, &target)?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn symlink(source: &Path, target: &Path) -> Result<()> {
+    std::os::unix::fs::symlink(source, target).map_err(|source_error| UzeError::Write {
+        path: target.to_path_buf(),
+        source: source_error,
+    })
+}
+
+#[cfg(not(unix))]
+fn symlink(_source: &Path, target: &Path) -> Result<()> {
+    Err(UzeError::UnsupportedRuntimeProjection(target.to_path_buf()))
 }
 
 #[cfg(test)]

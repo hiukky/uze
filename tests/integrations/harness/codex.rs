@@ -177,6 +177,85 @@ fn run_codex_prompt_input(home: &Path) -> std::result::Result<String, String> {
 /// is not. A malformed-metadata control restores the listing, proving the
 /// exclusion is caused by the policy file being genuinely read. Skips when
 /// `codex` is not on PATH, so CI stays deterministic.
+/// Real-Codex coexistence dogfood (P1 regression, zero model calls): the
+/// physical state the Lab found broken — OpenCode owns the shared
+/// `~/.agents/skills` entry for a canonical user-only Skill — must be
+/// model-hidden for Codex too, because the shared entry carries Codex's
+/// `agents/openai.yaml` policy sidecar in the superset representation.
+/// A control that deletes the sidecar restores the listing, proving the
+/// exclusion is caused by the sidecar being genuinely read. Skips when
+/// `codex` is not on PATH, so CI stays deterministic.
+#[test]
+fn real_codex_dogfood_user_only_skill_stays_hidden_in_opencode_owned_shared_entry() {
+    let probe = std::process::Command::new("codex")
+        .arg("--version")
+        .output();
+    if probe.is_err() || probe.as_ref().is_ok_and(|o| !o.status.success()) {
+        eprintln!("codex not available on PATH; skipping real-Codex dogfood");
+        return;
+    }
+    let _scope = uze_testkit::env::scope();
+    let root = temp("real-codex-coexistence");
+    let uze_home = UzeHome::at(root.join("uze"));
+    let store = UzeStore::new(uze_home.clone());
+    let package = install(&store, workflow_fixture()).unwrap();
+    let environment = UzeEngine::new(store)
+        .compose(std::slice::from_ref(&package.id))
+        .unwrap();
+    let resource = &environment.resources[0];
+    assert_eq!(
+        resource.skill_invocation(),
+        SkillInvocationPolicy::USER_ONLY
+    );
+
+    let codex_home = root.join("codex-home");
+    let agents_home = codex_home.join(".agents");
+    // OpenCode is the integration that creates the shared entry in the
+    // combined delivery (Codex consumes its own generated envelope); the
+    // wrapper must therefore already be the superset.
+    let opencode = OpenCodeIntegration::new(
+        agents_home.clone(),
+        root.join("config/opencode.json"),
+        uze_home.clone(),
+    );
+    mark_setup(&uze_home, &opencode);
+    let receipt = opencode
+        .attach_receipt(resource)
+        .unwrap()
+        .expect("OpenCode attaches the user-only Skill");
+    let ManagedArtifact::SymlinkReference { target, .. } = &receipt.artifact else {
+        panic!("expected symlink artifact");
+    };
+    assert_eq!(
+        fs::read_to_string(target.join("agents/openai.yaml")).unwrap(),
+        "policy:\n  allow_implicit_invocation: false\n",
+        "the shared entry (created by OpenCode) carries Codex's policy sidecar"
+    );
+
+    let before_store_bytes = fs::read(package.root.join("skills/review/SKILL.md")).unwrap();
+    let valid = run_codex_prompt_input(&codex_home).expect("codex prompt-input runs");
+    assert!(
+        !valid.contains("workflow:review") && !valid.contains("review: Review code"),
+        "the user-only Skill must not be offered to the model through the OpenCode-owned shared entry: {valid}"
+    );
+
+    // Control: removing the sidecar restores the listing (the exclusion is
+    // caused by the policy file being read, not by the entry's name).
+    fs::remove_file(target.join("agents/openai.yaml")).unwrap();
+    let malformed = run_codex_prompt_input(&codex_home).expect("codex prompt-input runs");
+    assert!(
+        malformed.contains("workflow:review"),
+        "control: a shared entry without the policy sidecar must leak the user-only Skill"
+    );
+
+    assert_eq!(
+        fs::read(package.root.join("skills/review/SKILL.md")).unwrap(),
+        before_store_bytes,
+        "the canonical Store bytes are untouched throughout"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn real_codex_dogfood_user_only_skill_is_hidden_from_the_model() {
     let probe = std::process::Command::new("codex")

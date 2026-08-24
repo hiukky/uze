@@ -22,7 +22,12 @@
 //! straight into the Store). A non-default policy requires the vendor
 //! fields, so UZE materializes one wrapper SKILL.md under `$UZE_HOME` —
 //! loading the canonical name/description/body, never rewriting the Store
-//! — and symlinks the shared root entry at it.
+//! — and symlinks the shared root entry at it. Because Codex reads the
+//! SAME physical entry from `~/.agents/skills`, the wrapper is the superset
+//! representation (`crate::shared::skill::write_superset_skill_wrapper`):
+//! OpenCode's own controls AND Codex's `agents/openai.yaml` policy sidecar
+//! for `model=false`, so the entry is correct whichever integration
+//! created it (ADR-030 §25).
 
 use std::path::{Path, PathBuf};
 
@@ -59,11 +64,16 @@ pub(super) fn generated_skill_dir(uze_home: &UzeHome, resource: &Resource) -> Pa
 }
 
 /// Deterministically materializes (or refreshes) one non-default Skill's
-/// wrapper directory: a real SKILL.md carrying the canonical
-/// identity/description/body plus OpenCode's own invocation controls, with
-/// every other canonical file still referenced. Idempotent and rebuilt
-/// wholesale — the directory is entirely UZE-owned and non-authoritative
-/// (ADR-013 §4).
+/// wrapper directory — the shared-root superset representation
+/// (`crate::shared::skill::write_superset_skill_wrapper`): a real SKILL.md
+/// carrying the stable namespaced label as its `name` (OpenCode derives the
+/// skill id from the path, so the frontmatter `name` is the invocation
+/// label), the canonical description/body, and OpenCode's own invocation
+/// controls — plus Codex's `agents/openai.yaml` policy sidecar, because
+/// this directory lives in the shared `~/.agents/skills` root Codex reads
+/// too (`model=false` must stay hidden there; ADR-030 §25). Only a default
+/// Skill may stay byte-preserving. Idempotent and rebuilt wholesale — the
+/// directory is entirely UZE-owned and non-authoritative (ADR-013 §4).
 pub(super) fn materialize_generated_skill(
     uze_home: &UzeHome,
     resource: &Resource,
@@ -92,46 +102,17 @@ pub(super) fn materialize_generated_skill(
         path: canonical_dir.join("SKILL.md"),
         source: error,
     })?;
-    let (description, body) = crate::shared::skill::parse_skill_body(&bytes);
-    let name = crate::shared::skill::frontmatter_value(&bytes, "name")
+    let label = uze_core::integration::qualified_exposure_name_candidates(resource)
+        .into_iter()
+        .next()
         .unwrap_or_else(|| fallback_name.to_owned());
-    let mut document = String::from("---\n");
-    document.push_str(&format!("name: {name}\n"));
-    if let Some(description) = description {
-        let escaped = crate::shared::skill::escape_yaml_double_quoted(&description);
-        document.push_str(&format!("description: \"{escaped}\"\n"));
-    }
-    if !policy.user {
-        document.push_str("slash: false\n");
-    }
-    if !policy.model {
-        document.push_str("metadata:\n  opencode/autoinvoke: false\n");
-    }
-    document.push_str("---\n");
-    document.push_str(&body);
-    std::fs::write(dir.join("SKILL.md"), document).map_err(|source_error| UzeError::Write {
-        path: dir.join("SKILL.md"),
-        source: source_error,
-    })?;
-    // Everything else in the canonical skill directory stays referenced.
-    for entry in std::fs::read_dir(canonical_dir).map_err(|error| UzeError::Read {
-        path: canonical_dir.to_path_buf(),
-        source: error,
-    })? {
-        let entry = entry.map_err(|error| UzeError::Read {
-            path: canonical_dir.to_path_buf(),
-            source: error,
-        })?;
-        let entry_name = entry.file_name();
-        if entry_name == "SKILL.md" {
-            continue;
-        }
-        let source = entry.path();
-        let target = dir.join(&entry_name);
-        if !target.exists() && !target.is_symlink() {
-            symlink(&source, &target)?;
-        }
-    }
+    crate::shared::skill::write_superset_skill_wrapper(
+        &dir,
+        canonical_dir,
+        &bytes,
+        &label,
+        &policy,
+    )?;
     Ok(dir)
 }
 
@@ -330,17 +311,4 @@ fn fs_remove_dir_all(path: &Path) -> Result<()> {
         path: path.to_path_buf(),
         source,
     })
-}
-
-#[cfg(unix)]
-fn symlink(source: &Path, target: &Path) -> Result<()> {
-    std::os::unix::fs::symlink(source, target).map_err(|source_error| UzeError::Write {
-        path: target.to_path_buf(),
-        source: source_error,
-    })
-}
-
-#[cfg(not(unix))]
-fn symlink(_source: &Path, target: &Path) -> Result<()> {
-    Err(UzeError::UnsupportedRuntimeProjection(target.to_path_buf()))
 }
