@@ -8,7 +8,7 @@
 use std::{path::PathBuf, process::Command};
 
 fn temporary_home(label: &str) -> PathBuf {
-    uze_test_support::temp::scratch(label)
+    uze_testkit::temp::scratch(label)
 }
 
 fn uze(home: &PathBuf) -> Command {
@@ -25,7 +25,7 @@ fn uze(home: &PathBuf) -> Command {
 }
 
 fn package_fixture() -> PathBuf {
-    uze_test_support::fixtures::canonical("skill-plugin")
+    uze_testkit::fixtures::canonical("skill-plugin")
 }
 
 /// `uze flow@ai` — no marketplace `ai` registered, so this must reach the

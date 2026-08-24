@@ -22,14 +22,14 @@ use uze::{
 };
 use uze_integrations::{codex::CodexIntegration, opencode::OpenCodeIntegration};
 
-use uze_test_support::temp::scratch;
+use uze_testkit::temp::scratch;
 
 fn temp(label: &str) -> PathBuf {
     scratch(label)
 }
 
 fn flow_fixture() -> PathBuf {
-    uze_test_support::fixtures::canonical("flow")
+    uze_testkit::fixtures::canonical("flow")
 }
 
 fn user_only_body(name: &str) -> String {
@@ -156,8 +156,8 @@ fn fake_codex_bin_dir(root: &Path) -> PathBuf {
 #[cfg(unix)]
 fn with_fake_codex(root: &Path, f: impl FnOnce()) {
     let fake_bin = fake_codex_bin_dir(root);
-    let mut scope = uze_test_support::env::scope();
-    scope.set("PATH", uze_test_support::temp::path_prefixed(&fake_bin));
+    let mut scope = uze_testkit::env::scope();
+    scope.set("PATH", uze_testkit::temp::path_prefixed(&fake_bin));
     f();
 }
 

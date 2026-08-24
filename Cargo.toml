@@ -17,7 +17,7 @@ members = [
   "crates/uze-core",
   "crates/uze-integrations",
   "crates/uze-application",
-  "crates/uze-test-support",
+  "crates/uze-testkit",
   "e2e",
 ]
 default-members = ["."]
@@ -48,8 +48,8 @@ schemars = "1"
 
 [dev-dependencies]
 # Shared test infrastructure (TestEnvironment, FakeHarness, fixtures,
-# scenario builder) — see crates/uze-test-support and tests/README.md.
-uze-test-support = { path = "crates/uze-test-support" }
+# scenario builder) — see crates/uze-testkit and tests/README.md.
+uze-testkit = { path = "crates/uze-testkit" }
 
 [[bin]]
 name = "uze-mcp-conformance-fixture"

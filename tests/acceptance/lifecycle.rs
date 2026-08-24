@@ -1,8 +1,8 @@
 //! Acceptance A6/A7: remove lifecycle and drift-blocked destructive
 //! removal, driven through the public CLI against fake harnesses.
 
-use uze_test_support::fixtures;
-use uze_test_support::temp::TestEnvironment;
+use uze_testkit::fixtures;
+use uze_testkit::temp::TestEnvironment;
 
 use crate::util::{install_fake_harnesses, uze_bin};
 

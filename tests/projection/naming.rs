@@ -52,7 +52,7 @@ use uze::{
 };
 
 fn temp(label: &str) -> PathBuf {
-    uze_test_support::temp::scratch(label)
+    uze_testkit::temp::scratch(label)
 }
 
 /// Never spawns a process. Provisioning only needs *a* verified outcome to
@@ -291,7 +291,7 @@ fn package_uze_plus_skill_uze_naturally_gets_the_stable_label_no_special_case() 
 }
 
 fn official_package() -> PathBuf {
-    uze_test_support::fixtures::official_plugin()
+    uze_testkit::fixtures::official_plugin()
 }
 
 // --- Legacy receipt migration (ADR-026) -------------------------------------

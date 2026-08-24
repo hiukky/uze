@@ -35,11 +35,11 @@ pub(crate) fn temp(label: &str) -> PathBuf {
 }
 
 pub(crate) fn workflow_fixture() -> PathBuf {
-    uze_test_support::fixtures::canonical("workflow")
+    uze_testkit::fixtures::canonical("workflow")
 }
 
 pub(crate) fn flow_fixture() -> PathBuf {
-    uze_test_support::fixtures::canonical("flow")
+    uze_testkit::fixtures::canonical("flow")
 }
 
 pub(crate) fn install(store: &UzeStore, path: impl Into<PathBuf>) -> uze::Result<StoredPackage> {

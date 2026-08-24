@@ -58,15 +58,15 @@ impl Drop for SharedStoreFixture {
 }
 
 fn package_fixture() -> PathBuf {
-    uze_test_support::fixtures::canonical("skill-plugin")
+    uze_testkit::fixtures::canonical("skill-plugin")
 }
 
 fn mcp_package_fixture() -> PathBuf {
-    uze_test_support::fixtures::canonical("mcp-plugin")
+    uze_testkit::fixtures::canonical("mcp-plugin")
 }
 
 fn temporary_root(label: &str) -> PathBuf {
-    uze_test_support::temp::scratch(label)
+    uze_testkit::temp::scratch(label)
 }
 
 fn assert_clean_workspace(workspace: &Path) {

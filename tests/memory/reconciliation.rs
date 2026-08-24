@@ -27,15 +27,15 @@ use uze::{
 };
 
 fn temp(label: &str) -> PathBuf {
-    uze_test_support::temp::scratch(label)
+    uze_testkit::temp::scratch(label)
 }
 
 fn fixture_a() -> PathBuf {
-    uze_test_support::fixtures::canonical("instructions-a")
+    uze_testkit::fixtures::canonical("instructions-a")
 }
 
 fn fixture_b() -> PathBuf {
-    uze_test_support::fixtures::canonical("instructions-b")
+    uze_testkit::fixtures::canonical("instructions-b")
 }
 
 /// A deterministic stand-in for the one bridge-capable harness (Claude

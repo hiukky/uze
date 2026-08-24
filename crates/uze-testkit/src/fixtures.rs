@@ -21,7 +21,21 @@ use std::path::{Path, PathBuf};
 use crate::workspace_root;
 
 /// `tests/fixtures/`.
+///
+/// Resolved through `$UZE_TESTKIT_FIXTURES_ROOT` when set (the Lab image
+/// copies the canonical tree to a runtime path; compile-time paths do not
+/// exist in the container), otherwise by walking up from this crate's
+/// manifest directory.
 pub fn root() -> PathBuf {
+    if let Some(override_dir) = std::env::var_os("UZE_TESTKIT_FIXTURES_ROOT") {
+        let root = PathBuf::from(override_dir);
+        assert!(
+            root.is_dir(),
+            "UZE_TESTKIT_FIXTURES_ROOT is set but is not a directory: {}",
+            root.display()
+        );
+        return root;
+    }
     workspace_root().join("tests/fixtures")
 }
 
@@ -65,9 +79,31 @@ pub fn assert_in_fixtures(path: &Path) {
     let checked = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     assert!(
         checked.starts_with(&fixtures_root),
-        "expected {} to live under tests/fixtures ({}); use uze_test_support::fixtures instead \
+        "expected {} to live under tests/fixtures ({}); use uze_testkit::fixtures instead \
          of hard-coded paths",
         checked.display(),
         fixtures_root.display()
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fixtures_root_honors_the_runtime_override() {
+        let override_dir = std::env::temp_dir().join(format!(
+            "uze-testkit-fixtures-override-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&override_dir).unwrap();
+        let mut scope = crate::env::scope();
+        scope.set("UZE_TESTKIT_FIXTURES_ROOT", &override_dir);
+        assert_eq!(root(), override_dir);
+        assert_eq!(canonical("x"), override_dir.join("canonical/x"));
+        drop(scope);
+        // Without the override the workspace walk is authoritative again.
+        assert!(root().ends_with("tests/fixtures"));
+        let _ = std::fs::remove_dir_all(&override_dir);
+    }
 }

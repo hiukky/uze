@@ -2,9 +2,9 @@
 //! driven through the public CLI with deterministic fake harness CLI
 //! binaries (no real vendor binary, no model call).
 
-use uze_test_support::assertions;
-use uze_test_support::fixtures;
-use uze_test_support::temp::TestEnvironment;
+use uze_testkit::assertions;
+use uze_testkit::fixtures;
+use uze_testkit::temp::TestEnvironment;
 
 use crate::util::{
     default_body, install_fake_harnesses, make_skill_package, model_only_body, user_only_body,

@@ -16,7 +16,7 @@ use std::{
 use uze::{PackageSource, ResolvedSource, UzeError, UzeHome, UzeStore, acquisition::acquire};
 
 fn temporary(label: &str) -> PathBuf {
-    uze_test_support::temp::scratch(label)
+    uze_testkit::temp::scratch(label)
 }
 
 fn git(arguments: &[&str], directory: &Path) -> String {

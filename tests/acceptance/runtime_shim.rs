@@ -5,8 +5,8 @@
 use std::path::Path;
 
 use uze::UzeHome;
-use uze_test_support::fake_harness::FakeHarness;
-use uze_test_support::temp::TestEnvironment;
+use uze_testkit::fake_harness::FakeHarness;
+use uze_testkit::temp::TestEnvironment;
 
 use crate::util::uze_bin;
 

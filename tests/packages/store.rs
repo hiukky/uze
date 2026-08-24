@@ -19,15 +19,15 @@ fn install(
 }
 
 fn package_fixture() -> PathBuf {
-    uze_test_support::fixtures::canonical("skill-plugin")
+    uze_testkit::fixtures::canonical("skill-plugin")
 }
 
 fn mcp_package_fixture() -> PathBuf {
-    uze_test_support::fixtures::canonical("mcp-plugin")
+    uze_testkit::fixtures::canonical("mcp-plugin")
 }
 
 fn temporary_home(label: &str) -> PathBuf {
-    uze_test_support::temp::scratch(label)
+    uze_testkit::temp::scratch(label)
 }
 
 #[test]
@@ -157,7 +157,7 @@ fn store_and_engine_compose_an_mcp_only_package_into_one_mcp_resource() {
 fn one_package_with_two_mcp_servers_produces_two_named_resources() {
     let home = UzeHome::at(temporary_home("multi-mcp"));
     let store = UzeStore::new(home.clone());
-    let fixture = uze_test_support::fixtures::canonical("multi-mcp-plugin");
+    let fixture = uze_testkit::fixtures::canonical("multi-mcp-plugin");
     let package = install(&store, fixture).unwrap();
     let environment = UzeEngine::new(store)
         .compose(std::slice::from_ref(&package.id))

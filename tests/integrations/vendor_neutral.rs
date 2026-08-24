@@ -32,15 +32,15 @@ fn install(
 }
 
 fn native_package_fixture() -> PathBuf {
-    uze_test_support::fixtures::foreign("codex", "native-plugin")
+    uze_testkit::fixtures::foreign("codex", "native-plugin")
 }
 
 fn plain_package_fixture() -> PathBuf {
-    uze_test_support::fixtures::canonical("skill-plugin")
+    uze_testkit::fixtures::canonical("skill-plugin")
 }
 
 fn temporary_home(label: &str) -> UzeHome {
-    UzeHome::at(uze_test_support::temp::scratch(label))
+    UzeHome::at(uze_testkit::temp::scratch(label))
 }
 
 /// Publishes a derived view of the installed package set, exactly the way a

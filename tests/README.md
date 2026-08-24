@@ -49,7 +49,7 @@ live inside their domain with behavior-descriptive test names.
 
 ## Support crate
 
-`crates/uze-test-support` owns the shared infrastructure:
+`crates/uze-testkit` owns the shared infrastructure:
 
 - `temp::TestEnvironment` — isolated HOME/UZE_HOME/PATH/cwd/fake-bin and
   per-harness config homes, with real-home safety guards. Every child
@@ -75,7 +75,7 @@ make test-real-harness                   # L2 probes that need real vendor binar
 ```
 
 Real-harness policy: a probe skips cleanly when the binary is absent
-(`real_codex_dogfood...`); the `e2e/` lab (Docker, offline tiers) is the
+(`real_codex_dogfood...`); the `e2e/` lab (Docker, offline L2) is the
 place for real-vendor verdicts, and is never required for the ordinary
 suite.
 
@@ -106,12 +106,12 @@ real-vendor evidence exists in-repo (see the harness matrix below).
 
 | Harness | Component (L1) | Real CLI (L2) | Acceptance (L3) |
 |---|---:|---:|---:|
-| Claude | ✓ | e2e lab (Tier 2) — no in-repo probe | ✓ |
+| Claude | ✓ | e2e lab (L2) — no in-repo probe | ✓ |
 | Codex | ✓ | ✓ (`real_codex_dogfood...`, zero model calls, skip-if-absent) | ✓ |
-| OpenCode | ✓ | e2e lab (Tier 2) | ✓ |
-| Antigravity | ✓ | e2e lab (Tier 2) | ✓ |
+| OpenCode | ✓ | e2e lab (L2) | ✓ |
+| Antigravity | ✓ | e2e lab (L2) | ✓ |
 
-"e2e lab" = `e2e/` container lab Tiers 1-2 (offline, no credentials, runs
+"e2e lab" = `e2e/` container lab L2 (offline, no credentials, runs
 the real binaries) — the honest place for vendor-semantics verdicts.
 
 ## Acceptance scenarios (L3)

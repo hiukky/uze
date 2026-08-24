@@ -1,8 +1,8 @@
 //! Workspace negatives: malformed external inputs are reported cleanly,
 //! never panicked on (L2 CLI evidence, isolated env).
 
-use uze_test_support::fixtures;
-use uze_test_support::temp::TestEnvironment;
+use uze_testkit::fixtures;
+use uze_testkit::temp::TestEnvironment;
 
 use crate::util::uze_bin;
 

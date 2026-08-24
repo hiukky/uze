@@ -1,54 +1,32 @@
 //! The harness registry: the only place a new harness is declared.
 //!
-//! Adding a harness must not mean writing a new runner. Every tier is generic
-//! over this table, so a new entry — plus whatever `IntegrationPort` the
-//! product already provides — is the whole cost of covering it.
+//! Adding a harness must not mean writing a new runner: L2 scenarios are
+//! generic over this table. Each entry declares what the harness reports for
+//! each vendor-facing surface, plus the optional L4 route.
 //!
-//! Deliberately absent: any expected attachment name. Tier 1 reads the names
-//! UZE actually attached out of `uze inspect --format json` and hands them to
-//! Tier 2, so a fixture rename can never silently pass against a stale
-//! constant here.
+//! Deliberately absent: any expected attachment name. Scenario runners read
+//! the names UZE actually attached out of `uze inspect --format json` and
+//! hand them to the probes, so a fixture rename can never silently pass
+//! against a stale constant here.
+//!
+//! Delivery shapes reflect the CURRENT projection (ADR-020/021/030):
+//! Claude and Codex receive generated native packages, OpenCode a shared
+//! skill-root symlink, Antigravity a staged plugin copy.
 
-/// The delivery shapes UZE can produce, as reported in an attachment
-/// receipt's `artifact` field. A harness declares a deterministic probe per
-/// kind it actually receives, because the name a harness can be asked about
-/// differs by route: a vendor-config entry is named by UZE, while a natively
-/// installed package is named by the harness's own plugin system and carries
-/// its capabilities implicitly.
+/// The vendor-facing surface a probe asks about.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
-pub enum ArtifactKind {
-    VendorConfigEntry,
-    SymlinkReference,
-    IntegrationOwned,
-}
-
-impl ArtifactKind {
-    /// The tag UZE serializes for this variant.
-    pub fn tag(self) -> &'static str {
-        match self {
-            Self::VendorConfigEntry => "VENDOR_CONFIG_ENTRY",
-            Self::SymlinkReference => "SYMLINK_REFERENCE",
-            Self::IntegrationOwned => "INTEGRATION_OWNED",
-        }
-    }
-
-    pub fn from_tag(tag: &str) -> Option<Self> {
-        match tag {
-            "VENDOR_CONFIG_ENTRY" => Some(Self::VendorConfigEntry),
-            "SYMLINK_REFERENCE" => Some(Self::SymlinkReference),
-            "INTEGRATION_OWNED" => Some(Self::IntegrationOwned),
-            _ => None,
-        }
-    }
+pub enum ProbeCapability {
+    Skill,
+    Mcp,
+    Package,
 }
 
 /// One deterministic probe: a harness subcommand that reports what the
-/// harness itself can see, without starting a model turn.
+/// harness itself sees, without starting a model turn.
 ///
 /// `required` fragments must appear in the probe's output *in addition to*
-/// the attached name Tier 1 discovered. They separate "the harness lists the
-/// entry" from "the harness reports it as usable" — a config entry pointing
-/// at a dead binary is still listed, so listing alone is not discovery.
+/// the attached name the runner discovered. They separate "the harness lists
+/// the entry" from "the harness reports it as usable".
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Probe {
     pub arguments: &'static [&'static str],
@@ -56,36 +34,43 @@ pub struct Probe {
     /// resolved fixture server path, which ties a probe to this package even
     /// when the harness renames the capability out of UZE's naming.
     pub required: &'static [&'static str],
-    /// Whether the attached name Tier 1 discovered must also appear. A
-    /// harness that decomposes a delivered package into capabilities under
-    /// its own names cannot be asked about UZE's name, so such a probe
-    /// identifies the attachment through `required` instead.
+    /// Whether the discovered attached name must also appear. A harness that
+    /// decomposes a delivered package into capabilities under its own names
+    /// cannot be asked about UZE's name, so such a probe identifies the
+    /// attachment through `required` instead.
     pub matches_attached_name: bool,
-    /// Exactly what a pass on this probe establishes, echoed into the
-    /// evidence record. Two harnesses can both report `DiscoveryVerified`
-    /// while proving different depths — Codex offers no MCP health check —
-    /// and a reader must not have to infer that from the argv.
+    /// Exactly what a pass establishes, echoed into the evidence record.
     pub claim: &'static str,
 }
 
-/// Files a harness needs in its disposable HOME before a Tier 3 route
-/// resolves. Declarative so a new harness adds data, not runner code.
+/// L2 invocation-policy probe (scenario R2): what the harness reports about
+/// who may invoke a Skill, model-free. `None` records `Unverified`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PolicyProbe {
+    /// Subcommand that renders the model-visible prompt input.
+    pub arguments: &'static [&'static str],
+    /// Fragments that must appear for the normal Skill (model-visible).
+    pub normal_visible: &'static [&'static str],
+    /// Fragments that must appear for the user-only Skill (hidden).
+    pub user_only_marker: &'static [&'static str],
+    /// Exactly what a pass on this probe establishes.
+    pub claim: &'static str,
+}
+
+/// Files a harness needs in its disposable HOME before an L4 route resolves.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProviderConfig {
-    /// Written relative to the run's HOME. `{gateway}` is substituted.
     pub relative_path: &'static str,
     pub contents: &'static str,
     /// Directories copied into HOME before the config is written, as
-    /// `(absolute source, destination relative to HOME)`. OpenCode resolves
-    /// its official runtime plugin packages on first use; they are baked into
-    /// the image so no tier depends on reaching npm.
+    /// `(absolute source, destination relative to HOME)`.
     pub seed: &'static [(&'static str, &'static str)],
 }
 
-/// Tier 3 invocation shape. Placeholders substituted at run time:
+/// L4 invocation shape. Placeholders substituted at run time:
 /// `{model}`, `{prompt}`, `{workspace}`, `{gateway}`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct BehaviorSpec {
+pub struct L4Spec {
     pub arguments: &'static [&'static str],
     pub environment: &'static [(&'static str, &'static str)],
     /// Gateway alias this harness's protocol route resolves against.
@@ -101,23 +86,25 @@ pub struct HarnessSpec {
     /// an attachment receipt's `integration` field.
     pub uze_name: &'static str,
     pub executable: &'static str,
-    /// Deterministic discovery probe per artifact kind. `None` means this
-    /// harness offers no non-model way to report that kind; the tier records
-    /// it as unavailable rather than inventing evidence.
-    pub probes: &'static [(ArtifactKind, Probe)],
-    /// `None` for a harness with no routable behavioral tier — its provider
-    /// protocol has no gateway-compatible route, so a model turn would need
-    /// a real vendor account. Deterministic tiers still cover it fully.
-    pub behavior: Option<BehaviorSpec>,
+    /// L2 probes per vendor-facing capability. `None` for a surface the
+    /// harness offers no model-free way to report; the scenario records it
+    /// as unavailable rather than inventing evidence.
+    pub probes: &'static [(ProbeCapability, Probe)],
+    /// L2 invocation-policy evidence (R2); `None` → `Unverified`.
+    pub policy: Option<PolicyProbe>,
+    /// L2 runtime-shim evidence (R6): run this subcommand *through* the shim
+    /// and expect the real executable to answer. `None` → `Unverified`.
+    pub shim_probe: Option<&'static [&'static str]>,
+    /// `None` for a harness with no gateway-routable L4 route.
+    pub l4: Option<L4Spec>,
 }
 
 impl HarnessSpec {
-    pub fn probes_for(&self, kind: ArtifactKind) -> Vec<&'static Probe> {
+    pub fn probe_for(&self, capability: ProbeCapability) -> Option<&'static Probe> {
         self.probes
             .iter()
-            .filter(|(declared, _)| *declared == kind)
+            .find(|(declared, _)| *declared == capability)
             .map(|(_, probe)| probe)
-            .collect()
     }
 }
 
@@ -126,34 +113,54 @@ pub const HARNESSES: &[HarnessSpec] = &[
         id: "claude",
         uze_name: "claude-code",
         executable: "claude",
+        // Claude receives the canonical package as a generated native
+        // package (ADR-020): the vendor-facing result is one marketplace
+        // entry under UZE's generated-only marketplace, reported by Claude's
+        // own plugin machinery. The MCP capability is registered through the
+        // generated envelope's manifest and checked for connectivity.
         probes: &[
             (
-                ArtifactKind::VendorConfigEntry,
+                ProbeCapability::Package,
                 Probe {
-                    arguments: &["mcp", "list"],
-                    required: &["Connected"],
-                    matches_attached_name: true,
-                    claim: "Claude Code lists the UZE-registered MCP server and reports it connected",
+                    arguments: &["plugin", "marketplace", "list", "--json"],
+                    required: &["\"name\"", "\"path\""],
+                    matches_attached_name: false,
+                    claim: "Claude Code lists UZE's generated marketplace entry in its own plugin catalogue",
                 },
             ),
             (
-                ArtifactKind::SymlinkReference,
+                ProbeCapability::Skill,
                 Probe {
-                    arguments: &["plugin", "list"],
-                    required: &["loaded"],
+                    arguments: &["plugin", "list", "--json"],
+                    required: &["\"enabled\": true"],
                     matches_attached_name: true,
-                    claim: "Claude Code loads the UZE-managed skill reference from its user scope",
+                    claim: "Claude Code reports the UZE-generated package containing the Skill as enabled",
+                },
+            ),
+            (
+                ProbeCapability::Mcp,
+                Probe {
+                    // Claude renames plugin-scoped MCP servers to
+                    // `plugin:<pkg>:<server>` — the server is identified by
+                    // its resolved fixture binary and connection state, not
+                    // by UZE's name.
+                    arguments: &["mcp", "list"],
+                    required: &["Connected", "{mcp_binary}"],
+                    matches_attached_name: false,
+                    claim: "Claude Code lists the UZE-registered MCP server (plugin-scoped name) and reports it connected",
                 },
             ),
         ],
-        behavior: Some(BehaviorSpec {
+        policy: None,
+        shim_probe: Some(&["--version"]),
+        l4: Some(L4Spec {
             // `--permission-mode bypassPermissions` is required, not
             // convenience: Claude Code's default mode denies every MCP tool
             // call when no interactive approver exists, which burns turns and
             // surfaces as `error_max_turns` rather than as a permission
             // problem. The container is already externally sandboxed
             // (read-only root, tmpfs-only writes, cap_drop ALL, no provider
-            // egress), and this tier asserts capability wiring, not the
+            // egress), and this level asserts capability wiring, not the
             // harness's own approval UX.
             arguments: &[
                 "-p",
@@ -172,8 +179,6 @@ pub const HARNESSES: &[HarnessSpec] = &[
                 ("ANTHROPIC_BASE_URL", "{gateway}"),
                 ("ANTHROPIC_API_KEY", "not-required-inside-isolated-lab"),
             ],
-            // Claude Code sends `reasoning.effort` for any model name it does
-            // not recognize, which a plain chat model rejects with a 400.
             model: "uze-conformance-reasoning",
             provider_config: None,
         }),
@@ -182,43 +187,45 @@ pub const HARNESSES: &[HarnessSpec] = &[
         id: "codex",
         uze_name: "codex",
         executable: "codex",
-        // Codex receives the whole package natively, so its receipt is an
-        // integration-owned artifact the Core does not interpret. UZE names
-        // the package and Codex derives capability names from the installed
-        // envelope, which is why no UZE-named vendor-config entry exists to
-        // probe for.
+        // Codex receives the whole package natively (generated envelope);
+        // its receipt is an integration-owned artifact. Codex derives
+        // capability names from the installed envelope, which is why the
+        // MCP probe identifies the server by its resolved binary path.
         probes: &[
             (
-                ArtifactKind::IntegrationOwned,
+                ProbeCapability::Package,
                 Probe {
-                    arguments: &["plugin", "list"],
-                    required: &["installed", "enabled"],
+                    arguments: &["plugin", "list", "--json"],
+                    required: &["\"enabled\": true", "\"installed\": true"],
                     matches_attached_name: true,
                     claim: "Codex reports the UZE marketplace plugin installed and enabled",
                 },
             ),
             (
-                // Second probe on the same delivery: `plugin list` proves the
-                // package installed, but says nothing about the capabilities
-                // inside it. This one proves Codex decomposed the envelope into
-                // a real MCP server registration. Codex names that server from
-                // the package's own manifest rather than from UZE, so the
-                // resolved binary path is what ties it back to this fixture.
-                //
-                // Codex runs no health check here, so this is registration
-                // evidence, not connectivity evidence — Claude and OpenCode are
-                // probed one level deeper. That asymmetry is a real coverage
-                // gap, recorded rather than papered over.
-                ArtifactKind::IntegrationOwned,
+                ProbeCapability::Skill,
                 Probe {
-                    arguments: &["mcp", "list", "--json"],
-                    required: &["{mcp_binary}", "\"enabled\": true"],
-                    matches_attached_name: false,
-                    claim: "Codex decomposed the plugin envelope into an enabled MCP server registration (registration only: Codex runs no health check)",
+                    arguments: &["plugin", "list", "--json"],
+                    required: &["\"enabled\": true"],
+                    matches_attached_name: true,
+                    claim: "Codex reports the UZE package (containing the Skill) as installed and enabled",
                 },
             ),
+            // No MCP probe: `codex mcp list --json` returns no entries for
+            // marketplace-plugin servers on the pinned 0.148.0 (and on
+            // 0.149.1). Codex offers no model-free enumeration of plugin MCP
+            // servers — the scenario records `Unverified` with this reason,
+            // never a guessed pass.
         ],
-        behavior: Some(BehaviorSpec {
+        // `codex debug prompt-input` renders the model-visible prompt without
+        // invoking a model. A user-only Skill must not appear there.
+        policy: Some(PolicyProbe {
+            arguments: &["debug", "prompt-input"],
+            normal_visible: &[],
+            user_only_marker: &[],
+            claim: "Codex's model-visible prompt input includes the default Skill and excludes the user-only Skill",
+        }),
+        shim_probe: Some(&["--version"]),
+        l4: Some(L4Spec {
             // Codex 0.148.0 removed `wire_api = "chat"` for custom model
             // providers, so the gateway route only resolves declared as
             // "responses". `model_reasoning_summary="none"` avoids a provider
@@ -240,10 +247,9 @@ pub const HARNESSES: &[HarnessSpec] = &[
                 "{model}",
                 // Codex's bundled bubblewrap needs an unprivileged user
                 // namespace, which Docker's default seccomp profile blocks.
-                // Relaxing seccomp so a sandbox can run inside a container
-                // that is already read-only, tmpfs-only, cap_drop ALL and
-                // without provider egress trades real isolation for none, so
-                // the outer boundary is the sandbox and Codex's own is off.
+                // The outer boundary is already read-only, tmpfs-only,
+                // cap_drop ALL and without provider egress, so Codex's own
+                // sandbox is off inside it.
                 "--dangerously-bypass-approvals-and-sandbox",
                 "exec",
                 "--skip-git-repo-check",
@@ -260,19 +266,15 @@ pub const HARNESSES: &[HarnessSpec] = &[
     HarnessSpec {
         id: "opencode",
         uze_name: "opencode",
-        executable: "opencode",
+        // The latest channel installs the V2 preview binary (`opencode2`);
+        // the product detects either alias.
+        executable: "opencode2",
+        // OpenCode has no package-level native concept: Skills are consumed
+        // from the shared `.agents/skills` discovery root (symlink) and MCP
+        // through the managed `opencode.json` config.
         probes: &[
             (
-                ArtifactKind::VendorConfigEntry,
-                Probe {
-                    arguments: &["mcp", "list"],
-                    required: &["connected"],
-                    matches_attached_name: true,
-                    claim: "OpenCode lists the UZE-registered MCP server and reports it connected",
-                },
-            ),
-            (
-                ArtifactKind::SymlinkReference,
+                ProbeCapability::Skill,
                 Probe {
                     // Emits JSON per discovered skill, including the resolved
                     // `location`, which proves the managed symlink resolves
@@ -283,12 +285,19 @@ pub const HARNESSES: &[HarnessSpec] = &[
                     claim: "OpenCode resolves the UZE-managed skill symlink into its discovered skill set",
                 },
             ),
+            (
+                ProbeCapability::Mcp,
+                Probe {
+                    arguments: &["mcp", "list"],
+                    required: &["connected"],
+                    matches_attached_name: true,
+                    claim: "OpenCode lists the UZE-registered MCP server and reports it connected",
+                },
+            ),
         ],
-        behavior: Some(BehaviorSpec {
-            // The selected model is fully declared in the per-run config the
-            // caller writes. `OPENCODE_DISABLE_MODELS_FETCH` keeps OpenCode
-            // from refreshing its optional models.dev catalog, which no tier
-            // may depend on.
+        policy: None,
+        shim_probe: Some(&["--version"]),
+        l4: Some(L4Spec {
             arguments: &[
                 "run",
                 "--pure",
@@ -325,14 +334,14 @@ pub const HARNESSES: &[HarnessSpec] = &[
         id: "antigravity",
         uze_name: "antigravity",
         executable: "agy",
+        // Antigravity receives the whole package as a staged byte copy
+        // (`agy plugin install`); `agy plugin list` is machine-readable
+        // JSON (verified against 1.1.19) — the plugin name appears inside
+        // `imports` if and only if the install registered it.
         probes: &[
             (
-                ArtifactKind::IntegrationOwned,
+                ProbeCapability::Package,
                 Probe {
-                    // `agy plugin list` is machine-readable JSON on stdout
-                    // (verified against 1.1.19): the attached plugin name
-                    // appears inside `imports` if and only if the install
-                    // registered it.
                     arguments: &["plugin", "list"],
                     required: &["\"imports\"", "\"name\""],
                     matches_attached_name: true,
@@ -340,22 +349,32 @@ pub const HARNESSES: &[HarnessSpec] = &[
                 },
             ),
             (
-                ArtifactKind::VendorConfigEntry,
+                ProbeCapability::Skill,
                 Probe {
-                    // `agy mcp list` is human-readable; a stdio server shows
-                    // its type — registration evidence, not connectivity.
-                    arguments: &["mcp", "list"],
-                    required: &["stdio"],
+                    arguments: &["plugin", "list"],
+                    required: &["\"imports\"", "\"name\""],
                     matches_attached_name: true,
-                    claim: "Antigravity lists the UZE-registered MCP server in its global config (registration only: `agy mcp list` shows no connection state)",
+                    claim: "Antigravity lists the UZE-staged plugin (carrying the Skill) as imported",
                 },
             ),
-            // No probe is declared for SYMLINK_REFERENCE: Antigravity offers
-            // no model-free way to list skills discovered outside a plugin
-            // (`/skills` is TUI-only). The tier records that as Unverified
-            // rather than inventing evidence for it.
+            (
+                ProbeCapability::Mcp,
+                Probe {
+                    // `agy plugin list` reports the per-plugin import
+                    // manifest, which carries the components the staged
+                    // plugin registered — including `mcpServers`. `agy mcp
+                    // list` only shows *global* servers, so per-plugin MCP
+                    // registration is the strongest model-free evidence.
+                    arguments: &["plugin", "list"],
+                    required: &["mcpServers"],
+                    matches_attached_name: true,
+                    claim: "Antigravity reports the MCP server component inside the staged plugin's own import manifest (per-plugin registration; `agy mcp list` only lists global servers)",
+                },
+            ),
         ],
-        behavior: None,
+        policy: None,
+        shim_probe: Some(&["--version"]),
+        l4: None,
     },
 ];
 
@@ -393,6 +412,19 @@ mod tests {
                     );
                 }
             }
+            if let Some(policy) = harness.policy {
+                for fragment in policy
+                    .normal_visible
+                    .iter()
+                    .chain(policy.user_only_marker.iter())
+                {
+                    assert!(
+                        !fragment.contains("uze-"),
+                        "{} hardcodes an attachment name fragment in its policy probe: {fragment}",
+                        harness.id
+                    );
+                }
+            }
         }
     }
 
@@ -415,22 +447,26 @@ mod tests {
     }
 
     #[test]
-    fn every_declared_probe_kind_is_reachable() {
+    fn every_l2_probe_capability_has_at_most_one_probe() {
         for harness in HARNESSES {
-            for (kind, _) in harness.probes {
-                assert!(
-                    !harness.probes_for(*kind).is_empty(),
-                    "{} declares an unreachable {kind:?} probe",
-                    harness.id
-                );
-            }
+            let mut seen: Vec<ProbeCapability> =
+                harness.probes.iter().map(|(kind, _)| *kind).collect();
+            seen.sort_unstable();
+            let before = seen.len();
+            seen.dedup();
+            assert_eq!(
+                seen.len(),
+                before,
+                "{} declares two probes for the same capability",
+                harness.id
+            );
         }
     }
 
     #[test]
-    fn behavior_specs_carry_no_provider_credential() {
+    fn l4_specs_carry_no_provider_credential() {
         for harness in HARNESSES {
-            for (name, value) in harness.behavior.iter().flat_map(|spec| spec.environment) {
+            for (name, value) in harness.l4.iter().flat_map(|spec| spec.environment) {
                 assert!(
                     !value.starts_with("sk-"),
                     "{} would ship a literal provider key in {name}",
@@ -438,17 +474,5 @@ mod tests {
                 );
             }
         }
-    }
-
-    #[test]
-    fn artifact_kind_tags_round_trip() {
-        for kind in [
-            ArtifactKind::VendorConfigEntry,
-            ArtifactKind::SymlinkReference,
-            ArtifactKind::IntegrationOwned,
-        ] {
-            assert_eq!(ArtifactKind::from_tag(kind.tag()), Some(kind));
-        }
-        assert_eq!(ArtifactKind::from_tag("SOMETHING_ELSE"), None);
     }
 }

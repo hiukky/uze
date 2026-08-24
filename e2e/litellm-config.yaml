@@ -15,7 +15,7 @@ model_list:
   # rejects with a 400. A second alias backed by a reasoning-capable model
   # keeps the cheap default for Codex/OpenCode, which have no such
   # requirement, and isolates the extra reasoning-token cost to Claude's
-  # own conformance run. See e2e/run-claude-e2e.sh.
+  # own conformance run. See the L4 level of the conformance runner.
   - model_name: uze-conformance-reasoning
     litellm_params:
       model: os.environ/UZE_CONFORMANCE_REASONING_MODEL

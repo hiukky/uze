@@ -22,7 +22,7 @@ use std::{
 use uze::{PackageSource, UzeError, UzeHome, UzeStore};
 
 fn temporary(label: &str) -> PathBuf {
-    uze_test_support::temp::scratch(label)
+    uze_testkit::temp::scratch(label)
 }
 
 /// A minimal valid Agent Plugin, so every rejection below is about

@@ -416,8 +416,8 @@ fn no_duplicate_capability_receipt_when_a_package_covers_the_resource() {
     let root = temp("no-duplicate-receipt");
     let uze_home = UzeHome::at(root.join("uze"));
     let fake_bin = fake_always_succeeding_bin_dir(&root);
-    let mut env_scope = uze_test_support::env::scope();
-    env_scope.set("PATH", uze_test_support::temp::path_prefixed(&fake_bin));
+    let mut env_scope = uze_testkit::env::scope();
+    env_scope.set("PATH", uze_testkit::temp::path_prefixed(&fake_bin));
 
     let application = uze::UzeApplication::new_with_runner(
         uze_home.clone(),

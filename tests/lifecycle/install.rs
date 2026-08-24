@@ -26,10 +26,10 @@ fn install(
 }
 
 fn fixture() -> PathBuf {
-    uze_test_support::fixtures::foreign("codex", "native-plugin")
+    uze_testkit::fixtures::foreign("codex", "native-plugin")
 }
 fn temp(label: &str) -> PathBuf {
-    uze_test_support::temp::scratch(label)
+    uze_testkit::temp::scratch(label)
 }
 fn installed(home: &UzeHome) -> (uze::StoredPackage, uze::EffectiveEnvironment) {
     let store = UzeStore::new(home.clone());

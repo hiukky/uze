@@ -2,9 +2,9 @@
 //! running UZE from `project/subdir/deeper` must resolve the workspace
 //! root and report a healthy locked environment.
 
-use uze_test_support::fixtures;
-use uze_test_support::scenario::Scenario;
-use uze_test_support::temp::TestEnvironment;
+use uze_testkit::fixtures;
+use uze_testkit::scenario::Scenario;
+use uze_testkit::temp::TestEnvironment;
 
 use crate::util::{agents_json, uze_bin};
 

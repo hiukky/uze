@@ -48,7 +48,7 @@ pub fn workspace_root() -> PathBuf {
         }
         if !candidate.pop() {
             panic!(
-                "uze-test-support: could not locate the workspace root above {}",
+                "uze-testkit: could not locate the workspace root above {}",
                 env!("CARGO_MANIFEST_DIR")
             );
         }

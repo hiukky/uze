@@ -2,7 +2,7 @@
 
 Every persistent test input lives here, in four kinds. Fixtures are
 *inputs*, never `$UZE_HOME`: each test installs them into an isolated
-[`TestEnvironment`](`crates/uze-test-support`) Store.
+[`TestEnvironment`](`crates/uze-testkit`) Store.
 
 | Kind | What it holds | Who consumes it |
 |---|---|---|
@@ -62,7 +62,7 @@ as its own format. One per vendor, minimal:
 Scenarios that depend on UZE-generated state (drifted receipts, projection
 conflicts, corrupted stores) cannot be static files — receipts carry
 machine-specific absolute paths. They are built by the scenario builders in
-`crates/uze-test-support` (apply UZE, then mutate), and named by the
+`crates/uze-testkit` (apply UZE, then mutate), and named by the
 behavior they exercise.
 
 ## golden/

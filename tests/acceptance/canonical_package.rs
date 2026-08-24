@@ -41,7 +41,7 @@ fn install(
 }
 
 fn fixture() -> PathBuf {
-    uze_test_support::fixtures::canonical("flow")
+    uze_testkit::fixtures::canonical("flow")
 }
 
 fn mark_setup(home: &UzeHome, integration: &dyn IntegrationPort) {
@@ -58,7 +58,7 @@ fn mark_setup(home: &UzeHome, integration: &dyn IntegrationPort) {
 }
 
 fn temp(label: &str) -> PathBuf {
-    uze_test_support::temp::scratch(label)
+    uze_testkit::temp::scratch(label)
 }
 
 /// The fixture ships literally none of the harnesses' own enhanced envelope

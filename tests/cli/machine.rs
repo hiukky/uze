@@ -1,7 +1,7 @@
 use std::{path::PathBuf, process::Command};
 
 fn package_fixture() -> PathBuf {
-    uze_test_support::fixtures::canonical("skill-plugin")
+    uze_testkit::fixtures::canonical("skill-plugin")
 }
 
 /// Copies the MCP fixture package into `dest_dir` with its `mcp.json`
@@ -9,7 +9,7 @@ fn package_fixture() -> PathBuf {
 /// the fixture MCP server binary — see
 /// `tests/fixtures/canonical/mcp-plugin/README.md`.
 fn mcp_package_fixture_with_resolved_binary(dest_dir: &std::path::Path) -> PathBuf {
-    let source = uze_test_support::fixtures::canonical("mcp-plugin");
+    let source = uze_testkit::fixtures::canonical("mcp-plugin");
     std::fs::create_dir_all(dest_dir).unwrap();
     std::fs::copy(source.join("plugin.json"), dest_dir.join("plugin.json")).unwrap();
     let manifest = std::fs::read_to_string(source.join("mcp.json")).unwrap();
@@ -22,7 +22,7 @@ fn mcp_package_fixture_with_resolved_binary(dest_dir: &std::path::Path) -> PathB
 }
 
 fn temporary_home(label: &str) -> PathBuf {
-    uze_test_support::temp::scratch(label)
+    uze_testkit::temp::scratch(label)
 }
 
 #[test]

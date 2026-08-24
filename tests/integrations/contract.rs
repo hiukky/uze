@@ -28,11 +28,11 @@ fn install(
 }
 
 fn package_fixture() -> PathBuf {
-    uze_test_support::fixtures::canonical("skill-plugin")
+    uze_testkit::fixtures::canonical("skill-plugin")
 }
 
 fn mcp_package_fixture() -> PathBuf {
-    uze_test_support::fixtures::canonical("mcp-plugin")
+    uze_testkit::fixtures::canonical("mcp-plugin")
 }
 
 fn mcp_stored_environment(label: &str) -> (PathBuf, uze::EffectiveEnvironment) {
@@ -44,7 +44,7 @@ fn mcp_stored_environment(label: &str) -> (PathBuf, uze::EffectiveEnvironment) {
 }
 
 fn temporary_home(label: &str) -> PathBuf {
-    uze_test_support::temp::scratch(label)
+    uze_testkit::temp::scratch(label)
 }
 
 fn stored_environment(label: &str) -> (PathBuf, uze::EffectiveEnvironment) {
@@ -390,8 +390,8 @@ fn detach_mcp_entry_removes_a_registered_entry_idempotently() {
         permissions.set_mode(0o755);
         fs::set_permissions(&path, permissions).unwrap();
     }
-    let mut scope = uze_test_support::env::scope();
-    scope.set("PATH", uze_test_support::temp::path_prefixed(&dir));
+    let mut scope = uze_testkit::env::scope();
+    scope.set("PATH", uze_testkit::temp::path_prefixed(&dir));
 
     assert!(marker.exists());
     claude::detach_mcp_entry(&dir.join("claude"), &dir, "uze-example").unwrap();

@@ -72,11 +72,11 @@ fn status_distinguishes_installed_from_contributing_here() {
 }
 
 fn temp(label: &str) -> PathBuf {
-    uze_test_support::temp::scratch(label)
+    uze_testkit::temp::scratch(label)
 }
 
 fn fixture_a() -> PathBuf {
-    uze_test_support::fixtures::canonical("instructions-a")
+    uze_testkit::fixtures::canonical("instructions-a")
 }
 
 struct StubBridgeHarness {

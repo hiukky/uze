@@ -23,11 +23,11 @@ use uze::{
 };
 
 fn temp(label: &str) -> PathBuf {
-    uze_test_support::temp::scratch(label)
+    uze_testkit::temp::scratch(label)
 }
 
 fn official_package() -> PathBuf {
-    uze_test_support::fixtures::official_plugin()
+    uze_testkit::fixtures::official_plugin()
 }
 
 /// Mirrors the real integrations only in `id()`/`detect()` — proves the
@@ -190,7 +190,7 @@ fn installing_the_skill_package_never_touches_managed_regions_of_other_packages(
     let application = app(&root);
     application
         .add_plugin(
-            PackageSource::local(uze_test_support::fixtures::canonical("instructions-a")),
+            PackageSource::local(uze_testkit::fixtures::canonical("instructions-a")),
             &uze::trust::AlwaysTrust,
         )
         .unwrap();
@@ -233,7 +233,7 @@ fn drift_is_still_blocked_with_the_skill_package_also_installed() {
         .unwrap();
     application
         .add_plugin(
-            PackageSource::local(uze_test_support::fixtures::canonical("instructions-a")),
+            PackageSource::local(uze_testkit::fixtures::canonical("instructions-a")),
             &uze::trust::AlwaysTrust,
         )
         .unwrap();

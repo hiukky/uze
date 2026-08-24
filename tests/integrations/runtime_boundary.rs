@@ -101,7 +101,7 @@ fn no_internal_integration_call_site_spawns_a_bare_vendor_executable() {
 //
 // All four run inside one test function deliberately: each mutates the
 // process-global PATH, and Rust test functions in one binary run in
-// parallel; the crate-wide process-env lock in `uze-test-support` also
+// parallel; the crate-wide process-env lock in `uze-testkit` also
 // serializes this against every other PATH-mutating test in this binary.
 
 #[cfg(unix)]
@@ -118,7 +118,7 @@ fn write_fake_executable(dir: &Path, name: &str, version_line: &str) {
 #[cfg(unix)]
 #[test]
 fn upstream_executable_resolution_never_recurses_through_the_runtime_shim() {
-    let root = uze_test_support::temp::scratch("shim-boundary-behavioral");
+    let root = uze_testkit::temp::scratch("shim-boundary-behavioral");
     let uze_home = UzeHome::at(root.join("uze"));
     let shims_dir = uze_home.shims_dir();
     let real_dir = root.join("real-bin");
@@ -141,10 +141,10 @@ fn upstream_executable_resolution_never_recurses_through_the_runtime_shim() {
         write_fake_executable(&real_dir, name, real);
     }
 
-    let mut scope = uze_test_support::env::scope();
+    let mut scope = uze_testkit::env::scope();
     scope.set(
         "PATH",
-        uze_test_support::temp::join_paths(&[&shims_dir, &real_dir]),
+        uze_testkit::temp::join_paths(&[&shims_dir, &real_dir]),
     );
 
     let claude = ClaudeIntegration::new(root.join("claude"), uze_home.clone());

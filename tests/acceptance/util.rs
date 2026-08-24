@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use uze_test_support::temp::TestEnvironment;
+use uze_testkit::temp::TestEnvironment;
 
 /// The real UZE binary built for this test run (public path only).
 pub(crate) fn uze_bin() -> &'static Path {
@@ -67,8 +67,8 @@ pub(crate) fn agents_json(name: &str, plugin: &str) -> String {
 /// `recorded` receives the fake harnesses for invocation-log assertions.
 pub(crate) fn install_fake_harnesses(
     env: &TestEnvironment,
-) -> Vec<uze_test_support::fake_harness::FakeHarness> {
-    use uze_test_support::fake_harness::{Action, FakeHarness, MarketplaceVendor};
+) -> Vec<uze_testkit::fake_harness::FakeHarness> {
+    use uze_testkit::fake_harness::{Action, FakeHarness, MarketplaceVendor};
 
     let claude_state = env.root().join("fake-state/claude");
     let codex_state = env.root().join("fake-state/codex");

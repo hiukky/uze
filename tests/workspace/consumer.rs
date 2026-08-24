@@ -16,7 +16,7 @@ use uze::{
 };
 
 fn temp(label: &str) -> PathBuf {
-    uze_test_support::temp::scratch(label)
+    uze_testkit::temp::scratch(label)
 }
 
 /// A local marketplace containing one plugin (a copy of the existing

@@ -41,11 +41,11 @@ use uze::{
 };
 
 fn temp(label: &str) -> PathBuf {
-    uze_test_support::temp::scratch(label)
+    uze_testkit::temp::scratch(label)
 }
 
 fn workflow_fixture() -> PathBuf {
-    uze_test_support::fixtures::canonical("workflow")
+    uze_testkit::fixtures::canonical("workflow")
 }
 
 fn install(store: &UzeStore, path: impl Into<PathBuf>) -> uze::Result<StoredPackage> {
@@ -500,7 +500,7 @@ fn package_coverage_keeps_canonical_identities() {
 fn mcp_naming_is_unchanged() {
     let root = temp("mcp-unchanged");
     let store = UzeStore::new(UzeHome::at(&root));
-    let mcp_fixture = uze_test_support::fixtures::canonical("mcp-plugin");
+    let mcp_fixture = uze_testkit::fixtures::canonical("mcp-plugin");
     let package = install(&store, mcp_fixture).unwrap();
     let environment = UzeEngine::new(store)
         .compose(std::slice::from_ref(&package.id))

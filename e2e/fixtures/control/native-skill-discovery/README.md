@@ -3,7 +3,7 @@
 Deliberately a plain project directory containing `.agents/skills/uze-e2e/`.
 It never touches the UZE store, engine, integrations, or runtime bridge.
 
-It is the **control** for the behavior tier — but note carefully what it does
+It is the **C1 control** for the Lab's L4 level — but note carefully what it does
 and does not control for.
 
 ## What it measures
@@ -18,12 +18,12 @@ attaches it at **user scope**, leaving the caller's project untouched. The
 behavior tier's workspace contains no skill file at all, so a behavior pass
 can only have come from that user-scope route.
 
-A baseline pass therefore does **not** weaken a behavior pass. The two probe
+A control pass therefore does **not** weaken an L4 pass. The two probe
 different paths to the same capability.
 
 ## How to read it
 
-| Baseline | Behavior | Reading |
+| Control (C1) | L4 | Reading |
 |---|---|---|
 | pass | pass | The harness supports both routes. UZE's adds reach without per-project files. |
 | **fail** | **pass** | UZE's user-scope route is the harness's *only* path to that capability. Strongest evidence for UZE. |

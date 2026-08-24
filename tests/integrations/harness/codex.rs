@@ -186,7 +186,7 @@ fn real_codex_dogfood_user_only_skill_is_hidden_from_the_model() {
         eprintln!("codex not available on PATH; skipping real-Codex dogfood");
         return;
     }
-    let _scope = uze_test_support::env::scope();
+    let _scope = uze_testkit::env::scope();
     let root = temp("real-codex-dogfood");
     let uze_home = UzeHome::at(root.join("uze"));
     let store = UzeStore::new(uze_home.clone());

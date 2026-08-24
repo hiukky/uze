@@ -3,12 +3,17 @@
 //! The primitives below know nothing beyond process facts: [`run`] starts a
 //! selected real executable under a caller-supplied disposable environment
 //! and reports how it exited. Knowledge of specific harness CLIs is confined
-//! to [`harness`], which is a declarative table, and the tier logic in
-//! [`tier`] is generic over it. Nothing here knows Docker internals, and no
-//! product-domain type ever references this crate.
+//! to [`harness`], which is a declarative table, and the scenario logic in
+//! [`scenario`] is generic over it. Nothing here knows Docker internals, and
+//! no product-domain type ever references this crate.
+//!
+//! The Lab consumes the **single canonical fixture source** in
+//! `tests/fixtures` through `uze-testkit` (see [`compose_lab_package`]);
+//! it never maintains a second canonical tree.
 
+pub mod evidence;
 pub mod harness;
-pub mod tier;
+pub mod scenario;
 
 use std::{
     collections::BTreeMap,
@@ -19,9 +24,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// Per-run proof values. A behavioral prompt never contains these values: the
-/// Skill receives one through its materialized content and the MCP server
-/// receives the other through its process environment.
+/// Per-run proof values. The MCP server receives its proof through process
+/// arguments (the one channel every delivery route persists intact). The
+/// Skill proof is the canonical fixture's own token, replaced per run so
+/// evidence is never attributable to stale bytes (see `compose_lab_package`).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DynamicProof {
     pub skill: String,
@@ -33,42 +39,6 @@ impl DynamicProof {
         Self {
             skill: format!("UZE_E2E_SKILL_{nonce}"),
             mcp: format!("UZE_E2E_MCP_{nonce}"),
-        }
-    }
-}
-
-/// Distinguishes the layer that was actually proved. A model failure can never
-/// rewrite attachment/discovery evidence into an incompatibility claim.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum EvidenceState {
-    Unverified,
-    AttachmentVerified,
-    DiscoveryVerified,
-    LocalBehaviorVerified,
-    VendorBehaviorVerified,
-    Failed,
-    BlockedByEnvironment,
-    TimedOut,
-    ModelFailure,
-    HarnessFailure,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ConformanceEvidence {
-    pub attachment: EvidenceState,
-    pub discovery: EvidenceState,
-    pub behavior: EvidenceState,
-    pub reason: Option<String>,
-}
-
-impl ConformanceEvidence {
-    pub fn fresh() -> Self {
-        Self {
-            attachment: EvidenceState::Unverified,
-            discovery: EvidenceState::Unverified,
-            behavior: EvidenceState::Unverified,
-            reason: None,
         }
     }
 }
@@ -114,6 +84,113 @@ pub struct FixtureSpec {
 
 const MCP_MANIFESTS: [&str; 2] = ["mcp.json", ".mcp.json"];
 const CODEX_ENVELOPE: &str = "plugin.json";
+
+/// The canonical skill fixture's static proof token; `compose_lab_package`
+/// replaces it with the materialization placeholder so each run's value is
+/// per-run, never stale.
+const CANONICAL_SKILL_PROOF_TOKEN: &str = "UZE_E2E_SKILL_PROOF_20260820";
+
+/// Builds the Lab's canonical multi-capability package **from the single
+/// fixture source** (`tests/fixtures`, via `uze-testkit`):
+///
+/// - canonical `skill-plugin` (the Skill, canonical bytes);
+/// - canonical `mcp-plugin`'s manifests (the MCP server, placeholder intact);
+/// - the foreign Codex-native envelope (vendor-native format).
+///
+/// The skill proof token is replaced with the materialization placeholder so
+/// `materialize_fixture` can substitute a per-run value. If the canonical
+/// token ever changes, this fails loudly instead of passing on stale bytes.
+pub fn compose_lab_package(destination: &Path) -> Result<(), HarnessRunError> {
+    let skill_source = uze_testkit::fixtures::canonical("skill-plugin");
+    let mcp_source = uze_testkit::fixtures::canonical("mcp-plugin");
+    let envelope_source = uze_testkit::fixtures::foreign("codex", "native-plugin");
+
+    if destination.exists() {
+        return Err(HarnessRunError::Materialize(format!(
+            "composed package destination already exists: {}",
+            destination.display()
+        )));
+    }
+    fs::create_dir_all(destination).map_err(materialize_error)?;
+
+    copy_tree(&skill_source, destination).map_err(materialize_error)?;
+    copy_tree(&mcp_source, destination).map_err(materialize_error)?;
+    // The Codex-native envelope references `./.mcp.json`; the canonical MCP
+    // plugin ships `mcp.json` only, so the Lab composes the same manifest
+    // under both names (vendor-format duplication, not fixture duplication).
+    let mcp_bytes = fs::read(destination.join("mcp.json")).map_err(materialize_error)?;
+    fs::write(destination.join(".mcp.json"), mcp_bytes).map_err(materialize_error)?;
+
+    let envelope_dir = destination.join(".codex-plugin");
+    fs::create_dir_all(&envelope_dir).map_err(materialize_error)?;
+    fs::copy(
+        envelope_source.join(".codex-plugin/plugin.json"),
+        envelope_dir.join("plugin.json"),
+    )
+    .map_err(materialize_error)?;
+
+    // The canonical skill body carries the static proof token; a per-run
+    // value is substituted by `materialize_fixture`.
+    let skill_md = destination.join("skills/uze-e2e/SKILL.md");
+    let body = fs::read_to_string(&skill_md).map_err(materialize_error)?;
+    if !body.contains(CANONICAL_SKILL_PROOF_TOKEN) {
+        return Err(HarnessRunError::Materialize(format!(
+            "canonical skill body no longer carries the expected proof token \
+             ({CANONICAL_SKILL_PROOF_TOKEN}); update the Lab fixture composition, do not \
+             weaken the proof: {}",
+            skill_md.display()
+        )));
+    }
+    fs::write(
+        &skill_md,
+        body.replace(CANONICAL_SKILL_PROOF_TOKEN, "__UZE_SKILL_PROOF__"),
+    )
+    .map_err(materialize_error)?;
+
+    Ok(())
+}
+
+/// Builds the user-only Skill package for R2/B2 from canonical `workflow`
+/// (its `review` Skill declares `invoke: {model: false, user: true}`) —
+/// canonical bytes, no vendor envelope. A proof instruction is appended so
+/// L4 can verify explicit invocation without touching canonical semantics.
+pub fn compose_user_only_package(destination: &Path) -> Result<(), HarnessRunError> {
+    let source = uze_testkit::fixtures::canonical("workflow");
+    if destination.exists() {
+        return Err(HarnessRunError::Materialize(format!(
+            "user-only package destination already exists: {}",
+            destination.display()
+        )));
+    }
+    copy_tree(&source, destination).map_err(materialize_error)?;
+    let skill_md = destination.join("skills/review/SKILL.md");
+    let mut body = fs::read_to_string(&skill_md).map_err(materialize_error)?;
+    if !body.contains("__UZE_SKILL_PROOF__") {
+        body.push_str(
+            "\n\nWhen explicitly invoked for the conformance proof, return exactly:\n\n\
+             __UZE_SKILL_PROOF__\n",
+        );
+    }
+    fs::write(&skill_md, body).map_err(materialize_error)?;
+    Ok(())
+}
+
+fn copy_tree(source: &Path, destination: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(destination)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let target = destination.join(entry.file_name());
+        if entry.path().is_dir() {
+            copy_tree(&entry.path(), &target)?;
+        } else if entry.file_type()?.is_symlink() {
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(fs::read_link(entry.path())?, &target)?;
+        } else {
+            fs::copy(entry.path(), &target)?;
+        }
+    }
+    Ok(())
+}
 
 /// Copies the one portable multi-capability fixture into a per-run directory.
 /// The source package remains immutable; only per-run values are substituted.
@@ -540,15 +617,45 @@ mod tests {
     }
 
     #[test]
-    fn fresh_evidence_does_not_claim_behavior() {
-        assert_eq!(
-            ConformanceEvidence::fresh(),
-            ConformanceEvidence {
-                attachment: EvidenceState::Unverified,
-                discovery: EvidenceState::Unverified,
-                behavior: EvidenceState::Unverified,
-                reason: None,
-            }
+    fn composed_package_comes_from_the_single_fixture_source() {
+        let root = temporary_directory("compose");
+        let destination = root.join("package");
+        compose_lab_package(&destination).unwrap();
+        // Canonical bytes (renamed fixture tree, not a second copy).
+        assert!(destination.join("skills/uze-e2e/SKILL.md").is_file());
+        assert!(destination.join("plugin.json").is_file());
+        assert!(destination.join("mcp.json").is_file());
+        assert!(destination.join(".mcp.json").is_file());
+        // The vendor-native envelope is the foreign fixture's.
+        assert!(destination.join(".codex-plugin/plugin.json").is_file());
+        // The canonical proof token was swapped for the per-run placeholder.
+        let body = fs::read_to_string(destination.join("skills/uze-e2e/SKILL.md")).unwrap();
+        assert!(
+            body.contains("__UZE_SKILL_PROOF__"),
+            "composed skill must carry the materialization placeholder: {body}"
         );
+        // Materializing a second time substitutes the per-run proof.
+        let run_dir = root.join("run");
+        materialize_fixture(&destination, &run_dir, &spec(FixtureVariant::Full)).unwrap();
+        let body = fs::read_to_string(run_dir.join("skills/uze-e2e/SKILL.md")).unwrap();
+        assert!(
+            body.contains("UZE_E2E_SKILL_nonce-42"),
+            "per-run skill proof must be substituted: {body}"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn user_only_package_is_canonical_workflow_with_no_envelope() {
+        let root = temporary_directory("user-only");
+        let destination = root.join("package");
+        compose_user_only_package(&destination).unwrap();
+        let body = fs::read_to_string(destination.join("skills/review/SKILL.md")).unwrap();
+        assert!(
+            body.contains("invoke:") && body.contains("model: false"),
+            "workflow's review skill must be user-only: {body}"
+        );
+        assert!(!destination.join(".codex-plugin").exists());
+        let _ = fs::remove_dir_all(root);
     }
 }

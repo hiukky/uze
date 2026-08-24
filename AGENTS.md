@@ -78,7 +78,7 @@ need to).
 - `tests/` — domain-organized integration suites (one `main.rs` per
   domain: `cli/`, `memory/`, `packages/`, `workspace/`, `lifecycle/`,
   `projection/`, `integrations/`, `acceptance/`), shared test
-  infrastructure in `crates/uze-test-support` (isolated `TestEnvironment`,
+  infrastructure in `crates/uze-testkit` (isolated `TestEnvironment`,
   `FakeHarness`, canonical/scenario fixtures), and the taxonomy documented
   in `tests/README.md` (L0-L4).
 - `playground/` — WSL/distro install helpers (`make install-wsl-lab`) and a
