@@ -2027,10 +2027,25 @@ mod tests {
         uze_core::project_lock::save_lock(&project, &lock).unwrap();
 
         let original_home = std::env::var_os("HOME");
-        // SAFETY: single-threaded access to HOME guarded by HOME_LOCK; none
-        // of the other tests in this binary read HOME.
+        let original_path = std::env::var_os("PATH");
+        // SAFETY: single-threaded access to HOME/PATH guarded by HOME_LOCK;
+        // none of the other tests in this binary read HOME.
         unsafe { std::env::set_var("HOME", &base) };
         unsafe { std::env::set_var("UZE_HOME", &home) };
+        // Isolate PATH to a directory with nothing on it: on a machine
+        // where `uze setup claude` has ever actually run, the real
+        // `~/.uze/shims/claude` sits ahead of everything else on the
+        // ambient PATH this test process inherited. That shim resolves to
+        // this very `uze` binary (not a vendor CLI), and it is excluded
+        // from `resolve_real_executable`'s walk only by comparing against
+        // *this test's* fake `shims_dir` — never the developer's real one.
+        // Left unisolated, the install path below shells out to `uze`
+        // itself expecting Claude Code's CLI and gets `uze`'s own `--help`
+        // usage back. Every harness must read as absent here, matching a
+        // clean machine.
+        let empty_path_dir = base.join("empty-path");
+        std::fs::create_dir_all(&empty_path_dir).unwrap();
+        unsafe { std::env::set_var("PATH", &empty_path_dir) };
 
         let uze_home = UzeHome::at(&home);
         let mut model = TuiModel {
@@ -2072,7 +2087,15 @@ mod tests {
                 );
                 assert!(project.missing_plugins.is_empty());
             }
-            _ => panic!("expected Mutated(Ok(..))"),
+            super::worker::WorkerResult::Mutated(Err(error)) => {
+                panic!("expected Mutated(Ok(..)), got Mutated(Err({error}))")
+            }
+            super::worker::WorkerResult::TrustRequired { plugin, detail, .. } => {
+                panic!(
+                    "expected Mutated(Ok(..)), got TrustRequired {{ plugin: {plugin}, detail: {detail} }}"
+                )
+            }
+            _ => panic!("expected Mutated(Ok(..)), got a different WorkerResult variant"),
         }
 
         if let Some(home) = original_home {
@@ -2080,6 +2103,12 @@ mod tests {
             unsafe { std::env::set_var("HOME", home) };
         } else {
             unsafe { std::env::remove_var("HOME") };
+        }
+        if let Some(path) = original_path {
+            // SAFETY: same guard as above.
+            unsafe { std::env::set_var("PATH", path) };
+        } else {
+            unsafe { std::env::remove_var("PATH") };
         }
         unsafe { std::env::remove_var("UZE_HOME") };
         std::fs::remove_dir_all(&base).ok();
