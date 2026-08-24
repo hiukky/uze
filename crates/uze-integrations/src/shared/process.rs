@@ -19,6 +19,18 @@ use std::process::{Command, Output, Stdio};
 
 use uze_core::{Result, UzeError};
 
+/// A value is safe to pass as a bare positional argument to a vendor CLI
+/// only when it cannot be mistaken for a flag. Package-controlled strings
+/// (an MCP server's name in `mcp.json`, a Skill/Command's logical name) flow
+/// into vendor invocations like `claude mcp add --scope user --transport
+/// stdio <entry_name> -- <command>` with no `--` separator available before
+/// `entry_name` — a name starting with `-` would be parsed as a flag by the
+/// vendor's own argument parser instead of as the positional value. This is
+/// the one guard every such value must pass before it is ever used as one.
+pub(crate) fn is_cli_safe_token(value: &str) -> bool {
+    !value.is_empty() && !value.starts_with('-')
+}
+
 /// Runs `program` with `HOME=home` and the given `args`, stdio captured and
 /// stdin null — the opposite of the old inherited-stdio calls whose spinner
 /// output interleaved with UZE's own terminal surface.
@@ -95,6 +107,21 @@ fn output_tail(output: &Output) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_leading_dash_is_never_a_safe_cli_token() {
+        assert!(!is_cli_safe_token("-h"));
+        assert!(!is_cli_safe_token("--scope"));
+        assert!(!is_cli_safe_token("--transport"));
+        assert!(!is_cli_safe_token(""));
+    }
+
+    #[test]
+    fn an_ordinary_name_is_a_safe_cli_token() {
+        assert!(is_cli_safe_token("github"));
+        assert!(is_cli_safe_token("flow:review"));
+        assert!(is_cli_safe_token("my-server_1"));
+    }
 
     /// A non-success exit status without touching vendor installs — the
     /// platform's own `false` command is the canonical source.

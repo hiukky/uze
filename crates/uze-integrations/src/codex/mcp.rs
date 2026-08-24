@@ -15,7 +15,7 @@ use uze_core::{
 
 use super::CodexIntegration;
 use super::unsupported;
-use crate::shared::process::{capture, failed_message};
+use crate::shared::process::{capture, failed_message, is_cli_safe_token};
 
 impl CodexIntegration {
     pub(super) fn mcp_exposure_plan(&self, resource: &Resource) -> ExposurePlan {
@@ -32,6 +32,12 @@ impl CodexIntegration {
         else {
             return unsupported(resource, "Resource has no derivable attachment entry name.");
         };
+        if !is_cli_safe_token(&entry_name) {
+            return unsupported(
+                resource,
+                "MCP server name would be parsed as a flag by `codex mcp add`, not a name; refusing to attach.",
+            );
+        }
         let Some((command, args)) = parse_mcp_server_config(&resource.capability.payload) else {
             return unsupported(
                 resource,

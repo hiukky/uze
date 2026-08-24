@@ -16,7 +16,7 @@ use uze_core::{
 
 use super::GeminiIntegration;
 use super::{blocked, unsupported};
-use crate::shared::process::{capture, failed_message};
+use crate::shared::process::{capture, failed_message, is_cli_safe_token};
 
 impl GeminiIntegration {
     pub(super) fn mcp_exposure_plan(&self, resource: &Resource) -> ExposurePlan {
@@ -27,6 +27,12 @@ impl GeminiIntegration {
         else {
             return unsupported(resource, "MCP resource has no derivable entry name.");
         };
+        if !is_cli_safe_token(&entry_name) {
+            return unsupported(
+                resource,
+                "MCP server name would be parsed as a flag by `gemini mcp add`, not a name; refusing to attach.",
+            );
+        }
         if !state::is_installed(&self.uze_home, self.id()) {
             return unsupported(
                 resource,

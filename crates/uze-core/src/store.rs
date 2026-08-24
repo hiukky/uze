@@ -26,7 +26,15 @@ impl PackageId {
     }
 
     pub fn from_plugin_name(name: &str, manifest: &Path) -> Result<Self> {
+        // The id is later used as a bare CLI argument to vendor tooling
+        // (e.g. `codex plugin remove <id>@marketplace`, with no `--`
+        // separator available before it). A leading `-` would let a
+        // maliciously or carelessly named plugin be parsed as a flag by
+        // that vendor CLI rather than as the id itself, so it is rejected
+        // here at the one chokepoint every package id is constructed
+        // through — not just re-checked at each call site.
         let valid = !name.is_empty()
+            && !name.starts_with('-')
             && name.chars().all(|character| {
                 character.is_ascii_alphanumeric() || character == '-' || character == '_'
             });
@@ -398,6 +406,19 @@ mod tests {
         assert!(PackageId::from_plugin_name("has/slash", &manifest).is_err());
         assert!(PackageId::from_plugin_name("has.dot", &manifest).is_err());
         assert!(PackageId::from_plugin_name("has:colon", &manifest).is_err());
+    }
+
+    #[test]
+    fn package_id_rejects_a_leading_dash() {
+        // Package ids are used as bare positional/selector arguments to
+        // vendor CLIs (e.g. `codex plugin remove <id>@marketplace`); a
+        // leading `-` would let the vendor CLI parse the id as a flag
+        // instead, so it must be rejected before it ever becomes an id.
+        let manifest = PathBuf::from("/tmp/plugin.json");
+        assert!(PackageId::from_plugin_name("-force", &manifest).is_err());
+        assert!(PackageId::from_plugin_name("--force", &manifest).is_err());
+        // A dash elsewhere in the name remains fine.
+        assert!(PackageId::from_plugin_name("my-plugin", &manifest).is_ok());
     }
 
     #[test]
