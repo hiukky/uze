@@ -19,7 +19,6 @@ members = [
   "crates/uze-integrations",
   "crates/uze-application",
   "crates/uze-testkit",
-  "conformance",
 ]
 default-members = ["."]
 resolver = "3"

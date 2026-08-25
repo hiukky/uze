@@ -10,9 +10,8 @@ COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
     cargo build --locked --release --bin uze --bin uze-mcp-conformance-fixture \
-    && cargo build --locked --release --manifest-path conformance/Cargo.toml \
     && mkdir -p /out \
-    && cp /src/target/release/uze /src/target/release/uze-mcp-conformance-fixture /src/target/release/uze-conformance /out/
+    && cp /src/target/release/uze /src/target/release/uze-mcp-conformance-fixture /out/
 
 FROM node:22-bookworm-slim AS harness-lab
 
@@ -56,13 +55,11 @@ RUN mkdir -p /opt/opencode-runtime \
     @ai-sdk/openai-compatible
 
 COPY --from=uze-build /out/uze-mcp-conformance-fixture /usr/local/bin/uze-mcp-conformance-fixture
-COPY --from=uze-build /out/uze-conformance /usr/local/bin/uze-conformance
 # Single canonical fixture source: the Lab consumes tests/_fixtures through
 # uze-testkit — it never maintains a second canonical tree.
 # Single fixture tree: canonical/foreign/scenarios/golden plus the Lab's
 # control fixture and the shared MCP fixture-server source.
 COPY tests/_fixtures /opt/uze-fixtures/tests-fixtures
-COPY conformance/opencode-models.json /opt/uze-conformance/opencode-models.json
 COPY conformance/entrypoint.sh /usr/local/bin/uze-harness-entrypoint
 
 # The Lab resolves the canonical fixture tree from this runtime path (see
@@ -73,7 +70,7 @@ ENV UZE_TESTKIT_FIXTURES_ROOT=/opt/uze-fixtures/tests-fixtures
 RUN chmod 0755 /usr/local/bin/uze-harness-entrypoint \
     && mkdir -p /work \
     && chown -R node:node /opt/uze-fixtures /opt/opencode-runtime /usr/local/pnpm /usr/local/.local /usr/local/.opencode \
-    && chown node:node /work /usr/local/bin/uze /usr/local/bin/uze-conformance \
+    && chown node:node /work /usr/local/bin/uze \
     && chown -R node:node /usr/local/bin/uze-mcp-conformance-fixture
 
 # Rootless runtime: `node` (UID 1000) owns every writable tree — HOME,

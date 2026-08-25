@@ -1,21 +1,21 @@
 # Instructions/Rules — M3 Phase A design
 
-Status: **DESIGN — awaiting review.** Nothing in this document is implemented.
-This is Phase A (design, Fases 1–14) of the M3 Portable Instructions
-milestone. Per the milestone brief, Phase B (primitive/lifecycle) and Phase C
-(tracer bullet across the four harnesses) do not start until this design is
-reviewed.
+Status: **historical design record.** This Phase A design (Fases 1–14) was
+reviewed and implemented — the shipped result is the Context Manager
+described in [context-manager.md](context-manager.md), which is the current
+truth. This file is retained because ADR-014 and source doc comments cite it.
 
-Builds on [landscape.md](landscape.md) and [instructions.md](instructions.md).
-Does not repeat the general M3 capability research; only re-verifies points
-that were ambiguous and blocking a real implementation decision (Fase 1).
+Builds on the 2026-08-21 M3 capability research; the research corpus itself
+is not retained as permanent documentation (see
+[overview.md](overview.md)). Only points that were ambiguous and blocking a
+real implementation decision were re-verified (Fase 1).
 
 ---
 
 ## Fase 1 — Revalidated matrix (Instructions only)
 
 Re-verified 2026-08-21 against official docs, narrowly, for exactly the
-points [instructions.md](instructions.md) had flagged UNKNOWN or that block a
+points the prior Instructions research had flagged UNKNOWN or that block a
 design decision below. Everything else is carried over from the prior
 research unchanged.
 

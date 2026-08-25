@@ -5,7 +5,7 @@ UZE_BIN ?= target/debug/uze
 RELEASE_BIN ?= target/release/uze
 INSTALL_ARGS ?= --force
 
-.PHONY: help build release install install-wsl-lab playground-lab run test test-acceptance test-conformance test-real-harness docs-harness-matrix check fmt lint coverage version clean changelog
+.PHONY: help build release install install-wsl-lab playground-lab run test test-acceptance test-conformance test-real-harness docs-harness-matrix check fmt lint coverage version clean changelog lab-image lab-run
 
 help: ## Show the available local-development targets.
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z0-9_.-]+:.*##/ { printf "  %-12s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -42,26 +42,20 @@ test-acceptance: ## Run the L3 acceptance suite (the release signal).
 test-conformance: ## Run integration conformance + per-harness semantics.
 	$(CARGO) test -p uze --test integrations
 
+
+# --- Harness Conformance Lab (Python, Real Harness + Synthetic World) ---
+# The Lab runs the per-harness verticals in the disposable Docker image
+# (`conformance-harness:latest`): real harness binary + synthetic provider,
+# zero Internet, zero tokens. HARNESS selects one harness id
+# (antigravity | claude | codex).
+HARNESS ?= antigravity
+LAB_IMAGE ?= conformance-harness:latest
+
+lab-image: ## Build the Lab harness image (installs channel-latest harnesses).
+	docker build -f conformance/Dockerfile -t $(LAB_IMAGE) .
+
+lab-run: ## Run the isolation vertical for $(HARNESS) (3x clean is the gate).
+	python3 conformance/lab.py --harness $(HARNESS)
 test-real-harness: ## Run L2 probes that need real vendor binaries (skip cleanly when absent).
 	$(CARGO) test -p uze --test integrations real_codex_dogfood -- --ignored 2>/dev/null || \
 	$(CARGO) test -p uze --test integrations real_codex_dogfood
-
-fmt: ## Format Rust sources.
-	$(CARGO) fmt
-
-lint: ## Run Clippy with warnings treated as errors.
-	$(CARGO) clippy -- -D warnings
-
-check: ## Run formatting, linting, and tests.
-	$(CARGO) fmt --check
-	$(CARGO) clippy -- -D warnings
-	$(CARGO) test --no-fail-fast
-
-docs-harness-matrix: ## Regenerate the deterministic harness×feature matrix in README.md.
-	$(CARGO) run --quiet --bin uze-harness-matrix
-
-coverage: ## Run coverage and enforce 65%→70%→90% roadmap (see CI).
-	$(CARGO) llvm-cov --workspace --summary-only --fail-under-lines 64 --fail-under-regions 65 --html
-
-clean: ## Remove local Cargo build artifacts.
-	$(CARGO) clean

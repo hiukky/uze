@@ -1,0 +1,11 @@
+{
+  "hasCompletedOnboarding": true,
+  "lastOnboardingVersion": "2.1.245",
+  "numStartups": 5,
+  "projects": {
+    "/work": {
+      "hasTrustDialogAccepted": true,
+      "hasCompletedProjectOnboarding": true
+    }
+  }
+}

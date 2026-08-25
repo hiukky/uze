@@ -24,15 +24,18 @@ fn one_plugin_reaches_every_harness_with_no_duplicate_delivery() {
     // by this suite).
     env.run_ok(uze_bin(), &["setup"]);
     let fixture = fixtures::canonical("skill-plugin");
+    let (market_args, install_args) =
+        uze_testkit::marketplace::marketplace_install_args(&env.home, &fixture);
+    env.run_ok(
+        uze_bin(),
+        &market_args.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
+    let mut with_json = install_args.clone();
+    with_json.push("--format".to_owned());
+    with_json.push("json".to_owned());
     let install = env.run_ok(
         uze_bin(),
-        &[
-            "plugin",
-            "install",
-            fixture.to_str().unwrap(),
-            "--format",
-            "json",
-        ],
+        &with_json.iter().map(String::as_str).collect::<Vec<_>>(),
     );
     let report: serde_json::Value = serde_json::from_slice(&install.stdout).expect("json report");
     let delivery = report["package_plans"]
@@ -100,9 +103,15 @@ fn invocation_policy_projects_per_harness_classification() {
             ("review", &user_only_body("review")),
         ],
     );
+    let (market_args, install_args) =
+        uze_testkit::marketplace::marketplace_install_args(&env.home, &policy_package);
     env.run_ok(
         uze_bin(),
-        &["plugin", "install", policy_package.to_str().unwrap()],
+        &market_args.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
+    env.run_ok(
+        uze_bin(),
+        &install_args.iter().map(String::as_str).collect::<Vec<_>>(),
     );
 
     // Inspect reports all three skills with their policy classification.
@@ -180,9 +189,15 @@ fn superset_shared_entry_keeps_both_integrations_preserved() {
         "conflict-fixture",
         &[("audit", &model_only_body("audit"))],
     );
+    let (market_args, install_args) =
+        uze_testkit::marketplace::marketplace_install_args(&env.home, &conflict_package);
     env.run_ok(
         uze_bin(),
-        &["plugin", "install", conflict_package.to_str().unwrap()],
+        &market_args.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
+    env.run_ok(
+        uze_bin(),
+        &install_args.iter().map(String::as_str).collect::<Vec<_>>(),
     );
 
     let shared_entry = env.home.join(".agents/skills/conflict-fixture:audit");

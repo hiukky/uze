@@ -4,6 +4,74 @@ fn package_fixture() -> PathBuf {
     uze_testkit::fixtures::canonical("skill-plugin")
 }
 
+/// `uze plugin install` through a staged test marketplace — the product
+/// rejects direct-path installs, so the test exercises the real user flow:
+/// `market add` first, then `plugin install <name>@<market>`.
+fn install_via_marketplace_json(
+    home: &std::path::Path,
+    uze_home: &std::path::Path,
+    package: &std::path::Path,
+    path: &str,
+) -> std::process::Output {
+    let (market_args, install_args) =
+        uze_testkit::marketplace::marketplace_install_args(home, package);
+    let base = || {
+        Command::new(env!("CARGO_BIN_EXE_uze"))
+            .env("UZE_HOME", uze_home)
+            .env("HOME", home)
+            .env("PATH", path)
+            .args(&market_args)
+            .output()
+    };
+    let market_add = base().unwrap();
+    assert!(
+        market_add.status.success(),
+        "market add failed: {}",
+        String::from_utf8_lossy(&market_add.stderr)
+    );
+    let mut with_json = install_args.clone();
+    with_json.push("--format".to_owned());
+    with_json.push("json".to_owned());
+    Command::new(env!("CARGO_BIN_EXE_uze"))
+        .env("UZE_HOME", uze_home)
+        .env("HOME", home)
+        .env("PATH", path)
+        .args(&with_json)
+        .output()
+        .unwrap()
+}
+
+fn install_via_marketplace(
+    home: &std::path::Path,
+    uze_home: &std::path::Path,
+    package: &std::path::Path,
+    path: &str,
+) -> std::process::Output {
+    let (market_args, install_args) =
+        uze_testkit::marketplace::marketplace_install_args(home, package);
+    let base = || {
+        Command::new(env!("CARGO_BIN_EXE_uze"))
+            .env("UZE_HOME", uze_home)
+            .env("HOME", home)
+            .env("PATH", path)
+            .args(&market_args)
+            .output()
+    };
+    let market_add = base().unwrap();
+    assert!(
+        market_add.status.success(),
+        "market add failed: {}",
+        String::from_utf8_lossy(&market_add.stderr)
+    );
+    Command::new(env!("CARGO_BIN_EXE_uze"))
+        .env("UZE_HOME", uze_home)
+        .env("HOME", home)
+        .env("PATH", path)
+        .args(&install_args)
+        .output()
+        .unwrap()
+}
+
 /// Copies the MCP fixture package into `dest_dir` with its `mcp.json`
 /// placeholder command rewritten to the real, test-build-resolved path of
 /// the fixture MCP server binary — see
@@ -112,13 +180,7 @@ echo '{version_line}'
 #[test]
 fn inspect_reports_an_installed_plugin_without_vendor_writes() {
     let home = temporary_home("cli-inspect");
-    let add = Command::new(env!("CARGO_BIN_EXE_uze"))
-        .env("UZE_HOME", &home)
-        .env("HOME", &home)
-        .env("PATH", "/usr/bin:/bin")
-        .args(["plugin", "install", package_fixture().to_str().unwrap()])
-        .output()
-        .unwrap();
+    let add = install_via_marketplace(&home, &home, &package_fixture(), "/usr/bin:/bin");
     assert!(add.status.success());
     let before = std::fs::read(home.join("state/attachments.json")).ok();
     let output = Command::new(env!("CARGO_BIN_EXE_uze"))
@@ -149,19 +211,7 @@ fn inspect_reports_an_installed_plugin_without_vendor_writes() {
 #[test]
 fn add_and_inspect_use_the_same_injected_uze_home() {
     let home = temporary_home("cli-store");
-    let add = Command::new(env!("CARGO_BIN_EXE_uze"))
-        .env("UZE_HOME", &home)
-        .env("HOME", &home)
-        .env("PATH", "/usr/bin:/bin")
-        .args([
-            "plugin",
-            "install",
-            package_fixture().to_str().unwrap(),
-            "--format",
-            "json",
-        ])
-        .output()
-        .unwrap();
+    let add = install_via_marketplace_json(&home, &home, &package_fixture(), "/usr/bin:/bin");
     assert!(add.status.success());
     let installed: serde_json::Value = serde_json::from_slice(&add.stdout).unwrap();
     assert_eq!(installed["plugin"]["id"], "uze-agent-skill-conformance");
@@ -295,7 +345,10 @@ fn setup_then_add_attaches_transparently_without_a_separate_sync_step() {
     // per-resource `.claude/skills` symlink. Codex has no envelope for
     // either package and still decomposes at the capability level, so its
     // resource-level attachment output is unchanged.
-    let add = run(&["plugin", "install", package_fixture().to_str().unwrap()]);
+    let (market_args, install_args) =
+        uze_testkit::marketplace::marketplace_install_args(&home, &package_fixture());
+    run(&market_args.iter().map(String::as_str).collect::<Vec<_>>());
+    let add = run(&install_args.iter().map(String::as_str).collect::<Vec<_>>());
     assert!(add.contains("claude-code: native"));
     assert!(add.contains("codex: native"));
 
@@ -366,13 +419,7 @@ fn add_prepares_a_detected_opencode_and_attaches_without_prior_setup() {
     let fake_bin = fake_harness_bin_dir("cli-add-autoprepares-opencode-bin");
     let path = format!("{}:{}", fake_bin.display(), std::env::var("PATH").unwrap());
 
-    let output = Command::new(env!("CARGO_BIN_EXE_uze"))
-        .env("UZE_HOME", &uze_home)
-        .env("HOME", &home)
-        .env("PATH", &path)
-        .args(["plugin", "install", package_fixture().to_str().unwrap()])
-        .output()
-        .unwrap();
+    let output = install_via_marketplace(&home, &uze_home, &package_fixture(), &path);
     assert!(
         output.status.success(),
         "uze add failed: {}",
@@ -445,7 +492,10 @@ fn setup_then_add_attaches_the_mcp_fixture_idempotently_and_removal_works() {
     // is just as eligible as a Skill-only one, so BOTH Claude and Codex now
     // receive package-level delivery covering the one MCP resource — no
     // resource-level `mcp add` for either.
-    let add = run(&["plugin", "install", package.to_str().unwrap()]);
+    let (market_args, install_args) =
+        uze_testkit::marketplace::marketplace_install_args(&home, &package);
+    run(&market_args.iter().map(String::as_str).collect::<Vec<_>>());
+    let add = run(&install_args.iter().map(String::as_str).collect::<Vec<_>>());
     assert!(add.contains("claude-code: native"));
     assert!(add.contains("codex: native"));
 
@@ -501,7 +551,7 @@ fn setup_then_add_attaches_the_mcp_fixture_idempotently_and_removal_works() {
     // Idempotent: `plugin install` a second time does not fail. Both
     // integrations' package delivery re-resolves to the same
     // already-installed selector — no reinstall, no resource-level replay.
-    let second_add = run(&["plugin", "install", package.to_str().unwrap()]);
+    let second_add = run(&install_args.iter().map(String::as_str).collect::<Vec<_>>());
     assert!(second_add.contains("claude-code: native"));
     assert!(second_add.contains("codex: native"));
 
@@ -518,13 +568,7 @@ fn setup_then_add_attaches_the_mcp_fixture_idempotently_and_removal_works() {
 #[test]
 fn plugin_remove_uses_the_package_centric_application_flow() {
     let home = temporary_home("cli-remove");
-    let add = Command::new(env!("CARGO_BIN_EXE_uze"))
-        .env("UZE_HOME", &home)
-        .env("HOME", &home)
-        .env("PATH", "/usr/bin:/bin")
-        .args(["plugin", "install", package_fixture().to_str().unwrap()])
-        .output()
-        .unwrap();
+    let add = install_via_marketplace(&home, &home, &package_fixture(), "/usr/bin:/bin");
     assert!(add.status.success());
     let remove = Command::new(env!("CARGO_BIN_EXE_uze"))
         .env("UZE_HOME", &home)
@@ -573,13 +617,7 @@ fn plugin_remove_uses_the_package_centric_application_flow() {
 #[test]
 fn root_remove_no_longer_falls_back_to_global_removal() {
     let home = temporary_home("cli-remove-no-fallback");
-    let add = Command::new(env!("CARGO_BIN_EXE_uze"))
-        .env("UZE_HOME", &home)
-        .env("HOME", &home)
-        .env("PATH", "/usr/bin:/bin")
-        .args(["plugin", "install", package_fixture().to_str().unwrap()])
-        .output()
-        .unwrap();
+    let add = install_via_marketplace(&home, &home, &package_fixture(), "/usr/bin:/bin");
     assert!(add.status.success());
 
     // `current_dir(&home)` matters here: this repo's own root (the ambient

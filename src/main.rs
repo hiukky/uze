@@ -5,6 +5,7 @@
 #[cfg(test)]
 mod command_performance;
 mod progress;
+use crate::progress::Colorize;
 mod shim;
 
 use std::{collections::BTreeMap, io::IsTerminal, path::PathBuf};
@@ -146,9 +147,11 @@ enum MarketAction {
 
 #[derive(Debug, Subcommand)]
 enum PluginAction {
-    /// Install a plugin on this machine, from `name@marketplace` or a
-    /// direct local path/Git URL — never touches the current project's
-    /// `agents.lock` (use `uze <plugin>@<market>` for that).
+    /// Install a plugin on this machine from a marketplace that must have
+    /// been added first (`uze market add <market>`), as `name@marketplace`.
+    /// A direct path or Git URL is never accepted — never touches the
+    /// current project's `agents.lock` (use `uze <plugin>@<market>` for
+    /// that).
     Install {
         plugin: String,
         #[arg(long)]
@@ -347,7 +350,7 @@ fn run(cli: Cli) -> Result<()> {
         println!();
         return Ok(());
     };
-    let app = UzeApplication::from_env(home)?;
+    let app = UzeApplication::from_env(home.clone())?;
     // Seed the default marketplace plugins (`plugins/uze`) on every CLI
     // invocation. This makes the Skill globally available without a manual
     // `uze plugin install` and heals its attachment after a binary update.
@@ -499,15 +502,19 @@ fn run(cli: Cli) -> Result<()> {
             } => {
                 let authority = trust_authority(trust);
                 let spinner = progress::spinner(&format!("Installing plugin {plugin}..."));
-                // `name@marketplace` resolves through the marketplace
-                // registry; anything else (a local path or a Git URL) is a
-                // direct source, exactly as root `uze add` used to accept
-                // — that capability now lives here, not at the root (see
-                // ADR-019's migration table).
+                // Every install goes through a marketplace that must have
+                // been added first: `uze market add <market>` then
+                // `uze plugin install <name>@<market>`. A direct source
+                // (path or Git URL) is never accepted — the marketplace is
+                // the product's provenance contract (see ADR-019).
                 let installed = if plugin.contains('@') {
                     app.plugin_install(&plugin, authority.as_ref())
                 } else {
-                    app.add_plugin(parse_source(&plugin), authority.as_ref())
+                    return Err(uze::UzeError::UnknownPackage(format!(
+                        "`{plugin}` is not a `name@marketplace` spec; add its marketplace with \
+                         `uze market add <market>` first, then install with \
+                         `uze plugin install {plugin}@<market>`"
+                    )));
                 };
                 match installed {
                     Ok(report) => {
@@ -593,7 +600,7 @@ fn run(cli: Cli) -> Result<()> {
                     OutputFormat::Json => print_json(&harness),
                 }
             }
-            HarnessAction::Setup { name } => run_setup(&app, name.as_deref())?,
+            HarnessAction::Setup { name } => run_setup(&app, &home, name.as_deref(), verbose)?,
         },
         Command::Doctor { format } => {
             let spinner = progress::spinner("Running diagnostics...");
@@ -604,7 +611,7 @@ fn run(cli: Cli) -> Result<()> {
                 OutputFormat::Json => print_json(&report),
             }
         }
-        Command::Setup { harness } => run_setup(&app, harness.as_deref())?,
+        Command::Setup { harness } => run_setup(&app, &home, harness.as_deref(), verbose)?,
         Command::External(args) => run_shorthand(&app, args, verbose)?,
     }
     Ok(())
@@ -615,42 +622,382 @@ fn run(cli: Cli) -> Result<()> {
 /// `specs/harness-namespace/spec.md`'s "Namespaced and root setup are
 /// equivalent" scenario. One function, two call sites, so they cannot
 /// silently drift apart.
-fn run_setup(app: &UzeApplication, harness: Option<&str>) -> Result<()> {
-    println!("Provisioning harnesses through official routes…");
-    for result in app.setup(harness)? {
-        if result.configured {
-            println!(
-                "{}: ready ({}; version {})",
-                result.integration,
-                format!("{:?}", result.provisioning.action).to_lowercase(),
-                result.detection.version.as_deref().unwrap_or("unknown")
-            );
-            if let Some(shim) = &result.runtime_shim {
-                println!(
-                    "  EXPERIMENTAL runtime shim: {} (remove this symlink to turn it back off)",
-                    shim.shim_path.display()
-                );
-                if let Some(rc_file) = &shim.rc_file_updated {
-                    println!("  Added it to PATH in {}", rc_file.display());
-                }
-                if let Some(hint) = &shim.path_hint {
-                    println!("  Not yet on PATH in this session — {hint}");
-                }
-            }
+///
+/// Progress contract: `setup` runs harnesses **sequentially
+/// in registration order**, one opaque container per harness. The vendor
+/// installer's output is buffered to `$UZE_HOME/state/logs/setup-<harness>.log`
+/// instead of interleaving on the terminal, so the terminal shows only
+/// ordered step headers and the per-harness final status.
+fn run_setup(
+    app: &UzeApplication,
+    home: &UzeHome,
+    harness: Option<&str>,
+    verbose: bool,
+) -> Result<()> {
+    let targets: Vec<String> = match harness {
+        Some(name) => vec![name.to_owned()],
+        None => app
+            .harness_list()
+            .into_iter()
+            .map(|h| h.integration)
+            .collect(),
+    };
+    if targets.is_empty() {
+        println!("No harnesses registered");
+        return Ok(());
+    }
+    let total = targets.len();
+    let is_tty = std::io::stderr().is_terminal();
+    if is_tty {
+        println!(
+            "{} Provisioning {} harness(es) through official routes…",
+            "▸".cyan().bold(),
+            total.to_string().cyan().bold()
+        );
+    } else {
+        println!(
+            "Provisioning {} harness(es) through official routes…",
+            total
+        );
+    }
+    if !verbose {
+        let msg = "(installer output is buffered per harness — see $UZE_HOME/state/logs/setup-<harness>.log; use --verbose to stream)";
+        if is_tty {
+            println!("{}", msg.dim());
         } else {
-            println!(
-                "{}: setup {:?}: {}",
-                result.integration,
-                result.provisioning.status,
-                result
-                    .provisioning
-                    .reason
-                    .as_deref()
-                    .unwrap_or("executable was not verified")
-            );
+            println!("{}", msg);
         }
     }
+    let logs_dir = home.state_dir().join("logs");
+    let _ = std::fs::create_dir_all(&logs_dir);
+    let mut had_warning = false;
+
+    for (idx, id) in targets.iter().enumerate() {
+        let step = idx + 1;
+        let header = if is_tty {
+            crate::progress::step_header(step, total, id)
+        } else {
+            format!("[{}/{}] {} — provisioning…", step, total, id)
+        };
+        let spinner = if is_tty {
+            Some(progress::spinner(&header))
+        } else {
+            println!("{}", header);
+            None
+        };
+        let log_path = logs_dir.join(format!("setup-{}.log", id));
+        let _ = std::fs::write(
+            &log_path,
+            format!("=== uze setup {} — {} ===\n", id, chrono_stamp()),
+        );
+        let runner = CapturingRunner::new(log_path.clone(), verbose);
+        let per_app = UzeApplication::from_env_with_runner(home.clone(), Box::new(runner))?;
+        let results = match per_app.setup(Some(id)) {
+            Ok(r) => r,
+            Err(e) => {
+                if let Some(pb) = &spinner {
+                    pb.finish_and_clear();
+                }
+                progress::error(&format!("[{}/{}] {} failed: {}", step, total, id, e));
+                if !verbose {
+                    eprintln!("  → log: {}", log_path.display());
+                    if let Ok(tail) = read_tail(&log_path, 20) {
+                        eprintln!("  ── tail ──\n{}\n  ──", tail);
+                    }
+                }
+                return Err(e);
+            }
+        };
+        for result in &results {
+            if result.configured {
+                let summary = if is_tty {
+                    format!(
+                        "{} [{}/{}] {}: {} ({}; version {})",
+                        crate::progress::success_icon(),
+                        step,
+                        total,
+                        result.integration.cyan().bold(),
+                        "ready".green().bold(),
+                        format!("{:?}", result.provisioning.action)
+                            .to_lowercase()
+                            .dim(),
+                        result
+                            .detection
+                            .version
+                            .as_deref()
+                            .unwrap_or("unknown")
+                            .cyan()
+                    )
+                } else {
+                    format!(
+                        "[{}/{}] {}: ready ({}; version {})",
+                        step,
+                        total,
+                        result.integration,
+                        format!("{:?}", result.provisioning.action).to_lowercase(),
+                        result.detection.version.as_deref().unwrap_or("unknown")
+                    )
+                };
+                if let Some(pb) = &spinner {
+                    pb.finish_and_clear();
+                }
+                println!("{}", summary);
+                if let Some(shim) = &result.runtime_shim {
+                    println!(
+                        "  ↳ shim: {} (remove symlink to disable)",
+                        shim.shim_path.display().to_string().dim()
+                    );
+                    if let Some(rc) = &shim.rc_file_updated {
+                        println!("    added to PATH in {}", rc.display().to_string().cyan());
+                    }
+                    if let Some(hint) = &shim.path_hint {
+                        println!("    → {}", hint.dim());
+                    }
+                }
+                if let Some(err) = &result.attach_error {
+                    had_warning = true;
+                    if is_tty {
+                        eprintln!(
+                            "  {} {}: {}",
+                            crate::progress::warning_icon(),
+                            id.cyan().bold(),
+                            err.yellow()
+                        );
+                        eprintln!(
+                            "    {} run `uze doctor` for details; fix and re-run `uze setup {}`",
+                            "→".dim(),
+                            id.cyan()
+                        );
+                        eprintln!(
+                            "    {} log: {}",
+                            "→".dim(),
+                            log_path.display().to_string().dim()
+                        );
+                    } else {
+                        eprintln!("  warning {}: {}", id, err);
+                        eprintln!("    log: {}", log_path.display());
+                    }
+                    if verbose && let Ok(tail) = std::fs::read_to_string(&log_path) {
+                        print_log_block(&log_path, &tail);
+                    }
+                }
+                if let Some(err) = &result.shim_error {
+                    had_warning = true;
+                    if is_tty {
+                        eprintln!(
+                            "  {} shim {}: {}",
+                            crate::progress::warning_icon(),
+                            id.cyan().bold(),
+                            err.yellow()
+                        );
+                    } else {
+                        eprintln!("  shim warning {}: {}", id, err);
+                    }
+                    eprintln!("    log: {}", log_path.display().to_string().dim());
+                }
+                if verbose
+                    && result.attach_error.is_none()
+                    && result.shim_error.is_none()
+                    && let Ok(content) = std::fs::read_to_string(&log_path)
+                    && !content.trim().is_empty()
+                    && content.lines().count() > 1
+                {
+                    print_log_block(&log_path, &content);
+                }
+            } else {
+                if let Some(pb) = &spinner {
+                    pb.finish_and_clear();
+                }
+                let summary = if is_tty {
+                    format!(
+                        "{} [{}/{}] {}: {} {:?}: {}",
+                        crate::progress::error_icon(),
+                        step,
+                        total,
+                        result.integration.cyan().bold(),
+                        "setup".red().bold(),
+                        result.provisioning.status,
+                        result
+                            .provisioning
+                            .reason
+                            .as_deref()
+                            .unwrap_or("executable was not verified")
+                            .dim()
+                    )
+                } else {
+                    format!(
+                        "[{}/{}] {}: setup {:?}: {}",
+                        step,
+                        total,
+                        result.integration,
+                        result.provisioning.status,
+                        result
+                            .provisioning
+                            .reason
+                            .as_deref()
+                            .unwrap_or("executable was not verified")
+                    )
+                };
+                println!("{}", summary);
+                if let Some(err) = &result.attach_error {
+                    eprintln!("  {} {}", crate::progress::warning_icon(), err.yellow());
+                }
+                if verbose {
+                    if let Ok(content) = std::fs::read_to_string(&log_path) {
+                        print_log_block(&log_path, &content);
+                    }
+                } else {
+                    eprintln!("  → log: {}", log_path.display().to_string().dim());
+                }
+            }
+        }
+    }
+    if had_warning {
+        if is_tty {
+            eprintln!(
+                "\n{} Setup completed with warnings — some harnesses need manual cleanup. See `{}`.",
+                crate::progress::warning_icon(),
+                "uze doctor".cyan()
+            );
+        } else {
+            eprintln!(
+                "\nSetup completed with warnings — some harnesses need manual cleanup. See `uze doctor`."
+            );
+        }
+    } else if is_tty {
+        println!(
+            "\n{} Setup completed — all {} harness(es) ready.",
+            crate::progress::success_icon(),
+            total.to_string().green().bold()
+        );
+    } else {
+        println!("\nSetup completed — all {} harness(es) ready.", total);
+    }
     Ok(())
+}
+
+fn chrono_stamp() -> String {
+    format!("{:?}", std::time::SystemTime::now())
+}
+
+fn print_log_block(path: &std::path::Path, content: &str) {
+    println!("  ── log {} ──", path.display().to_string().dim());
+    let lines: Vec<&str> = content.lines().collect();
+    let to_show = if lines.len() > 80 { 80 } else { lines.len() };
+    for line in lines.iter().take(to_show) {
+        println!("  {} {}", crate::progress::log_prefix(), line.dim());
+    }
+    if lines.len() > to_show {
+        println!(
+            "  {} … ({} more lines, see {})",
+            crate::progress::log_prefix(),
+            lines.len() - to_show,
+            path.display().to_string().dim()
+        );
+    }
+    println!("  ── end log ──");
+}
+
+fn read_tail(path: &std::path::Path, n: usize) -> std::io::Result<String> {
+    let content = std::fs::read_to_string(path)?;
+    let lines: Vec<&str> = content.lines().collect();
+    let start = lines.len().saturating_sub(n);
+    Ok(lines[start..].join("\n"))
+}
+
+/// `ProcessRunner` that buffers an installer's inherited output to a per-harness
+/// log file instead of streaming it interleaved on the terminal. `Quiet`
+/// probes stay quiet; `Inherit` (the installer) is redirected to the file so
+/// each harness's log is an opaque container until the step finishes.
+struct CapturingRunner {
+    log_path: std::path::PathBuf,
+    verbose: bool,
+}
+
+impl CapturingRunner {
+    fn new(log_path: std::path::PathBuf, verbose: bool) -> Self {
+        Self { log_path, verbose }
+    }
+}
+
+impl uze::provisioning::ProcessRunner for CapturingRunner {
+    fn run(
+        &self,
+        spec: &uze::provisioning::ProcessSpec,
+    ) -> uze::Result<uze::provisioning::ProcessResult> {
+        use std::fs::OpenOptions;
+        use std::process::{Command, Stdio};
+        use std::thread;
+        use std::time::{Duration, Instant};
+
+        let mut command = Command::new(&spec.program);
+        command.args(&spec.arguments).stdin(Stdio::null());
+        match spec.output {
+            uze::provisioning::ProcessOutput::Quiet => {
+                command.stdout(Stdio::null()).stderr(Stdio::null());
+            }
+            uze::provisioning::ProcessOutput::Inherit => {
+                if let Ok(mut f) = OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&self.log_path)
+                {
+                    use std::io::Write;
+                    let _ = writeln!(
+                        f,
+                        "\n--- run: {} {} (timeout {:?}) ---",
+                        spec.program,
+                        spec.arguments.join(" "),
+                        spec.timeout
+                    );
+                }
+                let file = OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&self.log_path)
+                    .map_err(|source| uze::UzeError::Write {
+                        path: self.log_path.clone(),
+                        source,
+                    })?;
+                let stdout = file.try_clone().map_err(|source| uze::UzeError::Write {
+                    path: self.log_path.clone(),
+                    source,
+                })?;
+                let stderr = file;
+                command
+                    .stdout(Stdio::from(stdout))
+                    .stderr(Stdio::from(stderr));
+                if self.verbose {
+                    eprintln!("  │ run: {} {}", spec.program, spec.arguments.join(" "));
+                }
+            }
+        }
+        let mut child = command.spawn().map_err(|source| uze::UzeError::Process {
+            program: spec.program.clone(),
+            source,
+        })?;
+        let started = Instant::now();
+        loop {
+            if let Some(status) = child.try_wait().map_err(|source| uze::UzeError::Process {
+                program: spec.program.clone(),
+                source,
+            })? {
+                return Ok(uze::provisioning::ProcessResult {
+                    success: status.success(),
+                    timed_out: false,
+                });
+            }
+            if started.elapsed() >= spec.timeout {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Ok(uze::provisioning::ProcessResult {
+                    success: false,
+                    timed_out: true,
+                });
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+    }
 }
 
 /// `uze <plugin>@<market>` — the project shorthand. Reached only from
@@ -721,40 +1068,6 @@ fn run_shorthand(app: &UzeApplication, args: Vec<String>, verbose: bool) -> Resu
 /// otherwise used exactly as given.
 fn context_path(path: Option<PathBuf>) -> PathBuf {
     path.unwrap_or_else(|| PathBuf::from("."))
-}
-
-/// Interprets a direct plugin source: a local path, or a Git URL —
-/// `<url>@<ref>` pins a branch, tag or commit, and `#<subdir>` selects a
-/// package root inside the repository. Used by `uze plugin install` when
-/// its argument is not a `name@marketplace` spec.
-fn parse_source(spec: &str) -> uze::PackageSource {
-    let looks_remote = spec.starts_with("https://")
-        || spec.starts_with("http://")
-        || spec.starts_with("git://")
-        || spec.starts_with("ssh://")
-        || spec.starts_with("file://");
-    if !looks_remote {
-        return uze::PackageSource::local(spec);
-    }
-    let (locator, subdirectory) = match spec.split_once('#') {
-        Some((locator, subdirectory)) => (locator, Some(PathBuf::from(subdirectory))),
-        None => (spec, None),
-    };
-    // Split on the last `@` only when it follows the authority, so a URL
-    // whose path legitimately contains `@` is not mistaken for a pin.
-    let scheme_end = locator.find("://").map(|at| at + 3).unwrap_or(0);
-    let (url, reference) = match locator[scheme_end..].rfind('@') {
-        Some(at) => {
-            let at = scheme_end + at;
-            (&locator[..at], Some(locator[at + 1..].to_owned()))
-        }
-        None => (locator, None),
-    };
-    uze::PackageSource::Git {
-        url: url.to_owned(),
-        reference,
-        subdirectory,
-    }
 }
 
 /// Chooses who answers a trust question.

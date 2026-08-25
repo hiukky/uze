@@ -8,3 +8,4 @@ publish = false
 description = "Shared, harness-agnostic test infrastructure for the UZE workspace (TestEnvironment, FakeHarness, fixtures, scenario builder, assertions)."
 
 [dependencies]
+serde_json = "1"

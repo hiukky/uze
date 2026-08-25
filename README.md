@@ -56,6 +56,7 @@ see `uze --help` or run `uze` for the terminal UI.
 </thead><tbody>
 <tr><td align="left">Cursor CLI</td><td>⚪</td></tr>
 <tr><td align="left">Muse</td><td>⚪</td></tr>
+<tr><td align="left">PI</td><td>⚪</td></tr>
 </tbody></table>
 
 > ⚪ roadmap — no integration yet; cells flip when it lands.

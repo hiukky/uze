@@ -24,9 +24,25 @@ impl UzeApplication {
         &self,
         integration: &dyn IntegrationPort,
     ) -> Result<()> {
+        let mut first_error: Option<uze_core::UzeError> = None;
         for package_id in self.store.package_ids()? {
-            let package = self.store.package(&package_id)?;
-            self.attach_package_to(&package, integration)?;
+            let package = match self.store.package(&package_id) {
+                Ok(pkg) => pkg,
+                Err(error) => {
+                    if first_error.is_none() {
+                        first_error = Some(error);
+                    }
+                    continue;
+                }
+            };
+            if let Err(error) = self.attach_package_to(&package, integration)
+                && first_error.is_none()
+            {
+                first_error = Some(error);
+            }
+        }
+        if let Some(error) = first_error {
+            return Err(error);
         }
         Ok(())
     }

@@ -1,12 +1,11 @@
 # Context Manager
 
 Status: **first usable vertical slice, implemented and tested, 2026-08-21.**
-Companion to [instructions.md](instructions.md) and
-[instructions-design.md](instructions-design.md), which cover the earlier
-Instructions tracer bullet this builds directly on. This document describes
-the Context Manager as its own product boundary, distinct from the Package
-Manager, and the `inspect → plan → reconcile` model that boundary now
-exposes.
+The design this builds on is recorded in
+[instructions-design.md](instructions-design.md) (its Fases 1–14); this
+document describes the Context Manager as its own product boundary, distinct
+from the Package Manager, and the `inspect → plan → reconcile` model that
+boundary now exposes.
 
 ## Principles
 

@@ -2031,15 +2031,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "uze-conformance"
-version = "0.0.0-alpha.14"
-dependencies = [
- "serde",
- "serde_json",
- "uze-testkit",
-]
-
-[[package]]
 name = "uze-core"
 version = "0.0.0-alpha.14"
 dependencies = [
@@ -2060,6 +2051,9 @@ dependencies = [
 [[package]]
 name = "uze-testkit"
 version = "0.0.0-alpha.14"
+dependencies = [
+ "serde_json",
+]
 
 [[package]]
 name = "version_check"

@@ -1,0 +1,181 @@
+#!/usr/bin/env python3
+"""Shared machinery for the per-harness conformance scenarios.
+
+Everything a scenario needs that is not harness-specific: the `--internal`
+Docker topology (provider + harness containers), per-run TLS certs for the
+TLS-intercepted providers, PTY screen/waiter helpers, and the evidence
+`check()` accumulator.
+"""
+import json
+import os
+import re
+import subprocess
+import time
+
+import pexpect
+
+PROVIDER_IMG = "python:3.12-slim"
+HARNESS_IMAGE = "conformance-harness:latest"
+
+HARNESS_HOSTS = {
+    "claude": ["api.anthropic.com", "platform.claude.com", "console.anthropic.com",
+               "statsig.anthropic.com", "api.statsig.com", "sentry.io",
+               "telemetry.anthropic.com"],
+    "codex": ["api.openai.com"],
+}
+HARNESS_SANS = {
+    "claude": "DNS:api.anthropic.com,DNS:*.anthropic.com,DNS:platform.claude.com,"
+              "DNS:*.claude.com,DNS:console.anthropic.com,DNS:statsig.anthropic.com,"
+              "DNS:api.statsig.com,DNS:sentry.io,DNS:telemetry.anthropic.com",
+    "codex": "DNS:api.openai.com,DNS:*.openai.com",
+}
+
+
+class Config:
+    """Per-run context shared with the harness scenario module."""
+
+    def __init__(self, harness, run):
+        self.harness = harness
+        self.run = run
+        self.repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self.fix = os.path.join(self.repo, "harnesses", harness, "fixtures")
+        self.outdir = os.environ.get(
+            "AGY_OUTDIR", f"/tmp/harness-conformance/{harness}/run{run}")
+        self.net = "uze-harness-offline"
+        self.prov_name = "fake-provider"
+        self.cert_dir = os.path.join(self.outdir, "certs")
+        self.mcp_proof = "UZE_MCP_CONFORMANCE_PROOF_1"
+        self.mcp_fixture_bin = "/usr/local/bin/uze-mcp-conformance-fixture"
+        os.makedirs(self.outdir, exist_ok=True)
+
+
+results = []
+
+
+def check(name, ok, detail="", kind="assert"):
+    results.append({"check": name, "pass": bool(ok), "detail": detail, "kind": kind})
+    tag = "PASS" if ok else "FAIL"
+    if kind == "adapted":
+        tag = "ADAPTED"
+    print(f"{tag:7s} {name}" + (f"  ({detail})" if detail else ""))
+
+
+def sh(*args, ok=(0,)):
+    r = subprocess.run(args, capture_output=True, text=True)
+    if r.returncode not in ok:
+        raise RuntimeError(f"{' '.join(args)} rc={r.returncode}: {r.stderr[-500:]}")
+    return r
+
+
+def generate_certs(cfg):
+    os.makedirs(cfg.cert_dir, exist_ok=True)
+    ca_key = os.path.join(cfg.cert_dir, "ca.key")
+    ca_crt = os.path.join(cfg.cert_dir, "ca.crt")
+    leaf_key = os.path.join(cfg.cert_dir, "leaf.key")
+    leaf_csr = os.path.join(cfg.cert_dir, "leaf.csr")
+    leaf_crt = os.path.join(cfg.cert_dir, "leaf.crt")
+    if not os.path.exists(ca_crt):
+        sh("openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+           "-keyout", ca_key, "-out", ca_crt, "-days", "30",
+           "-subj", "/CN=UZE Synthetic CA", "-sha256")
+    if not os.path.exists(leaf_crt):
+        sh("openssl", "req", "-newkey", "rsa:2048", "-nodes",
+           "-keyout", leaf_key, "-out", leaf_csr, "-subj", "/CN=api.example.com")
+        ext = os.path.join(cfg.cert_dir, "ext.cnf")
+        with open(ext, "w") as f:
+            f.write(f"subjectAltName={HARNESS_SANS[cfg.harness]}\nextendedKeyUsage=serverAuth\n")
+        sh("openssl", "x509", "-req", "-in", leaf_csr, "-CA", ca_crt, "-CAkey", ca_key,
+           "-CAcreateserial", "-out", leaf_crt, "-days", "30", "-extfile", ext, "-sha256")
+    return ca_crt, leaf_crt, leaf_key
+
+
+def start_provider(cfg, mode):
+    """Runs the synthetic provider container on the internal net.
+
+    antigravity: fake_gemini (plain HTTP 9999); claude: fake_anthropic
+    (TLS 443, Anthropic hosts); codex: fake_openai (TLS 443, api.openai.com).
+    """
+    subprocess.run(["docker", "rm", "-f", cfg.prov_name], capture_output=True)
+    env = ["-e", f"PROVIDER_MODE={mode}",
+           "-e", "PROVIDER_STRUCT=/app/struct.json",
+           "-e", f"MCP_PROOF={cfg.mcp_proof}"]
+    provider = os.path.join(cfg.repo, "harnesses", cfg.harness)
+    if cfg.harness == "antigravity":
+        mounts = ["-v", f"{provider}/provider.py:/app/fp.py:ro"]
+        if mode == "static":
+            mounts += ["-v", f"{cfg.fix}/simple_turn.sse:/app/resp.sse:ro",
+                       "-e", "PROVIDER_RESP=/app/resp.sse"]
+        else:
+            env += ["-e", 'FC_ARGS={"serverName":"uze-conformance","toolName":"uze_conformance","arguments":{}}',
+                    "-e", "FINAL_TEXT=UZE_CONFORMANCE_PASS"]
+        sh("docker", "run", "-d", "--name", cfg.prov_name, "--network", cfg.net,
+           *mounts, *env, PROVIDER_IMG, "python", "/app/fp.py", "9999")
+    elif cfg.harness == "claude":
+        _, leaf_crt, leaf_key = generate_certs(cfg)
+        env += ["-e", "LEAF_CERT=/app/leaf.crt", "-e", "LEAF_KEY=/app/leaf.key",
+                "-e", "RESPONSE_TEXT=UZE_CONFORMANCE_OK",
+                "-e", "FINAL_TEXT=UZE_CONFORMANCE_PASS"]
+        sh("docker", "run", "-d", "--name", cfg.prov_name, "--network", cfg.net,
+           "-v", f"{provider}/provider.py:/app/fp.py:ro",
+           "-v", f"{leaf_crt}:/app/leaf.crt:ro",
+           "-v", f"{leaf_key}:/app/leaf.key:ro",
+           *env, PROVIDER_IMG, "python", "/app/fp.py")
+    else:
+        _, leaf_crt, leaf_key = generate_certs(cfg)
+        env += ["-e", "LEAF_CERT=/app/leaf.crt", "-e", "LEAF_KEY=/app/leaf.key",
+                "-e", "RESPONSE_TEXT=UZE_CONFORMANCE_OK"]
+        sh("docker", "run", "-d", "--name", cfg.prov_name, "--network", cfg.net,
+           "-v", f"{provider}/provider.py:/app/fp.py:ro",
+           "-v", f"{leaf_crt}:/app/leaf.crt:ro",
+           "-v", f"{leaf_key}:/app/leaf.key:ro",
+           *env, PROVIDER_IMG, "python", "/app/fp.py")
+    time.sleep(2)
+    return subprocess.check_output(
+        ["docker", "inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
+         cfg.prov_name], text=True).strip()
+
+
+def provider_struct(cfg):
+    try:
+        out = subprocess.run(["docker", "exec", cfg.prov_name, "cat", "/app/struct.json"],
+                             capture_output=True, text=True).stdout
+        return json.loads(out) or []
+    except Exception:
+        return []
+
+
+def docker_base(cfg, prov_ip, final_cmd, tty=True):
+    cmd = ["docker", "run", "--rm"] + (["-it"] if tty else []) + ["--network", cfg.net]
+    for h in HARNESS_HOSTS.get(cfg.harness, []):
+        cmd += ["--add-host", f"{h}:{prov_ip}"]
+    cmd += ["--tmpfs", "/tmp:rw,exec,nosuid,nodev,size=128m,uid=1000,gid=1000,mode=700",
+            "--tmpfs", "/work:rw,noexec,nosuid,nodev,size=512m,uid=1000,gid=1000,mode=700",
+            "-e", "HOME=/work/home", "-e", "UZE_HOME=/work/home/.uze",
+            "-e", "UZE_TESTKIT_FIXTURES_ROOT=/opt/uze-fixtures/tests-fixtures",
+            "-v", f"{cfg.fix}:/app/fixtures:ro",
+            HARNESS_IMAGE, "sh", "-c", final_cmd]
+    return cmd
+
+
+def make_screen(child):
+    def screen(wait=2.2):
+        time.sleep(wait)
+        try:
+            t = child.read_nonblocking(size=250000, timeout=6)
+        except Exception:
+            t = ""
+        p = re.sub(r"\x1b\][^\x07]*\x07", "", t)
+        p = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", p).replace("\x1b", "")
+        return t, p
+    return screen
+
+
+def make_waiter(screen):
+    def wait_for(markers, tries=12, gap=2.0):
+        for _ in range(tries):
+            t, p = screen(gap)
+            for m in markers:
+                if m in p:
+                    return t, p, m
+        return t, p, None
+    return wait_for

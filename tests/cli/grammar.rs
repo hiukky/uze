@@ -107,19 +107,44 @@ fn market_add_never_touches_the_project_lock() {
     let _ = std::fs::remove_dir_all(home);
 }
 
-/// `uze plugin install <path>` — machine-level install by direct source
-/// (no `@`), also never touching the project lock.
+/// `uze plugin install <path>` — a direct source without a marketplace is
+/// rejected by the product (the marketplace is the provenance contract,
+/// ADR-019), and the marketplace flow never touches the project lock.
 #[test]
-fn plugin_install_by_direct_path_never_touches_the_project_lock() {
+fn plugin_install_requires_a_marketplace_and_never_touches_the_project_lock() {
     let home = temporary_home("plugin-install-path");
     std::fs::create_dir_all(&home).unwrap();
-    let output = uze(&home)
+    let rejected = uze(&home)
         .args(["plugin", "install", package_fixture().to_str().unwrap()])
         .output()
         .unwrap();
     assert!(
+        !rejected.status.success(),
+        "a direct-path install must be rejected"
+    );
+    let stderr = String::from_utf8_lossy(&rejected.stderr);
+    assert!(
+        stderr.contains("marketplace"),
+        "the rejection must point at the marketplace contract: {stderr}"
+    );
+    assert!(
+        !home.join("agents.lock").is_file(),
+        "`plugin install` must never create agents.lock"
+    );
+
+    // The marketplace flow is the supported path.
+    let (market_args, install_args) =
+        uze_testkit::marketplace::marketplace_install_args(&home, &package_fixture());
+    let market_add = uze(&home).args(&market_args).output().unwrap();
+    assert!(
+        market_add.status.success(),
+        "market add failed: {}",
+        String::from_utf8_lossy(&market_add.stderr)
+    );
+    let output = uze(&home).args(&install_args).output().unwrap();
+    assert!(
         output.status.success(),
-        "plugin install failed: {}",
+        "marketplace install failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(

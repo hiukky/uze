@@ -1,0 +1,1 @@
+data: {"candidates":[{"content":{"parts":[{"text":"UZE_CONFORMANCE_OK"}],"role":"model"},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":50,"candidatesTokenCount":3,"totalTokenCount":53}}

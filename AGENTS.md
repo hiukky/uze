@@ -49,6 +49,17 @@ explains a non-obvious *why* — the rationale behind a decision, an invariant,
 a workaround, or a subtle constraint the code alone cannot convey. Never
 restate what the code already says; write intent, not implementation.
 
+## Documentation hygiene
+
+Do not create permanent Markdown files for implementation notes,
+investigation logs, temporary plans, or task reports unless explicitly
+requested — prefer ephemeral working notes. Research becomes documentation
+only when the information is likely to remain useful, is not better
+represented by code/tests/ADR/OpenSpec, and has a clear canonical owner.
+Before adding a document, update the existing canonical one when
+appropriate; new docs must state their durable purpose and owner, and
+prefer updating an existing document over creating a new file.
+
 ## Workspace layout
 
 Cargo workspace, edition 2024, MSRV 1.97. Single version source:
@@ -72,11 +83,14 @@ need to).
   (`claude`, `codex`, `opencode`, `antigravity`)
   implementing the shared `IntegrationPort` from `uze-core`, plus `shared/`
   for cross-vendor process/path helpers.
-- `conformance/` — Harness Conformance Lab: real external-harness L2/L4
-  evidence (`conformance/src/{harness,scenario,evidence}.rs`) in a
-  disposable Docker environment. Vendor-specific by design; never linked
-  into the deterministic suite. Single fixture source: `tests/_fixtures`
-  (via `uze-testkit`).
+- `conformance/` — Harness Conformance Lab (Python): Real Harness +
+  Synthetic World isolation evidence, vertical per harness
+  (`conformance/harnesses/{antigravity,claude,codex}/`) in a disposable
+  Docker environment — the real harness binary, a synthetic provider, zero
+  Internet, zero tokens. Vendor-specific by design; never linked into the
+  deterministic suite. Single fixture source: `tests/_fixtures`; per-harness
+  synthetic seeds under `conformance/harnesses/<vendor>/fixtures/`.
+  Run with `python3 conformance/lab.py --harness <h>`.
 - `tests/` — domain-organized integration suites (one `main.rs` per
   domain: `cli/`, `memory/`, `packages/`, `workspace/`, `lifecycle/`,
   `projection/`, `integrations/`, `acceptance/`), shared test

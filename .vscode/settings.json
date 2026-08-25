@@ -1,11 +1,12 @@
 {
   "files.exclude": {
     "**/target": true,
-    "**/.git": true
+    "**/.git": true,
+    "**/__pycache__":true
   },
   "search.exclude": {
     "**/target": true,
-    "**/Cargo.lock": true
+    "**/Cargo.lock": true,
   },
   "files.watcherExclude": {
     "**/target/**": true

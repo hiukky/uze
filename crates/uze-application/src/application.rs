@@ -205,7 +205,7 @@ impl UzeApplication {
     /// command must not mutate installed plugin content. A newer snapshot is
     /// surfaced as `PluginSummary::update_available` (a pure read) for an
     /// explicit `update_plugin` to act on later, not applied silently. See
-    /// `docs/architecture/overview.md`'s Marketplace section.
+    /// `docs/architecture/invariants.md`'s "Official marketplace" section.
     ///
     /// Idempotent: nothing changes on a repeat call once every default
     /// plugin is installed and attached. Returns `true` if it installed at
@@ -249,10 +249,22 @@ impl UzeApplication {
                 continue;
             };
             for integration in &self.integrations {
-                if self.detect_cached(integration.as_ref()).present
-                    && !self.attachment_effective(package.id.as_str(), integration.as_ref())?
-                {
-                    self.attach_package_to(&package, integration.as_ref())?;
+                let effective = self
+                    .attachment_effective(package.id.as_str(), integration.as_ref())
+                    .unwrap_or(false);
+                if self.detect_cached(integration.as_ref()).present && !effective {
+                    // Production resilience: a single harness's foreign state
+                    // (e.g. Antigravity `uze` already imported outside UZE)
+                    // must not abort bootstrap for other harnesses. Attach
+                    // failures are best-effort here; `setup`/`doctor` will
+                    // surface them as warnings. This intentionally swallows
+                    // the error — the method's contract is "best-effort attach",
+                    // not "all harnesses must succeed".
+                    if let Err(err) = self.attach_package_to(&package, integration.as_ref()) {
+                        // Swallow foreign-state errors silently in bootstrap;
+                        // explicit `setup` will surface them per-harness.
+                        let _ = err;
+                    }
                 }
             }
         }
@@ -309,8 +321,18 @@ impl UzeApplication {
             return Ok(false);
         }
         let materialized = bootstrap::materialize(id)?;
-        self.install_materialized(materialized, &trust::NoTrustAuthority, &[], false)?;
-        Ok(true)
+        match self.install_materialized(materialized, &trust::NoTrustAuthority, &[], false) {
+            Ok(_) => Ok(true),
+            Err(_) => {
+                // Production resilience: the Store entry is already persisted
+                // before harness attachment, and a foreign-state failure on
+                // one harness must not abort bootstrap for other harnesses nor
+                // fail the whole `setup` on a user's real machine. The package
+                // remains installed; `setup`/`doctor` will surface the
+                // per-harness warning.
+                Ok(true)
+            }
+        }
     }
 
     /// Resolves a `PackageSource` into local bytes. `Embedded` sources are
@@ -443,6 +465,13 @@ impl UzeApplication {
 
     /// Runs only selected, detected setup routines. No integration knowledge
     /// leaks to the caller beyond stable ids and reported facts.
+    ///
+    /// Resilience contract (production environments): a single harness's
+    /// attach or shim failure never aborts the whole `setup` run. Failures
+    /// are collected per-harness into `SetupResult::attach_error` /
+    /// `shim_error` and surfaced as warnings — the caller still gets a
+    /// `Vec<SetupResult>` with one entry per harness, and `doctor` shows the
+    /// same facts via reconciliation.
     pub fn setup(&self, requested: Option<&str>) -> Result<Vec<SetupResult>> {
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.home)?;
         self.home.ensure_layout()?;
@@ -463,8 +492,18 @@ impl UzeApplication {
                 .iter()
                 .find(|integration| integration.id() == result.integration)
             {
-                self.attach_stored_packages_to(integration.as_ref())?;
-                result.runtime_shim = self.ensure_runtime_shim(integration.as_ref())?;
+                match self.attach_stored_packages_to(integration.as_ref()) {
+                    Ok(()) => {}
+                    Err(error) => {
+                        result.attach_error = Some(error.to_string());
+                    }
+                }
+                match self.ensure_runtime_shim(integration.as_ref()) {
+                    Ok(shim) => result.runtime_shim = shim,
+                    Err(error) => {
+                        result.shim_error = Some(error.to_string());
+                    }
+                }
             }
         }
         Ok(results)
@@ -599,6 +638,8 @@ impl UzeApplication {
                     // this helper also backs `add`'s implicit preparation,
                     // which must never silently create a PATH shim.
                     runtime_shim: None,
+                    attach_error: None,
+                    shim_error: None,
                 })
             })
             .collect()
@@ -631,6 +672,8 @@ impl UzeApplication {
                         detection,
                     ),
                     runtime_shim: None,
+                    attach_error: None,
+                    shim_error: None,
                 })
             })
             .collect()
@@ -1059,6 +1102,19 @@ pub struct SetupResult {
     /// persistent `CLAUDE.md` bridge. `None` for every
     /// integration with no runtime-integration story (not an error).
     pub runtime_shim: Option<RuntimeShimSetup>,
+    /// `Some` when attachment of at least one stored package failed for this
+    /// harness (e.g. a foreign `uze` plugin already occupies the Antigravity
+    /// name). The harness stays `configured` and other harnesses still
+    /// complete — the error is surfaced as a warning, not a fatal `Err`,
+    /// matching the production-resilience contract added for real user
+    /// environments where `setup` must never abort the whole run on one
+    /// harness.
+    pub attach_error: Option<String>,
+    /// `Some` when the experimental runtime shim failed to be created for
+    /// this harness (e.g. no real executable on PATH outside the shim dir).
+    /// Also non-fatal: the harness setup completed, the shim just couldn't be
+    /// wired.
+    pub shim_error: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -2315,5 +2371,419 @@ mod tests {
              and both warm reads (in-process and cross-invocation)"
         );
         let _ = fs::remove_dir_all(&root);
+    }
+
+    // --- Production resilience: `setup` never aborts the whole run on one harness ---
+    //
+    // Real user machines are not fresh temp dirs: a same-name Antigravity
+    // plugin imported outside UZE, a drifted symlink, or a shim conflict must
+    // surface as a per-harness warning, not as a fatal `uze: ...` that aborts
+    // the entire `setup` and leaves other harnesses half-configured.
+    // These tests replicate those production anomalies deterministically
+    // without a real `agy` binary, via minimal fake integrations.
+
+    struct HealthySymlinkIntegration {
+        root: PathBuf,
+    }
+
+    impl IntegrationPort for HealthySymlinkIntegration {
+        fn id(&self) -> &'static str {
+            "healthy-harness"
+        }
+        fn capabilities(&self) -> HarnessCapabilities {
+            HarnessCapabilities::default()
+        }
+        fn detect(&self) -> HarnessDetection {
+            HarnessDetection {
+                present: true,
+                version: Some("9.9.9".to_owned()),
+            }
+        }
+        fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+            ExposurePlan {
+                representation: resource.capability.representation,
+                route: CompatibilityRoute::Adaptable,
+                verification: VerificationStatus::Unverified,
+                mechanism: ExposureMechanism::Unsupported {
+                    rationale: "healthy test does not use exposure_plan".to_owned(),
+                },
+                evidence: "test".to_owned(),
+            }
+        }
+        fn attach_receipt(&self, resource: &Resource) -> Result<Option<AttachmentReceipt>> {
+            let path = self.root.join(resource.name());
+            #[cfg(unix)]
+            {
+                let already_correct = fs::read_link(&path)
+                    .map(|target| target == resource.capability.path)
+                    .unwrap_or(false);
+                if !already_correct {
+                    if path.symlink_metadata().is_ok() {
+                        fs::remove_file(&path).map_err(|source| UzeError::Write {
+                            path: path.clone(),
+                            source,
+                        })?;
+                    }
+                    std::os::unix::fs::symlink(&resource.capability.path, &path).map_err(
+                        |source| UzeError::Write {
+                            path: path.clone(),
+                            source,
+                        },
+                    )?;
+                }
+            }
+            Ok(Some(AttachmentReceipt {
+                package_id: match &resource.origin {
+                    uze_core::ResourceOrigin::Package { id, .. } => id.as_str().to_owned(),
+                    _ => unreachable!(),
+                },
+                resource_identity: Some(resource.identity()),
+                integration: self.id().to_owned(),
+                strategy: "test-healthy".to_owned(),
+                artifact: ManagedArtifact::SymlinkReference {
+                    path,
+                    target: resource.capability.path.clone(),
+                },
+            }))
+        }
+    }
+
+    struct ForeignFailingIntegration {
+        root: PathBuf,
+    }
+
+    impl IntegrationPort for ForeignFailingIntegration {
+        fn id(&self) -> &'static str {
+            "antigravity"
+        }
+        fn capabilities(&self) -> HarnessCapabilities {
+            HarnessCapabilities::default()
+        }
+        fn detect(&self) -> HarnessDetection {
+            HarnessDetection {
+                present: true,
+                version: Some("1.1.19".to_owned()),
+            }
+        }
+        fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+            ExposurePlan {
+                representation: resource.capability.representation,
+                route: CompatibilityRoute::Adaptable,
+                verification: VerificationStatus::Unverified,
+                mechanism: ExposureMechanism::Unsupported {
+                    rationale: "foreign test".to_owned(),
+                },
+                evidence: "test".to_owned(),
+            }
+        }
+        fn attach_receipt(&self, resource: &Resource) -> Result<Option<AttachmentReceipt>> {
+            // Only the default `uze` package is treated as foreign-occupied;
+            // any other package should succeed so per-package resilience can be
+            // observed (the same shape as the real Antigravity preflight which
+            // only blocks the conflicting name).
+            if let uze_core::ResourceOrigin::Package { id, .. } = &resource.origin
+                && id.as_str().eq("uze")
+            {
+                return Err(UzeError::ExposureUnavailable(
+                    "Antigravity already has an imported plugin named `uze` that UZE does not own; refusing to overwrite it".to_owned(),
+                ));
+            }
+            let path = self.root.join(resource.name());
+            #[cfg(unix)]
+            {
+                if path.symlink_metadata().is_ok() {
+                    fs::remove_file(&path).map_err(|source| UzeError::Write {
+                        path: path.clone(),
+                        source,
+                    })?;
+                }
+                std::os::unix::fs::symlink(&resource.capability.path, &path).map_err(|source| {
+                    UzeError::Write {
+                        path: path.clone(),
+                        source,
+                    }
+                })?;
+            }
+            Ok(Some(AttachmentReceipt {
+                package_id: match &resource.origin {
+                    uze_core::ResourceOrigin::Package { id, .. } => id.as_str().to_owned(),
+                    _ => unreachable!(),
+                },
+                resource_identity: Some(resource.identity()),
+                integration: self.id().to_owned(),
+                strategy: "test-foreign".to_owned(),
+                artifact: ManagedArtifact::SymlinkReference {
+                    path,
+                    target: resource.capability.path.clone(),
+                },
+            }))
+        }
+        fn attach_package(
+            &self,
+            _package: &StoredPackage,
+            _plan: &PackageExposurePlan,
+        ) -> Result<Option<AttachmentReceipt>> {
+            Err(UzeError::ExposureUnavailable(
+                "Antigravity already has an imported plugin named `uze` that UZE does not own; refusing to overwrite it".to_owned(),
+            ))
+        }
+    }
+
+    struct ShimConflictingIntegration {}
+
+    impl IntegrationPort for ShimConflictingIntegration {
+        fn id(&self) -> &'static str {
+            "shim-test"
+        }
+        fn capabilities(&self) -> HarnessCapabilities {
+            HarnessCapabilities::default()
+        }
+        fn detect(&self) -> HarnessDetection {
+            HarnessDetection {
+                present: true,
+                version: Some("1.0.0".to_owned()),
+            }
+        }
+        fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+            ExposurePlan {
+                representation: resource.capability.representation,
+                route: CompatibilityRoute::Adaptable,
+                verification: VerificationStatus::Unverified,
+                mechanism: ExposureMechanism::Unsupported {
+                    rationale: "shim test".to_owned(),
+                },
+                evidence: "test".to_owned(),
+            }
+        }
+        fn supports_runtime_integration(&self) -> bool {
+            true
+        }
+        fn aliases(&self) -> &'static [&'static str] {
+            &["shim-test"]
+        }
+    }
+
+    #[test]
+    fn setup_continues_when_one_harness_has_foreign_state_and_other_succeeds() {
+        let root = temp("setup-resilience-foreign-one-harness");
+        let home = UzeHome::at(&root);
+        let healthy_root = root.join("healthy");
+        let foreign_root = root.join("foreign");
+        fs::create_dir_all(&healthy_root).unwrap();
+        fs::create_dir_all(&foreign_root).unwrap();
+
+        let app = UzeApplication::new(
+            home.clone(),
+            vec![
+                Box::new(HealthySymlinkIntegration {
+                    root: healthy_root.clone(),
+                }),
+                Box::new(ForeignFailingIntegration {
+                    root: foreign_root.clone(),
+                }),
+            ],
+        );
+        // Seed store with the default `uze` package (the one Antigravity
+        // would see as foreign) plus one additional fixture package.
+        app.ensure_default_plugins().unwrap();
+        app.add_plugin(
+            uze_core::PackageSource::local(fixture()),
+            &uze_core::trust::AlwaysTrust,
+        )
+        .unwrap();
+
+        // Mock the real binaries for shim resolution: create fake executables
+        // for both harnesses so `ensure_runtime_shim` for the shim-less ones
+        // just returns Ok(None) instead of being the reason for a warning.
+        let fake_bin = root.join("bin");
+        fs::create_dir_all(&fake_bin).unwrap();
+
+        let results = app.setup(None).unwrap();
+        assert_eq!(results.len(), 2, "both harnesses must be reported");
+
+        let healthy = results
+            .iter()
+            .find(|r| r.integration == "healthy-harness")
+            .expect("healthy harness missing");
+        let foreign = results
+            .iter()
+            .find(|r| r.integration == "antigravity")
+            .expect("foreign harness missing");
+
+        assert!(healthy.configured, "healthy harness stays configured");
+        assert!(
+            healthy.attach_error.is_none(),
+            "healthy harness must have no attach_error, got {:?}",
+            healthy.attach_error
+        );
+        assert!(
+            foreign.configured,
+            "foreign harness stays configured despite attach warning"
+        );
+        assert!(
+            foreign.attach_error.is_some(),
+            "foreign harness must surface attach_error as warning, not fatal"
+        );
+        assert!(
+            foreign
+                .attach_error
+                .as_deref()
+                .unwrap()
+                .contains("already has an imported plugin"),
+            "wrong attach_error: {:?}",
+            foreign.attach_error
+        );
+
+        // Healthy harness actually attached at least one package; foreign's
+        // failure for the `uze` package does not erase that.
+        let healthy_receipts = state::receipts(&home, None)
+            .unwrap()
+            .into_iter()
+            .filter(|(_, r)| r.integration == "healthy-harness")
+            .count();
+        assert!(
+            healthy_receipts >= 1,
+            "healthy harness must have recorded receipts despite sibling failure"
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn attach_stored_packages_to_is_per_package_resilient() {
+        let root = temp("attach-per-package-resilience");
+        let home = UzeHome::at(&root);
+        let foreign_root = root.join("foreign2");
+        fs::create_dir_all(&foreign_root).unwrap();
+
+        let app = UzeApplication::new(
+            home.clone(),
+            vec![Box::new(ForeignFailingIntegration {
+                root: foreign_root.clone(),
+            })],
+        );
+        // Two packages: default `uze` (will fail for this integration) and
+        // the canonical skill fixture (should succeed).
+        app.ensure_default_plugins().unwrap();
+        app.add_plugin(
+            uze_core::PackageSource::local(fixture()),
+            &uze_core::trust::AlwaysTrust,
+        )
+        .unwrap();
+
+        let foreign: &dyn IntegrationPort = app.integrations[0].as_ref();
+        let result = app.attach_stored_packages_to(foreign);
+        assert!(
+            result.is_err(),
+            "overall attach should still report the first error"
+        );
+
+        // But the non-conflicting package must still have been attempted and
+        // recorded — per-package resilience, not abort-on-first.
+        let receipts = state::receipts(&home, None).unwrap();
+        let has_fixture_receipt = receipts.iter().any(|(_, r)| {
+            r.integration == "antigravity"
+                && r.package_id == "uze-agent-skill-conformance"
+                && r.resource_identity.is_some()
+        });
+        assert!(
+            has_fixture_receipt,
+            "fixture package must have been attached despite `uze` package failing: {receipts:?}"
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn setup_is_idempotent_with_foreign_state_present() {
+        let root = temp("setup-idempotent-foreign");
+        let home = UzeHome::at(&root);
+        let foreign_root = root.join("foreign3");
+        fs::create_dir_all(&foreign_root).unwrap();
+
+        let app = UzeApplication::new(
+            home.clone(),
+            vec![Box::new(ForeignFailingIntegration {
+                root: foreign_root.clone(),
+            })],
+        );
+        app.ensure_default_plugins().unwrap();
+
+        let first = app.setup(None).unwrap();
+        let foreign_first = first
+            .iter()
+            .find(|r| r.integration == "antigravity")
+            .unwrap()
+            .attach_error
+            .clone();
+        assert!(foreign_first.is_some());
+
+        let second = app.setup(None).unwrap();
+        let foreign_second = second
+            .iter()
+            .find(|r| r.integration == "antigravity")
+            .unwrap()
+            .attach_error
+            .clone();
+        assert_eq!(
+            foreign_first, foreign_second,
+            "repeated setup must be stable and not duplicate or hide the warning"
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn shim_failure_is_reported_but_does_not_abort_setup() {
+        let root = temp("setup-shim-resilience");
+        let home = UzeHome::at(&root);
+        let shim_root = root.join("shim-data");
+        fs::create_dir_all(&shim_root).unwrap();
+
+        // Pre-create a conflicting regular file where the shim symlink would go,
+        // so `refresh_shim_symlink` returns `ManagedEntryConflict`.
+        let shims_dir = home.shims_dir();
+        fs::create_dir_all(&shims_dir).unwrap();
+        let shim_path = shims_dir.join("shim-test");
+        fs::write(&shim_path, "foreign file, not a symlink").unwrap();
+
+        // Provide a fake real executable so resolution succeeds up to the
+        // symlink step — a temp dir on PATH containing `shim-test`.
+        let fake_bin = root.join("fake-bin");
+        fs::create_dir_all(&fake_bin).unwrap();
+        let fake_exe = fake_bin.join("shim-test");
+        fs::write(&fake_exe, "#!/bin/sh\necho 1.0.0\n").unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&fake_exe).unwrap().permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&fake_exe, perms).unwrap();
+        }
+        let old_path = std::env::var_os("PATH").unwrap_or_default();
+        let new_path = format!("{}:{}", fake_bin.display(), old_path.to_string_lossy());
+        // SAFETY: single-threaded test, restores PATH afterwards.
+        unsafe { std::env::set_var("PATH", &new_path) };
+
+        let app = UzeApplication::new(home.clone(), vec![Box::new(ShimConflictingIntegration {})]);
+
+        let results = app.setup(None).unwrap();
+        let shim_result = results
+            .iter()
+            .find(|r| r.integration == "shim-test")
+            .expect("shim harness missing");
+        assert!(shim_result.configured);
+        assert!(
+            shim_result.shim_error.is_some(),
+            "shim conflict must be surfaced as shim_error, not fatal"
+        );
+        assert!(
+            shim_result.attach_error.is_none(),
+            "attach itself should not have failed"
+        );
+
+        // Restore PATH.
+        unsafe { std::env::set_var("PATH", old_path) };
+        let _ = fs::remove_dir_all(root);
     }
 }

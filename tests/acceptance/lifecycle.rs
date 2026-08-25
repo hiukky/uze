@@ -20,15 +20,18 @@ fn remove_lifecycle_cleans_artifacts_and_keeps_project_lock_untouched() {
     .unwrap();
 
     let fixture = fixtures::canonical("skill-plugin");
+    let (market_args, install_args) =
+        uze_testkit::marketplace::marketplace_install_args(&env.home, &fixture);
     env.run_ok(
         uze_bin(),
-        &[
-            "plugin",
-            "install",
-            fixture.to_str().unwrap(),
-            "--format",
-            "json",
-        ],
+        &market_args.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
+    let mut with_json = install_args.clone();
+    with_json.push("--format".to_owned());
+    with_json.push("json".to_owned());
+    env.run_ok(
+        uze_bin(),
+        &with_json.iter().map(String::as_str).collect::<Vec<_>>(),
     );
 
     let inspect = env.run_ok(
@@ -98,7 +101,16 @@ fn drift_blocks_destructive_remove_and_preserves_the_artifact() {
     install_fake_harnesses(&env);
 
     let fixture = fixtures::canonical("skill-plugin");
-    env.run_ok(uze_bin(), &["plugin", "install", fixture.to_str().unwrap()]);
+    let (market_args, install_args) =
+        uze_testkit::marketplace::marketplace_install_args(&env.home, &fixture);
+    env.run_ok(
+        uze_bin(),
+        &market_args.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
+    env.run_ok(
+        uze_bin(),
+        &install_args.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
 
     // The codex/opencode entry is UZE's managed symlink; repoint it at a
     // foreign directory — the canonical drifted shape (a plain foreign

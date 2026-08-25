@@ -17,15 +17,20 @@ fn fresh_machine_installs_canonical_plugin_and_inspects_healthy() {
     let env = TestEnvironment::isolated();
 
     // The default `uze` plugin is seeded even on an empty machine.
+    let (market_args, install_args) = uze_testkit::marketplace::marketplace_install_args(
+        &env.home,
+        &fixtures::canonical("skill-plugin"),
+    );
+    env.run_ok(
+        uze_bin(),
+        &market_args.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
+    let mut with_json = install_args.clone();
+    with_json.push("--format".to_owned());
+    with_json.push("json".to_owned());
     let install = env.run_ok(
         uze_bin(),
-        &[
-            "plugin",
-            "install",
-            fixtures::canonical("skill-plugin").to_str().unwrap(),
-            "--format",
-            "json",
-        ],
+        &with_json.iter().map(String::as_str).collect::<Vec<_>>(),
     );
     let report: serde_json::Value = serde_json::from_slice(&install.stdout).expect("json report");
     assert_eq!(report["plugin"]["id"], "uze-agent-skill-conformance");

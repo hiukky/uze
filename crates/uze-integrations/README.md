@@ -45,7 +45,7 @@ Agents/Hooks/Commands are `NOT_IMPLEMENTED` project-wide, not per-harness gaps:
 `uze-core::importers` and routed to zero integrations (`grep` confirms —
 these three variants and `Policy`, which is entirely unused anywhere, never
 appear in any `IntegrationPort::capabilities()`/`exposure_plan()`).
-`docs/capabilities/{agents,hooks,commands}.md` document this as a deliberate
+`docs/capabilities/overview.md` documents this as a deliberate
 research-only posture, not an oversight.
 
 ## Native-first routing
@@ -151,28 +151,6 @@ Only Claude has a runtime-projection mechanism (`--add-dir` delivery of
 (`/compact` retention). Codex, OpenCode, and Antigravity inherit
 `IntegrationPort`'s passthrough defaults and do nothing with the shim/dispatch
 machinery ADR-014 also gives them for free.
-
-**Note on an in-progress, external change observed during this audit:** all
-four parallel audits independently noticed that `crates/uze-integrations/
-src/opencode.rs`, `crates/uze-core/src/integration.rs`, `src/shim.rs`, and
-`crates/uze-application/src/application.rs` changed on disk mid-session —
-not made by this audit or any of its forks. The change adds a new
-`IntegrationPort::runtime_executable_aliases()` method and flips
-`OpenCodeIntegration::supports_runtime_integration()` to `true`,
-generalizing the Claude-only PATH-shim mechanism to resolve OpenCode's
-`opencode2`-named v2 binary without a physical symlink. ADR-014 explicitly
-does not anticipate this ("only if and when [Codex, OpenCode, or Antigravity]
-has a real runtime-projection need of its own — nothing here requires or
-anticipates that"). The workspace briefly failed to compile mid-edit
-(missing `use std::fs`/`PathBuf` in `opencode/provision.rs`) and now builds
-again; `cargo test -p uze-integrations --lib` currently reports **38**
-passing (was 39 at the start of this audit — the old
-`symlink_alias_is_created_repaired_and_leaves_foreign_files_alone` test
-appears to have been removed as part of the same change). This audit did
-not touch, revert, or evaluate that change — it was out of scope, made no
-attempt to finish or fix it, and the OpenCode README reflects the
-mechanism as it stood *before* this edit began. **Flagging for your
-review, not folding into any verdict above.**
 
 ## Evidence legend
 

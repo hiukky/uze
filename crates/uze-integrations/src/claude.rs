@@ -309,7 +309,7 @@ impl IntegrationPort for ClaudeIntegration {
     }
 
     /// Claude namespaces plugin skills/commands itself (`/flow:review` for a
-    /// plugin named `flow` — see `docs/capabilities/commands.md`), so UZE
+    /// plugin named `flow` — see `docs/capabilities/skill-invocation-policy.md`), so UZE
     /// never materializes the namespace into the plugin: the plugin declares
     /// the plain logical name and Claude owns the `plugin:` prefix. For the
     /// capability-level fallback shim the physical directory name is the

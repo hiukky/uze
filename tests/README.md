@@ -88,6 +88,23 @@ Real-harness policy: a probe skips cleanly when the binary is absent
 place for real-vendor verdicts, and is never required for the ordinary
 suite.
 
+## Where does a new test go?
+
+```text
+Does it need a real harness CLI?
+├── yes ──> conformance/, as an L2 or L4 scenario (see conformance/README.md)
+└── no
+    └── Does it exercise a public UZE flow end to end?
+        ├── yes ──> tests/acceptance/
+        └── no
+            └── Does it use the uze library or the uze binary, deterministically?
+                ├── yes ──> tests/<domain>/
+                └── no  ──> a #[cfg(test)] module beside the code
+```
+
+If a test would need a credential, a network call, or an environment variable
+to be meaningful, it does not belong in `tests/`.
+
 ## Domain × level matrix (as of this refactor)
 
 | Domain | L0 | L1 | L2 | L3 |
