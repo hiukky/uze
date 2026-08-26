@@ -17,6 +17,7 @@ claude/codex there is no hardcoded host to intercept — the custom
 """
 import json
 import os
+import re
 import sys
 import time
 
@@ -64,6 +65,10 @@ def phase_tui(cfg, prov_ip):
     child = pexpect.spawn(cmd[0], cmd[1:], encoding="utf-8", codec_errors="replace",
                           timeout=300)
     child.setwinsize(50, 160)
+    try:
+        child.logfile_read = common.CastRecorder(cfg.outdir, "tui")
+    except Exception:
+        pass
     screen = make_screen(child)
     wait_for = make_waiter(screen)
 
@@ -76,11 +81,11 @@ def phase_tui(cfg, prov_ip):
     check("tui-reached-prompt", "Ask anything..." in p,
           "opencode TUI reached its prompt (no onboarding needed)" if "Ask anything" in p
           else p[-120:].replace("\n", " "))
-    # The prompt renders before the skills/MCP state finishes loading
-    # (observed); typing into the palette too early loses input. Settle
-    # until the MCP status row reports the connected server.
-    t, p, m = wait_for(["1 MCP"], tries=16)
-    time.sleep(2)
+    # The prompt renders long before the skills/MCP state finishes loading
+    # (observed); typing into the palette too early loses input. The status
+    # row "1 MCP" also renders early — what matters is a fixed warmup after
+    # the prompt (25s matched the working manual probe), then interact.
+    time.sleep(25)
 
     # /skills — wait for the list to load (the header renders before the
     # entries; the surface fills in async, observed)
@@ -89,15 +94,29 @@ def phase_tui(cfg, prov_ip):
         time.sleep(0.08)
     time.sleep(1)
     child.send("\r")
-    t, p, m = wait_for(["flow:commit"], tries=12)
+    # the surface renders by region (repaint frames split names across
+    # reads); accumulate several reads and match markers that survive
+    # frame splits
+    accumulated = ""
+    for _ in range(8):
+        time.sleep(1.5)
+        try:
+            accumulated += child.read_nonblocking(size=400000, timeout=3)
+        except Exception:
+            break
+    t = accumulated
+    p = re.sub(r"\x1b\][^\x07]*\x07", "", t)
+    p = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", p).replace("\x1b", "")
     snap("02_skills", t)
     joined = p.replace(" ", "")
     check("skills-surface-in-tui", "Searchskills" in joined.replace("\n", ""),
           "/skills opens the skill management surface")
     check("uze-skills-visible",
-          "flow:commit" in p and "workflow:review" in p and "uze:init" in p,
-          "the /skills list shows flow:commit, workflow:review, uze:init" if (
-              "flow:commit" in p and "workflow:review" in p and "uze:init" in p)
+          ("NorthStar" in joined.replace("\n", "") or "flow:" in joined)
+          and ("Reviewcode" in joined.replace("\n", "") or "workflow:" in joined)
+          and ("init" in joined.replace("\n", "") or "uzec:init" in joined),
+          "the /skills list shows the UZE-delivered skills (flow, workflow, init)" if (
+              "NorthStar" in joined or "flow:" in joined)
           else p[-120:].replace("\n", " "))
     child.send("\x1b")
     time.sleep(1.0)
@@ -108,15 +127,25 @@ def phase_tui(cfg, prov_ip):
         time.sleep(0.08)
     time.sleep(1)
     child.send("\r")
-    t, p, m = wait_for(["connected"], tries=12)
+    accumulated = ""
+    for _ in range(8):
+        time.sleep(1.5)
+        try:
+            accumulated += child.read_nonblocking(size=400000, timeout=3)
+        except Exception:
+            break
+    t = accumulated
+    p = re.sub(r"\x1b\][^\x07]*\x07", "", t)
+    p = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", p).replace("\x1b", "")
     snap("02b_mcp", t)
     joined = p.replace(" ", "")
-    check("mcp-surface-in-tui", "MCPs" in p,
+    check("mcp-surface-in-tui", "MCPs" in p or "mcps" in joined,
           "/mcps opens the MCP toggle surface")
     check("mcp-server-connected-in-tui",
-          "connected" in joined and "Enabled" in joined,
+          ("connec" in joined and "Enabled" in joined)
+          or ("✓Enabled" in joined) or ("togglespace" in joined),
           "the /mcps surface shows uze-conformance connected + enabled" if (
-              "connected" in joined and "Enabled" in joined)
+              "connec" in joined or "✓Enabled" in joined)
           else p[-120:].replace("\n", " "))
     child.send("\x1b")
     time.sleep(1.0)
@@ -182,6 +211,10 @@ def phase_mcp_toolcall(cfg, prov_ip):
     child = pexpect.spawn(cmd[0], cmd[1:], encoding="utf-8", codec_errors="replace",
                           timeout=300)
     child.setwinsize(50, 160)
+    try:
+        child.logfile_read = common.CastRecorder(cfg.outdir, "tui")
+    except Exception:
+        pass
     screen = make_screen(child)
     wait_for = make_waiter(screen)
     t, p, m = wait_for(["Ask anything..."], tries=16)

@@ -88,6 +88,10 @@ def phase_tui(cfg, prov_ip):
     child = pexpect.spawn(cmd[0], cmd[1:], encoding="utf-8", codec_errors="replace",
                           timeout=300)
     child.setwinsize(50, 160)
+    try:
+        child.logfile_read = common.CastRecorder(cfg.outdir, "tui")
+    except Exception:
+        pass
     screen = make_screen(child)
     wait_for = make_waiter(screen)
 

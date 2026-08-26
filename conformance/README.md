@@ -32,11 +32,16 @@ conformance/
 │   │   ├── scenarios.py          #   onboarding, /plugin, /mcp, turn,
 │   │   │                         #   model-facing (policy preserved), finding
 │   │   └── fixtures/             #   claude.json + settings.json (theme)
-│   └── codex/                    # Real codex 0.149.1 + synthetic OpenAI
-│       ├── provider.py           #   fake_openai (TLS 443, WS→HTTPS fallback)
-│       ├── scenarios.py          #   trust, /skills, /plugins, /mcp, turn,
-│       │                         #   model-facing, plugin-list state
-│       └── fixtures/             #   auth.json seed
+│   ├── codex/                    # Real codex 0.149.1 + synthetic OpenAI
+│   │   ├── provider.py           #   fake_openai (TLS 443, WS→HTTPS fallback)
+│   │   ├── scenarios.py          #   trust, /skills, /plugins, /mcp, turn,
+│   │   │                         #   model-facing, plugin-list state
+│   │   └── fixtures/             #   auth.json seed
+│   └── opencode/                 # Real opencode 1.18.23 + synthetic
+│       ├── provider.py           #   OpenAI-compatible (plain HTTP 9999)
+│       ├── scenarios.py          #   /skills, /mcps, turn, model-facing,
+│       │                         #   MCP tool round-trip in the TUI
+│       └── fixtures/             #   (none — provider is config-driven)
 ```
 
 ## Golden signal: Real Harness + Synthetic World
@@ -55,6 +60,7 @@ Run (3x clean is the gate):
 python3 lab.py --harness antigravity   # 16/16 PASS + 1 ADAPTED
 python3 lab.py --harness claude        # 8/8 PASS
 python3 lab.py --harness codex         # 11/11 PASS
+python3 lab.py --harness opencode      # 14/14 PASS + 1 ADAPTED
 ```
 
 Evidence JSON goes under `AGY_OUTDIR` (default
@@ -69,9 +75,25 @@ vendor-limitation record, never a rewrite).
 | Antigravity | `GOOGLE_GEMINI_BASE_URL` + API-key mode | plain HTTP 9999 |
 | Claude | TLS interception of hardcoded hosts (`/etc/hosts` + `NODE_EXTRA_CA_CERTS`) | TLS 443, Anthropic Messages SSE |
 | Codex | TLS interception of `api.openai.com` + `auth.json` seed | TLS 443, WS-accept-then-close + Responses SSE |
+| OpenCode | custom `baseURL` in the global `opencode.json` (no TLS needed) | plain HTTP 9999, Chat Completions SSE |
 
 The per-run TLS certs are generated with openssl into the run's outdir —
 nothing is committed, nothing is reused across runs.
+
+## Watching a run (the TUI, rendered correctly)
+
+Every TUI phase is recorded (`scriptreplay`-compatible typescript + timing)
+into the run's outdir. `make lab-watch` replays the most recent session
+with correct rendering — ANSI, colors and all — as if it were live:
+
+```bash
+make lab-run HARNESS=opencode   # run the vertical (records the session)
+make lab-watch                  # replay it, rendered correctly
+```
+
+In CI, the same suite runs per harness (`ci.yml` → `conformance` job, matrix
+`antigravity | claude | codex | opencode`); each run's evidence lands as a
+build artifact.
 
 ## Honest findings (documented, never a pass)
 

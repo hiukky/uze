@@ -85,12 +85,15 @@ need to).
   for cross-vendor process/path helpers.
 - `conformance/` — Harness Conformance Lab (Python): Real Harness +
   Synthetic World isolation evidence, vertical per harness
-  (`conformance/harnesses/{antigravity,claude,codex}/`) in a disposable
-  Docker environment — the real harness binary, a synthetic provider, zero
-  Internet, zero tokens. Vendor-specific by design; never linked into the
-  deterministic suite. Single fixture source: `tests/_fixtures`; per-harness
-  synthetic seeds under `conformance/harnesses/<vendor>/fixtures/`.
-  Run with `python3 conformance/lab.py --harness <h>`.
+  (`conformance/harnesses/{antigravity,claude,codex,opencode}/`) in a
+  disposable Docker environment — the real harness binary, a synthetic
+  provider, zero Internet, zero tokens. Vendor-specific by design; never
+  linked into the deterministic suite. Single fixture source:
+  `tests/_fixtures`; per-harness synthetic seeds under
+  `conformance/harnesses/<vendor>/fixtures/`. Run with
+  `python3 conformance/lab.py --harness <h>`; replay a recorded run with
+  `make lab-watch`. The CI `conformance` job runs all four verticals
+  (matrix).
 - `tests/` — domain-organized integration suites (one `main.rs` per
   domain: `cli/`, `memory/`, `packages/`, `workspace/`, `lifecycle/`,
   `projection/`, `integrations/`, `acceptance/`), shared test

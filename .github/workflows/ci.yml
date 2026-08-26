@@ -81,3 +81,31 @@ jobs:
         with:
           name: lcov
           path: lcov.info
+
+  conformance:
+    name: Conformance Lab (Real Harness + Synthetic World)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        harness: [antigravity, claude, codex, opencode]
+    steps:
+      - uses: actions/checkout@v7
+      # The Lab image bakes the real harness binaries (channel-latest),
+      # the `uze` binary and the fixture tree; `lab.py` runs each vertical
+      # against it in a disposable `--internal` network — zero Internet,
+      # zero tokens.
+      - name: Build the Lab harness image
+        run: docker build -f conformance/Dockerfile -t conformance-harness:latest .
+      - name: Run the ${{ matrix.harness }} vertical
+        run: |
+          python3 conformance/lab.py --harness ${{ matrix.harness }}
+        env:
+          AGY_OUTDIR: /tmp/harness-conformance/${{ matrix.harness }}/run1
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: conformance-evidence-${{ matrix.harness }}
+          path: /tmp/harness-conformance/${{ matrix.harness }}/run1/
+          if-no-files-found: ignore

@@ -57,7 +57,8 @@ def check(name, ok, detail="", kind="assert"):
     tag = "PASS" if ok else "FAIL"
     if kind == "adapted":
         tag = "ADAPTED"
-    print(f"{tag:7s} {name}" + (f"  ({detail})" if detail else ""))
+    symbol = {"PASS": "✅", "ADAPTED": "🟡", "FAIL": "❌"}[tag]
+    print(f"{symbol} [{tag:7s}] {name}" + (f"  ({detail})" if detail else ""))
 
 
 def sh(*args, ok=(0,)):
@@ -161,6 +162,65 @@ def docker_base(cfg, prov_ip, final_cmd, tty=True):
             "-v", f"{cfg.fix}:/app/fixtures:ro",
             HARNESS_IMAGE, "sh", "-c", final_cmd]
     return cmd
+
+
+def spawn_tui(cfg, cmd, tag):
+    """Spawns the harness TUI under `script` so the raw PTY session (with
+    timing) is recorded into the run's outdir — `scriptreplay` then
+    reproduces the interactive TUI with correct rendering, exactly as it
+    happened, ANSI and all.
+
+    The returned pexpect child behaves identically (the recorder sits
+    between the child and the PTY); only the extra recording files are new.
+    """
+    rec = os.path.join(cfg.outdir, f"{tag}.typescript")
+    timing = os.path.join(cfg.outdir, f"{tag}.timing")
+    if not os.path.exists(os.path.join(cfg.outdir, "script-ok")):
+        if subprocess.run(["which", "script"], capture_output=True).returncode != 0:
+            print("WARN: `script` not found; TUI recording disabled")
+            open(os.path.join(cfg.outdir, "script-ok"), "w").write("no")
+        else:
+            open(os.path.join(cfg.outdir, "script-ok"), "w").write("yes")
+    if open(os.path.join(cfg.outdir, "script-ok")).read() != "yes":
+        return pexpect.spawn(cmd[0], cmd[1:], encoding="utf-8",
+                             codec_errors="replace", timeout=300)
+    wrapped = ["script", "-q", "--timing", timing, "-c",
+               " ".join([f'"{c}"' if " " in c else c for c in cmd]), rec]
+    child = pexpect.spawn(wrapped[0], wrapped[1:], encoding="utf-8",
+                          codec_errors="replace", timeout=300)
+    child.setwinsize(50, 160)
+    return child
+
+
+class CastRecorder:
+    """Grows a `scriptreplay`-compatible recording from the raw PTY stream
+    WITHOUT wrapping the child (a `script` wrapper buffers output and broke
+    the interactive drive): every chunk the driver reads is appended to the
+    typescript file and accounted in the timing file, so `make lab-watch`
+    can replay the exact TUI session with correct rendering.
+    """
+
+    def __init__(self, outdir, tag):
+        self.typescript = open(os.path.join(outdir, f"{tag}.typescript"), "w")
+        self.timing = open(os.path.join(outdir, f"{tag}.timing"), "w")
+        self.last = time.time()
+
+    def write(self, data):
+        now = time.time()
+        delay = max(0.000001, now - self.last)
+        self.last = now
+        self.typescript.write(data)
+        self.typescript.flush()
+        self.timing.write(f"{delay:.6f} {len(data)}\n")
+        self.timing.flush()
+
+    def flush(self):
+        self.typescript.flush()
+        self.timing.flush()
+
+    def close(self):
+        self.typescript.close()
+        self.timing.close()
 
 
 def make_screen(child):

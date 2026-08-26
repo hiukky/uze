@@ -51,7 +51,7 @@ def finish(cfg):
         json.dump(common.results, f, indent=1)
     subprocess.run(["docker", "rm", "-f", cfg.prov_name], capture_output=True)
     subprocess.run(["docker", "network", "rm", cfg.net], capture_output=True)
-    sys.exit(0 if passed + adapted == len(common.results) else 1)
+    sys.exit(0 if passed == len(common.results) else 1)
 
 
 if __name__ == "__main__":
