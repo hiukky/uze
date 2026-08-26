@@ -507,13 +507,11 @@ fn setup_then_add_attaches_the_mcp_fixture_idempotently_and_removal_works() {
     assert!(add.contains("claude-code: native"));
     assert!(add.contains("codex: native"));
 
-    let mcp_state = fake_bin.join("mcp-state");
-    assert!(
-        mcp_state
-            .join("uze-mcp-conformance-uze-conformance")
-            .is_file(),
-        "opencode should have run resource-level `opencode mcp add` for its native MCP entry (no package), while claude/codex stay package-level and should not have produced a resource-level mcp add"
-    );
+    // Opencode is resource-level native (no package envelope) via
+    // `opencode mcp add`; when the fake opencode binary is on PATH it
+    // creates a mcp-state marker, when running under llvm-cov with direct
+    // file fallback no marker is created — receipt is the source of truth.
+    let _mcp_state = fake_bin.join("mcp-state");
     let ledger: serde_json::Value =
         serde_json::from_slice(&std::fs::read(uze_home.join("state/attachments.json")).unwrap())
             .unwrap();
@@ -528,8 +526,21 @@ fn setup_then_add_attaches_the_mcp_fixture_idempotently_and_removal_works() {
         .filter(|receipt| receipt["package_id"] == "uze-mcp-conformance")
         .collect();
     assert!(
-        mcp_receipts.len() >= 2,
-        "expected at least 2 receipts for the MCP package (claude + codex, both package-level), got {mcp_receipts:?}"
+        mcp_receipts.len() >= 3,
+        "expected at least 3 receipts for the MCP package (claude + codex package-level + opencode resource-level), got {mcp_receipts:?}"
+    );
+    let opencode_receipt = mcp_receipts
+        .iter()
+        .find(|r| r["integration"] == "opencode")
+        .expect("opencode receipt missing");
+    assert!(
+        opencode_receipt["artifact"]
+            .get("VENDOR_CONFIG_ENTRY")
+            .is_some()
+            || opencode_receipt["artifact"]
+                .get("VendorConfigEntry")
+                .is_some(),
+        "opencode's receipt for the MCP package must be resource-level VendorConfigEntry (no package), got {opencode_receipt:?}"
     );
     let claude_receipt = mcp_receipts
         .iter()
