@@ -267,65 +267,56 @@ fn print_colored_help() {
     let green = "\x1b[32m";
     let reset = "\x1b[0m";
     let bold = "\x1b[1m";
+    let muted = "\x1b[2m";
 
-    println!("{}UZE{} — Agent environment manager", bold, reset);
+    let version = env!("CARGO_PKG_VERSION");
+    let desc = "Agent environment manager";
+    // Center within the commands block width (indent 2 + cmd 12 + gap 2 + longest desc ~44 = 60)
+    const CW: usize = 60;
+    let center = |s: &str| {
+        let len = s.chars().count();
+        if len >= CW {
+            s.to_string()
+        } else {
+            let left = (CW - len) / 2;
+            format!("{}{}", " ".repeat(left), s)
+        }
+    };
+    println!("{}", center(&format!("{}UZE{}", bold, reset)));
+    println!("{}", center(&format!("{}v{}{}", muted, version, reset)));
+    println!("{}", center(&format!("{}{}{}", muted, desc, reset)));
     println!();
-    println!("{}Usage:{}", bold, reset);
+    println!("{}Usage:{}", muted, reset);
     println!("  uze <plugin>@<market>");
     println!("  uze <command> [options]");
     println!();
-    println!("{}Project:{}", bold, reset);
-    println!(
-        "  {}<plugin>@<market>{}   Add a plugin to this project",
-        cyan, reset
-    );
-    println!(
-        "  {}install{}             Install this project's environment from agents.lock",
-        cyan, reset
-    );
-    println!(
-        "  {}remove{}              Remove a plugin from this project",
-        cyan, reset
-    );
-    println!(
-        "  {}status{}              Show this project's environment status",
-        cyan, reset
-    );
-    println!(
-        "  {}context{}             Manage this project's AGENTS.md context",
-        cyan, reset
-    );
+    println!("{}Project:{}", muted, reset);
+    // tabular: command column is 12 wide, then two spaces, then description
+    const W: usize = 12;
+    let row = |cmd: &str, desc: &str, color: &str| {
+        let pad = " ".repeat(W - cmd.len());
+        format!("  {}{}{}{}  {}", color, cmd, reset, pad, desc)
+    };
+    println!("{}", row("install", "Install this project's environment from agents.lock", cyan));
+    println!("{}", row("remove", "Remove a plugin from this project", cyan));
+    println!("{}", row("status", "Show this project's environment status", cyan));
+    println!("{}", row("context", "Manage this project's AGENTS.md context", cyan));
     println!();
-    println!("{}Machine:{}", bold, reset);
-    println!(
-        "  {}market{}              Manage marketplace sources",
-        cyan, reset
-    );
-    println!(
-        "  {}plugin{}              Manage plugins installed on this machine",
-        cyan, reset
-    );
-    println!(
-        "  {}harness{}             Manage agent harness integrations",
-        cyan, reset
-    );
+    println!("{}Machine:{}", muted, reset);
+    println!("{}", row("market", "Manage marketplace sources", cyan));
+    println!("{}", row("plugin", "Manage plugins installed on this machine", cyan));
+    println!("{}", row("harness", "Manage agent harness integrations", cyan));
+    println!("{}", row("doctor", "Run diagnostics", cyan));
+    println!("{}", row("setup", "Set up harness integrations", cyan));
     println!();
-    println!("{}Diagnostics:{}", bold, reset);
-    println!("  {}doctor{}              Run diagnostics", cyan, reset);
-    println!(
-        "  {}setup{}               Set up harness integrations",
-        cyan, reset
-    );
-    println!();
-    println!("{}Options:{}", bold, reset);
-    println!("  {}-h, --help{}     Print help", green, reset);
-    println!("  {}-V, --version{}  Print version", green, reset);
-    println!();
-    println!("{}Examples:{}", bold, reset);
-    println!("  uze flow@ai");
-    println!("  uze install");
-    println!("  uze market add hiukky/ai");
-    println!("  uze plugin install flow@ai");
+    println!("{}Options:{}", muted, reset);
+    const OW: usize = 14;
+    let opt_row = |opt: &str, desc: &str| {
+        let pad = " ".repeat(OW - opt.len());
+        format!("  {}{}{}{}  {}", green, opt, reset, pad, desc)
+    };
+    println!("{}", opt_row("-h, --help", "Print help"));
+    println!("{}", opt_row("-V, --version", "Print version"));
 }
 
 fn run(cli: Cli) -> Result<()> {
