@@ -1,0 +1,16 @@
+{
+  "name": "uze-lab",
+  "description": "Isolated marketplace used exclusively by the Harness Conformance Lab.",
+  "plugins": [
+    {
+      "name": "flow",
+      "source": "./plugins/flow",
+      "description": "Default, user-only, and model-only Skill policy coverage."
+    },
+    {
+      "name": "mcp-plugin",
+      "source": "./plugins/mcp-plugin",
+      "description": "MCP registration and execution coverage."
+    }
+  ]
+}

@@ -4,7 +4,7 @@ import json
 """Antigravity scenario (latest channel) — Real Harness + Synthetic World.
 
 Phase A (TUI): prompt + synthetic credential, /skills (flow:commit,
-workflow:review, uze:init), /mcp (server listed + tools enumerated),
+flow:review, uze:init), /mcp (server listed + tools enumerated),
 deterministic turn, model-only Skill hidden from the slash surface but
 present for the model, user-only Skill CAPABILITY_ADAPTED, MCP tool invocation
 inside the interactive TUI (proof round-trip).
@@ -20,17 +20,13 @@ import os
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 import shared.common as common
-from shared.common import check, docker_base, make_screen, make_waiter, provider_struct, start_provider
+from shared.common import (check, docker_base, make_screen, make_waiter,
+                           materialize_marketplace, provider_struct, start_provider)
 
 
 def agy_setup(cfg, prov_ip, include_mcp, final_cmd):
-    mcp_block = ""
-    plugins = "flow workflow background"
+    plugins = "flow"
     if include_mcp:
-        mcp_block = f"""
-cp -r /opt/uze-fixtures/tests-fixtures/canonical/mcp-plugin /work/market/plugins/mcp-plugin
-printf '%s' '{{"mcpServers": {{"uze-conformance": {{"command": "{cfg.mcp_fixture_bin}", "args": ["--proof", "{cfg.mcp_proof}"]}}}}}}' > /work/market/plugins/mcp-plugin/mcp.json
-"""
         plugins += " mcp-plugin"
     return f"""
 set -e
@@ -39,17 +35,11 @@ export HOME=/work/home UZE_HOME=/work/home/.uze
 export GEMINI_API_KEY=uze-conformance-invalid-by-design
 export GOOGLE_GEMINI_BASE_URL=http://{prov_ip}:9999
 export AGY_CLI_DISABLE_AUTO_UPDATE=1
-mkdir -p /work/home/.gemini/antigravity-cli /work/market/plugins
+mkdir -p /work/home/.gemini/antigravity-cli
 cp /app/fixtures/settings.json /work/home/.gemini/antigravity-cli/settings.json
 cp /app/fixtures/jetski_state.pbtxt /work/home/.gemini/antigravity-cli/jetski_state.pbtxt
 cp /app/fixtures/installation_id /work/home/.gemini/antigravity-cli/installation_id
-cp -r /opt/uze-fixtures/tests-fixtures/canonical/flow /work/market/plugins/flow
-cp -r /opt/uze-fixtures/tests-fixtures/canonical/workflow /work/market/plugins/workflow
-mkdir -p /work/market/plugins/background/skills/analyze
-printf '%s\n' '{{"name":"background","description":"model-only conformance fixture"}}' > /work/market/plugins/background/plugin.json
-printf '%s\n' '---' 'name: analyze' 'description: Model-only conformance fixture' 'invoke:' '  model: true' '  user: false' '---' 'Analyze the current workspace.' > /work/market/plugins/background/skills/analyze/SKILL.md
-{mcp_block}
-printf '%s' '{{"name":"uze-lab","description":"lab","plugins":[{{"name":"flow","source":"./plugins/flow"}},{{"name":"workflow","source":"./plugins/workflow"}},{{"name":"background","source":"./plugins/background"}}{",{\"name\":\"mcp-plugin\",\"source\":\"./plugins/mcp-plugin\"}" if include_mcp else ""}]}}' > /work/market/agents.json
+{materialize_marketplace(cfg)}
 uze market add /work/market >/dev/null 2>&1
 for p in {plugins}; do uze plugin install $p@uze-lab >/dev/null 2>&1; done
 {final_cmd}
@@ -102,15 +92,15 @@ def phase_tui(cfg, prov_ip):
         time.sleep(0.15)
     time.sleep(1.2)
     child.send("\r")
-    t2, p2, _ = wait_for(["workflow:review"], tries=4)
+    t2, p2, _ = wait_for(["flow:review"], tries=4)
     snap("02_skills", t2)
     check("uzek-skill-visible", "flow:commit" in p2, "flow:commit in /skills")
-    check("useronly-skill-human-visible", "workflow:review" in p2,
-          "workflow:review in global skills surface")
+    check("useronly-skill-human-visible", "flow:review" in p2,
+          "flow:review in global skills surface")
     check("official-uzek-skill-visible", "uze:init" in p2, "uze:init in /skills")
-    check("model-only-skill-hidden-from-tui", "background:analyze" not in p2,
-          "background:analyze is omitted from /skills by disable-slash-command: true"
-          if "background:analyze" not in p2 else p2[-160:].replace("\n", " "))
+    check("model-only-skill-hidden-from-tui", "flow:analyze" not in p2,
+          "flow:analyze is omitted from /skills by disable-slash-command: true"
+          if "flow:analyze" not in p2 else p2[-160:].replace("\n", " "))
     child.send("\x1b")
     time.sleep(1.0)
     t_settle, _, _ = wait_for([">"], tries=6)
@@ -158,12 +148,12 @@ def phase_tui(cfg, prov_ip):
               any(marker.get(name) for marker in markers for name in ("flow:commit", "commit")),
               "flow:commit in the request the harness sent to its provider")
         check("user-only-skill-adapted",
-              any(marker.get(name) for marker in markers for name in ("workflow:review", "review")),
-              "workflow:review present (no vendor explicit-only mechanism)",
+              any(marker.get(name) for marker in markers for name in ("flow:review", "review")),
+              "flow:review present (no vendor explicit-only mechanism)",
               kind="adapted")
         check("model-only-skill-present",
-              any(marker.get(name) for marker in markers for name in ("background:analyze", "analyze")),
-              "background:analyze present in the request while absent from /skills")
+              any(marker.get(name) for marker in markers for name in ("flow:analyze", "analyze")),
+              "flow:analyze present in the request while absent from /skills")
         check("provider-request-captured",
               any(summary.get("tools") for summary in summaries),
               "request body structurally recorded (tools/skills/markers)")

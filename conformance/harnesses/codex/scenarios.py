@@ -22,7 +22,8 @@ import os
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 import shared.common as common
-from shared.common import check, docker_base, generate_certs, make_screen, make_waiter, provider_struct
+from shared.common import (check, docker_base, generate_certs, make_screen,
+                           make_waiter, materialize_marketplace, provider_struct)
 
 
 def codex_setup(cfg, prov_ip, final_cmd):
@@ -33,16 +34,11 @@ export HOME=/work/home CODEX_HOME=/work/home/.codex UZE_HOME=/work/home/.uze
 export OPENAI_API_KEY=uze-conformance-invalid-by-design
 export CODEX_CA_CERTIFICATES=/app/ca.crt
 export SSL_CERT_FILE=/app/ca.crt
-export UZE_TESTKIT_FIXTURES_ROOT=/opt/uze-fixtures/tests-fixtures
-mkdir -p /work/home/.codex /work/market/plugins /work/home/.agents
+mkdir -p /work/home/.codex /work/home/.agents
 cp /app/fixtures/auth.json /work/home/.codex/auth.json
-cp -r /opt/uze-fixtures/tests-fixtures/canonical/flow /work/market/plugins/flow
-cp -r /opt/uze-fixtures/tests-fixtures/canonical/workflow /work/market/plugins/workflow
-cp -r /opt/uze-fixtures/tests-fixtures/canonical/mcp-plugin /work/market/plugins/mcp-plugin
-printf '%s' '{{"mcpServers": {{"uze-conformance": {{"command": "{cfg.mcp_fixture_bin}", "args": ["--proof", "{cfg.mcp_proof}"]}}}}}}' > /work/market/plugins/mcp-plugin/mcp.json
-printf '%s' '{{"name":"uze-lab","description":"lab","plugins":[{{"name":"flow","source":"./plugins/flow"}},{{"name":"workflow","source":"./plugins/workflow"}},{{"name":"mcp-plugin","source":"./plugins/mcp-plugin"}}]}}' > /work/market/agents.json
+{materialize_marketplace(cfg)}
 uze market add /work/market >/dev/null 2>&1
-for p in flow workflow mcp-plugin; do uze plugin install $p@uze-lab >/dev/null 2>&1; done
+for p in flow mcp-plugin; do uze plugin install $p@uze-lab >/dev/null 2>&1; done
 {final_cmd}
 """
 
@@ -127,7 +123,7 @@ def phase_tui(cfg, prov_ip):
     t, p, m = wait_for(["Installed", "Plugins"], tries=8)
     snap("02c_plugins", t)
     joined = p.replace(" ", "")
-    check("plugins-in-tui", "Installed" in p and ("uze" in joined or "workflow" in joined),
+    check("plugins-in-tui", "Installed" in p and ("uze" in joined or "flow" in joined),
           "/plugins shows the UZE-delivered plugins installed")
     child.send("\x1b")
     time.sleep(1.0)
@@ -179,7 +175,7 @@ def phase_tui(cfg, prov_ip):
               "the model request carries the skills catalog section")
         # Honest finding (documented, not a pass): with the current UZE
         # delivery the plugin skills are not listed in codex's model catalog
-        # (only the built-ins); flow:commit/workflow:review are absent.
+        # (only the built-ins); UZE-delivered flow skills are absent.
         check("plugin-skill-catalog-finding",
               not any(markers.get(m) for m in ("flow:commit", "North Star")),
               "observed: uze plugin skills absent from the model catalog (finding)")

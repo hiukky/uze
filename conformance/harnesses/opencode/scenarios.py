@@ -3,7 +3,7 @@
 
 Phase A (TUI): the global opencode.json (custom provider + model + MCP)
 makes the TUI boot straight to the prompt (no onboarding, observed);
-/skills (flow:commit / workflow:review / uze:init listed); /mcps (the UZE
+/skills (flow:commit / flow:review / uze:init listed); /mcps (the UZE
 MCP server connected + enabled); deterministic turn; provider-request
 observation (model-visible Skill present; user-only skill visible to the
 model — opencode lists every registered skill in the system prompt, so the
@@ -25,7 +25,8 @@ import pexpect
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 import shared.common as common
-from shared.common import check, docker_base, make_screen, make_waiter, provider_struct
+from shared.common import (check, docker_base, make_screen, make_waiter,
+                           materialize_marketplace, provider_struct)
 
 
 def opencode_setup(cfg, prov_ip, final_cmd):
@@ -33,16 +34,11 @@ def opencode_setup(cfg, prov_ip, final_cmd):
 set -e
 export PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/.local/bin:/usr/local/.opencode/bin
 export HOME=/work/home UZE_HOME=/work/home/.uze
-export UZE_TESTKIT_FIXTURES_ROOT=/opt/uze-fixtures/tests-fixtures
 export OPENCODE_DISABLE_MODELS_FETCH=1
-mkdir -p /work/home/.config/opencode /work/home/.agents /work/market/plugins
-cp -r /opt/uze-fixtures/tests-fixtures/canonical/flow /work/market/plugins/flow
-cp -r /opt/uze-fixtures/tests-fixtures/canonical/workflow /work/market/plugins/workflow
-cp -r /opt/uze-fixtures/tests-fixtures/canonical/mcp-plugin /work/market/plugins/mcp-plugin
-printf '%s' '{{"mcpServers": {{"uze-conformance": {{"command": "{cfg.mcp_fixture_bin}", "args": ["--proof", "{cfg.mcp_proof}"]}}}}}}' > /work/market/plugins/mcp-plugin/mcp.json
-printf '%s' '{{"name":"uze-lab","description":"lab","plugins":[{{"name":"flow","source":"./plugins/flow"}},{{"name":"workflow","source":"./plugins/workflow"}},{{"name":"mcp-plugin","source":"./plugins/mcp-plugin"}}]}}' > /work/market/agents.json
+mkdir -p /work/home/.config/opencode /work/home/.agents
+{materialize_marketplace(cfg)}
 uze market add /work/market >/dev/null 2>&1
-for p in flow workflow mcp-plugin; do uze plugin install $p@uze-lab >/dev/null 2>&1; done
+for p in flow mcp-plugin; do uze plugin install $p@uze-lab >/dev/null 2>&1; done
 node -e '
 const fs=require("fs");
 const p="/work/home/.config/opencode/opencode.json";
@@ -111,7 +107,7 @@ def phase_tui(cfg, prov_ip):
     joined = p.replace(" ", "")
     check("skills-surface-in-tui", "Searchskills" in joined.replace("\n", ""),
           "/skills opens the skill management surface")
-    qualified_skills = ("flow:commit", "workflow:review", "uze:init")
+    qualified_skills = ("flow:commit", "flow:review", "uze:init")
     check("qualified-uze-skills-visible",
           all(skill in joined for skill in qualified_skills),
           "the /skills list shows each UZE skill by its qualified invocation label"
@@ -184,8 +180,8 @@ def phase_tui(cfg, prov_ip):
         # opencode lists every registered skill in the system prompt — no
         # explicit-only mechanism, so the user-only policy is ADAPTED.
         check("user-only-skill-adapted",
-              markers.get("workflow:review", False),
-              "workflow:review visible to the model (no explicit-only mechanism)",
+              markers.get("flow:review", False),
+              "flow:review visible to the model (no explicit-only mechanism)",
               kind="adapted")
         check("mcp-tool-model-exposed", mcp_tool_present,
               "the UZE MCP tool is exposed in the model request")

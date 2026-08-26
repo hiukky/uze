@@ -31,7 +31,7 @@ LEAF_CERT = os.environ.get("LEAF_CERT", "/app/leaf.crt")
 LEAF_KEY = os.environ.get("LEAF_KEY", "/app/leaf.key")
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
-SKILL_MARKERS = ["flow:commit", "workflow:review", "commit", "review", "init",
+SKILL_MARKERS = ["flow:commit", "flow:review", "commit", "review", "init",
                  "North Star", "Review code"]
 COUNTER = {"n": 0}
 

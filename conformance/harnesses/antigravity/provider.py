@@ -42,7 +42,7 @@ FC_ARGS = json.loads(os.environ.get("FC_ARGS",
 FINAL_TEXT = os.environ.get("FINAL_TEXT", "UZE_CONFORMANCE_PASS")
 MCP_PROOF = os.environ.get("MCP_PROOF", "UZE_MCP_CONFORMANCE_PROOF_1")
 
-SKILL_MARKERS = ["flow:commit", "workflow:review", "background:analyze",
+SKILL_MARKERS = ["flow:commit", "flow:review", "flow:analyze",
                  "commit", "review", "analyze", "init"]
 TOOL_NAMES = ["grep_search", "list_dir", "manage_task", "read_url_content",
               "replace_file_content", "run_command", "schedule", "search_web",

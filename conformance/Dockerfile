@@ -55,21 +55,15 @@ RUN mkdir -p /opt/opencode-runtime \
     @ai-sdk/openai-compatible
 
 COPY --from=uze-build /out/uze-mcp-conformance-fixture /usr/local/bin/uze-mcp-conformance-fixture
-# Single canonical fixture source: the Lab consumes tests/_fixtures through
-# uze-testkit — it never maintains a second canonical tree.
-# Single fixture tree: canonical/foreign/scenarios/golden plus the Lab's
-# control fixture and the shared MCP fixture-server source.
-COPY tests/_fixtures /opt/uze-fixtures/tests-fixtures
+# The Lab owns a complete, isolated marketplace fixture. It represents the
+# final resources exercised by real harnesses; unit/integration fixtures stay
+# under tests/_fixtures and remain independent.
+COPY conformance/_fixtures /opt/uze-conformance-fixtures
 COPY conformance/entrypoint.sh /usr/local/bin/uze-harness-entrypoint
-
-# The Lab resolves the canonical fixture tree from this runtime path (see
-# uze-testkit::fixtures::root) — compile-time manifest paths do not exist in
-# the container.
-ENV UZE_TESTKIT_FIXTURES_ROOT=/opt/uze-fixtures/tests-fixtures
 
 RUN chmod 0755 /usr/local/bin/uze-harness-entrypoint \
     && mkdir -p /work \
-    && chown -R node:node /opt/uze-fixtures /opt/opencode-runtime /usr/local/pnpm /usr/local/.local /usr/local/.opencode \
+    && chown -R node:node /opt/uze-conformance-fixtures /opt/opencode-runtime /usr/local/pnpm /usr/local/.local /usr/local/.opencode \
     && chown node:node /work /usr/local/bin/uze \
     && chown -R node:node /usr/local/bin/uze-mcp-conformance-fixture
 

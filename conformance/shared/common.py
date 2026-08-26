@@ -39,6 +39,8 @@ class Config:
         self.run = run
         self.repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         self.fix = os.path.join(self.repo, "harnesses", harness, "fixtures")
+        self.marketplace = "/opt/uze-conformance-fixtures/marketplace"
+        self.marketplace_source = os.path.join(self.repo, "_fixtures", "marketplace")
         self.outdir = os.environ.get(
             "AGY_OUTDIR", f"/tmp/harness-conformance/{harness}/run{run}")
         self.net = "uze-harness-offline"
@@ -66,6 +68,52 @@ def sh(*args, ok=(0,)):
     if r.returncode not in ok:
         raise RuntimeError(f"{' '.join(args)} rc={r.returncode}: {r.stderr[-500:]}")
     return r
+
+
+def materialize_marketplace(cfg):
+    """Returns the shell fragment that creates one disposable Lab market.
+
+    The checked-in conformance marketplace is the complete product input for
+    every vertical. Only its MCP executable and proof are run-specific.
+    """
+    return f"""
+cp -r {cfg.marketplace} /work/market
+sed -i 's|__UZE_MCP_FIXTURE_BINARY__|{cfg.mcp_fixture_bin}|g; s|__UZE_MCP_CONFORMANCE_PROOF__|{cfg.mcp_proof}|g' /work/market/plugins/mcp-plugin/mcp.json
+"""
+
+
+def validate_marketplace(cfg):
+    """Fails before Docker starts if the shared final-resource fixture drifts."""
+    with open(os.path.join(cfg.marketplace_source, "agents.json")) as f:
+        manifest = json.load(f)
+    if manifest.get("name") != "uze-lab":
+        raise RuntimeError("conformance marketplace must retain the uze-lab identity")
+    plugins = {plugin["name"]: plugin["source"] for plugin in manifest["plugins"]}
+    expected = {
+        "flow": "./plugins/flow",
+        "mcp-plugin": "./plugins/mcp-plugin",
+    }
+    if plugins != expected:
+        raise RuntimeError(f"invalid conformance marketplace inventory: {plugins}")
+
+    required = (
+        "plugins/flow/skills/commit/SKILL.md",
+        "plugins/flow/skills/review/SKILL.md",
+        "plugins/flow/skills/analyze/SKILL.md",
+        "plugins/mcp-plugin/mcp.json",
+    )
+    for relative_path in required:
+        path = os.path.join(cfg.marketplace_source, relative_path)
+        if not os.path.isfile(path):
+            raise RuntimeError(f"missing conformance marketplace resource: {relative_path}")
+
+    with open(os.path.join(cfg.marketplace_source, "plugins/mcp-plugin/mcp.json")) as f:
+        mcp = json.load(f)
+    server = mcp.get("mcpServers", {}).get("uze-conformance", {})
+    if server.get("command") != "__UZE_MCP_FIXTURE_BINARY__" or server.get("args") != [
+        "--proof", "__UZE_MCP_CONFORMANCE_PROOF__"
+    ]:
+        raise RuntimeError("invalid conformance MCP fixture placeholders")
 
 
 def generate_certs(cfg):
@@ -158,7 +206,6 @@ def docker_base(cfg, prov_ip, final_cmd, tty=True):
     cmd += ["--tmpfs", "/tmp:rw,exec,nosuid,nodev,size=128m,uid=1000,gid=1000,mode=700",
             "--tmpfs", "/work:rw,noexec,nosuid,nodev,size=512m,uid=1000,gid=1000,mode=700",
             "-e", "HOME=/work/home", "-e", "UZE_HOME=/work/home/.uze",
-            "-e", "UZE_TESTKIT_FIXTURES_ROOT=/opt/uze-fixtures/tests-fixtures",
             "-v", f"{cfg.fix}:/app/fixtures:ro",
             HARNESS_IMAGE, "sh", "-c", final_cmd]
     return cmd

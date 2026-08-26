@@ -19,7 +19,8 @@ import os
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 import shared.common as common
-from shared.common import check, docker_base, generate_certs, make_screen, make_waiter, provider_struct
+from shared.common import (check, docker_base, generate_certs, make_screen,
+                           make_waiter, materialize_marketplace, provider_struct)
 
 
 def claude_setup(cfg, prov_ip, final_cmd):
@@ -30,15 +31,11 @@ export HOME=/work/home CLAUDE_CONFIG_DIR=/work/home/.claude UZE_HOME=/work/home/
 export ANTHROPIC_API_KEY=uze-conformance-invalid-by-design
 export ANTHROPIC_BASE_URL=https://api.anthropic.com
 export NODE_EXTRA_CA_CERTS=/app/ca.crt
-mkdir -p /work/home/.claude /work/market/plugins
+mkdir -p /work/home/.claude
 cp /app/fixtures/claude.json /work/home/.claude.json
-cp -r /opt/uze-fixtures/tests-fixtures/canonical/flow /work/market/plugins/flow
-cp -r /opt/uze-fixtures/tests-fixtures/canonical/workflow /work/market/plugins/workflow
-cp -r /opt/uze-fixtures/tests-fixtures/canonical/mcp-plugin /work/market/plugins/mcp-plugin
-printf '%s' '{{"mcpServers": {{"uze-conformance": {{"command": "{cfg.mcp_fixture_bin}", "args": ["--proof", "{cfg.mcp_proof}"]}}}}}}' > /work/market/plugins/mcp-plugin/mcp.json
-printf '%s' '{{"name":"uze-lab","description":"lab","plugins":[{{"name":"flow","source":"./plugins/flow"}},{{"name":"workflow","source":"./plugins/workflow"}},{{"name":"mcp-plugin","source":"./plugins/mcp-plugin"}}]}}' > /work/market/agents.json
+{materialize_marketplace(cfg)}
 uze market add /work/market >/dev/null 2>&1
-for p in flow workflow mcp-plugin; do uze plugin install $p@uze-lab >/dev/null 2>&1; done
+for p in flow mcp-plugin; do uze plugin install $p@uze-lab >/dev/null 2>&1; done
 {final_cmd}
 """
 
@@ -160,8 +157,8 @@ def phase_tui(cfg, prov_ip):
               any(markers.get(m) for m in ("flow:commit", "commit")),
               "flow:commit in the primary request claude sent to its provider")
         check("user-only-skill-hidden",
-              not any(markers.get(m) for m in ("workflow:review", "Review code")),
-              "workflow:review absent from the primary model request (disable-model-invocation preserved)")
+              not any(markers.get(m) for m in ("flow:review", "Review code")),
+              "flow:review absent from the primary model request (disable-model-invocation preserved)")
         check("provider-request-captured",
               any(r.get("summary", {}).get("tools") for r in struct),
               "request body structurally recorded (tools/skill markers)")

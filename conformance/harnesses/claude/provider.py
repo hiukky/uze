@@ -40,7 +40,7 @@ MCP_PROOF = os.environ.get("MCP_PROOF", "UZE_MCP_CONFORMANCE_PROOF_1")
 LEAF_CERT = os.environ.get("LEAF_CERT", "/app/leaf.crt")
 LEAF_KEY = os.environ.get("LEAF_KEY", "/app/leaf.key")
 
-SKILL_MARKERS = ["flow:commit", "workflow:review", "commit", "review", "init"]
+SKILL_MARKERS = ["flow:commit", "flow:review", "commit", "review", "init"]
 COUNTER = {"n": 0}
 
 

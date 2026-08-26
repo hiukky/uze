@@ -30,6 +30,7 @@ def main():
     if harness not in ("antigravity", "claude", "codex", "opencode"):
         raise RuntimeError(f"unknown harness: {harness}")
 
+    common.validate_marketplace(cfg)
     scenario = importlib.import_module(f"harnesses.{harness}.scenarios")
 
     subprocess.run(["docker", "rm", "-f", cfg.prov_name], capture_output=True)

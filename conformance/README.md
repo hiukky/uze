@@ -15,6 +15,8 @@ deliberately small and vendor-neutral.
 ```
 conformance/
 ├── lab.py                        # entry: python3 lab.py --harness <h>
+├── _fixtures/
+│   └── marketplace/               # final isolated resources: Skills + MCP
 ├── shared/
 │   └── common.py                 # vendor-neutral: docker topology, per-run
 │                                 #   TLS certs, PTY screen/waiter, evidence
@@ -79,6 +81,19 @@ vendor-limitation record, never a rewrite).
 
 The per-run TLS certs are generated with openssl into the run's outdir —
 nothing is committed, nothing is reused across runs.
+
+## Shared final-resource marketplace
+
+`_fixtures/marketplace/` is the Lab's dedicated, complete marketplace. Each
+vertical starts from a fresh copy and selects the plugins it needs, so the
+same `flow` Skills and MCP resources are exercised across harnesses without
+each scenario rebuilding them by hand. `lab.py` validates
+the inventory and the MCP runtime placeholders before it starts Docker.
+
+This is intentionally separate from `tests/_fixtures/`: those fixtures are
+small, stable inputs for deterministic Rust tests, while this marketplace is
+the evolving final resource set for real-harness evidence. The two trees may
+have equivalent examples, but neither is an implicit source for the other.
 
 ## Watching a run (the TUI, rendered correctly)
 

@@ -134,14 +134,14 @@ from clean state and writes `verdict.json` + screen evidence under
 - `tui-reached-prompt` / `synthetic-credential` — prompt `>` with `Gemini API
   key`, no personal account.
 - `uzek-skill-visible` / `useronly-skill-human-visible` /
-  `official-uzek-skill-visible` — `/skills` lists flow:commit, workflow:review,
+  `official-uzek-skill-visible` — `/skills` lists flow:commit, flow:review,
   uze:init.
 - `mcp-server-visible-in-tui` / `mcp-server-connected-in-tui` — `/mcp` lists
   uze-conformance and shows `Tools: uze_conformance` (loaded + enumerated).
 - `deterministic-response-rendered` / `agent-loop-clean` — UZE_CONFORMANCE_OK
   rendered, no loop error (no-`[DONE]` fix).
 - `model-visible-skill-present` — flow:commit in the real provider request.
-- `user-only-skill-adapted` — workflow:review present, no vendor explicit-only
+- `user-only-skill-adapted` — flow:review present, no vendor explicit-only
   mechanism → **CAPABILITY_ADAPTED**.
 - `mcp-tool-invoked-via-tui` / `mcp-tool-executed-in-tui` — an interactive TUI
   prompt triggers the MCP tool call; the REAL AGY executes the REAL MCP server
@@ -177,7 +177,7 @@ from clean state and writes `verdict.json` + screen evidence under
   `✔ connected` with `1 tool`.
 - `deterministic-response-rendered` — UZE_CONFORMANCE_OK in the TUI.
 - `model-visible-skill-present` — flow:commit in the **primary** model request.
-- `user-only-skill-hidden` — workflow:review ABSENT from the **primary** model
+- `user-only-skill-hidden` — flow:review ABSENT from the **primary** model
   request (`disable-model-invocation` preserved — genuine policy preservation,
   unlike Antigravity's ADAPTED). Auxiliary no-tools calls (title/context) may
   include the full skill listing — a documented secondary leak, not the
@@ -204,7 +204,7 @@ from clean state and writes `verdict.json` + screen evidence under
 | Plugins in TUI | **N/A** (no `/plugin`; CLI) | **PROVEN** (`/plugin`) | **PROVEN** (`/plugins`) |
 | MCP registered + connected | **PROVEN** (`/mcp` + CLI S1/S2) | **PROVEN** (`/mcp` ✔ connected) | **PARTIAL** (`/mcp` surface; inventory empty — finding) |
 | Model-visible Skill (flow:commit) | **PROVEN** | **PROVEN** (primary request) | **FINDING** (absent from catalog) |
-| User-only Skill (workflow:review) | **CAPABILITY_ADAPTED** (visible) | **PROVEN HIDDEN** (absent from primary request) | **FINDING** (not distinguishable — absent) |
+| User-only Skill (flow:review) | **CAPABILITY_ADAPTED** (visible) | **PROVEN HIDDEN** (absent from primary request) | **FINDING** (not distinguishable — absent) |
 | MCP tool executed by real harness | **PROVEN** (TUI round-trip) | **PARTIAL** (ToolSearch protocol needed) | **PARTIAL** (inventory empty) |
 | Deterministic response rendered | **PROVEN** | **PROVEN** | **PROVEN** |
 | Provider request observable | **PROVEN** (structural) | **PROVEN** (structural) | **PROVEN** (structural) |

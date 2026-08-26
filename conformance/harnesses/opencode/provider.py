@@ -42,7 +42,7 @@ MCP_PROOF = os.environ.get("MCP_PROOF", "UZE_MCP_CONFORMANCE_PROOF_1")
 # (`<server>-<tool>`), observed in the primary request.
 MCP_TOOL = "uze-mcp-conformance-uze-conformance_uze_conformance"
 
-SKILL_MARKERS = ["flow:commit", "workflow:review", "commit", "review", "init",
+SKILL_MARKERS = ["flow:commit", "flow:review", "commit", "review", "init",
                  "North Star", "Review code"]
 COUNTER = {"n": 0}
 
