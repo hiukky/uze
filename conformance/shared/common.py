@@ -110,6 +110,12 @@ def start_provider(cfg, mode):
                     "-e", "FINAL_TEXT=UZE_CONFORMANCE_PASS"]
         sh("docker", "run", "-d", "--name", cfg.prov_name, "--network", cfg.net,
            *mounts, *env, PROVIDER_IMG, "python", "/app/fp.py", "9999")
+    elif cfg.harness == "opencode":
+        env += ["-e", "RESPONSE_TEXT=UZE_CONFORMANCE_OK",
+                "-e", "FINAL_TEXT=UZE_CONFORMANCE_PASS"]
+        sh("docker", "run", "-d", "--name", cfg.prov_name, "--network", cfg.net,
+           "-v", f"{provider}/provider.py:/app/fp.py:ro",
+           *env, PROVIDER_IMG, "python", "/app/fp.py", "9999")
     elif cfg.harness == "claude":
         _, leaf_crt, leaf_key = generate_certs(cfg)
         env += ["-e", "LEAF_CERT=/app/leaf.crt", "-e", "LEAF_KEY=/app/leaf.key",

@@ -27,7 +27,7 @@ def main():
                    if a not in ("--harness",) and not a.startswith("--") and a != harness), "1")
 
     cfg = common.Config(harness, run_id)
-    if harness not in ("antigravity", "claude", "codex"):
+    if harness not in ("antigravity", "claude", "codex", "opencode"):
         raise RuntimeError(f"unknown harness: {harness}")
 
     scenario = importlib.import_module(f"harnesses.{harness}.scenarios")
