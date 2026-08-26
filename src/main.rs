@@ -297,15 +297,37 @@ fn print_colored_help() {
         let pad = " ".repeat(W - cmd.len());
         format!("  {}{}{}{}  {}", color, cmd, reset, pad, desc)
     };
-    println!("{}", row("install", "Install this project's environment from agents.lock", cyan));
-    println!("{}", row("remove", "Remove a plugin from this project", cyan));
-    println!("{}", row("status", "Show this project's environment status", cyan));
-    println!("{}", row("context", "Manage this project's AGENTS.md context", cyan));
+    println!(
+        "{}",
+        row(
+            "install",
+            "Install this project's environment from agents.lock",
+            cyan
+        )
+    );
+    println!(
+        "{}",
+        row("remove", "Remove a plugin from this project", cyan)
+    );
+    println!(
+        "{}",
+        row("status", "Show this project's environment status", cyan)
+    );
+    println!(
+        "{}",
+        row("context", "Manage this project's AGENTS.md context", cyan)
+    );
     println!();
     println!("{}Machine:{}", muted, reset);
     println!("{}", row("market", "Manage marketplace sources", cyan));
-    println!("{}", row("plugin", "Manage plugins installed on this machine", cyan));
-    println!("{}", row("harness", "Manage agent harness integrations", cyan));
+    println!(
+        "{}",
+        row("plugin", "Manage plugins installed on this machine", cyan)
+    );
+    println!(
+        "{}",
+        row("harness", "Manage agent harness integrations", cyan)
+    );
     println!("{}", row("doctor", "Run diagnostics", cyan));
     println!("{}", row("setup", "Set up harness integrations", cyan));
     println!();
