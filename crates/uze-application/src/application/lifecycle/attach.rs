@@ -207,14 +207,45 @@ impl UzeApplication {
                     AttachmentState::Matched => {
                         if integration.detach_receipt(existing)?.state == AttachmentState::Missing {
                             state::forget_receipt(&self.home, key)?;
+                            return Ok(resolved);
                         }
                     }
                     AttachmentState::Missing | AttachmentState::Conflict => {
                         state::forget_receipt(&self.home, key)?;
+                        return Ok(resolved);
                     }
                     AttachmentState::Drifted | AttachmentState::Blocked => {}
                 }
                 // Fall through to the fresh candidate below — do not reuse.
+            } else if resource.capability.kind == CapabilityKind::AgentSkill
+                && shared_root.is_some()
+                && matches!(
+                    &existing.artifact,
+                    ManagedArtifact::SymlinkReference { target, .. }
+                        if target.starts_with(self.home.store_dir())
+                )
+            {
+                // Before qualified labels were materialized in generated
+                // wrappers, default Skills linked straight to Store bytes.
+                // That preserves content but leaves harnesses such as
+                // OpenCode displaying the canonical bare `name`. A matched
+                // receipt proves UZE owns this exact legacy link, so detach
+                // it and let the integration rebuild a wrapper. Foreign or
+                // drifted links keep the existing inspect-before-detach rule.
+                let inspection = integration.inspect_receipt(existing);
+                match inspection.state {
+                    AttachmentState::Matched => {
+                        if integration.detach_receipt(existing)?.state == AttachmentState::Missing {
+                            state::forget_receipt(&self.home, key)?;
+                            return Ok(resolved);
+                        }
+                    }
+                    AttachmentState::Missing | AttachmentState::Conflict => {
+                        state::forget_receipt(&self.home, key)?;
+                        return Ok(resolved);
+                    }
+                    AttachmentState::Drifted | AttachmentState::Blocked => {}
+                }
             } else {
                 resolved.resolved_exposure_name = existing_name;
                 resolved.resolved_artifact_target = match &existing.artifact {

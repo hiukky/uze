@@ -44,6 +44,39 @@ fn opencode_routes_every_combination_natively() {
         fs::remove_dir_all(root).unwrap();
     }
 }
+
+#[test]
+fn opencode_default_skill_wrapper_carries_the_qualified_label() {
+    let (root, home, package, r) =
+        make_policy_package("oc-default-label", "commit", &default_body("commit"));
+    let store_bytes = fs::read(package.root.join("skills/commit/SKILL.md")).unwrap();
+    let opencode = OpenCodeIntegration::new(
+        root.join("agents"),
+        root.join("config/opencode.json"),
+        home.clone(),
+    );
+    mark_setup(&home, &opencode);
+
+    let receipt = opencode
+        .attach_receipt(&r)
+        .unwrap()
+        .expect("default Skill attaches on OpenCode");
+    let ManagedArtifact::SymlinkReference { target, .. } = &receipt.artifact else {
+        panic!("expected a managed symlink reference");
+    };
+    let wrapper = fs::read_to_string(target.join("SKILL.md")).unwrap();
+    assert!(
+        wrapper.starts_with("---\nname: flow:commit\n"),
+        "the OpenCode-visible name stays qualified: {wrapper}"
+    );
+    assert_eq!(
+        fs::read(package.root.join("skills/commit/SKILL.md")).unwrap(),
+        store_bytes,
+        "the canonical Store bytes stay untouched"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn opencode_user_only_wrapper_carries_autoinvoke_metadata() {
     let (root, home, package, r) =

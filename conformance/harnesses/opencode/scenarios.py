@@ -111,13 +111,12 @@ def phase_tui(cfg, prov_ip):
     joined = p.replace(" ", "")
     check("skills-surface-in-tui", "Searchskills" in joined.replace("\n", ""),
           "/skills opens the skill management surface")
-    check("uze-skills-visible",
-          ("NorthStar" in joined.replace("\n", "") or "flow:" in joined)
-          and ("Reviewcode" in joined.replace("\n", "") or "workflow:" in joined)
-          and ("init" in joined.replace("\n", "") or "uzec:init" in joined),
-          "the /skills list shows the UZE-delivered skills (flow, workflow, init)" if (
-              "NorthStar" in joined or "flow:" in joined)
-          else p[-120:].replace("\n", " "))
+    qualified_skills = ("flow:commit", "workflow:review", "uze:init")
+    check("qualified-uze-skills-visible",
+          all(skill in joined for skill in qualified_skills),
+          "the /skills list shows each UZE skill by its qualified invocation label"
+          if all(skill in joined for skill in qualified_skills)
+          else p[-240:].replace("\n", " "))
     child.send("\x1b")
     time.sleep(1.0)
 
@@ -180,12 +179,12 @@ def phase_tui(cfg, prov_ip):
         check("skills-instructions-in-request", bool(has_catalog),
               "the model request carries the skills catalog section")
         check("model-visible-skill-present",
-              any(markers.get(m) for m in ("flow:commit", "commit")),
+              markers.get("flow:commit", False),
               "flow:commit present in the primary request opencode sent")
         # opencode lists every registered skill in the system prompt — no
         # explicit-only mechanism, so the user-only policy is ADAPTED.
         check("user-only-skill-adapted",
-              any(markers.get(m) for m in ("workflow:review", "Review code")),
+              markers.get("workflow:review", False),
               "workflow:review visible to the model (no explicit-only mechanism)",
               kind="adapted")
         check("mcp-tool-model-exposed", mcp_tool_present,

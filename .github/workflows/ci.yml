@@ -83,12 +83,20 @@ jobs:
           path: lcov.info
 
   conformance:
-    name: Conformance Lab (Real Harness + Synthetic World)
+    name: E2E - ${{ matrix.label }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        harness: [antigravity, claude, codex, opencode]
+        include:
+          - harness: antigravity
+            label: Antigravity
+          - harness: claude
+            label: Claude
+          - harness: codex
+            label: Codex
+          - harness: opencode
+            label: OpenCode
     steps:
       - uses: actions/checkout@v7
       # The Lab image bakes the real harness binaries (channel-latest),
@@ -97,6 +105,8 @@ jobs:
       # zero tokens.
       - name: Build the Lab harness image
         run: docker build -f conformance/Dockerfile -t conformance-harness:latest .
+      - name: Install Lab runner dependency
+        run: python3 -m pip install --user pexpect
       - name: Run the ${{ matrix.harness }} vertical
         run: |
           python3 conformance/lab.py --harness ${{ matrix.harness }}

@@ -347,6 +347,42 @@ fn a_legacy_named_receipt_is_migrated_to_the_stable_label_not_frozen_forever() {
 }
 
 #[test]
+fn a_legacy_store_link_is_upgraded_to_a_qualified_skill_wrapper() {
+    let root = temp("legacy-store-link");
+    let (application, agents_home) = app_with_opencode(&root);
+    let package_dir = skill_fixture(&root.join("fixtures"), "legacy-store", "commit");
+
+    let summary = install(&application, package_dir);
+    let entry = agents_home.join("skills/legacy-store:commit");
+    let wrapper = fs::read_link(&entry).unwrap();
+    let canonical = root.join("uze-home/store/packages/legacy-store/skills/commit");
+
+    fs::remove_file(&entry).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&canonical, &entry).unwrap();
+    rewrite_receipt_target(&root, &summary.id, &wrapper, &canonical);
+
+    let setup = application.setup(None).unwrap();
+    assert!(
+        setup.iter().all(|result| result.attach_error.is_none()),
+        "the legacy link migration must reattach cleanly: {setup:#?}"
+    );
+
+    let upgraded = fs::read_link(&entry).unwrap();
+    assert_ne!(
+        upgraded, canonical,
+        "the legacy direct Store link is replaced"
+    );
+    assert!(
+        fs::read_to_string(upgraded.join("SKILL.md"))
+            .unwrap()
+            .starts_with("---\nname: legacy-store:commit\n"),
+        "the rebuilt wrapper exposes the stable qualified label"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn a_legacy_name_taken_over_by_foreign_content_is_surrendered_and_relabeled() {
     let root = temp("legacy-conflict");
     let (application, agents_home) = app_with_opencode(&root);
@@ -407,6 +443,22 @@ fn rewrite_receipt_path(root: &Path, package_id: &str, old_path: &Path, new_path
         {
             assert_eq!(path.as_str().unwrap(), old_path.to_str().unwrap());
             *path = serde_json::json!(new_path.to_str().unwrap());
+        }
+    }
+    fs::write(&ledger_path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+}
+
+fn rewrite_receipt_target(root: &Path, package_id: &str, old_target: &Path, new_target: &Path) {
+    let ledger_path = root.join("uze-home/state/attachments.json");
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&fs::read(&ledger_path).unwrap()).unwrap();
+    let receipts = value["receipts"].as_object_mut().unwrap();
+    for receipt in receipts.values_mut() {
+        if receipt["package_id"] == package_id
+            && let Some(target) = receipt.pointer_mut("/artifact/SYMLINK_REFERENCE/target")
+        {
+            assert_eq!(target.as_str().unwrap(), old_target.to_str().unwrap());
+            *target = serde_json::json!(new_target.to_str().unwrap());
         }
     }
     fs::write(&ledger_path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();

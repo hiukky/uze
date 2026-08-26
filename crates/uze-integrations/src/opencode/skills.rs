@@ -1,7 +1,7 @@
 //! OpenCode Agent Skill exposure — invocation-policy-aware delivery through
-//! OpenCode V2's native Skill mechanism.
+//! OpenCode's native Skill mechanism.
 //!
-//! OpenCode V2 discovers Skills natively at `~/.agents/skills` (the shared
+//! OpenCode discovers Skills natively at `~/.agents/skills` (the shared
 //! root it shares with Codex), and its SKILL.md frontmatter natively
 //! expresses both halves of the canonical invocation policy:
 //!
@@ -18,11 +18,11 @@
 //! vendor Command — the vendor Command primitive remains a projection
 //! detail UZE does not need for this harness (ADR-030 §9).
 //!
-//! A default model+user Skill is delivered byte-preserving (a symlink
-//! straight into the Store). A non-default policy requires the vendor
-//! fields, so UZE materializes one wrapper SKILL.md under `$UZE_HOME` —
+//! UZE materializes every Skill as one wrapper SKILL.md under `$UZE_HOME` —
 //! loading the canonical name/description/body, never rewriting the Store
-//! — and symlinks the shared root entry at it. Because Codex reads the
+//! — and symlinks the shared root entry at it. OpenCode uses `name` as the
+//! visible label, so direct Store links would lose the stable qualified
+//! label whenever the canonical skill has a bare name. Because Codex reads the
 //! SAME physical entry from `~/.agents/skills`, the wrapper is the superset
 //! representation (`crate::shared::skill::write_superset_skill_wrapper`):
 //! OpenCode's own controls AND Codex's `agents/openai.yaml` policy sidecar
@@ -63,16 +63,15 @@ pub(super) fn generated_skill_dir(uze_home: &UzeHome, resource: &Resource) -> Pa
         .join(name)
 }
 
-/// Deterministically materializes (or refreshes) one non-default Skill's
+/// Deterministically materializes (or refreshes) one Skill's
 /// wrapper directory — the shared-root superset representation
 /// (`crate::shared::skill::write_superset_skill_wrapper`): a real SKILL.md
-/// carrying the stable namespaced label as its `name` (OpenCode derives the
-/// skill id from the path, so the frontmatter `name` is the invocation
-/// label), the canonical description/body, and OpenCode's own invocation
+/// carrying the stable namespaced label as its `name`, the canonical
+/// description/body, and OpenCode's own invocation
 /// controls — plus Codex's `agents/openai.yaml` policy sidecar, because
 /// this directory lives in the shared `~/.agents/skills` root Codex reads
-/// too (`model=false` must stay hidden there; ADR-030 §25). Only a default
-/// Skill may stay byte-preserving. Idempotent and rebuilt wholesale — the
+/// too (`model=false` must stay hidden there; ADR-030 §25). Idempotent and
+/// rebuilt wholesale — the
 /// directory is entirely UZE-owned and non-authoritative (ADR-013 §4).
 pub(super) fn materialize_generated_skill(
     uze_home: &UzeHome,
@@ -117,6 +116,11 @@ pub(super) fn materialize_generated_skill(
 }
 
 impl OpenCodeIntegration {
+    fn is_generated_skill_wrapper(&self, target: &Path) -> bool {
+        target.starts_with(self.uze_home.state_dir().join("attachments"))
+            && target.join("SKILL.md").is_file()
+    }
+
     pub(super) fn cleanup_unused_skill_wrapper(&self, target: &Path) -> Result<()> {
         let managed_root = self
             .uze_home
@@ -153,11 +157,11 @@ impl OpenCodeIntegration {
             return Ok(());
         }
         let Some(target) = &resource.resolved_artifact_target else {
-            if policy.is_default() {
-                return Ok(());
-            }
             return materialize_generated_skill(&self.uze_home, resource).map(|_| ());
         };
+        if !self.is_generated_skill_wrapper(target) {
+            return materialize_generated_skill(&self.uze_home, resource).map(|_| ());
+        }
         if policy.is_default() {
             return Ok(());
         }
@@ -215,17 +219,15 @@ impl OpenCodeIntegration {
             .parent()
             .expect("SKILL.md has a parent")
             .to_path_buf();
-        let source = if policy.is_default() {
-            canonical_source.clone()
-        } else {
-            resource
-                .resolved_artifact_target
-                .clone()
-                .unwrap_or_else(|| generated_skill_dir(&self.uze_home, resource))
-        };
+        let source = resource
+            .resolved_artifact_target
+            .as_ref()
+            .filter(|target| self.is_generated_skill_wrapper(target))
+            .cloned()
+            .unwrap_or_else(|| generated_skill_dir(&self.uze_home, resource));
         if state::is_installed(&self.uze_home, self.id()) {
             let mut evidence = String::from(
-                "OpenCode V2 natively discovers the UZE-managed symlink in ~/.agents/skills (the same shared root Codex uses). A default model+user Skill is delivered byte-preserving: the symlink points straight at the canonical SKILL.md in the UZE store.",
+                "OpenCode natively discovers the UZE-managed symlink in ~/.agents/skills (the same shared root Codex uses). UZE generates a wrapper carrying the stable qualified label as its `name`, while preserving the canonical description and body without rewriting the Store.",
             );
             if !policy.is_default() {
                 evidence.push_str(
