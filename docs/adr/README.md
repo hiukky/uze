@@ -71,3 +71,4 @@ never renumbered), using this structure (Michael Nygard style):
 - [031 — Adopt a canonical portable Agent capability](031-adopt-a-canonical-portable-agent-capability.md)
 - [032 — Restore marketplace.json as the Marketplace Manifest](032-restore-marketplace-manifest.md)
 - [033 — Adopt a canonical portable Hook capability](033-adopt-portable-hook-capability.md)
+- [034 — Adopt GitHub Releases as the official Linux distribution channel](034-adopt-github-releases-linux-distribution.md)
