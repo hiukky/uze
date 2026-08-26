@@ -1,0 +1,155 @@
+name: Release
+
+# One-click release publisher. Run from Actions -> Release -> Run workflow.
+# Everything happens here, in order: the make check gate (fmt + clippy +
+# tests), the cargo-release bump of every workspace crate in lockstep, the
+# `chore(release): bump workspace version to <v>` commit, CHANGELOG.md
+# regeneration folded into that same commit, the annotated `v<v>` tag, the
+# branch + tag push, the four Linux artifacts built from the tag on native
+# runners, and the GitHub Release with tarballs + SHASUMS256.txt that
+# install.sh consumes. See docs/versioning.md for the full flow.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version bump to apply
+        required: false
+        default: alpha
+        type: choice
+        options:
+          - alpha
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  prepare:
+    name: Bump, changelog, tag, push
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # git-cliff needs the full history plus existing tags;
+          # cargo-release needs to push branch + tag afterwards.
+          fetch-depth: 0
+      - uses: taiki-e/install-action@v2
+        with:
+          # Pinned: the release changelog depends on `git-cliff -t` naming.
+          tool: cargo-release@1.1.5,git-cliff@2.13.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-prepare
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+      - name: Bump, changelog, tag and push
+        id: release
+        run: |
+          set -euo pipefail
+          # Runs the `make check` pre-release-hook first (see release.toml):
+          # if the gate fails, nothing is bumped, committed or tagged.
+          # `--no-tag` defers the tag so the changelog can be folded into
+          # the release commit before the tag is created on it.
+          cargo release "${{ inputs.bump }}" --execute --no-confirm --no-tag
+          version="$(sed -n 's/^version = "\([^"]*\)"$/\1/p' Cargo.toml | head -n 1)"
+          [ -n "$version" ] || { echo "could not read version from Cargo.toml" >&2; exit 1; }
+          tag="v${version}"
+          # `-t` names the release section before the tag physically exists;
+          # with the tag already present (and pointing at HEAD) git-cliff
+          # would see an empty range and omit the section entirely.
+          git-cliff -t "$tag" -o CHANGELOG.md
+          git add CHANGELOG.md
+          git commit --amend --no-edit
+          git tag -a "$tag" -m "uze $version"
+          git push origin main
+          git push origin "$tag"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  package:
+    name: Package ${{ matrix.target }}
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-24.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Build exactly what was released and pushed by `prepare`.
+          ref: ${{ needs.prepare.outputs.tag }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+      - run: cargo build --locked --release --bin uze --target ${{ matrix.target }}
+      - name: Package release archive
+        run: |
+          mkdir -p dist
+          tar -C "target/${{ matrix.target }}/release" -czf \
+            "dist/uze-${{ matrix.target }}.tar.gz" uze
+      - uses: actions/upload-artifact@v7
+        with:
+          name: uze-${{ matrix.target }}
+          path: dist/uze-${{ matrix.target }}.tar.gz
+          retention-days: 1
+
+  publish:
+    name: Publish release
+    needs: [prepare, package]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Collect assets and checksums
+        run: |
+          set -euo pipefail
+          mkdir -p assets
+          mv dist/uze-*.tar.gz assets/
+          (cd assets && sha256sum *.tar.gz > SHASUMS256.txt)
+          ls -l assets/
+          cat assets/SHASUMS256.txt
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ needs.prepare.outputs.tag }}"
+          version="${{ needs.prepare.outputs.version }}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "release $tag exists — uploading assets"
+            gh release upload "$tag" assets/* --clobber
+          else
+            gh release create "$tag" assets/* \
+              --title "uze $version" \
+              --notes "One-click release: version bump, changelog and tag are in the \`chore(release)\` commit ($tag)."
+          fi
+          gh release view "$tag" --json tagName,assets --jq '{tag: .tagName, assets: [.assets[].name]}'
