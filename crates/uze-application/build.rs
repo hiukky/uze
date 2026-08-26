@@ -1,10 +1,10 @@
 //! Generates a static table embedding the official UZE marketplace snapshot
-//! (`agents.json` + everything under `plugins/`) into the binary.
+//! (`marketplace.json` + everything under `plugins/`) into the binary.
 //!
 //! Deliberately generic: this walks whatever files exist at build time and
 //! emits one `include_bytes!` per file, keyed by its path relative to the
 //! repository root. Adding a plugin to the marketplace means adding files
-//! and an `agents.json` entry — nothing here names a specific plugin,
+//! and a `marketplace.json` entry — nothing here names a specific plugin,
 //! so nothing here needs to change.
 
 use std::{
@@ -22,8 +22,8 @@ fn main() {
         .to_path_buf();
 
     let mut entries = Vec::new();
-    let agents_manifest = repo_root.join("agents.json");
-    collect_file(&repo_root, &agents_manifest, &mut entries);
+    let marketplace_manifest = repo_root.join("marketplace.json");
+    collect_file(&repo_root, &marketplace_manifest, &mut entries);
     collect_dir(&repo_root, &repo_root.join("plugins"), &mut entries);
     entries.sort();
 
@@ -46,7 +46,7 @@ fn main() {
     }
     writeln!(generated, "];").unwrap();
 
-    println!("cargo:rerun-if-changed={}", agents_manifest.display());
+    println!("cargo:rerun-if-changed={}", marketplace_manifest.display());
     println!(
         "cargo:rerun-if-changed={}",
         repo_root.join("plugins").display()

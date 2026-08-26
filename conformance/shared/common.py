@@ -84,7 +84,7 @@ sed -i 's|__UZE_MCP_FIXTURE_BINARY__|{cfg.mcp_fixture_bin}|g; s|__UZE_MCP_CONFOR
 
 def validate_marketplace(cfg):
     """Fails before Docker starts if the shared final-resource fixture drifts."""
-    with open(os.path.join(cfg.marketplace_source, "agents.json")) as f:
+    with open(os.path.join(cfg.marketplace_source, "marketplace.json")) as f:
         manifest = json.load(f)
     if manifest.get("name") != "uze-lab":
         raise RuntimeError("conformance marketplace must retain the uze-lab identity")

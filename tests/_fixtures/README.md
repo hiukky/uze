@@ -13,7 +13,7 @@ Every persistent test input lives here, in four kinds. Fixtures are
 
 ## canonical/
 
-Valid `agents.json`-authorable inputs. Keep them SMALL — one fixture proves
+Valid `marketplace.json`-authorable inputs. Keep them SMALL — one fixture proves
 one shape; adding "just one more feature" to every fixture is what made the
 old `packages/` set hard to reason about.
 
@@ -55,7 +55,7 @@ as its own format. One per vendor, minimal:
   `docs/capabilities/uze-skill.md`'s manual/agentic eval, never CI.
 - `malformed-lock/` — `agents.lock` referencing a marketplace that does not
   exist.
-- `malformed-marketplace/` — `agents.json` with a plugin lacking required
+- `malformed-marketplace/` — `marketplace.json` with a plugin lacking required
   fields.
 - `nested-workspace/` — workspace root with a nested project (`apps/web`).
 

@@ -1,8 +1,8 @@
-//! Deterministic workspace detection for `agents.lock` / `agents.json`.
+//! Deterministic workspace detection for `agents.lock` / `marketplace.json`.
 //!
 //! One predictable rule, no git assumption, no harness assumption: a
 //! directory is a workspace when it contains `agents.lock` (consumer), or
-//! `agents.json` (marketplace), or both (hybrid). The nearest such
+//! `marketplace.json` (marketplace), or both (hybrid). The nearest such
 //! directory wins over any ancestor.
 //!
 //! `AGENTS.md` and `.agents/` are explicitly NOT anchors: they are
@@ -16,19 +16,19 @@ use serde::Serialize;
 
 use crate::{Result, UzeError, project_lock::LOCK_FILE_NAME};
 
-/// The marketplace manifest name (`agents.json`) — the same name
+/// The marketplace manifest name (`marketplace.json`) — the same name
 /// `acquisition::marketplace` reads, named here because this module is the
 /// one that detects it from a directory rather than parsing it.
-pub const MARKETPLACE_MANIFEST_NAME: &str = "agents.json";
+pub const MARKETPLACE_MANIFEST_NAME: &str = "marketplace.json";
 
 /// The two UZE workspace anchors, seen from a plain directory.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub enum WorkspaceKind {
-    /// Neither `agents.lock` nor `agents.json` on the resolved path.
+    /// Neither `agents.lock` nor `marketplace.json` on the resolved path.
     NoWorkspace,
     /// `agents.lock` present.
     Consumer,
-    /// `agents.json` present.
+    /// `marketplace.json` present.
     Marketplace,
     /// Both present in the same directory.
     Hybrid,
@@ -44,7 +44,7 @@ pub struct ResolvedWorkspace {
 }
 
 /// Walks upward from `cwd` (inclusive) looking for the first directory
-/// containing `agents.lock` and/or `agents.json`. Nearest ancestor wins —
+/// containing `agents.lock` and/or `marketplace.json`. Nearest ancestor wins —
 /// a nested consumer inside a marketplace (or vice versa) is detected as
 /// its own workspace, never as the outer one.
 pub fn resolve_workspace(cwd: &Path) -> Result<ResolvedWorkspace> {
@@ -145,10 +145,24 @@ mod tests {
     fn marketplace_manifest_is_an_anchor() {
         let root = temp("marketplace");
         mkdir(&root);
-        fs::write(root.join("agents.json"), r#"{"name":"m","plugins":[]}"#).unwrap();
+        fs::write(
+            root.join("marketplace.json"),
+            r#"{"name":"m","plugins":[]}"#,
+        )
+        .unwrap();
         let resolved = resolve_workspace(&root).unwrap();
         assert_eq!(resolved.kind, WorkspaceKind::Marketplace);
         assert_eq!(resolved.root, root.canonicalize().unwrap());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn agents_json_alone_is_not_a_marketplace_anchor() {
+        let root = temp("agents-json-only");
+        mkdir(&root);
+        fs::write(root.join("agents.json"), r#"{"name":"m","plugins":[]}"#).unwrap();
+        let resolved = resolve_workspace(&root).unwrap();
+        assert_eq!(resolved.kind, WorkspaceKind::NoWorkspace);
         fs::remove_dir_all(&root).unwrap();
     }
 
@@ -157,7 +171,11 @@ mod tests {
         let root = temp("hybrid");
         mkdir(&root);
         fs::write(root.join("agents.lock"), "version: 1\n").unwrap();
-        fs::write(root.join("agents.json"), r#"{"name":"m","plugins":[]}"#).unwrap();
+        fs::write(
+            root.join("marketplace.json"),
+            r#"{"name":"m","plugins":[]}"#,
+        )
+        .unwrap();
         let resolved = resolve_workspace(&root).unwrap();
         assert_eq!(resolved.kind, WorkspaceKind::Hybrid);
         fs::remove_dir_all(&root).unwrap();
@@ -185,7 +203,11 @@ mod tests {
         let outer = temp("cross-kind");
         let inner = outer.join("plugins/flow");
         mkdir(&inner);
-        fs::write(outer.join("agents.json"), r#"{"name":"m","plugins":[]}"#).unwrap();
+        fs::write(
+            outer.join("marketplace.json"),
+            r#"{"name":"m","plugins":[]}"#,
+        )
+        .unwrap();
         fs::write(inner.join("agents.lock"), "version: 1\n").unwrap();
         let resolved = resolve_workspace(&inner).unwrap();
         assert_eq!(

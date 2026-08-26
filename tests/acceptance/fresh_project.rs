@@ -8,7 +8,7 @@ use uze_testkit::fixtures;
 use uze_testkit::scenario::Scenario;
 use uze_testkit::temp::TestEnvironment;
 
-use crate::util::{agents_json, uze_bin};
+use crate::util::{marketplace_json, uze_bin};
 
 /// A1 — fresh machine: empty HOME/UZE_HOME, install a canonical plugin,
 /// Store correct, projection correct, inspect healthy.
@@ -69,7 +69,7 @@ fn fresh_machine_installs_canonical_plugin_and_inspects_healthy() {
 fn fresh_clone_with_lock_install_marks_environment_ready() {
     let env = TestEnvironment::isolated();
     let scenario = Scenario::new()
-        .marketplace("ai", &agents_json("ai", "flow"))
+        .marketplace("ai", &marketplace_json("ai", "flow"))
         .marketplace_plugin("flow", fixtures::canonical("flow"))
         .lock_plugin_from_market("ai", "flow")
         .project_file("AGENTS.md", "# Project\n")
@@ -114,7 +114,7 @@ fn fresh_clone_with_lock_install_marks_environment_ready() {
 fn marketplace_resolution_installs_plugin_by_shorthand() {
     let env = TestEnvironment::isolated();
     let scenario = Scenario::new()
-        .marketplace("ai", &agents_json("ai", "flow"))
+        .marketplace("ai", &marketplace_json("ai", "flow"))
         .marketplace_plugin("flow", fixtures::canonical("flow"))
         .materialize(&env);
     let market = scenario.marketplace.as_ref().unwrap();
@@ -158,13 +158,13 @@ fn golden_environment_is_healthy() {
     let env = TestEnvironment::isolated();
     let golden = fixtures::golden();
     let golden_market = golden.join("marketplace");
-    let agents = std::fs::read_to_string(golden_market.join("agents.json"))
-        .expect("golden marketplace agents.json");
+    let marketplace = std::fs::read_to_string(golden_market.join("marketplace.json"))
+        .expect("golden marketplace marketplace.json");
     let project_readme = std::fs::read_to_string(golden.join("project/AGENTS.md"))
         .expect("golden project AGENTS.md");
 
     let scenario = Scenario::new()
-        .marketplace("golden", &agents)
+        .marketplace("golden", &marketplace)
         .marketplace_plugin("flow", golden_market.join("plugins/flow"))
         .lock_plugin_from_market("golden", "flow")
         .project_file("AGENTS.md", project_readme)

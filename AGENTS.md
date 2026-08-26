@@ -13,7 +13,7 @@ capabilities where it doesn't, a safe adapter only as a last resort. It also
 maintains one project context file, `AGENTS.md`, and projects it into each
 harness's own bridge/config format instead of maintaining four separately.
 
-This repository is itself the official uze marketplace: `agents.json` +
+This repository is itself the official uze marketplace: `marketplace.json` +
 `plugins/**` at the root, with `plugins/uze` (the `/uze` Skill) as the one
 official plugin today.
 

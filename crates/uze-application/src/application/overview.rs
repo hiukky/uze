@@ -4,11 +4,11 @@
 //!
 //! - workspace detection (`uze_core::workspace`) for root + kind
 //! - `agents.lock` parsing (`uze_core::project_lock`) for the consumer side
-//! - `agents.json` parsing (`acquisition::marketplace`) for the marketplace side
+//! - `marketplace.json` parsing (`acquisition::marketplace`) for the marketplace side
 //! - Store package ids (`installed_packages`) for installed vs required
 //! - `context_inspect` for the memory/portability half
 //!
-//! This is deliberately a *projection*: files (agents.lock, agents.json,
+//! This is deliberately a *projection*: files (agents.lock, marketplace.json,
 //! `.agents/`, paths, counts-by-inspection) are evidence used *here* to
 //! compute states, but the states are the product. The TUI renders these
 //! enums verbatim; it never re-derives a `Ready` from lock bytes.
@@ -39,7 +39,7 @@ use super::*;
 impl UzeApplication {
     /// What kind of UZE workspace `cwd` is inside, and the semantic state
     /// of its project/marketplace halves. Total for workspace-shaped
-    /// inputs: a malformed `agents.lock` or `agents.json` is reported as a
+    /// inputs: a malformed `agents.lock` or `marketplace.json` is reported as a
     /// state (`Invalid`/`InvalidManifest`), never an error — the Overview
     /// exists to show exactly that, not to refuse to run because of it.
     /// The only `Err` is an unresolvable cwd.
@@ -204,7 +204,7 @@ pub enum MemoryState {
 pub struct OverviewMarketplace {
     /// The marketplace's own declared name, when the manifest parses.
     pub name: Option<String>,
-    /// Packages declared by `agents.json`.
+    /// Packages declared by `marketplace.json`.
     pub package_count: usize,
     /// Declared packages whose source directory is missing or escapes the
     /// root — a manifest can be valid JSON while pointing at nothing.
@@ -280,7 +280,7 @@ mod tests {
             .map(|name| format!(r#"{{"name": "{name}", "source": "{name}"}}"#))
             .collect();
         fs::write(
-            root.join("agents.json"),
+            root.join(workspace::MARKETPLACE_MANIFEST_NAME),
             format!(
                 r#"{{"name": "{marketplace_name}", "plugins": [{}]}}"#,
                 entries.join(",")
@@ -564,7 +564,7 @@ mod tests {
         let fx = Fixture::new("market-invalid");
         let root = fx._drop_root.join("market");
         fs::create_dir_all(&root).unwrap();
-        fs::write(root.join("agents.json"), "not json").unwrap();
+        fs::write(root.join(workspace::MARKETPLACE_MANIFEST_NAME), "not json").unwrap();
 
         let summary = fx.app.overview_workspace(&root).unwrap();
         assert_eq!(summary.kind, WorkspaceKind::Marketplace);

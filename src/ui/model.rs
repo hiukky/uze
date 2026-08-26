@@ -160,7 +160,7 @@ pub(crate) struct TuiModel {
     pub(crate) context_status: Option<ProjectContextStatus>,
     pub(crate) context_plan: Option<ContextPlan>,
 
-    /// The detected UZE workspace (`agents.lock`/`agents.json`), loaded on
+    /// The detected UZE workspace (`agents.lock`/`marketplace.json`), loaded on
     /// the first refresh. `None` only before the startup worker returns.
     pub(crate) workspace: Option<OverviewWorkspaceSummary>,
 

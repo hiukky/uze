@@ -60,7 +60,7 @@ never renumbered), using this structure (Michael Nygard style):
 - [020 — Generated Native Package Projection](020-generated-native-package-projection.md)
 - [021 — Extend Generated Native Projection to Codex and Gemini](021-extend-generated-native-projection-to-codex-and-gemini.md)
 - [022 — Remove the Dead Foreign Claude Plugin Importer](022-remove-dead-foreign-claude-plugin-importer.md)
-- [023 — Marketplace Manifest Is agents.json](023-marketplace-manifest-is-agents-json.md)
+- [023 — Marketplace Manifest Is agents.json](023-marketplace-manifest-is-agents-json.md) — superseded (ADR-032)
 - [024 — Cache Attachment Inspection with Fingerprint + TTL Invalidation](024-cache-attachment-inspection-with-fingerprint-ttl-invalidation.md)
 - [025 — Commands as a First-Class Capability](025-commands-as-first-class-capability.md) — superseded (ADR-030)
 - [026 — Stable Namespaced Invocation Labels](026-stable-namespaced-invocation-labels.md)
@@ -69,3 +69,4 @@ never renumbered), using this structure (Michael Nygard style):
 - [029 — Projection Conflicts at Naming Time](029-projection-conflicts-at-naming-time.md)
 - [030 — Skill + Invocation Policy replace the canonical Command](030-skill-plus-invocation-policy.md)
 - [031 — Adopt a canonical portable Agent capability](031-adopt-a-canonical-portable-agent-capability.md)
+- [032 — Restore marketplace.json as the Marketplace Manifest](032-restore-marketplace-manifest.md)

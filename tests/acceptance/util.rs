@@ -53,9 +53,9 @@ pub(crate) fn model_only_body(name: &str) -> String {
     )
 }
 
-/// A canonical marketplace `agents.json` with one local `plugins/<name>`
+/// A canonical marketplace `marketplace.json` with one local `plugins/<name>`
 /// entry pointing at `./plugins/<name>`.
-pub(crate) fn agents_json(name: &str, plugin: &str) -> String {
+pub(crate) fn marketplace_json(name: &str, plugin: &str) -> String {
     format!(
         r#"{{"name":"{name}","description":"acceptance marketplace","plugins":[{{"name":"{plugin}","source":"./plugins/{plugin}"}}]}}"#
     )

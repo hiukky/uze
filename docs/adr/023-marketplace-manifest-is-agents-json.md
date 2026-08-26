@@ -1,6 +1,6 @@
 # Marketplace Manifest Is agents.json
 
-Status: Accepted
+Status: Superseded by [ADR-032](032-restore-marketplace-manifest.md)
 
 ## Context
 

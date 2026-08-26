@@ -196,6 +196,15 @@ pub(super) fn attach_mcp_entry(
     if let Some(xdg) = xdg_config_home {
         cmd.env("XDG_CONFIG_HOME", xdg);
     }
+    let config_parent = config_path.parent().expect("config path has a parent");
+    fs::create_dir_all(config_parent).map_err(|source| UzeError::Write {
+        path: config_parent.to_path_buf(),
+        source,
+    })?;
+    // OpenCode discovers a project-local `opencode.json` from its cwd. Run
+    // its native command at the integration-owned config directory so a UZE
+    // operation can never create a config in the caller's project checkout.
+    cmd.current_dir(config_parent);
     cmd.args(&mcp_args);
     cmd.stdin(std::process::Stdio::null());
     let output = cmd.output().map_err(|error| {
@@ -323,11 +332,14 @@ pub(super) fn inspect_opencode_mcp_value(
 
 #[cfg(test)]
 mod mcp_tests {
-    use std::path::{Path, PathBuf};
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+    };
 
     use uze_core::integration::AttachmentState;
 
-    use super::inspect_opencode_mcp_value;
+    use super::{attach_mcp_entry, inspect_opencode_mcp_value};
 
     #[test]
     fn managed_cwd_and_environment_reference_drift_are_detected() {
@@ -355,5 +367,45 @@ mod mcp_tests {
             .state,
             AttachmentState::Drifted
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn native_mcp_command_runs_in_the_managed_config_directory() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root =
+            std::env::temp_dir().join(format!("uze-opencode-mcp-cwd-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let config_path = root.join("config/opencode.json");
+        let cwd_capture = root.join("cwd.txt");
+        let executable = root.join("fake-opencode");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            &executable,
+            format!("#!/bin/sh\npwd > {}\n", cwd_capture.display()),
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&executable).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&executable, permissions).unwrap();
+
+        attach_mcp_entry(
+            &executable,
+            &root,
+            Some(&root.join("config")),
+            "uze-test",
+            Path::new("/bin/echo"),
+            &[],
+            &config_path,
+        )
+        .unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&cwd_capture).unwrap().trim(),
+            config_path.parent().unwrap().to_string_lossy(),
+            "the native CLI must not inherit the caller's project cwd"
+        );
+        let _ = fs::remove_dir_all(root);
     }
 }

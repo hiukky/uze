@@ -31,7 +31,7 @@ pub struct Scenario {
 #[derive(Clone)]
 struct MarketplaceSpec {
     name: String,
-    agents_json: String,
+    marketplace_json: String,
 }
 
 struct LockedPlugin {
@@ -52,12 +52,12 @@ impl Scenario {
         Scenario::default()
     }
 
-    /// Declares a marketplace root: `agents.json` content written to
-    /// `<env root>/market-<name>/agents.json` at materialize time.
-    pub fn marketplace(mut self, name: &str, agents_json: &str) -> Self {
+    /// Declares a marketplace root: `marketplace.json` content written to
+    /// `<env root>/market-<name>/marketplace.json` at materialize time.
+    pub fn marketplace(mut self, name: &str, marketplace_json: &str) -> Self {
         self.marketplace = Some(MarketplaceSpec {
             name: name.to_owned(),
-            agents_json: agents_json.to_owned(),
+            marketplace_json: marketplace_json.to_owned(),
         });
         self
     }
@@ -96,8 +96,8 @@ impl Scenario {
         let marketplace = self.marketplace.take().map(|spec| {
             let dir = env.root().join(format!("market-{}", spec.name));
             std::fs::create_dir_all(&dir).expect("scenario: marketplace dir must be creatable");
-            std::fs::write(dir.join("agents.json"), spec.agents_json)
-                .expect("scenario: agents.json must be writable");
+            std::fs::write(dir.join("marketplace.json"), spec.marketplace_json)
+                .expect("scenario: marketplace.json must be writable");
             for (name, source) in &self.marketplace_plugins {
                 let dest = dir.join("plugins").join(name);
                 copy_tree(source, &dest);

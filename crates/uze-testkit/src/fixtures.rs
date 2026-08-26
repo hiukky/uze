@@ -60,7 +60,7 @@ pub fn golden() -> PathBuf {
 }
 
 /// The official marketplace fixture (`tests/_fixtures/golden/marketplace` if
-/// present, else the repository's own `agents.json` directory root).
+/// present, else the repository's own `marketplace.json` directory root).
 pub fn marketplace() -> PathBuf {
     root().join("golden").join("marketplace")
 }

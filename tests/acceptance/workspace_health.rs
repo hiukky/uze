@@ -6,7 +6,7 @@ use uze_testkit::fixtures;
 use uze_testkit::scenario::Scenario;
 use uze_testkit::temp::TestEnvironment;
 
-use crate::util::{agents_json, uze_bin};
+use crate::util::{marketplace_json, uze_bin};
 
 /// A9 — run from `project/subdir/deeper`: the nearest workspace root
 /// (`AGENTS.md` + lock) is resolved, never the subdirectory.
@@ -14,7 +14,7 @@ use crate::util::{agents_json, uze_bin};
 fn nested_cwd_resolves_workspace_root_and_installs() {
     let env = TestEnvironment::isolated();
     let scenario = Scenario::new()
-        .marketplace("ai", &agents_json("ai", "flow"))
+        .marketplace("ai", &marketplace_json("ai", "flow"))
         .marketplace_plugin("flow", fixtures::canonical("flow"))
         .lock_plugin_from_market("ai", "flow")
         .project_file("AGENTS.md", "# Workspace\n")
@@ -77,7 +77,7 @@ fn nested_cwd_resolves_workspace_root_and_installs() {
 fn workspace_overview_tracks_environment_readiness() {
     let env = TestEnvironment::isolated();
     let scenario = Scenario::new()
-        .marketplace("ai", &agents_json("ai", "flow"))
+        .marketplace("ai", &marketplace_json("ai", "flow"))
         .marketplace_plugin("flow", fixtures::canonical("flow"))
         .lock_plugin_from_market("ai", "flow")
         .materialize(&env);

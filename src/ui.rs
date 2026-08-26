@@ -4,7 +4,7 @@
 //! This module owns only navigation/selection/overlay state and input
 //! transitions. Every product operation runs in a short-lived worker against
 //! a fresh application facade, so the terminal never reads Store, vendor
-//! files, integrations, or `agents.json` directly — it calls
+//! files, integrations, or `marketplace.json` directly — it calls
 //! `UzeApplication` read models exactly like the CLI does, and renders what
 //! comes back.
 
@@ -1841,7 +1841,7 @@ mod tests {
         assert!(rows.iter().any(|row| row.contains("PROJECT")));
         assert!(
             !rows.iter().any(|row| row.contains("MARKETPLACE")),
-            "no agents.json → no MARKETPLACE column, even in a consumer"
+            "no marketplace.json → no MARKETPLACE column, even in a consumer"
         );
     }
 
@@ -1863,7 +1863,7 @@ mod tests {
         let lock_bytes = b"version: 1\nplugins: {}\n";
         std::fs::write(&lock_path, lock_bytes).unwrap();
         let manifest_bytes = br#"{"name":"m","plugins":[]}"#;
-        std::fs::write(root.join("agents.json"), manifest_bytes).unwrap();
+        std::fs::write(root.join("marketplace.json"), manifest_bytes).unwrap();
         let agents_md = b"# hi\n";
         std::fs::write(root.join("AGENTS.md"), agents_md).unwrap();
 
@@ -1889,7 +1889,7 @@ mod tests {
         // The render must leave the workspace exactly as found.
         assert_eq!(std::fs::read(&lock_path).unwrap(), lock_bytes);
         assert_eq!(
-            std::fs::read(root.join("agents.json")).unwrap(),
+            std::fs::read(root.join("marketplace.json")).unwrap(),
             manifest_bytes
         );
         assert_eq!(std::fs::read(root.join("AGENTS.md")).unwrap(), agents_md);
@@ -1943,7 +1943,7 @@ mod tests {
         assert!(rows.iter().any(|row| row.contains("PROJECT")));
         assert!(
             !rows.iter().any(|row| row.contains("MARKETPLACE")),
-            "no agents.json in a plain directory → no MARKETPLACE column"
+            "no marketplace.json in a plain directory → no MARKETPLACE column"
         );
 
         assert!(
@@ -1951,7 +1951,7 @@ mod tests {
             "rendering must never create a project lock"
         );
         assert!(
-            !root.join("agents.json").exists(),
+            !root.join("marketplace.json").exists(),
             "rendering must never create a marketplace manifest"
         );
         let entries: Vec<_> = std::fs::read_dir(&root).unwrap().collect();
@@ -1988,7 +1988,7 @@ mod tests {
         std::fs::create_dir_all(&project).unwrap();
         std::fs::create_dir_all(market.join("flow/skills/uze-test")).unwrap();
         std::fs::write(
-            market.join("agents.json"),
+            market.join("marketplace.json"),
             r#"{"name":"test","plugins":[{"name":"flow","source":"flow"}]}"#,
         )
         .unwrap();

@@ -27,7 +27,7 @@ pub fn marketplace_install_args(root: &Path, package: &Path) -> (Vec<String>, Ve
         ],
     });
     fs::write(
-        market.join("agents.json"),
+        market.join("marketplace.json"),
         serde_json::to_string_pretty(&manifest).unwrap(),
     )
     .unwrap();
@@ -93,11 +93,12 @@ mod tests {
         assert_eq!(market[1], "add");
         assert!(market[2].ends_with("market"));
         assert_eq!(install, vec!["plugin", "install", "demo@test"]);
-        let agents: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(root.join("market/agents.json")).unwrap())
-                .unwrap();
-        assert_eq!(agents["name"], "test");
-        assert_eq!(agents["plugins"][0]["name"], "demo");
+        let marketplace: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(root.join("market/marketplace.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(marketplace["name"], "test");
+        assert_eq!(marketplace["plugins"][0]["name"], "demo");
         let _ = fs::remove_dir_all(root);
     }
 }
