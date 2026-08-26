@@ -55,7 +55,7 @@ results = []
 def check(name, ok, detail="", kind="assert"):
     results.append({"check": name, "pass": bool(ok), "detail": detail, "kind": kind})
     tag = "PASS" if ok else "FAIL"
-    if kind == "adapted":
+    if ok and kind == "adapted":
         tag = "ADAPTED"
     symbol = {"PASS": "✅", "ADAPTED": "🟡", "FAIL": "❌"}[tag]
     print(f"{symbol} [{tag:7s}] {name}" + (f"  ({detail})" if detail else ""))

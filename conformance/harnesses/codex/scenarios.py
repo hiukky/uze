@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import subprocess
 import json
-"""Codex scenario (codex-cli 0.149.1) — Real Harness + Synthetic World.
+"""Codex scenario (latest channel) — Real Harness + Synthetic World.
 
 Phase A (TUI): auth.json seed skips login; trust prompt dismissed; prompt;
 /skills surface; /plugins surface; /mcp surface; deterministic turn; model

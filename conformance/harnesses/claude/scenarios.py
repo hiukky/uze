@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import json
-"""Claude Code scenario (claude 2.1.245) — Real Harness + Synthetic World.
+"""Claude Code scenario (latest channel) — Real Harness + Synthetic World.
 
 Phase A (TUI): onboarding drive -> prompt; /plugin, /mcp (server connected,
 1 tool), deterministic turn, model-visible skill present and user-only skill

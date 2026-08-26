@@ -22,22 +22,22 @@ conformance/
 │                                 #   addons, host scripts) — NEVER required
 │                                 #   for conformance execution
 ├── harnesses/
-│   ├── antigravity/              # Real AGY 1.1.20 + synthetic Gemini
+│   ├── antigravity/              # Real AGY (latest channel) + synthetic Gemini
 │   │   ├── provider.py           #   fake_gemini (plain HTTP 9999)
 │   │   ├── scenarios.py          #   onboarding, /skills, /mcp, turn,
 │   │   │                         #   model-facing, MCP round-trip, state
 │   │   └── fixtures/             #   synthetic seeds (settings, state, sse)
-│   ├── claude/                   # Real claude 2.1.245 + synthetic Anthropic
+│   ├── claude/                   # Real Claude Code (latest channel) + synthetic Anthropic
 │   │   ├── provider.py           #   fake_anthropic (TLS 443, hardcoded hosts)
 │   │   ├── scenarios.py          #   onboarding, /plugin, /mcp, turn,
 │   │   │                         #   model-facing (policy preserved), finding
 │   │   └── fixtures/             #   claude.json + settings.json (theme)
-│   ├── codex/                    # Real codex 0.149.1 + synthetic OpenAI
+│   ├── codex/                    # Real Codex (latest channel) + synthetic OpenAI
 │   │   ├── provider.py           #   fake_openai (TLS 443, WS→HTTPS fallback)
 │   │   ├── scenarios.py          #   trust, /skills, /plugins, /mcp, turn,
 │   │   │                         #   model-facing, plugin-list state
 │   │   └── fixtures/             #   auth.json seed
-│   └── opencode/                 # Real opencode 1.18.23 + synthetic
+│   └── opencode/                 # Real OpenCode (latest channel) + synthetic
 │       ├── provider.py           #   OpenAI-compatible (plain HTTP 9999)
 │       ├── scenarios.py          #   /skills, /mcps, turn, model-facing,
 │       │                         #   MCP tool round-trip in the TUI

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""OpenCode scenario (opencode 1.18.23) — Real Harness + Synthetic World.
+"""OpenCode scenario (latest channel) — Real Harness + Synthetic World.
 
 Phase A (TUI): the global opencode.json (custom provider + model + MCP)
 makes the TUI boot straight to the prompt (no onboarding, observed);

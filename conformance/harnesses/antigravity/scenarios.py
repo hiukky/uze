@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import subprocess
 import json
-"""Antigravity scenario (agy 1.1.20) — Real Harness + Synthetic World.
+"""Antigravity scenario (latest channel) — Real Harness + Synthetic World.
 
 Phase A (TUI): prompt + synthetic credential, /skills (flow:commit,
 workflow:review, uze:init), /mcp (server listed + tools enumerated),
@@ -86,7 +86,7 @@ def phase_tui(cfg, prov_ip):
 
     t1, p1 = screen(3)
     snap("01_prompt", t1)
-    check("tui-reached-prompt", "Antigravity CLI 1.1.20" in p1 and ">" in p1,
+    check("tui-reached-prompt", "Antigravity CLI" in p1 and ">" in p1,
           "header visible" if "Antigravity CLI" in p1 else "no header")
     check("synthetic-credential", "Gemini API key" in p1,
           "account row shows API key, not a personal account")
@@ -146,16 +146,17 @@ def phase_tui(cfg, prov_ip):
     with open(f"{cfg.outdir}/04_provider_struct.json", "w") as f:
         json.dump(struct, f, indent=1)
     if struct:
-        markers = struct[0].get("summary", {}).get("skill_markers", {})
+        summaries = [entry.get("summary", {}) for entry in struct]
+        markers = [summary.get("skill_markers", {}) for summary in summaries]
         check("model-visible-skill-present",
-              any(markers.get(m) for m in ("flow:commit", "commit")),
+              any(marker.get(name) for marker in markers for name in ("flow:commit", "commit")),
               "flow:commit in the request the harness sent to its provider")
         check("user-only-skill-adapted",
-              any(markers.get(m) for m in ("workflow:review", "review")),
+              any(marker.get(name) for marker in markers for name in ("workflow:review", "review")),
               "workflow:review present (no vendor explicit-only mechanism)",
               kind="adapted")
         check("provider-request-captured",
-              bool(struct[0].get("summary", {}).get("tools")),
+              any(summary.get("tools") for summary in summaries),
               "request body structurally recorded (tools/skills/markers)")
     else:
         check("model-visible-skill-present", False, "no provider request captured")
