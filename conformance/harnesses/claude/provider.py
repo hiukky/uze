@@ -25,10 +25,10 @@ Env:
   PROVIDER_MODE, PROVIDER_STRUCT, RESPONSE_TEXT, FINAL_TEXT, MCP_TOOL,
   MCP_PROOF, LEAF_CERT, LEAF_KEY
 """
+
 import json
 import os
 import ssl
-import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 STRUCT_PATH = os.environ.get("PROVIDER_STRUCT", "/tmp/claude-struct.json")
@@ -50,9 +50,13 @@ SKILL_MARKERS = ["flow:commit", "flow:review", "commit", "review", "init"]
 # Conformance evidence markers carried by portable-hook denial reasons
 # (ADR-033): presence/absence in the structural summary proves what the real
 # harness relayed after the hook executed.
-HOOK_MARKERS = ["blocked by protect-env", "first-handler-denied",
-                "second-handler-ran", "second-handler-reached",
-                "Denied by UZE hook"]
+HOOK_MARKERS = [
+    "blocked by protect-env",
+    "first-handler-denied",
+    "second-handler-ran",
+    "second-handler-reached",
+    "Denied by UZE hook",
+]
 COUNTER = {"n": 0}
 
 
@@ -80,35 +84,89 @@ def sse(events):
 
 def text_events(text):
     return [
-        ("message_start", {"type": "message_start", "message": {
-            "id": "msg_uze_1", "type": "message", "role": "assistant",
-            "model": "claude-opus-5", "content": [], "stop_reason": None,
-            "usage": {"input_tokens": 10, "output_tokens": 1}}}),
-        ("content_block_start", {"type": "content_block_start", "index": 0,
-                                 "content_block": {"type": "text", "text": ""}}),
-        ("content_block_delta", {"type": "content_block_delta", "index": 0,
-                                 "delta": {"type": "text_delta", "text": text}}),
+        (
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_uze_1",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-opus-5",
+                    "content": [],
+                    "stop_reason": None,
+                    "usage": {"input_tokens": 10, "output_tokens": 1},
+                },
+            },
+        ),
+        (
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "text", "text": ""},
+            },
+        ),
+        (
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": text},
+            },
+        ),
         ("content_block_stop", {"type": "content_block_stop", "index": 0}),
-        ("message_delta", {"type": "message_delta",
-                           "delta": {"stop_reason": "end_turn", "stop_sequence": None},
-                           "usage": {"output_tokens": 3}}),
+        (
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                "usage": {"output_tokens": 3},
+            },
+        ),
         ("message_stop", {"type": "message_stop"}),
     ]
 
 
 def tool_use_events():
     return [
-        ("message_start", {"type": "message_start", "message": {
-            "id": "msg_uze_2", "type": "message", "role": "assistant",
-            "model": "claude-opus-5", "content": [], "stop_reason": None,
-            "usage": {"input_tokens": 10, "output_tokens": 1}}}),
-        ("content_block_start", {"type": "content_block_start", "index": 0,
-                                 "content_block": {"type": "tool_use", "id": "toolu_1",
-                                                   "name": TOOL_NAME, "input": TOOL_ARGS}}),
+        (
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_uze_2",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-opus-5",
+                    "content": [],
+                    "stop_reason": None,
+                    "usage": {"input_tokens": 10, "output_tokens": 1},
+                },
+            },
+        ),
+        (
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "toolu_1",
+                    "name": TOOL_NAME,
+                    "input": TOOL_ARGS,
+                },
+            },
+        ),
         ("content_block_stop", {"type": "content_block_stop", "index": 0}),
-        ("message_delta", {"type": "message_delta",
-                           "delta": {"stop_reason": "tool_use", "stop_sequence": None},
-                           "usage": {"output_tokens": 3}}),
+        (
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+                "usage": {"output_tokens": 3},
+            },
+        ),
         ("message_stop", {"type": "message_stop"}),
     ]
 
@@ -117,9 +175,14 @@ class H(BaseHTTPRequestHandler):
     def _handle(self):
         ln = int(self.headers.get("Content-Length", 0) or 0)
         body = self.rfile.read(ln).decode("utf-8", "replace") if ln else ""
-        n = COUNTER["n"]; COUNTER["n"] += 1
-        rec = {"method": self.command, "path": self.path, "seq": n,
-               "summary": structural_summary(body)}
+        n = COUNTER["n"]
+        COUNTER["n"] += 1
+        rec = {
+            "method": self.command,
+            "path": self.path,
+            "seq": n,
+            "summary": structural_summary(body),
+        }
         struct = []
         if os.path.exists(STRUCT_PATH):
             try:
@@ -129,7 +192,9 @@ class H(BaseHTTPRequestHandler):
         struct.append(rec)
         with open(STRUCT_PATH, "w") as f:
             json.dump(struct, f, indent=1)
-        print(f"[claude-provider:{MODE}] {self.command} {self.path} req#{n}", flush=True)
+        print(
+            f"[claude-provider:{MODE}] {self.command} {self.path} req#{n}", flush=True
+        )
 
         if self.path.startswith("/v1/messages"):
             b = json.loads(body) if body else {}

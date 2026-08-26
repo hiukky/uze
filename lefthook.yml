@@ -5,11 +5,21 @@
 # here: in some local setups the git_acquisition tests are flaky on
 # gpg/pinentry (unrelated to code correctness), which would make hooks cry
 # wolf. CI still runs the full suite on every push.
+#
+# Python (conformance/) is linted and formatted with ruff — install it with
+# `pipx install ruff` (or `cargo install ruff`); config lives in
+# conformance/ruff.toml, see `make python-lint` / `make python-fmt`.
 
 pre-commit:
   commands:
     fmt:
       run: cargo fmt --check
+    python-fmt:
+      glob: "*.py"
+      run: ruff format --check {staged_files}
+    python-lint:
+      glob: "*.py"
+      run: ruff check {staged_files}
 
 pre-push:
   commands:
@@ -17,6 +27,12 @@ pre-push:
       run: cargo fmt --check
     clippy:
       run: cargo clippy --all-targets -- -D warnings
+    python-fmt:
+      glob: "*.py"
+      run: ruff format --check conformance/
+    python-lint:
+      glob: "*.py"
+      run: ruff check conformance/
     harness-matrix:
       # Deterministic README matrix: regenerates via `make
       # docs-harness-matrix`; a stale matrix fails the push.

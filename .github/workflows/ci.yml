@@ -66,6 +66,18 @@ jobs:
       - name: Exercise the installer offline
         run: sh tests/scripts/installer-test.sh
 
+  python:
+    name: Python
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install ruff
+        uses: taiki-e/install-action@v2
+        with:
+          tool: ruff
+      - run: ruff format --check conformance/
+      - run: ruff check conformance/
+
   coverage:
     name: Coverage
     runs-on: ubuntu-latest

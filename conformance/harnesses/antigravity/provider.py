@@ -28,17 +28,21 @@ Env:
   FINAL_TEXT       : deterministic text served after request #1 (toolcall)
   PORT (argv[1])   : listen port
 """
+
 import json
 import os
-import re
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 STRUCT_PATH = os.environ.get("PROVIDER_STRUCT", "/tmp/agy-provider-struct.json")
 RESP_SSE = os.environ.get("PROVIDER_RESP", "")
 MODE = os.environ.get("PROVIDER_MODE", "static")
-FC_ARGS = json.loads(os.environ.get("FC_ARGS",
-                                     '{"serverName":"uze-conformance","toolName":"uze_conformance","arguments":{}}'))
+FC_ARGS = json.loads(
+    os.environ.get(
+        "FC_ARGS",
+        '{"serverName":"uze-conformance","toolName":"uze_conformance","arguments":{}}',
+    )
+)
 FINAL_TEXT = os.environ.get("FINAL_TEXT", "UZE_CONFORMANCE_PASS")
 MCP_PROOF = os.environ.get("MCP_PROOF", "UZE_MCP_CONFORMANCE_PROOF_1")
 
@@ -46,17 +50,39 @@ MCP_PROOF = os.environ.get("MCP_PROOF", "UZE_MCP_CONFORMANCE_PROOF_1")
 # tool (`run_command`); the MCP phases keep the default below.
 FC_NAME = os.environ.get("TOOL_NAME", "call_mcp_tool")
 
-SKILL_MARKERS = ["flow:commit", "flow:review", "flow:analyze",
-                 "commit", "review", "analyze", "init"]
-TOOL_NAMES = ["grep_search", "list_dir", "manage_task", "read_url_content",
-              "replace_file_content", "run_command", "schedule", "search_web",
-              "view_file", "write_to_file", "generate_image", "call_mcp_tool"]
+SKILL_MARKERS = [
+    "flow:commit",
+    "flow:review",
+    "flow:analyze",
+    "commit",
+    "review",
+    "analyze",
+    "init",
+]
+TOOL_NAMES = [
+    "grep_search",
+    "list_dir",
+    "manage_task",
+    "read_url_content",
+    "replace_file_content",
+    "run_command",
+    "schedule",
+    "search_web",
+    "view_file",
+    "write_to_file",
+    "generate_image",
+    "call_mcp_tool",
+]
 # Conformance evidence markers carried by portable-hook denial reasons
 # (ADR-033): presence/absence in the structural summary proves what the real
 # harness relayed after the hook executed.
-HOOK_MARKERS = ["blocked by protect-env", "first-handler-denied",
-                "second-handler-ran", "second-handler-reached",
-                "Denied by UZE hook"]
+HOOK_MARKERS = [
+    "blocked by protect-env",
+    "first-handler-denied",
+    "second-handler-ran",
+    "second-handler-reached",
+    "Denied by UZE hook",
+]
 COUNTER = {"n": 0}
 
 
@@ -67,9 +93,12 @@ def structural_summary(body_text):
     has_fr = "functionResponse" in body
     return {
         "content_roles": [c.get("role") for c in b.get("contents", [])],
-        "tools": [t.get("name") for t in
-                  (b.get("tools") or [{}])[0].get("functionDeclarations", [])]
-                  if b.get("tools") else [],
+        "tools": [
+            t.get("name")
+            for t in (b.get("tools") or [{}])[0].get("functionDeclarations", [])
+        ]
+        if b.get("tools")
+        else [],
         "tool_config": b.get("toolConfig"),
         "skill_markers": {m: (m in body) for m in SKILL_MARKERS},
         "has_function_call": has_fc,
@@ -81,16 +110,21 @@ def structural_summary(body_text):
 
 
 def sse(obj):
-    return f'data: {json.dumps(obj)}\n\n'.encode()
+    return f"data: {json.dumps(obj)}\n\n".encode()
 
 
 class H(BaseHTTPRequestHandler):
     def _handle(self):
         length = int(self.headers.get("Content-Length", 0) or 0)
         body = self.rfile.read(length).decode("utf-8", "replace") if length else ""
-        n = COUNTER["n"]; COUNTER["n"] += 1
-        rec = {"method": self.command, "path": self.path,
-               "seq": n, "summary": structural_summary(body)}
+        n = COUNTER["n"]
+        COUNTER["n"] += 1
+        rec = {
+            "method": self.command,
+            "path": self.path,
+            "seq": n,
+            "summary": structural_summary(body),
+        }
         struct = []
         if os.path.exists(STRUCT_PATH):
             try:
@@ -104,21 +138,52 @@ class H(BaseHTTPRequestHandler):
 
         if MODE == "toolcall" and n == 0:
             fc = {"functionCall": {"name": FC_NAME, "args": FC_ARGS}}
-            payload = sse({"candidates": [{"content": {"parts": [fc], "role": "model"},
-                                          "finishReason": "STOP", "index": 0}]})
+            payload = sse(
+                {
+                    "candidates": [
+                        {
+                            "content": {"parts": [fc], "role": "model"},
+                            "finishReason": "STOP",
+                            "index": 0,
+                        }
+                    ]
+                }
+            )
         else:
-            payload = b''
+            payload = b""
             if RESP_SSE and os.path.exists(RESP_SSE):
                 with open(RESP_SSE, "rb") as f:
                     payload = f.read()
             if MODE == "toolcall" and n > 0:
-                payload = sse({"candidates": [{"content": {"parts": [{"text": FINAL_TEXT}],
-                                                           "role": "model"},
-                                              "finishReason": "STOP", "index": 0}]})
+                payload = sse(
+                    {
+                        "candidates": [
+                            {
+                                "content": {
+                                    "parts": [{"text": FINAL_TEXT}],
+                                    "role": "model",
+                                },
+                                "finishReason": "STOP",
+                                "index": 0,
+                            }
+                        ]
+                    }
+                )
             if not payload:
-                payload = sse({"candidates": [{"content": {"parts": [{"text": FINAL_TEXT}],
-                                                           "role": "model"},
-                                              "finishReason": "STOP", "index": 0}]})
+                payload = sse(
+                    {
+                        "candidates": [
+                            {
+                                "content": {
+                                    "parts": [{"text": FINAL_TEXT}],
+                                    "role": "model",
+                                },
+                                "finishReason": "STOP",
+                                "index": 0,
+                            }
+                        ]
+                    }
+                )
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=UTF-8")
         self.send_header("Content-Length", str(len(payload)))

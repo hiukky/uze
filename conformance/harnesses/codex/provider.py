@@ -17,12 +17,12 @@ PROVIDER_STRUCT: the model-facing observation boundary.
 
 Env: PROVIDER_STRUCT, RESPONSE_TEXT, LEAF_CERT, LEAF_KEY, CA_TRUST_FILE
 """
+
 import base64
 import hashlib
 import json
 import os
 import ssl
-import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 STRUCT_PATH = os.environ.get("PROVIDER_STRUCT", "/tmp/codex-struct.json")
@@ -32,8 +32,15 @@ LEAF_CERT = os.environ.get("LEAF_CERT", "/app/leaf.crt")
 LEAF_KEY = os.environ.get("LEAF_KEY", "/app/leaf.key")
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
-SKILL_MARKERS = ["flow:commit", "flow:review", "commit", "review", "init",
-                 "North Star", "Review code"]
+SKILL_MARKERS = [
+    "flow:commit",
+    "flow:review",
+    "commit",
+    "review",
+    "init",
+    "North Star",
+    "Review code",
+]
 COUNTER = {"n": 0}
 
 # The hook scenarios script a tool call to the harness's native shell tool
@@ -45,9 +52,13 @@ TOOL_ARGS = os.environ.get("TOOL_ARGS", "{}")
 # Conformance evidence markers carried by portable-hook denial reasons
 # (ADR-033): presence/absence in the structural summary proves what the real
 # harness relayed after the hook executed.
-HOOK_MARKERS = ["blocked by protect-env", "first-handler-denied",
-                "second-handler-ran", "second-handler-reached",
-                "Denied by UZE hook"]
+HOOK_MARKERS = [
+    "blocked by protect-env",
+    "first-handler-denied",
+    "second-handler-ran",
+    "second-handler-reached",
+    "Denied by UZE hook",
+]
 
 
 def structural_summary(body_text):
@@ -65,44 +76,110 @@ def structural_summary(body_text):
 def responses_sse(text):
     rid, mid = "resp_uze_1", "msg_uze_1"
     evs = [
-        ("response.created", {"type": "response.created", "response": {
-            "id": rid, "object": "response", "created_at": 1750000000,
-            "status": "in_progress", "model": "gpt-5.6-sol", "output": [],
-            "usage": None}}),
-        ("response.output_item.added", {"type": "response.output_item.added",
-                                        "output_index": 0,
-                                        "item": {"type": "message", "id": mid,
-                                                 "role": "assistant",
-                                                 "status": "in_progress",
-                                                 "content": []}}),
-        ("response.content_part.added", {"type": "response.content_part.added",
-                                         "item_id": mid, "output_index": 0,
-                                         "content_index": 0,
-                                         "part": {"type": "output_text",
-                                                  "text": "", "annotations": []}}),
-        ("response.output_text.delta", {"type": "response.output_text.delta",
-                                        "item_id": mid, "output_index": 0,
-                                        "content_index": 0, "delta": text}),
-        ("response.output_text.done", {"type": "response.output_text.done",
-                                       "item_id": mid, "output_index": 0,
-                                       "content_index": 0, "text": text}),
-        ("response.output_item.done", {"type": "response.output_item.done",
-                                       "output_index": 0,
-                                       "item": {"type": "message", "id": mid,
-                                                "role": "assistant",
-                                                "status": "completed",
-                                                "content": [{"type": "output_text",
-                                                             "text": text,
-                                                             "annotations": []}]}}),
-        ("response.completed", {"type": "response.completed", "response": {
-            "id": rid, "object": "response", "created_at": 1750000000,
-            "status": "completed", "model": "gpt-5.6-sol",
-            "output": [{"type": "message", "id": mid, "role": "assistant",
-                        "status": "completed",
-                        "content": [{"type": "output_text", "text": text,
-                                     "annotations": []}]}],
-            "usage": {"input_tokens": 10, "output_tokens": 3,
-                      "total_tokens": 13}}}),
+        (
+            "response.created",
+            {
+                "type": "response.created",
+                "response": {
+                    "id": rid,
+                    "object": "response",
+                    "created_at": 1750000000,
+                    "status": "in_progress",
+                    "model": "gpt-5.6-sol",
+                    "output": [],
+                    "usage": None,
+                },
+            },
+        ),
+        (
+            "response.output_item.added",
+            {
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {
+                    "type": "message",
+                    "id": mid,
+                    "role": "assistant",
+                    "status": "in_progress",
+                    "content": [],
+                },
+            },
+        ),
+        (
+            "response.content_part.added",
+            {
+                "type": "response.content_part.added",
+                "item_id": mid,
+                "output_index": 0,
+                "content_index": 0,
+                "part": {"type": "output_text", "text": "", "annotations": []},
+            },
+        ),
+        (
+            "response.output_text.delta",
+            {
+                "type": "response.output_text.delta",
+                "item_id": mid,
+                "output_index": 0,
+                "content_index": 0,
+                "delta": text,
+            },
+        ),
+        (
+            "response.output_text.done",
+            {
+                "type": "response.output_text.done",
+                "item_id": mid,
+                "output_index": 0,
+                "content_index": 0,
+                "text": text,
+            },
+        ),
+        (
+            "response.output_item.done",
+            {
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": {
+                    "type": "message",
+                    "id": mid,
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [
+                        {"type": "output_text", "text": text, "annotations": []}
+                    ],
+                },
+            },
+        ),
+        (
+            "response.completed",
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": rid,
+                    "object": "response",
+                    "created_at": 1750000000,
+                    "status": "completed",
+                    "model": "gpt-5.6-sol",
+                    "output": [
+                        {
+                            "type": "message",
+                            "id": mid,
+                            "role": "assistant",
+                            "status": "completed",
+                            "content": [
+                                {"type": "output_text", "text": text, "annotations": []}
+                            ],
+                        }
+                    ],
+                    "usage": {
+                        "input_tokens": 10,
+                        "output_tokens": 3,
+                        "total_tokens": 13,
+                    },
+                },
+            },
+        ),
     ]
     return "".join(f"event: {e}\ndata: {json.dumps(d)}\n\n" for e, d in evs).encode()
 
@@ -114,31 +191,79 @@ def function_call_sse():
     the `function_call_output`, which the handler answers with the final
     text."""
     rid, fid = "resp_uze_2", "fc_uze_1"
-    item = {"type": "function_call", "id": fid, "call_id": fid,
-            "name": TOOL_NAME, "arguments": "", "status": "in_progress"}
+    item = {
+        "type": "function_call",
+        "id": fid,
+        "call_id": fid,
+        "name": TOOL_NAME,
+        "arguments": "",
+        "status": "in_progress",
+    }
     evs = [
-        ("response.created", {"type": "response.created", "response": {
-            "id": rid, "object": "response", "created_at": 1750000000,
-            "status": "in_progress", "model": "gpt-5.6-sol", "output": [],
-            "usage": None}}),
-        ("response.output_item.added", {"type": "response.output_item.added",
-                                        "output_index": 0, "item": item}),
-        ("response.function_call_arguments.delta",
-         {"type": "response.function_call_arguments.delta",
-          "item_id": fid, "output_index": 0, "delta": TOOL_ARGS}),
-        ("response.function_call_arguments.done",
-         {"type": "response.function_call_arguments.done",
-          "item_id": fid, "output_index": 0, "arguments": TOOL_ARGS}),
-        ("response.output_item.done", {"type": "response.output_item.done",
-                                       "output_index": 0,
-                                       "item": {**item, "arguments": TOOL_ARGS,
-                                                "status": "completed"}}),
-        ("response.completed", {"type": "response.completed", "response": {
-            "id": rid, "object": "response", "created_at": 1750000000,
-            "status": "completed", "model": "gpt-5.6-sol",
-            "output": [{**item, "arguments": TOOL_ARGS, "status": "completed"}],
-            "usage": {"input_tokens": 10, "output_tokens": 3,
-                      "total_tokens": 13}}}),
+        (
+            "response.created",
+            {
+                "type": "response.created",
+                "response": {
+                    "id": rid,
+                    "object": "response",
+                    "created_at": 1750000000,
+                    "status": "in_progress",
+                    "model": "gpt-5.6-sol",
+                    "output": [],
+                    "usage": None,
+                },
+            },
+        ),
+        (
+            "response.output_item.added",
+            {"type": "response.output_item.added", "output_index": 0, "item": item},
+        ),
+        (
+            "response.function_call_arguments.delta",
+            {
+                "type": "response.function_call_arguments.delta",
+                "item_id": fid,
+                "output_index": 0,
+                "delta": TOOL_ARGS,
+            },
+        ),
+        (
+            "response.function_call_arguments.done",
+            {
+                "type": "response.function_call_arguments.done",
+                "item_id": fid,
+                "output_index": 0,
+                "arguments": TOOL_ARGS,
+            },
+        ),
+        (
+            "response.output_item.done",
+            {
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": {**item, "arguments": TOOL_ARGS, "status": "completed"},
+            },
+        ),
+        (
+            "response.completed",
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": rid,
+                    "object": "response",
+                    "created_at": 1750000000,
+                    "status": "completed",
+                    "model": "gpt-5.6-sol",
+                    "output": [{**item, "arguments": TOOL_ARGS, "status": "completed"}],
+                    "usage": {
+                        "input_tokens": 10,
+                        "output_tokens": 3,
+                        "total_tokens": 13,
+                    },
+                },
+            },
+        ),
     ]
     return "".join(f"event: {e}\ndata: {json.dumps(d)}\n\n" for e, d in evs).encode()
 
@@ -149,9 +274,14 @@ class H(BaseHTTPRequestHandler):
     def _handle(self):
         ln = int(self.headers.get("Content-Length", 0) or 0)
         body = self.rfile.read(ln).decode("utf-8", "replace") if ln else ""
-        n = COUNTER["n"]; COUNTER["n"] += 1
-        rec = {"method": self.command, "path": self.path, "seq": n,
-               "summary": structural_summary(body)}
+        n = COUNTER["n"]
+        COUNTER["n"] += 1
+        rec = {
+            "method": self.command,
+            "path": self.path,
+            "seq": n,
+            "summary": structural_summary(body),
+        }
         struct = []
         if os.path.exists(STRUCT_PATH):
             try:
@@ -166,7 +296,8 @@ class H(BaseHTTPRequestHandler):
         if self.headers.get("Upgrade", "").lower() == "websocket":
             key = self.headers.get("Sec-WebSocket-Key", "")
             accept = base64.b64encode(
-                hashlib.sha1((key + WS_GUID).encode()).digest()).decode()
+                hashlib.sha1((key + WS_GUID).encode()).digest()
+            ).decode()
             self.send_response(101)
             self.send_header("Upgrade", "websocket")
             self.send_header("Connection", "Upgrade")
@@ -185,11 +316,25 @@ class H(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
         elif self.path.startswith("/v1/models"):
-            payload = json.dumps({"object": "list", "data": [
-                {"id": "gpt-5.6-sol", "object": "model", "created_at": 1750000000,
-                 "owned_by": "openai"},
-                {"id": "o3", "object": "model", "created_at": 1750000000,
-                 "owned_by": "openai"}]}).encode()
+            payload = json.dumps(
+                {
+                    "object": "list",
+                    "data": [
+                        {
+                            "id": "gpt-5.6-sol",
+                            "object": "model",
+                            "created_at": 1750000000,
+                            "owned_by": "openai",
+                        },
+                        {
+                            "id": "o3",
+                            "object": "model",
+                            "created_at": 1750000000,
+                            "owned_by": "openai",
+                        },
+                    ],
+                }
+            ).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
         else:

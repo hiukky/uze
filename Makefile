@@ -5,7 +5,7 @@ UZE_BIN ?= target/debug/uze
 RELEASE_BIN ?= target/release/uze
 INSTALL_ARGS ?= --force
 
-.PHONY: help build release install install-wsl-lab playground-lab run test test-acceptance test-conformance test-installer test-real-harness docs-harness-matrix check fmt lint coverage version clean changelog lab-image lab-run lab-replay
+.PHONY: help build release install install-wsl-lab playground-lab run test test-acceptance test-conformance test-installer test-real-harness docs-harness-matrix check fmt lint coverage version clean changelog lab-image lab-run lab-replay python-fmt python-lint
 
 help: ## Show the available local-development targets.
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z0-9_.-]+:.*##/ { printf "  %-12s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -51,7 +51,13 @@ fmt: ## Check formatting (cargo fmt --check).
 lint: ## Lint with clippy, warnings denied.
 	$(CARGO) clippy --all-targets -- -D warnings
 
-check: fmt lint test ## Local proxy for the CI gate; also cargo-release's pre-release-hook.
+python-fmt: ## Check Python formatting with ruff (conformance/).
+	ruff format --check conformance/
+
+python-lint: ## Lint Python with ruff (conformance/).
+	ruff check conformance/
+
+check: fmt lint test python-fmt python-lint ## Local proxy for the CI gate; also cargo-release's pre-release-hook.
 
 
 # --- Harness Conformance Lab (Python, Real Harness + Synthetic World) ---

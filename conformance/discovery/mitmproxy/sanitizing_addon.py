@@ -4,34 +4,82 @@ Persists ONLY protocol shape — never personal identity.
 Masks: Authorization/cookie/api-key headers, token-like query params,
 and token/credential-like JSON fields. Raw flows are never written to disk.
 """
+
 import json
 import os
 import re
 import time
 
 SENSITIVE_HEADERS = {
-    "authorization", "proxy-authorization", "cookie", "set-cookie",
-    "x-goog-api-key", "x-api-key", "api-key", "x-goog-iam-authorization",
-    "x-cloud-trace-context", "x-request-id", "x-token", "x-auth-token",
-    "google-oauth-state", "x-cc-token",
+    "authorization",
+    "proxy-authorization",
+    "cookie",
+    "set-cookie",
+    "x-goog-api-key",
+    "x-api-key",
+    "api-key",
+    "x-goog-iam-authorization",
+    "x-cloud-trace-context",
+    "x-request-id",
+    "x-token",
+    "x-auth-token",
+    "google-oauth-state",
+    "x-cc-token",
 }
 SENSITIVE_PARAM_KEYS = {
-    "token", "access_token", "refresh_token", "id_token", "api_key",
-    "apikey", "key", "code", "client_secret", "credential", "auth",
-    "code_challenge", "code_verifier", "state", "jwt", "sig",
+    "token",
+    "access_token",
+    "refresh_token",
+    "id_token",
+    "api_key",
+    "apikey",
+    "key",
+    "code",
+    "client_secret",
+    "credential",
+    "auth",
+    "code_challenge",
+    "code_verifier",
+    "state",
+    "jwt",
+    "sig",
 }
 SENSITIVE_JSON_KEYS = {
-    "access_token", "refresh_token", "id_token", "api_key", "apikey",
-    "credential", "credentials", "client_secret", "secret", "token",
-    "authorization", "authorization_code", "code", "idtoken", "id_token",
-    "oauth", "oauth_token", "session", "session_id", "email",
-    "user_id", "userId", "sub", "account_id", "gaia_id", "installation_id",
-    "machine_id", "device_id", "client_id", "clientId", "state", "jwt",
+    "access_token",
+    "refresh_token",
+    "id_token",
+    "api_key",
+    "apikey",
+    "credential",
+    "credentials",
+    "client_secret",
+    "secret",
+    "token",
+    "authorization",
+    "authorization_code",
+    "code",
+    "idtoken",
+    "id_token",
+    "oauth",
+    "oauth_token",
+    "session",
+    "session_id",
+    "email",
+    "user_id",
+    "userId",
+    "sub",
+    "account_id",
+    "gaia_id",
+    "installation_id",
+    "machine_id",
+    "device_id",
+    "client_id",
+    "clientId",
+    "state",
+    "jwt",
 }
 
-TOKEN_RE = re.compile(
-    r"(?i)([A-Za-z0-9._~+/=-]{16,})"
-)
+TOKEN_RE = re.compile(r"(?i)([A-Za-z0-9._~+/=-]{16,})")
 
 
 def _mask(value, key=None):
@@ -44,7 +92,10 @@ def _mask(value, key=None):
     if re.search(r"(?i)bearer\s+", s):
         s = re.sub(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+", r"\1<UZE_TEST_TOKEN>", s)
     # Mask long opaque strings (tokens, ids)
-    s = TOKEN_RE.sub(lambda m: "<tok%d>" % len(m.group(1)) if len(m.group(1)) >= 24 else m.group(0), s)
+    s = TOKEN_RE.sub(
+        lambda m: "<tok%d>" % len(m.group(1)) if len(m.group(1)) >= 24 else m.group(0),
+        s,
+    )
     return s
 
 
@@ -54,7 +105,10 @@ def _sanitize_headers(headers):
         lk = k.lower()
         if lk in SENSITIVE_HEADERS:
             out[k] = "<UZE_MASKED_HEADER>"
-        elif any(part in lk for part in ("token", "key", "secret", "cred", "auth", "cookie", "session")):
+        elif any(
+            part in lk
+            for part in ("token", "key", "secret", "cred", "auth", "cookie", "session")
+        ):
             out[k] = "<UZE_MASKED_HEADER>"
         else:
             out[k] = _mask(v)
@@ -82,15 +136,19 @@ def _sanitize_json_body(body_text):
         data = json.loads(body_text)
     except Exception:
         return None
+
     def walk(o):
         if isinstance(o, dict):
-            return {k: ("<UZE_MASKED>" if k.lower() in SENSITIVE_JSON_KEYS else walk(v))
-                    for k, v in o.items()}
+            return {
+                k: ("<UZE_MASKED>" if k.lower() in SENSITIVE_JSON_KEYS else walk(v))
+                for k, v in o.items()
+            }
         if isinstance(o, list):
             return [walk(v) for v in o]
         if isinstance(o, str) and len(o) >= 24:
             return _mask(o)
         return o
+
     return walk(data)
 
 
@@ -107,7 +165,6 @@ class SanitizingLog:
     def response(self, flow):
         req = flow.request
         resp = flow.response
-        url = req.pretty_url
         host = req.host
         scheme = req.scheme
         path = req.path

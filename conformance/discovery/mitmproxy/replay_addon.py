@@ -8,6 +8,7 @@ Modes (AGY_REPLAY_MODE):
 Fixtures are sanitized captures from the real working AGY (see
 fixtures/observed_endpoints.json) — protocol shape, synthetic identity only.
 """
+
 import json
 import os
 import time
@@ -31,7 +32,9 @@ class Replay:
     def __init__(self):
         self.fixtures = _load_fixtures()
         self.unmatched = []
-        self.log_path = os.environ.get("AGY_REPLAY_LOG", "/tmp/agy-replay-unmatched.jsonl")
+        self.log_path = os.environ.get(
+            "AGY_REPLAY_LOG", "/tmp/agy-replay-unmatched.jsonl"
+        )
 
     def _record_unmatched(self, flow, reason):
         req = flow.request
@@ -41,8 +44,14 @@ class Replay:
             "method": req.method,
             "path": req.path,
             "scheme": req.scheme,
-            "req_headers": {k: ("<masked>" if "authorization" in k.lower() or "cookie" in k.lower() else v)
-                            for k, v in req.headers.items()},
+            "req_headers": {
+                k: (
+                    "<masked>"
+                    if "authorization" in k.lower() or "cookie" in k.lower()
+                    else v
+                )
+                for k, v in req.headers.items()
+            },
             "req_body": req.get_text()[:4000] if req.raw_content else None,
             "reason": reason,
         }
@@ -52,7 +61,10 @@ class Replay:
                 f.write(json.dumps(rec) + "\n")
         except Exception:
             pass
-        print(f"[replay] UNMATCHED {req.method} {req.host}{req.path} ({reason})", flush=True)
+        print(
+            f"[replay] UNMATCHED {req.method} {req.host}{req.path} ({reason})",
+            flush=True,
+        )
 
     def request(self, flow):
         mode = os.environ.get("AGY_REPLAY_MODE", "passthrough")
@@ -65,7 +77,9 @@ class Replay:
                 body = json.dumps(body)
             headers = dict(fixture.get("resp_headers", {}))
             headers.setdefault("Content-Type", "application/json; charset=UTF-8")
-            flow.response = http.Response.make(fixture.get("status", 200), body, headers)
+            flow.response = http.Response.make(
+                fixture.get("status", 200), body, headers
+            )
             flow.metadata["replayed"] = key
             return
         if mode == "offline":
@@ -80,7 +94,8 @@ class Replay:
         if mode == "block" and key not in self.fixtures:
             self._record_unmatched(flow, "blocked")
             flow.response = http.Response.make(
-                503, json.dumps({"error": "UZE_REPLAY_BLOCKED", "key": key}),
+                503,
+                json.dumps({"error": "UZE_REPLAY_BLOCKED", "key": key}),
                 {"Content-Type": "application/json"},
             )
             flow.metadata["blocked"] = key

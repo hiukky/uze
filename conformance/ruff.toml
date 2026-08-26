@@ -1,0 +1,19 @@
+# Ruff configuration for the Harness Conformance Lab (conformance/).
+#
+# Pragmatic scope, not the full preview rule set: real errors (F), obvious
+# statement/runtime mistakes (E4/E7/E9), and import ordering (I). The
+# opinionated preview rules (blind-except BLE001, try-except-pass S110,
+# open-with SIM115, subprocess-check PLW1510, ...) are intentionally not
+# selected: much of this tree is synthetic-world test harness code where
+# those patterns are deliberate. See `make python-fmt` / `make python-lint`.
+
+target-version = "py311"
+
+[lint]
+select = ["E4", "E7", "E9", "F", "I"]
+
+# The per-harness scenario scripts prepend the conformance root to
+# sys.path before importing `shared.common` (they run from harness-local
+# directories), which E402 would flag — the pattern is intentional.
+[lint.per-file-ignores]
+"harnesses/*/scenarios.py" = ["E402"]

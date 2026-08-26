@@ -27,6 +27,7 @@ body — into PROVIDER_STRUCT: the model-facing observation boundary.
 
 Env: PROVIDER_MODE, PROVIDER_STRUCT, RESPONSE_TEXT, FINAL_TEXT, MCP_PROOF
 """
+
 import json
 import os
 import sys
@@ -48,14 +49,27 @@ MCP_TOOL = "uze-mcp-conformance-uze-conformance_uze_conformance"
 TOOL_NAME = os.environ.get("TOOL_NAME", MCP_TOOL)
 TOOL_ARGS = os.environ.get("TOOL_ARGS", "{}")
 
-SKILL_MARKERS = ["flow:analyze", "flow:commit", "flow:review", "analyze", "commit", "review", "init",
-                 "North Star", "Review code"]
+SKILL_MARKERS = [
+    "flow:analyze",
+    "flow:commit",
+    "flow:review",
+    "analyze",
+    "commit",
+    "review",
+    "init",
+    "North Star",
+    "Review code",
+]
 # Conformance evidence markers carried by portable-hook denial reasons
 # (ADR-033): presence/absence in the structural summary proves what the real
 # harness relayed after the bridge executed.
-HOOK_MARKERS = ["blocked by protect-env", "first-handler-denied",
-                "second-handler-ran", "second-handler-reached",
-                "Denied by UZE hook"]
+HOOK_MARKERS = [
+    "blocked by protect-env",
+    "first-handler-denied",
+    "second-handler-ran",
+    "second-handler-reached",
+    "Denied by UZE hook",
+]
 COUNTER = {"n": 0}
 
 
@@ -63,8 +77,9 @@ def structural_summary(body_text):
     body = body_text or ""
     return {
         "skill_markers": {m: (m in body) for m in SKILL_MARKERS},
-        "has_available_skills": ("### Available skills" in body
-                                 or "<available_skills>" in body),
+        "has_available_skills": (
+            "### Available skills" in body or "<available_skills>" in body
+        ),
         "has_user_text": '"role": "user"' in body or '"role":"user"' in body,
         "has_tool_result": ('"role": "tool"' in body or '"role":"tool"' in body),
         "hook_markers": {m: (m in body) for m in HOOK_MARKERS},
@@ -81,28 +96,82 @@ def sse(chunks):
 
 def text_chunks(text):
     return [
-        {"id": "c1", "object": "chat.completion.chunk", "model": "uze-model",
-         "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""},
-                      "finish_reason": None}]},
-        {"id": "c1", "object": "chat.completion.chunk", "model": "uze-model",
-         "choices": [{"index": 0, "delta": {"content": text}, "finish_reason": None}]},
-        {"id": "c1", "object": "chat.completion.chunk", "model": "uze-model",
-         "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+        {
+            "id": "c1",
+            "object": "chat.completion.chunk",
+            "model": "uze-model",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"role": "assistant", "content": ""},
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "c1",
+            "object": "chat.completion.chunk",
+            "model": "uze-model",
+            "choices": [
+                {"index": 0, "delta": {"content": text}, "finish_reason": None}
+            ],
+        },
+        {
+            "id": "c1",
+            "object": "chat.completion.chunk",
+            "model": "uze-model",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        },
     ]
 
 
 def tool_call_chunks():
     return [
-        {"id": "c1", "object": "chat.completion.chunk", "model": "uze-model",
-         "choices": [{"index": 0, "delta": {"role": "assistant", "content": None,
-                     "tool_calls": [{"index": 0, "id": "call_uze_1", "type": "function",
-                                     "function": {"name": TOOL_NAME, "arguments": ""}}]},
-                     "finish_reason": None}]},
-        {"id": "c1", "object": "chat.completion.chunk", "model": "uze-model",
-         "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0,
-                     "function": {"arguments": TOOL_ARGS}}]}, "finish_reason": None}]},
-        {"id": "c1", "object": "chat.completion.chunk", "model": "uze-model",
-         "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+        {
+            "id": "c1",
+            "object": "chat.completion.chunk",
+            "model": "uze-model",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_uze_1",
+                                "type": "function",
+                                "function": {"name": TOOL_NAME, "arguments": ""},
+                            }
+                        ],
+                    },
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "c1",
+            "object": "chat.completion.chunk",
+            "model": "uze-model",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [
+                            {"index": 0, "function": {"arguments": TOOL_ARGS}}
+                        ]
+                    },
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "c1",
+            "object": "chat.completion.chunk",
+            "model": "uze-model",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
+        },
     ]
 
 
@@ -112,9 +181,14 @@ class H(BaseHTTPRequestHandler):
     def _handle(self):
         ln = int(self.headers.get("Content-Length", 0) or 0)
         body = self.rfile.read(ln).decode("utf-8", "replace") if ln else ""
-        n = COUNTER["n"]; COUNTER["n"] += 1
-        rec = {"method": self.command, "path": self.path, "seq": n,
-               "summary": structural_summary(body)}
+        n = COUNTER["n"]
+        COUNTER["n"] += 1
+        rec = {
+            "method": self.command,
+            "path": self.path,
+            "seq": n,
+            "summary": structural_summary(body),
+        }
         struct = []
         if os.path.exists(STRUCT_PATH):
             try:
@@ -124,7 +198,9 @@ class H(BaseHTTPRequestHandler):
         struct.append(rec)
         with open(STRUCT_PATH, "w") as f:
             json.dump(struct, f, indent=1)
-        print(f"[opencode-provider:{MODE}] {self.command} {self.path} req#{n}", flush=True)
+        print(
+            f"[opencode-provider:{MODE}] {self.command} {self.path} req#{n}", flush=True
+        )
 
         has_tools = '"tools"' in body
         has_result = '"role":"tool"' in body or '"tool_result"' in body
