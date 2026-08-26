@@ -5,7 +5,7 @@ UZE_BIN ?= target/debug/uze
 RELEASE_BIN ?= target/release/uze
 INSTALL_ARGS ?= --force
 
-.PHONY: help build release install install-wsl-lab playground-lab run test test-acceptance test-conformance test-real-harness docs-harness-matrix check fmt lint coverage version clean changelog lab-image lab-run
+.PHONY: help build release install install-wsl-lab playground-lab run test test-acceptance test-conformance test-real-harness docs-harness-matrix check fmt lint coverage version clean changelog lab-image lab-run lab-watch
 
 help: ## Show the available local-development targets.
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z0-9_.-]+:.*##/ { printf "  %-12s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -47,15 +47,39 @@ test-conformance: ## Run integration conformance + per-harness semantics.
 # The Lab runs the per-harness verticals in the disposable Docker image
 # (`conformance-harness:latest`): real harness binary + synthetic provider,
 # zero Internet, zero tokens. HARNESS selects one harness id
-# (antigravity | claude | codex).
+# (antigravity | claude | codex | opencode).
 HARNESS ?= antigravity
 LAB_IMAGE ?= conformance-harness:latest
+# The recorded TUI session to replay. Empty = auto-detect the most recent
+# one under /tmp/harness-conformance (the Lab's evidence dir); override
+# with `make lab-watch LAB_WATCH=<path>` for a specific session.
+LAB_WATCH ?=
 
 lab-image: ## Build the Lab harness image (installs channel-latest harnesses).
 	docker build -f conformance/Dockerfile -t $(LAB_IMAGE) .
 
 lab-run: ## Run the isolation vertical for $(HARNESS) (3x clean is the gate).
 	python3 conformance/lab.py --harness $(HARNESS)
+
+lab-watch: ## Replay the most recent recorded TUI session (rendered correctly, ANSI intact).
+	@watch="$${LAB_WATCH:-$$(ls -t /tmp/harness-conformance/*/run*/tui.typescript 2>/dev/null | head -n 1)}"; \
+	recent="$$(ls -dt /tmp/harness-conformance/*/run* 2>/dev/null | head -n 1)"; \
+	if [ -z "$$watch" ] || [ ! -f "$$watch" ]; then \
+		echo "no recorded TUI session found under /tmp/harness-conformance — run the lab first:"; \
+		echo "  make lab-run HARNESS=antigravity|claude|codex|opencode"; \
+		if [ -n "$$recent" ]; then \
+			if [ -f "$$recent/verdict.json" ]; then \
+				echo "  (most recent run dir: $$recent)"; \
+			else \
+				harness="$$(basename "$$(dirname "$$recent")")"; \
+				echo "  (most recent run dir: $$recent — no verdict.json, that run did not complete)"; \
+				echo "  re-run it: make lab-run HARNESS=$$harness"; \
+			fi; \
+		fi; \
+		exit 1; \
+	fi; \
+	echo "replaying $$watch"; \
+	scriptreplay --timing "$${watch%.typescript}.timing" "$$watch"
 test-real-harness: ## Run L2 probes that need real vendor binaries (skip cleanly when absent).
 	$(CARGO) test -p uze --test integrations real_codex_dogfood -- --ignored 2>/dev/null || \
 	$(CARGO) test -p uze --test integrations real_codex_dogfood
