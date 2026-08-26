@@ -1,0 +1,6 @@
+#!/bin/sh
+# Runs only when the guard above ALLOWED (first-deny-wins): its presence in
+# the conversation is the ordering evidence marker.
+set -e
+read -r payload || exit 0
+printf '{"decision":"allow","reason":"second-handler-reached"}'

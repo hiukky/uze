@@ -151,6 +151,13 @@ properties):
   block in SKILL.md (ADR-030), never a second capability kind — no
   canonical `Command`, no `commands/` surface. Integrations translate the
   policy into vendor-specific encodings; Store bytes stay verbatim.
+- **Portable Hooks (ADR-033)**: one authored `hooks.json` + shell-command
+  ABI (normalized stdin/stdout, bounded output/timeout, first-deny-wins,
+  fail-open for observational vs fail-closed for deny/ask/transform) is the
+  canonical Hook surface; every harness projection (merged config entries,
+  the generated Antigravity plugin, the owned OpenCode bridge) is
+  receipt-owned, content-identity inspected, and never touches foreign
+  hooks/plugins/order.
 - **Package vs. project context are independent**: `uze add`/`remove`/
   `update`/`market`/`plugin`/`harness` are machine-scoped (`~/.uze`);
   `uze context inspect|plan|reconcile` are project-scoped. Neither touches

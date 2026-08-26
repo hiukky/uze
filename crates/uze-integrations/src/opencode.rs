@@ -25,6 +25,7 @@ use uze_core::{
     capability::CapabilityKind,
     exposure::{ExposureMechanism, ExposurePlan},
     home::UzeHome,
+    hook::PortableHook,
     integration::{
         AttachmentInspection, AttachmentReceipt, AttachmentState, ContextDelivery,
         HarnessDetection, IntegrationPort, ManagedArtifact, default_exposure_name_candidates,
@@ -34,12 +35,14 @@ use uze_core::{
     provisioning::{ProcessRunner, ProvisioningResult},
     router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus},
     state,
+    store::PackageId,
 };
 
 mod mcp;
 mod provision;
 mod skills;
 
+use crate::hooks as hook_projection;
 use mcp::{
     attach_mcp_config, attach_mcp_entry, provisioning_executable_for_attach, resolve_home_and_xdg,
 };
@@ -100,11 +103,19 @@ impl IntegrationPort for OpenCodeIntegration {
         HarnessCapabilities {
             direct_standard: [CapabilityKind::AgentSkill, CapabilityKind::Agent].into_iter().collect(),
             native: [CapabilityKind::Mcp].into_iter().collect(),
+            // Hooks reach OpenCode through UZE's generated bridge — an
+            // explicit adapter, never a native hook file (OpenCode exposes
+            // no declarative hook surface; ADR-033).
+            adaptable: [CapabilityKind::Hook].into_iter().collect(),
             verification: VerificationStatus::Unverified,
-            evidence: "OpenCode V2 documents global Agent Skills at ~/.agents/skills and local MCP via `opencode mcp add <name> -- <command>` into global `mcp.servers.<name>.command` in opencode.json (verified `opencode mcp add --help` requires ` -- ` separator; no `remove` verb so detach stays file rewrite). Skills preserve invocation policy natively in SKILL.md frontmatter (metadata.opencode/autoinvoke/slash — ADR-030 §9) without Command primitive."
+            evidence: "OpenCode V2 documents global Agent Skills at ~/.agents/skills and local MCP via `opencode mcp add <name> -- <command>` into global `mcp.servers.<name>.command` in opencode.json (verified `opencode mcp add --help` requires ` -- ` separator; no `remove` verb so detach stays file rewrite). Skills preserve invocation policy natively in SKILL.md frontmatter (metadata.opencode/autoinvoke/slash — ADR-030 §9) without Command primitive. Portable Hooks are delivered through an owned, regenerable `.opencode/plugins/uze-hooks-<package>.ts` bridge (tool.execute.before/after, sequential handlers, first-deny-wins, bounded output, per-handler timeouts) registered by one managed `plugin` entry in opencode.json — no author TypeScript toolchain (ADR-033; deterministic emission, real-binary verification pending in the conformance lab)."
                 .to_owned(),
             ..HarnessCapabilities::default()
         }
+    }
+
+    fn hook_capabilities(&self) -> uze_core::hook::HookCapabilities {
+        hook_projection::opencode_capabilities()
     }
     fn detect(&self) -> HarnessDetection {
         resolve_opencode_binary(&self.uze_home.shims_dir())
@@ -180,9 +191,10 @@ impl IntegrationPort for OpenCodeIntegration {
             CapabilityKind::AgentSkill => self.skill_plan(resource),
             CapabilityKind::Mcp => self.mcp_plan(resource),
             CapabilityKind::Agent => self.agent_plan(resource),
+            CapabilityKind::Hook => self.hook_plan(resource),
             _ => unsupported(
                 resource,
-                "OpenCode portability is implemented only for Agent Skills, Agents, and MCP in this slice.",
+                "OpenCode portability is implemented only for Agent Skills, Agents, MCP, and portable Hooks in this slice.",
             ),
         }
     }
@@ -194,6 +206,14 @@ impl IntegrationPort for OpenCodeIntegration {
                     self.materialize_or_verify_skill(resource)?;
                 }
                 Ok(Some(plan.mechanism.attach()?))
+            }
+            ExposureMechanism::ManagedHookConfig {
+                config_file,
+                expected,
+                ..
+            } => {
+                self.attach_hook_bridge(resource, expected)?;
+                Ok(Some(config_file.clone()))
             }
             ExposureMechanism::ManagedVendorConfig {
                 entry_name,
@@ -233,6 +253,14 @@ impl IntegrationPort for OpenCodeIntegration {
     }
 
     fn inspect_receipt(&self, receipt: &AttachmentReceipt) -> AttachmentInspection {
+        if let ManagedArtifact::HookConfigEntry {
+            config_file,
+            expected,
+            ..
+        } = &receipt.artifact
+        {
+            return self.inspect_hook_bridge(config_file, expected);
+        }
         let ManagedArtifact::VendorConfigEntry {
             entry_name,
             command,
@@ -298,6 +326,14 @@ impl IntegrationPort for OpenCodeIntegration {
             enabled,
         } = &receipt.artifact
         else {
+            if let ManagedArtifact::HookConfigEntry {
+                config_file,
+                expected,
+                ..
+            } = &receipt.artifact
+            {
+                return self.detach_hook_bridge(receipt, config_file, expected);
+            }
             let detached = detach_standard_receipt(receipt)?;
             if detached.state == AttachmentState::Missing
                 && let ManagedArtifact::SymlinkReference { target, .. } = &receipt.artifact
@@ -372,6 +408,216 @@ impl OpenCodeIntegration {
             },
             evidence: "OpenCode natively discovers Markdown agents from its configuration agents directory; UZE keeps a receipt-owned symlink to the canonical Store definition.".to_owned(),
         }
+    }
+
+    /// The per-resource hook plan: semantic compatibility assessed against
+    /// the bridged profile (Adaptable for a faithfully executed bridge,
+    /// never Native — the generated source is UZE's own adapter), with the
+    /// managed `plugin` entry named after the package's bridge file.
+    fn hook_plan(&self, resource: &Resource) -> ExposurePlan {
+        let Ok(hook) = serde_json::from_slice::<PortableHook>(&resource.capability.payload) else {
+            return unsupported(
+                resource,
+                "hook resource payload is not a valid portable hook group",
+            );
+        };
+        let compatibility = uze_core::hook::assess(&hook, &self.hook_capabilities(), true);
+        let mechanism = match compatibility.route {
+            CompatibilityRoute::Unsupported | CompatibilityRoute::Degraded => {
+                ExposureMechanism::Unsupported {
+                    rationale: compatibility
+                        .reason
+                        .clone()
+                        .unwrap_or_else(|| "no compatible hook route".to_owned()),
+                }
+            }
+            _ => {
+                let package_id = match &resource.origin {
+                    uze_core::project::ResourceOrigin::Package { id, .. } => id.as_str(),
+                    uze_core::project::ResourceOrigin::Project { .. } => {
+                        return unsupported(
+                            resource,
+                            "OpenCode hooks need a UZE-stored package for their owned bridge.",
+                        );
+                    }
+                };
+                let entry = hook_projection::opencode_bridge_path(self.config_root(), package_id)
+                    .display()
+                    .to_string();
+                ExposureMechanism::ManagedHookConfig {
+                    config_file: self.config_path.clone(),
+                    entry_name: format!("uze-hooks-{package_id}"),
+                    event: None,
+                    expected: entry,
+                }
+            }
+        };
+        let base = "OpenCode exposes no declarative hook file; UZE generates an owned, regenerable TypeScript bridge (tool.execute.before/after on the portable ABI — sequential handlers, first-deny-wins by thrown error, transform via output.args, 64 KiB cap, per-handler timeouts) and registers its absolute path in one managed `plugin` entry, preserving foreign plugins.";
+        let evidence = match &compatibility.reason {
+            Some(reason) => format!("{base} Compatibility: {reason}"),
+            None => base.to_owned(),
+        };
+        ExposurePlan {
+            representation: resource.capability.representation,
+            route: compatibility.route,
+            verification: VerificationStatus::Unverified,
+            mechanism,
+            evidence,
+        }
+    }
+
+    /// The config root is the parent of `opencode.json` — the physical
+    /// anchor for the owned `.opencode/plugins/` bridge directory.
+    fn config_root(&self) -> &Path {
+        self.config_path
+            .parent()
+            .expect("OpenCode config path has a parent")
+    }
+
+    /// Emits the owned bridge for the resource's package and appends its
+    /// path to the config's `plugin` array. The bridge is package-scoped:
+    /// it always covers every canonical group that still has a receipt,
+    /// plus the group being attached, so a multi-group package converges on
+    /// one deterministic file regardless of attach order.
+    fn attach_hook_bridge(&self, resource: &Resource, expected: &str) -> Result<()> {
+        let package_root = resource.package_root().ok_or_else(|| {
+            UzeError::ExposureUnavailable("OpenCode hooks need a UZE-stored package".to_owned())
+        })?;
+        let package_id = match &resource.origin {
+            uze_core::project::ResourceOrigin::Package { id, .. } => id.as_str(),
+            uze_core::project::ResourceOrigin::Project { .. } => {
+                return Err(UzeError::ExposureUnavailable(
+                    "OpenCode hooks need a UZE-stored package".to_owned(),
+                ));
+            }
+        };
+        let current = serde_json::from_slice::<PortableHook>(&resource.capability.payload)
+            .map_err(|source| UzeError::Json {
+                path: resource.capability.path.clone(),
+                source,
+            })?;
+        let active = self.active_hook_ids(package_id, None)?;
+        let mut groups = hook_projection::groups_with_ids(package_root, &|id| {
+            active.iter().any(|active| active == id)
+        })?;
+        if !groups.iter().any(|group| group.id == current.id) {
+            groups.push(current);
+        }
+        let references: Vec<&PortableHook> = groups.iter().collect();
+        let bridge_path = hook_projection::opencode_bridge_path(self.config_root(), package_id);
+        if let Some(parent) = bridge_path.parent() {
+            fs::create_dir_all(parent).map_err(|source| UzeError::Write {
+                path: parent.to_path_buf(),
+                source,
+            })?;
+        }
+        fs::write(
+            &bridge_path,
+            hook_projection::opencode_bridge(&references, package_root),
+        )
+        .map_err(|source| UzeError::Write {
+            path: bridge_path.clone(),
+            source,
+        })?;
+        hook_projection::merge_plugin_entry(&self.config_path, expected)?;
+        Ok(())
+    }
+
+    /// The hook group ids this integration still has receipts for on one
+    /// package, extracted from each receipt's resource identity
+    /// (`package:<id>:hooks.json:<group-id>`). `exclude` skips one receipt
+    /// during its own detach, when the ledger still holds it.
+    fn active_hook_ids(&self, package_id: &str, exclude: Option<&str>) -> Result<Vec<String>> {
+        let Ok(ledger) = state::receipts(&self.uze_home, Some(package_id)) else {
+            return Ok(Vec::new());
+        };
+        let mut ids = Vec::new();
+        for (_, receipt) in ledger {
+            if receipt.integration != self.id() {
+                continue;
+            }
+            if !matches!(receipt.artifact, ManagedArtifact::HookConfigEntry { .. }) {
+                continue;
+            }
+            let Some(identity) = &receipt.resource_identity else {
+                continue;
+            };
+            if exclude.is_some_and(|skipped| skipped == identity) {
+                continue;
+            }
+            if let Some(id) = identity.rsplit(':').next() {
+                ids.push(id.to_owned());
+            }
+        }
+        ids.sort();
+        ids.dedup();
+        Ok(ids)
+    }
+
+    /// The receipt's managed `plugin` entry must still point at an existing
+    /// bridge file; a missing file is drift (the entry is UZE's, the file
+    /// is derived — regenerate rather than silently stay broken).
+    fn inspect_hook_bridge(&self, config_file: &Path, expected: &str) -> AttachmentInspection {
+        let entry_state = hook_projection::inspect_plugin_entry(config_file, expected);
+        if entry_state.state != AttachmentState::Matched {
+            return entry_state;
+        }
+        let bridge = PathBuf::from(expected);
+        if !bridge.is_file() {
+            return AttachmentInspection {
+                state: AttachmentState::Drifted,
+                reason:
+                    "the managed bridge file is missing; re-run plugin install to regenerate it"
+                        .to_owned(),
+            };
+        }
+        AttachmentInspection {
+            state: AttachmentState::Matched,
+            reason: "managed bridge entry and file are in place".to_owned(),
+        }
+    }
+
+    /// Removes one group's receipt ownership: the bridge is regenerated
+    /// from the remaining groups (manifest order preserved), and when the
+    /// last group goes the config entry and the UZE-created bridge files
+    /// are removed entirely.
+    fn detach_hook_bridge(
+        &self,
+        receipt: &AttachmentReceipt,
+        config_file: &Path,
+        expected: &str,
+    ) -> Result<AttachmentInspection> {
+        let inspection = self.inspect_hook_bridge(config_file, expected);
+        if inspection.state != AttachmentState::Matched {
+            return Ok(inspection);
+        }
+        let package_id = receipt.package_id.as_str();
+        let identity = receipt.resource_identity.clone();
+        let remaining = self.active_hook_ids(package_id, identity.as_deref())?;
+        let package = PackageId::from_plugin_name(package_id, Path::new("plugin.json"))?;
+        let package_root = self.uze_home.package_dir(&package);
+        let groups = hook_projection::groups_with_ids(&package_root, &|id| {
+            remaining.iter().any(|active| active == id)
+        })?;
+        if groups.is_empty() {
+            hook_projection::remove_plugin_entry(config_file, expected)?;
+            let bridge = PathBuf::from(expected);
+            hook_projection::remove_bridge_file(&bridge)?;
+        } else {
+            let references: Vec<&PortableHook> = groups.iter().collect();
+            fs::write(
+                PathBuf::from(expected),
+                hook_projection::opencode_bridge(&references, &package_root),
+            )
+            .map_err(|source| UzeError::Write {
+                path: PathBuf::from(expected),
+                source,
+            })?;
+        }
+        Ok(AttachmentInspection {
+            state: AttachmentState::Missing,
+            reason: "managed OpenCode bridge entry detached".to_owned(),
+        })
     }
 }
 

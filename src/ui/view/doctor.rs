@@ -8,6 +8,7 @@ use ratatui::{
 };
 
 use crate::application::DoctorReport;
+use crate::integration::AttachmentState;
 
 use super::super::model::TuiModel;
 use super::super::{ACCENT, BORDER_FAINT, DANGER, MUTED, TEXT_SECONDARY, WARNING};
@@ -185,6 +186,43 @@ pub(crate) fn classify_doctor(doctor: Option<&DoctorReport>) -> Vec<Issue> {
                 ),
             });
         }
+        for hook in &package.hooks {
+            // A hook whose route cannot preserve its declared semantics is
+            // an honest, actionable finding (ADR-033 doctor spec) — never
+            // hidden behind a healthy-native row.
+            if let Some(loss) = &hook.weakened {
+                issues.push(Issue {
+                    severity: Severity::Medium,
+                    message: format!(
+                        "{}: hook `{}` on {} is {:?} — {loss}",
+                        package.plugin, hook.hook, hook.harness, hook.route
+                    ),
+                });
+            }
+            match hook.state {
+                Some(
+                    AttachmentState::Drifted | AttachmentState::Conflict | AttachmentState::Blocked,
+                ) => {
+                    issues.push(Issue {
+                        severity: Severity::High,
+                        message: format!(
+                            "{}: hook `{}` on {} attachment is {:?}",
+                            package.plugin, hook.hook, hook.harness, hook.state
+                        ),
+                    });
+                }
+                Some(AttachmentState::Missing) => {
+                    issues.push(Issue {
+                        severity: Severity::Low,
+                        message: format!(
+                            "{}: hook `{}` on {} attachment missing",
+                            package.plugin, hook.hook, hook.harness
+                        ),
+                    });
+                }
+                _ => {}
+            }
+        }
     }
     for harness in &doctor.harnesses {
         if harness.detection.present && harness.setup.contains("not configured") {
@@ -326,6 +364,33 @@ fn doctor_groups(doctor: Option<&DoctorReport>) -> Vec<(&'static str, Vec<Check>
                 solution: None,
             });
         }
+        // One row per hook attachment finding (ADR-033 doctor spec): the
+        // plugin may be healthy overall while a specific hook on a specific
+        // harness cannot preserve its declared semantics.
+        for hook in &package.hooks {
+            if hook.state == Some(AttachmentState::Missing) {
+                plugins.push(Check {
+                    label: format!(
+                        "{} hook `{}` missing on {}",
+                        package.plugin, hook.hook, hook.harness
+                    ),
+                    detail: format!("[{}] receipt not found in managed config", hook.event),
+                    status: CheckStatus::Warn,
+                    solution: Some("Press u in Plugins — updating re-applies the managed entry"),
+                });
+            }
+            if let Some(loss) = &hook.weakened {
+                plugins.push(Check {
+                    label: format!(
+                        "{} hook `{}` — {:?} on {}",
+                        package.plugin, hook.hook, hook.route, hook.harness
+                    ),
+                    detail: format!("[{}] {loss}", hook.event),
+                    status: CheckStatus::Warn,
+                    solution: Some("Remove the plugin (r) or accept the stated limitation"),
+                });
+            }
+        }
     }
     for plugin in &doctor.plugins {
         if plugin.update_available == Some(true) {
@@ -360,6 +425,7 @@ mod tests {
             plugins: Vec::new(),
             harnesses: Vec::new(),
             attachments: vec![PackageManagedState {
+                hooks: Vec::new(),
                 plugin: "acme".to_owned(),
                 state: ManagedStateSummary {
                     matched: 0,

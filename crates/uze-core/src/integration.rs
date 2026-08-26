@@ -72,6 +72,19 @@ pub enum ManagedArtifact {
         #[serde(flatten, default)]
         detail: BTreeMap<String, serde_json::Value>,
     },
+    /// A UZE-namespaced entry inside the harness's shared hook
+    /// configuration (ADR-033). `entry_name` is the stable UZE identity,
+    /// `event` the manifest group's semantic event where the target shape
+    /// is event-keyed, and `expected` the exact serialized entry content
+    /// the owning integration wrote. Inspection and detach are
+    /// integration-owned: the Core knows the identity, never the file's
+    /// shape.
+    HookConfigEntry {
+        config_file: PathBuf,
+        entry_name: String,
+        event: Option<crate::hook::HookEvent>,
+        expected: String,
+    },
 }
 
 /// The `kind` a receipt predating [`ManagedArtifact::IntegrationOwned`]
@@ -161,6 +174,19 @@ pub trait IntegrationPort {
     }
 
     fn capabilities(&self) -> HarnessCapabilities;
+
+    /// The hook semantics this harness can preserve (ADR-033): the semantic
+    /// events, effects, matcher translation, input transformation,
+    /// ordering, and handler types an integration can honestly deliver.
+    /// The Core composes per-resource compatibility from this declaration
+    /// (`crate::hook::assess`) instead of overloading the coarse
+    /// `HarnessCapabilities` kind sets, because a Hook route varies per
+    /// event/effect axis. The vendor-neutral default is the empty profile
+    /// — no Hook semantics preservable — which each integration overrides
+    /// exactly as far as its observed contract reaches.
+    fn hook_capabilities(&self) -> crate::hook::HookCapabilities {
+        crate::hook::HookCapabilities::default()
+    }
 
     /// This integration's opt-in contribution to a shim-mediated harness
     /// launch (`RUNTIME INFRASTRUCTURE`, see `harness_runtime`) — entirely
@@ -479,6 +505,17 @@ pub trait IntegrationPort {
                 region_identity,
                 expected_content,
             },
+            ExposureMechanism::ManagedHookConfig {
+                config_file,
+                entry_name,
+                event,
+                expected,
+            } => ManagedArtifact::HookConfigEntry {
+                config_file,
+                entry_name,
+                event,
+                expected,
+            },
             _ => return Ok(None),
         };
         Ok(Some(AttachmentReceipt {
@@ -557,6 +594,7 @@ pub fn managed_artifact_exposure_name(artifact: &ManagedArtifact) -> Option<Stri
             path.file_name()?.to_str().map(str::to_owned)
         }
         ManagedArtifact::VendorConfigEntry { entry_name, .. } => Some(entry_name.clone()),
+        ManagedArtifact::HookConfigEntry { entry_name, .. } => Some(entry_name.clone()),
         // A text region spans a *portion* of a shared file, not a dedicated
         // entry; an integration-owned artifact's naming is opaque to the
         // Core by design.
@@ -654,6 +692,11 @@ pub fn receipt_location(receipt: &AttachmentReceipt) -> PathBuf {
         ManagedArtifact::VendorConfigEntry { entry_name, .. } => {
             PathBuf::from(format!("mcp:{entry_name}"))
         }
+        ManagedArtifact::HookConfigEntry {
+            config_file,
+            entry_name,
+            ..
+        } => PathBuf::from(format!("{}#{entry_name}", config_file.display())),
         ManagedArtifact::ManagedTextRegion {
             target_file,
             region_identity,

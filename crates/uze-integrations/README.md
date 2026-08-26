@@ -58,18 +58,19 @@ Status: **PROVEN** (real-CLI behavioral evidence) · **SUPPORTED** (implemented,
 | Skills | **PROVEN** — via package or managed symlink, real behavioral proof-token run | **PROVEN** — managed symlink, real behavioral proof-token run | **PROVEN** — managed symlink, real behavioral proof-token run (v1.18.18) | **SUPPORTED** — via plugin (native) or managed global-skills symlink; DOCUMENTED root, no behavioral run |
 | MCP | **PARTIAL** — config/discovery PROVEN live, behavioral tool-call gap open | **PARTIAL** — config PROVEN, discovery inconclusive (vendor JSON has no connectivity field), behavioral blocked by an approval gate | **SUPPORTED** — TESTED only, zero recorded conformance run of any tier | **SUPPORTED** — native plugin `mcp_config.json` + `agy mcp add` fallback; real-binary dogfood |
 | Context (AGENTS.md) | **PARTIAL** — `--add-dir` runtime projection, extensive real-CLI evidence, one open gap (`/compact` retention) | Native (reads `AGENTS.md` directly) — DOCUMENTED, outside this crate | Native (reads `AGENTS.md` directly) — DOCUMENTED, outside this crate | **Native** (reads `AGENTS.md` and `GEMINI.md`; official docs: identical context rules) — no bridge generated |
-| Agents | NOT_IMPLEMENTED | NOT_IMPLEMENTED (also a real, open Codex *vendor* gap — plugins can't declare subagents today) | NOT_IMPLEMENTED | NOT_IMPLEMENTED (vendor supports `agents/` — future surface) |
-| Hooks | NOT_IMPLEMENTED | NOT_IMPLEMENTED | NOT_IMPLEMENTED | NOT_IMPLEMENTED (vendor supports `hooks.json` — future surface) |
+| Agents | **SUPPORTED** — native user-scope agents dir; Codex generates standalone TOML (see each vertical's README) | **SUPPORTED** — generated `~/.codex/agents/*.toml` (real plugin-level subagents remain an open *vendor* gap) | **SUPPORTED** — native `agents/` dir next to config | **SUPPORTED** — native `agents/` dir |
+| Hooks | **SUPPORTED** — `settings.json` `hooks` entries via `hook-exec` wrapper (ADR-033); deterministic, real-binary verification pending in the Lab | **SUPPORTED** — `~/.codex/hooks.json` command form via `hook-exec` wrapper (ADR-033) | **SUPPORTED** — owned regenerable `.ts` bridge + managed `plugin` entry (ADR-033); degraded for `Stop`, unsupported for `ask` | **SUPPORTED** — generated plugin named-entry `hooks.json` via `hook-exec` wrapper (ADR-033)
 | Commands | NOT_IMPLEMENTED (Claude itself merged Commands into Skills upstream) | NOT_IMPLEMENTED | NOT_IMPLEMENTED | **ADAPTED** — routes through the vendor's official commands→Skills conversion; explicit-only property degrades (declared, never hidden) |
 | Runtime Integration | Yes — the only harness with a projection mechanism (`--add-dir`) | None (passthrough default) | None (passthrough default; see note below) | None (passthrough default; no shim) |
 
-Agents/Hooks/Commands are `NOT_IMPLEMENTED` project-wide, not per-harness gaps:
-`CapabilityKind::{Agent, Hook, Action}` are recognized only by
-`uze-core::importers` and routed to zero integrations (`grep` confirms —
-these three variants and `Policy`, which is entirely unused anywhere, never
-appear in any `IntegrationPort::capabilities()`/`exposure_plan()`).
-`docs/capabilities/overview.md` documents this as a deliberate
-research-only posture, not an oversight.
+Commands are `NOT_IMPLEMENTED` project-wide, not per-harness gaps:
+`CapabilityKind::Action` is recognized only by `uze-core::importers` and
+routed to zero integrations (`grep` confirms — this variant and `Policy`,
+which is entirely unused anywhere, never appear in any
+`IntegrationPort::capabilities()`/`exposure_plan()`).
+`docs/capabilities/overview.md` documents the implemented posture for
+Agents (ADR-031) and Hooks (ADR-033) and the deliberate research-only
+posture for Commands.
 
 ## Native-first routing
 

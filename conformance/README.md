@@ -27,22 +27,26 @@ conformance/
 │   ├── antigravity/              # Real AGY (latest channel) + synthetic Gemini
 │   │   ├── provider.py           #   fake_gemini (plain HTTP 9999)
 │   │   ├── scenarios.py          #   onboarding, /skills, /mcp, turn,
-│   │   │                         #   model-facing, MCP round-trip, state
+│   │   │                         #   model-facing, MCP round-trip, state,
+│   │   │                         #   hooks (deny/allow/order)
 │   │   └── fixtures/             #   synthetic seeds (settings, state, sse)
 │   ├── claude/                   # Real Claude Code (latest channel) + synthetic Anthropic
 │   │   ├── provider.py           #   fake_anthropic (TLS 443, hardcoded hosts)
 │   │   ├── scenarios.py          #   onboarding, /plugin, /mcp, turn,
-│   │   │                         #   model-facing (policy preserved), finding
+│   │   │                         #   model-facing (policy preserved), finding,
+│   │   │                         #   hooks (deny/allow/order)
 │   │   └── fixtures/             #   claude.json + settings.json (theme)
 │   ├── codex/                    # Real Codex (latest channel) + synthetic OpenAI
 │   │   ├── provider.py           #   fake_openai (TLS 443, WS→HTTPS fallback)
 │   │   ├── scenarios.py          #   trust, /skills, /plugins, /mcp, turn,
-│   │   │                         #   model-facing, plugin-list state
+│   │   │                         #   model-facing, plugin-list state,
+│   │   │                         #   hooks (deny/allow/order)
 │   │   └── fixtures/             #   auth.json seed
 │   └── opencode/                 # Real OpenCode (latest channel) + synthetic
 │       ├── provider.py           #   OpenAI-compatible (plain HTTP 9999)
 │       ├── scenarios.py          #   /skills, /mcps, turn, model-facing,
-│       │                         #   MCP tool round-trip in the TUI
+│       │                         #   MCP tool round-trip in the TUI,
+│       │                         #   hooks (deny/allow/order)
 │       └── fixtures/             #   (none — provider is config-driven)
 ```
 
@@ -59,11 +63,19 @@ real uze → real harness → real TUI → synthetic provider → deterministic 
 Run (3x clean is the gate):
 
 ```bash
-python3 lab.py --harness antigravity   # 16/16 PASS + 1 ADAPTED
-python3 lab.py --harness claude        # 8/8 PASS
-python3 lab.py --harness codex         # 11/11 PASS
-python3 lab.py --harness opencode      # 14/14 PASS + 1 ADAPTED
+python3 lab.py --harness antigravity   # 16/16 PASS + 1 ADAPTED (pre-hooks baseline)
+python3 lab.py --harness claude        # 8/8 PASS (pre-hooks baseline)
+python3 lab.py --harness codex         # 11/11 PASS (pre-hooks baseline)
+python3 lab.py --harness opencode      # 14/14 PASS + 1 ADAPTED (pre-hooks baseline)
 ```
+
+Every vertical additionally runs the **portable-hooks phase** (ADR-033):
+three TUI-first scenarios — `deny` (a real tool call blocked by a portable
+hook, reason relayed), `allow` (the same hook lets the real tool execute),
+and `order` (first-deny-wins: the second handler's marker must never reach
+the conversation). The phase count is recorded on the next clean 3x run and
+kept current here; the hook checks themselves are live assertions over the
+conversation the REAL harness sent its provider plus the TUI surface.
 
 Evidence JSON goes under `AGY_OUTDIR` (default
 `/tmp/harness-conformance/<harness>/run<N>`). The exit code is 0 only when
@@ -86,8 +98,9 @@ nothing is committed, nothing is reused across runs.
 
 `_fixtures/marketplace/` is the Lab's dedicated, complete marketplace. Each
 vertical starts from a fresh copy and selects the plugins it needs, so the
-same `flow` Skills and MCP resources are exercised across harnesses without
-each scenario rebuilding them by hand. `lab.py` validates
+same `flow` Skills, MCP resources, and portable-hook plugins (`hook-plugin`,
+`hook-order-plugin` — ADR-033) are exercised across harnesses without each
+scenario rebuilding them by hand. `lab.py` validates
 the inventory and the MCP runtime placeholders before it starts Docker.
 
 This is intentionally separate from `tests/_fixtures/`: those fixtures are
@@ -118,7 +131,15 @@ build artifact.
   asserted.
 - **Codex**: with the current UZE delivery the plugin skills are not listed
   in codex's model catalog (only built-ins), and the UZE MCP config does not
-  reach the `/mcp` inventory.
+  reach the `/mcp` inventory. The same approval gate may intercept hook
+  scenario tool calls before or alongside the portable hook; the hooks
+  phase records whichever evidence the real harness produces and the gate
+  result honestly.
+- **Hooks (ADR-033)**: the deny/allow/order phases assert semantic markers
+  (a portable-hook denial reason reaching the conversation; the tool
+  executing only after an allow; the second handler's marker never
+  appearing after a first deny). The exact vendor wording of a surfaced
+  denial is recorded by the first clean 3x run, never assumed.
 
 ## Discovery
 

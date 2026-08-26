@@ -18,7 +18,7 @@ use uze_core::{
     capability::CapabilityKind,
     context::{self as instruction_context},
     detection_cache::DetectionCache,
-    exposure::{ExposurePlan, PackageExposurePlan},
+    exposure::{ExposureMechanism, ExposurePlan, PackageExposurePlan},
     integration::{
         AttachmentInspection, AttachmentState, HarnessDetection, IntegrationPort,
         IntegrationStatus, PublicationStatus,
@@ -27,7 +27,7 @@ use uze_core::{
     reconciliation::{
         PackageRemovalPlan, ReconciledReceipt, ReconciliationReport, reconcile_package,
     },
-    router::HarnessCapabilities,
+    router::{CompatibilityRoute, HarnessCapabilities},
     state,
     store::StoredPackage,
     trust::{self, TrustAuthority, TrustOutcome, TrustRequest},
@@ -1308,6 +1308,29 @@ pub struct ContextReconciliationReport {
 pub struct PackageManagedState {
     pub plugin: String,
     pub state: ManagedStateSummary,
+    /// One row per canonical hook group × harness — the doctor's Hook
+    /// attachment report (ADR-033): semantic event, compatibility verdict,
+    /// the exact guarantee weakened on a degraded/unsupported route, and
+    /// the receipt-owned artifact and its state when attached.
+    pub hooks: Vec<HookHealth>,
+}
+
+/// Per-(hook group, harness) diagnostic row in the doctor report. `weakened`
+/// is `Some` exactly when the route is Degraded/Unsupported — a semantic
+/// loss is always stated, never hidden. `artifact`/`state` are `Some` only
+/// for an attached hook (a degraded hook attaches nothing, honestly).
+#[derive(Clone, Debug, Serialize)]
+pub struct HookHealth {
+    /// The canonical hook group id (`<package>:<group>` in receipts).
+    pub hook: String,
+    /// The semantic event this group listens to (abi name, e.g.
+    /// `pre_tool_use`).
+    pub event: String,
+    pub harness: String,
+    pub route: CompatibilityRoute,
+    pub weakened: Option<String>,
+    pub artifact: Option<PathBuf>,
+    pub state: Option<AttachmentState>,
 }
 
 #[derive(Clone, Debug, Serialize)]

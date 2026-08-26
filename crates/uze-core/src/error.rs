@@ -156,6 +156,11 @@ pub enum UzeError {
         program: String,
         source: std::io::Error,
     },
+    /// A runtime hook dispatch (the `hook-exec` wrapper) could not honor the
+    /// portable command ABI — unknown adapter/event/effect, unreadable native
+    /// payload, or an adapter rejection.
+    #[error("hook dispatch failed: {0}")]
+    HookDispatch(String),
 }
 
 /// Payload of [`UzeError::ProjectionConflict`], boxed so `UzeError` stays

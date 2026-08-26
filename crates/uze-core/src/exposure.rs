@@ -14,6 +14,7 @@ use crate::{
     capability::Representation,
     error::{Result, UzeError},
     home::UzeHome,
+    hook::HookEvent,
     router::{CompatibilityRoute, VerificationStatus},
 };
 
@@ -85,6 +86,20 @@ pub enum ExposureMechanism {
         target_file: PathBuf,
         region_identity: String,
         expected_content: String,
+    },
+    /// One namespaced entry inside a shared harness hook configuration
+    /// (ADR-033). `entry_name` is the stable UZE identity for the entry
+    /// (`<package>:<hook-id>`); `event` names the manifest group's semantic
+    /// event where the target shape is event-keyed; `expected` is the exact
+    /// serialized entry UZE owns, used for content-identity inspection and
+    /// drift-safe removal. Every merge/inspect/detach rule lives in the
+    /// owning integration, which knows the target file's shape; the Core
+    /// only routes the mechanism.
+    ManagedHookConfig {
+        config_file: PathBuf,
+        entry_name: String,
+        event: Option<HookEvent>,
+        expected: String,
     },
     Unsupported {
         rationale: String,
@@ -375,6 +390,18 @@ impl ExposurePlan {
                 // persistent, package-lifecycle artifact created once via
                 // `attach_text_region`/`IntegrationPort::attach`, not a
                 // per-session projection this type prepares or tears down.
+                Ok(PreparedExposure {
+                    working_directory: workspace.to_path_buf(),
+                    arguments: Vec::new(),
+                    runtime_directory: None,
+                    managed: None,
+                })
+            }
+            ExposureMechanism::ManagedHookConfig { .. } => {
+                // A managed hook entry is a persistent, package-lifecycle
+                // artifact merged once into the harness's shared hook
+                // configuration via `IntegrationPort::attach` — never a
+                // per-session projection (ADR-033).
                 Ok(PreparedExposure {
                     working_directory: workspace.to_path_buf(),
                     arguments: Vec::new(),

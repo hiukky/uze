@@ -1,0 +1,6 @@
+#!/bin/sh
+# Must never run: the first handler already denied. If this marker ever
+# reaches a conversation, ordering is broken.
+set -e
+read -r payload || exit 0
+printf '{"decision":"deny","reason":"second-handler-ran"}'

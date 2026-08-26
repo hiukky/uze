@@ -32,6 +32,10 @@ old `packages/` set hard to reason about.
   marketplace/consumer example used all over lifecycle tests.
 - `workflow/` — `workflow` package with one Skill `review`; the
   invocation-policy carrier (its `SKILL.md` defines `invoke` blocks).
+- `hook-plugin/` — hooks-only package: a `PreToolUse` deny group
+  (`protect-env`, matcher `shell`) plus an observational `PostToolUse`
+  group (`audit`); the portable-hook lifecycle baseline (ADR-033), consumed
+  by the integration hook tests and the conformance Lab's hook scenarios.
 
 ## foreign/
 

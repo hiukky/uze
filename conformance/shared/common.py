@@ -92,6 +92,8 @@ def validate_marketplace(cfg):
     expected = {
         "flow": "./plugins/flow",
         "mcp-plugin": "./plugins/mcp-plugin",
+        "hook-plugin": "./plugins/hook-plugin",
+        "hook-order-plugin": "./plugins/hook-order-plugin",
     }
     if plugins != expected:
         raise RuntimeError(f"invalid conformance marketplace inventory: {plugins}")
@@ -102,6 +104,12 @@ def validate_marketplace(cfg):
         "plugins/flow/skills/analyze/SKILL.md",
         "plugins/flow/agents/reviewer.md",
         "plugins/mcp-plugin/mcp.json",
+        "plugins/hook-plugin/hooks.json",
+        "plugins/hook-plugin/scripts/guard",
+        "plugins/hook-plugin/scripts/mark",
+        "plugins/hook-order-plugin/hooks.json",
+        "plugins/hook-order-plugin/scripts/order-1",
+        "plugins/hook-order-plugin/scripts/order-2",
     )
     for relative_path in required:
         path = os.path.join(cfg.marketplace_source, relative_path)
@@ -139,16 +147,24 @@ def generate_certs(cfg):
     return ca_crt, leaf_crt, leaf_key
 
 
-def start_provider(cfg, mode):
+def start_provider(cfg, mode, extra_env=None):
     """Runs the synthetic provider container on the internal net.
 
     antigravity: fake_gemini (plain HTTP 9999); claude: fake_anthropic
     (TLS 443, Anthropic hosts); codex: fake_openai (TLS 443, api.openai.com).
+    `extra_env` adds `-e K=V` pairs (e.g. the hook-scenario tool name/args).
     """
     subprocess.run(["docker", "rm", "-f", cfg.prov_name], capture_output=True)
     env = ["-e", f"PROVIDER_MODE={mode}",
            "-e", "PROVIDER_STRUCT=/app/struct.json",
            "-e", f"MCP_PROOF={cfg.mcp_proof}"]
+    for name, value in (extra_env or {}).items():
+        env += ["-e", f"{name}={value}"]
+
+    # The hook scenarios parameterize the scripted tool call via the same
+    # envs the MCP toolcall phases use; defaults keep MCP behavior unchanged.
+    env += ["-e", f"TOOL_NAME={os.environ.get('HOOK_TOOL', 'Bash')}",
+            "-e", f"TOOL_ARGS={os.environ.get('HOOK_ARGS', '{}')}"]
     provider = os.path.join(cfg.repo, "harnesses", cfg.harness)
     if cfg.harness == "antigravity":
         mounts = ["-v", f"{provider}/provider.py:/app/fp.py:ro"]
@@ -156,8 +172,11 @@ def start_provider(cfg, mode):
             mounts += ["-v", f"{cfg.fix}/simple_turn.sse:/app/resp.sse:ro",
                        "-e", "PROVIDER_RESP=/app/resp.sse"]
         else:
-            env += ["-e", 'FC_ARGS={"serverName":"uze-conformance","toolName":"uze_conformance","arguments":{}}',
-                    "-e", "FINAL_TEXT=UZE_CONFORMANCE_PASS"]
+            # Hook scenarios pass their own FC_ARGS (a `run_command` call
+            # carrying the marker); the MCP default applies otherwise.
+            if not extra_env or "FC_ARGS" not in extra_env:
+                env += ["-e", 'FC_ARGS={"serverName":"uze-conformance","toolName":"uze_conformance","arguments":{}}']
+            env += ["-e", "FINAL_TEXT=UZE_CONFORMANCE_PASS"]
         sh("docker", "run", "-d", "--name", cfg.prov_name, "--network", cfg.net,
            *mounts, *env, PROVIDER_IMG, "python", "/app/fp.py", "9999")
     elif cfg.harness == "opencode":

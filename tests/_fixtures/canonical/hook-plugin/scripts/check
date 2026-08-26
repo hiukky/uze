@@ -1,0 +1,8 @@
+#!/bin/sh
+# Conformance fixture: denies when the shell command mentions a secret path.
+set -e
+read -r payload
+case "$payload" in
+  *secrets*) printf '{"decision":"deny","reason":"blocked by protect-env"}' ;;
+  *) printf '{"decision":"allow"}' ;;
+esac

@@ -1,0 +1,19 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "id": "protect-env",
+        "matcher": "shell",
+        "effect": "deny",
+        "hooks": [{ "type": "command", "command": "${PLUGIN_ROOT}/scripts/check", "timeout": 10 }]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "id": "audit",
+        "matcher": "file.write",
+        "hooks": [{ "type": "command", "command": "${PLUGIN_ROOT}/scripts/audit", "timeout": 5 }]
+      }
+    ]
+  }
+}

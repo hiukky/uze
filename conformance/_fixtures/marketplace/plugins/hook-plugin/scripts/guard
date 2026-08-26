@@ -1,0 +1,9 @@
+#!/bin/sh
+# Denies every shell invocation that mentions `secrets`; allows everything
+# else. The reason string is the conformance evidence marker.
+set -e
+read -r payload || exit 0
+case "$payload" in
+  *secrets*) printf '{"decision":"deny","reason":"blocked by protect-env"}' ;;
+  *) printf '{"decision":"allow"}' ;;
+esac

@@ -1,0 +1,5 @@
+#!/bin/sh
+# Conformance fixture: observational audit that appends to the plugin log.
+set -e
+read -r payload
+printf '%s\n' "$payload" >> "${PLUGIN_ROOT}/audit.log"

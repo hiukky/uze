@@ -7,4 +7,5 @@ pub mod codex;
 pub mod opencode;
 pub mod registry;
 
+pub(crate) mod hooks;
 mod shared;

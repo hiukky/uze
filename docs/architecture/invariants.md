@@ -364,6 +364,50 @@ granting, even for the official marketplace.
 
 ---
 
+## Portable Hook delivery (ADR-033)
+
+### Hook semantics are assessed per event/effect, never by event names alone
+
+A `Stop` hook is never represented as an OpenCode tool callback and an
+`ask`/`transform` effect never attaches where the target cannot preserve it;
+a degraded or unsupported route states the exact loss.
+
+> `tests/integrations/hooks.rs::compatibility_is_semantic_and_never_fabricates_a_stop_equivalence`
+> `tests/integrations/hooks.rs::transform_is_adaptable_through_the_bridge_and_degraded_on_claude`
+
+### Hook delivery is receipt-owned and content-identity safe
+
+Merging adds only the exact rendered entry; inspection compares that exact
+content; removal refuses drift and preserves foreign hooks, plugins,
+entries, and ordering — and a UZE-created file holding nothing but UZE's
+own entry is cleaned up when the last entry goes.
+
+> `tests/integrations/hooks.rs::claude_merges_into_settings_json_preserving_foreign_content`
+> `tests/integrations/hooks.rs::foreign_codex_hooks_survive_attach_and_detach`
+> `crates/uze-integrations/src/hooks.rs::drift_blocks_removal_and_an_empty_file_is_removed`
+
+### A package's hooks attach once per harness, idempotently
+
+Re-attach never duplicates; an update replaces the previous version of the
+same group instead of stacking it; the OpenCode bridge is package-scoped
+and regenerates from the receipt set.
+
+> `tests/integrations/hooks.rs::an_update_replaces_the_previous_version_of_the_samed_group`
+> `tests/integrations/hooks.rs::opencode_bridge_is_package_scoped_and_regenerates_across_groups`
+
+### The dispatcher never silently weakens a safety hook
+
+Launch failure, timeout, oversized output, and a non-zero exit (except the
+canonical deny exit) are fail-open for observational hooks and fail-closed
+(a deny) for declared deny/ask/transform effects; the first deny stops
+later handlers.
+
+> `crates/uze-core/src/hook.rs::observation_fails_open_but_a_declared_deny_effect_fails_closed`
+> `crates/uze-core/src/hook.rs::handlers_run_in_order_and_the_first_deny_stops_later_ones`
+> `crates/uze-core/src/hook.rs::timeout_terminates_a_hung_handler_and_fails_closed_for_deny`
+
+---
+
 ## Decisions deliberately *not* taken
 
 Recorded because absence is a decision, and because each one has been proposed

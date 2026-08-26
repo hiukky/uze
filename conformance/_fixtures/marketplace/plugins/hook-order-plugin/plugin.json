@@ -1,0 +1,5 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "hook-order-plugin",
+  "description": "Conformance portable hooks: a two-handler PreToolUse group whose first handler always denies — the second handler must never run."
+}

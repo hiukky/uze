@@ -869,6 +869,7 @@ mod tests {
                 },
             ],
             attachments: vec![PackageManagedState {
+                hooks: Vec::new(),
                 plugin: "one".to_owned(),
                 state: ManagedStateSummary {
                     matched: 1,
@@ -1194,6 +1195,7 @@ mod tests {
             plugins: Vec::new(),
             harnesses: Vec::new(),
             attachments: vec![PackageManagedState {
+                hooks: Vec::new(),
                 plugin: "acme".to_owned(),
                 state: ManagedStateSummary {
                     matched: 0,
@@ -1373,6 +1375,7 @@ mod tests {
             plugins: vec![plugin("one")],
             harnesses: Vec::new(),
             attachments: vec![PackageManagedState {
+                hooks: Vec::new(),
                 plugin: "one".to_owned(),
                 state: ManagedStateSummary {
                     matched: 2,

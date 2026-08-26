@@ -18,6 +18,8 @@ use std::{collections::BTreeSet, fs, path::Path, path::PathBuf};
 
 use uze_core::{Result, UzeError, home::UzeHome, project::Resource, store::StoredPackage};
 
+use crate::hooks as hook_projection;
+
 /// Root of every package's generated plugin directory. Lives under
 /// `$UZE_HOME/state/attachments/antigravity/plugins/` — the same convention
 /// every other integration's generated envelopes use, never under the Store.
@@ -51,6 +53,14 @@ pub(super) fn canonical_mcp_servers(package: &StoredPackage) -> Option<BTreeSet<
     (!entries.is_empty()).then_some(entries)
 }
 
+/// Whether the package declares canonical portable hooks: a root
+/// `hooks.json` that parses. The Antigravity plugin system reads `hooks.json`
+/// in its own named-entry form — never the canonical shape — so any such
+/// package must take the generated route rather than being installed whole.
+pub(super) fn canonical_hook_groups(package: &StoredPackage) -> bool {
+    hook_projection::package_hook_groups(&package.root).is_ok_and(|groups| !groups.is_empty())
+}
+
 /// The intersection ADR-013 §2 requires, computed against the SEMANTIC
 /// surface a generated plugin preserves: canonical `skills/` are carried
 /// verbatim, and the MCP servers declared in canonical `mcp.json` are
@@ -66,6 +76,7 @@ pub(super) fn generated_exact_coverage(
     resources: &[&Resource],
 ) -> BTreeSet<String> {
     let declared_mcp = canonical_mcp_servers(package).unwrap_or_default();
+    let has_hooks = canonical_hook_groups(package);
     let mut provided = BTreeSet::new();
     for resource in resources {
         match resource.capability.kind {
@@ -82,6 +93,11 @@ pub(super) fn generated_exact_coverage(
                 {
                     provided.insert(resource.identity());
                 }
+            }
+            uze_core::capability::CapabilityKind::Hook
+                if has_hooks && resource.capability.path == package.root.join("hooks.json") =>
+            {
+                provided.insert(resource.identity());
             }
             _ => {}
         }
@@ -207,6 +223,20 @@ pub(super) fn materialize_generated_plugin(
             source,
         })?;
     }
+    if canonical_hook_groups(package) {
+        // The plugin system reads `hooks.json` in its own named-entry form,
+        // never the canonical shape, so the canonical groups are translated
+        // into the named document with the hook-exec wrapper carrying the
+        // portable ABI (ADR-033).
+        let groups = hook_projection::package_hook_groups(&package.root)?;
+        let references: Vec<&uze_core::hook::PortableHook> = groups.iter().collect();
+        let executable = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("uze"));
+        let document = hook_projection::agy_hook_document(&references, &executable, &package.root);
+        fs::write(dir.join("hooks.json"), document).map_err(|source| UzeError::Write {
+            path: dir.join("hooks.json"),
+            source,
+        })?;
+    }
     Ok(dir)
 }
 
@@ -295,6 +325,18 @@ mod generated_native_tests {
                 },
             },
         };
+        (root, pkg)
+    }
+
+    fn make_package_with_hooks(label: &str) -> (PathBuf, StoredPackage) {
+        let (root, pkg) = make_package_with_mcp(label);
+        // Hooks replace the MCP surface for this fixture's purpose.
+        fs::remove_file(pkg.root.join("mcp.json")).unwrap();
+        fs::write(
+            pkg.root.join("hooks.json"),
+            r#"{"hooks":{"PreToolUse":[{"id":"protect-env","matcher":"shell","effect":"deny","hooks":[{"type":"command","command":"${PLUGIN_ROOT}/check"}]}],"Stop":[{"hooks":[{"type":"command","command":"archive"}]}]}}"#,
+        )
+        .unwrap();
         (root, pkg)
     }
 
@@ -452,6 +494,73 @@ mod generated_native_tests {
         )
         .unwrap();
         assert_eq!(first, second);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn canonical_hooks_are_detected_only_for_a_parsable_manifest() {
+        let (root, pkg) = make_package_with_hooks("canonical-hooks");
+        assert!(canonical_hook_groups(&pkg));
+        fs::write(pkg.root.join("hooks.json"), "{not json").unwrap();
+        assert!(
+            !canonical_hook_groups(&pkg),
+            "malformed hooks are not translated"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn package_with_hooks_takes_the_generated_named_route() {
+        let (root, pkg) = make_package_with_hooks("plan-hooks");
+        let resources = uze_core::engine::package_resources_at(&pkg.id, &pkg.root).unwrap();
+        let references: Vec<&Resource> = resources.iter().collect();
+        let uze_home = UzeHome::at(root.join("uze"));
+        let integration = AntigravityIntegration::new(root.join("agents"), uze_home.clone());
+        let plan = integration
+            .package_exposure_plan(&pkg, &references)
+            .expect("generated route applies");
+        assert_eq!(plan.route, uze_core::router::CompatibilityRoute::Native);
+        assert_eq!(
+            plan.provided_resource_identities,
+            references
+                .iter()
+                .map(|resource| resource.identity())
+                .collect(),
+            "every canonical hook group is covered by the generated plugin"
+        );
+        assert!(
+            !generated_root(&uze_home).join("flow").exists(),
+            "planning must stay read-only"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn materialize_translates_canonical_hooks_into_named_entries() {
+        let (root, pkg) = make_package_with_hooks("materialize-hooks");
+        let uze_home = UzeHome::at(root.join("uze"));
+        let dir = materialize_generated_plugin(&uze_home, &pkg).unwrap();
+        assert!(
+            pkg.root.join("hooks.json").is_file(),
+            "Store bytes stay untouched"
+        );
+        let hooks: serde_json::Value =
+            serde_json::from_slice(&fs::read(dir.join("hooks.json")).unwrap()).unwrap();
+        let protect = &hooks["hooks"]["protect-env"]["PreToolUse"][0];
+        assert_eq!(
+            protect["matcher"], "run_command",
+            "portable aliases translate to AGY tool names"
+        );
+        let command = protect["hooks"][0]["command"].as_str().unwrap();
+        assert!(
+            command.contains("hook-exec"),
+            "the wrapper carries the portable ABI"
+        );
+        assert!(command.contains("--adapter 'antigravity'"));
+        assert!(command.contains("--command '${PLUGIN_ROOT}/check'"));
+        // The unnamed Stop group gets its deterministic derived id and
+        // carries no matcher (match-all).
+        assert_eq!(hooks["hooks"]["stop-0"]["Stop"][0].get("matcher"), None);
         let _ = fs::remove_dir_all(root);
     }
 

@@ -92,16 +92,18 @@ as a tool callback.
 
 ### Verification
 
-- [ ] Parser, schema validation, aliases, IR, compatibility and ABI decisions
+- [x] Parser, schema validation, aliases, IR, compatibility and ABI decisions
       have deterministic unit coverage.
-- [ ] Each integration has native/bridge emission, existing-config merge,
+- [x] Each integration has native/bridge emission, existing-config merge,
       idempotence, inspection, drift, and safe-detach tests.
-- [ ] Bridge tests prove matching, normalized stdin, transformation, denial,
+- [x] Bridge tests prove matching, normalized stdin, transformation, denial,
       reason propagation, sequence, handler error, timeout, and regeneration.
-- [ ] CLI status/doctor/TUI expose compatibility and generated artifacts.
+- [x] CLI status/doctor/TUI expose compatibility and generated artifacts.
 - [ ] Four real-harness conformance verticals prove only documented, observed
-      claims; unavailable semantics are diagnosed.
+      claims; unavailable semantics are diagnosed. (Scenarios are added —
+      `phase_hooks` for all four verticals; a clean 3x run is the gate.)
 - [ ] `cargo test --no-fail-fast`, formatting, clippy, strict OpenSpec
-      validation, and the conformance matrix pass.
+      validation, and the conformance matrix pass. (The deterministic half
+      passes; the conformance matrix awaits its first clean run.)
 
 Source change: openspec/changes/add-portable-hooks/

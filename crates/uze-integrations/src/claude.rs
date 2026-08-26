@@ -21,6 +21,7 @@ use uze_core::{
     exposure::{ExposureMechanism, ExposurePlan, PackageExposurePlan},
     harness_runtime::{RuntimeContext, resolve_real_executable},
     home::UzeHome,
+    hook::{HookAdapterPort, HookCommandInput, HookDispatchOutcome, HookEvent},
     integration::{
         AttachmentInspection, AttachmentReceipt, AttachmentState, ContextDelivery,
         HarnessDetection, IntegrationPort, ManagedArtifact, PublicationStatus,
@@ -43,6 +44,7 @@ mod skills;
 
 pub use mcp::detach_mcp_entry;
 
+use crate::hooks as hook_projection;
 use crate::shared::process::run_quiet;
 use generate::{
     GENERATED_MARKETPLACE_NAME, GENERATED_PLUGIN_KIND, generatable, generated_catalogue_matches,
@@ -65,6 +67,7 @@ const CLAUDE_MARKETPLACE_NAME: &str = "uze-local";
 /// `.claude-plugin/plugin.json` + `SKILL.md` at the start of every session,
 /// with no per-session flag. Until `uze setup` has completed, exposure falls
 /// back to the `--plugin-dir` conformance probe from ADR-005.
+#[derive(Clone)]
 pub struct ClaudeIntegration {
     skills_dir: std::path::PathBuf,
     agents_dir: std::path::PathBuf,
@@ -79,6 +82,10 @@ pub struct ClaudeIntegration {
     /// (whose `claude_home` need not literally be `$HOME/.claude`) still
     /// gets a consistent, isolated value.
     command_home: std::path::PathBuf,
+    /// The user-scope settings file carrying the `hooks` key Claude Code
+    /// reads (ADR-033): `<claude_home>/settings.json` — inside the Claude
+    /// config directory, not the HOME root where `~/.claude.json` lives.
+    hooks_config: std::path::PathBuf,
     uze_home: UzeHome,
 }
 
@@ -92,8 +99,17 @@ impl ClaudeIntegration {
             skills_dir: claude_home.join("skills"),
             agents_dir: claude_home.join("agents"),
             command_home,
+            hooks_config: claude_home.join("settings.json"),
             uze_home,
         }
+    }
+
+    /// The shared user-scope settings file whose `hooks` key receives every
+    /// managed group entry (ADR-033): Claude Code documents hook
+    /// configuration through `settings.json`, and UZE namespaces its
+    /// entries by exact content so foreign hooks and ordering never change.
+    fn hooks_config_path(&self) -> std::path::PathBuf {
+        self.hooks_config.clone()
     }
 
     /// Convenience constructor for the CLI composition root. Unused when
@@ -238,14 +254,23 @@ impl IntegrationPort for ClaudeIntegration {
 
     fn capabilities(&self) -> HarnessCapabilities {
         HarnessCapabilities {
-            native: [CapabilityKind::AgentSkill, CapabilityKind::Mcp, CapabilityKind::Agent]
+            native: [
+                CapabilityKind::AgentSkill,
+                CapabilityKind::Mcp,
+                CapabilityKind::Agent,
+                CapabilityKind::Hook,
+            ]
                 .into_iter()
                 .collect(),
             verification: VerificationStatus::Unverified,
-            evidence: "Claude Code consumes UZE's derived marketplaces: a package shipping .claude-plugin/plugin.json is installed as a native plugin covering its declared skills/mcpServers (`claude plugin install <sel>@uze-local`, empirically confirmed via `claude plugin validate`/`plugin list`); one without gets a deterministically synthesized envelope published through the generated-only `uze-store` marketplace (ADR-020). Invocation policy is translated into Claude's own SKILL.md frontmatter (disable-model-invocation / user-invocable — both verified against the current Claude Code skill docs); an explicit-envelope Skill is only claimed as covered when its canonical policy is actually preserved by the vendor content it ships. Capability-level shims (`<claude_home>/skills` reference, `claude mcp add`) remain only as fallback for resources outside the envelope's coverage. Behavioral (prompted) verification remains a separate opt-in conformance probe."
+            evidence: "Claude Code consumes UZE's derived marketplaces: a package shipping .claude-plugin/plugin.json is installed as a native plugin covering its declared skills/mcpServers (`claude plugin install <sel>@uze-local`, empirically confirmed via `claude plugin validate`/`plugin list`); one without gets a deterministically synthesized envelope published through the generated-only `uze-store` marketplace (ADR-020). Invocation policy is translated into Claude's own SKILL.md frontmatter (disable-model-invocation / user-invocable — both verified against the current Claude Code skill docs); an explicit-envelope Skill is only claimed as covered when its canonical policy is actually preserved by the vendor content it ships. Capability-level shims (`<claude_home>/skills` reference, `claude mcp add`) remain only as fallback for resources outside the envelope's coverage. Portable Hooks are projected into the `hooks` key of the user settings file through a hook-exec wrapper carrying the portable ABI (ADR-033; deterministic emission, real-binary verification pending in the conformance lab). Behavioral (prompted) verification remains a separate opt-in conformance probe."
                 .to_owned(),
             ..HarnessCapabilities::default()
         }
+    }
+
+    fn hook_capabilities(&self) -> uze_core::hook::HookCapabilities {
+        hook_projection::claude_capabilities()
     }
 
     fn detect(&self) -> HarnessDetection {
@@ -317,9 +342,10 @@ impl IntegrationPort for ClaudeIntegration {
             CapabilityKind::AgentSkill => self.skill_exposure_plan(resource),
             CapabilityKind::Mcp => self.mcp_exposure_plan(resource),
             CapabilityKind::Agent => self.agent_exposure_plan(resource),
+            CapabilityKind::Hook => self.hook_exposure_plan(resource),
             _ => unsupported(
                 resource,
-                "Claude Code attachment is only modeled for Agent Skills, Agents, and MCP servers.",
+                "Claude Code attachment is only modeled for Agent Skills, Agents, MCP servers, and portable Hooks.",
             ),
         }
     }
@@ -477,6 +503,22 @@ impl IntegrationPort for ClaudeIntegration {
                     args,
                 )
             }
+            ExposureMechanism::ManagedHookConfig {
+                config_file,
+                entry_name,
+                event,
+                expected,
+            } => {
+                let path = hook_projection::attach_event_entry(
+                    &self.uze_home,
+                    self.id(),
+                    config_file,
+                    event.expect("Claude hook entries are event-keyed"),
+                    entry_name,
+                    expected,
+                )?;
+                Ok(Some(path))
+            }
             _ => Ok(None),
         }
     }
@@ -500,6 +542,16 @@ impl IntegrationPort for ClaudeIntegration {
                 cwd.as_deref(),
                 environment,
                 *enabled,
+            ),
+            ManagedArtifact::HookConfigEntry {
+                config_file,
+                event,
+                expected,
+                ..
+            } => hook_projection::inspect_event_entry(
+                config_file,
+                event.expect("Claude hook entries are event-keyed"),
+                expected,
             ),
             ManagedArtifact::IntegrationOwned {
                 kind,
@@ -539,6 +591,16 @@ impl IntegrationPort for ClaudeIntegration {
                     reason: "Claude managed MCP entry detached via CLI".to_owned(),
                 })
             }
+            ManagedArtifact::HookConfigEntry {
+                config_file,
+                event,
+                expected,
+                ..
+            } => hook_projection::remove_event_entry(
+                config_file,
+                event.expect("Claude hook entries are event-keyed"),
+                expected,
+            ),
             ManagedArtifact::IntegrationOwned { kind, selector, .. }
                 if kind == "claude-plugin" || kind == GENERATED_PLUGIN_KIND =>
             {
@@ -587,6 +649,40 @@ impl ClaudeIntegration {
             },
             evidence: "Claude Code natively discovers Markdown subagents from its user agents directory; UZE keeps a receipt-owned symlink to the canonical Store definition.".to_owned(),
         }
+    }
+
+    fn hook_exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+        hook_projection::hook_exposure_plan(
+            resource,
+            &self.hook_capabilities(),
+            self.hooks_config_path(),
+            "claude",
+            self.id(),
+            false,
+            "Claude Code reads `hooks` from its user settings file; UZE merges one group entry per canonical hook (command + matcher + timeout preserved through the hook-exec wrapper carrying the portable ABI) and keeps the exact entry receipt-owned. The generated settings entry follows the plugin `hooks/hooks.json` group form.",
+        )
+    }
+}
+
+impl HookAdapterPort for ClaudeIntegration {
+    fn adapter_id(&self) -> &'static str {
+        IntegrationPort::id(self)
+    }
+
+    fn normalize_input(
+        &self,
+        native: &serde_json::Value,
+        event: HookEvent,
+    ) -> std::result::Result<HookCommandInput, String> {
+        hook_projection::claude_normalize_input(native, event)
+    }
+
+    fn render_output(
+        &self,
+        outcome: &HookDispatchOutcome,
+        event: HookEvent,
+    ) -> std::result::Result<Option<Vec<u8>>, String> {
+        hook_projection::claude_render_output(outcome, event)
     }
 }
 

@@ -11,25 +11,40 @@
 
 use std::path::Path;
 
-use uze_core::{Result, home::UzeHome, integration::IntegrationPort};
+use uze_core::{Result, home::UzeHome, hook::HookAdapterPort, integration::IntegrationPort};
 
 use crate::{antigravity, claude, codex, opencode};
 
 /// The built-in integration set, in registration order.
 pub struct IntegrationRegistry {
     integrations: Vec<Box<dyn IntegrationPort>>,
+    /// The runtime hook adapters (`hook-exec`) for the harnesses that speak
+    /// a native hook command contract. OpenCode is deliberately absent: its
+    /// hook delivery is the generated bridge, which never shells out through
+    /// the dispatcher. Built from the same constructors as `integrations`,
+    /// so the adapter set cannot drift from the harness set.
+    hook_adapters: Vec<Box<dyn HookAdapterPort>>,
 }
 
 impl IntegrationRegistry {
     /// Composition root: constructs every built-in integration from the
     /// environment. The one place that knows the harness set.
     pub fn builtin(home: &UzeHome) -> Result<Self> {
+        let claude = claude::ClaudeIntegration::from_env(home.clone())?;
+        let codex = codex::CodexIntegration::from_env(home.clone())?;
+        let opencode_integration = opencode::OpenCodeIntegration::from_env(home.clone())?;
+        let antigravity_integration = antigravity::AntigravityIntegration::from_env(home.clone())?;
         Ok(Self {
             integrations: vec![
-                Box::new(claude::ClaudeIntegration::from_env(home.clone())?),
-                Box::new(codex::CodexIntegration::from_env(home.clone())?),
-                Box::new(opencode::OpenCodeIntegration::from_env(home.clone())?),
-                Box::new(antigravity::AntigravityIntegration::from_env(home.clone())?),
+                Box::new(claude.clone()),
+                Box::new(codex.clone()),
+                Box::new(opencode_integration),
+                Box::new(antigravity_integration.clone()),
+            ],
+            hook_adapters: vec![
+                Box::new(claude),
+                Box::new(codex),
+                Box::new(antigravity_integration),
             ],
         })
     }
@@ -38,25 +53,26 @@ impl IntegrationRegistry {
     /// real machine: every harness home is rooted under `root` instead of
     /// `$HOME`, mirroring `builtin`'s environment construction exactly.
     pub fn isolated(root: &Path, home: &UzeHome) -> Self {
+        let claude = claude::ClaudeIntegration::new(root.join("claude"), home.clone());
+        let codex = codex::CodexIntegration::new(root.join("agents"), home.clone());
+        let opencode_integration = opencode::OpenCodeIntegration::new(
+            root.join("agents"),
+            root.join("opencode-config/opencode.json"),
+            home.clone(),
+        );
+        let antigravity_integration =
+            antigravity::AntigravityIntegration::new(root.join("agents"), home.clone());
         Self {
             integrations: vec![
-                Box::new(claude::ClaudeIntegration::new(
-                    root.join("claude"),
-                    home.clone(),
-                )),
-                Box::new(codex::CodexIntegration::new(
-                    root.join("agents"),
-                    home.clone(),
-                )),
-                Box::new(opencode::OpenCodeIntegration::new(
-                    root.join("agents"),
-                    root.join("opencode-config/opencode.json"),
-                    home.clone(),
-                )),
-                Box::new(antigravity::AntigravityIntegration::new(
-                    root.join("agents"),
-                    home.clone(),
-                )),
+                Box::new(claude.clone()),
+                Box::new(codex.clone()),
+                Box::new(opencode_integration),
+                Box::new(antigravity_integration.clone()),
+            ],
+            hook_adapters: vec![
+                Box::new(claude),
+                Box::new(codex),
+                Box::new(antigravity_integration),
             ],
         }
     }
@@ -77,6 +93,16 @@ impl IntegrationRegistry {
 
     pub fn get(&self, id: &str) -> Option<&dyn IntegrationPort> {
         self.iter().find(|integration| integration.id() == id)
+    }
+
+    /// The runtime hook adapter (`hook-exec`) for an adapter id — the
+    /// vocabulary `hook-exec --adapter` accepts, resolved without any layer
+    /// above the integration registry naming a harness.
+    pub fn hook_adapter(&self, id: &str) -> Option<&dyn HookAdapterPort> {
+        self.hook_adapters
+            .iter()
+            .map(Box::as_ref)
+            .find(|adapter| adapter.adapter_id() == id)
     }
 
     /// Resolves a requested harness name against the registered set: an id

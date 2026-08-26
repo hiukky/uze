@@ -8,7 +8,7 @@ mod progress;
 use crate::progress::Colorize;
 mod shim;
 
-use std::{collections::BTreeMap, io::IsTerminal, path::PathBuf};
+use std::{collections::BTreeMap, io::IsTerminal, path::Path, path::PathBuf};
 
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum, error::ErrorKind};
 use uze::{
@@ -19,6 +19,11 @@ use uze::{
         ProjectContextStatus, RemovePluginReport, RemoveProjectPluginReport, StatusReport,
     },
     context::PlannedAction,
+    hook::{
+        CommandHandlerType, CommandHook, DEFAULT_TIMEOUT_SECONDS, DENY_EXIT_CODE, HookDecision,
+        HookEffect, HookEvent, PortableHook, dispatch_handlers,
+    },
+    integrations::registry::IntegrationRegistry,
 };
 
 #[derive(Debug, Parser)]
@@ -86,6 +91,28 @@ enum Command {
     },
     /// Set up harness integrations
     Setup { harness: Option<String> },
+    /// Internal runtime dispatch: runs a package's hook commands for one
+    /// hook event (ADR-033). Harness integrations emit invocations of this
+    /// exact form into managed hook configuration; it is not for
+    /// interactive use and is hidden from help.
+    #[command(hide = true)]
+    HookExec {
+        /// Hook adapter id, as registered by the integration registry
+        #[arg(long)]
+        adapter: String,
+        /// ABI event name: pre_tool_use | post_tool_use | stop
+        #[arg(long)]
+        event: String,
+        /// Declared group effect: observe | allow | ask | deny | transform
+        #[arg(long)]
+        effect: String,
+        /// Canonical package root the handlers run in
+        #[arg(long)]
+        plugin_root: PathBuf,
+        /// Authored handler command, repeatable for sequential handlers
+        #[arg(long = "command", required = true)]
+        commands: Vec<String>,
+    },
     /// Reached only when the first argument matches none of the built-ins
     /// above — `clap`'s own generated matcher tries every named variant
     /// first, so this is the *sole* place `<plugin>@<market>` project
@@ -626,8 +653,90 @@ fn run(cli: Cli) -> Result<()> {
         }
         Command::Setup { harness } => run_setup(&app, &home, harness.as_deref(), verbose)?,
         Command::External(args) => run_shorthand(&app, args, verbose)?,
+        Command::HookExec {
+            adapter,
+            event,
+            effect,
+            plugin_root,
+            commands,
+        } => {
+            let code = run_hook_exec(&home, &adapter, &event, &effect, &plugin_root, commands)?;
+            // The exit code is part of the ABI: a denied outcome must read
+            // as a denial to targets that key off exit codes, and an error
+            // must not print a second `uze:` line into the harness's stderr.
+            std::process::exit(code);
+        }
     }
     Ok(())
+}
+
+/// The `hook-exec` runtime wrapper (ADR-033): reads the harness's native
+/// hook payload from stdin, normalizes it through the adapter, runs the
+/// authored handlers sequentially against the portable ABI, and renders the
+/// aggregated decision back to the harness's own stdout contract. Exits
+/// [`DENY_EXIT_CODE`] on a denial so exit-code-keyed targets observe the
+/// same decision as the JSON stdout carries.
+fn run_hook_exec(
+    home: &UzeHome,
+    adapter_id: &str,
+    event_name: &str,
+    effect_name: &str,
+    plugin_root: &Path,
+    commands: Vec<String>,
+) -> Result<i32> {
+    use std::io::{Read, Write};
+    use uze::UzeError;
+
+    let event = HookEvent::parse_abi(event_name)
+        .ok_or_else(|| UzeError::HookDispatch(format!("unknown hook event `{event_name}`")))?;
+    let effect = HookEffect::parse_abi(effect_name)
+        .ok_or_else(|| UzeError::HookDispatch(format!("unknown hook effect `{effect_name}`")))?;
+    let registry = IntegrationRegistry::builtin(home)?;
+    let adapter = registry
+        .hook_adapter(adapter_id)
+        .ok_or_else(|| UzeError::HookDispatch(format!("unknown hook adapter `{adapter_id}`")))?;
+    let mut native = String::new();
+    std::io::stdin()
+        .read_to_string(&mut native)
+        .map_err(|source| {
+            UzeError::HookDispatch(format!("cannot read the native payload: {source}"))
+        })?;
+    let native: serde_json::Value = serde_json::from_str(&native).map_err(|source| {
+        UzeError::HookDispatch(format!("the native hook payload is not JSON: {source}"))
+    })?;
+    let input = adapter
+        .normalize_input(&native, event)
+        .map_err(UzeError::HookDispatch)?;
+    let hook = PortableHook {
+        id: "dispatch".to_owned(),
+        event,
+        matchers: Vec::new(),
+        handlers: commands
+            .into_iter()
+            .map(|command| CommandHook {
+                handler_type: CommandHandlerType::Command,
+                command,
+                timeout: DEFAULT_TIMEOUT_SECONDS,
+            })
+            .collect(),
+        effect,
+        order: 0,
+    };
+    let outcome = dispatch_handlers(&hook, &input, plugin_root)?;
+    if let Some(bytes) = adapter
+        .render_output(&outcome, event)
+        .map_err(UzeError::HookDispatch)?
+    {
+        std::io::stdout().write_all(&bytes).map_err(|source| {
+            UzeError::HookDispatch(format!("cannot render hook output: {source}"))
+        })?;
+        let _ = std::io::stdout().flush();
+    }
+    Ok(if outcome.decision == Some(HookDecision::Deny) {
+        DENY_EXIT_CODE
+    } else {
+        0
+    })
 }
 
 /// `uze setup [harness]` and `uze harness setup [name]` are the same
@@ -1315,6 +1424,24 @@ fn render_doctor(report: &DoctorReport) -> String {
             state.conflicts,
             state.blocked
         ));
+        for hook in &attachment.hooks {
+            let verdict = format!("{:?}", hook.route).to_lowercase();
+            let attached = match (&hook.artifact, &hook.state) {
+                (Some(artifact), Some(state)) => {
+                    format!(" | {:?} at {}", state, artifact.display())
+                }
+                _ => String::new(),
+            };
+            let weakened = hook
+                .weakened
+                .as_deref()
+                .map(|loss| format!(" | weakened: {loss}"))
+                .unwrap_or_default();
+            text.push_str(&format!(
+                "    hook {} [{}] on {}: {verdict}{attached}{weakened}\n",
+                hook.hook, hook.event, hook.harness
+            ));
+        }
     }
     if let Some(error) = &report.ledger_error {
         text.push_str(&format!("\nLedger\n  blocked: {error}\n"));

@@ -6,6 +6,7 @@
 mod agents;
 mod capability_conformance;
 mod contract;
+mod hooks;
 mod identity;
 mod lifecycle_conformance;
 mod policy;

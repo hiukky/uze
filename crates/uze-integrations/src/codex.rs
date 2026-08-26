@@ -19,6 +19,7 @@ use uze_core::{
     exposure::{ExposureMechanism, ExposurePlan, PackageExposurePlan},
     harness_runtime::resolve_real_executable,
     home::UzeHome,
+    hook::{HookAdapterPort, HookCommandInput, HookDispatchOutcome, HookEvent},
     integration::{
         AttachmentInspection, AttachmentReceipt, AttachmentState, ContextDelivery,
         HarnessDetection, IntegrationPort, ManagedArtifact, PublicationStatus,
@@ -39,6 +40,7 @@ mod skills;
 
 pub use mcp::detach_mcp_entry;
 
+use crate::hooks as hook_projection;
 use crate::shared::process::run_quiet;
 use generate::{
     GENERATED_MARKETPLACE_NAME, GENERATED_PLUGIN_KIND, generatable, generated_catalogue_matches,
@@ -58,6 +60,7 @@ use skills::codex_skill_exposure_name_candidates;
 /// Codex documents a cwd-independent USER-scope Agent Skill directory that
 /// explicitly follows symlinks. Until `uze setup` has completed, exposure
 /// falls back to the per-session managed projection from ADR-005.
+#[derive(Clone)]
 pub struct CodexIntegration {
     skills_dir: PathBuf,
     agents_dir: PathBuf,
@@ -102,6 +105,14 @@ impl CodexIntegration {
             command_home,
             uze_home,
         }
+    }
+
+    /// The UZE-managed `hooks.json` at Codex's own config home — the
+    /// standalone command-hook file Codex reads for its hook events
+    /// (ADR-033). Only the `hooks` key is touched; foreign config files and
+    /// entries are preserved.
+    fn hooks_config_path(&self) -> PathBuf {
+        self.command_home.join(".codex").join("hooks.json")
     }
 
     /// Convenience constructor for the CLI composition root. Unused when
@@ -287,14 +298,19 @@ impl IntegrationPort for CodexIntegration {
                 CapabilityKind::AgentSkill,
                 CapabilityKind::Mcp,
                 CapabilityKind::Agent,
+                CapabilityKind::Hook,
             ]
                 .into_iter()
                 .collect(),
             verification: VerificationStatus::Unverified,
-            evidence: "Codex consumes UZE's derived marketplaces: a package shipping .codex-plugin/plugin.json is added as a native plugin covering its declared skills/mcpServers (`codex plugin add <sel>@uze-local`); one without gets a deterministically synthesized envelope published through the generated-only `uze-store` marketplace (ADR-021) — both confirmed against real Codex 0.148.0 dogfood (`codex plugin list --json`). Canonical Agents are generated as Codex's documented standalone TOML files under ~/.codex/agents/, with name, description, and developer_instructions derived from the portable Markdown definition. Invocation policy is translated into Codex's own agents/openai.yaml → policy.allow_implicit_invocation: false for a canonical user-only Skill (Codex Build skills documentation; empirically honored by codex-cli 0.149.0 via `codex debug prompt-input`); the user=false combination is honestly Degraded since Codex has no documented way to disable explicit `$skill` invocation. Per ADR-025/ADR-030, Native means an officially supported primitive that preserves the canonical capability semantics — not an identical vendor file format. Capability-level fallbacks (USER-scope `~/.agents/skills` reference, `codex mcp add`) remain only for resources outside the envelope's coverage."
+            evidence: "Codex consumes UZE's derived marketplaces: a package shipping .codex-plugin/plugin.json is added as a native plugin covering its declared skills/mcpServers (`codex plugin add <sel>@uze-local`); one without gets a deterministically synthesized envelope published through the generated-only `uze-store` marketplace (ADR-021) — both confirmed against real Codex 0.148.0 dogfood (`codex plugin list --json`). Canonical Agents are generated as Codex's documented standalone TOML files under ~/.codex/agents/, with name, description, and developer_instructions derived from the portable Markdown definition. Invocation policy is translated into Codex's own agents/openai.yaml → policy.allow_implicit_invocation: false for a canonical user-only Skill (Codex Build skills documentation; empirically honored by codex-cli 0.149.0 via `codex debug prompt-input`); the user=false combination is honestly Degraded since Codex has no documented way to disable explicit `$skill` invocation. Per ADR-025/ADR-030, Native means an officially supported primitive that preserves the canonical capability semantics — not an identical vendor file format. Portable Hooks are projected into Codex's own `~/.codex/hooks.json` command form through a hook-exec wrapper carrying the portable ABI (ADR-033; deterministic emission, real-binary verification pending in the conformance lab). Capability-level fallbacks (USER-scope `~/.agents/skills` reference, `codex mcp add`) remain only for resources outside the envelope's coverage."
                 .to_owned(),
             ..HarnessCapabilities::default()
         }
+    }
+
+    fn hook_capabilities(&self) -> uze_core::hook::HookCapabilities {
+        hook_projection::codex_capabilities()
     }
 
     fn detect(&self) -> HarnessDetection {
@@ -356,9 +372,10 @@ impl IntegrationPort for CodexIntegration {
             CapabilityKind::AgentSkill => self.skill_exposure_plan(resource),
             CapabilityKind::Mcp => self.mcp_exposure_plan(resource),
             CapabilityKind::Agent => self.agent_exposure_plan(resource),
+            CapabilityKind::Hook => self.hook_exposure_plan(resource),
             _ => unsupported(
                 resource,
-                "Codex attachment is only modeled for Agent Skills, Agents, and MCP servers.",
+                "Codex attachment is only modeled for Agent Skills, Agents, MCP servers, and portable Hooks.",
             ),
         }
     }
@@ -439,6 +456,22 @@ impl IntegrationPort for CodexIntegration {
                     command,
                     args,
                 )
+            }
+            ExposureMechanism::ManagedHookConfig {
+                config_file,
+                entry_name,
+                event,
+                expected,
+            } => {
+                let path = hook_projection::attach_event_entry(
+                    &self.uze_home,
+                    self.id(),
+                    config_file,
+                    event.expect("Codex hook entries are event-keyed"),
+                    entry_name,
+                    expected,
+                )?;
+                Ok(Some(path))
             }
             _ => Ok(None),
         }
@@ -521,6 +554,16 @@ impl IntegrationPort for CodexIntegration {
                     *enabled,
                 )
             }
+            ManagedArtifact::HookConfigEntry {
+                config_file,
+                event,
+                expected,
+                ..
+            } => hook_projection::inspect_event_entry(
+                config_file,
+                event.expect("Codex hook entries are event-keyed"),
+                expected,
+            ),
             ManagedArtifact::IntegrationOwned {
                 kind,
                 selector,
@@ -554,6 +597,18 @@ impl IntegrationPort for CodexIntegration {
             ManagedArtifact::VendorConfigEntry { entry_name, .. } => {
                 let executable = self.provisioning_executable();
                 mcp::detach_mcp_entry(Path::new(&executable), &self.command_home, entry_name)?;
+            }
+            ManagedArtifact::HookConfigEntry {
+                config_file,
+                event,
+                expected,
+                ..
+            } => {
+                return hook_projection::remove_event_entry(
+                    config_file,
+                    event.expect("Codex hook entries are event-keyed"),
+                    expected,
+                );
             }
             ManagedArtifact::IntegrationOwned { kind, selector, .. }
                 if kind == "marketplace-plugin" || kind == GENERATED_PLUGIN_KIND =>
@@ -601,6 +656,40 @@ impl CodexIntegration {
             },
             evidence: "Codex natively loads standalone custom-agent TOML files from ~/.codex/agents/. UZE deterministically generates that native TOML from the portable Markdown definition and exposes it through a receipt-owned reference.".to_owned(),
         }
+    }
+
+    fn hook_exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+        hook_projection::hook_exposure_plan(
+            resource,
+            &self.hook_capabilities(),
+            self.hooks_config_path(),
+            "codex",
+            self.id(),
+            false,
+            "Codex's own hooks.json command form reads PreToolUse/PostToolUse/Stop command hooks; UZE merges one group entry per canonical hook (command + matcher + timeout preserved through the hook-exec wrapper carrying the portable ABI) and keeps the exact entry receipt-owned.",
+        )
+    }
+}
+
+impl HookAdapterPort for CodexIntegration {
+    fn adapter_id(&self) -> &'static str {
+        IntegrationPort::id(self)
+    }
+
+    fn normalize_input(
+        &self,
+        native: &serde_json::Value,
+        event: HookEvent,
+    ) -> std::result::Result<HookCommandInput, String> {
+        hook_projection::codex_normalize_input(native, event)
+    }
+
+    fn render_output(
+        &self,
+        outcome: &HookDispatchOutcome,
+        event: HookEvent,
+    ) -> std::result::Result<Option<Vec<u8>>, String> {
+        hook_projection::codex_render_output(outcome, event)
     }
 }
 

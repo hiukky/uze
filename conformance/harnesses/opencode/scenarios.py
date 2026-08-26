@@ -29,7 +29,7 @@ from shared.common import (check, docker_base, make_screen, make_waiter,
                            materialize_marketplace, provider_struct)
 
 
-def opencode_setup(cfg, prov_ip, final_cmd):
+def opencode_setup(cfg, prov_ip, final_cmd, plugins="flow mcp-plugin"):
     return f"""
 set -e
 export PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/.local/bin:/usr/local/.opencode/bin
@@ -39,7 +39,7 @@ export UZE_CONFORMANCE_KEY=dummy
 mkdir -p /work/home/.config/opencode /work/home/.agents
 {materialize_marketplace(cfg)}
 uze market add /work/market >/dev/null 2>&1
-for p in flow mcp-plugin; do uze plugin install $p@uze-lab >/dev/null 2>&1; done
+for p in {plugins}; do uze plugin install $p@uze-lab >/dev/null 2>&1; done
 node -e '
 const fs=require("fs");
 const p="/work/home/.config/opencode/opencode.json";
@@ -53,8 +53,8 @@ fs.writeFileSync(p, JSON.stringify(d,null,1));
 """
 
 
-def opencode_container(cfg, prov_ip, final_cmd):
-    cmd = docker_base(cfg, prov_ip, opencode_setup(cfg, prov_ip, final_cmd))
+def opencode_container(cfg, prov_ip, final_cmd, plugins="flow mcp-plugin"):
+    cmd = docker_base(cfg, prov_ip, opencode_setup(cfg, prov_ip, final_cmd, plugins=plugins))
     return cmd
 
 
@@ -254,6 +254,113 @@ def phase_mcp_toolcall(cfg, prov_ip):
     child.close(force=True)
 
 
+def phase_hooks(cfg, prov_ip, kind):
+    """Portable-hook evidence inside the REAL OpenCode TUI (ADR-033).
+
+    The provider scripts a `bash` tool call whose arguments the generated
+    bridge's `guard` handler examines; `kind` selects the scenario
+    (identical semantics to the claude/codex/antigravity verticals):
+
+      deny  : arguments contain `secrets` -> the bridge throws the hook's
+              denial (the tool is blocked before it executes); the second
+              handler never runs.
+      allow : plain echo arguments -> the hook allows, the real bash runs.
+      order : a two-handler group whose first handler always denies -> the
+              second handler's marker must never appear (first-deny-wins).
+
+    Evidence = what the REAL harness relayed: hook marker presence/absence
+    in the provider-observed conversation plus the TUI denial surface.
+    """
+    scenarios = {
+        "deny": {
+            "plugin": "hook-plugin",
+            "args": "{\"command\":\"echo API secrets\"}",
+            "deny_present": "blocked by protect-env",
+            "deny_absent": ["second-handler-reached"],
+        },
+        "allow": {
+            "plugin": "hook-plugin",
+            "args": "{\"command\":\"echo plain output\"}",
+            "deny_present": None,
+            "deny_absent": ["blocked by protect-env"],
+        },
+        "order": {
+            "plugin": "hook-order-plugin",
+            "args": "{\"command\":\"echo any\"}",
+            "deny_present": "first-handler-denied",
+            "deny_absent": ["second-handler-ran"],
+        },
+    }
+    spec = scenarios[kind]
+    common.start_provider(cfg, "toolcall",
+                          {"TOOL_NAME": "bash", "TOOL_ARGS": spec["args"]})
+    time.sleep(1)
+    cmd = opencode_container(
+        cfg,
+        prov_ip,
+        "UZE_HOME=/usr/local/.uze PATH=/usr/local/.uze/shims:$PATH exec opencode --standalone",
+        plugins=f"flow {spec['plugin']}",
+    )
+    child = pexpect.spawn(cmd[0], cmd[1:], encoding="utf-8", codec_errors="replace",
+                          timeout=300)
+    child.setwinsize(50, 160)
+    try:
+        child.logfile_read = common.CastRecorder(cfg.outdir, f"tui-hooks-{kind}")
+    except Exception:
+        pass
+    screen = make_screen(child)
+    wait_for = make_waiter(screen)
+    t, p, m = wait_for(["Ask anything"], tries=16)
+    time.sleep(2)
+
+    for ch in "run the API check":
+        child.send(ch)
+        time.sleep(0.04)
+    time.sleep(1)
+    child.send("\r")
+    t3, p3, m3 = wait_for(["UZE_CONFORMANCE_PASS", "blocked by protect-env",
+                           "Denied by UZE hook", "denied"], tries=24, gap=2.5)
+    with open(f"{cfg.outdir}/hooks_{kind}.raw", "w") as f:
+        f.write(t3)
+    check(f"hooks-{kind}-turn-settled",
+          m3 is not None,
+          "the turn settled (final text or hook denial rendered)"
+          if m3 is not None else p3[-160:].replace("\n", " "))
+
+    struct = provider_struct(cfg)
+    with open(f"{cfg.outdir}/hooks_{kind}_struct.json", "w") as f:
+        json.dump(struct, f, indent=1)
+    markers = {}
+    has_result = False
+    for r in struct:
+        s = r.get("summary", {})
+        markers.update(s.get("hook_markers", {}))
+        has_result = has_result or bool(s.get("has_tool_result"))
+    if spec["deny_present"]:
+        check(f"hooks-{kind}-denial-reason-relayed",
+              markers.get(spec["deny_present"], False),
+              f"`{spec['deny_present']}` reached the conversation"
+              if markers.get(spec["deny_present"], False)
+              else ", ".join(f"{m}={markers.get(m)}" for m in markers))
+    for absent in spec["deny_absent"]:
+        check(f"hooks-{kind}-marker-absent-{absent}",
+              not markers.get(absent, False),
+              f"`{absent}` never reached the conversation (first-deny-wins)")
+    if kind == "allow":
+        check("hooks-allow-tool-executed",
+              has_result,
+              "the bash tool actually executed after the bridge allowed it"
+              if has_result else "no tool result observed")
+
+    child.send("\x03")
+    time.sleep(0.5)
+    child.send("\x03")
+    time.sleep(0.5)
+    child.close(force=True)
+
+
 def run(cfg, prov_ip):
     phase_tui(cfg, prov_ip)
     phase_mcp_toolcall(cfg, prov_ip)
+    for kind in ("deny", "allow", "order"):
+        phase_hooks(cfg, prov_ip, kind)

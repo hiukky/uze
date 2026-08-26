@@ -40,7 +40,19 @@ MCP_PROOF = os.environ.get("MCP_PROOF", "UZE_MCP_CONFORMANCE_PROOF_1")
 LEAF_CERT = os.environ.get("LEAF_CERT", "/app/leaf.crt")
 LEAF_KEY = os.environ.get("LEAF_KEY", "/app/leaf.key")
 
+# The hook scenarios script a tool call to the harness's native shell tool;
+# the MCP phases keep their own default. TOOL_ARGS mirrors the `input` the
+# hook's normalized ABI payload will carry.
+TOOL_NAME = os.environ.get("TOOL_NAME", MCP_TOOL)
+TOOL_ARGS = json.loads(os.environ.get("TOOL_ARGS", "{}"))
+
 SKILL_MARKERS = ["flow:commit", "flow:review", "commit", "review", "init"]
+# Conformance evidence markers carried by portable-hook denial reasons
+# (ADR-033): presence/absence in the structural summary proves what the real
+# harness relayed after the hook executed.
+HOOK_MARKERS = ["blocked by protect-env", "first-handler-denied",
+                "second-handler-ran", "second-handler-reached",
+                "Denied by UZE hook"]
 COUNTER = {"n": 0}
 
 
@@ -56,6 +68,7 @@ def structural_summary(body_text):
         "skill_markers": {m: (m in body) for m in SKILL_MARKERS},
         "has_tool_use": has_tool_use,
         "has_tool_result": has_tool_result,
+        "hook_markers": {m: (m in body) for m in HOOK_MARKERS},
         "mcp_proof_present": MCP_PROOF in body,
         "user_text_present": '"type": "text"' in body and '"role": "user"' in body,
     }
@@ -91,7 +104,7 @@ def tool_use_events():
             "usage": {"input_tokens": 10, "output_tokens": 1}}}),
         ("content_block_start", {"type": "content_block_start", "index": 0,
                                  "content_block": {"type": "tool_use", "id": "toolu_1",
-                                                   "name": MCP_TOOL, "input": {}}}),
+                                                   "name": TOOL_NAME, "input": TOOL_ARGS}}),
         ("content_block_stop", {"type": "content_block_stop", "index": 0}),
         ("message_delta", {"type": "message_delta",
                            "delta": {"stop_reason": "tool_use", "stop_sequence": None},

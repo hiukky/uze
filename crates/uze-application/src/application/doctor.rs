@@ -30,13 +30,78 @@ impl UzeApplication {
         let attachments = report
             .plugins
             .iter()
-            .map(|plugin: &PluginSummary| PackageManagedState {
-                plugin: plugin.id.clone(),
-                state: managed_state(&self.reconcile_cached_report(&plugin.id)),
+            .map(|plugin: &PluginSummary| {
+                let reconciliation = self.reconcile_cached_report(&plugin.id);
+                PackageManagedState {
+                    plugin: plugin.id.clone(),
+                    state: managed_state(&reconciliation),
+                    hooks: self.hook_health(&reconciliation),
+                }
             })
             .collect();
         report.attachments = attachments;
         report
+    }
+
+    /// Per-package hook rows for `doctor`: every canonical hook group ×
+    /// every harness, with the semantic verdict (native/adapted/degraded/
+    /// unsupported), the exact guarantee that is weakened when it is, and
+    /// the receipt-owned artifact and its attachment state when the hook is
+    /// actually attached (ADR-033 / doctor spec: a degraded hook must be
+    /// actionable, never hidden behind a healthy-native row).
+    fn hook_health(&self, reconciliation: &ReconciliationReport) -> Vec<HookHealth> {
+        use uze_core::{hook::PortableHook, integration::receipt_location, store::PackageId};
+        let Ok(id) = PackageId::from_plugin_name(
+            &reconciliation.package_id,
+            std::path::Path::new("plugin.json"),
+        ) else {
+            return Vec::new();
+        };
+        let Ok(environment) = self.engine().compose(std::slice::from_ref(&id)) else {
+            return Vec::new();
+        };
+        let mut rows = Vec::new();
+        for resource in environment
+            .resources
+            .iter()
+            .filter(|resource| resource.capability.kind == CapabilityKind::Hook)
+        {
+            let Ok(hook) = serde_json::from_slice::<PortableHook>(&resource.capability.payload)
+            else {
+                continue;
+            };
+            let identity = resource.identity();
+            for integration in &self.integrations {
+                let plan = integration.exposure_plan(resource);
+                let attached = reconciliation.receipts.iter().find(|entry| {
+                    entry.receipt.integration == integration.id()
+                        && entry.receipt.resource_identity.as_deref() == Some(identity.as_str())
+                });
+                rows.push(HookHealth {
+                    hook: hook.id.clone(),
+                    event: hook.event.abi_name().to_owned(),
+                    harness: integration.id().to_owned(),
+                    route: plan.route,
+                    // A degraded or unsupported route must state the exact
+                    // semantic loss, never hide it behind a healthy verdict.
+                    weakened: match plan.route {
+                        CompatibilityRoute::Degraded | CompatibilityRoute::Unsupported => {
+                            match &plan.mechanism {
+                                ExposureMechanism::Unsupported { rationale } => {
+                                    Some(rationale.clone())
+                                }
+                                _ => None,
+                            }
+                        }
+                        _ => None,
+                    },
+                    artifact: attached.map(|entry| receipt_location(&entry.receipt)),
+                    state: attached.map(|entry| entry.inspection.state),
+                });
+            }
+        }
+        rows.sort_by(|left, right| (&left.hook, &left.harness).cmp(&(&right.hook, &right.harness)));
+        rows
     }
 
     /// The cheap half of `doctor` — everything except per-receipt

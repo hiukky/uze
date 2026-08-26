@@ -1,0 +1,5 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "hook-plugin",
+  "description": "Conformance portable hooks: one group whose first handler denies the shell tool when the payload mentions `secrets` (and allows otherwise), with a second handler that only runs after an approval — proving first-deny-wins ordering."
+}

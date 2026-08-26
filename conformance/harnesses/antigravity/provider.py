@@ -42,11 +42,21 @@ FC_ARGS = json.loads(os.environ.get("FC_ARGS",
 FINAL_TEXT = os.environ.get("FINAL_TEXT", "UZE_CONFORMANCE_PASS")
 MCP_PROOF = os.environ.get("MCP_PROOF", "UZE_MCP_CONFORMANCE_PROOF_1")
 
+# The hook scenarios script a functionCall to the harness's native shell
+# tool (`run_command`); the MCP phases keep the default below.
+FC_NAME = os.environ.get("TOOL_NAME", "call_mcp_tool")
+
 SKILL_MARKERS = ["flow:commit", "flow:review", "flow:analyze",
                  "commit", "review", "analyze", "init"]
 TOOL_NAMES = ["grep_search", "list_dir", "manage_task", "read_url_content",
               "replace_file_content", "run_command", "schedule", "search_web",
               "view_file", "write_to_file", "generate_image", "call_mcp_tool"]
+# Conformance evidence markers carried by portable-hook denial reasons
+# (ADR-033): presence/absence in the structural summary proves what the real
+# harness relayed after the hook executed.
+HOOK_MARKERS = ["blocked by protect-env", "first-handler-denied",
+                "second-handler-ran", "second-handler-reached",
+                "Denied by UZE hook"]
 COUNTER = {"n": 0}
 
 
@@ -64,6 +74,7 @@ def structural_summary(body_text):
         "skill_markers": {m: (m in body) for m in SKILL_MARKERS},
         "has_function_call": has_fc,
         "has_function_response": has_fr,
+        "hook_markers": {m: (m in body) for m in HOOK_MARKERS},
         "mcp_proof_present": MCP_PROOF in body,
         "has_user_request_tag": "<USER_REQUEST>" in body,
     }
@@ -92,7 +103,7 @@ class H(BaseHTTPRequestHandler):
         print(f"[provider:{MODE}] {self.command} {self.path} req#{n}", flush=True)
 
         if MODE == "toolcall" and n == 0:
-            fc = {"functionCall": {"name": "call_mcp_tool", "args": FC_ARGS}}
+            fc = {"functionCall": {"name": FC_NAME, "args": FC_ARGS}}
             payload = sse({"candidates": [{"content": {"parts": [fc], "role": "model"},
                                           "finishReason": "STOP", "index": 0}]})
         else:

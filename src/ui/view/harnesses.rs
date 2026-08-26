@@ -296,7 +296,9 @@ fn friendly_delivery(strategy: &str) -> &str {
 /// `HarnessCapabilities` sets (see `HarnessHealth::native_instructions`'s
 /// doc comment) — mixing it into the same lookup would silently mislabel it
 /// "not supported" on every harness, since none of them ever populate that
-/// capability kind.
+/// capability kind. Hooks are `CapabilityKind::Hook` and route through the
+/// same sets (declared native/adaptable per harness); the hardcoded
+/// "Not implemented" stub for them was removed with ADR-033 delivery.
 fn compatibility_rows(harness: &HarnessHealth) -> Vec<(&'static str, &'static str, Style)> {
     let instructions = if harness.native_instructions {
         ("AGENTS.md", "√ Native", Style::default().fg(ACCENT))
@@ -307,22 +309,14 @@ fn compatibility_rows(harness: &HarnessHealth) -> Vec<(&'static str, &'static st
         ("Skills", CapabilityKind::AgentSkill),
         ("MCP", CapabilityKind::Mcp),
         ("Agents", CapabilityKind::Agent),
+        ("Hooks", CapabilityKind::Hook),
     ]
     .into_iter()
     .map(|(label, kind)| {
         let (status, style) = capability_status(&harness.capabilities, kind);
         (label, status, style)
     });
-    // Recognized on import but not yet routed to any harness — see
-    // `uze_core::importers`, which is the only place these kinds appear at
-    // all today.
-    let unimplemented = [("Hooks", "— Not implemented")]
-        .into_iter()
-        .map(|(label, status)| (label, status, Style::default().fg(MUTED)));
-    std::iter::once(instructions)
-        .chain(routed)
-        .chain(unimplemented)
-        .collect()
+    std::iter::once(instructions).chain(routed).collect()
 }
 
 fn capability_status(

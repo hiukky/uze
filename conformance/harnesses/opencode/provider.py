@@ -42,8 +42,20 @@ MCP_PROOF = os.environ.get("MCP_PROOF", "UZE_MCP_CONFORMANCE_PROOF_1")
 # (`<server>-<tool>`), observed in the primary request.
 MCP_TOOL = "uze-mcp-conformance-uze-conformance_uze_conformance"
 
+# The hook scenarios script a tool call to the harness's native shell tool
+# (`bash`); the MCP phases keep their own default. TOOL_ARGS mirrors the
+# `arguments` the hook's normalized ABI payload will carry.
+TOOL_NAME = os.environ.get("TOOL_NAME", MCP_TOOL)
+TOOL_ARGS = os.environ.get("TOOL_ARGS", "{}")
+
 SKILL_MARKERS = ["flow:analyze", "flow:commit", "flow:review", "analyze", "commit", "review", "init",
                  "North Star", "Review code"]
+# Conformance evidence markers carried by portable-hook denial reasons
+# (ADR-033): presence/absence in the structural summary proves what the real
+# harness relayed after the bridge executed.
+HOOK_MARKERS = ["blocked by protect-env", "first-handler-denied",
+                "second-handler-ran", "second-handler-reached",
+                "Denied by UZE hook"]
 COUNTER = {"n": 0}
 
 
@@ -55,6 +67,7 @@ def structural_summary(body_text):
                                  or "<available_skills>" in body),
         "has_user_text": '"role": "user"' in body or '"role":"user"' in body,
         "has_tool_result": ('"role": "tool"' in body or '"role":"tool"' in body),
+        "hook_markers": {m: (m in body) for m in HOOK_MARKERS},
         "mcp_proof_present": MCP_PROOF in body,
         "mcp_tool_present": MCP_TOOL in body,
         "len": len(body),
@@ -83,11 +96,11 @@ def tool_call_chunks():
         {"id": "c1", "object": "chat.completion.chunk", "model": "uze-model",
          "choices": [{"index": 0, "delta": {"role": "assistant", "content": None,
                      "tool_calls": [{"index": 0, "id": "call_uze_1", "type": "function",
-                                     "function": {"name": MCP_TOOL, "arguments": ""}}]},
+                                     "function": {"name": TOOL_NAME, "arguments": ""}}]},
                      "finish_reason": None}]},
         {"id": "c1", "object": "chat.completion.chunk", "model": "uze-model",
          "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0,
-                     "function": {"arguments": "{}"}}]}, "finish_reason": None}]},
+                     "function": {"arguments": TOOL_ARGS}}]}, "finish_reason": None}]},
         {"id": "c1", "object": "chat.completion.chunk", "model": "uze-model",
          "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
     ]

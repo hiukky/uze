@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "id": "protect-order",
+        "matcher": "shell",
+        "effect": "deny",
+        "hooks": [
+          { "type": "command", "command": "${PLUGIN_ROOT}/scripts/order-1", "timeout": 10 },
+          { "type": "command", "command": "${PLUGIN_ROOT}/scripts/order-2", "timeout": 10 }
+        ]
+      }
+    ]
+  }
+}

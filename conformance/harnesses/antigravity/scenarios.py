@@ -24,10 +24,11 @@ from shared.common import (check, docker_base, make_screen, make_waiter,
                            materialize_marketplace, provider_struct, start_provider)
 
 
-def agy_setup(cfg, prov_ip, include_mcp, final_cmd):
-    plugins = "flow"
-    if include_mcp:
-        plugins += " mcp-plugin"
+def agy_setup(cfg, prov_ip, include_mcp, final_cmd, plugins=None):
+    if plugins is None:
+        plugins = "flow"
+        if include_mcp:
+            plugins += " mcp-plugin"
     return f"""
 set -e
 export PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/.local/bin
@@ -217,6 +218,129 @@ def phase_tui(cfg, prov_ip):
     child.close(force=True)
 
 
+def phase_hooks(cfg, prov_ip, kind):
+    """Portable-hook evidence inside the REAL Antigravity CLI TUI (ADR-033).
+
+    The provider scripts a `run_command` functionCall whose arguments the
+    plugin's `guard` handler examines (delivered through UZE's generated
+    named-entry plugin); `kind` selects the scenario, identical semantics to
+    the claude/codex/opencode verticals:
+
+      deny  : arguments contain `secrets` -> the hook denies (reason
+              "blocked by protect-env") and the second handler never runs;
+              run_command itself never executes.
+      allow : plain echo arguments -> the hook allows, run_command runs.
+      order : a two-handler group whose first handler always denies -> the
+              second handler's marker must never appear (first-deny-wins).
+
+    Evidence = what the REAL harness relayed: hook marker presence/absence
+    in the provider-observed conversation plus the TUI denial surface.
+    """
+    scenarios = {
+        "deny": {
+            "plugin": "hook-plugin",
+            "args": '{"command":"echo API secrets"}',
+            "deny_present": "blocked by protect-env",
+            "deny_absent": ["second-handler-reached"],
+        },
+        "allow": {
+            "plugin": "hook-plugin",
+            "args": '{"command":"echo plain output"}',
+            "deny_present": None,
+            "deny_absent": ["blocked by protect-env"],
+        },
+        "order": {
+            "plugin": "hook-order-plugin",
+            "args": '{"command":"echo any"}',
+            "deny_present": "first-handler-denied",
+            "deny_absent": ["second-handler-ran"],
+        },
+    }
+    spec = scenarios[kind]
+    start_provider(cfg, "toolcall",
+                   {"TOOL_NAME": "run_command", "FC_ARGS": spec["args"]})
+    time.sleep(1)
+    setup = agy_setup(cfg, prov_ip, include_mcp=False,
+                      final_cmd="exec agy", plugins=f"flow {spec['plugin']}")
+    cmd = docker_base(cfg, prov_ip, setup)
+    child = pexpect.spawn(cmd[0], cmd[1:], encoding="utf-8", codec_errors="replace",
+                          timeout=300)
+    child.setwinsize(50, 160)
+    try:
+        child.logfile_read = common.CastRecorder(cfg.outdir, f"tui-hooks-{kind}")
+    except Exception:
+        pass
+    screen = make_screen(child)
+    wait_for = make_waiter(screen)
+
+    try:
+        child.expect("Choose your color scheme", timeout=150)
+    except Exception as e:
+        check("hooks-tui-started", False, f"onboarding never appeared: {e}")
+        child.close(force=True)
+        return
+    child.send("\r")
+    time.sleep(3)
+    child.send("\t\t")
+    time.sleep(0.7)
+    child.send("\r")
+    time.sleep(5)
+    t1, p1 = screen(3)
+    if ">" not in p1:
+        t1, p1, _ = wait_for([">"], tries=6)
+
+    for ch in "run the API check":
+        child.send(ch)
+        time.sleep(0.08)
+    child.send("\r")
+    t4, p4 = screen(1.2)
+    tries = 0
+    while "UZE_CONFORMANCE_PASS" not in p4 and not any(
+            m in p4 for m in ("blocked by protect-env", "Denied by UZE hook")
+    ) and tries < 14:
+        t4, p4 = screen(2.0)
+        tries += 1
+    with open(f"{cfg.outdir}/hooks_{kind}.raw", "w") as f:
+        f.write(t4)
+    check(f"hooks-{kind}-turn-settled",
+          "UZE_CONFORMANCE_PASS" in p4 or "blocked by protect-env" in p4
+          or "Denied by UZE hook" in p4,
+          "the turn settled (final text or hook denial rendered)"
+          if "UZE_CONFORMANCE_PASS" in p4 or "denied" in p4
+          else p4[-160:].replace("\n", " "))
+
+    struct = provider_struct(cfg)
+    with open(f"{cfg.outdir}/hooks_{kind}_struct.json", "w") as f:
+        json.dump(struct, f, indent=1)
+    markers = {}
+    has_response = False
+    for r in struct:
+        s = r.get("summary", {})
+        markers.update(s.get("hook_markers", {}))
+        has_response = has_response or bool(s.get("has_function_response"))
+    if spec["deny_present"]:
+        check(f"hooks-{kind}-denial-reason-relayed",
+              markers.get(spec["deny_present"], False),
+              f"`{spec['deny_present']}` reached the conversation"
+              if markers.get(spec["deny_present"], False)
+              else ", ".join(f"{m}={markers.get(m)}" for m in markers))
+    for absent in spec["deny_absent"]:
+        check(f"hooks-{kind}-marker-absent-{absent}",
+              not markers.get(absent, False),
+              f"`{absent}` never reached the conversation (first-deny-wins)")
+    if kind == "allow":
+        check("hooks-allow-tool-executed",
+              has_response,
+              "run_command actually executed after the hook allowed it"
+              if has_response else "no function response observed")
+
+    child.send("\x03")
+    time.sleep(0.5)
+    child.sendline("/exit")
+    time.sleep(2)
+    child.close(force=True)
+
+
 def phase_mcp_registration(cfg, prov_ip):
     final = """
 echo '===== S1 plugin list ====='
@@ -240,3 +364,5 @@ cat /work/home/.gemini/config/plugins/uze-mcp-conformance/mcp_config.json 2>&1
 def run(cfg, prov_ip):
     phase_tui(cfg, prov_ip)
     phase_mcp_registration(cfg, prov_ip)
+    for kind in ("deny", "allow", "order"):
+        phase_hooks(cfg, prov_ip, kind)

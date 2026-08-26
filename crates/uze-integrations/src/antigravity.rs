@@ -63,6 +63,7 @@ use uze_core::{
     exposure::{ExposureMechanism, ExposurePlan, PackageExposurePlan},
     harness_runtime::resolve_real_executable,
     home::UzeHome,
+    hook::{HookAdapterPort, HookCommandInput, HookDispatchOutcome, HookEvent},
     integration::{
         AttachmentInspection, AttachmentReceipt, AttachmentState, ContextDelivery,
         HarnessDetection, IntegrationPort, ManagedArtifact, default_exposure_name_candidates,
@@ -81,8 +82,9 @@ mod plugin;
 mod provision;
 mod skills;
 
+use crate::hooks as hook_projection;
 use crate::shared::provision::provision_cli;
-use generate::remove_generated_plugin_by_id;
+use generate::{canonical_hook_groups, remove_generated_plugin_by_id};
 use mcp::attach_mcp_entry;
 use plugin::{
     GENERATED_PLUGIN_KIND, PLUGIN_KIND, attach_explicit_plugin, attach_generated_plugin,
@@ -104,6 +106,7 @@ pub const ID: &str = "antigravity";
 /// destination: `~/.local/bin/agy`.
 const INSTALLER_COMMAND: &str = "curl -fsSL https://antigravity.google/cli/install.sh | bash";
 
+#[derive(Clone)]
 pub struct AntigravityIntegration {
     /// CLI global skills root (`~/.gemini/antigravity-cli/skills`), where a
     /// UZE-managed reference is discovered natively.
@@ -191,7 +194,12 @@ impl IntegrationPort for AntigravityIntegration {
             // capability-level shims (global skills reference, `agy mcp
             // add`) are the fallback for resources outside the envelope's
             // coverage, never the primary route.
-            native: [CapabilityKind::AgentSkill, CapabilityKind::Mcp, CapabilityKind::Agent]
+            native: [
+                CapabilityKind::AgentSkill,
+                CapabilityKind::Mcp,
+                CapabilityKind::Agent,
+                CapabilityKind::Hook,
+            ]
                 .into_iter()
                 .collect(),
             // Non-default invocation policies are ADAPTED, never Native:
@@ -205,10 +213,14 @@ impl IntegrationPort for AntigravityIntegration {
             // the per-resource exposure plan, kept honest per policy — a
             // default model+user Skill is fully Native.
             verification: VerificationStatus::Unverified,
-            evidence: "Antigravity CLI consumes UZE's native plugins: the canonical package itself is a valid plugin (plugin.json name/description; extra fields tolerated), so an envelope-less package is installed straight from the Store via `agy plugin install`; one with a canonical mcp.json gets a deterministically synthesized plugin carrying a translated mcp_config.json, installed from a UZE-owned derived directory (verified against real agy 1.1.19 dogfood: validate → install → list → uninstall). Non-default invocation policies are ADAPTED (no explicit-invocation-only mechanism exists; Skills stay model-discoverable and slash-invocable — verified against 1.1.19). MCP falls back to `agy mcp add` (global ~/.gemini/config/mcp_config.json) for resources outside plugin coverage. AGENTS.md is read natively (official docs: identical workspace context rules), so context needs no bridge."
+            evidence: "Antigravity CLI consumes UZE's native plugins: the canonical package itself is a valid plugin (plugin.json name/description; extra fields tolerated), so an envelope-less package is installed straight from the Store via `agy plugin install`; one with a canonical mcp.json and/or canonical hooks.json gets a deterministically synthesized plugin carrying a translated mcp_config.json and a named-entry hooks.json respectively, installed from a UZE-owned derived directory (verified against real agy 1.1.19 dogfood: validate → install → list → uninstall; the hook projection itself is deterministic emission, real-binary verification pending in the conformance lab). Non-default invocation policies are ADAPTED (no explicit-invocation-only mechanism exists; Skills stay model-discoverable and slash-invocable — verified against 1.1.19). MCP falls back to `agy mcp add` (global ~/.gemini/config/mcp_config.json) for resources outside plugin coverage. AGENTS.md is read natively (official docs: identical workspace context rules), so context needs no bridge."
                 .to_owned(),
             ..HarnessCapabilities::default()
         }
+    }
+
+    fn hook_capabilities(&self) -> uze_core::hook::HookCapabilities {
+        hook_projection::antigravity_capabilities()
     }
 
     fn detect(&self) -> HarnessDetection {
@@ -294,9 +306,10 @@ impl IntegrationPort for AntigravityIntegration {
             CapabilityKind::AgentSkill => self.skill_exposure_plan(resource),
             CapabilityKind::Mcp => self.mcp_exposure_plan(resource),
             CapabilityKind::Agent => self.agent_exposure_plan(resource),
+            CapabilityKind::Hook => self.hook_fallback_plan(resource),
             _ => unsupported(
                 resource,
-                "Antigravity attachment is only modeled for Agent Skills, Agents, and MCP servers.",
+                "Antigravity attachment is only modeled for Agent Skills, Agents, MCP servers, and portable Hooks.",
             ),
         }
     }
@@ -333,14 +346,14 @@ impl IntegrationPort for AntigravityIntegration {
         }
         let canonical_mcp = generate::canonical_mcp_servers(package);
         let author_mcp = plugin::author_mcp_config_servers(package);
-        if canonical_mcp.is_some() && author_mcp.is_empty() {
+        if (canonical_mcp.is_some() && author_mcp.is_empty()) || canonical_hook_groups(package) {
             let provided = generate::generated_exact_coverage(package, resources);
             return Some(PackageExposurePlan {
                 package_id: package.id.clone(),
                 route: CompatibilityRoute::Native,
                 verification: VerificationStatus::Unverified,
                 provided_resource_identities: provided,
-                evidence: "The canonical package's own plugin.json is a valid Antigravity plugin manifest, but its MCP servers live in canonical mcp.json, which the plugin system does not read. UZE synthesizes a deterministic plugin (plugin.json + mcp_config.json translation + symlinked skills/) into a UZE-owned derived directory and installs that — never the Store."
+                evidence: "The canonical package's own plugin.json is a valid Antigravity plugin manifest, but its MCP servers live in canonical mcp.json (which the plugin system does not read) and/or its hooks live in canonical portable form (the plugin reads named-entry hooks.json). UZE synthesizes a deterministic plugin (plugin.json + translated mcp_config.json + translated named hooks.json + symlinked skills/) into a UZE-owned derived directory and installs that — never the Store."
                     .to_owned(),
             });
         }
@@ -366,7 +379,7 @@ impl IntegrationPort for AntigravityIntegration {
         _plan: &PackageExposurePlan,
     ) -> Result<Option<AttachmentReceipt>> {
         let executable = self.provisioning_executable();
-        if generate::canonical_mcp_servers(package).is_some() {
+        if generate::canonical_mcp_servers(package).is_some() || canonical_hook_groups(package) {
             attach_generated_plugin(&executable, self, package)
         } else {
             attach_explicit_plugin(&executable, self, package)
@@ -537,5 +550,43 @@ impl AntigravityIntegration {
             },
             evidence: "Antigravity CLI natively discovers Markdown custom agents from its global agents directory; UZE keeps a receipt-owned symlink to the canonical Store definition.".to_owned(),
         }
+    }
+
+    /// The capability-level fallback for a Hook resource. Antigravity
+    /// exposes hooks only through its native Plugin surface — a global
+    /// hook config is not part of the documented model — so a hook is
+    /// always delivered at package level through the UZE-generated plugin
+    /// (see the package exposure plan); this plan exists to state that
+    /// honestly if a resource ever surfaces outside package coverage.
+    fn hook_fallback_plan(&self, resource: &Resource) -> ExposurePlan {
+        let mut plan = unsupported(
+            resource,
+            "Antigravity carries hooks only inside its native Plugin: this package's hooks are delivered through the UZE-generated named-entry plugin at package level (see Plugin inspection).",
+        );
+        plan.route = CompatibilityRoute::Native;
+        plan.verification = VerificationStatus::Unverified;
+        plan
+    }
+}
+
+impl HookAdapterPort for AntigravityIntegration {
+    fn adapter_id(&self) -> &'static str {
+        "antigravity"
+    }
+
+    fn normalize_input(
+        &self,
+        native: &serde_json::Value,
+        event: HookEvent,
+    ) -> std::result::Result<HookCommandInput, String> {
+        hook_projection::antigravity_normalize_input(native, event)
+    }
+
+    fn render_output(
+        &self,
+        outcome: &HookDispatchOutcome,
+        event: HookEvent,
+    ) -> std::result::Result<Option<Vec<u8>>, String> {
+        hook_projection::antigravity_render_output(outcome, event)
     }
 }

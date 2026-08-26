@@ -11,6 +11,16 @@
       "name": "mcp-plugin",
       "source": "./plugins/mcp-plugin",
       "description": "MCP registration and execution coverage."
+    },
+    {
+      "name": "hook-plugin",
+      "source": "./plugins/hook-plugin",
+      "description": "Portable hooks: PreToolUse deny/allow guard around the shell tool (ADR-033)."
+    },
+    {
+      "name": "hook-order-plugin",
+      "source": "./plugins/hook-order-plugin",
+      "description": "Portable hooks: two-handler PreToolUse group proving first-deny-wins ordering (ADR-033)."
     }
   ]
 }
