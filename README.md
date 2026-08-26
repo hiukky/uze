@@ -38,10 +38,10 @@ see `uze --help` or run `uze` for the terminal UI.
 <table><thead>
 <tr><th align="left">Harness</th><th>AGENTS.md</th><th>Skill</th><th>User-only</th><th>MCP</th><th>Package</th><th>Agents</th><th>Hooks</th><th>Shim</th></tr>
 </thead><tbody>
-<tr><td align="left">claude</td><td>🟢</td><td>🟢</td><td>🟢</td><td>🟢</td><td>🟢</td><td>⚪</td><td>⚪</td><td>🧪</td></tr>
-<tr><td align="left">codex</td><td>🟢</td><td>🟢</td><td>🟢</td><td>🟢</td><td>🟢</td><td>⚪</td><td>⚪</td><td>—</td></tr>
-<tr><td align="left">opencode</td><td>🟢</td><td>🟢</td><td>🟢</td><td>🟢</td><td>⚪</td><td>⚪</td><td>⚪</td><td>🧪</td></tr>
-<tr><td align="left">Antigravity CLI</td><td>🟢</td><td>🟢</td><td>🟡</td><td>🟢</td><td>🟢</td><td>⚪</td><td>⚪</td><td>—</td></tr>
+<tr><td align="left">claude</td><td>🟢</td><td>🟢</td><td>🟢</td><td>🟢</td><td>🟢</td><td>🟢</td><td>⚪</td><td>🧪</td></tr>
+<tr><td align="left">codex</td><td>🟢</td><td>🟢</td><td>🟢</td><td>🟢</td><td>🟢</td><td>🟢</td><td>⚪</td><td>—</td></tr>
+<tr><td align="left">opencode</td><td>🟢</td><td>🟢</td><td>🟢</td><td>🟢</td><td>⚪</td><td>🟢</td><td>⚪</td><td>🧪</td></tr>
+<tr><td align="left">Antigravity CLI</td><td>🟢</td><td>🟢</td><td>🟡</td><td>🟢</td><td>🟢</td><td>🟢</td><td>⚪</td><td>—</td></tr>
 </tbody></table>
 
 > 🟢 native · 🟡 adapted · 🟠 degraded · ⚪ roadmap · 🧪 experimental · — n/a

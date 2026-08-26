@@ -67,6 +67,7 @@ const CLAUDE_MARKETPLACE_NAME: &str = "uze-local";
 /// back to the `--plugin-dir` conformance probe from ADR-005.
 pub struct ClaudeIntegration {
     skills_dir: std::path::PathBuf,
+    agents_dir: std::path::PathBuf,
     /// `HOME` to set explicitly whenever a `claude` subcommand is shelled
     /// out to for MCP registration (`mcp add`/`get`/`remove`) — unlike the
     /// Skills path (pure filesystem operations on `skills_dir`, no process
@@ -89,6 +90,7 @@ impl ClaudeIntegration {
             .unwrap_or_else(|| claude_home.clone());
         Self {
             skills_dir: claude_home.join("skills"),
+            agents_dir: claude_home.join("agents"),
             command_home,
             uze_home,
         }
@@ -236,7 +238,7 @@ impl IntegrationPort for ClaudeIntegration {
 
     fn capabilities(&self) -> HarnessCapabilities {
         HarnessCapabilities {
-            native: [CapabilityKind::AgentSkill, CapabilityKind::Mcp]
+            native: [CapabilityKind::AgentSkill, CapabilityKind::Mcp, CapabilityKind::Agent]
                 .into_iter()
                 .collect(),
             verification: VerificationStatus::Unverified,
@@ -314,9 +316,10 @@ impl IntegrationPort for ClaudeIntegration {
         match resource.capability.kind {
             CapabilityKind::AgentSkill => self.skill_exposure_plan(resource),
             CapabilityKind::Mcp => self.mcp_exposure_plan(resource),
+            CapabilityKind::Agent => self.agent_exposure_plan(resource),
             _ => unsupported(
                 resource,
-                "Claude Code attachment is only modeled for Agent Skills and MCP servers.",
+                "Claude Code attachment is only modeled for Agent Skills, Agents, and MCP servers.",
             ),
         }
     }
@@ -435,6 +438,9 @@ impl IntegrationPort for ClaudeIntegration {
             ExposureMechanism::ManagedUserScopeReference {
                 source, entry_name, ..
             } => {
+                if resource.capability.kind != CapabilityKind::AgentSkill {
+                    return Ok(Some(plan.mechanism.attach()?));
+                }
                 let skill_source_dir = resource
                     .capability
                     .path
@@ -559,6 +565,27 @@ impl IntegrationPort for ClaudeIntegration {
                 }
                 Ok(detached)
             }
+        }
+    }
+}
+
+impl ClaudeIntegration {
+    fn agent_exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+        let entry_name = resource
+            .resolved_exposure_name
+            .clone()
+            .or_else(|| resource.logical_capability_name())
+            .unwrap_or_else(|| resource.name());
+        ExposurePlan {
+            representation: resource.capability.representation,
+            route: CompatibilityRoute::Native,
+            verification: VerificationStatus::Unverified,
+            mechanism: ExposureMechanism::ManagedUserScopeReference {
+                discovery_root: self.agents_dir.clone(),
+                entry_name: format!("{entry_name}.md"),
+                source: resource.capability.path.clone(),
+            },
+            evidence: "Claude Code natively discovers Markdown subagents from its user agents directory; UZE keeps a receipt-owned symlink to the canonical Store definition.".to_owned(),
         }
     }
 }

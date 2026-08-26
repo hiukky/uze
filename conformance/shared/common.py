@@ -100,6 +100,7 @@ def validate_marketplace(cfg):
         "plugins/flow/skills/commit/SKILL.md",
         "plugins/flow/skills/review/SKILL.md",
         "plugins/flow/skills/analyze/SKILL.md",
+        "plugins/flow/agents/reviewer.md",
         "plugins/mcp-plugin/mcp.json",
     )
     for relative_path in required:

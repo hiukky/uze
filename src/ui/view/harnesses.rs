@@ -306,6 +306,7 @@ fn compatibility_rows(harness: &HarnessHealth) -> Vec<(&'static str, &'static st
     let routed = [
         ("Skills", CapabilityKind::AgentSkill),
         ("MCP", CapabilityKind::Mcp),
+        ("Agents", CapabilityKind::Agent),
     ]
     .into_iter()
     .map(|(label, kind)| {
@@ -315,12 +316,9 @@ fn compatibility_rows(harness: &HarnessHealth) -> Vec<(&'static str, &'static st
     // Recognized on import but not yet routed to any harness — see
     // `uze_core::importers`, which is the only place these kinds appear at
     // all today.
-    let unimplemented = [
-        ("Agents", "— Not implemented"),
-        ("Hooks", "— Not implemented"),
-    ]
-    .into_iter()
-    .map(|(label, status)| (label, status, Style::default().fg(MUTED)));
+    let unimplemented = [("Hooks", "— Not implemented")]
+        .into_iter()
+        .map(|(label, status)| (label, status, Style::default().fg(MUTED)));
     std::iter::once(instructions)
         .chain(routed)
         .chain(unimplemented)

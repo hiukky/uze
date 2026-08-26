@@ -86,8 +86,35 @@ pub fn package_resources_at(id: &PackageId, root: &std::path::Path) -> Result<Ve
     }
     resources.extend(instruction_resources(id, root)?);
     resources.extend(mcp_resources(id, root)?);
+    resources.extend(agent_resources(id, root)?);
     resources.sort_by_key(|resource| resource.identity());
     Ok(resources)
+}
+
+/// Discovers the portable Agent surface. Agent definitions are ordinary
+/// Markdown files directly below `agents/`; integrations own every vendor
+/// projection of those bytes (ADR-031).
+fn agent_resources(id: &PackageId, package_root: &std::path::Path) -> Result<Vec<Resource>> {
+    let agents_root = package_root.join("agents");
+    if !agents_root.is_dir() {
+        return Ok(Vec::new());
+    }
+    crate::project::files_with_extension(&agents_root, "md")?
+        .into_iter()
+        .map(|path| {
+            let payload = crate::project::read_file(&path)?;
+            Ok(Resource::from_package(
+                id.clone(),
+                package_root.to_path_buf(),
+                Capability {
+                    kind: CapabilityKind::Agent,
+                    representation: Representation::Standard,
+                    path,
+                    payload,
+                },
+            ))
+        })
+        .collect()
 }
 
 /// Discovers a package's optional root-level `AGENTS.md` — the same
@@ -223,6 +250,25 @@ mod discovery_tests {
         assert_eq!(
             resources[0].skill_policy,
             Some(crate::skill::SkillInvocationPolicy::USER_ONLY)
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn agents_are_discovered_as_independent_byte_preserving_resources() {
+        let root = temp("agents");
+        let pkg = root.join("pkg");
+        fs::create_dir_all(pkg.join("agents/review")).unwrap();
+        let bytes = b"---\ndescription: Review changes\n---\nInspect the diff.\n";
+        fs::write(pkg.join("agents/review/reviewer.md"), bytes).unwrap();
+        let id = PackageId::from_plugin_name("demo", Path::new("plugin.json")).unwrap();
+        let resources = package_resources_at(&id, &pkg).unwrap();
+        assert_eq!(resources.len(), 1);
+        assert_eq!(resources[0].capability.kind, CapabilityKind::Agent);
+        assert_eq!(resources[0].capability.payload, bytes);
+        assert_eq!(
+            resources[0].logical_capability_name().as_deref(),
+            Some("reviewer")
         );
         fs::remove_dir_all(root).unwrap();
     }

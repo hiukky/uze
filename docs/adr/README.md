@@ -68,3 +68,4 @@ never renumbered), using this structure (Michael Nygard style):
 - [028 — Claude Command Explicit Invocation via Generated Frontmatter](028-claude-command-explicit-invocation-via-generated-frontmatter.md) — superseded
 - [029 — Projection Conflicts at Naming Time](029-projection-conflicts-at-naming-time.md)
 - [030 — Skill + Invocation Policy replace the canonical Command](030-skill-plus-invocation-policy.md)
+- [031 — Adopt a canonical portable Agent capability](031-adopt-a-canonical-portable-agent-capability.md)

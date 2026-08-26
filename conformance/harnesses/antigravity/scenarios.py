@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-import subprocess
 import json
+import subprocess
 """Antigravity scenario (latest channel) — Real Harness + Synthetic World.
 
 Phase A (TUI): prompt + synthetic credential, /skills (flow:commit,
@@ -105,6 +105,21 @@ def phase_tui(cfg, prov_ip):
     time.sleep(1.0)
     t_settle, _, _ = wait_for([">"], tries=6)
     snap("02c_back_to_prompt", t_settle)
+
+    # /agents is the native agent manager; fixture visibility is the
+    # behavioral proof that AGY loaded UZE's portable definition.
+    child.send("/")
+    time.sleep(1.2)
+    for ch in "agents":
+        child.send(ch)
+        time.sleep(0.15)
+    child.send("\r")
+    t_agents, p_agents, _ = wait_for(["reviewer", "Agents"], tries=8)
+    snap("02a_agents", t_agents)
+    check("agent-visible-in-tui", "reviewer" in p_agents,
+          "Antigravity /agents lists the UZE reviewer agent" if "reviewer" in p_agents else p_agents[-200:].replace("\n", " "))
+    child.send("\x1b")
+    time.sleep(1.0)
 
     # /mcp
     child.send("/")

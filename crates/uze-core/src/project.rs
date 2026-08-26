@@ -140,6 +140,12 @@ impl Resource {
                 Some(skill_name.to_owned())
             }
             CapabilityKind::Mcp => self.resource_name.clone(),
+            CapabilityKind::Agent => self
+                .capability
+                .path
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .map(str::to_owned),
             _ => None,
         }
     }
@@ -212,6 +218,7 @@ pub fn resolve_project(root: impl AsRef<Path>) -> Result<EffectiveEnvironment> {
 
     discover_instructions(&root, &mut project_resources)?;
     discover_skills(&root, &mut project_resources)?;
+    discover_agents(&root, &mut project_resources)?;
     discover_mcp(&root, &mut project_resources)?;
     project_resources.sort_by(|left, right| left.path.cmp(&right.path));
 
@@ -222,6 +229,17 @@ pub fn resolve_project(root: impl AsRef<Path>) -> Result<EffectiveEnvironment> {
             .map(|capability| Resource::from_project(root.clone(), capability))
             .collect(),
     })
+}
+
+fn discover_agents(root: &Path, items: &mut Vec<Capability>) -> Result<()> {
+    let agents_root = root.join(".agents/agents");
+    if !agents_root.is_dir() {
+        return Ok(());
+    }
+    for path in files_with_extension(&agents_root, "md")? {
+        push_file(items, path, CapabilityKind::Agent)?;
+    }
+    Ok(())
 }
 
 /// Resolves only resources owned by a project. `UzeEngine` is responsible for
@@ -327,6 +345,44 @@ pub fn files_named(root: &Path, expected_name: &str) -> Result<Vec<PathBuf>> {
     Ok(matches)
 }
 
+/// Walks a non-symlinked directory tree for ordinary files with an extension.
+/// This shares `files_named`'s cycle-safety contract while allowing the
+/// canonical Agent surface to retain its meaningful Markdown filenames.
+pub fn files_with_extension(root: &Path, extension: &str) -> Result<Vec<PathBuf>> {
+    let mut pending = vec![root.to_path_buf()];
+    let mut matches = Vec::new();
+    while let Some(directory) = pending.pop() {
+        let mut entries = fs::read_dir(&directory)
+            .map_err(|source| UzeError::Read {
+                path: directory.clone(),
+                source,
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|source| UzeError::Read {
+                path: directory.clone(),
+                source,
+            })?;
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            let path = entry.path();
+            let metadata = fs::symlink_metadata(&path).map_err(|source| UzeError::Read {
+                path: path.clone(),
+                source,
+            })?;
+            if metadata.file_type().is_symlink() {
+                continue;
+            }
+            if metadata.is_dir() {
+                pending.push(path);
+            } else if path.extension().and_then(|value| value.to_str()) == Some(extension) {
+                matches.push(path);
+            }
+        }
+    }
+    matches.sort();
+    Ok(matches)
+}
+
 pub fn read_file(path: &Path) -> Result<Vec<u8>> {
     fs::read(path).map_err(|source| UzeError::Read {
         path: path.to_path_buf(),
@@ -405,6 +461,25 @@ mod tests {
         assert_eq!(
             resource.logical_capability_name().as_deref(),
             Some("github")
+        );
+    }
+
+    #[test]
+    fn agent_package_resource_logical_name_is_its_markdown_stem() {
+        let id = PackageId::from_plugin_name("demo-package", Path::new("plugin.json")).unwrap();
+        let resource = Resource::from_package(
+            id,
+            PathBuf::from("/uze-home/store/packages/demo-package"),
+            Capability {
+                kind: CapabilityKind::Agent,
+                representation: Representation::Standard,
+                path: PathBuf::from("/uze-home/store/packages/demo-package/agents/reviewer.md"),
+                payload: Vec::new(),
+            },
+        );
+        assert_eq!(
+            resource.logical_capability_name().as_deref(),
+            Some("reviewer")
         );
     }
 

@@ -3,6 +3,7 @@
 //! policy carrier used by the per-harness modules, and the structural
 //! vendor-neutrality scans.
 
+mod agents;
 mod capability_conformance;
 mod contract;
 mod identity;

@@ -15,7 +15,10 @@
 //! `OpenCodeIntegration` struct and its `IntegrationPort` impl, delegating
 //! to each submodule.
 
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use uze_core::{
     Result, UzeError,
@@ -48,6 +51,7 @@ use provision::{provision_opencode, resolve_opencode_binary};
 /// only those portable capabilities.
 pub struct OpenCodeIntegration {
     skills_dir: PathBuf,
+    agents_dir: PathBuf,
     config_path: PathBuf,
     uze_home: UzeHome,
 }
@@ -56,6 +60,10 @@ impl OpenCodeIntegration {
     pub fn new(agents_home: PathBuf, config_path: PathBuf, uze_home: UzeHome) -> Self {
         Self {
             skills_dir: agents_home.join("skills"),
+            agents_dir: config_path
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join("agents"),
             config_path,
             uze_home,
         }
@@ -90,7 +98,7 @@ impl IntegrationPort for OpenCodeIntegration {
     }
     fn capabilities(&self) -> HarnessCapabilities {
         HarnessCapabilities {
-            direct_standard: [CapabilityKind::AgentSkill].into_iter().collect(),
+            direct_standard: [CapabilityKind::AgentSkill, CapabilityKind::Agent].into_iter().collect(),
             native: [CapabilityKind::Mcp].into_iter().collect(),
             verification: VerificationStatus::Unverified,
             evidence: "OpenCode V2 documents global Agent Skills at ~/.agents/skills and local MCP via `opencode mcp add <name> -- <command>` into global `mcp.servers.<name>.command` in opencode.json (verified `opencode mcp add --help` requires ` -- ` separator; no `remove` verb so detach stays file rewrite). Skills preserve invocation policy natively in SKILL.md frontmatter (metadata.opencode/autoinvoke/slash — ADR-030 §9) without Command primitive."
@@ -171,9 +179,10 @@ impl IntegrationPort for OpenCodeIntegration {
         match resource.capability.kind {
             CapabilityKind::AgentSkill => self.skill_plan(resource),
             CapabilityKind::Mcp => self.mcp_plan(resource),
+            CapabilityKind::Agent => self.agent_plan(resource),
             _ => unsupported(
                 resource,
-                "OpenCode portability is implemented only for Agent Skills and MCP in this slice.",
+                "OpenCode portability is implemented only for Agent Skills, Agents, and MCP in this slice.",
             ),
         }
     }
@@ -344,6 +353,25 @@ impl IntegrationPort for OpenCodeIntegration {
             state: AttachmentState::Missing,
             reason: "OpenCode managed MCP entry detached".to_owned(),
         })
+    }
+}
+
+impl OpenCodeIntegration {
+    fn agent_plan(&self, resource: &Resource) -> ExposurePlan {
+        let entry_name = resource
+            .logical_capability_name()
+            .unwrap_or_else(|| resource.name());
+        ExposurePlan {
+            representation: resource.capability.representation,
+            route: CompatibilityRoute::Native,
+            verification: VerificationStatus::Unverified,
+            mechanism: ExposureMechanism::ManagedUserScopeReference {
+                discovery_root: self.agents_dir.clone(),
+                entry_name: format!("{entry_name}.md"),
+                source: resource.capability.path.clone(),
+            },
+            evidence: "OpenCode natively discovers Markdown agents from its configuration agents directory; UZE keeps a receipt-owned symlink to the canonical Store definition.".to_owned(),
+        }
     }
 }
 

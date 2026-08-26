@@ -60,6 +60,8 @@ use skills::codex_skill_exposure_name_candidates;
 /// falls back to the per-session managed projection from ADR-005.
 pub struct CodexIntegration {
     skills_dir: PathBuf,
+    agents_dir: PathBuf,
+    generated_agents_dir: PathBuf,
     /// `HOME` to set explicitly whenever a `codex` subcommand is shelled
     /// out to for MCP registration — see `ClaudeIntegration::command_home`
     /// for the full rationale; the same concern applies here since Codex
@@ -91,6 +93,12 @@ impl CodexIntegration {
             .unwrap_or_else(|| agents_home.clone());
         Self {
             skills_dir: agents_home.join("skills"),
+            agents_dir: command_home.join(".codex").join("agents"),
+            generated_agents_dir: uze_home
+                .state_dir()
+                .join("attachments")
+                .join("codex")
+                .join("agents"),
             command_home,
             uze_home,
         }
@@ -228,6 +236,34 @@ impl CodexIntegration {
         }
         Ok(())
     }
+
+    fn materialize_agent(&self, resource: &Resource) -> Result<PathBuf> {
+        let name = resource
+            .logical_capability_name()
+            .unwrap_or_else(|| resource.name());
+        let target = self.generated_agents_dir.join(format!("{name}.toml"));
+        fs::create_dir_all(&self.generated_agents_dir).map_err(|source| UzeError::Write {
+            path: self.generated_agents_dir.clone(),
+            source,
+        })?;
+        let content = codex_agent_toml(resource, &name);
+        match fs::read_to_string(&target) {
+            Ok(existing) if existing == content => return Ok(target),
+            Ok(_) => return Err(UzeError::ManagedEntryDrift(target)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(source) => {
+                return Err(UzeError::Read {
+                    path: target,
+                    source,
+                });
+            }
+        }
+        fs::write(&target, content).map_err(|source| UzeError::Write {
+            path: target.clone(),
+            source,
+        })?;
+        Ok(target)
+    }
 }
 
 impl IntegrationPort for CodexIntegration {
@@ -247,11 +283,15 @@ impl IntegrationPort for CodexIntegration {
 
     fn capabilities(&self) -> HarnessCapabilities {
         HarnessCapabilities {
-            native: [CapabilityKind::AgentSkill, CapabilityKind::Mcp]
+            native: [
+                CapabilityKind::AgentSkill,
+                CapabilityKind::Mcp,
+                CapabilityKind::Agent,
+            ]
                 .into_iter()
                 .collect(),
             verification: VerificationStatus::Unverified,
-            evidence: "Codex consumes UZE's derived marketplaces: a package shipping .codex-plugin/plugin.json is added as a native plugin covering its declared skills/mcpServers (`codex plugin add <sel>@uze-local`); one without gets a deterministically synthesized envelope published through the generated-only `uze-store` marketplace (ADR-021) — both confirmed against real Codex 0.148.0 dogfood (`codex plugin list --json`). Invocation policy is translated into Codex's own agents/openai.yaml → policy.allow_implicit_invocation: false for a canonical user-only Skill (Codex Build skills documentation; empirically honored by codex-cli 0.149.0 via `codex debug prompt-input`); the user=false combination is honestly Degraded since Codex has no documented way to disable explicit `$skill` invocation. Per ADR-025/ADR-030, Native means an officially supported primitive that preserves the canonical capability semantics — not an identical vendor file format. Capability-level fallbacks (USER-scope `~/.agents/skills` reference, `codex mcp add`) remain only for resources outside the envelope's coverage."
+            evidence: "Codex consumes UZE's derived marketplaces: a package shipping .codex-plugin/plugin.json is added as a native plugin covering its declared skills/mcpServers (`codex plugin add <sel>@uze-local`); one without gets a deterministically synthesized envelope published through the generated-only `uze-store` marketplace (ADR-021) — both confirmed against real Codex 0.148.0 dogfood (`codex plugin list --json`). Canonical Agents are generated as Codex's documented standalone TOML files under ~/.codex/agents/, with name, description, and developer_instructions derived from the portable Markdown definition. Invocation policy is translated into Codex's own agents/openai.yaml → policy.allow_implicit_invocation: false for a canonical user-only Skill (Codex Build skills documentation; empirically honored by codex-cli 0.149.0 via `codex debug prompt-input`); the user=false combination is honestly Degraded since Codex has no documented way to disable explicit `$skill` invocation. Per ADR-025/ADR-030, Native means an officially supported primitive that preserves the canonical capability semantics — not an identical vendor file format. Capability-level fallbacks (USER-scope `~/.agents/skills` reference, `codex mcp add`) remain only for resources outside the envelope's coverage."
                 .to_owned(),
             ..HarnessCapabilities::default()
         }
@@ -315,9 +355,10 @@ impl IntegrationPort for CodexIntegration {
         match resource.capability.kind {
             CapabilityKind::AgentSkill => self.skill_exposure_plan(resource),
             CapabilityKind::Mcp => self.mcp_exposure_plan(resource),
+            CapabilityKind::Agent => self.agent_exposure_plan(resource),
             _ => unsupported(
                 resource,
-                "Codex attachment is only modeled for Agent Skills and MCP servers.",
+                "Codex attachment is only modeled for Agent Skills, Agents, and MCP servers.",
             ),
         }
     }
@@ -379,6 +420,8 @@ impl IntegrationPort for CodexIntegration {
                 // silently drop the invocation policy (ADR-030 §25).
                 if resource.capability.kind == CapabilityKind::AgentSkill {
                     self.materialize_or_verify_skill(resource)?;
+                } else if resource.capability.kind == CapabilityKind::Agent {
+                    self.materialize_agent(resource)?;
                 }
                 Ok(Some(plan.mechanism.attach()?))
             }
@@ -540,6 +583,60 @@ impl IntegrationPort for CodexIntegration {
             reason: "Codex managed artifact detached".to_owned(),
         })
     }
+}
+
+impl CodexIntegration {
+    fn agent_exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+        let entry_name = resource
+            .logical_capability_name()
+            .unwrap_or_else(|| resource.name());
+        ExposurePlan {
+            representation: resource.capability.representation,
+            route: CompatibilityRoute::Native,
+            verification: VerificationStatus::Unverified,
+            mechanism: ExposureMechanism::ManagedUserScopeReference {
+                discovery_root: self.agents_dir.clone(),
+                entry_name: format!("{entry_name}.toml"),
+                source: self.generated_agents_dir.join(format!("{entry_name}.toml")),
+            },
+            evidence: "Codex natively loads standalone custom-agent TOML files from ~/.codex/agents/. UZE deterministically generates that native TOML from the portable Markdown definition and exposes it through a receipt-owned reference.".to_owned(),
+        }
+    }
+}
+
+fn codex_agent_toml(resource: &Resource, fallback_name: &str) -> String {
+    let markdown = String::from_utf8_lossy(&resource.capability.payload);
+    let (frontmatter, instructions) = markdown_frontmatter(&markdown);
+    let name = frontmatter_value(frontmatter, "name").unwrap_or(fallback_name);
+    let description =
+        frontmatter_value(frontmatter, "description").unwrap_or("Portable UZE custom agent.");
+    format!(
+        "name = {}\ndescription = {}\ndeveloper_instructions = {}\n",
+        toml_string(name),
+        toml_string(description),
+        toml_string(instructions.trim()),
+    )
+}
+
+fn markdown_frontmatter(markdown: &str) -> (&str, &str) {
+    let Some(rest) = markdown.strip_prefix("---\n") else {
+        return ("", markdown);
+    };
+    let Some(end) = rest.find("\n---\n") else {
+        return ("", markdown);
+    };
+    (&rest[..end], &rest[end + 5..])
+}
+
+fn frontmatter_value<'a>(frontmatter: &'a str, key: &str) -> Option<&'a str> {
+    frontmatter.lines().find_map(|line| {
+        let (found, value) = line.split_once(':')?;
+        (found.trim() == key).then(|| value.trim().trim_matches('"').trim_matches('\''))
+    })
+}
+
+fn toml_string(value: &str) -> String {
+    serde_json::to_string(value).expect("strings are JSON serializable")
 }
 
 fn unsupported(resource: &Resource, rationale: &str) -> ExposurePlan {

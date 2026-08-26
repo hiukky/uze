@@ -108,6 +108,7 @@ pub struct AntigravityIntegration {
     /// CLI global skills root (`~/.gemini/antigravity-cli/skills`), where a
     /// UZE-managed reference is discovered natively.
     skills_dir: PathBuf,
+    agents_dir: PathBuf,
     /// Global plugins directory (`~/.gemini/config/plugins`), where
     /// `agy plugin install` stages plugin byte copies.
     plugins_dir: PathBuf,
@@ -131,6 +132,7 @@ impl AntigravityIntegration {
         let gemini_root = command_home.join(".gemini");
         Self {
             skills_dir: gemini_root.join("antigravity-cli").join("skills"),
+            agents_dir: gemini_root.join("antigravity-cli").join("agents"),
             plugins_dir: gemini_root.join("config").join("plugins"),
             mcp_config_path: gemini_root.join("config").join("mcp_config.json"),
             command_home,
@@ -189,7 +191,7 @@ impl IntegrationPort for AntigravityIntegration {
             // capability-level shims (global skills reference, `agy mcp
             // add`) are the fallback for resources outside the envelope's
             // coverage, never the primary route.
-            native: [CapabilityKind::AgentSkill, CapabilityKind::Mcp]
+            native: [CapabilityKind::AgentSkill, CapabilityKind::Mcp, CapabilityKind::Agent]
                 .into_iter()
                 .collect(),
             // Non-default invocation policies are ADAPTED, never Native:
@@ -291,9 +293,10 @@ impl IntegrationPort for AntigravityIntegration {
         match resource.capability.kind {
             CapabilityKind::AgentSkill => self.skill_exposure_plan(resource),
             CapabilityKind::Mcp => self.mcp_exposure_plan(resource),
+            CapabilityKind::Agent => self.agent_exposure_plan(resource),
             _ => unsupported(
                 resource,
-                "Antigravity attachment is only modeled for Agent Skills and MCP servers.",
+                "Antigravity attachment is only modeled for Agent Skills, Agents, and MCP servers.",
             ),
         }
     }
@@ -515,5 +518,24 @@ fn unsupported(resource: &Resource, rationale: &str) -> ExposurePlan {
             rationale: rationale.to_owned(),
         },
         evidence: rationale.to_owned(),
+    }
+}
+
+impl AntigravityIntegration {
+    fn agent_exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+        let entry_name = resource
+            .logical_capability_name()
+            .unwrap_or_else(|| resource.name());
+        ExposurePlan {
+            representation: resource.capability.representation,
+            route: CompatibilityRoute::Native,
+            verification: VerificationStatus::Unverified,
+            mechanism: ExposureMechanism::ManagedUserScopeReference {
+                discovery_root: self.agents_dir.clone(),
+                entry_name: format!("{entry_name}.md"),
+                source: resource.capability.path.clone(),
+            },
+            evidence: "Antigravity CLI natively discovers Markdown custom agents from its global agents directory; UZE keeps a receipt-owned symlink to the canonical Store definition.".to_owned(),
+        }
     }
 }

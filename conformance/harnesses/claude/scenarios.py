@@ -116,6 +116,19 @@ def phase_tui(cfg, prov_ip):
     child.send("\x1b")
     time.sleep(1.0)
 
+    # /agents is Claude's native custom-subagent manager. This proves the
+    # harness consumes the canonical Agent, not merely that UZE wrote a path.
+    for ch in "/agents":
+        child.send(ch)
+        time.sleep(0.06)
+    child.send("\r")
+    t, p, _ = wait_for(["reviewer", "Agents"], tries=10)
+    snap("02a_agents", t)
+    check("agent-visible-in-tui", "reviewer" in p,
+          "Claude /agents lists the UZE reviewer agent" if "reviewer" in p else p[-200:].replace("\n", " "))
+    child.send("\x1b")
+    time.sleep(1.0)
+
     # /mcp
     for ch in "/mcp":
         child.send(ch)
