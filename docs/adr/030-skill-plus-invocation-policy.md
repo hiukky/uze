@@ -133,3 +133,13 @@ invalid policy, backward compatibility, shared-root reuse/conflict),
 per-integration unit suites (`claude/generate.rs`,
 `claude/plugin.rs`, `codex/skills.rs`, `opencode/skills.rs`,
 `antigravity/skills.rs`).
+
+## More Information
+
+2026-08-26 — AGY 1.1.21 added `disable-slash-command: true`: it preserves
+the model-only policy (`model: true, user: false`) by hiding the Skill from
+`/` and `/name` resolution while retaining model discovery. UZE translates
+that policy natively. The inverse control still does not exist, so user-only
+Skills remain Adapted. A package containing any non-default Skill is
+decomposed rather than installed as an unchanged plugin tree, preventing the
+plugin from bypassing or duplicating the policy-aware capability projection.

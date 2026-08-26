@@ -1,7 +1,7 @@
 # Antigravity CLI Integration
 
 **Status: primary Google-family v0 harness** (validated against `agy`
-**1.1.19** in an isolated `$HOME`). Full audit/evidence:
+**1.1.21** in an isolated `$HOME`). Full audit/evidence:
 `docs/architecture/antigravity-compatibility.md`; decision: ADR-027.
 
 | Surface | Status | Mechanism | Evidence |
@@ -9,7 +9,7 @@
 | Plugin (explicit) | SUPPORTED, exact coverage | `agy plugin install <Store package path>` — the canonical `plugin.json` (name + description) **is** the vendor manifest (extra fields tolerated) | PROVEN — real-binary dogfood: attach → `agy plugin list` shows import → inspect MATCHED → remove → unregistered → reinstall MATCHED |
 | Plugin (generated) | SUPPORTED, exact coverage | canonical `mcp.json` → generated envelope (`mcp_config.json` translation: `url`/`httpUrl` → `serverUrl`) installed from `$UZE_HOME/state/attachments/antigravity/plugins/<id>/` | PROVEN — real-binary dogfood + `agy plugin validate` (skills + mcpServers processed) |
 | Skills | SUPPORTED, native (default policy) | via plugin (package-level) or `ManagedUserScopeReference` → `~/.gemini/antigravity-cli/skills/<label>` (CLI-documented global skills root) | DOCUMENTED (root) + TESTED (lifecycle/drift) |
-| Skill invocation policy | ADAPTED, documented | every non-default `invoke:` policy degrades — no explicit-only mechanism, no user-catalog suppression (skills stay model-discoverable and slash-invocable); the loss is named in the plan evidence (ADR-030) | PROVEN (agy 1.1.19: no policy control documented or observable) + TESTED |
+| Skill invocation policy | NATIVE model-only; ADAPTED user-only | `disable-slash-command: true` preserves `model=true,user=false`; no model-discovery suppression exists for `model=false,user=true` | PROVEN (agy 1.1.21) + TESTED |
 | MCP | SUPPORTED, adapted | `agy mcp add <name> <command> [args…]` → `~/.gemini/config/mcp_config.json` | PROVEN (add/list/remove/disable) + TESTED (inspection) |
 
 ## Delivery
@@ -46,12 +46,11 @@ it become authoritative.
   `mcp_config.json`, so MCP-bearing canonical packages take the generated
   route; the translation `url`/`httpUrl` → `serverUrl` is the vendor's own
   documented legacy-migration rule.
-- **Non-default invocation policies are Adapted**, not Native: Antigravity
-  has no explicit-only mechanism and no user-catalog suppression, so a
-  user-only or model-only canonical policy loses one half (Skills are
-  model-discoverable and slash-invocable — verified against 1.1.19). The
-  degradation is named in the plan evidence, and a package never claims
-  such a Skill as covered.
+- **Invocation policy is asymmetric**: `disable-slash-command: true`
+  natively preserves model-only Skills; Antigravity still has no way to
+  preserve user-only Skills because they remain model-discoverable. Any
+  package containing a non-default Skill is decomposed so an unchanged
+  plugin tree cannot bypass the per-skill policy wrapper or duplicate it.
 - **Context is Native**: `AGENTS.md` and `GEMINI.md` are both parsed
   (official docs: "identical workspace context rules"), so UZE
   generates no bridge file.

@@ -1,6 +1,6 @@
 //! Antigravity invocation-policy conformance (ADR-030): honest routing
-//! with stated degradation (no forced policy exists), the no-forced-policy
-//! wrapper, and generated-package user-only exclusion.
+//! with stated user-only degradation, the model-only native wrapper, and
+//! package exclusion for non-default policies.
 
 use crate::policy::*;
 
@@ -32,12 +32,12 @@ fn antigravity_routes_every_combination_honestly() {
     );
     fs::remove_dir_all(root).unwrap();
 
-    // C. model-only → Adapted
+    // C. model-only → Native (`disable-slash-command: true`)
     let (root, home, _package, r) =
         make_policy_package("agy-c", "legacy", &model_only_body("legacy"));
     let agy = AntigravityIntegration::new(root.join("agents"), home.clone());
     mark_setup(&home, &agy);
-    assert_eq!(agy.exposure_plan(&r).route, CompatibilityRoute::Adaptable);
+    assert_eq!(agy.exposure_plan(&r).route, CompatibilityRoute::Native);
     fs::remove_dir_all(root).unwrap();
 
     // D. invalid → Unsupported
@@ -45,6 +45,27 @@ fn antigravity_routes_every_combination_honestly() {
     let agy = AntigravityIntegration::new(root.join("agents"), home.clone());
     mark_setup(&home, &agy);
     assert_eq!(agy.exposure_plan(&r).route, CompatibilityRoute::Unsupported);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn antigravity_model_only_wrapper_hides_the_slash_command() {
+    let (root, home, _package, r) =
+        make_policy_package("agy-model-only", "analyze", &model_only_body("analyze"));
+    let agy = AntigravityIntegration::new(root.join("agents"), home.clone());
+    mark_setup(&home, &agy);
+    let receipt = agy
+        .attach_receipt(&r)
+        .unwrap()
+        .expect("model-only Skill attaches on Antigravity");
+    let ManagedArtifact::SymlinkReference { target, .. } = &receipt.artifact else {
+        panic!("expected a managed symlink reference");
+    };
+    let wrapper = fs::read_to_string(target.join("SKILL.md")).unwrap();
+    assert!(
+        wrapper.contains("disable-slash-command: true"),
+        "the current AGY-native model-only control is emitted: {wrapper}"
+    );
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -76,12 +97,10 @@ fn antigravity_generated_package_never_claims_a_user_only_skill() {
         make_policy_package("agy-envelope", "review", &user_only_body("review"));
     let agy = AntigravityIntegration::new(root.join("agents"), home.clone());
     mark_setup(&home, &agy);
-    let plan = agy
-        .package_exposure_plan(&package, &[&r])
-        .expect("generated route applies via the Skill");
+    let plan = agy.package_exposure_plan(&package, &[&r]).is_none();
     assert!(
-        !plan.provided_resource_identities.contains(&r.identity()),
-        "Antigravity cannot hide the Skill from the model — never claim native coverage"
+        plan,
+        "a non-default Skill must not be staged unchanged inside a plugin"
     );
     let fallback = agy.exposure_plan(&r);
     assert_eq!(fallback.route, CompatibilityRoute::Adaptable);

@@ -8,21 +8,17 @@
 //! `~/.gemini/antigravity-cli/builtin/skills/`), so a UZE-managed reference
 //! there is consumed natively.
 //!
-//! Invocation-policy reality (verified against agy 1.1.19, see
-//! `docs/architecture/antigravity-compatibility.md`): Antigravity has **no
-//! explicit-invocation-only mechanism** and no user-catalog suppression —
-//! its Skills are model-discoverable (progressive disclosure) *and*
-//! slash-invocable, with no documented or observable switch for either
-//! half. Per ADR-030 that makes every non-default canonical policy
-//! **Adapted**, not Native:
+//! Invocation-policy reality (agy 1.1.21): `disable-slash-command: true`
+//! hides a Skill from `/` and `/name` while retaining model discovery. The
+//! inverse control does not exist: every user-invocable Skill remains
+//! model-discoverable. Per ADR-030 this yields:
 //!
 //! - model+user (default) → Native;
 //! - user-only (`model=false`) → Adapted: user invocation is native, but
 //!   the model can still discover/auto-select the Skill — the exact
 //!   semantic degradation that used to characterize delivery of a
 //!   canonical `Command`;
-//! - model-only (`user=false`) → Adapted: model visibility is native, but
-//!   the skill cannot be hidden from the user's slash surface;
+//! - model-only (`user=false`) → Native via `disable-slash-command: true`;
 //! - invalid (`model=false,user=false`) → never projected.
 //!
 //! The generated wrapper carries the stable namespaced label as its front
@@ -114,6 +110,9 @@ pub(super) fn materialize_generated_skill(
         let escaped = crate::shared::skill::escape_yaml_double_quoted(&description);
         skill.push_str(&format!("description: \"{escaped}\"\n"));
     }
+    if !resource.skill_invocation().user {
+        skill.push_str("disable-slash-command: true\n");
+    }
     skill.push_str("---\n");
     skill.push_str(&body);
     fs::write(dir.join("SKILL.md"), skill).map_err(|source| UzeError::Write {
@@ -184,21 +183,22 @@ impl AntigravityIntegration {
                     "Antigravity CLI imports every markdown skill under ~/.gemini/antigravity-cli/skills as a global slash command, so a UZE-managed reference there is consumed natively. The generated wrapper carries the stable namespaced label and the canonical name/description/body."
                         .to_owned(),
                 )
-            } else {
+            } else if !policy.model {
                 (
                     CompatibilityRoute::Adaptable,
-                    "Antigravity has no explicit-invocation-only mechanism and no way to hide a Skill from the model or the user's slash surface (verified against agy 1.1.19; the official migration path converts legacy commands to Skills, which are both model-discoverable and slash-invocable). The user-invocation half is native; the non-default canonical invoke policy degrades — ADAPTED per ADR-030, reported honestly rather than invented."
+                    "Antigravity has no explicit-invocation-only mechanism: a user-invocable Skill remains model-discoverable. The user-invocation half is native; invoke.model=false degrades — ADAPTED per ADR-030, reported honestly rather than invented."
+                        .to_owned(),
+                )
+            } else {
+                (
+                    CompatibilityRoute::Native,
+                    "Antigravity natively preserves invoke.user=false with disable-slash-command: true: the Skill remains model-discoverable while `/` and `/name` resolution omit it."
                         .to_owned(),
                 )
             };
             if !policy.model {
                 evidence.push_str(
                     " The canonical invoke.model=false cannot be enforced: the model may still discover and auto-select this Skill.",
-                );
-            }
-            if !policy.user {
-                evidence.push_str(
-                    " The canonical invoke.user=false cannot be enforced: the skill remains slash-invocable.",
                 );
             }
             return ExposurePlan {

@@ -317,6 +317,17 @@ impl IntegrationPort for AntigravityIntegration {
         // whose name is not a valid Antigravity plugin name has no native
         // package route at all (capability-level delivery only).
         plugin_manifest_name(package)?;
+        // A plugin stages its entire skills/ tree unchanged. When any
+        // Skill carries a non-default invocation policy, delivering that
+        // tree would bypass the capability wrapper that translates (or
+        // honestly adapts) the policy. Decompose the package instead: each
+        // capability then gets exactly one policy-aware delivery.
+        if resources.iter().any(|resource| {
+            resource.capability.kind == CapabilityKind::AgentSkill
+                && !resource.skill_invocation().is_default()
+        }) {
+            return None;
+        }
         let canonical_mcp = generate::canonical_mcp_servers(package);
         let author_mcp = plugin::author_mcp_config_servers(package);
         if canonical_mcp.is_some() && author_mcp.is_empty() {

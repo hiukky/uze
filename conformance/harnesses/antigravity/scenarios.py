@@ -5,8 +5,8 @@ import json
 
 Phase A (TUI): prompt + synthetic credential, /skills (flow:commit,
 workflow:review, uze:init), /mcp (server listed + tools enumerated),
-deterministic turn, model-visible skill present, user-only skill
-CAPABILITY_ADAPTED (no vendor explicit-only mechanism), MCP tool invocation
+deterministic turn, model-only Skill hidden from the slash surface but
+present for the model, user-only Skill CAPABILITY_ADAPTED, MCP tool invocation
 inside the interactive TUI (proof round-trip).
 
 Phase B (CLI/state): plugin registration via `agy plugin list` + staged
@@ -25,7 +25,7 @@ from shared.common import check, docker_base, make_screen, make_waiter, provider
 
 def agy_setup(cfg, prov_ip, include_mcp, final_cmd):
     mcp_block = ""
-    plugins = "flow workflow"
+    plugins = "flow workflow background"
     if include_mcp:
         mcp_block = f"""
 cp -r /opt/uze-fixtures/tests-fixtures/canonical/mcp-plugin /work/market/plugins/mcp-plugin
@@ -45,8 +45,11 @@ cp /app/fixtures/jetski_state.pbtxt /work/home/.gemini/antigravity-cli/jetski_st
 cp /app/fixtures/installation_id /work/home/.gemini/antigravity-cli/installation_id
 cp -r /opt/uze-fixtures/tests-fixtures/canonical/flow /work/market/plugins/flow
 cp -r /opt/uze-fixtures/tests-fixtures/canonical/workflow /work/market/plugins/workflow
+mkdir -p /work/market/plugins/background/skills/analyze
+printf '%s\n' '{{"name":"background","description":"model-only conformance fixture"}}' > /work/market/plugins/background/plugin.json
+printf '%s\n' '---' 'name: analyze' 'description: Model-only conformance fixture' 'invoke:' '  model: true' '  user: false' '---' 'Analyze the current workspace.' > /work/market/plugins/background/skills/analyze/SKILL.md
 {mcp_block}
-printf '%s' '{{"name":"uze-lab","description":"lab","plugins":[{{"name":"flow","source":"./plugins/flow"}},{{"name":"workflow","source":"./plugins/workflow"}}{",{\"name\":\"mcp-plugin\",\"source\":\"./plugins/mcp-plugin\"}" if include_mcp else ""}]}}' > /work/market/agents.json
+printf '%s' '{{"name":"uze-lab","description":"lab","plugins":[{{"name":"flow","source":"./plugins/flow"}},{{"name":"workflow","source":"./plugins/workflow"}},{{"name":"background","source":"./plugins/background"}}{",{\"name\":\"mcp-plugin\",\"source\":\"./plugins/mcp-plugin\"}" if include_mcp else ""}]}}' > /work/market/agents.json
 uze market add /work/market >/dev/null 2>&1
 for p in {plugins}; do uze plugin install $p@uze-lab >/dev/null 2>&1; done
 {final_cmd}
@@ -105,6 +108,9 @@ def phase_tui(cfg, prov_ip):
     check("useronly-skill-human-visible", "workflow:review" in p2,
           "workflow:review in global skills surface")
     check("official-uzek-skill-visible", "uze:init" in p2, "uze:init in /skills")
+    check("model-only-skill-hidden-from-tui", "background:analyze" not in p2,
+          "background:analyze is omitted from /skills by disable-slash-command: true"
+          if "background:analyze" not in p2 else p2[-160:].replace("\n", " "))
     child.send("\x1b")
     time.sleep(1.0)
     t_settle, _, _ = wait_for([">"], tries=6)
@@ -155,6 +161,9 @@ def phase_tui(cfg, prov_ip):
               any(marker.get(name) for marker in markers for name in ("workflow:review", "review")),
               "workflow:review present (no vendor explicit-only mechanism)",
               kind="adapted")
+        check("model-only-skill-present",
+              any(marker.get(name) for marker in markers for name in ("background:analyze", "analyze")),
+              "background:analyze present in the request while absent from /skills")
         check("provider-request-captured",
               any(summary.get("tools") for summary in summaries),
               "request body structurally recorded (tools/skills/markers)")
