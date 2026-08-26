@@ -5,7 +5,7 @@ UZE_BIN ?= target/debug/uze
 RELEASE_BIN ?= target/release/uze
 INSTALL_ARGS ?= --force
 
-.PHONY: help build release install install-wsl-lab playground-lab run test test-acceptance test-conformance test-real-harness docs-harness-matrix check fmt lint coverage version clean changelog lab-image lab-run lab-watch lab-replay
+.PHONY: help build release install install-wsl-lab playground-lab run test test-acceptance test-conformance test-real-harness docs-harness-matrix check fmt lint coverage version clean changelog lab-image lab-run lab-replay
 
 help: ## Show the available local-development targets.
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z0-9_.-]+:.*##/ { printf "  %-12s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -50,10 +50,6 @@ test-conformance: ## Run integration conformance + per-harness semantics.
 # (antigravity | claude | codex | opencode).
 HARNESS ?= antigravity
 LAB_IMAGE ?= conformance-harness:latest
-# The recorded TUI session to replay. Empty = auto-detect the most recent
-# one under /tmp/harness-conformance (the Lab's evidence dir); override
-# with `make lab-watch LAB_WATCH=<path>` for a specific session.
-LAB_WATCH ?=
 
 lab-image: ## Build the Lab harness image (installs channel-latest harnesses).
 	docker build -f conformance/Dockerfile -t $(LAB_IMAGE) .
@@ -61,11 +57,8 @@ lab-image: ## Build the Lab harness image (installs channel-latest harnesses).
 lab-run: ## Run the isolation vertical for $(HARNESS) (3x clean is the gate).
 	python3 conformance/lab.py --harness $(HARNESS)
 
-lab-watch: ## Live-follow the most recent Lab TUI recording (auto-detected; waits for the next run).
-	LAB_WATCH="$(LAB_WATCH)" python3 conformance/lab-watch.py
-
 lab-replay: ## Replay the most recent recorded TUI session (rendered correctly, ANSI intact).
-	@watch="$${LAB_WATCH:-$$(ls -t /tmp/harness-conformance/*/run*/tui.typescript 2>/dev/null | head -n 1)}"; \
+	@watch="$${LAB_REPLAY:-$$(ls -t /tmp/harness-conformance/*/run*/tui.typescript 2>/dev/null | head -n 1)}"; \
 	recent="$$(ls -dt /tmp/harness-conformance/*/run* 2>/dev/null | head -n 1)"; \
 	if [ -z "$$watch" ] || [ ! -f "$$watch" ]; then \
 		echo "no recorded TUI session found under /tmp/harness-conformance — run the lab first:"; \

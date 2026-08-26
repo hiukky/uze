@@ -243,7 +243,7 @@ class CastRecorder:
     """Grows a `scriptreplay`-compatible recording from the raw PTY stream
     WITHOUT wrapping the child (a `script` wrapper buffers output and broke
     the interactive drive): every chunk the driver reads is appended to the
-    typescript file and accounted in the timing file, so `make lab-watch`
+    typescript file and accounted in the timing file, so `make lab-replay`
     can replay the exact TUI session with correct rendering.
     """
 

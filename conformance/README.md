@@ -98,12 +98,12 @@ have equivalent examples, but neither is an implicit source for the other.
 ## Watching a run (the TUI, rendered correctly)
 
 Every TUI phase is recorded (`scriptreplay`-compatible typescript + timing)
-into the run's outdir. `make lab-watch` replays the most recent session
+into the run's outdir. `make lab-replay` replays the most recent session
 with correct rendering — ANSI, colors and all — as if it were live:
 
 ```bash
 make lab-run HARNESS=opencode   # run the vertical (records the session)
-make lab-watch                  # replay it, rendered correctly
+make lab-replay                 # replay it, rendered correctly
 ```
 
 In CI, the same suite runs per harness (`ci.yml` → `conformance` job, matrix

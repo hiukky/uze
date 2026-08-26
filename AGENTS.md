@@ -92,7 +92,7 @@ need to).
   `tests/_fixtures`; per-harness synthetic seeds under
   `conformance/harnesses/<vendor>/fixtures/`. Run with
   `python3 conformance/lab.py --harness <h>`; replay a recorded run with
-  `make lab-watch`. The CI `conformance` job runs all four verticals
+  `make lab-replay`. The CI `conformance` job runs all four verticals
   (matrix).
 - `tests/` — domain-organized integration suites (one `main.rs` per
   domain: `cli/`, `memory/`, `packages/`, `workspace/`, `lifecycle/`,
