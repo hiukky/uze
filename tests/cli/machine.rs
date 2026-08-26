@@ -135,7 +135,7 @@ fn fake_harness_bin_dir(label: &str) -> PathBuf {
     for (name, version_line) in [
         ("claude", "9.9.9 (Fake Claude)"),
         ("codex", "codex-cli 9.9.9"),
-        ("opencode", "opencode 9.9.9"),
+        ("opencode2", "opencode2 v9.9.9"),
         ("agy", "agy 9.9.9"),
     ] {
         let path = dir.join(name);

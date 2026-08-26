@@ -25,14 +25,6 @@ RUN apt-get update \
     && apt-get install --no-install-recommends -y ca-certificates curl git ripgrep tini \
     && rm -rf /var/lib/apt/lists/*
 
-# Deterministic JS package management: corepack + pinned pnpm (a package
-# manager, not a harness — the harness versions it installs are always
-# latest). Global bins land in PNPM_HOME (on PATH below).
-RUN corepack enable \
-    && corepack prepare pnpm@9.15.9 --activate
-ENV PNPM_HOME=/usr/local/pnpm
-ENV PATH="${PNPM_HOME}:${PATH}"
-
 COPY --from=uze-build /out/uze /usr/local/bin/uze
 
 # UZE is its own provisioner: `uze setup` installs the primary V0 harnesses
@@ -42,17 +34,8 @@ COPY --from=uze-build /out/uze /usr/local/bin/uze
 # versions; the L2 runtime then runs `--network none` and keeps them.
 # `HOME=/usr/local` pins the vendor default install location (~/.local/bin)
 # into the image, reachable by the runtime user; the PATH below carries it.
-ENV PATH="/usr/local/.local/bin:/usr/local/.opencode/bin:/usr/local/pnpm:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ENV PATH="/usr/local/.local/bin:/usr/local/.opencode/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 RUN HOME=/usr/local /usr/local/bin/uze setup
-
-# OpenCode resolves its official runtime plugin package on first use. Bake it
-# into the disposable image so a harness with intentionally no egress does
-# not try to reach npm at test time.
-RUN mkdir -p /opt/opencode-runtime \
-    && pnpm --dir /opt/opencode-runtime init --silent >/dev/null \
-    && pnpm --dir /opt/opencode-runtime add --reporter=silent \
-    @opencode-ai/plugin \
-    @ai-sdk/openai-compatible
 
 COPY --from=uze-build /out/uze-mcp-conformance-fixture /usr/local/bin/uze-mcp-conformance-fixture
 # The Lab owns a complete, isolated marketplace fixture. It represents the
@@ -63,7 +46,7 @@ COPY conformance/entrypoint.sh /usr/local/bin/uze-harness-entrypoint
 
 RUN chmod 0755 /usr/local/bin/uze-harness-entrypoint \
     && mkdir -p /work \
-    && chown -R node:node /opt/uze-conformance-fixtures /opt/opencode-runtime /usr/local/pnpm /usr/local/.local /usr/local/.opencode \
+    && chown -R node:node /opt/uze-conformance-fixtures /usr/local/.local /usr/local/.opencode \
     && chown node:node /work /usr/local/bin/uze \
     && chown -R node:node /usr/local/bin/uze-mcp-conformance-fixture
 

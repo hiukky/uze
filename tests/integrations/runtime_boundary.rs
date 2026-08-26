@@ -134,7 +134,7 @@ fn upstream_executable_resolution_never_recurses_through_the_runtime_shim() {
             "9.9.9 (Real Claude)",
         ),
         ("codex", "codex-cli POISON", "codex-cli 9.9.9"),
-        ("opencode", "opencode2 vPOISON", "opencode2 v9.9.9"),
+        ("opencode2", "opencode2 vPOISON", "opencode2 v9.9.9"),
         ("agy", "1.0.0-POISON", "1.1.19"),
     ] {
         write_fake_executable(&shims_dir, name, poison);

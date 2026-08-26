@@ -212,11 +212,11 @@ fn one_plugin_install_is_planned_once_for_native_and_decomposed_harnesses() {
     // label (ADR-026) — the path-derived OpenCode V2 slash ID, user-visible
     // like Claude's.
     assert_eq!(
-        config["mcp"]["uze-plugin-first-conformance-conformance"]["type"],
+        config["mcp"]["servers"]["uze-plugin-first-conformance-conformance"]["type"],
         "local"
     );
     assert_eq!(
-        config["mcp"]["uze-plugin-first-conformance-conformance"]["command"][0],
+        config["mcp"]["servers"]["uze-plugin-first-conformance-conformance"]["command"][0],
         "__UZE_MCP_FIXTURE_BINARY__"
     );
     assert!(

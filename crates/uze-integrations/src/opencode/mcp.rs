@@ -1,5 +1,5 @@
-//! OpenCode MCP exposure — UZE adapts the standard stdio command/args into
-//! OpenCode's documented global `mcp.<name>.command` array in
+//! OpenCode V2 MCP exposure — UZE adapts the standard stdio command/args into
+//! OpenCode's documented global `mcp.servers.<name>.command` array in
 //! `opencode.json`; the OpenCode MCP runtime remains native.
 
 use std::{fs, path::Path, path::PathBuf};
@@ -15,6 +15,16 @@ use uze_core::{
 
 use super::OpenCodeIntegration;
 use super::unsupported;
+
+pub(super) fn configured_server<'a>(
+    config: &'a serde_json::Value,
+    entry_name: &str,
+) -> Option<&'a serde_json::Value> {
+    config
+        .get("mcp")
+        .and_then(|mcp| mcp.get("servers"))
+        .and_then(|servers| servers.get(entry_name))
+}
 
 impl OpenCodeIntegration {
     pub(super) fn mcp_plan(&self, resource: &Resource) -> ExposurePlan {
@@ -50,7 +60,7 @@ impl OpenCodeIntegration {
                 environment: Vec::new(),
                 enabled: Some(true),
             },
-            evidence: "UZE adapts the standard stdio command/args into OpenCode's documented global `mcp.<name>.command` array in opencode.json; the OpenCode MCP runtime remains native."
+            evidence: "UZE adapts the standard stdio command/args into OpenCode V2's documented global `mcp.servers.<name>.command` array in opencode.json; the OpenCode MCP runtime remains native."
                 .to_owned(),
         }
     }
@@ -84,14 +94,22 @@ pub(super) fn attach_mcp_config(
         .ok_or_else(|| {
             UzeError::ExposureUnavailable("OpenCode config `mcp` must be an object".to_owned())
         })?;
+    let servers = mcp
+        .entry("servers")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .ok_or_else(|| {
+            UzeError::ExposureUnavailable(
+                "OpenCode V2 config `mcp.servers` must be an object".to_owned(),
+            )
+        })?;
     let command_values: Vec<serde_json::Value> =
         std::iter::once(command.to_string_lossy().into_owned())
             .chain(args.iter().cloned())
             .map(serde_json::Value::String)
             .collect();
-    let desired =
-        serde_json::json!({ "type": "local", "command": command_values, "enabled": true });
-    match mcp.get(entry_name) {
+    let desired = serde_json::json!({ "type": "local", "command": command_values });
+    match servers.get(entry_name) {
         Some(current) if current == &desired => return Ok(Some(config_path.to_path_buf())),
         Some(_) => {
             return Err(UzeError::ExposureUnavailable(format!(
@@ -99,7 +117,7 @@ pub(super) fn attach_mcp_config(
             )));
         }
         None => {
-            mcp.insert(entry_name.to_owned(), desired);
+            servers.insert(entry_name.to_owned(), desired);
         }
     }
     let parent = config_path.parent().expect("config path has a parent");
@@ -150,7 +168,11 @@ pub(super) fn inspect_opencode_mcp_value(
     let matches = transport == "stdio"
         && current.get("type").and_then(serde_json::Value::as_str) == Some("local")
         && enabled.is_none_or(|expected| {
-            current.get("enabled").and_then(serde_json::Value::as_bool) == Some(expected)
+            current
+                .get("disabled")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+                == !expected
         })
         && current
             .get("command")
@@ -168,7 +190,7 @@ pub(super) fn inspect_opencode_mcp_value(
         })
         && (environment.is_empty()
             || current
-                .get("env")
+                .get("environment")
                 .and_then(serde_json::Value::as_object)
                 .is_some_and(|env| {
                     environment
@@ -178,12 +200,12 @@ pub(super) fn inspect_opencode_mcp_value(
     if matches {
         AttachmentInspection {
             state: AttachmentState::Matched,
-            reason: "OpenCode MCP entry matches receipt".to_owned(),
+            reason: "OpenCode V2 MCP entry matches receipt".to_owned(),
         }
     } else {
         AttachmentInspection {
             state: AttachmentState::Drifted,
-            reason: "OpenCode MCP entry differs from receipt".to_owned(),
+            reason: "OpenCode V2 MCP entry differs from receipt".to_owned(),
         }
     }
 }
@@ -203,9 +225,9 @@ mod mcp_tests {
         let current = serde_json::json!({
             "type": "local",
             "command": ["/bin/example", "--serve"],
-            "enabled": true,
+            "disabled": false,
             "cwd": "/other",
-            "env": {"OTHER": "opaque"}
+            "environment": {"OTHER": "opaque"}
         });
         assert_eq!(
             inspect_opencode_mcp_value(

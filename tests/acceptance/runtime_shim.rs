@@ -43,7 +43,7 @@ fn runtime_shim_active_internal_calls_resolve_real_executable_without_recursion(
     for (name, version) in [
         ("claude", "9.9.9 (Real Claude)"),
         ("codex", "codex-cli 9.9.9"),
-        ("opencode", "opencode 9.9.9"),
+        ("opencode2", "opencode2 v9.9.9"),
         ("agy", "agy 9.9.9"),
     ] {
         let _ = FakeHarness::new(&env.fake_bin, name)
@@ -87,7 +87,7 @@ fn runtime_shim_active_internal_calls_resolve_real_executable_without_recursion(
     );
     // The fake "real" binaries must have been invoked: detection went
     // through them, not the shims (doctor's text does not print versions).
-    for name in ["claude", "codex", "opencode", "agy"] {
+    for name in ["claude", "codex", "opencode2", "agy"] {
         let log = env
             .fake_bin
             .join(".invocations")

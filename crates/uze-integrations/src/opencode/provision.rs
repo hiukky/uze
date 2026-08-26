@@ -1,9 +1,9 @@
 //! OpenCode automatic provisioning and binary detection.
 //!
-//! Target channel: the V1 installer (`https://opencode.ai/install`), which
-//! installs the canonical `opencode` binary — the surface UZE's delivery
-//! semantics were validated against (global `~/.config/opencode/opencode.json`
-//! `mcp` config, shared `~/.agents/skills`, `debug skill` discovery).
+//! Target channel: the official OpenCode V2 beta installer
+//! (`https://opencode.ai/v2/install`). V2 installs separately as
+//! `opencode2`; UZE's runtime shim maps its stable `opencode` entrypoint to
+//! that binary without creating a vendor-path alias.
 
 use std::{path::Path, process::Command};
 
@@ -14,9 +14,9 @@ use uze_core::{
     provisioning::{ProcessRunner, ProcessSpec, ProvisionAction, ProvisioningResult},
 };
 
-/// Resolves whichever name currently answers to `--version`: `opencode`
-/// (the canonical alias, once created) first, then `opencode2` (the raw v2
-/// binary name) as a fallback for a fresh v2 install that has no alias yet.
+/// Resolves the OpenCode V2 executable. V1's `opencode` is intentionally
+/// ignored: V1 and V2 are side-by-side products with different policy and
+/// MCP configuration semantics.
 ///
 /// Resolved explicitly via `resolve_real_executable` (excluding
 /// `shims_dir`) rather than a bare `Command::new("opencode")` PATH lookup —
@@ -26,13 +26,6 @@ use uze_core::{
 /// so a bare lookup could re-enter UZE's own runtime shim instead of the
 /// vendor CLI.
 pub(super) fn resolve_opencode_binary(shims_dir: &Path) -> Option<(String, HarnessDetection)> {
-    if let Some(path) = resolve_real_executable(&["opencode"], shims_dir) {
-        let path = path.to_string_lossy().into_owned();
-        let detection = detect_binary(&path);
-        if detection.present {
-            return Some((path, detection));
-        }
-    }
     let path = resolve_real_executable(&["opencode2"], shims_dir)?;
     let path = path.to_string_lossy().into_owned();
     let detection = detect_binary(&path);
@@ -79,7 +72,7 @@ pub(super) fn provision_opencode(
         Some((which, _)) => ProcessSpec::new(which.clone(), ["upgrade"]).with_inherited_output(),
         None => ProcessSpec::new(
             "sh",
-            ["-c", "curl -fsSL https://opencode.ai/install | bash"],
+            ["-c", "curl -fsSL https://opencode.ai/v2/install | bash"],
         )
         .with_inherited_output(),
     };
@@ -106,7 +99,7 @@ pub(super) fn provision_opencode(
         return Ok(ProvisioningResult::failed(
             action,
             method,
-            "installer finished but neither `opencode` nor `opencode2` could be verified",
+            "installer finished but `opencode2` could not be verified",
         ));
     }
     Ok(ProvisioningResult::verified(action, method, verified))
@@ -199,7 +192,7 @@ mod provision_tests {
             assert_eq!(commands[0].arguments, ["upgrade"]);
         } else {
             assert_eq!(commands[0].program, "sh");
-            assert!(commands[0].arguments[1].contains("opencode.ai/install"));
+            assert!(commands[0].arguments[1].contains("opencode.ai/v2/install"));
         }
         assert_eq!(commands.len(), 1);
     }

@@ -95,8 +95,8 @@ pub(crate) fn install_fake_harnesses(
                 },
             )
             .build(),
-        FakeHarness::new(&env.fake_bin, "opencode")
-            .version_line("opencode 9.9.9")
+        FakeHarness::new(&env.fake_bin, "opencode2")
+            .version_line("opencode2 v9.9.9")
             .build(),
         FakeHarness::new(&env.fake_bin, "agy")
             .version_line("agy 9.9.9")

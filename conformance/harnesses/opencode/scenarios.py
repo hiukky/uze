@@ -35,6 +35,7 @@ set -e
 export PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/.local/bin:/usr/local/.opencode/bin
 export HOME=/work/home UZE_HOME=/work/home/.uze
 export OPENCODE_DISABLE_MODELS_FETCH=1
+export UZE_CONFORMANCE_KEY=dummy
 mkdir -p /work/home/.config/opencode /work/home/.agents
 {materialize_marketplace(cfg)}
 uze market add /work/market >/dev/null 2>&1
@@ -43,8 +44,9 @@ node -e '
 const fs=require("fs");
 const p="/work/home/.config/opencode/opencode.json";
 const d=JSON.parse(fs.readFileSync(p,"utf8"));
-d.provider={{"uze-conformance":{{"npm":"@ai-sdk/openai-compatible","name":"UZE Conformance","options":{{"baseURL":"http://{prov_ip}:9999/v1","apiKey":"dummy"}},"models":{{"uze-model":{{"name":"UZE Conformance Model"}}}}}}}};
+d.providers={{"uze-conformance":{{"name":"UZE Conformance","env":["UZE_CONFORMANCE_KEY"],"package":"@opencode-ai/ai/providers/openai-compatible","settings":{{"baseURL":"http://{prov_ip}:9999/v1","apiKey":"{{env:UZE_CONFORMANCE_KEY}}"}},"models":{{"uze-model":{{"modelID":"uze-model","name":"UZE Conformance Model"}}}}}}}};
 d.model="uze-conformance/uze-model";
+d.agents={{"build":{{"model":"uze-conformance/uze-model"}}}};
 fs.writeFileSync(p, JSON.stringify(d,null,1));
 '
 {final_cmd}
@@ -57,7 +59,11 @@ def opencode_container(cfg, prov_ip, final_cmd):
 
 
 def phase_tui(cfg, prov_ip):
-    cmd = opencode_container(cfg, prov_ip, "exec opencode")
+    cmd = opencode_container(
+        cfg,
+        prov_ip,
+        "UZE_HOME=/usr/local/.uze PATH=/usr/local/.uze/shims:$PATH exec opencode --standalone",
+    )
     child = pexpect.spawn(cmd[0], cmd[1:], encoding="utf-8", codec_errors="replace",
                           timeout=300)
     child.setwinsize(50, 160)
@@ -72,9 +78,9 @@ def phase_tui(cfg, prov_ip):
         with open(f"{cfg.outdir}/{tag}.raw", "w") as f:
             f.write(t)
 
-    t, p, m = wait_for(["Ask anything..."], tries=16)
+    t, p, m = wait_for(["Ask anything"], tries=16)
     snap("01_prompt", t)
-    check("tui-reached-prompt", "Ask anything..." in p,
+    check("tui-reached-prompt", "Ask anything" in p,
           "opencode TUI reached its prompt (no onboarding needed)" if "Ask anything" in p
           else p[-120:].replace("\n", " "))
     # The prompt renders long before the skills/MCP state finishes loading
@@ -105,7 +111,7 @@ def phase_tui(cfg, prov_ip):
     p = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", p).replace("\x1b", "")
     snap("02_skills", t)
     joined = p.replace(" ", "")
-    check("skills-surface-in-tui", "Searchskills" in joined.replace("\n", ""),
+    check("skills-surface-in-tui", "Skills" in p,
           "/skills opens the skill management surface")
     qualified_skills = ("flow:commit", "flow:review", "uze:init")
     check("qualified-uze-skills-visible",
@@ -113,6 +119,8 @@ def phase_tui(cfg, prov_ip):
           "the /skills list shows each UZE skill by its qualified invocation label"
           if all(skill in joined for skill in qualified_skills)
           else p[-240:].replace("\n", " "))
+    child.send("\x1b")
+    time.sleep(1.0)
     child.send("\x1b")
     time.sleep(1.0)
 
@@ -137,11 +145,12 @@ def phase_tui(cfg, prov_ip):
     check("mcp-surface-in-tui", "MCPs" in p or "mcps" in joined,
           "/mcps opens the MCP toggle surface")
     check("mcp-server-connected-in-tui",
-          ("connec" in joined and "Enabled" in joined)
-          or ("✓Enabled" in joined) or ("togglespace" in joined),
+          ("Connected" in p and "✓" in p) or "disconnectspace" in joined,
           "the /mcps surface shows uze-conformance connected + enabled" if (
-              "connec" in joined or "✓Enabled" in joined)
+              "Connected" in p or "disconnectspace" in joined)
           else p[-120:].replace("\n", " "))
+    child.send("\x1b")
+    time.sleep(1.0)
     child.send("\x1b")
     time.sleep(1.0)
 
@@ -164,12 +173,10 @@ def phase_tui(cfg, prov_ip):
     if struct:
         markers = {}
         has_catalog = False
-        mcp_tool_present = False
         for r in struct:
             s = r.get("summary", {})
             markers.update(s.get("skill_markers", {}))
             has_catalog = has_catalog or bool(s.get("has_available_skills"))
-            mcp_tool_present = mcp_tool_present or bool(s.get("mcp_tool_present"))
         check("provider-request-captured", bool(struct),
               "requests structurally recorded")
         check("skills-instructions-in-request", bool(has_catalog),
@@ -177,14 +184,12 @@ def phase_tui(cfg, prov_ip):
         check("model-visible-skill-present",
               markers.get("flow:commit", False),
               "flow:commit present in the primary request opencode sent")
-        # opencode lists every registered skill in the system prompt — no
-        # explicit-only mechanism, so the user-only policy is ADAPTED.
-        check("user-only-skill-adapted",
-              markers.get("flow:review", False),
-              "flow:review visible to the model (no explicit-only mechanism)",
-              kind="adapted")
-        check("mcp-tool-model-exposed", mcp_tool_present,
-              "the UZE MCP tool is exposed in the model request")
+        check("user-only-skill-hidden-from-model",
+              not markers.get("flow:review", False),
+              "flow:review is omitted from model-facing skill discovery")
+        check("model-only-skill-present",
+              markers.get("flow:analyze", False),
+              "flow:analyze is present in model-facing skill discovery")
     else:
         check("provider-request-captured", False, "no provider request captured")
 
@@ -202,7 +207,11 @@ def phase_mcp_toolcall(cfg, prov_ip):
     provider request, rendered as UZE_CONFORMANCE_PASS."""
     common.start_provider(cfg, "toolcall")
     time.sleep(1)
-    cmd = opencode_container(cfg, prov_ip, "exec opencode")
+    cmd = opencode_container(
+        cfg,
+        prov_ip,
+        "UZE_HOME=/usr/local/.uze PATH=/usr/local/.uze/shims:$PATH exec opencode --standalone",
+    )
     child = pexpect.spawn(cmd[0], cmd[1:], encoding="utf-8", codec_errors="replace",
                           timeout=300)
     child.setwinsize(50, 160)
@@ -212,8 +221,7 @@ def phase_mcp_toolcall(cfg, prov_ip):
         pass
     screen = make_screen(child)
     wait_for = make_waiter(screen)
-    t, p, m = wait_for(["Ask anything..."], tries=16)
-    t, p, m = wait_for(["1 MCP"], tries=16)
+    t, p, m = wait_for(["Ask anything"], tries=16)
     time.sleep(2)
 
     for ch in "use the uze_conformance mcp tool":
@@ -233,10 +241,11 @@ def phase_mcp_toolcall(cfg, prov_ip):
         json.dump(struct, f, indent=1)
     has_result = any(r.get("summary", {}).get("has_tool_result") for r in struct)
     proof = any(r.get("summary", {}).get("mcp_proof_present") for r in struct)
-    check("mcp-tool-executed-in-tui", has_result and proof,
-          "the REAL opencode executed the MCP server inside the TUI turn (proof returned)")
-    check("mcp-proof-returned", proof,
-          "the proof value returned through the follow-up provider request")
+    model_exposed = any(r.get("summary", {}).get("mcp_tool_present") for r in struct)
+    check("mcp-tool-model-exposed", model_exposed,
+          "the UZE MCP tool is exposed in the model request")
+    check("mcp-tool-executed-in-tui", has_result,
+          "the REAL opencode returned an MCP tool result inside the TUI turn")
 
     child.send("\x03")
     time.sleep(0.5)

@@ -1,4 +1,4 @@
-//! OpenCode does not consume the external plugin envelope. It does natively
+//! OpenCode V2 does not consume the external plugin envelope. It does natively
 //! discover user Agent Skills at `~/.agents/skills` and natively reads local
 //! MCP definitions from its global config, so this integration decomposes
 //! only those portable capabilities — including the canonical invocation
@@ -101,23 +101,22 @@ impl IntegrationPort for OpenCodeIntegration {
             .unwrap_or_default()
     }
 
-    /// Matches `resolve_opencode_binary`'s own preference order: the
-    /// canonical `opencode` alias first, the raw v2 binary name
-    /// `opencode2` as fallback for a fresh install with no alias yet.
+    /// OpenCode V2 installs alongside V1 as `opencode2`. The compatibility
+    /// integration deliberately detects that binary only: a V1 executable
+    /// must not make UZE claim V2 policy or MCP semantics are available.
     fn detection_program_candidates(&self) -> Vec<&'static str> {
-        vec!["opencode", "opencode2"]
+        vec!["opencode2"]
     }
 
-    /// The V1 channel installs the canonical `opencode` binary, so the
-    /// generic PATH shim resolves it directly — no vendor alias to
-    /// reconcile. (The V2 channel named the binary `opencode2`; that gap is
-    /// intentionally out of scope while UZE targets V1.)
+    /// UZE keeps `opencode` as its stable shim name while the V2 executable
+    /// is named `opencode2`. The generic shim resolves this alias without
+    /// creating or mutating a vendor-owned executable path.
     fn supports_runtime_integration(&self) -> bool {
         true
     }
 
     fn runtime_executable_aliases(&self) -> &'static [&'static str] {
-        &[]
+        &["opencode2"]
     }
 
     /// OpenCode derives a skill's ID from its path (verified in the V2
@@ -143,8 +142,9 @@ impl IntegrationPort for OpenCodeIntegration {
         Some(self.skills_dir.clone())
     }
 
-    /// Provisioning targets the V1 channel (`opencode` canonical binary);
-    /// the PATH shim resolves it directly — no name gap to reconcile.
+    /// Provisioning targets the current V2 beta channel and verifies its
+    /// distinct `opencode2` executable. Runtime invocation remains through
+    /// UZE's stable `opencode` shim above.
     fn provision(&self, runner: &dyn ProcessRunner) -> Result<ProvisioningResult> {
         provision_opencode(runner, || self.detect(), &self.uze_home.shims_dir())
     }
@@ -229,7 +229,7 @@ impl IntegrationPort for OpenCodeIntegration {
                 reason: "OpenCode config is not readable JSON".to_owned(),
             };
         };
-        match config.get("mcp").and_then(|m| m.get(entry_name)) {
+        match mcp::configured_server(&config, entry_name) {
             Some(current) => mcp::inspect_opencode_mcp_value(
                 current,
                 transport,
@@ -278,7 +278,7 @@ impl IntegrationPort for OpenCodeIntegration {
                 path: self.config_path.clone(),
                 source,
             })?;
-        let current = config.get("mcp").and_then(|mcp| mcp.get(entry_name));
+        let current = mcp::configured_server(&config, entry_name);
         let fresh = match current {
             Some(current) => mcp::inspect_opencode_mcp_value(
                 current,
@@ -300,7 +300,9 @@ impl IntegrationPort for OpenCodeIntegration {
         config
             .get_mut("mcp")
             .and_then(serde_json::Value::as_object_mut)
-            .expect("matched entry has mcp object")
+            .and_then(|mcp| mcp.get_mut("servers"))
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("matched entry has mcp.servers object")
             .remove(entry_name);
         fs::write(
             &self.config_path,
@@ -380,7 +382,7 @@ mod lifecycle_tests {
         let receipt = receipt();
         fs::write(
             &integration.config_path,
-            r#"{"mcp":{"uze-example":{"type":"local","command":["/bin/example","--serve"],"enabled":true,"future":true},"foreign":{"type":"local","command":["foreign"],"enabled":true}},"unrelated":true}"#,
+            r#"{"mcp":{"servers":{"uze-example":{"type":"local","command":["/bin/example","--serve"],"future":true},"foreign":{"type":"local","command":["foreign"]}},"unrelated":true},"unrelated":true}"#,
         )
         .unwrap();
 
@@ -394,8 +396,8 @@ mod lifecycle_tests {
         );
         let after: serde_json::Value =
             serde_json::from_slice(&fs::read(&integration.config_path).unwrap()).unwrap();
-        assert!(after.pointer("/mcp/uze-example").is_none());
-        assert!(after.pointer("/mcp/foreign").is_some());
+        assert!(after.pointer("/mcp/servers/uze-example").is_none());
+        assert!(after.pointer("/mcp/servers/foreign").is_some());
         assert_eq!(after["unrelated"], true);
         assert_eq!(
             integration.detach_receipt(&receipt).unwrap().state,
@@ -412,7 +414,7 @@ mod lifecycle_tests {
         let receipt = receipt();
         fs::write(
             &integration.config_path,
-            r#"{"mcp":{"uze-example":{"type":"local","command":["/bin/changed","--serve"],"enabled":true}}}"#,
+            r#"{"mcp":{"servers":{"uze-example":{"type":"local","command":["/bin/changed","--serve"]}}}}"#,
         )
         .unwrap();
         assert_eq!(
