@@ -27,6 +27,8 @@ pub enum UzeError {
         path: PathBuf,
         source: serde_json::Error,
     },
+    #[error("invalid portable hook manifest at {path}: {reason}")]
+    InvalidHookManifest { path: PathBuf, reason: String },
     #[error("bundle manifest is missing in {0}")]
     MissingManifest(PathBuf),
     #[error("unsafe path reference in {path}: {reference}")]

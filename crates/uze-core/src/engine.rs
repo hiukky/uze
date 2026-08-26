@@ -87,8 +87,39 @@ pub fn package_resources_at(id: &PackageId, root: &std::path::Path) -> Result<Ve
     resources.extend(instruction_resources(id, root)?);
     resources.extend(mcp_resources(id, root)?);
     resources.extend(agent_resources(id, root)?);
+    resources.extend(hook_resources(id, root)?);
     resources.sort_by_key(|resource| resource.identity());
     Ok(resources)
+}
+
+/// Discovers a root `hooks.json` and materializes one stable resource per
+/// canonical group. The Store keeps the authored manifest unchanged; each
+/// resource payload is the normalized group used only for planning.
+fn hook_resources(id: &PackageId, package_root: &std::path::Path) -> Result<Vec<Resource>> {
+    let manifest_path = package_root.join(crate::hook::HOOKS_FILE_NAME);
+    if !manifest_path.is_file() {
+        return Ok(Vec::new());
+    }
+    let bytes = crate::project::read_file(&manifest_path)?;
+    crate::hook::parse_manifest(&manifest_path, &bytes)?
+        .into_iter()
+        .map(|hook| {
+            let name = hook.id.clone();
+            let payload =
+                serde_json::to_vec(&hook).expect("portable Hook serialization is infallible");
+            Ok(Resource::from_package_named(
+                id.clone(),
+                package_root.to_path_buf(),
+                Capability {
+                    kind: CapabilityKind::Hook,
+                    representation: Representation::Standard,
+                    path: manifest_path.clone(),
+                    payload,
+                },
+                name,
+            ))
+        })
+        .collect()
 }
 
 /// Discovers the portable Agent surface. Agent definitions are ordinary
@@ -269,6 +300,28 @@ mod discovery_tests {
         assert_eq!(
             resources[0].logical_capability_name().as_deref(),
             Some("reviewer")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn hooks_are_discovered_as_stable_named_resources() {
+        let root = temp("hooks");
+        let pkg = root.join("pkg");
+        fs::create_dir_all(&pkg).unwrap();
+        fs::write(pkg.join("hooks.json"), br#"{"hooks":{"PreToolUse":[{"id":"protect-env","matcher":"shell","hooks":[{"type":"command","command":"scripts/check"}]}],"PostToolUse":[{"hooks":[{"type":"command","command":"scripts/log","timeout":5}]}]}}"#).unwrap();
+        let id = PackageId::from_plugin_name("demo", Path::new("plugin.json")).unwrap();
+        let resources = package_resources_at(&id, &pkg).unwrap();
+        assert_eq!(resources.len(), 2);
+        assert_eq!(resources[0].capability.kind, CapabilityKind::Hook);
+        assert_eq!(
+            resources[0].resource_name.as_deref(),
+            Some("post_tool_use-0")
+        );
+        assert_eq!(resources[1].resource_name.as_deref(), Some("protect-env"));
+        assert_eq!(
+            resources[1].logical_capability_name().as_deref(),
+            Some("protect-env")
         );
         fs::remove_dir_all(root).unwrap();
     }

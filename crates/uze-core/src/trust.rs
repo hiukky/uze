@@ -88,35 +88,54 @@ impl TrustAuthority for NoTrustAuthority {
 
 /// Extracts the capabilities that introduce process execution.
 ///
-/// Only MCP servers declaring a `command` qualify today. A Skill is text a
-/// model reads; it carries no execution of its own, so it needs no consent
-/// beyond installing the package at all.
+/// MCP servers and portable Hooks both introduce declared process execution.
+/// A Skill is text a model reads; it carries no execution of its own.
 pub fn executable_capabilities(resources: &[&Resource]) -> Vec<ExecutableCapability> {
     resources
         .iter()
-        .filter(|resource| resource.capability.kind == CapabilityKind::Mcp)
-        .filter_map(|resource| {
-            let config: serde_json::Value =
-                serde_json::from_slice(&resource.capability.payload).ok()?;
-            let command = config.get("command")?.as_str()?.to_owned();
-            let arguments = config
-                .get("args")
-                .and_then(serde_json::Value::as_array)
-                .map(|values| {
-                    values
-                        .iter()
-                        .filter_map(serde_json::Value::as_str)
-                        .map(str::to_owned)
-                        .collect()
-                })
-                .unwrap_or_default();
-            Some(ExecutableCapability {
-                name: resource.name(),
-                command,
-                arguments,
-            })
+        .flat_map(|resource| match resource.capability.kind {
+            CapabilityKind::Mcp => mcp_execution(resource).into_iter().collect(),
+            CapabilityKind::Hook => hook_executions(resource),
+            _ => Vec::new(),
         })
         .collect()
+}
+
+fn mcp_execution(resource: &Resource) -> Option<ExecutableCapability> {
+    let config: serde_json::Value = serde_json::from_slice(&resource.capability.payload).ok()?;
+    let command = config.get("command")?.as_str()?.to_owned();
+    let arguments = config
+        .get("args")
+        .and_then(serde_json::Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(ExecutableCapability {
+        name: resource.name(),
+        command,
+        arguments,
+    })
+}
+
+fn hook_executions(resource: &Resource) -> Vec<ExecutableCapability> {
+    serde_json::from_slice::<crate::hook::PortableHook>(&resource.capability.payload)
+        .map(|hook| {
+            hook.handlers
+                .into_iter()
+                .enumerate()
+                .map(|(index, handler)| ExecutableCapability {
+                    name: format!("{}#{index}", hook.id),
+                    command: handler.command,
+                    arguments: Vec::new(),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Whether an update introduces execution the installed package did not
@@ -192,6 +211,37 @@ mod tests {
                 command: "./bin/server".to_owned(),
                 arguments: vec!["--stdio".to_owned()],
             }]
+        );
+    }
+
+    #[test]
+    fn hook_commands_require_the_same_explicit_trust() {
+        let hook = Resource::from_package_named(
+            PackageId::from_plugin_name("demo", &PathBuf::from("plugin.json")).unwrap(),
+            PathBuf::from("/store/demo"),
+            Capability {
+                kind: CapabilityKind::Hook,
+                representation: Representation::Standard,
+                path: PathBuf::from("/store/demo/hooks.json"),
+                payload: serde_json::to_vec(&crate::hook::PortableHook {
+                    id: "protect-env".to_owned(),
+                    event: crate::hook::HookEvent::PreToolUse,
+                    matchers: Vec::new(),
+                    handlers: vec![crate::hook::CommandHook {
+                        handler_type: crate::hook::CommandHandlerType::Command,
+                        command: "scripts/check".to_owned(),
+                        timeout: 10,
+                    }],
+                    effect: crate::hook::HookEffect::Deny,
+                    order: 0,
+                })
+                .unwrap(),
+            },
+            "protect-env".to_owned(),
+        );
+        assert_eq!(
+            executable_capabilities(&[&hook])[0].command,
+            "scripts/check"
         );
     }
 

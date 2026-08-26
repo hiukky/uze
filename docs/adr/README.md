@@ -70,3 +70,4 @@ never renumbered), using this structure (Michael Nygard style):
 - [030 — Skill + Invocation Policy replace the canonical Command](030-skill-plus-invocation-policy.md)
 - [031 — Adopt a canonical portable Agent capability](031-adopt-a-canonical-portable-agent-capability.md)
 - [032 — Restore marketplace.json as the Marketplace Manifest](032-restore-marketplace-manifest.md)
+- [033 — Adopt a canonical portable Hook capability](033-adopt-portable-hook-capability.md)

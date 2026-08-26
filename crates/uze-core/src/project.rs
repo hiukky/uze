@@ -106,6 +106,22 @@ impl Resource {
         }
     }
 
+    pub fn from_project_named(
+        root: PathBuf,
+        capability: Capability,
+        resource_name: String,
+    ) -> Self {
+        let skill_policy = derive_skill_policy(&capability);
+        Self {
+            origin: ResourceOrigin::Project { root },
+            capability,
+            resource_name: Some(resource_name),
+            skill_policy,
+            resolved_exposure_name: None,
+            resolved_artifact_target: None,
+        }
+    }
+
     pub fn name(&self) -> String {
         self.resource_name
             .clone()
@@ -146,6 +162,7 @@ impl Resource {
                 .file_stem()
                 .and_then(|name| name.to_str())
                 .map(str::to_owned),
+            CapabilityKind::Hook => self.resource_name.clone(),
             _ => None,
         }
     }
@@ -220,6 +237,7 @@ pub fn resolve_project(root: impl AsRef<Path>) -> Result<EffectiveEnvironment> {
     discover_skills(&root, &mut project_resources)?;
     discover_agents(&root, &mut project_resources)?;
     discover_mcp(&root, &mut project_resources)?;
+    discover_hooks(&root, &mut project_resources)?;
     project_resources.sort_by(|left, right| left.path.cmp(&right.path));
 
     Ok(EffectiveEnvironment {
@@ -287,6 +305,25 @@ fn discover_mcp(root: &Path, items: &mut Vec<Capability>) -> Result<()> {
             });
         }
     }
+    Ok(())
+}
+
+fn discover_hooks(root: &Path, items: &mut Vec<Capability>) -> Result<()> {
+    let path = root.join("hooks.json");
+    if !path.is_file() {
+        return Ok(());
+    }
+    let payload = read_file(&path)?;
+    // Validate now, just as project MCP discovery validates its manifest.
+    // Project resources deliberately keep the authored bytes as one local
+    // capability; package delivery expands groups into stable named resources.
+    crate::hook::parse_manifest(&path, &payload)?;
+    items.push(Capability {
+        kind: CapabilityKind::Hook,
+        representation: Representation::Standard,
+        path,
+        payload,
+    });
     Ok(())
 }
 
@@ -544,5 +581,22 @@ mod tests {
             "github".to_owned(),
         );
         assert_eq!(resource.skill_policy, None);
+    }
+
+    #[test]
+    fn a_project_hook_manifest_is_discovered_without_rewriting_its_bytes() {
+        let root = std::env::temp_dir().join(format!("uze-project-hook-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let bytes = br#"{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"scripts/check"}]}]}}"#;
+        std::fs::write(root.join("hooks.json"), bytes).unwrap();
+        let environment = resolve_project(&root).unwrap();
+        let hook = environment
+            .resources
+            .iter()
+            .find(|resource| resource.capability.kind == CapabilityKind::Hook)
+            .unwrap();
+        assert_eq!(hook.capability.payload, bytes);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

@@ -12,6 +12,7 @@ pub mod error;
 pub mod exposure;
 pub mod harness_runtime;
 pub mod home;
+pub mod hook;
 pub mod importer;
 pub mod importers;
 pub mod integration;
