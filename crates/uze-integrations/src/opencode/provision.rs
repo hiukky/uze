@@ -1,9 +1,10 @@
 //! OpenCode automatic provisioning and binary detection.
 //!
-//! Target channel: the official OpenCode V2 beta installer
-//! (`https://opencode.ai/v2/install`). V2 installs separately as
-//! `opencode2`; UZE's runtime shim maps its stable `opencode` entrypoint to
-//! that binary without creating a vendor-path alias.
+//! Target channel: the official OpenCode V2 installer
+//! (`https://opencode.ai/install`, legacy `https://opencode.ai/v2/install`).
+//! V2 is the standard channel and installs as `opencode`; the legacy
+//! `opencode2` name is still probed for backward compatibility. UZE's
+//! runtime shim keeps `opencode` stable without mutating vendor paths.
 
 use std::{path::Path, process::Command};
 
@@ -14,9 +15,9 @@ use uze_core::{
     provisioning::{ProcessRunner, ProcessSpec, ProvisionAction, ProvisioningResult},
 };
 
-/// Resolves the OpenCode V2 executable. V1's `opencode` is intentionally
-/// ignored: V1 and V2 are side-by-side products with different policy and
-/// MCP configuration semantics.
+/// Resolves the OpenCode V2 executable. V2 is the standard channel
+/// (`opencode`); the legacy `opencode2` alias is still accepted for
+/// backward compatibility.
 ///
 /// Resolved explicitly via `resolve_real_executable` (excluding
 /// `shims_dir`) rather than a bare `Command::new("opencode")` PATH lookup —
@@ -26,7 +27,7 @@ use uze_core::{
 /// so a bare lookup could re-enter UZE's own runtime shim instead of the
 /// vendor CLI.
 pub(super) fn resolve_opencode_binary(shims_dir: &Path) -> Option<(String, HarnessDetection)> {
-    let path = resolve_real_executable(&["opencode2"], shims_dir)?;
+    let path = resolve_real_executable(&["opencode", "opencode2"], shims_dir)?;
     let path = path.to_string_lossy().into_owned();
     let detection = detect_binary(&path);
     detection.present.then_some((path, detection))
@@ -99,7 +100,7 @@ pub(super) fn provision_opencode(
         return Ok(ProvisioningResult::failed(
             action,
             method,
-            "installer finished but `opencode2` could not be verified",
+            "installer finished but `opencode` could not be verified",
         ));
     }
     Ok(ProvisioningResult::verified(action, method, verified))

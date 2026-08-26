@@ -187,10 +187,10 @@ fn assert_native_skill_and_mcp(integration: &dyn IntegrationPort) {
     }
 }
 
-/// OpenCode has no package-level native concept (deliberate, ADR-020's
-/// non-goal, unchanged by ADR-021): Skills are consumed natively from the
-/// shared `~/.agents/skills` discovery root (direct standard), MCP is
-/// adapted through the managed `opencode.json` `mcp` config.
+/// OpenCode V2 is standard (`opencode`, legacy `opencode2` alias kept):
+/// Skills are consumed natively from the shared `~/.agents/skills` root
+/// (direct standard), MCP is now native via `opencode mcp add <name> --`
+/// into `mcp.servers` (no `remove` verb, so detach stays file rewrite).
 fn assert_opencode_native_skill_adapted_mcp(integration: &dyn IntegrationPort) {
     let capabilities = integration.capabilities();
     assert!(
@@ -200,12 +200,12 @@ fn assert_opencode_native_skill_adapted_mcp(integration: &dyn IntegrationPort) {
         "opencode: AgentSkill must be declared direct_standard (native shared-root discovery)"
     );
     assert!(
-        capabilities.adaptable.contains(&CapabilityKind::Mcp),
-        "opencode: MCP must be declared adaptable (managed opencode.json config)"
+        capabilities.native.contains(&CapabilityKind::Mcp),
+        "opencode: MCP must be declared native (`opencode mcp add` CLI)"
     );
     assert!(
-        capabilities.native.is_empty(),
-        "opencode: no capability kind may be declared native (no package-level concept exists)"
+        !capabilities.adaptable.contains(&CapabilityKind::Mcp),
+        "opencode: MCP must not be adaptable after native CLI migration"
     );
 }
 

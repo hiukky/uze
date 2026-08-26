@@ -37,7 +37,9 @@ mod mcp;
 mod provision;
 mod skills;
 
-use mcp::attach_mcp_config;
+use mcp::{
+    attach_mcp_config, attach_mcp_entry, provisioning_executable_for_attach, resolve_home_and_xdg,
+};
 use provision::{provision_opencode, resolve_opencode_binary};
 
 /// OpenCode does not consume the external plugin envelope. It does natively
@@ -89,9 +91,10 @@ impl IntegrationPort for OpenCodeIntegration {
     fn capabilities(&self) -> HarnessCapabilities {
         HarnessCapabilities {
             direct_standard: [CapabilityKind::AgentSkill].into_iter().collect(),
-            adaptable: [CapabilityKind::Mcp].into_iter().collect(),
+            native: [CapabilityKind::Mcp].into_iter().collect(),
             verification: VerificationStatus::Unverified,
-            evidence: "OpenCode documents global Agent Skills discovery at ~/.agents/skills and global local-MCP configuration under `mcp` in opencode.json. It does not consume the external plugin envelope, so UZE decomposes only those portable components. Invocation policy is preserved natively in OpenCode V2 SKILL.md frontmatter (metadata.opencode/autoinvoke: false hides model-facing discovery while explicit activation by ID keeps working; slash: false hides the skill from interactive command catalogs), so the vendor Command primitive is never needed for a canonical Skill (ADR-030 §9).".to_owned(),
+            evidence: "OpenCode V2 documents global Agent Skills at ~/.agents/skills and local MCP via `opencode mcp add <name> -- <command>` into global `mcp.servers.<name>.command` in opencode.json (verified `opencode mcp add --help` requires ` -- ` separator; no `remove` verb so detach stays file rewrite). Skills preserve invocation policy natively in SKILL.md frontmatter (metadata.opencode/autoinvoke/slash — ADR-030 §9) without Command primitive."
+                .to_owned(),
             ..HarnessCapabilities::default()
         }
     }
@@ -101,16 +104,14 @@ impl IntegrationPort for OpenCodeIntegration {
             .unwrap_or_default()
     }
 
-    /// OpenCode V2 installs alongside V1 as `opencode2`. The compatibility
-    /// integration deliberately detects that binary only: a V1 executable
-    /// must not make UZE claim V2 policy or MCP semantics are available.
+    /// OpenCode V2 installs as `opencode` (current, 1.18.x) with a legacy
+    /// `opencode2` alias. Both are probed in PATH order excluding the shim.
     fn detection_program_candidates(&self) -> Vec<&'static str> {
-        vec!["opencode2"]
+        vec!["opencode", "opencode2"]
     }
 
-    /// UZE keeps `opencode` as its stable shim name while the V2 executable
-    /// is named `opencode2`. The generic shim resolves this alias without
-    /// creating or mutating a vendor-owned executable path.
+    /// UZE keeps `opencode` as its stable shim name; the legacy `opencode2`
+    /// alias is still resolved generically without mutating vendor paths.
     fn supports_runtime_integration(&self) -> bool {
         true
     }
@@ -190,7 +191,34 @@ impl IntegrationPort for OpenCodeIntegration {
                 command,
                 args,
                 ..
-            } => attach_mcp_config(&self.config_path, entry_name, command, args),
+            } => {
+                if let Some(exe) = provisioning_executable_for_attach(&self.uze_home.shims_dir()) {
+                    let (home_opt, xdg_opt) = resolve_home_and_xdg(&self.config_path);
+                    // Only use the native CLI when we can derive a HOME/XDG that
+                    // matches this integration's config_path (production:
+                    // $HOME/.config/opencode/opencode.json or
+                    // $XDG_CONFIG_HOME/opencode/opencode.json). Isolated tests
+                    // use <tmp>/config/opencode.json — there we keep the
+                    // direct file path so inspection stays on the same file.
+                    // If the CLI fails (e.g. shim mis-resolution in a test
+                    // without a real opencode on PATH), fall back to the
+                    // direct file path so tests stay deterministic.
+                    if let Some(home) = home_opt
+                        && let Ok(path) = attach_mcp_entry(
+                            &exe,
+                            &home,
+                            xdg_opt.as_deref(),
+                            entry_name,
+                            command,
+                            args,
+                            &self.config_path,
+                        )
+                    {
+                        return Ok(path);
+                    }
+                }
+                attach_mcp_config(&self.config_path, entry_name, command, args)
+            }
             _ => Ok(None),
         }
     }

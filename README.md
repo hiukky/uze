@@ -40,7 +40,7 @@ see `uze --help` or run `uze` for the terminal UI.
 </thead><tbody>
 <tr><td align="left">claude</td><td>🟢</td><td>🟢</td><td>🟢</td><td>🟢</td><td>🟢</td><td>⚪</td><td>⚪</td><td>🧪</td></tr>
 <tr><td align="left">codex</td><td>🟢</td><td>🟢</td><td>🟢</td><td>🟢</td><td>🟢</td><td>⚪</td><td>⚪</td><td>—</td></tr>
-<tr><td align="left">opencode</td><td>🟢</td><td>🟢</td><td>🟢</td><td>🟡</td><td>⚪</td><td>⚪</td><td>⚪</td><td>🧪</td></tr>
+<tr><td align="left">opencode</td><td>🟢</td><td>🟢</td><td>🟢</td><td>🟢</td><td>⚪</td><td>⚪</td><td>⚪</td><td>🧪</td></tr>
 <tr><td align="left">Antigravity CLI</td><td>🟢</td><td>🟢</td><td>🟡</td><td>🟢</td><td>🟢</td><td>⚪</td><td>⚪</td><td>—</td></tr>
 </tbody></table>
 

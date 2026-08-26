@@ -135,6 +135,7 @@ fn fake_harness_bin_dir(label: &str) -> PathBuf {
     for (name, version_line) in [
         ("claude", "9.9.9 (Fake Claude)"),
         ("codex", "codex-cli 9.9.9"),
+        ("opencode", "opencode v9.9.9"),
         ("opencode2", "opencode2 v9.9.9"),
         ("agy", "agy 9.9.9"),
     ] {
@@ -497,7 +498,8 @@ fn setup_then_add_attaches_the_mcp_fixture_idempotently_and_removal_works() {
     // under Generated Native Package (ADR-020/ADR-021) an MCP-only package
     // is just as eligible as a Skill-only one, so BOTH Claude and Codex now
     // receive package-level delivery covering the one MCP resource — no
-    // resource-level `mcp add` for either.
+    // resource-level `mcp add` for either. Opencode has no package envelope
+    // and stays resource-level via native `opencode mcp add` (now 🟢 Native).
     let (market_args, install_args) =
         uze_testkit::marketplace::marketplace_install_args(&home, &package);
     run(&market_args.iter().map(String::as_str).collect::<Vec<_>>());
@@ -507,10 +509,10 @@ fn setup_then_add_attaches_the_mcp_fixture_idempotently_and_removal_works() {
 
     let mcp_state = fake_bin.join("mcp-state");
     assert!(
-        !mcp_state
+        mcp_state
             .join("uze-mcp-conformance-uze-conformance")
             .is_file(),
-        "the MCP resource is now covered by package delivery on both harnesses, so neither should have run a resource-level `mcp add`"
+        "opencode should have run resource-level `opencode mcp add` for its native MCP entry (no package), while claude/codex stay package-level and should not have produced a resource-level mcp add"
     );
     let ledger: serde_json::Value =
         serde_json::from_slice(&std::fs::read(uze_home.join("state/attachments.json")).unwrap())

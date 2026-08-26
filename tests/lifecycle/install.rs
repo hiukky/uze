@@ -193,7 +193,7 @@ fn one_plugin_install_is_planned_once_for_native_and_decomposed_harnesses() {
     ));
     assert_eq!(
         opencode.exposure_plan(mcp).route,
-        CompatibilityRoute::Adaptable
+        CompatibilityRoute::Native
     );
     assert!(matches!(
         opencode.exposure_plan(mcp).mechanism,
