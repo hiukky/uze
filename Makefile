@@ -5,7 +5,7 @@ UZE_BIN ?= target/debug/uze
 RELEASE_BIN ?= target/release/uze
 INSTALL_ARGS ?= --force
 
-.PHONY: help build release install install-wsl-lab playground-lab run test test-acceptance test-conformance test-real-harness docs-harness-matrix check fmt lint coverage version clean changelog lab-image lab-run lab-watch
+.PHONY: help build release install install-wsl-lab playground-lab run test test-acceptance test-conformance test-real-harness docs-harness-matrix check fmt lint coverage version clean changelog lab-image lab-run lab-watch lab-replay
 
 help: ## Show the available local-development targets.
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z0-9_.-]+:.*##/ { printf "  %-12s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -61,7 +61,10 @@ lab-image: ## Build the Lab harness image (installs channel-latest harnesses).
 lab-run: ## Run the isolation vertical for $(HARNESS) (3x clean is the gate).
 	python3 conformance/lab.py --harness $(HARNESS)
 
-lab-watch: ## Replay the most recent recorded TUI session (rendered correctly, ANSI intact).
+lab-watch: ## Live-follow the most recent Lab TUI recording (auto-detected; waits for the next run).
+	LAB_WATCH="$(LAB_WATCH)" python3 conformance/lab-watch.py
+
+lab-replay: ## Replay the most recent recorded TUI session (rendered correctly, ANSI intact).
 	@watch="$${LAB_WATCH:-$$(ls -t /tmp/harness-conformance/*/run*/tui.typescript 2>/dev/null | head -n 1)}"; \
 	recent="$$(ls -dt /tmp/harness-conformance/*/run* 2>/dev/null | head -n 1)"; \
 	if [ -z "$$watch" ] || [ ! -f "$$watch" ]; then \
@@ -72,8 +75,7 @@ lab-watch: ## Replay the most recent recorded TUI session (rendered correctly, A
 				echo "  (most recent run dir: $$recent)"; \
 			else \
 				harness="$$(basename "$$(dirname "$$recent")")"; \
-				echo "  (most recent run dir: $$recent — no verdict.json, that run did not complete)"; \
-				echo "  re-run it: make lab-run HARNESS=$$harness"; \
+				echo "  ($$recent did not complete — re-run: make lab-run HARNESS=$$harness)"; \
 			fi; \
 		fi; \
 		exit 1; \
