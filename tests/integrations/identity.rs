@@ -394,3 +394,67 @@ fn is_word_boundary_match(haystack: &str, start: usize, len: usize) -> bool {
     let after_ok = end >= bytes.len() || !bytes[end].is_ascii_alphanumeric();
     before_ok && after_ok
 }
+
+/// Shared neutrality scanner for the application and CLI/TUI guards below.
+/// `dir` is walked recursively; comments are stripped (they are prose
+/// allowed to explain vendor behavior) and `#[cfg(test)]` modules are
+/// stripped (they are fixtures allowed to name harnesses).
+fn vendor_names_in_production(dir: &Path) -> Vec<String> {
+    let mut files = Vec::new();
+    rust_files(dir, &mut files);
+    let mut violations = Vec::new();
+    for path in &files {
+        let Ok(contents) = fs::read_to_string(path) else {
+            continue;
+        };
+        for (line_number, line) in strip_test_modules(&contents) {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("//") {
+                continue;
+            }
+            let lower = line.to_lowercase();
+            for vendor in VENDOR_NAMES {
+                if lower
+                    .match_indices(vendor)
+                    .any(|(index, _)| is_word_boundary_match(&lower, index, vendor.len()))
+                {
+                    violations.push(format!(
+                        "{}:{}: contains vendor name `{vendor}`",
+                        path.display(),
+                        line_number + 1
+                    ));
+                }
+            }
+        }
+    }
+    violations
+}
+
+/// The Application orchestrates integrations; it must not know which
+/// harnesses exist. Composition is `uze-integrations`' registry's job.
+#[test]
+fn application_never_names_a_vendor_harness() {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("crates/uze-application/src");
+    let violations = vendor_names_in_production(&dir);
+    assert!(
+        violations.is_empty(),
+        "uze-application production logic must never name a specific harness (composition \
+         lives in uze-integrations' registry):\n{}",
+        violations.join("\n")
+    );
+}
+
+/// CLI/TUI presentation consumes registry descriptors and application read
+/// models; a hard-coded vendor list here would drift the moment a harness
+/// joins the registry.
+#[test]
+fn cli_and_tui_never_name_a_vendor_harness() {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+    let violations = vendor_names_in_production(&dir);
+    assert!(
+        violations.is_empty(),
+        "CLI/TUI production logic must never name a specific harness (descriptors and read \
+         models only):\n{}",
+        violations.join("\n")
+    );
+}

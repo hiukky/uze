@@ -22,9 +22,10 @@ use uze_core::{
     harness_runtime::{RuntimeContext, resolve_real_executable},
     home::UzeHome,
     integration::{
-        AttachmentInspection, AttachmentReceipt, AttachmentState, HarnessDetection,
-        IntegrationPort, ManagedArtifact, PublicationStatus, default_exposure_name_candidates,
-        detach_standard_receipt, inspect_standard_receipt, qualified_exposure_name_candidates,
+        AttachmentInspection, AttachmentReceipt, AttachmentState, ContextDelivery,
+        HarnessDetection, IntegrationPort, ManagedArtifact, PublicationStatus,
+        default_exposure_name_candidates, detach_standard_receipt, inspect_standard_receipt,
+        qualified_exposure_name_candidates,
     },
     project::Resource,
     provisioning::{ProcessRunner, ProcessSpec, ProvisioningResult},
@@ -219,6 +220,18 @@ impl IntegrationPort for ClaudeIntegration {
 
     fn display_name(&self) -> &'static str {
         "claude"
+    }
+
+    fn invocation_prefix(&self) -> &'static str {
+        "/"
+    }
+
+    /// Reads project context only through the `@AGENTS.md` bridge region in
+    /// `CLAUDE.md` — the vendor's own documented interop path.
+    fn context_delivery(&self) -> ContextDelivery {
+        ContextDelivery::Bridge {
+            file_name: "CLAUDE.md",
+        }
     }
 
     fn capabilities(&self) -> HarnessCapabilities {

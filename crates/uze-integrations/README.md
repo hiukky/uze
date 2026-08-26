@@ -5,7 +5,30 @@ implements `uze-core::integration::IntegrationPort` — the only contract Core
 knows. No integration imports another; no harness name appears in
 `uze-core`, `uze-application`'s Store/Engine/Router layer, or any other
 integration. See `docs/adr/005-establish-peer-harness-integrations.md`.
-Enforced structurally, not just by convention: `tests/integration_conformance.rs::core_never_names_a_vendor_harness`.
+Enforced structurally, not just by convention: `tests/integrations/identity.rs`
+(`core_never_names_a_vendor_harness`, `application_never_names_a_vendor_harness`,
+`cli_and_tui_never_name_a_vendor_harness`).
+
+## Registry / composition root
+
+`registry::IntegrationRegistry` is the **single production composition
+root**: the only place that constructs the concrete integration types.
+`builtin(&home)` composes the environment-based set; `isolated(root,
+&home)` composes the same set against a throwaway root for tooling and
+tests. Everything else — `UzeApplication::from_env`, the PATH shim
+dispatch, the README harness-matrix generator — consumes the registry or
+the `IntegrationPort` contract, never a concrete type.
+
+```rust
+let registry = IntegrationRegistry::builtin(&home)?; // names the harnesses
+for integration in registry.iter() { /* generic */ }
+registry.resolve("claude")?;        // id or declared alias
+registry.by_shim_name("claude");    // runtime-shim opt-ins only
+```
+
+A new harness therefore means: one vertical under `src/<harness>/`, one
+entry in `builtin`/`isolated`, conformance, and docs — nothing in core,
+application, CLI, or TUI changes.
 
 This is about *delivery*: canonical Store content projected out to each
 harness. Acquisition can, in principle, run the other direction — a

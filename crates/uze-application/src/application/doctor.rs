@@ -2,7 +2,11 @@
 
 #![allow(clippy::empty_line_after_doc_comments)]
 
-use uze_core::{Result, integration::AttachmentState, state};
+use uze_core::{
+    Result,
+    integration::{AttachmentState, ContextDelivery},
+    state,
+};
 
 use super::*;
 
@@ -112,7 +116,10 @@ impl UzeApplication {
                 // exactly the state this field exists to surface.
                 publication: integration.publication(&installed),
                 capabilities: integration.capabilities(),
-                native_instructions: NATIVE_INSTRUCTION_INTEGRATIONS.contains(&integration.id()),
+                native_instructions: matches!(
+                    integration.context_delivery(),
+                    ContextDelivery::Native { .. }
+                ),
             })
             .collect()
     }

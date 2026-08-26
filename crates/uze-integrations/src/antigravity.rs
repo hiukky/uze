@@ -64,8 +64,8 @@ use uze_core::{
     harness_runtime::resolve_real_executable,
     home::UzeHome,
     integration::{
-        AttachmentInspection, AttachmentReceipt, AttachmentState, HarnessDetection,
-        IntegrationPort, ManagedArtifact, default_exposure_name_candidates,
+        AttachmentInspection, AttachmentReceipt, AttachmentState, ContextDelivery,
+        HarnessDetection, IntegrationPort, ManagedArtifact, default_exposure_name_candidates,
         detach_standard_receipt, inspect_standard_receipt,
     },
     project::Resource,
@@ -170,6 +170,15 @@ impl IntegrationPort for AntigravityIntegration {
 
     fn aliases(&self) -> &'static [&'static str] {
         &["agy", "antigravity-cli"]
+    }
+
+    /// Reads the shared `AGENTS.md` natively (official docs: identical
+    /// workspace context rules) plus the legacy `GEMINI.md` global-rules
+    /// file, which is observed for portability reporting only.
+    fn context_delivery(&self) -> ContextDelivery {
+        ContextDelivery::Native {
+            files: &["GEMINI.md"],
+        }
     }
 
     fn capabilities(&self) -> HarnessCapabilities {

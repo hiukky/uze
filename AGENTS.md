@@ -124,11 +124,18 @@ uze-integrations (Claude, Codex, Antigravity, OpenCode — implement Integration
 
 `uze-core` production code never names a specific harness (Claude/Codex/
 OpenCode/Antigravity) — enforced by
-`tests/integration_conformance.rs::core_never_names_a_vendor_harness`.
-Vendor-specific knowledge lives only in `uze-integrations`. A new harness
-should require no semantic change to Store, Engine, or Router — only a new
-`IntegrationPort` implementation. Antigravity CLI is the Google-family v0
-harness (ADR-027).
+`tests/integrations/identity.rs::core_never_names_a_vendor_harness`; the
+same neutrality holds for `uze-application` and `src/` (CLI/TUI),
+enforced by `application_never_names_a_vendor_harness` and
+`cli_and_tui_never_name_a_vendor_harness`. Vendor-specific knowledge lives
+only in `uze-integrations`, whose `registry::IntegrationRegistry`
+(`builtin`/`isolated`) is the single composition root that names the
+concrete integration types — application, the runtime shim, and tooling
+all consume the registry or the `IntegrationPort` contract. A new harness
+should require no semantic change to Store, Engine, or Router and no
+change to core/application/CLI/TUI — only a new integration vertical, one
+registry entry, conformance, and docs. Antigravity CLI is the Google-family
+v0 harness (ADR-027).
 
 Key domain concepts (see `docs/architecture/invariants.md` for the guarded
 properties):

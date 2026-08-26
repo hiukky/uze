@@ -22,7 +22,6 @@ pub mod project_root;
 pub mod provisioning;
 pub mod reconciliation;
 pub mod router;
-pub mod runtime;
 pub mod shell_path;
 pub mod skill;
 pub mod state;

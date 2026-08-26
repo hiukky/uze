@@ -22,19 +22,16 @@ use uze::{
     PackageId, UzeHome,
     acquisition::{PackageSource, Provenance, ResolvedSource},
     capability::{Capability, CapabilityKind, Representation},
-    integration::IntegrationPort,
+    integration::{ContextDelivery, IntegrationPort},
     project::Resource,
     router::CompatibilityRoute,
     store::StoredPackage,
 };
-use uze_integrations::{
-    antigravity::AntigravityIntegration, claude::ClaudeIntegration, codex::CodexIntegration,
-    opencode::OpenCodeIntegration,
-};
+use uze_integrations::registry::IntegrationRegistry;
 
 /// Planned harnesses: no `IntegrationPort` yet, so matrix cells would be
 /// meaningless — listed as roadmap only, and they flip the moment they land.
-const PLANNED_HARNESSES: [&str; 2] = ["Cursor CLI", "Muse"];
+const PLANNED_HARNESSES: [&str; 3] = ["Cursor CLI", "Muse", "PI"];
 
 const MARKER_START: &str = "<!-- uze-matrix:start -->";
 const MARKER_END: &str = "<!-- uze-matrix:end -->";
@@ -144,11 +141,7 @@ fn package_route(integration: &dyn IntegrationPort) -> Option<CompatibilityRoute
 }
 
 struct Harness {
-    id: &'static str,
     integration: Box<dyn IntegrationPort>,
-    /// How a human/agent invokes an exposed capability on this harness
-    /// (`{name}` is the exposure candidate).
-    invocation: &'static str,
 }
 
 /// Real setup state, like the L1 contract tests record before asking for
@@ -174,40 +167,15 @@ fn harnesses() -> Vec<Harness> {
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     let uze_home = UzeHome::at(root.join("uze"));
-    let claude = ClaudeIntegration::new(root.join("claude"), uze_home.clone());
-    let codex = CodexIntegration::new(root.join("agents"), uze_home.clone());
-    let opencode = OpenCodeIntegration::new(
-        root.join("agents"),
-        root.join("opencode-config.json"),
-        uze_home.clone(),
-    );
-    let antigravity = AntigravityIntegration::new(root.join("agents"), uze_home.clone());
-    mark_setup(&uze_home, &claude);
-    mark_setup(&uze_home, &codex);
-    mark_setup(&uze_home, &opencode);
-    mark_setup(&uze_home, &antigravity);
-    vec![
-        Harness {
-            id: "Claude",
-            integration: Box::new(claude),
-            invocation: "/{name}",
-        },
-        Harness {
-            id: "Codex",
-            integration: Box::new(codex),
-            invocation: "${name}",
-        },
-        Harness {
-            id: "OpenCode",
-            integration: Box::new(opencode),
-            invocation: "/{name}",
-        },
-        Harness {
-            id: "Antigravity",
-            integration: Box::new(antigravity),
-            invocation: "{name}",
-        },
-    ]
+    let registry = IntegrationRegistry::isolated(&root, &uze_home);
+    let integrations = registry.into_inner();
+    for integration in &integrations {
+        mark_setup(&uze_home, integration.as_ref());
+    }
+    integrations
+        .into_iter()
+        .map(|integration| Harness { integration })
+        .collect()
 }
 
 /// Effective delivery route for a resource: the native package plan's route
@@ -256,7 +224,7 @@ fn matrix_block() -> String {
         let package = package_route(integration).map(route_symbol).unwrap_or("⚪");
         out.push_str(&format!(
             "<tr><td align=\"left\">{}</td><td>🟢</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>\n",
-            harness.id,
+            integration.display_name(),
             route_symbol(effective_route(
                 integration,
                 &default_skill,
@@ -288,8 +256,21 @@ fn matrix_block() -> String {
     out.push('\n');
     out.push_str("> 🟢 native · 🟡 adapted · 🟠 degraded · ⚪ roadmap · 🧪 experimental · — n/a\n");
     out.push_str(">\n");
+    let bridge_harnesses: Vec<&str> = harnesses()
+        .iter()
+        .filter_map(|harness| {
+            matches!(
+                harness.integration.context_delivery(),
+                ContextDelivery::Bridge { .. }
+            )
+            .then_some(harness.integration.display_name())
+        })
+        .collect();
     out.push_str("> **Project context:** All harnesses read `AGENTS.md` natively via uze;\n");
-    out.push_str("> `@AGENTS.md` bridge for Claude, native file for others.\n");
+    out.push_str(&format!(
+        "> `@AGENTS.md` bridge for {}, native file for others.\n",
+        bridge_harnesses.join(", ")
+    ));
     out.push('\n');
 
     out.push_str("### Planned harnesses\n\n");
@@ -315,6 +296,7 @@ fn matrix_block() -> String {
     );
     for harness in harnesses() {
         let integration = harness.integration.as_ref();
+        let prefix = integration.invocation_prefix();
         let default_name = integration
             .exposure_name_candidates(&default_skill)
             .into_iter()
@@ -326,10 +308,12 @@ fn matrix_block() -> String {
             .next()
             .unwrap_or_else(|| "review".to_owned());
         out.push_str(&format!(
-            "<tr><td align=\"left\">{}</td><td><code>{}</code></td><td><code>{}</code></td></tr>\n",
-            harness.id,
-            harness.invocation.replace("{name}", &default_name),
-            harness.invocation.replace("{name}", &user_only_name),
+            "<tr><td align=\"left\">{}</td><td><code>{}{}</code></td><td><code>{}{}</code></td></tr>\n",
+            integration.display_name(),
+            prefix,
+            default_name,
+            prefix,
+            user_only_name,
         ));
     }
     out.push_str("</tbody></table>\n");

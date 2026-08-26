@@ -20,9 +20,9 @@ use uze_core::{
     harness_runtime::resolve_real_executable,
     home::UzeHome,
     integration::{
-        AttachmentInspection, AttachmentReceipt, AttachmentState, HarnessDetection,
-        IntegrationPort, ManagedArtifact, PublicationStatus, default_exposure_name_candidates,
-        detach_standard_receipt, inspect_standard_receipt,
+        AttachmentInspection, AttachmentReceipt, AttachmentState, ContextDelivery,
+        HarnessDetection, IntegrationPort, ManagedArtifact, PublicationStatus,
+        default_exposure_name_candidates, detach_standard_receipt, inspect_standard_receipt,
     },
     project::Resource,
     provisioning::{ProcessRunner, ProcessSpec, ProvisioningResult},
@@ -233,6 +233,16 @@ impl CodexIntegration {
 impl IntegrationPort for CodexIntegration {
     fn id(&self) -> &'static str {
         "codex"
+    }
+
+    fn invocation_prefix(&self) -> &'static str {
+        "$"
+    }
+
+    /// Reads the shared `AGENTS.md` natively (it is the origin harness for
+    /// the convention); UZE maintains no artifact for it.
+    fn context_delivery(&self) -> ContextDelivery {
+        ContextDelivery::Native { files: &[] }
     }
 
     fn capabilities(&self) -> HarnessCapabilities {

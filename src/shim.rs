@@ -1,10 +1,12 @@
 //! PATH shim entry point.
 //!
 //! This is the part of `uze` that runs when the binary is invoked under a
-//! symlinked name (`claude`, `codex`, `opencode`) rather than as
-//! `uze` itself — see `UzeApplication::ensure_runtime_shim`, which is what
-//! creates that symlink at `~/.uze/shims/<name>` as an ordinary part of
-//! `uze setup <harness>`, for whichever integrations opt in.
+//! shim symlink name (`~/.uze/shims/<name>`, e.g. `claude`, `codex`,
+//! `opencode`) rather than as `uze` itself — see
+//! `UzeApplication::ensure_runtime_shim`, which is what creates that
+//! symlink at `~/.uze/shims/<name>` as an ordinary part of
+//! `uze setup <harness>`, for whichever integrations opt in. Which names
+//! count is the registry's answer, never this file's.
 //!
 //! Deliberately thin, and deliberately generic: every vendor-specific
 //! decision comes from `IntegrationPort::runtime_contribution`. This file
@@ -28,21 +30,21 @@ use std::{
 use uze::{
     UzeHome,
     harness_runtime::{self, HarnessRuntimeContribution, RuntimeContext},
-    integration::IntegrationPort,
 };
-use uze_integrations::{
-    claude::ClaudeIntegration, codex::CodexIntegration, opencode::OpenCodeIntegration,
-};
+use uze_integrations::registry::IntegrationRegistry;
 
-const KNOWN_SHIM_NAMES: &[&str] = &["claude", "codex", "opencode"];
-
-/// `None` when this process was not invoked through one of the known shim
-/// names — the ordinary `uze <subcommand>` path in `main()` continues
+/// `None` when this process was not invoked through one of the registry's
+/// shim names — the ordinary `uze <subcommand>` path in `main()` continues
 /// unchanged, including a direct `uze` invocation.
 pub fn detect() -> Option<String> {
     let argv0 = env::args_os().next()?;
     let name = Path::new(&argv0).file_name()?.to_str()?.to_owned();
-    KNOWN_SHIM_NAMES.contains(&name.as_str()).then_some(name)
+    let home = UzeHome::from_env().ok()?;
+    let registry = IntegrationRegistry::builtin(&home).ok()?;
+    registry
+        .shim_names()
+        .contains(&name.as_str())
+        .then_some(name)
 }
 
 /// Diverges. On success this replaces the process image (`exec`) and never
@@ -71,7 +73,14 @@ pub fn run(shim_name: &str) -> ! {
     // that is the entire opt-in signal (see
     // `IntegrationPort::supports_runtime_integration`'s doc comment). No
     // separate enabled/disabled state to read.
-    let integration = build_integration(shim_name, &home);
+    let registry = match IntegrationRegistry::builtin(&home) {
+        Ok(registry) => registry,
+        Err(error) => die(&format!(
+            "cannot compose the integration registry ({error}); refusing to guess at a real \
+             `{shim_name}` to avoid a possible shim loop"
+        )),
+    };
+    let integration = registry.by_shim_name(shim_name);
 
     // Resolve the real binary under the invoked name first, falling back to
     // any alternate names the integration declares (e.g. OpenCode's v2
@@ -118,24 +127,6 @@ pub fn run(shim_name: &str) -> ! {
     }
 
     exec_or_die(&executable, &original_args, &contribution);
-}
-
-fn build_integration(shim_name: &str, home: &UzeHome) -> Option<Box<dyn IntegrationPort>> {
-    match shim_name {
-        "claude" => ClaudeIntegration::from_env(home.clone())
-            .ok()
-            .map(|integration| Box::new(integration) as Box<dyn IntegrationPort>),
-        "codex" => CodexIntegration::from_env(home.clone())
-            .ok()
-            .map(|integration| Box::new(integration) as Box<dyn IntegrationPort>),
-        "opencode" => OpenCodeIntegration::from_env(home.clone())
-            .ok()
-            .map(|integration| Box::new(integration) as Box<dyn IntegrationPort>),
-        // `antigravity` never opts into a runtime shim
-        // (`supports_runtime_integration` stays false), so there is no arm
-        // for it here — and none is needed.
-        _ => None,
-    }
 }
 
 /// Exact argv passthrough: `contribution.extra_args` are prepended before

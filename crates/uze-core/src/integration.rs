@@ -13,7 +13,6 @@ use crate::{
     project::EffectiveEnvironment,
     provisioning::ProvisionStatus,
     router::{HarnessCapabilities, RouteDecision, route},
-    runtime::RuntimeSupport,
     state,
     store::StoredPackage,
 };
@@ -127,6 +126,28 @@ pub enum PublicationStatus {
     Unpublished(String),
 }
 
+/// How an integration's harness consumes a project's shared `AGENTS.md`
+/// context — the delivery half of the Context Manager's per-harness model
+/// (`context inspect|plan|reconcile`). The Core only defines the
+/// vocabulary; which harness has which delivery is each integration's own
+/// declaration, never the Application's.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ContextDelivery {
+    /// Reads the shared `AGENTS.md` directly; UZE maintains no artifact and
+    /// writes nothing for this harness. `files` names any *additional*
+    /// native context files the harness reads (e.g. a hand-written vendor
+    /// instructions file), observed for portability reporting only — never
+    /// written by UZE.
+    Native { files: &'static [&'static str] },
+    /// Reaches the shared context only through a delimited bridge region
+    /// (an `@AGENTS.md` import) inside the harness's own native file, which
+    /// `context inspect|plan|reconcile` maintain.
+    Bridge { file_name: &'static str },
+    /// No project-context delivery is modeled for this harness; `context`
+    /// commands never report it.
+    None,
+}
+
 pub trait IntegrationPort {
     fn id(&self) -> &'static str;
 
@@ -140,10 +161,6 @@ pub trait IntegrationPort {
     }
 
     fn capabilities(&self) -> HarnessCapabilities;
-
-    fn runtime_support(&self) -> RuntimeSupport {
-        RuntimeSupport::default()
-    }
 
     /// This integration's opt-in contribution to a shim-mediated harness
     /// launch (`RUNTIME INFRASTRUCTURE`, see `harness_runtime`) — entirely
@@ -179,6 +196,31 @@ pub trait IntegrationPort {
     /// alias file ever being created outside `$UZE_HOME`.
     fn runtime_executable_aliases(&self) -> &'static [&'static str] {
         &[]
+    }
+
+    /// The physical name this harness's PATH shim symlink is created under
+    /// (`shims_dir/<shim_name>`) — the name a user actually types. Defaults
+    /// to the first alias, else the id. Shared by `ensure_runtime_shim`
+    /// (creation) and the shim's own invocation detection (dispatch).
+    fn shim_name(&self) -> &'static str {
+        self.aliases().first().copied().unwrap_or(self.id())
+    }
+
+    /// How this harness consumes a project's shared `AGENTS.md` context
+    /// (see [`ContextDelivery`]). Drives `context inspect|plan|reconcile`;
+    /// the default `None` keeps an integration that has not declared a
+    /// delivery unreported rather than inheriting another harness's.
+    fn context_delivery(&self) -> ContextDelivery {
+        ContextDelivery::None
+    }
+
+    /// The prefix a human types to explicitly invoke an exposed capability
+    /// on this harness (e.g. `/` for slash commands, `$` for Codex's
+    /// explicit skill invocation, nothing for a bare-name harness).
+    /// Presentation-only, rendered by docs/matrix tooling; never used for
+    /// lookup or matching.
+    fn invocation_prefix(&self) -> &'static str {
+        ""
     }
 
     /// The integration, not the resource representation, selects how the

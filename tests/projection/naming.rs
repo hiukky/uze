@@ -79,9 +79,6 @@ impl<T: IntegrationPort> IntegrationPort for AlwaysPresent<T> {
     fn capabilities(&self) -> HarnessCapabilities {
         self.0.capabilities()
     }
-    fn runtime_support(&self) -> uze::runtime::RuntimeSupport {
-        self.0.runtime_support()
-    }
     fn exposure_plan(&self, resource: &ProjectResource) -> ExposurePlan {
         self.0.exposure_plan(resource)
     }

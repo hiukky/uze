@@ -23,8 +23,8 @@ use uze_core::{
     exposure::{ExposureMechanism, ExposurePlan},
     home::UzeHome,
     integration::{
-        AttachmentInspection, AttachmentReceipt, AttachmentState, HarnessDetection,
-        IntegrationPort, ManagedArtifact, default_exposure_name_candidates,
+        AttachmentInspection, AttachmentReceipt, AttachmentState, ContextDelivery,
+        HarnessDetection, IntegrationPort, ManagedArtifact, default_exposure_name_candidates,
         detach_standard_receipt, inspect_standard_receipt, qualified_exposure_name_candidates,
     },
     project::Resource,
@@ -75,6 +75,16 @@ impl OpenCodeIntegration {
 impl IntegrationPort for OpenCodeIntegration {
     fn id(&self) -> &'static str {
         "opencode"
+    }
+
+    fn invocation_prefix(&self) -> &'static str {
+        "/"
+    }
+
+    /// Reads the shared `AGENTS.md` natively (preferred over `CLAUDE.md`
+    /// per its own docs); UZE maintains no artifact for it.
+    fn context_delivery(&self) -> ContextDelivery {
+        ContextDelivery::Native { files: &[] }
     }
     fn capabilities(&self) -> HarnessCapabilities {
         HarnessCapabilities {

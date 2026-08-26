@@ -61,7 +61,44 @@ delivery-time) was confirmed dead — unreachable from `Store::ingest` or
 any other production path — and removed; the invariant now holds with no
 carved-out exception.
 
-> `tests/integration_conformance.rs::core_never_names_a_vendor_harness`
+> `tests/integrations/identity.rs::core_never_names_a_vendor_harness`
+
+### The Application and CLI/TUI never name a harness either
+
+`uze-application` orchestrates integrations it knows only through
+`IntegrationPort`; the CLI/TUI consume registry descriptors and read
+models. All concrete harness knowledge — construction, display metadata,
+context-delivery mode, shim names — lives in `uze-integrations`, with one
+composition root (`IntegrationRegistry::builtin`/`isolated`) naming the
+built-in set. A comment explaining a generic mechanism may cite a vendor;
+live code may not.
+
+> `tests/integrations/identity.rs::application_never_names_a_vendor_harness`
+> `tests/integrations/identity.rs::cli_and_tui_never_name_a_vendor_harness`
+
+### One composition root owns the built-in integration set
+
+`crates/uze-integrations/src/registry.rs` is the single production place
+that constructs the concrete integration types (env-based `builtin` and
+isolated `isolated`); application, the runtime shim, and the README
+matrix all consume the registry. A new harness needs one vertical, one
+registry entry, conformance, and docs — nothing in core/application/
+CLI/TUI.
+
+> `crates/uze-integrations/src/registry.rs` tests
+> `tests/integrations/vendor_neutral.rs::harness_selection_comes_from_the_registered_integrations`
+
+### Project-context delivery is declared per integration
+
+Which harness reads the shared `AGENTS.md` natively, which needs an
+`@AGENTS.md` bridge region, and which additional native files are
+observed for portability reporting is each integration's
+`context_delivery()` declaration — never an Application-owned vendor
+list. The bridge protocol itself (region identity, import line) is the
+Application's, shared by every bridge-needing harness.
+
+> `tests/memory/inspection.rs` scenarios A–F (stub harness declares its
+> bridge exactly like a real integration)
 
 ### Native means preserved semantics, not identical primitives (ADR-025, refined by ADR-030)
 

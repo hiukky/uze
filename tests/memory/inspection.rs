@@ -88,6 +88,16 @@ impl IntegrationPort for StubBridgeHarness {
     fn id(&self) -> &'static str {
         self.stub_id
     }
+
+    /// The one bridged harness in v0 declares its bridge like any real
+    /// integration would — the Application reads `context_delivery`, never
+    /// a vendor name.
+    fn context_delivery(&self) -> uze::integration::ContextDelivery {
+        uze::integration::ContextDelivery::Bridge {
+            file_name: "CLAUDE.md",
+        }
+    }
+
     fn capabilities(&self) -> HarnessCapabilities {
         HarnessCapabilities::default()
     }

@@ -32,10 +32,7 @@ use uze_core::{
     store::StoredPackage,
     trust::{self, TrustAuthority, TrustOutcome, TrustRequest},
 };
-use uze_integrations::{
-    antigravity::AntigravityIntegration, claude::ClaudeIntegration, codex::CodexIntegration,
-    opencode::OpenCodeIntegration,
-};
+use uze_integrations::registry::IntegrationRegistry;
 
 use crate::bootstrap;
 
@@ -65,12 +62,10 @@ pub use uze_core::workspace::WorkspaceKind;
 /// project's shared `AGENTS.md` only through an explicit bridge region
 /// written into their own native file *inside the project's working tree*,
 /// rather than natively — see `docs/capabilities/instructions-design.md`
-/// Fase 4. Codex, OpenCode and Antigravity are deliberately absent: all
-/// three read `AGENTS.md` directly, so `context_reconcile` never needs to
-/// write anything into a vendor-specific file at all. This list is
-/// explicit, hardcoded vendor knowledge — appropriate here, in the
-/// composition root that already names every concrete integration by type,
-/// and not something `uze-core` or `IntegrationPort` needs to know.
+/// Fase 4. Which harness needs a bridge is now each integration's own
+/// `context_delivery()` declaration; this Application holds only the
+/// bridge protocol itself (region identity + content), shared by every
+/// bridge-needing harness.
 ///
 /// Kept, unchanged, alongside the newer `EXPERIMENTAL RUNTIME DELIVERY
 /// STRATEGY` (`ClaudeIntegration::runtime_contribution`, driven through the
@@ -79,26 +74,16 @@ pub use uze_core::workspace::WorkspaceKind;
 /// decision pending an empirical interactive comparison — see the
 /// Checkpoint 2 report. Do not remove or fold this into the experimental
 /// path without that comparison.
-const BRIDGE_INTEGRATIONS: &[(&str, &str)] = &[("claude-code", "CLAUDE.md")];
-
+///
 /// Fixed, package-independent region identity: the bridge is shared
 /// infrastructure for however many packages currently contribute to
 /// `AGENTS.md`, never owned by one of them (see Fase C.5 of the design).
 const INSTRUCTION_BRIDGE_IDENTITY: &str = "instruction-bridge";
 
-/// The vendor-documented import syntax Claude Code uses for pulling another
-/// Markdown file's content into its own native instructions file
-/// (`@AGENTS.md`).
+/// The vendor-documented import syntax a bridge-needing harness uses for
+/// pulling another Markdown file's content into its own native
+/// instructions file (`@AGENTS.md`).
 const INSTRUCTION_BRIDGE_CONTENT: &str = "@AGENTS.md";
-
-/// Harnesses that read a project's shared `AGENTS.md` directly, with no
-/// artifact of their own — reported here purely for `context_inspect`'s
-/// benefit (Codex/OpenCode/Antigravity still never appear in
-/// `BRIDGE_INTEGRATIONS`, since `context_reconcile` genuinely writes
-/// nothing for them). Antigravity CLI reads `AGENTS.md` (and `GEMINI.md`)
-/// directly per its official docs: the context route is Native and no
-/// `@AGENTS.md` bridge is ever generated for it.
-const NATIVE_INSTRUCTION_INTEGRATIONS: &[&str] = &["codex", "opencode", "antigravity"];
 
 pub struct UzeApplication {
     home: UzeHome,
@@ -110,22 +95,12 @@ pub struct UzeApplication {
 }
 
 impl UzeApplication {
-    /// Production composition root. Concrete harness details remain inside
-    /// this layer, not in CLI or TUI code.
+    /// Production composition. The integration set comes from
+    /// `IntegrationRegistry::builtin` — the one place that knows which
+    /// harnesses exist; this layer only knows there are integrations.
     pub fn from_env(home: UzeHome) -> Result<Self> {
-        Ok(Self::new(
-            home.clone(),
-            vec![
-                Box::new(ClaudeIntegration::from_env(home.clone())?),
-                Box::new(CodexIntegration::from_env(home.clone())?),
-                Box::new(OpenCodeIntegration::from_env(home.clone())?),
-                // v0 primary Google-family harness: Antigravity CLI. The
-                // canonical package is itself a valid Antigravity plugin,
-                // so it needs no author-provided vendor envelope (see
-                // integrations/antigravity.rs).
-                Box::new(AntigravityIntegration::from_env(home)?),
-            ],
-        ))
+        let registry = IntegrationRegistry::builtin(&home)?;
+        Ok(Self::new(home, registry.into_inner()))
     }
 
     /// Dependency-injected constructor for deterministic contract tests or
@@ -141,16 +116,8 @@ impl UzeApplication {
     /// straight onto the real terminal and corrupt whatever is rendered
     /// there.
     pub fn from_env_with_runner(home: UzeHome, runner: Box<dyn ProcessRunner>) -> Result<Self> {
-        Ok(Self::new_with_runner(
-            home.clone(),
-            vec![
-                Box::new(ClaudeIntegration::from_env(home.clone())?),
-                Box::new(CodexIntegration::from_env(home.clone())?),
-                Box::new(OpenCodeIntegration::from_env(home.clone())?),
-                Box::new(AntigravityIntegration::from_env(home)?),
-            ],
-            runner,
-        ))
+        let registry = IntegrationRegistry::builtin(&home)?;
+        Ok(Self::new_with_runner(home, registry.into_inner(), runner))
     }
 
     /// Test and embedding composition point for the process runner used only
@@ -527,11 +494,7 @@ impl UzeApplication {
         if !integration.supports_runtime_integration() {
             return Ok(None);
         }
-        let shim_name = integration
-            .aliases()
-            .first()
-            .copied()
-            .unwrap_or(integration.id());
+        let shim_name = integration.shim_name();
         let shims_dir = self.home.shims_dir();
 
         // Refuse to shim a harness with no real binary anywhere — that

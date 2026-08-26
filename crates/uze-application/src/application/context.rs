@@ -7,15 +7,12 @@ use std::{collections::BTreeSet, path::PathBuf};
 use uze_core::{
     Result, UzeError,
     context::{self as instruction_context, InstructionContribution},
-    integration::AttachmentState,
+    integration::{AttachmentState, ContextDelivery},
     text_region,
 };
 
 use super::*;
-use super::{
-    BRIDGE_INTEGRATIONS, INSTRUCTION_BRIDGE_CONTENT, INSTRUCTION_BRIDGE_IDENTITY,
-    NATIVE_INSTRUCTION_INTEGRATIONS, UzeApplication,
-};
+use super::{INSTRUCTION_BRIDGE_CONTENT, INSTRUCTION_BRIDGE_IDENTITY, UzeApplication};
 
 impl UzeApplication {
     pub fn context_inspect(&self, project_root: &std::path::Path) -> Result<ProjectContextStatus> {
@@ -35,7 +32,20 @@ impl UzeApplication {
             instruction_context::inspect_agents_md(&agents_md_path, &contributions_input);
         let agents_md_exists = agents_md_path.is_file();
 
-        let sources: Vec<InstructionSourceObservation> = ["AGENTS.md", "CLAUDE.md", "GEMINI.md"]
+        // The observed project files are the shared canonical `AGENTS.md`
+        // plus whatever each registered integration declares through
+        // `context_delivery` (its bridge file or additional native files) —
+        // never an Application-owned list of filenames.
+        let mut source_names = vec!["AGENTS.md"];
+        for integration in &self.integrations {
+            match integration.context_delivery() {
+                ContextDelivery::Bridge { file_name } => source_names.push(file_name),
+                ContextDelivery::Native { files } => source_names.extend(files),
+                ContextDelivery::None => {}
+            }
+        }
+        source_names.dedup();
+        let sources: Vec<InstructionSourceObservation> = source_names
             .iter()
             .map(|file_name| {
                 let path = canonical.join(file_name);
@@ -65,15 +75,11 @@ impl UzeApplication {
         let mut harnesses = Vec::new();
         for integration in &self.integrations {
             let id = integration.id();
-            let is_native = NATIVE_INSTRUCTION_INTEGRATIONS.contains(&id);
-            let bridge_file_name = BRIDGE_INTEGRATIONS
-                .iter()
-                .find(|(bridge_id, _)| *bridge_id == id)
-                .map(|(_, file_name)| *file_name);
-            if !is_native && bridge_file_name.is_none() {
-                // Not a harness this milestone models Instructions delivery
-                // for at all; silently excluded rather than reported as a
-                // gap it was never claimed to close.
+            let delivery = integration.context_delivery();
+            if matches!(delivery, ContextDelivery::None) {
+                // Not a harness this integration declares Instructions
+                // delivery for at all; silently excluded rather than
+                // reported as a gap it was never claimed to close.
                 continue;
             }
             if !self.detect_cached(integration.as_ref()).present {
@@ -84,29 +90,33 @@ impl UzeApplication {
                 });
                 continue;
             }
-            if is_native {
-                harnesses.push(HarnessContextStatus {
-                    integration: id.to_owned(),
-                    display_name: integration.display_name().to_owned(),
-                    delivery: HarnessContextDelivery::Native,
-                });
-                continue;
+            match delivery {
+                ContextDelivery::Native { .. } => {
+                    harnesses.push(HarnessContextStatus {
+                        integration: id.to_owned(),
+                        display_name: integration.display_name().to_owned(),
+                        delivery: HarnessContextDelivery::Native,
+                    });
+                }
+                ContextDelivery::Bridge { file_name } => {
+                    let bridge_file = canonical.join(file_name);
+                    let state = text_region::inspect(
+                        &bridge_file,
+                        INSTRUCTION_BRIDGE_IDENTITY,
+                        INSTRUCTION_BRIDGE_CONTENT,
+                    )
+                    .state;
+                    harnesses.push(HarnessContextStatus {
+                        integration: id.to_owned(),
+                        display_name: integration.display_name().to_owned(),
+                        delivery: HarnessContextDelivery::Bridge {
+                            needed: observation.has_any_matched_contribution(),
+                            state,
+                        },
+                    });
+                }
+                ContextDelivery::None => unreachable!("excluded above"),
             }
-            let bridge_file = canonical.join(bridge_file_name.expect("checked above"));
-            let state = text_region::inspect(
-                &bridge_file,
-                INSTRUCTION_BRIDGE_IDENTITY,
-                INSTRUCTION_BRIDGE_CONTENT,
-            )
-            .state;
-            harnesses.push(HarnessContextStatus {
-                integration: id.to_owned(),
-                display_name: integration.display_name().to_owned(),
-                delivery: HarnessContextDelivery::Bridge {
-                    needed: observation.has_any_matched_contribution(),
-                    state,
-                },
-            });
         }
 
         let portability = derive_portability(agents_md_exists, &sources, &harnesses);
@@ -153,13 +163,13 @@ impl UzeApplication {
             )
         }) || observation.has_any_matched_contribution();
 
-        let bridges = BRIDGE_INTEGRATIONS
+        let bridges = self
+            .integrations
             .iter()
-            .filter_map(|(integration_id, file_name)| {
-                let integration = self
-                    .integrations
-                    .iter()
-                    .find(|integration| integration.id() == *integration_id)?;
+            .filter_map(|integration| {
+                let ContextDelivery::Bridge { file_name } = integration.context_delivery() else {
+                    return None;
+                };
                 if !self.detect_cached(integration.as_ref()).present {
                     return None;
                 }
@@ -171,7 +181,7 @@ impl UzeApplication {
                 )
                 .state;
                 Some(BridgePlan {
-                    integration: (*integration_id).to_owned(),
+                    integration: integration.id().to_owned(),
                     file: bridge_file,
                     action: plan_action_for_bridge(would_have_contribution, state),
                 })
@@ -196,13 +206,13 @@ impl UzeApplication {
         let contributions = self.instruction_contributions()?;
         let agents_md_report = instruction_context::reconcile_agents_md(&agents_md, &contributions);
 
-        let bridges = BRIDGE_INTEGRATIONS
+        let bridges = self
+            .integrations
             .iter()
-            .filter_map(|(integration_id, file_name)| {
-                let integration = self
-                    .integrations
-                    .iter()
-                    .find(|integration| integration.id() == *integration_id)?;
+            .filter_map(|integration| {
+                let ContextDelivery::Bridge { file_name } = integration.context_delivery() else {
+                    return None;
+                };
                 if !self.detect_cached(integration.as_ref()).present {
                     return None;
                 }
@@ -214,7 +224,7 @@ impl UzeApplication {
                     agents_md_report.has_any_matched_contribution(),
                 );
                 Some(BridgeStatus {
-                    integration: (*integration_id).to_owned(),
+                    integration: integration.id().to_owned(),
                     file: bridge_file,
                     state: inspection.state,
                     reason: inspection.reason,
