@@ -52,15 +52,21 @@ fn one_plugin_reaches_every_harness_with_no_duplicate_delivery() {
     );
     assertions::assert_file(&claude_envelope, "claude generated envelope");
 
-    // Codex/OpenCode: shared `.agents/skills` symlink into the Store.
+    // Codex/OpenCode: one shared `.agents/skills` wrapper preserving the
+    // canonical body while publishing the stable qualified label.
     let codex_entry = env
         .home
         .join(".agents/skills/uze-agent-skill-conformance:uze-e2e");
-    assertions::assert_symlink(
-        &codex_entry,
-        &env.uze_home
-            .join("store/packages/uze-agent-skill-conformance/skills/uze-e2e"),
-        "codex/opencode shared skill entry",
+    assert!(
+        codex_entry.is_symlink(),
+        "codex/opencode shared skill entry must be a symlink"
+    );
+    let shared_target = std::fs::read_link(&codex_entry).expect("read shared skill target");
+    let wrapper =
+        std::fs::read_to_string(shared_target.join("SKILL.md")).expect("read shared skill wrapper");
+    assert!(
+        wrapper.starts_with("---\nname: uze-agent-skill-conformance:uze-e2e\n"),
+        "the shared wrapper preserves the qualified skill label: {wrapper}"
     );
 
     let ledger = std::fs::read(env.uze_home.join("state/attachments.json")).unwrap();

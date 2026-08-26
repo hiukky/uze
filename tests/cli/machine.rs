@@ -4,6 +4,18 @@ fn package_fixture() -> PathBuf {
     uze_testkit::fixtures::canonical("skill-plugin")
 }
 
+fn contains_fixture_skill_wrapper(entries: &[PathBuf], uze_home: &std::path::Path) -> bool {
+    entries.iter().any(|entry| {
+        let Ok(target) = std::fs::read_link(entry) else {
+            return false;
+        };
+        target.starts_with(uze_home.join("state/attachments"))
+            && std::fs::read_to_string(target.join("SKILL.md")).is_ok_and(|skill| {
+                skill.starts_with("---\nname: uze-agent-skill-conformance:uze-e2e\n")
+            })
+    })
+}
+
 /// `uze plugin install` through a staged test marketplace — the product
 /// rejects direct-path installs, so the test exercises the real user flow:
 /// `market add` first, then `plugin install <name>@<market>`.
@@ -396,11 +408,8 @@ fn setup_then_add_attaches_transparently_without_a_separate_sync_step() {
     );
     assert!(codex_entries.iter().any(|p| p.is_symlink()));
     assert!(
-        codex_entries.iter().any(|p| {
-            std::fs::read_link(p).ok()
-                == Some(uze_home.join("store/packages/uze-agent-skill-conformance/skills/uze-e2e"))
-        }),
-        "codex should contain the fixture skill symlink"
+        contains_fixture_skill_wrapper(&codex_entries, &uze_home),
+        "codex should contain the qualified fixture skill wrapper"
     );
 
     let _ = std::fs::remove_dir_all(home);
@@ -438,11 +447,8 @@ fn add_prepares_a_detected_opencode_and_attaches_without_prior_setup() {
     );
     assert!(entries.iter().any(|p| p.is_symlink()));
     assert!(
-        entries.iter().any(|p| {
-            std::fs::read_link(p).ok()
-                == Some(uze_home.join("store/packages/uze-agent-skill-conformance/skills/uze-e2e"))
-        }),
-        "fixture skill should be present alongside the default plugin"
+        contains_fixture_skill_wrapper(&entries, &uze_home),
+        "the qualified fixture skill wrapper should be present alongside the default plugin"
     );
 
     let integrations = std::fs::read_to_string(uze_home.join("state/integrations.json")).unwrap();
