@@ -474,16 +474,16 @@ fn package_coverage_keeps_canonical_identities() {
         .package_exposure_plan(&package, &resources)
         .expect("generatable");
     assert_eq!(plan.provided_resource_identities.len(), 1);
-    // Antigravity cannot preserve the user-only policy in a native plugin,
-    // so it covers NOTHING at package level (honest semantic coverage).
+    // Antigravity cannot preserve the user-only policy in an unchanged
+    // plugin tree, so it has no package-level plan at all: decomposed
+    // capability delivery prevents the plugin from bypassing or duplicating
+    // the policy-aware wrapper.
     let antigravity = AntigravityIntegration::new(root.join("agents"), home.clone());
-    let aplan = antigravity
-        .package_exposure_plan(&package, &resources)
-        .expect("natively expressible");
-    assert_eq!(
-        aplan.provided_resource_identities.len(),
-        0,
-        "user-only semantics degrade on Antigravity; never claimed as covered"
+    assert!(
+        antigravity
+            .package_exposure_plan(&package, &resources)
+            .is_none(),
+        "a non-default Skill never enters an unchanged Antigravity plugin"
     );
     for identity in plan.provided_resource_identities.iter() {
         assert!(

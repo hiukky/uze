@@ -364,12 +364,11 @@ mod generated_native_tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    /// ADR-030 §13: a non-default invoke policy cannot be preserved by the
-    /// Antigravity plugin (no explicit-only mechanism), so it is never
-    /// claimed in the native package plan — it falls through to
-    /// capability-level delivery, which reports the degradation.
+    /// ADR-030 §13: a non-default invoke policy must not enter an unchanged
+    /// Antigravity plugin tree. The package is decomposed so every resource
+    /// follows its own policy-aware capability route.
     #[test]
-    fn non_default_policy_skill_is_never_claimed_by_the_generated_route() {
+    fn non_default_policy_skill_disables_the_generated_package_route() {
         let (root, pkg) = make_package_with_mcp("plan-policy");
         let user_only = Resource::from_package(
             pkg.id.clone(),
@@ -382,17 +381,14 @@ mod generated_native_tests {
                     .to_vec(),
             },
         );
-        let r_mcp = mcp_resource(&pkg, "mcp-a");
-        let resources = vec![&user_only, &r_mcp];
+        let resources = vec![&user_only];
         let uze_home = UzeHome::at(root.join("uze"));
         let integration = AntigravityIntegration::new(root.join("agents"), uze_home.clone());
-        let plan = integration
-            .package_exposure_plan(&pkg, &resources)
-            .expect("generated route still applies via MCP");
-        assert_eq!(
-            plan.provided_resource_identities,
-            BTreeSet::from([r_mcp.identity()]),
-            "only the MCP server is claimed; the degraded user-only Skill is not"
+        assert!(
+            integration
+                .package_exposure_plan(&pkg, &resources)
+                .is_none(),
+            "the unchanged generated plugin must not carry the user-only Skill"
         );
         let fallback = integration.exposure_plan(&user_only);
         assert_eq!(
