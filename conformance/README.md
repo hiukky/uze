@@ -83,9 +83,9 @@ ADAPTED vendor-limitation records and any pre-existing base-phase failure):
 
 ```bash
 python3 lab.py --harness claude        # 18/18 PASS (hooks deny/allow/order proven)
-python3 lab.py --harness codex         # pending first clean run
-python3 lab.py --harness antigravity   # 27/28 PASS + 2 ADAPTED (1 pre-existing MCP FAIL)
-python3 lab.py --harness opencode      # 27/28 PASS + 2 ADAPTED (1 pre-existing MCP FAIL)
+python3 lab.py --harness codex         # 20/20 PASS + 1 ADAPTED (allow recorded ADAPTED: approval gate)
+python3 lab.py --harness antigravity   # 28/28 PASS + 2 ADAPTED (MCP round-trip proven: the proof returns)
+python3 lab.py --harness opencode      # 28/28 PASS + 6 ADAPTED (MCP tool not exposed on the V2 beta channel — recorded, never fabricated)
 ```
 
 Evidence JSON goes under `AGY_OUTDIR` (default

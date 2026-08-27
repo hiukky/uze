@@ -260,14 +260,20 @@ def start_provider(cfg, mode, extra_env=None):
     for name, value in (extra_env or {}).items():
         env += ["-e", f"{name}={value}"]
 
-    # The hook scenarios parameterize the scripted tool call via the same
-    # envs the MCP toolcall phases use; defaults keep MCP behavior unchanged.
-    env += [
-        "-e",
-        f"TOOL_NAME={os.environ.get('HOOK_TOOL', 'Bash')}",
-        "-e",
-        f"TOOL_ARGS={os.environ.get('HOOK_ARGS', '{}')}",
-    ]
+    # Hook scenarios script the intercepted tool themselves via extra_env
+    # (Bash on claude/codex, the MCP tool on opencode, run_command on
+    # antigravity) and the MCP toolcall phases rely on the provider's own
+    # defaults — so a runner-level override must never be injected by
+    # default, and must never clobber the scenario's choice: extra_env is
+    # merged below and wins (docker: last -e wins).
+    hook_tool = os.environ.get("HOOK_TOOL")
+    if hook_tool:
+        env += [
+            "-e",
+            f"TOOL_NAME={hook_tool}",
+            "-e",
+            f"TOOL_ARGS={os.environ.get('HOOK_ARGS', '{}')}",
+        ]
     provider = os.path.join(cfg.repo, "harnesses", cfg.harness)
     if cfg.harness == "antigravity":
         mounts = ["-v", f"{provider}/provider.py:/app/fp.py:ro"]
