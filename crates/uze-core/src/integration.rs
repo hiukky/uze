@@ -85,6 +85,13 @@ pub enum ManagedArtifact {
         event: Option<crate::hook::HookEvent>,
         expected: String,
     },
+    /// A whole, UZE-owned derived file the harness loads from its own
+    /// discovery directory (the OpenCode bridge): no configuration entry
+    /// exists to merge, so `path` is the entire artifact. The owning
+    /// integration interprets inspection and detach.
+    ManagedHookFile {
+        path: PathBuf,
+    },
 }
 
 /// The `kind` a receipt predating [`ManagedArtifact::IntegrationOwned`]
@@ -516,6 +523,9 @@ pub trait IntegrationPort {
                 event,
                 expected,
             },
+            ExposureMechanism::ManagedHookFile { path } => {
+                ManagedArtifact::ManagedHookFile { path }
+            }
             _ => return Ok(None),
         };
         Ok(Some(AttachmentReceipt {
@@ -595,6 +605,10 @@ pub fn managed_artifact_exposure_name(artifact: &ManagedArtifact) -> Option<Stri
         }
         ManagedArtifact::VendorConfigEntry { entry_name, .. } => Some(entry_name.clone()),
         ManagedArtifact::HookConfigEntry { entry_name, .. } => Some(entry_name.clone()),
+        ManagedArtifact::ManagedHookFile { path } => path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_owned),
         // A text region spans a *portion* of a shared file, not a dedicated
         // entry; an integration-owned artifact's naming is opaque to the
         // Core by design.
@@ -697,6 +711,7 @@ pub fn receipt_location(receipt: &AttachmentReceipt) -> PathBuf {
             entry_name,
             ..
         } => PathBuf::from(format!("{}#{entry_name}", config_file.display())),
+        ManagedArtifact::ManagedHookFile { path } => path.clone(),
         ManagedArtifact::ManagedTextRegion {
             target_file,
             region_identity,

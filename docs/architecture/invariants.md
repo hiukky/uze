@@ -389,8 +389,9 @@ own entry is cleaned up when the last entry goes.
 ### A package's hooks attach once per harness, idempotently
 
 Re-attach never duplicates; an update replaces the previous version of the
-same group instead of stacking it; the OpenCode bridge is package-scoped
-and regenerates from the receipt set.
+same group instead of stacking it; the OpenCode bridge is package-scoped,
+single-sourced (the auto-discovered global plugin directory — never a
+second `plugin` config entry) and regenerates from the receipt set.
 
 > `tests/integrations/hooks.rs::an_update_replaces_the_previous_version_of_the_samed_group`
 > `tests/integrations/hooks.rs::opencode_bridge_is_package_scoped_and_regenerates_across_groups`
@@ -400,11 +401,15 @@ and regenerates from the receipt set.
 Launch failure, timeout, oversized output, and a non-zero exit (except the
 canonical deny exit) are fail-open for observational hooks and fail-closed
 (a deny) for declared deny/ask/transform effects; the first deny stops
-later handlers.
+later handlers. A deny is translated into the harness's own blocking
+contract (JSON decision plus exit 2 on the command-hook harnesses) —
+internal exit codes never leak outward, because any other non-zero exit is
+a non-blocking error there.
 
 > `crates/uze-core/src/hook.rs::observation_fails_open_but_a_declared_deny_effect_fails_closed`
 > `crates/uze-core/src/hook.rs::handlers_run_in_order_and_the_first_deny_stops_later_ones`
 > `crates/uze-core/src/hook.rs::timeout_terminates_a_hung_handler_and_fails_closed_for_deny`
+> `crates/uze-integrations/src/hooks.rs::adapters_render_native_decisions_and_block_exit_codes`
 
 ---
 

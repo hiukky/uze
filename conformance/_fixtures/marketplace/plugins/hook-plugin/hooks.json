@@ -9,6 +9,24 @@
           { "type": "command", "command": "${PLUGIN_ROOT}/scripts/guard", "timeout": 10 },
           { "type": "command", "command": "${PLUGIN_ROOT}/scripts/mark", "timeout": 10 }
         ]
+      },
+      {
+        "id": "protect-mcp",
+        "matcher": "native:uze-mcp-conformance-uze-conformance_uze_conformance",
+        "effect": "deny",
+        "hooks": [
+          { "type": "command", "command": "${PLUGIN_ROOT}/scripts/guard", "timeout": 10 },
+          { "type": "command", "command": "${PLUGIN_ROOT}/scripts/mark", "timeout": 10 }
+        ]
+      },
+      {
+        "id": "protect-observe-mcp",
+        "matcher": "native:uze-mcp-conformance-uze-conformance_uze_conformance",
+        "effect": "observe",
+        "hooks": [
+          { "type": "command", "command": "${PLUGIN_ROOT}/scripts/guard", "timeout": 10 },
+          { "type": "command", "command": "${PLUGIN_ROOT}/scripts/mark", "timeout": 10 }
+        ]
       }
     ]
   }

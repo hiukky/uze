@@ -207,13 +207,9 @@ impl IntegrationPort for OpenCodeIntegration {
                 }
                 Ok(Some(plan.mechanism.attach()?))
             }
-            ExposureMechanism::ManagedHookConfig {
-                config_file,
-                expected,
-                ..
-            } => {
-                self.attach_hook_bridge(resource, expected)?;
-                Ok(Some(config_file.clone()))
+            ExposureMechanism::ManagedHookFile { path } => {
+                self.attach_hook_bridge(resource, path)?;
+                Ok(Some(path.clone()))
             }
             ExposureMechanism::ManagedVendorConfig {
                 entry_name,
@@ -253,13 +249,8 @@ impl IntegrationPort for OpenCodeIntegration {
     }
 
     fn inspect_receipt(&self, receipt: &AttachmentReceipt) -> AttachmentInspection {
-        if let ManagedArtifact::HookConfigEntry {
-            config_file,
-            expected,
-            ..
-        } = &receipt.artifact
-        {
-            return self.inspect_hook_bridge(config_file, expected);
+        if let ManagedArtifact::ManagedHookFile { path } = &receipt.artifact {
+            return self.inspect_hook_bridge(receipt, path);
         }
         let ManagedArtifact::VendorConfigEntry {
             entry_name,
@@ -326,13 +317,8 @@ impl IntegrationPort for OpenCodeIntegration {
             enabled,
         } = &receipt.artifact
         else {
-            if let ManagedArtifact::HookConfigEntry {
-                config_file,
-                expected,
-                ..
-            } = &receipt.artifact
-            {
-                return self.detach_hook_bridge(receipt, config_file, expected);
+            if let ManagedArtifact::ManagedHookFile { path } = &receipt.artifact {
+                return self.detach_hook_bridge(receipt, path);
             }
             let detached = detach_standard_receipt(receipt)?;
             if detached.state == AttachmentState::Missing
@@ -412,8 +398,10 @@ impl OpenCodeIntegration {
 
     /// The per-resource hook plan: semantic compatibility assessed against
     /// the bridged profile (Adaptable for a faithfully executed bridge,
-    /// never Native — the generated source is UZE's own adapter), with the
-    /// managed `plugin` entry named after the package's bridge file.
+    /// never Native — the generated source is UZE's own adapter), delivered
+    /// as one owned bridge file in the harness's auto-discovered global
+    /// plugin directory — a single load source, with no `plugin` config
+    /// entry to duplicate (verified against the real harness).
     fn hook_plan(&self, resource: &Resource) -> ExposurePlan {
         let Ok(hook) = serde_json::from_slice::<PortableHook>(&resource.capability.payload) else {
             return unsupported(
@@ -441,18 +429,12 @@ impl OpenCodeIntegration {
                         );
                     }
                 };
-                let entry = hook_projection::opencode_bridge_path(self.config_root(), package_id)
-                    .display()
-                    .to_string();
-                ExposureMechanism::ManagedHookConfig {
-                    config_file: self.config_path.clone(),
-                    entry_name: format!("uze-hooks-{package_id}"),
-                    event: None,
-                    expected: entry,
+                ExposureMechanism::ManagedHookFile {
+                    path: hook_projection::opencode_bridge_path(self.config_root(), package_id),
                 }
             }
         };
-        let base = "OpenCode exposes no declarative hook file; UZE generates an owned, regenerable TypeScript bridge (tool.execute.before/after on the portable ABI — sequential handlers, first-deny-wins by thrown error, transform via output.args, 64 KiB cap, per-handler timeouts) and registers its absolute path in one managed `plugin` entry, preserving foreign plugins.";
+        let base = "OpenCode V2 (spec: opencode.ai/v2/docs/build/plugins) exposes no declarative hook file; UZE generates one owned, regenerable Plugin.define bridge registering ctx.tool.hook callbacks that run the portable ABI sequentially on the harness's embedded Bun runtime (64 KiB cap, per-handler timeouts, PLUGIN_ROOT injected, input transformation via event.input). The V2 tool hooks provide input replacement but no input-based block signal, so deny/ask effects are diagnosed Unsupported before attach — never fabricated. One load source: the harness's auto-discovered global plugin directory, with no `plugin` config entry, so the bridge can never be loaded twice.";
         let evidence = match &compatibility.reason {
             Some(reason) => format!("{base} Compatibility: {reason}"),
             None => base.to_owned(),
@@ -467,19 +449,19 @@ impl OpenCodeIntegration {
     }
 
     /// The config root is the parent of `opencode.json` — the physical
-    /// anchor for the owned `.opencode/plugins/` bridge directory.
+    /// anchor for the owned `plugins/` bridge file.
     fn config_root(&self) -> &Path {
         self.config_path
             .parent()
             .expect("OpenCode config path has a parent")
     }
 
-    /// Emits the owned bridge for the resource's package and appends its
-    /// path to the config's `plugin` array. The bridge is package-scoped:
-    /// it always covers every canonical group that still has a receipt,
-    /// plus the group being attached, so a multi-group package converges on
-    /// one deterministic file regardless of attach order.
-    fn attach_hook_bridge(&self, resource: &Resource, expected: &str) -> Result<()> {
+    /// Emits the owned bridge for the resource's package. The bridge is
+    /// package-scoped: it always covers every canonical group that still
+    /// has a receipt, plus the group being attached, so a multi-group
+    /// package converges on one deterministic file regardless of attach
+    /// order.
+    fn attach_hook_bridge(&self, resource: &Resource, bridge_path: &Path) -> Result<()> {
         let package_root = resource.package_root().ok_or_else(|| {
             UzeError::ExposureUnavailable("OpenCode hooks need a UZE-stored package".to_owned())
         })?;
@@ -504,7 +486,6 @@ impl OpenCodeIntegration {
             groups.push(current);
         }
         let references: Vec<&PortableHook> = groups.iter().collect();
-        let bridge_path = hook_projection::opencode_bridge_path(self.config_root(), package_id);
         if let Some(parent) = bridge_path.parent() {
             fs::create_dir_all(parent).map_err(|source| UzeError::Write {
                 path: parent.to_path_buf(),
@@ -512,14 +493,13 @@ impl OpenCodeIntegration {
             })?;
         }
         fs::write(
-            &bridge_path,
-            hook_projection::opencode_bridge(&references, package_root),
+            bridge_path,
+            hook_projection::opencode_bridge(&references, package_root, package_id),
         )
         .map_err(|source| UzeError::Write {
-            path: bridge_path.clone(),
+            path: bridge_path.to_path_buf(),
             source,
         })?;
-        hook_projection::merge_plugin_entry(&self.config_path, expected)?;
         Ok(())
     }
 
@@ -536,7 +516,10 @@ impl OpenCodeIntegration {
             if receipt.integration != self.id() {
                 continue;
             }
-            if !matches!(receipt.artifact, ManagedArtifact::HookConfigEntry { .. }) {
+            if !matches!(
+                receipt.artifact,
+                ManagedArtifact::HookConfigEntry { .. } | ManagedArtifact::ManagedHookFile { .. }
+            ) {
                 continue;
             }
             let Some(identity) = &receipt.resource_identity else {
@@ -554,40 +537,79 @@ impl OpenCodeIntegration {
         Ok(ids)
     }
 
-    /// The receipt's managed `plugin` entry must still point at an existing
-    /// bridge file; a missing file is drift (the entry is UZE's, the file
-    /// is derived — regenerate rather than silently stay broken).
-    fn inspect_hook_bridge(&self, config_file: &Path, expected: &str) -> AttachmentInspection {
-        let entry_state = hook_projection::inspect_plugin_entry(config_file, expected);
-        if entry_state.state != AttachmentState::Matched {
-            return entry_state;
-        }
-        let bridge = PathBuf::from(expected);
-        if !bridge.is_file() {
+    /// The bridge file itself is the entire managed artifact: it must exist
+    /// (a missing file is drift — derived artifacts are regenerated by
+    /// `plugin install`/`update`) and its content must match what UZE would
+    /// regenerate from the Store for the receipt's package.
+    fn inspect_hook_bridge(
+        &self,
+        receipt: &AttachmentReceipt,
+        bridge_path: &Path,
+    ) -> AttachmentInspection {
+        let Ok(package) =
+            PackageId::from_plugin_name(&receipt.package_id, Path::new("plugin.json"))
+        else {
             return AttachmentInspection {
+                state: AttachmentState::Blocked,
+                reason: "receipt package id is not a stored package id".to_owned(),
+            };
+        };
+        let package_root = self.uze_home.package_dir(&package);
+        // The expected bridge covers exactly the groups this integration
+        // still owns receipts for — a bridge regenerated after one group's
+        // detach is not drift just because the manifest still declares it.
+        let active = match self.active_hook_ids(&receipt.package_id, None) {
+            Ok(active) => active,
+            Err(_) => {
+                return AttachmentInspection {
+                    state: AttachmentState::Blocked,
+                    reason: "the hook receipt ledger cannot be read".to_owned(),
+                };
+            }
+        };
+        let Ok(groups) = hook_projection::groups_with_ids(&package_root, &|id| {
+            active.iter().any(|active| active == id)
+        }) else {
+            return AttachmentInspection {
+                state: AttachmentState::Blocked,
+                reason: "the stored package hooks.json cannot be re-read".to_owned(),
+            };
+        };
+        let references: Vec<&PortableHook> = groups.iter().collect();
+        let expected =
+            hook_projection::opencode_bridge(&references, &package_root, &receipt.package_id);
+        match fs::read(bridge_path) {
+            Ok(bytes) if String::from_utf8_lossy(&bytes) == expected => AttachmentInspection {
+                state: AttachmentState::Matched,
+                reason: "the managed bridge file matches the Store-derived content".to_owned(),
+            },
+            Ok(_) => AttachmentInspection {
                 state: AttachmentState::Drifted,
                 reason:
-                    "the managed bridge file is missing; re-run plugin install to regenerate it"
+                    "the managed bridge content differs from the Store; re-run plugin install to regenerate it"
                         .to_owned(),
-            };
-        }
-        AttachmentInspection {
-            state: AttachmentState::Matched,
-            reason: "managed bridge entry and file are in place".to_owned(),
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => AttachmentInspection {
+                state: AttachmentState::Missing,
+                reason: "the managed bridge file is missing".to_owned(),
+            },
+            Err(error) => AttachmentInspection {
+                state: AttachmentState::Blocked,
+                reason: format!("the managed bridge file cannot be read: {error}"),
+            },
         }
     }
 
     /// Removes one group's receipt ownership: the bridge is regenerated
     /// from the remaining groups (manifest order preserved), and when the
-    /// last group goes the config entry and the UZE-created bridge files
-    /// are removed entirely.
+    /// last group goes the owned bridge file is removed entirely. No
+    /// configuration entry exists to orphan.
     fn detach_hook_bridge(
         &self,
         receipt: &AttachmentReceipt,
-        config_file: &Path,
-        expected: &str,
+        bridge_path: &Path,
     ) -> Result<AttachmentInspection> {
-        let inspection = self.inspect_hook_bridge(config_file, expected);
+        let inspection = self.inspect_hook_bridge(receipt, bridge_path);
         if inspection.state != AttachmentState::Matched {
             return Ok(inspection);
         }
@@ -600,23 +622,21 @@ impl OpenCodeIntegration {
             remaining.iter().any(|active| active == id)
         })?;
         if groups.is_empty() {
-            hook_projection::remove_plugin_entry(config_file, expected)?;
-            let bridge = PathBuf::from(expected);
-            hook_projection::remove_bridge_file(&bridge)?;
+            hook_projection::remove_bridge_file(bridge_path)?;
         } else {
             let references: Vec<&PortableHook> = groups.iter().collect();
             fs::write(
-                PathBuf::from(expected),
-                hook_projection::opencode_bridge(&references, &package_root),
+                bridge_path,
+                hook_projection::opencode_bridge(&references, &package_root, &receipt.package_id),
             )
             .map_err(|source| UzeError::Write {
-                path: PathBuf::from(expected),
+                path: bridge_path.to_path_buf(),
                 source,
             })?;
         }
         Ok(AttachmentInspection {
             state: AttachmentState::Missing,
-            reason: "managed OpenCode bridge entry detached".to_owned(),
+            reason: "managed OpenCode hook bridge detached".to_owned(),
         })
     }
 }

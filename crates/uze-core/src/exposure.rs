@@ -101,6 +101,14 @@ pub enum ExposureMechanism {
         event: Option<HookEvent>,
         expected: String,
     },
+    /// A whole, UZE-owned derived file loaded by the harness directly from
+    /// its own discovery directory — e.g. the OpenCode hook bridge
+    /// (`<config root>/plugins/uze-hooks-<package>.ts`, auto-discovered by
+    /// the harness, so there is no configuration entry to merge). The
+    /// integration owns attach/inspect/detach; the Core only routes it.
+    ManagedHookFile {
+        path: PathBuf,
+    },
     Unsupported {
         rationale: String,
     },
@@ -402,6 +410,18 @@ impl ExposurePlan {
                 // artifact merged once into the harness's shared hook
                 // configuration via `IntegrationPort::attach` — never a
                 // per-session projection (ADR-033).
+                Ok(PreparedExposure {
+                    working_directory: workspace.to_path_buf(),
+                    arguments: Vec::new(),
+                    runtime_directory: None,
+                    managed: None,
+                })
+            }
+            ExposureMechanism::ManagedHookFile { .. } => {
+                // A whole derived hook file is a persistent,
+                // package-lifecycle artifact written once via
+                // `IntegrationPort::attach` — never a per-session
+                // projection (ADR-033).
                 Ok(PreparedExposure {
                     working_directory: workspace.to_path_buf(),
                     arguments: Vec::new(),

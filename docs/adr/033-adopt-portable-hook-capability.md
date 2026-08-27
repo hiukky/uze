@@ -100,10 +100,16 @@ as a tool callback.
       reason propagation, sequence, handler error, timeout, and regeneration.
 - [x] CLI status/doctor/TUI expose compatibility and generated artifacts.
 - [ ] Four real-harness conformance verticals prove only documented, observed
-      claims; unavailable semantics are diagnosed. (Scenarios are added —
-      `phase_hooks` for all four verticals; a clean 3x run is the gate.)
+      claims; unavailable semantics are diagnosed. (Phases added for all
+      four verticals, grouped describe/test; real runs recorded — claude
+      18/18, opencode/antigravity 27/28 + 2 ADAPTED each with one
+      pre-existing base-phase MCP FAIL, codex deny/order proven and allow
+      ADAPTED via the approval gate. The clean 3x gate remains the final
+      step.)
 - [ ] `cargo test --no-fail-fast`, formatting, clippy, strict OpenSpec
       validation, and the conformance matrix pass. (The deterministic half
-      passes; the conformance matrix awaits its first clean run.)
+      passes: 14/14 targets, clippy `-D warnings` clean, fmt clean,
+      OpenSpec strict 15/15. The conformance matrix awaits its completed
+      clean 3x run.)
 
 Source change: openspec/changes/add-portable-hooks/

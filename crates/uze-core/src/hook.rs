@@ -400,6 +400,19 @@ pub struct HookDispatchOutcome {
     pub failure: Option<String>,
 }
 
+/// How the runtime wrapper answers one harness: the hook may render
+/// vendor-native JSON on stdout, a reason on stderr (the channel Claude and
+/// Codex feed back to the model on a blocked tool), and — crucially — the
+/// harness's own blocking exit code. Internal canonical decisions
+/// (e.g. the handler-level deny exit) never leak outward; each adapter
+/// translates them into the native contract of its own harness.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct HookNativeOutput {
+    pub stdout: Option<Vec<u8>>,
+    pub stderr: Option<String>,
+    pub exit_code: i32,
+}
+
 /// Per-handler result, consumed by `dispatch_handlers`' aggregation.
 struct HandlerResult {
     decision: Option<HookDecision>,
@@ -452,6 +465,42 @@ pub fn dispatch_handlers(
     Ok(outcome)
 }
 
+/// Unix: runs the handler in its own process group so the timeout can kill
+/// the whole tree (the shell AND its descendants), never just the direct
+/// child. No-op on other platforms.
+fn with_process_group(mut command: std::process::Command) -> std::process::Command {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    command
+}
+
+/// Kills the handler's whole process group — the shell plus any descendant
+/// it started. The `/bin/kill` coreutils binary is resolved absolutely so
+/// this never depends on `PATH` inside the harness's environment.
+#[cfg(unix)]
+fn kill_process_group(child: &std::process::Child) {
+    let pid = child.id();
+    let _ = std::process::Command::new("/bin/kill")
+        .arg("-KILL")
+        .arg(format!("-{pid}"))
+        .status();
+    // Fall back to killing just the direct child if the group kill failed
+    // (e.g. the process already exited between the poll and the kill).
+    let _ = std::process::Command::new("/bin/kill")
+        .arg("-KILL")
+        .arg(pid.to_string())
+        .status();
+}
+
+#[cfg(not(unix))]
+fn kill_process_group(child: &std::process::Child) {
+    let mut child = child.to_owned();
+    let _ = child.kill();
+}
+
 /// Expands the canonical `${PLUGIN_ROOT}` placeholder to the package root,
 /// so an authored command stays portable while the emitted projection can
 /// pin the concrete store path. The variable is also injected as the
@@ -485,7 +534,7 @@ fn run_handler(
     } else {
         invocation.arg("-c").arg(&command);
     }
-    let mut child = invocation
+    let mut child = with_process_group(invocation)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -518,7 +567,7 @@ fn run_handler(
         match child.try_wait() {
             Ok(Some(status)) => break (status, false),
             Ok(None) if Instant::now() >= deadline => {
-                let _ = child.kill();
+                kill_process_group(&child);
                 let status = child.wait().map_err(|source| UzeError::Process {
                     program: command.clone(),
                     source,
@@ -527,7 +576,7 @@ fn run_handler(
             }
             Ok(None) => thread::sleep(Duration::from_millis(10)),
             Err(source) => {
-                let _ = child.kill();
+                kill_process_group(&child);
                 return Err(UzeError::Process {
                     program: command,
                     source,
@@ -583,6 +632,13 @@ fn run_handler(
     } else if !denied_by_exit {
         match status.code() {
             Some(0) => None,
+            // A script without the executable bit: distinguish it from a
+            // generic failure so the author gets an actionable diagnostic
+            // (the canonical manifest runs commands through the shell, so
+            // `chmod +x` or an explicit `sh` prefix fixes it).
+            Some(126) => Some(format!(
+                "`{command}` is not executable (exit 126); chmod +x the script or invoke it as `sh {command}`"
+            )),
             Some(code) => Some(format!("`{command}` exited with code {code}")),
             None => Some(format!("`{command}` was terminated by a signal")),
         }
@@ -666,14 +722,17 @@ pub trait HookAdapterPort: Send + Sync {
         event: HookEvent,
     ) -> std::result::Result<HookCommandInput, String>;
 
-    /// Renders the aggregated outcome back into the harness's native stdout
-    /// contract. `None` when the harness treats an empty stdout as
-    /// allow/observe.
+    /// Renders the aggregated outcome back into the harness's native
+    /// contract: stdout JSON, a stderr reason (the channel native hooks
+    /// feed back on a blocked tool), and the harness's own blocking exit
+    /// code — `0` for allow/observe, the native block code (2 on
+    /// Claude/Codex/Antigravity tool use) for a deny. `None` stdout when
+    /// the harness treats an empty stdout as allow/observe.
     fn render_output(
         &self,
         outcome: &HookDispatchOutcome,
         event: HookEvent,
-    ) -> std::result::Result<Option<Vec<u8>>, String>;
+    ) -> std::result::Result<HookNativeOutput, String>;
 }
 
 #[cfg(test)]

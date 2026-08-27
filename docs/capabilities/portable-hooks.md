@@ -72,13 +72,19 @@ stdout is either empty (observe/allow) or one JSON object:
 - Handlers run sequentially in manifest order; the first deny stops the
   rest and blocks the intercepted tool where the target supports blocking.
 - stdout is capped at 64 KiB; stderr is preserved for diagnostics.
-- Exit `0` + valid JSON is a decision; exit `3` is a canonical hard deny;
-  any other non-zero exit, a timeout, or malformed output is **fail-open**
+- Exit `0` + valid JSON is a decision; exit `3` is the canonical hard deny
+  an author may use; any other non-zero exit, a timeout, or malformed
+  output is **fail-open**
   for `observe`/`allow` hooks and **fail-closed** (a deny) for declared
   `deny`/`ask`/`transform` effects.
 - The runtime wrapper is the `uze` binary's internal `hook-exec` command,
   emitted into managed hook configuration with an absolute executable path
-  and per-handler timeouts.
+  and per-handler timeouts. The wrapper never leaks internal exit codes:
+  a deny is translated into the harness's own blocking contract — JSON
+  decision plus **exit 2** on the command-hook harnesses (Claude, Codex,
+  Antigravity document exit 2 as the pre-tool block signal; any other
+  non-zero exit is a *non-blocking* error there, so leaking the canonical
+  deny exit would turn a denial into an executed tool).
 
 ## Delivery per harness
 
@@ -87,20 +93,24 @@ stdout is either empty (observe/allow) or one JSON object:
 | Claude Code | merged `hooks` entries in `~/.claude/settings.json` (plugin `hooks/hooks.json` group form) | native |
 | Codex | merged entries in `~/.codex/hooks.json` | native |
 | Antigravity CLI | named-entry `hooks.json` inside the UZE-generated native plugin | native (package-level) |
-| OpenCode | owned, regenerable `.opencode/plugins/uze-hooks-<package>.ts` bridge + one `plugin` entry in `opencode.json` | adapted (bridge) |
+| OpenCode | owned, regenerable V2 plugin (`Plugin.define` + `ctx.tool.hook`) at the global plugin directory `<config root>/plugins/uze-hooks-<package>.ts` — auto-discovered, no `plugin` config entry | adapted (bridge: observe/allow/transform only; deny/ask Unsupported, stop degraded) |
 
 Compatibility is semantic, per event and effect. A `Stop` hook is never
 represented as a tool callback: on OpenCode it is Degraded with the reason
 stated, and it is not attached. An `ask` effect is Unsupported where the
-target cannot preserve a real ask (Claude today; OpenCode, whose thrown
-error is a hard denial). A `transform` is only attached where the target
-preserves a safe input rewrite (OpenCode's bridge).
+target cannot preserve a real ask (OpenCode's V2 hooks offer input
+replacement but no input-based block; the only action-level deny/ask lives
+in the permission hook, which carries no tool input — so `deny`/`ask` are
+Unsupported on OpenCode V2 and never fabricated). A `transform` is only
+attached where the target preserves a safe input rewrite (OpenCode's `ctx
+.tool.hook("execute.before")` resets `event.input`).
 
 ## Lifecycle safety
 
-- Every projection is receipt-owned (`HookConfigEntry`); inspection compares
+- Every projection is receipt-owned (config entries by exact content
+  identity; the OpenCode bridge as a whole owned file); inspection compares
   the exact managed content, removal refuses drift/conflicts, and foreign
-  hooks, plugins, entries, and ordering are never changed.
+  hooks, plugins, files, entries, and ordering are never changed.
 - All generated artifacts are derived: safe to delete and regenerate from
   the Store (`uze plugin install` / `uze plugin update` rebuilds them).
 - `uze plugin inspect` lists hooks as resources with their per-harness
@@ -113,7 +123,18 @@ preserves a safe input rewrite (OpenCode's bridge).
   and proven by the Conformance Lab against the real harness binaries; a
   claim of native behavior on a specific version requires the lab's
   observed evidence.
-- `tool.execute.before` does not cover subagent-issued tool calls
+- OpenCode V2 (spec: opencode.ai/v2/docs/build/plugins) exposes no
+  input-based block signal — deny/ask are diagnosed Unsupported before
+  attach, and a runtime deny decision is logged, never enforced.
+- The OpenCode V2 beta TUI's tool hooks did not cover MCP tool calls in
+  the lab runs; the bridge semantics are validated with the real Bun
+  runtime, and the deny/allow/order lab scenarios record the observed
+  behavior honestly (ADAPTED) where the harness cannot enforce them.
+- Codex requires the `[features].hooks` feature flag in
+  `~/.codex/config.toml` (the deprecated `codex_hooks` key stops being
+  honored; verified against codex-cli 0.150.0).
+- `tool.execute.before` (classic API) does not cover subagent-issued tool
+  calls
   ([sst/opencode#5894](https://github.com/sst/opencode/issues/5894)).
 - Windows command quoting uses the POSIX wrapper form; `cmd`-specific
   quoting is a future target adaptation.

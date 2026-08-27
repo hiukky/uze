@@ -71,11 +71,22 @@ python3 lab.py --harness opencode      # 14/14 PASS + 1 ADAPTED (pre-hooks basel
 
 Every vertical additionally runs the **portable-hooks phase** (ADR-033):
 three TUI-first scenarios — `deny` (a real tool call blocked by a portable
-hook, reason relayed), `allow` (the same hook lets the real tool execute),
-and `order` (first-deny-wins: the second handler's marker must never reach
-the conversation). The phase count is recorded on the next clean 3x run and
-kept current here; the hook checks themselves are live assertions over the
-conversation the REAL harness sent its provider plus the TUI surface.
+hook), `allow` (the same hook lets the real tool execute, proven by the
+tool's own output reaching the conversation), and `order` (first-deny-wins:
+the second handler's marker must never appear). Runs are grouped
+`describe`/`test`-style (tui, cli.state, hooks > deny/allow/order) so a
+growing suite stays interpretable, and every wait aborts immediately when
+the harness process dies instead of burning its try budget.
+
+Latest evidence per harness (run-by-run, recorded honestly — including the
+ADAPTED vendor-limitation records and any pre-existing base-phase failure):
+
+```bash
+python3 lab.py --harness claude        # 18/18 PASS (hooks deny/allow/order proven)
+python3 lab.py --harness codex         # pending first clean run
+python3 lab.py --harness antigravity   # 27/28 PASS + 2 ADAPTED (1 pre-existing MCP FAIL)
+python3 lab.py --harness opencode      # 27/28 PASS + 2 ADAPTED (1 pre-existing MCP FAIL)
+```
 
 Evidence JSON goes under `AGY_OUTDIR` (default
 `/tmp/harness-conformance/<harness>/run<N>`). The exit code is 0 only when
@@ -131,15 +142,18 @@ build artifact.
   asserted.
 - **Codex**: with the current UZE delivery the plugin skills are not listed
   in codex's model catalog (only built-ins), and the UZE MCP config does not
-  reach the `/mcp` inventory. The same approval gate may intercept hook
-  scenario tool calls before or alongside the portable hook; the hooks
-  phase records whichever evidence the real harness produces and the gate
-  result honestly.
+  reach the `/mcp` inventory. Codex hooks require the `[features].hooks`
+  feature flag in `~/.codex/config.toml` (the deprecated `codex_hooks` key
+  stops being honored — verified: codex-cli prints the deprecation warning
+  and hooks stay disabled without the new key).
 - **Hooks (ADR-033)**: the deny/allow/order phases assert semantic markers
-  (a portable-hook denial reason reaching the conversation; the tool
-  executing only after an allow; the second handler's marker never
-  appearing after a first deny). The exact vendor wording of a surfaced
-  denial is recorded by the first clean 3x run, never assumed.
+  — a deny is proven by the intercepted tool *never executing* (its output
+  never reaches the conversation), an allow by the tool's output arriving.
+  OpenCode V2 exposes no input-based block (the action-level deny lives in
+  the permission hook, which carries no tool input), so its deny/order
+  scenarios are recorded ADAPTED with the observed behavior; AGY 1.1.21's
+  `allow` decision did not produce an observable execution in the lab turn,
+  also recorded ADAPTED.
 
 ## Discovery
 

@@ -6,6 +6,8 @@ Docker topology (provider + harness containers), per-run TLS certs for the
 TLS-intercepted providers, PTY screen/waiter helpers, and the evidence
 `check()` accumulator.
 """
+
+import contextlib
 import json
 import os
 import re
@@ -18,15 +20,21 @@ PROVIDER_IMG = "python:3.12-slim"
 HARNESS_IMAGE = "conformance-harness:latest"
 
 HARNESS_HOSTS = {
-    "claude": ["api.anthropic.com", "platform.claude.com", "console.anthropic.com",
-               "statsig.anthropic.com", "api.statsig.com", "sentry.io",
-               "telemetry.anthropic.com"],
+    "claude": [
+        "api.anthropic.com",
+        "platform.claude.com",
+        "console.anthropic.com",
+        "statsig.anthropic.com",
+        "api.statsig.com",
+        "sentry.io",
+        "telemetry.anthropic.com",
+    ],
     "codex": ["api.openai.com"],
 }
 HARNESS_SANS = {
     "claude": "DNS:api.anthropic.com,DNS:*.anthropic.com,DNS:platform.claude.com,"
-              "DNS:*.claude.com,DNS:console.anthropic.com,DNS:statsig.anthropic.com,"
-              "DNS:api.statsig.com,DNS:sentry.io,DNS:telemetry.anthropic.com",
+    "DNS:*.claude.com,DNS:console.anthropic.com,DNS:statsig.anthropic.com,"
+    "DNS:api.statsig.com,DNS:sentry.io,DNS:telemetry.anthropic.com",
     "codex": "DNS:api.openai.com,DNS:*.openai.com",
 }
 
@@ -42,7 +50,8 @@ class Config:
         self.marketplace = "/opt/uze-conformance-fixtures/marketplace"
         self.marketplace_source = os.path.join(self.repo, "_fixtures", "marketplace")
         self.outdir = os.environ.get(
-            "AGY_OUTDIR", f"/tmp/harness-conformance/{harness}/run{run}")
+            "AGY_OUTDIR", f"/tmp/harness-conformance/{harness}/run{run}"
+        )
         self.net = "uze-harness-offline"
         self.prov_name = "fake-provider"
         self.cert_dir = os.path.join(self.outdir, "certs")
@@ -53,14 +62,52 @@ class Config:
 
 results = []
 
+# Active describe() group stack (Jest-style): group names are indented in
+# the live log and carried into every verdict entry, so a growing suite
+# (skills, mcp, hooks, ...) stays interpretable.
+SUITE_STACK: list[str] = []
+
+
+@contextlib.contextmanager
+def describe(name: str):
+    """Opens a named group for every `check` that follows. Groups nest
+    (`with describe("hooks"): with describe("deny"): ...`); the current
+    chain is prepended to each verdict's `suite` field and rendered as
+    indentation in the live log. `run` outside any group is allowed — the
+    harness-level checks then carry no suite prefix."""
+    SUITE_STACK.append(name)
+    indent = "  " * (len(SUITE_STACK) - 1)
+    print(f"\n{indent}▸ {name}", flush=True)
+    try:
+        yield
+    finally:
+        SUITE_STACK.pop()
+
+
+def suite_path(name: str) -> str:
+    return " > ".join([*SUITE_STACK, name])
+
 
 def check(name, ok, detail="", kind="assert"):
-    results.append({"check": name, "pass": bool(ok), "detail": detail, "kind": kind})
+    suite = suite_path(name)
+    indent = "  " * len(SUITE_STACK)
+    results.append(
+        {
+            "check": name,
+            "suite": suite,
+            "pass": bool(ok),
+            "detail": detail,
+            "kind": kind,
+        }
+    )
     tag = "PASS" if ok else "FAIL"
     if ok and kind == "adapted":
         tag = "ADAPTED"
     symbol = {"PASS": "✅", "ADAPTED": "🟡", "FAIL": "❌"}[tag]
-    print(f"{symbol} [{tag:7s}] {name}" + (f"  ({detail})" if detail else ""))
+    print(
+        f"{indent}{symbol} [{tag:7s}] {name}" + (f"  ({detail})" if detail else ""),
+        flush=True,
+    )
 
 
 def sh(*args, ok=(0,)):
@@ -114,13 +161,16 @@ def validate_marketplace(cfg):
     for relative_path in required:
         path = os.path.join(cfg.marketplace_source, relative_path)
         if not os.path.isfile(path):
-            raise RuntimeError(f"missing conformance marketplace resource: {relative_path}")
+            raise RuntimeError(
+                f"missing conformance marketplace resource: {relative_path}"
+            )
 
     with open(os.path.join(cfg.marketplace_source, "plugins/mcp-plugin/mcp.json")) as f:
         mcp = json.load(f)
     server = mcp.get("mcpServers", {}).get("uze-conformance", {})
     if server.get("command") != "__UZE_MCP_FIXTURE_BINARY__" or server.get("args") != [
-        "--proof", "__UZE_MCP_CONFORMANCE_PROOF__"
+        "--proof",
+        "__UZE_MCP_CONFORMANCE_PROOF__",
     ]:
         raise RuntimeError("invalid conformance MCP fixture placeholders")
 
@@ -133,17 +183,61 @@ def generate_certs(cfg):
     leaf_csr = os.path.join(cfg.cert_dir, "leaf.csr")
     leaf_crt = os.path.join(cfg.cert_dir, "leaf.crt")
     if not os.path.exists(ca_crt):
-        sh("openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
-           "-keyout", ca_key, "-out", ca_crt, "-days", "30",
-           "-subj", "/CN=UZE Synthetic CA", "-sha256")
+        sh(
+            "openssl",
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-keyout",
+            ca_key,
+            "-out",
+            ca_crt,
+            "-days",
+            "30",
+            "-subj",
+            "/CN=UZE Synthetic CA",
+            "-sha256",
+        )
     if not os.path.exists(leaf_crt):
-        sh("openssl", "req", "-newkey", "rsa:2048", "-nodes",
-           "-keyout", leaf_key, "-out", leaf_csr, "-subj", "/CN=api.example.com")
+        sh(
+            "openssl",
+            "req",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-keyout",
+            leaf_key,
+            "-out",
+            leaf_csr,
+            "-subj",
+            "/CN=api.example.com",
+        )
         ext = os.path.join(cfg.cert_dir, "ext.cnf")
         with open(ext, "w") as f:
-            f.write(f"subjectAltName={HARNESS_SANS[cfg.harness]}\nextendedKeyUsage=serverAuth\n")
-        sh("openssl", "x509", "-req", "-in", leaf_csr, "-CA", ca_crt, "-CAkey", ca_key,
-           "-CAcreateserial", "-out", leaf_crt, "-days", "30", "-extfile", ext, "-sha256")
+            f.write(
+                f"subjectAltName={HARNESS_SANS[cfg.harness]}\nextendedKeyUsage=serverAuth\n"
+            )
+        sh(
+            "openssl",
+            "x509",
+            "-req",
+            "-in",
+            leaf_csr,
+            "-CA",
+            ca_crt,
+            "-CAkey",
+            ca_key,
+            "-CAcreateserial",
+            "-out",
+            leaf_crt,
+            "-days",
+            "30",
+            "-extfile",
+            ext,
+            "-sha256",
+        )
     return ca_crt, leaf_crt, leaf_key
 
 
@@ -155,65 +249,162 @@ def start_provider(cfg, mode, extra_env=None):
     `extra_env` adds `-e K=V` pairs (e.g. the hook-scenario tool name/args).
     """
     subprocess.run(["docker", "rm", "-f", cfg.prov_name], capture_output=True)
-    env = ["-e", f"PROVIDER_MODE={mode}",
-           "-e", "PROVIDER_STRUCT=/app/struct.json",
-           "-e", f"MCP_PROOF={cfg.mcp_proof}"]
+    env = [
+        "-e",
+        f"PROVIDER_MODE={mode}",
+        "-e",
+        "PROVIDER_STRUCT=/app/struct.json",
+        "-e",
+        f"MCP_PROOF={cfg.mcp_proof}",
+    ]
     for name, value in (extra_env or {}).items():
         env += ["-e", f"{name}={value}"]
 
     # The hook scenarios parameterize the scripted tool call via the same
     # envs the MCP toolcall phases use; defaults keep MCP behavior unchanged.
-    env += ["-e", f"TOOL_NAME={os.environ.get('HOOK_TOOL', 'Bash')}",
-            "-e", f"TOOL_ARGS={os.environ.get('HOOK_ARGS', '{}')}"]
+    env += [
+        "-e",
+        f"TOOL_NAME={os.environ.get('HOOK_TOOL', 'Bash')}",
+        "-e",
+        f"TOOL_ARGS={os.environ.get('HOOK_ARGS', '{}')}",
+    ]
     provider = os.path.join(cfg.repo, "harnesses", cfg.harness)
     if cfg.harness == "antigravity":
         mounts = ["-v", f"{provider}/provider.py:/app/fp.py:ro"]
         if mode == "static":
-            mounts += ["-v", f"{cfg.fix}/simple_turn.sse:/app/resp.sse:ro",
-                       "-e", "PROVIDER_RESP=/app/resp.sse"]
+            mounts += [
+                "-v",
+                f"{cfg.fix}/simple_turn.sse:/app/resp.sse:ro",
+                "-e",
+                "PROVIDER_RESP=/app/resp.sse",
+            ]
         else:
             # Hook scenarios pass their own FC_ARGS (a `run_command` call
             # carrying the marker); the MCP default applies otherwise.
             if not extra_env or "FC_ARGS" not in extra_env:
-                env += ["-e", 'FC_ARGS={"serverName":"uze-conformance","toolName":"uze_conformance","arguments":{}}']
+                env += [
+                    "-e",
+                    'FC_ARGS={"serverName":"uze-conformance","toolName":"uze_conformance","arguments":{}}',
+                ]
             env += ["-e", "FINAL_TEXT=UZE_CONFORMANCE_PASS"]
-        sh("docker", "run", "-d", "--name", cfg.prov_name, "--network", cfg.net,
-           *mounts, *env, PROVIDER_IMG, "python", "/app/fp.py", "9999")
+        sh(
+            "docker",
+            "run",
+            "-d",
+            "--name",
+            cfg.prov_name,
+            "--network",
+            cfg.net,
+            *mounts,
+            *env,
+            PROVIDER_IMG,
+            "python",
+            "/app/fp.py",
+            "9999",
+        )
     elif cfg.harness == "opencode":
-        env += ["-e", "RESPONSE_TEXT=UZE_CONFORMANCE_OK",
-                "-e", "FINAL_TEXT=UZE_CONFORMANCE_PASS"]
-        sh("docker", "run", "-d", "--name", cfg.prov_name, "--network", cfg.net,
-           "-v", f"{provider}/provider.py:/app/fp.py:ro",
-           *env, PROVIDER_IMG, "python", "/app/fp.py", "9999")
+        env += [
+            "-e",
+            "RESPONSE_TEXT=UZE_CONFORMANCE_OK",
+            "-e",
+            "FINAL_TEXT=UZE_CONFORMANCE_PASS",
+        ]
+        sh(
+            "docker",
+            "run",
+            "-d",
+            "--name",
+            cfg.prov_name,
+            "--network",
+            cfg.net,
+            "-v",
+            f"{provider}/provider.py:/app/fp.py:ro",
+            *env,
+            PROVIDER_IMG,
+            "python",
+            "/app/fp.py",
+            "9999",
+        )
     elif cfg.harness == "claude":
         _, leaf_crt, leaf_key = generate_certs(cfg)
-        env += ["-e", "LEAF_CERT=/app/leaf.crt", "-e", "LEAF_KEY=/app/leaf.key",
-                "-e", "RESPONSE_TEXT=UZE_CONFORMANCE_OK",
-                "-e", "FINAL_TEXT=UZE_CONFORMANCE_PASS"]
-        sh("docker", "run", "-d", "--name", cfg.prov_name, "--network", cfg.net,
-           "-v", f"{provider}/provider.py:/app/fp.py:ro",
-           "-v", f"{leaf_crt}:/app/leaf.crt:ro",
-           "-v", f"{leaf_key}:/app/leaf.key:ro",
-           *env, PROVIDER_IMG, "python", "/app/fp.py")
+        env += [
+            "-e",
+            "LEAF_CERT=/app/leaf.crt",
+            "-e",
+            "LEAF_KEY=/app/leaf.key",
+            "-e",
+            "RESPONSE_TEXT=UZE_CONFORMANCE_OK",
+            "-e",
+            "FINAL_TEXT=UZE_CONFORMANCE_PASS",
+        ]
+        sh(
+            "docker",
+            "run",
+            "-d",
+            "--name",
+            cfg.prov_name,
+            "--network",
+            cfg.net,
+            "-v",
+            f"{provider}/provider.py:/app/fp.py:ro",
+            "-v",
+            f"{leaf_crt}:/app/leaf.crt:ro",
+            "-v",
+            f"{leaf_key}:/app/leaf.key:ro",
+            *env,
+            PROVIDER_IMG,
+            "python",
+            "/app/fp.py",
+        )
     else:
         _, leaf_crt, leaf_key = generate_certs(cfg)
-        env += ["-e", "LEAF_CERT=/app/leaf.crt", "-e", "LEAF_KEY=/app/leaf.key",
-                "-e", "RESPONSE_TEXT=UZE_CONFORMANCE_OK"]
-        sh("docker", "run", "-d", "--name", cfg.prov_name, "--network", cfg.net,
-           "-v", f"{provider}/provider.py:/app/fp.py:ro",
-           "-v", f"{leaf_crt}:/app/leaf.crt:ro",
-           "-v", f"{leaf_key}:/app/leaf.key:ro",
-           *env, PROVIDER_IMG, "python", "/app/fp.py")
+        env += [
+            "-e",
+            "LEAF_CERT=/app/leaf.crt",
+            "-e",
+            "LEAF_KEY=/app/leaf.key",
+            "-e",
+            "RESPONSE_TEXT=UZE_CONFORMANCE_OK",
+        ]
+        sh(
+            "docker",
+            "run",
+            "-d",
+            "--name",
+            cfg.prov_name,
+            "--network",
+            cfg.net,
+            "-v",
+            f"{provider}/provider.py:/app/fp.py:ro",
+            "-v",
+            f"{leaf_crt}:/app/leaf.crt:ro",
+            "-v",
+            f"{leaf_key}:/app/leaf.key:ro",
+            *env,
+            PROVIDER_IMG,
+            "python",
+            "/app/fp.py",
+        )
     time.sleep(2)
     return subprocess.check_output(
-        ["docker", "inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
-         cfg.prov_name], text=True).strip()
+        [
+            "docker",
+            "inspect",
+            "-f",
+            "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
+            cfg.prov_name,
+        ],
+        text=True,
+    ).strip()
 
 
 def provider_struct(cfg):
     try:
-        out = subprocess.run(["docker", "exec", cfg.prov_name, "cat", "/app/struct.json"],
-                             capture_output=True, text=True).stdout
+        out = subprocess.run(
+            ["docker", "exec", cfg.prov_name, "cat", "/app/struct.json"],
+            capture_output=True,
+            text=True,
+        ).stdout
         return json.loads(out) or []
     except Exception:
         return []
@@ -223,11 +414,26 @@ def docker_base(cfg, prov_ip, final_cmd, tty=True):
     cmd = ["docker", "run", "--rm"] + (["-it"] if tty else []) + ["--network", cfg.net]
     for h in HARNESS_HOSTS.get(cfg.harness, []):
         cmd += ["--add-host", f"{h}:{prov_ip}"]
-    cmd += ["--tmpfs", "/tmp:rw,exec,nosuid,nodev,size=128m,uid=1000,gid=1000,mode=700",
-            "--tmpfs", "/work:rw,noexec,nosuid,nodev,size=512m,uid=1000,gid=1000,mode=700",
-            "-e", "HOME=/work/home", "-e", "UZE_HOME=/work/home/.uze",
-            "-v", f"{cfg.fix}:/app/fixtures:ro",
-            HARNESS_IMAGE, "sh", "-c", final_cmd]
+    cmd += [
+        "--tmpfs",
+        "/tmp:rw,exec,nosuid,nodev,size=128m,uid=1000,gid=1000,mode=700",
+        # /work is exec-capable on purpose: portable-hook handlers are shell
+        # scripts executed from the derived Store under /work (ADR-033), and
+        # the Lab's isolation comes from the `--internal` network, not from
+        # a noexec mount.
+        "--tmpfs",
+        "/work:rw,exec,nosuid,nodev,size=512m,uid=1000,gid=1000,mode=700",
+        "-e",
+        "HOME=/work/home",
+        "-e",
+        "UZE_HOME=/work/home/.uze",
+        "-v",
+        f"{cfg.fix}:/app/fixtures:ro",
+        HARNESS_IMAGE,
+        "sh",
+        "-c",
+        final_cmd,
+    ]
     return cmd
 
 
@@ -249,12 +455,21 @@ def spawn_tui(cfg, cmd, tag):
         else:
             open(os.path.join(cfg.outdir, "script-ok"), "w").write("yes")
     if open(os.path.join(cfg.outdir, "script-ok")).read() != "yes":
-        return pexpect.spawn(cmd[0], cmd[1:], encoding="utf-8",
-                             codec_errors="replace", timeout=300)
-    wrapped = ["script", "-q", "--timing", timing, "-c",
-               " ".join([f'"{c}"' if " " in c else c for c in cmd]), rec]
-    child = pexpect.spawn(wrapped[0], wrapped[1:], encoding="utf-8",
-                          codec_errors="replace", timeout=300)
+        return pexpect.spawn(
+            cmd[0], cmd[1:], encoding="utf-8", codec_errors="replace", timeout=300
+        )
+    wrapped = [
+        "script",
+        "-q",
+        "--timing",
+        timing,
+        "-c",
+        " ".join([f'"{c}"' if " " in c else c for c in cmd]),
+        rec,
+    ]
+    child = pexpect.spawn(
+        wrapped[0], wrapped[1:], encoding="utf-8", codec_errors="replace", timeout=300
+    )
     child.setwinsize(50, 160)
     return child
 
@@ -300,15 +515,35 @@ def make_screen(child):
         p = re.sub(r"\x1b\][^\x07]*\x07", "", t)
         p = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", p).replace("\x1b", "")
         return t, p
+
+    # Expose the child so the waiter can abort early when the harness
+    # process died (e.g. a setup error inside the container): without this,
+    # every wait_for burns its full try budget staring at a dead child.
+    screen.child = child
     return screen
 
 
 def make_waiter(screen):
-    def wait_for(markers, tries=12, gap=2.0):
-        for _ in range(tries):
+    def wait_for(markers, tries=12, gap=2.0, stop_on_death=False):
+        for attempt in range(tries):
             t, p = screen(gap)
             for m in markers:
                 if m in p:
                     return t, p, m
+            if (
+                stop_on_death
+                and getattr(screen, "child", None) is not None
+                and not screen.child.isalive()
+            ):
+                return t, p, None
+            # Long waits must not look frozen: show progress while the
+            # harness process is still alive but none of the markers have
+            # appeared yet. (Stdout is flushed so redirected runs stream.)
+            if tries > 6 and attempt >= 2 and attempt % 2 == 1:
+                print(
+                    f"    … waiting for progress (try {attempt + 1}/{tries})",
+                    flush=True,
+                )
         return t, p, None
+
     return wait_for

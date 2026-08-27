@@ -100,7 +100,11 @@ fn compatibility_is_semantic_and_never_fabricates_a_stop_equivalence() {
     );
     assert_eq!(
         opencode.exposure_plan(protect).route,
-        CompatibilityRoute::Adaptable
+        // OpenCode V2 exposes no input-based block (spec:
+        // opencode.ai/v2/docs/build/plugins — the action-level deny lives in
+        // the permission hook, which carries no tool input), so deny is
+        // diagnosed Unsupported, never fabricated.
+        CompatibilityRoute::Unsupported
     );
     assert_eq!(
         antigravity.exposure_plan(protect).route,
@@ -522,57 +526,84 @@ fn ingest_package(home: &UzeHome, pkg_root: &std::path::Path) {
         .expect("test package ingests into the store");
 }
 
+/// Re-discovers the package's resources from the Store, exactly where the
+/// engine finds them after a real installation — attach, inspect and
+/// detach all resolve Store bytes, so the fixture resources must point at
+/// the Store too.
+fn stored_resources(home: &UzeHome, name: &str) -> Vec<Resource> {
+    use uze::{engine::package_resources_at, store::UzeStore};
+    let package = UzeStore::new(home.clone())
+        .package(&PackageId::from_plugin_name(name, std::path::Path::new("plugin.json")).unwrap())
+        .expect("stored package exists");
+    package_resources_at(&package.id, &package.root).expect("Store resources rediscover")
+}
+
 #[test]
-fn opencode_bridge_lifecycle_preserves_foreign_plugins() {
-    let (root, resources) = hook_package("opencode-bridge", deny_group());
-    let protect = hook_resource(&resources, "protect-env");
+fn opencode_bridge_lifecycle_preserves_foreign_plugins_in_the_directory() {
+    let (root, _resources) = hook_package(
+        "opencode-bridge",
+        &manifest_with(
+            r#""PreToolUse":[{"id":"watch","matcher":"shell","effect":"observe","hooks":[{"type":"command","command":"${PLUGIN_ROOT}/scripts/check"}]}]"#,
+        ),
+    );
+    let home = UzeHome::at(root.join("uze"));
+    ingest_package(&home, &root.join("pkg"));
+    let resources = stored_resources(&home, "hook-demo");
+    let protect = hook_resource(&resources, "watch");
     let integration = opencode(&root);
-    ingest_package(&UzeHome::at(root.join("uze")), &root.join("pkg"));
     let config = root.join("config/opencode.json");
-    fs::create_dir_all(config.parent().unwrap()).unwrap();
+    let bridge = root.join("config/plugins/uze-hooks-hook-demo.ts");
+    // A foreign plugin file already lives in the harness's global plugin
+    // directory; the config itself is never touched by hook delivery.
+    fs::create_dir_all(config.parent().unwrap().join("plugins")).unwrap();
     fs::write(
-        &config,
-        r#"{"plugin": ["/foreign/plugin.js"], "mcp": {"servers": {}}}"#,
+        config.parent().unwrap().join("plugins/foreign.js"),
+        "// foreign\n",
     )
     .unwrap();
+    fs::write(&config, r#"{"mcp": {"servers": {}}}"#).unwrap();
 
     let plan = integration.exposure_plan(protect);
     assert_eq!(plan.route, CompatibilityRoute::Adaptable);
-    let uze::exposure::ExposureMechanism::ManagedHookConfig { expected, .. } = &plan.mechanism
-    else {
-        panic!("OpenCode hook plan is a managed plugin entry");
+    let uze::exposure::ExposureMechanism::ManagedHookFile { path } = &plan.mechanism else {
+        panic!("OpenCode hook plan is an owned bridge file");
     };
-    let bridge = Path::new(expected);
-    assert!(bridge.ends_with(".opencode/plugins/uze-hooks-hook-demo.ts"));
+    assert_eq!(*path, bridge);
 
     let receipt = integration
         .attach_receipt(protect)
         .expect("attach succeeds")
         .expect("attach produces a receipt");
-    let ManagedArtifact::HookConfigEntry {
-        config_file,
-        entry_name,
-        event,
-        expected,
-    } = &receipt.artifact
-    else {
-        panic!("OpenCode hook receipt is a HookConfigEntry");
+    // Production records the receipt right after the attach; inspection is
+    // receipt-driven, so mirror that exactly.
+    state::record_receipt(&home.clone(), "oc-lifecycle-1".to_owned(), receipt.clone()).unwrap();
+    let ManagedArtifact::ManagedHookFile { path } = &receipt.artifact else {
+        panic!("OpenCode hook receipt is a ManagedHookFile");
     };
-    assert_eq!(*config_file, config);
-    assert_eq!(entry_name, "uze-hooks-hook-demo");
-    assert_eq!(*event, None, "the plugin array entry is not event-keyed");
-    assert!(Path::new(expected).is_file(), "the bridge file exists");
-
+    assert_eq!(*path, bridge);
+    assert!(
+        bridge.is_file(),
+        "the bridge file exists in the auto-discovered directory"
+    );
+    // The config is untouched — a single load source (the directory), never
+    // a second explicit registration that could double-load the bridge.
     let document: serde_json::Value = serde_json::from_slice(&fs::read(&config).unwrap()).unwrap();
-    assert_eq!(
-        document["plugin"],
-        serde_json::json!(["/foreign/plugin.js", expected]),
-        "the foreign plugin keeps its position; UZE's entry is appended"
+    assert!(
+        document.get("plugin").is_none(),
+        "no redundant plugin entry"
     );
     assert!(document.get("mcp").is_some());
-    let source = fs::read_to_string(Path::new(expected)).unwrap();
-    assert!(source.contains("tool.execute.before"));
-    assert!(source.contains("\"effect\":\"deny\""));
+    assert!(
+        config
+            .parent()
+            .unwrap()
+            .join("plugins/foreign.js")
+            .is_file()
+    );
+    let source = fs::read_to_string(&bridge).unwrap();
+    assert!(source.contains("Plugin.define"));
+    assert!(source.contains("tool.hook"));
+    assert!(source.contains("\"effect\":\"observe\""));
     assert!(source.contains("\"matchers\":[\"bash\"]"));
 
     assert_eq!(
@@ -580,48 +611,55 @@ fn opencode_bridge_lifecycle_preserves_foreign_plugins() {
         AttachmentState::Matched
     );
 
-    // A deleted bridge file is drift, not a silent success.
-    fs::remove_file(Path::new(expected)).unwrap();
+    // A deleted bridge file is Missing, never a silent success — removal
+    // refuses (returns the inspection) and re-install regenerates it.
+    fs::remove_file(&bridge).unwrap();
     assert_eq!(
         integration.inspect_receipt(&receipt).state,
-        AttachmentState::Drifted
+        AttachmentState::Missing
     );
     assert_eq!(
         integration.detach_receipt(&receipt).unwrap().state,
-        AttachmentState::Drifted,
-        "removal refuses a drifted bridge"
+        AttachmentState::Missing,
+        "removal refuses a missing bridge"
     );
 
-    // Restore by re-attach; removal then cleans entry + file + empty dirs.
+    // Restore by re-attach; removal then deletes only the owned file, keeps
+    // the foreign plugin, and leaves the config untouched.
     integration.attach_receipt(protect).unwrap();
     assert_eq!(
         integration.detach_receipt(&receipt).unwrap().state,
         AttachmentState::Missing
     );
-    assert!(!Path::new(expected).exists());
-    let document: serde_json::Value = serde_json::from_slice(&fs::read(&config).unwrap()).unwrap();
-    assert_eq!(
-        document["plugin"],
-        serde_json::json!(["/foreign/plugin.js"])
+    assert!(!bridge.exists());
+    assert!(
+        config
+            .parent()
+            .unwrap()
+            .join("plugins/foreign.js")
+            .is_file()
     );
+    let document: serde_json::Value = serde_json::from_slice(&fs::read(&config).unwrap()).unwrap();
+    assert!(document.get("plugin").is_none());
     assert!(document.get("mcp").is_some());
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
 fn opencode_bridge_is_package_scoped_and_regenerates_across_groups() {
-    let (_root, resources) = hook_package(
+    let (_root, _resources) = hook_package(
         "opencode-multi",
         &manifest_with(
-            r#""PreToolUse":[{"id":"deny-first","matcher":"shell","effect":"deny","hooks":[{"type":"command","command":"first"}]},{"id":"observe-second","matcher":"shell","hooks":[{"type":"command","command":"second"}]}]"#,
+            r#""PreToolUse":[{"id":"observe-first","matcher":"shell","hooks":[{"type":"command","command":"first"}]},{"id":"observe-second","matcher":"shell","hooks":[{"type":"command","command":"second"}]}]"#,
         ),
     );
     let home = UzeHome::at(_root.join("uze"));
     ingest_package(&home, &_root.join("pkg"));
-    let first = hook_resource(&resources, "deny-first").clone();
+    let resources = stored_resources(&home, "hook-demo");
+    let first = hook_resource(&resources, "observe-first").clone();
     let second = hook_resource(&resources, "observe-second").clone();
     let integration = opencode(&_root);
-    let config = _root.join("config/opencode.json");
+    let bridge = _root.join("config/plugins/uze-hooks-hook-demo.ts");
 
     let receipt_first = integration.attach_receipt(&first).unwrap().unwrap();
     // Production records each receipt right after its attach, so the next
@@ -631,19 +669,18 @@ fn opencode_bridge_is_package_scoped_and_regenerates_across_groups() {
     state::record_receipt(&home, "multi-2".to_owned(), receipt_second.clone()).unwrap();
     assert_eq!(
         receipt_first.artifact, receipt_second.artifact,
-        "one shared entry per package"
+        "one owned bridge per package"
     );
-    let ManagedArtifact::HookConfigEntry { expected, .. } = &receipt_first.artifact else {
+    let ManagedArtifact::ManagedHookFile { path } = &receipt_first.artifact else {
         unreachable!();
     };
-    let source = fs::read_to_string(Path::new(expected)).unwrap();
-    assert!(source.contains("\"id\":\"deny-first\""));
+    assert_eq!(*path, bridge);
+    let source = fs::read_to_string(&bridge).unwrap();
+    assert!(source.contains("\"id\":\"observe-first\""));
     assert!(source.contains("\"id\":\"observe-second\""));
-    let document: serde_json::Value = serde_json::from_slice(&fs::read(&config).unwrap()).unwrap();
-    assert_eq!(document["plugin"].as_array().unwrap().len(), 1);
 
     // Detaching one group regenerates the bridge without it; detaching the
-    // last group removes everything. The ledger entries above let detach
+    // last group removes the file. The ledger entries above let detach
     // see the sibling receipt.
     let integration_too = opencode(&_root);
     assert_eq!(
@@ -656,9 +693,9 @@ fn opencode_bridge_is_package_scoped_and_regenerates_across_groups() {
     // Production forgets a receipt only after a successful detach; the
     // sibling's later detach must not see the forgotten group as active.
     state::forget_receipt(&home.clone(), "multi-1").unwrap();
-    let source = fs::read_to_string(Path::new(expected)).unwrap();
+    let source = fs::read_to_string(&bridge).unwrap();
     assert!(
-        !source.contains("deny-first"),
+        !source.contains("observe-first"),
         "the detached group leaves the bridge"
     );
     assert!(
@@ -672,13 +709,7 @@ fn opencode_bridge_is_package_scoped_and_regenerates_across_groups() {
             .state,
         AttachmentState::Missing
     );
-    assert!(!Path::new(expected).exists());
-    let document: serde_json::Value = serde_json::from_slice(&fs::read(&config).unwrap()).unwrap();
-    assert_eq!(
-        document.get("plugin"),
-        None,
-        "the last group removes the managed entry"
-    );
+    assert!(!bridge.exists(), "the last group removes the owned file");
     let _ = fs::remove_dir_all(_root);
 }
 
@@ -706,10 +737,10 @@ fn opencode_unmatch_all_groups_carry_no_matcher_and_stop_is_never_bridged() {
     );
 
     let receipt = integration.attach_receipt(all_tools).unwrap().unwrap();
-    let ManagedArtifact::HookConfigEntry { expected, .. } = &receipt.artifact else {
+    let ManagedArtifact::ManagedHookFile { path } = &receipt.artifact else {
         unreachable!();
     };
-    let source = fs::read_to_string(Path::new(expected)).unwrap();
+    let source = fs::read_to_string(path).unwrap();
     assert!(
         source.contains("\"matchers\":[]"),
         "an unmatch-all group runs for every tool"

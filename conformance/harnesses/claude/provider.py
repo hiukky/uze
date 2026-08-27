@@ -56,6 +56,10 @@ HOOK_MARKERS = [
     "second-handler-ran",
     "second-handler-reached",
     "Denied by UZE hook",
+    # The real tool stdout marker: only present when the intercepted tool
+    # actually executed after an allow — the deny/allow contrast relies
+    # on it, not on the ambiguous presence of a tool result.
+    "plain output",
 ]
 COUNTER = {"n": 0}
 

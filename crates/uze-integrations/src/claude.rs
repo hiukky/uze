@@ -21,7 +21,7 @@ use uze_core::{
     exposure::{ExposureMechanism, ExposurePlan, PackageExposurePlan},
     harness_runtime::{RuntimeContext, resolve_real_executable},
     home::UzeHome,
-    hook::{HookAdapterPort, HookCommandInput, HookDispatchOutcome, HookEvent},
+    hook::{HookAdapterPort, HookCommandInput, HookDispatchOutcome, HookEvent, HookNativeOutput},
     integration::{
         AttachmentInspection, AttachmentReceipt, AttachmentState, ContextDelivery,
         HarnessDetection, IntegrationPort, ManagedArtifact, PublicationStatus,
@@ -681,7 +681,7 @@ impl HookAdapterPort for ClaudeIntegration {
         &self,
         outcome: &HookDispatchOutcome,
         event: HookEvent,
-    ) -> std::result::Result<Option<Vec<u8>>, String> {
+    ) -> std::result::Result<HookNativeOutput, String> {
         hook_projection::claude_render_output(outcome, event)
     }
 }

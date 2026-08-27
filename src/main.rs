@@ -20,8 +20,8 @@ use uze::{
     },
     context::PlannedAction,
     hook::{
-        CommandHandlerType, CommandHook, DEFAULT_TIMEOUT_SECONDS, DENY_EXIT_CODE, HookDecision,
-        HookEffect, HookEvent, PortableHook, dispatch_handlers,
+        CommandHandlerType, CommandHook, DEFAULT_TIMEOUT_SECONDS, HookEffect, HookEvent,
+        PortableHook, dispatch_handlers,
     },
     integrations::registry::IntegrationRegistry,
 };
@@ -673,9 +673,14 @@ fn run(cli: Cli) -> Result<()> {
 /// The `hook-exec` runtime wrapper (ADR-033): reads the harness's native
 /// hook payload from stdin, normalizes it through the adapter, runs the
 /// authored handlers sequentially against the portable ABI, and renders the
-/// aggregated decision back to the harness's own stdout contract. Exits
-/// [`DENY_EXIT_CODE`] on a denial so exit-code-keyed targets observe the
-/// same decision as the JSON stdout carries.
+/// aggregated decision back into the harness's own native contract — JSON
+/// stdout where the harness parses it, the reason on stderr where that is
+/// the fed-back channel, and the harness's own blocking exit code (2 on
+/// the command-hook harnesses) for a deny. Internal canonical exit codes
+/// (the handler-level deny exit `3`) never leak outward: on Claude/Codex
+/// any other non-zero exit is a *non-blocking* error ("logged and ignored,
+/// execution continues") — leaking it would turn a deny into a tool that
+/// still runs.
 fn run_hook_exec(
     home: &UzeHome,
     adapter_id: &str,
@@ -723,20 +728,19 @@ fn run_hook_exec(
         order: 0,
     };
     let outcome = dispatch_handlers(&hook, &input, plugin_root)?;
-    if let Some(bytes) = adapter
+    let rendered = adapter
         .render_output(&outcome, event)
-        .map_err(UzeError::HookDispatch)?
-    {
+        .map_err(UzeError::HookDispatch)?;
+    if let Some(bytes) = rendered.stdout {
         std::io::stdout().write_all(&bytes).map_err(|source| {
             UzeError::HookDispatch(format!("cannot render hook output: {source}"))
         })?;
         let _ = std::io::stdout().flush();
     }
-    Ok(if outcome.decision == Some(HookDecision::Deny) {
-        DENY_EXIT_CODE
-    } else {
-        0
-    })
+    if let Some(reason) = rendered.stderr {
+        eprintln!("{reason}");
+    }
+    Ok(rendered.exit_code)
 }
 
 /// `uze setup [harness]` and `uze harness setup [name]` are the same

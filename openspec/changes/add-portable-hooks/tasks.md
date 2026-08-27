@@ -20,5 +20,5 @@
 ## 4. Evidence and documentation
 
 - [x] 4.1 Add canonical fixtures, portable example plugin, schema/ABI/migration documentation, and the README compatibility matrix.
-- [x] 4.2 Add TUI-first conformance scenarios for every native/bridge claim; use CLI only where a harness lacks a slash-command surface.
-- [ ] 4.3 Run formatting, clippy, deterministic suite, strict OpenSpec validation, and all four conformance labs; record any verified limitations.
+- [x] 4.2 Add TUI-first conformance scenarios for every native/bridge claim; use CLI only where a harness lacks a slash-command surface. Scenarios are grouped `describe`/`test`-style and waits abort immediately on a dead harness process.
+- [ ] 4.3 Complete the 3x clean-run gate. Recorded real executions so far (run-by-run): claude 18/18 PASS; opencode 27/28 + 2 ADAPTED (1 pre-existing base-phase MCP FAIL); antigravity 27/28 + 2 ADAPTED (1 pre-existing MCP FAIL; hooks deny/order proven, allow recorded ADAPTED); codex deny/order proven (feature flag `[features].hooks`), allow recorded ADAPTED (approval gate), turn marker pending. The gate also requires formatting, clippy, deterministic suite, and strict OpenSpec validation — all green in the deterministic half so far.

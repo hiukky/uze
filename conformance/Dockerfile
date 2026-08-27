@@ -22,7 +22,7 @@ FROM node:22-bookworm-slim AS harness-lab
 # ARG PNPM_VERSION=10.0.0  # (reserved; see note below)
 
 RUN apt-get update \
-    && apt-get install --no-install-recommends -y ca-certificates curl git ripgrep tini \
+    && apt-get install --no-install-recommends -y ca-certificates curl git ripgrep tini bubblewrap \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=uze-build /out/uze /usr/local/bin/uze

@@ -58,6 +58,10 @@ HOOK_MARKERS = [
     "second-handler-ran",
     "second-handler-reached",
     "Denied by UZE hook",
+    # The real tool stdout marker: only present when the intercepted tool
+    # actually executed after an allow — the deny/allow contrast relies
+    # on it, not on the ambiguous presence of a tool result.
+    "plain output",
 ]
 
 
@@ -309,7 +313,11 @@ class H(BaseHTTPRequestHandler):
                 pass
             return
         if self.path.startswith("/v1/responses"):
-            if MODE == "toolcall" and '"function_call_output"' not in body:
+            # A tool call is only scripted for a real turn: the TUI also
+            # sends a boot/connectivity request without `input`/`inputs`,
+            # and answering that with a function call hangs its model load.
+            has_turn = '"input"' in body or '"inputs"' in body
+            if MODE == "toolcall" and has_turn and '"function_call_output"' not in body:
                 payload = function_call_sse()
             else:
                 payload = responses_sse(RESPONSE_TEXT)
