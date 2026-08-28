@@ -146,6 +146,16 @@ fn assert_basic_identity_contract(integration: &dyn IntegrationPort) {
         !integration.display_name().is_empty(),
         "display_name() must not be empty"
     );
+    // The id is the stable logic key (receipts, state, matching); the label
+    // is what every human-facing surface (TUI, README, CLI text) shows.
+    // Equal strings mean the integration forgot its label and the UI would
+    // regress to ids like `claude-code` next to labels like `Antigravity
+    // CLI`.
+    assert!(
+        integration.display_name() != integration.id(),
+        "{}: display_name() must be a human label distinct from the stable id — the id is for logic, the label for display",
+        integration.id()
+    );
     let capabilities = integration.capabilities();
     assert!(
         !(capabilities.direct_standard.is_empty()

@@ -843,8 +843,8 @@ mod tests {
             plugins: model.plugins.clone(),
             harnesses: vec![
                 HarnessHealth {
-                    integration: "claude".to_owned(),
-                    display_name: "claude".to_owned(),
+                    integration: "claude-code".to_owned(),
+                    display_name: "Claude Code".to_owned(),
                     detection: HarnessDetection {
                         present: true,
                         version: Some("1.0.0".to_owned()),
@@ -858,7 +858,7 @@ mod tests {
                 },
                 HarnessHealth {
                     integration: "codex".to_owned(),
-                    display_name: "codex".to_owned(),
+                    display_name: "Codex".to_owned(),
                     detection: HarnessDetection::default(),
                     setup: "not configured".to_owned(),
                     strategy: None,

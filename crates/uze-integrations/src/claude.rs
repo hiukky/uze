@@ -236,8 +236,10 @@ impl IntegrationPort for ClaudeIntegration {
         &["claude"]
     }
 
+    /// `claude-code` is the stable id receipts and state carry, `claude`
+    /// the name people type — `Claude Code` is the label people read.
     fn display_name(&self) -> &'static str {
-        "claude"
+        "Claude Code"
     }
 
     fn invocation_prefix(&self) -> &'static str {

@@ -97,7 +97,7 @@ fn runtime_shim_active_internal_calls_resolve_real_executable_without_recursion(
             "the real-looking fake {name} was never invoked — doctor fell back to the shim"
         );
     }
-    for name in ["claude-code", "codex", "opencode", "antigravity"] {
+    for name in ["Claude Code", "Codex", "OpenCode", "Antigravity"] {
         assert!(
             stdout.contains(name) && stdout.contains("detected: true"),
             "doctor must detect {name} through the real-looking fake, got: {stdout}"

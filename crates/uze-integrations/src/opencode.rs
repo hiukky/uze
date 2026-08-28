@@ -90,6 +90,12 @@ impl IntegrationPort for OpenCodeIntegration {
         "opencode"
     }
 
+    /// `opencode` is both the stable id and the name people type — the
+    /// label capitalizes the product name so every harness reads as one.
+    fn display_name(&self) -> &'static str {
+        "OpenCode"
+    }
+
     fn invocation_prefix(&self) -> &'static str {
         "/"
     }

@@ -297,8 +297,8 @@ fn doctor_reports_not_configured_before_any_setup() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("claude-code"));
-    assert!(stdout.contains("codex"));
+    assert!(stdout.contains("Claude Code"));
+    assert!(stdout.contains("Codex"));
     assert!(stdout.matches("not configured").count() >= 2);
     // Default `uze` is seeded even when no harness is present.
     assert!(stdout.contains("uze"));
@@ -362,8 +362,8 @@ fn setup_then_add_attaches_transparently_without_a_separate_sync_step() {
         uze_testkit::marketplace::marketplace_install_args(&home, &package_fixture());
     run(&market_args.iter().map(String::as_str).collect::<Vec<_>>());
     let add = run(&install_args.iter().map(String::as_str).collect::<Vec<_>>());
-    assert!(add.contains("claude-code: native"));
-    assert!(add.contains("codex: native"));
+    assert!(add.contains("Claude Code: native"));
+    assert!(add.contains("Codex: native"));
 
     // `.claude/skills` is prepared (by `install`) but stays empty: neither
     // package decomposes into it anymore. The generated envelope directory
@@ -504,8 +504,8 @@ fn setup_then_add_attaches_the_mcp_fixture_idempotently_and_removal_works() {
         uze_testkit::marketplace::marketplace_install_args(&home, &package);
     run(&market_args.iter().map(String::as_str).collect::<Vec<_>>());
     let add = run(&install_args.iter().map(String::as_str).collect::<Vec<_>>());
-    assert!(add.contains("claude-code: native"));
-    assert!(add.contains("codex: native"));
+    assert!(add.contains("Claude Code: native"));
+    assert!(add.contains("Codex: native"));
 
     // Opencode is resource-level native (no package envelope) via
     // `opencode mcp add`; when the fake opencode binary is on PATH it
@@ -571,8 +571,8 @@ fn setup_then_add_attaches_the_mcp_fixture_idempotently_and_removal_works() {
     // integrations' package delivery re-resolves to the same
     // already-installed selector — no reinstall, no resource-level replay.
     let second_add = run(&install_args.iter().map(String::as_str).collect::<Vec<_>>());
-    assert!(second_add.contains("claude-code: native"));
-    assert!(second_add.contains("codex: native"));
+    assert!(second_add.contains("Claude Code: native"));
+    assert!(second_add.contains("Codex: native"));
 
     let _ = std::fs::remove_dir_all(home);
     let _ = std::fs::remove_dir_all(uze_home);

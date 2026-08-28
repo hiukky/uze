@@ -195,7 +195,10 @@ pub(crate) fn classify_doctor(doctor: Option<&DoctorReport>) -> Vec<Issue> {
                     severity: Severity::Medium,
                     message: format!(
                         "{}: hook `{}` on {} is {:?} — {loss}",
-                        package.plugin, hook.hook, hook.harness, hook.route
+                        package.plugin,
+                        hook.hook,
+                        hook_harness_label(doctor, &hook.harness),
+                        hook.route
                     ),
                 });
             }
@@ -207,7 +210,10 @@ pub(crate) fn classify_doctor(doctor: Option<&DoctorReport>) -> Vec<Issue> {
                         severity: Severity::High,
                         message: format!(
                             "{}: hook `{}` on {} attachment is {:?}",
-                            package.plugin, hook.hook, hook.harness, hook.state
+                            package.plugin,
+                            hook.hook,
+                            hook_harness_label(doctor, &hook.harness),
+                            hook.state
                         ),
                     });
                 }
@@ -216,7 +222,9 @@ pub(crate) fn classify_doctor(doctor: Option<&DoctorReport>) -> Vec<Issue> {
                         severity: Severity::Low,
                         message: format!(
                             "{}: hook `{}` on {} attachment missing",
-                            package.plugin, hook.hook, hook.harness
+                            package.plugin,
+                            hook.hook,
+                            hook_harness_label(doctor, &hook.harness)
                         ),
                     });
                 }
@@ -230,7 +238,7 @@ pub(crate) fn classify_doctor(doctor: Option<&DoctorReport>) -> Vec<Issue> {
                 severity: Severity::Medium,
                 message: format!(
                     "{} is installed but not configured — run setup",
-                    harness.integration
+                    harness.display_name
                 ),
             });
         }
@@ -245,6 +253,19 @@ pub(crate) fn classify_doctor(doctor: Option<&DoctorReport>) -> Vec<Issue> {
     }
     issues.sort_by_key(|issue| issue.severity);
     issues
+}
+
+/// The label `DoctorReport.harnesses` carries for a hook row's stable
+/// integration id — hook rows key on the id receipts use, the checklist
+/// shows the label. The id falls back to itself when the report has no
+/// matching harness.
+fn hook_harness_label(doctor: &DoctorReport, id: &str) -> String {
+    doctor
+        .harnesses
+        .iter()
+        .find(|harness| harness.integration == id)
+        .map(|harness| harness.display_name.clone())
+        .unwrap_or_else(|| id.to_owned())
 }
 
 // --- Doctor screen's own full checklist (pass + fail) -----------------------
@@ -372,7 +393,9 @@ fn doctor_groups(doctor: Option<&DoctorReport>) -> Vec<(&'static str, Vec<Check>
                 plugins.push(Check {
                     label: format!(
                         "{} hook `{}` missing on {}",
-                        package.plugin, hook.hook, hook.harness
+                        package.plugin,
+                        hook.hook,
+                        hook_harness_label(doctor, &hook.harness)
                     ),
                     detail: format!("[{}] receipt not found in managed config", hook.event),
                     status: CheckStatus::Warn,
@@ -383,7 +406,10 @@ fn doctor_groups(doctor: Option<&DoctorReport>) -> Vec<(&'static str, Vec<Check>
                 plugins.push(Check {
                     label: format!(
                         "{} hook `{}` — {:?} on {}",
-                        package.plugin, hook.hook, hook.route, hook.harness
+                        package.plugin,
+                        hook.hook,
+                        hook.route,
+                        hook_harness_label(doctor, &hook.harness)
                     ),
                     detail: format!("[{}] {loss}", hook.event),
                     status: CheckStatus::Warn,

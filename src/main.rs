@@ -484,14 +484,16 @@ fn run(cli: Cli) -> Result<()> {
             ContextAction::Plan { path, format } => {
                 let plan = app.context_plan(&context_path(path))?;
                 match format {
-                    OutputFormat::Text => print!("{}", render_context_plan(&plan)),
+                    OutputFormat::Text => print!("{}", render_context_plan(&plan, &app)),
                     OutputFormat::Json => print_json(&plan),
                 }
             }
             ContextAction::Reconcile { path, format } => {
                 let report = app.context_reconcile(&context_path(path))?;
                 match format {
-                    OutputFormat::Text => print!("{}", render_context_reconciliation(&report)),
+                    OutputFormat::Text => {
+                        print!("{}", render_context_reconciliation(&report, &app));
+                    }
                     OutputFormat::Json => print_json(&report),
                 }
             }
@@ -566,12 +568,12 @@ fn run(cli: Cli) -> Result<()> {
                                     report.plugin.id
                                 ));
                                 println!("  Store path: {}", report.plugin.store_path.display());
-                                print!("{}", render_add_report(&report, verbose));
+                                print!("{}", render_add_report(&report, verbose, &app));
                                 for publication in &report.publications {
                                     if let Some(error) = &publication.error {
                                         progress::warn(&format!(
                                             "{} could not publish: {error}",
-                                            publication.integration
+                                            app.integration_label(&publication.integration)
                                         ));
                                     }
                                 }
@@ -1182,7 +1184,7 @@ fn run_shorthand(app: &UzeApplication, args: Vec<String>, verbose: bool) -> Resu
             println!("Store path: {}", report.plugin.store_path.display());
             print!(
                 "{}",
-                render_add_report(&report, verbose || shorthand.verbose)
+                render_add_report(&report, verbose || shorthand.verbose, app)
             );
         }
         OutputFormat::Json => print_json(&report),
@@ -1275,7 +1277,7 @@ fn render_inspection(report: &PluginInspection) -> String {
             .map_or("decomposed".to_owned(), |plan| format!("{:?}", plan.route));
         text.push_str(&format!(
             "\n{}\n  Package  {package}\n",
-            delivery.integration
+            delivery.display_name
         ));
         for capability in &delivery.capabilities {
             let status = if capability.provided_by_package {
@@ -1303,8 +1305,10 @@ fn render_inspection(report: &PluginInspection) -> String {
 /// Compact per-harness report for an install/add: one line per harness with
 /// its route and — when an attachment was recorded — where. Evidence
 /// sentences and full attachment details are `--verbose`-only; `doctor`/
-/// `plugin inspect` state the same facts read-only.
-fn render_add_report(report: &AddPluginReport, verbose: bool) -> String {
+/// `plugin inspect` state the same facts read-only. Harness rows carry the
+/// human label (`app.integration_label`) — the report's own keys stay the
+/// stable ids, which is what `--format json` emits.
+fn render_add_report(report: &AddPluginReport, verbose: bool, app: &UzeApplication) -> String {
     let mut out = String::new();
     let attachments: BTreeMap<&str, &PathBuf> = report
         .attachments
@@ -1317,7 +1321,10 @@ fn render_add_report(report: &AddPluginReport, verbose: bool) -> String {
             .get(harness.as_str())
             .map(|location| format!(" ({})", location.display()))
             .unwrap_or_default();
-        out.push_str(&format!("  {harness}: {route}{attached}\n"));
+        out.push_str(&format!(
+            "  {}: {route}{attached}\n",
+            app.integration_label(harness)
+        ));
         if verbose {
             out.push_str(&format!("    {}\n", plan.evidence));
         }
@@ -1332,7 +1339,7 @@ fn render_add_report(report: &AddPluginReport, verbose: bool) -> String {
         {
             out.push_str(&format!(
                 "  {}: attached at {}\n",
-                attachment.integration,
+                app.integration_label(&attachment.integration),
                 attachment.location.display()
             ));
         }
@@ -1404,7 +1411,7 @@ fn render_doctor(report: &DoctorReport) -> String {
     for harness in &report.harnesses {
         text.push_str(&format!(
             "  {}  detected: {}  setup: {}\n",
-            harness.integration, harness.detection.present, harness.setup
+            harness.display_name, harness.detection.present, harness.setup
         ));
         if let Some(provisioning) = &harness.provisioning {
             text.push_str(&format!(
@@ -1441,9 +1448,13 @@ fn render_doctor(report: &DoctorReport) -> String {
                 .as_deref()
                 .map(|loss| format!(" | weakened: {loss}"))
                 .unwrap_or_default();
+            // Hook rows key on the stable id; render the label doctor
+            // already carries for the harness.
             text.push_str(&format!(
                 "    hook {} [{}] on {}: {verdict}{attached}{weakened}\n",
-                hook.hook, hook.event, hook.harness
+                hook.hook,
+                hook.event,
+                harness_label_of(report, &hook.harness)
             ));
         }
     }
@@ -1457,6 +1468,18 @@ fn render_doctor(report: &DoctorReport) -> String {
         text.push_str(&format!("\nProvisioning state\n  blocked: {error}\n"));
     }
     text
+}
+
+/// The label `DoctorReport.harnesses` carries for a hook row's stable
+/// integration id — the id falls back to itself for any future id the
+/// report doesn't describe.
+fn harness_label_of(report: &DoctorReport, id: &str) -> String {
+    report
+        .harnesses
+        .iter()
+        .find(|harness| harness.integration == id)
+        .map(|harness| harness.display_name.clone())
+        .unwrap_or_else(|| id.to_owned())
 }
 
 fn render_market_list(marketplaces: &[MarketplaceSummary]) -> String {
@@ -1482,7 +1505,7 @@ fn render_harness_list(harnesses: &[HarnessHealth]) -> String {
     for harness in harnesses {
         text.push_str(&format!(
             "  {}  detected: {}  setup: {}\n",
-            harness.integration, harness.detection.present, harness.setup
+            harness.display_name, harness.detection.present, harness.setup
         ));
     }
     text
@@ -1516,7 +1539,7 @@ fn render_status(report: &StatusReport) -> String {
             HarnessContextDelivery::NotDetected => "not installed".to_owned(),
             HarnessContextDelivery::Bridge { state, .. } => format!("bridged ({state:?})"),
         };
-        text.push_str(&format!("  {}  {delivery}\n", harness.integration));
+        text.push_str(&format!("  {}  {delivery}\n", harness.display_name));
     }
     text.push_str(&format!(
         "\nPackages\n  {} installed\n  {} contributing here\n",
@@ -1612,7 +1635,7 @@ fn render_context_status(status: &ProjectContextStatus) -> String {
                 )
             }
         };
-        text.push_str(&format!("  {}  {delivery}\n", harness.integration));
+        text.push_str(&format!("  {}  {delivery}\n", harness.display_name));
     }
     text.push_str(&format!(
         "\nPortability: {}\n",
@@ -1654,7 +1677,9 @@ fn render_action(action: &PlannedAction) -> String {
     }
 }
 
-fn render_context_plan(plan: &ContextPlan) -> String {
+/// Bridge rows show the human label (`app.integration_label`); the plan's
+/// own keys stay the stable ids — which is what `--format json` emits.
+fn render_context_plan(plan: &ContextPlan, app: &UzeApplication) -> String {
     let mut text = format!("Plan for {}\n", plan.agents_md.display());
     for contribution in &plan.agents_md_plan.contributions {
         text.push_str(&format!(
@@ -1675,7 +1700,7 @@ fn render_context_plan(plan: &ContextPlan) -> String {
         for bridge in &plan.bridges {
             text.push_str(&format!(
                 "  {}  {}  {}\n",
-                bridge.integration,
+                app.integration_label(&bridge.integration),
                 bridge.file.display(),
                 render_action(&bridge.action)
             ));
@@ -1689,7 +1714,10 @@ fn render_context_plan(plan: &ContextPlan) -> String {
     text
 }
 
-fn render_context_reconciliation(report: &ContextReconciliationReport) -> String {
+fn render_context_reconciliation(
+    report: &ContextReconciliationReport,
+    app: &UzeApplication,
+) -> String {
     let mut text = format!("Reconciled {}\n\n", report.agents_md.display());
     for package in &report.packages {
         text.push_str(&format!("  {}  {:?}\n", package.package_id, package.state));
@@ -1705,7 +1733,7 @@ fn render_context_reconciliation(report: &ContextReconciliationReport) -> String
         for bridge in &report.bridges {
             text.push_str(&format!(
                 "  {}  {}  {:?}\n",
-                bridge.integration,
+                app.integration_label(&bridge.integration),
                 bridge.file.display(),
                 bridge.state
             ));

@@ -170,7 +170,7 @@ impl IntegrationPort for AntigravityIntegration {
     }
 
     fn display_name(&self) -> &'static str {
-        "Antigravity CLI"
+        "Antigravity"
     }
 
     fn aliases(&self) -> &'static [&'static str] {

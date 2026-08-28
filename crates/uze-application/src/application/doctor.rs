@@ -193,16 +193,38 @@ impl UzeApplication {
         self.harness_health()
     }
 
-    /// Matches by either the stable integration id (`claude-code`) or the
-    /// display name people actually type (`claude`) — the same two names
-    /// `uze doctor`'s own output already shows side by side.
+    /// Matches by the stable integration id (`claude-code`), any alias
+    /// people actually type (`claude`), or the display label doctor shows
+    /// back (`Claude Code`) — the same names `uze setup` accepts plus what
+    /// `uze doctor`/the TUI print.
     pub fn harness_inspect(&self, name: &str) -> Result<HarnessHealth> {
+        let id = self
+            .integrations
+            .iter()
+            .find(|integration| {
+                integration.id() == name
+                    || integration.aliases().contains(&name)
+                    || integration.display_name() == name
+            })
+            .map(|integration| integration.id());
         self.harness_health()
             .into_iter()
-            .find(|harness| harness.integration == name || harness.display_name == name)
+            .find(|harness| Some(harness.integration.as_str()) == id)
             .ok_or_else(|| {
                 uze_core::UzeError::UnknownPackage(format!("harness `{name}` not found"))
             })
+    }
+
+    /// The human label for an integration id (`claude-code` → `Claude
+    /// Code`), for text renders whose read models carry only the stable id.
+    /// An id that belongs to no registered integration renders as itself —
+    /// a label lookup must never fail a display.
+    pub fn integration_label(&self, integration: &str) -> String {
+        self.integrations
+            .iter()
+            .find(|candidate| candidate.id() == integration)
+            .map(|candidate| candidate.display_name().to_owned())
+            .unwrap_or_else(|| integration.to_owned())
     }
 
     pub fn status(&self, project_root: &std::path::Path) -> Result<StatusReport> {
@@ -223,7 +245,7 @@ impl UzeApplication {
                             needed: true,
                             state,
                         } if *state != AttachmentState::Matched => {
-                            Some(format!("{}: bridge {:?}", harness.integration, state))
+                            Some(format!("{}: bridge {:?}", harness.display_name, state))
                         }
                         _ => None,
                     }),

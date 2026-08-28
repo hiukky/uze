@@ -1805,20 +1805,56 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    struct NamedIntegration;
+    impl IntegrationPort for NamedIntegration {
+        fn id(&self) -> &'static str {
+            "named"
+        }
+        fn aliases(&self) -> &'static [&'static str] {
+            &["n"]
+        }
+        fn display_name(&self) -> &'static str {
+            "Named Tool"
+        }
+        fn capabilities(&self) -> uze_core::router::HarnessCapabilities {
+            HarnessCapabilities::default()
+        }
+        fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+            ExposurePlan {
+                representation: resource.capability.representation,
+                route: CompatibilityRoute::Adaptable,
+                verification: VerificationStatus::Unverified,
+                mechanism: ExposureMechanism::Unsupported {
+                    rationale: "test does not attach".to_owned(),
+                },
+                evidence: "test".to_owned(),
+            }
+        }
+    }
+
     #[test]
     pub(crate) fn harness_inspect_finds_by_id_or_display_name_and_errors_on_unknown() {
         let root = temp("harness-inspect");
-        let app = UzeApplication::new(UzeHome::at(&root), vec![Box::new(SymlinkIntegration)]);
         // `SymlinkIntegration::id()` is "test"; it declares no `display_name`
         // override, so both default to the same string here — the point is
         // that lookup succeeds through the id path at all.
+        let app = UzeApplication::new(
+            UzeHome::at(&root),
+            vec![Box::new(SymlinkIntegration), Box::new(NamedIntegration)],
+        );
         let by_id = app.harness_inspect("test").unwrap();
         assert_eq!(by_id.integration, "test");
         assert!(app.harness_inspect("does-not-exist").is_err());
+        // Aliases (what `uze setup` accepts) and the display label (what
+        // doctor shows back) both resolve to the same harness as the id.
+        let by_alias = app.harness_inspect("n").unwrap();
+        assert_eq!(by_alias.integration, "named");
+        let by_label = app.harness_inspect("Named Tool").unwrap();
+        assert_eq!(by_label.integration, "named");
         // `harness_list` must return exactly the same data `harness_inspect`
         // filters down to one entry from — same underlying computation.
         let listed = app.harness_list();
-        assert_eq!(listed.len(), 1);
+        assert_eq!(listed.len(), 2);
         assert_eq!(listed[0].integration, by_id.integration);
         fs::remove_dir_all(root).unwrap();
     }

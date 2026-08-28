@@ -282,6 +282,12 @@ impl IntegrationPort for CodexIntegration {
         "codex"
     }
 
+    /// `codex` is both the stable id and the name people type — the label
+    /// capitalizes the product name so every harness reads as one.
+    fn display_name(&self) -> &'static str {
+        "Codex"
+    }
+
     fn invocation_prefix(&self) -> &'static str {
         "$"
     }
