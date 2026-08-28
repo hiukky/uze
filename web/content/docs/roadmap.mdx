@@ -1,0 +1,35 @@
+---
+title: Roadmap
+description: Where uze is going — from alpha to ecosystem
+---
+
+# Roadmap
+
+## Status
+
+**Alpha** — APIs, schemas, and harness integration behavior may change while the cross-harness
+model is being validated.
+
+## Now
+
+- [x] Harness management · Skills & MCP portability · Project context · Marketplace · Terminal UI
+- [x] Agent & hook portability · Native package delivery
+- [ ] Requirements & dependencies · Security & trust
+- [ ] Runtime context projection · Migration tooling · Ecosystem expansion
+
+## Planned harnesses
+
+| Harness | Status |
+| --- | --- |
+| Cursor CLI | ⚪ roadmap |
+| Muse | ⚪ roadmap |
+| PI | ⚪ roadmap |
+
+Cells flip when the integration lands — the harness matrix on the [compatibility page](/docs/harnesses)
+is generated from the integration code itself, so it can never silently rot.
+
+## The marketplace
+
+The plugin ecosystem grows through the official marketplace (`marketplace.json` at the repo root)
+plus any community marketplaces registered with `uze market add`. The one official plugin today
+is `plugins/uze` — the `/uze` Skill.

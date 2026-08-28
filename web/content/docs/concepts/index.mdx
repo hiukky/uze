@@ -1,0 +1,69 @@
+---
+title: Concepts
+description: The model behind uze — store, engine, router, receipts, delivery
+---
+
+# Concepts
+
+## Store, Engine, Router
+
+- **Store** — owns installed package bytes. It is the single source of truth: it never writes
+  anything a harness reads, and integrations never mutate it.
+- **Engine** — composes an environment from the Store: which resources (skills, MCP servers,
+  agents, hooks) a package contributes.
+- **Router** — decides per capability and per harness which route is possible, given what the
+  harness can genuinely preserve.
+
+## Delivery precedence
+
+Every capability is delivered per harness through the first route that preserves its canonical
+semantics:
+
+**Native > Generated Native > Safe Adaptation > Unsupported**
+
+- *Native* is an officially supported mechanism preserving canonical semantics — not necessarily
+  the same physical primitive across vendors.
+- *Generated Native* is a deterministically synthesized envelope (e.g. a UZE-built plugin
+  directory) delivered through the native mechanism.
+- *Safe Adaptation* degrades a property and says so — an honest report, never a silent loss.
+- *Unsupported* is stated as unsupported, with the reason.
+
+## Identifiers are not labels
+
+Every integration carries two names with distinct jobs:
+
+| Name | Example | Used for |
+| --- | --- | --- |
+| **id** | `claude-code`, `antigravity` | Receipts, state records, setup targets, matching — anything the machine needs keyed on |
+| **label** | `Claude Code`, `Antigravity` | Every human-facing surface: the TUI, the README, CLI text output |
+
+The label is display-only: lookups never depend on it (the CLI also accepts aliases like `claude`
+and `agy`). Machine output (`--format json`) keeps the stable id.
+
+## Receipts drive lifecycle safety
+
+Every managed artifact — a symlink, a generated directory, a config entry, a bridge region — is
+tracked by a typed **receipt**. Drift or an unreadable ledger blocks destructive mutation rather
+than authorizing one, and removal always inspects current state before detaching
+(inspect-before-detach).
+
+Derived artifacts (a generated envelope, a projected bridge file) are non-authoritative: safe to
+delete and rebuild from the Store + Engine alone.
+
+## Machine scope vs project scope
+
+```
+~/.uze (machine)                    project/ (project)
+─────────────────────               ─────────────────────
+uze add | remove | update           uze context inspect | plan | reconcile
+uze market | plugin | harness       uze install | remove (agents.lock)
+```
+
+Neither touches the other's state. `AGENTS.md` is the portable baseline for project context;
+a generated bridge (e.g. `CLAUDE.md` with an `@AGENTS.md` import) is the only projection uze
+maintains — and never outside its own managed regions.
+
+<Cards>
+  <Card title="Capabilities" href="/docs/concepts/capabilities" />
+  <Card title="Project context" href="/docs/concepts/context" />
+</Cards>

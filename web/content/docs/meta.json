@@ -1,0 +1,12 @@
+{
+  "pages": [
+    "index",
+    "getting-started",
+    "concepts",
+    "harnesses",
+    "cli",
+    "architecture",
+    "development",
+    "roadmap"
+  ]
+}

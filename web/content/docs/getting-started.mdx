@@ -1,0 +1,83 @@
+---
+title: Getting started
+description: Install uze, set up harnesses, and add your first plugin
+---
+
+# Getting started
+
+## Install
+
+```bash
+curl -fsSL https://hiukky.com/uze/install.sh | sh
+```
+
+Prefer building from source during alpha?
+
+```bash
+cargo install --path . --locked
+```
+
+## Set up harnesses
+
+`uze setup` detects the four supported harnesses on your machine and provisions any missing
+binaries through each vendor's official installer:
+
+```bash
+$ uze setup
+▸ Provisioning 4 harnesses through official routes…
+[1/4] Claude Code: ready (verified)
+[2/4] Codex: ready (verified)
+[3/4] OpenCode: ready (verified)
+[4/4] Antigravity: ready (verified)
+```
+
+Setup is idempotent — running it again refreshes recorded facts instead of duplicating state.
+Use `uze setup <name>` to target one harness (`claude`, `codex`, `opencode`, `agy` — or their
+stable ids `claude-code`, `antigravity`).
+
+<Callout type="warn">
+  The installer output is buffered per harness under `$UZE_HOME/state/logs/setup-<id>.log`;
+  use `--verbose` to stream it.
+</Callout>
+
+## Add a plugin
+
+Project shorthand adds a plugin from a marketplace to the current project:
+
+```bash
+$ uze flow@ai
+Claude Code: native (plugin:flow)
+Codex: native (plugin:flow)
+OpenCode: native (skills/flow)
+Antigravity: native (plugin:flow)
+```
+
+Machine-scoped verbs (`add`, `remove`, `update`, `market`, `plugin`, `harness`) manage the
+machine-wide Store; project-scoped verbs (`context`, plus `install`/`remove` against
+`agents.lock`) manage the current project. Neither touches the other's state.
+
+## Check the health
+
+```bash
+$ uze doctor     # store, harness detection, attachment health, ledger
+$ uze status     # how this project's context reaches each harness
+```
+
+## Terminal UI
+
+Run `uze` with no arguments for the terminal UI: overview, marketplace, plugins with per-harness
+delivery, harness drawer with compatibility per capability, and doctor.
+
+## A fresh project
+
+On a new clone, `agents.lock` records the project's plugin set:
+
+```bash
+$ uze install     # install this project's environment from agents.lock
+```
+
+## What happens next
+
+- [Concepts](/docs/concepts) — the model behind the loop.
+- [Harnesses](/docs/harnesses) — what each harness gets, natively.
+- [CLI reference](/docs/cli) — every command.

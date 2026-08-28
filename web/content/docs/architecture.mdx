@@ -1,0 +1,53 @@
+---
+title: Architecture
+description: The one-way dependency layering and the invariants that hold it together
+---
+
+# Architecture
+
+Dependency direction is one-way and enforced by tests, not just convention:
+
+```
+CLI / TUI (src/)
+      ↓
+uze-application  (orchestration: add/install/remove/update/context)
+      ↓
+uze-core         (domain contracts: Package, Store, Engine, Router,
+      ↑           IntegrationPort, capability/exposure model)
+uze-integrations (Claude, Codex, Antigravity, OpenCode — implement IntegrationPort)
+```
+
+- **`uze-core` never names a harness.** No Claude, Codex, OpenCode, or Antigravity string in
+  production code — enforced by `core_never_names_a_vendor_harness`; the same neutrality holds for
+  `uze-application` and the CLI/TUI.
+- **`uze-integrations` is the only vendor-specific layer.** One module per harness implementing
+  the shared `IntegrationPort`; its `registry` is the single composition root. A new harness
+  should require no semantic change to Store, Engine, or Router — only a new integration
+  vertical, one registry entry, conformance, and docs.
+- **Antigravity is the Google-family v0 harness** (ADR-027); the four supported harnesses are the
+  current set. Planned: Cursor CLI, Muse, PI.
+
+## Repository layout
+
+```
+crates/uze-core          harness-agnostic domain
+crates/uze-application   product facade — lifecycle orchestration
+crates/uze-integrations  one module per harness + shared helpers
+src/                     CLI parsing, TUI, runtime PATH shim, performance taxonomy
+tests/                   domain-organized integration suites (L0–L4)
+conformance/             Harness Conformance Lab (Python, disposable Docker)
+docs/adr/                architecture decision records (numbered)
+docs/architecture/       invariants — properties the architecture holds today
+openspec/                spec-driven change proposals
+plugins/uze              the official /uze Skill (this repo is uze's marketplace)
+```
+
+## Invariants
+
+`docs/architecture/invariants.md` is the canonical list of "do not break this" behaviors, each
+tied to the test that proves it — receipts drive lifecycle safety, the Store is the single source
+of truth, derived artifacts are rebuildable, the runtime shim never recurses into itself, every
+CLI leaf command is performance-classified.
+
+Design decisions with their rationale live in `docs/adr/`; recent ones cover generated
+native-package projection, Skill invocation policy, and portable hooks.

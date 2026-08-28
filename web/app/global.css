@@ -1,0 +1,109 @@
+@import 'tailwindcss';
+@import 'fumadocs-ui/css/lib/default-colors.css';
+@import 'fumadocs-ui/css/preset.css';
+
+/*
+  uze — theme lifted from the TUI's own palette (src/ui.rs), not invented for
+  the web: near-black base, warm off-white text, one signature sage-green
+  accent doubling as the success/native/pass color everywhere. Structure
+  comes from hairline dividers, never filled surface slabs or boxed panels.
+  Light mode is the same system read in reverse (paper <-> ink swapped),
+  with the accent deepened enough to hold contrast on a light ground.
+*/
+@theme {
+  --font-sans: var(--font-body), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-ui-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --color-paper: #f2f0ea;
+  --color-ink: #0a0c0d;
+  --color-muted: #6b6864;
+  --color-line: #ddd8cd;
+  --color-surface: #e5ece6;
+  --color-accent: #3d7a52;
+
+  --color-fd-background: var(--color-paper);
+  --color-fd-foreground: var(--color-ink);
+  --color-fd-muted: var(--color-surface);
+  --color-fd-muted-foreground: var(--color-muted);
+  --color-fd-popover: var(--color-paper);
+  --color-fd-popover-foreground: var(--color-ink);
+  --color-fd-card: var(--color-surface);
+  --color-fd-card-foreground: var(--color-ink);
+  --color-fd-border: var(--color-line);
+  --color-fd-primary: var(--color-accent);
+  --color-fd-primary-foreground: var(--color-paper);
+  --color-fd-secondary: var(--color-surface);
+  --color-fd-secondary-foreground: var(--color-ink);
+  --color-fd-accent: var(--color-surface);
+  --color-fd-accent-foreground: var(--color-ink);
+  --color-fd-ring: var(--color-accent);
+  --color-fd-overlay: hsla(0, 0%, 0%, 0.2);
+}
+
+.dark {
+  --color-paper: #0a0c0d;
+  --color-ink: #f2f0ea;
+  --color-muted: #a8a6a0;
+  --color-line: #1e1f20;
+  --color-surface: #161e1a;
+  --color-accent: #8fd19e;
+}
+
+html {
+  scrollbar-gutter: stable;
+}
+
+html > body[data-scroll-locked] {
+  margin-right: 0px !important;
+  --removed-body-scroll-bar-size: 0px !important;
+}
+
+/* signature diagram — one canonical source, drawn out to its native surfaces */
+.uze-diagram .uze-line {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: uze-draw 700ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+.uze-diagram .uze-line:nth-of-type(1) {
+  animation-delay: 0ms;
+}
+.uze-diagram .uze-line:nth-of-type(2) {
+  animation-delay: 140ms;
+}
+.uze-diagram .uze-line:nth-of-type(3) {
+  animation-delay: 320ms;
+}
+.uze-diagram .uze-line:nth-of-type(4) {
+  animation-delay: 380ms;
+}
+.uze-diagram .uze-line:nth-of-type(5) {
+  animation-delay: 440ms;
+}
+.uze-diagram .uze-line:nth-of-type(6) {
+  animation-delay: 500ms;
+}
+.uze-diagram .uze-dot {
+  opacity: 0;
+  animation: uze-fade 300ms ease-out forwards;
+  animation-delay: 750ms;
+}
+@keyframes uze-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes uze-fade {
+  to {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .uze-diagram .uze-line {
+    animation: none;
+    stroke-dashoffset: 0;
+  }
+  .uze-diagram .uze-dot {
+    animation: none;
+    opacity: 1;
+  }
+}

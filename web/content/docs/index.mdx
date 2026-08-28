@@ -1,0 +1,52 @@
+---
+title: Welcome
+description: What uze is and the problem it solves
+---
+
+# Welcome
+
+**uze is a compatibility and distribution layer for agent tooling.** You install a plugin once;
+uze stores its bytes centrally and delivers it through each harness's most native mechanism — a
+real plugin where one exists, native capabilities where it doesn't, a safe adapter only as a last
+resort.
+
+<Callout type="info">
+  Status: **alpha**. APIs, schemas and harness integration behavior may change while the
+  cross-harness model is being validated. Real-harness evidence lives in the
+  [Conformance Lab](/docs/development#conformance-lab).
+</Callout>
+
+## The problem
+
+Coding agents — Claude Code, Codex, OpenCode, Antigravity — each have their own plugin format,
+their own skills directory, their own way of reading project instructions. Maintaining the same
+skill or the same project context four times over is how agent setups rot.
+
+## The approach
+
+1. **One plugin bytes, one place.** The Store owns the canonical package; nothing a harness reads
+   is ever written from anywhere else.
+2. **One project context.** `AGENTS.md` is the portable baseline, projected into each harness's
+   own bridge/config format instead of maintaining four files.
+3. **Per-harness native delivery.** Every capability is delivered through the most native
+   mechanism that preserves its semantics — and when a harness genuinely cannot preserve them,
+   uze says so honestly instead of degrading silently.
+
+## The loop
+
+```bash
+$ uze setup            # detect + provision the four harnesses through official routes
+$ uze flow@ai          # add a plugin from a marketplace to this project
+$ uze doctor           # diagnostics: store, harnesses, attachment health
+$ uze context reconcile   # project context across every detected harness
+```
+
+Or just run `uze` with no arguments for the terminal UI.
+
+## Next steps
+
+<Cards>
+  <Card title="Getting started" href="/docs/getting-started" />
+  <Card title="Concepts" href="/docs/concepts" />
+  <Card title="Harness compatibility" href="/docs/harnesses" />
+</Cards>

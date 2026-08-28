@@ -1,0 +1,36 @@
+---
+title: Project context
+description: AGENTS.md as the portable baseline, and the bridges that reach the rest
+---
+
+# Project context
+
+`AGENTS.md` is the portable baseline for project instructions. Each harness consumes it through
+its own most native path, and uze reports the result instead of guessing:
+
+| Harness | Delivery |
+| --- | --- |
+| Claude Code | Bridge — `@AGENTS.md` import inside `CLAUDE.md` |
+| Codex | Native — reads `AGENTS.md` directly |
+| OpenCode | Native — reads `AGENTS.md` directly |
+| Antigravity | Native — identical workspace context rules |
+
+## The commands
+
+```bash
+$ uze context inspect      # what each harness currently sees
+$ uze context plan         # what reconcile would change
+$ uze context reconcile    # apply it
+```
+
+`reconcile` maintains only the delimited region it owns inside a bridge file — anything a user
+wrote around it is preserved. A file that carries content outside a well-formed managed region is
+recognized and reported (`VendorLocked`), never overwritten.
+
+## Portability states
+
+- **Portable** — `AGENTS.md` exists and every detected harness that needs something from it has
+  it (natively or via a matched bridge).
+- **Partially portable** — at least one harness's bridge is out of date.
+- **Vendor-locked** — no `AGENTS.md`, but vendor-specific files hold their own content; uze
+  makes the split visible instead of papering over it.

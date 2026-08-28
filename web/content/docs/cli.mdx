@@ -1,0 +1,51 @@
+---
+title: CLI reference
+description: Every command, grouped by machine scope and project scope
+---
+
+# CLI reference
+
+## Machine scope (`~/.uze`)
+
+```bash
+uze setup [harness]                    # detect + provision harnesses (official installers)
+uze doctor                             # diagnostics: store, harnesses, attachments, ledger
+uze plugin list                        # installed packages in the Store
+uze plugin inspect <plugin>            # capabilities + per-harness delivery
+uze plugin install <plugin>@<market>   # install from a marketplace
+uze plugin update <plugin>             # re-resolve and re-attach
+uze plugin remove <plugin>             # remove from the Store (inspects before detaching)
+uze market add <source>                # register a marketplace
+uze market list                        # list marketplaces
+uze harness list                       # detected harnesses and setup state
+uze harness inspect <name>             # one harness's detection/setup/provisioning detail
+```
+
+`setup` and `harness inspect` accept the stable id (`claude-code`), an alias (`claude`, `agy`),
+or the label (`Claude Code`).
+
+## Project scope
+
+```bash
+uze <plugin>@<market>        # shorthand — add a plugin to this project (e.g. `flow@ai`)
+uze install                  # install this project's environment from agents.lock
+uze remove <plugin>          # remove a plugin from this project (never the Store)
+uze status                   # how this project's context reaches each harness
+uze context inspect          # what each harness currently sees of AGENTS.md
+uze context plan             # what reconcile would change
+uze context reconcile        # apply the bridge projections
+```
+
+## Everywhere
+
+```bash
+uze                          # terminal UI (TUI)
+--verbose                    # stream installer output / show delivery evidence
+--format json                # machine-readable output (stable ids, not labels)
+```
+
+## Performance contract
+
+Every leaf command is classified: `Budgeted` (low-millisecond, cache-backed — detection results
+are cached across invocations, ADR-018) or `JustifiedSlow` with a stated reason. `uze doctor`
+inspects attachments through an on-disk cache, re-inspecting anomalies live.

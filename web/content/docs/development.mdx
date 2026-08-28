@@ -1,0 +1,48 @@
+---
+title: Development
+description: Build, test, and validate uze — and how the conformance lab proves harness behavior
+---
+
+# Development
+
+## Build and test
+
+```bash
+cargo build --locked --bin uze            # debug build
+cargo test --no-fail-fast                 # full workspace suite
+cargo clippy --all-targets -- -D warnings # CI gate
+cargo fmt --check
+```
+
+`make help` lists every wrapper (`make build`, `make test`, `make check`…); `ci.yml` is the
+source of truth for what gates a merge. Coverage is enforced as well:
+
+```bash
+cargo llvm-cov --workspace --summary-only --fail-under-lines 64 --fail-under-regions 65 --html
+```
+
+## OpenSpec
+
+Change proposals live under `openspec/`:
+
+```bash
+openspec validate --all --strict
+```
+
+## Conformance Lab
+
+Real-harness evidence never links into the deterministic suite: `conformance/` runs the **real
+harness binary** against a **synthetic world** — a disposable Docker environment with a synthetic
+provider, zero internet, zero tokens — one vertical per supported harness:
+
+```bash
+python3 conformance/lab.py --harness claude      # or codex | opencode | antigravity
+make lab-replay                                   # replay a recorded run
+```
+
+The lab is vendor-specific by design; the deterministic suite (`cargo test`) runs everywhere.
+
+## Marketplace
+
+This repository is itself the official uze marketplace: `marketplace.json` + `plugins/**` at the
+root, with `plugins/uze` (the `/uze` Skill) as the one official plugin.
