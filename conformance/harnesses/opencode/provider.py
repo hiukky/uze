@@ -33,6 +33,9 @@ import os
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+import capture
+import variation
+
 STRUCT_PATH = os.environ.get("PROVIDER_STRUCT", "/tmp/oc-struct.json")
 MODE = os.environ.get("PROVIDER_MODE", "static")
 RESPONSE_TEXT = os.environ.get("RESPONSE_TEXT", "UZE_CONFORMANCE_OK")
@@ -179,6 +182,8 @@ class H(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def _handle(self):
+
+        capture.capture(self)
         ln = int(self.headers.get("Content-Length", 0) or 0)
         body = self.rfile.read(ln).decode("utf-8", "replace") if ln else ""
         n = COUNTER["n"]
@@ -215,7 +220,7 @@ class H(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(payload)))
         self.send_header("Connection", "close")
         self.end_headers()
-        self.wfile.write(payload)
+        variation.emit(self.wfile, payload)
 
     do_POST = _handle
     do_GET = _handle

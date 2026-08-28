@@ -5,7 +5,7 @@ UZE_BIN ?= target/debug/uze
 RELEASE_BIN ?= target/release/uze
 INSTALL_ARGS ?= --force
 
-.PHONY: help build release install install-wsl-lab playground-lab run test test-acceptance test-conformance test-installer test-real-harness docs-harness-matrix check fmt lint coverage version clean changelog lab-image lab-run lab-replay python-fmt python-lint
+.PHONY: help build release install wsl-lab run test test-acceptance test-conformance test-installer harness-test harness-matrix check fmt lint coverage version clean changelog lab-image lab-run lab-evidence lab-sandbox lab-experiment lab-matrix lab-replay python-fmt python-lint
 
 help: ## Show the available local-development targets.
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z0-9_.-]+:.*##/ { printf "  %-12s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -25,10 +25,8 @@ changelog: ## Regenerate CHANGELOG.md from Conventional Commits (git-cliff; see 
 install: ## Force-rebuild (no version bump) and install/replace `uze` in Cargo's configured binary directory.
 	$(CARGO) install --path . --bin uze --locked $(INSTALL_ARGS)
 
-install-wsl-lab: ## Build release here and install it into the WSL distro named Lab.
+wsl-lab: ## Build the release here and deploy binary + playground plugin into the WSL distro named Lab.
 	./playground/install-wsl-distro.sh Lab
-
-playground-lab: install-wsl-lab ## Deploy the current binary and default plugin into Lab.
 
 run: build ## Run the debug binary; pass arguments with `ARGS="doctor"`.
 	$(UZE_BIN) $(ARGS)
@@ -44,6 +42,13 @@ test-conformance: ## Run integration conformance + per-harness semantics.
 
 test-installer: ## Exercise install.sh offline against a synthetic release (Linux).
 	sh tests/scripts/installer-test.sh
+
+harness-test: ## L2 probes that need real vendor binaries (skip cleanly when absent).
+	$(CARGO) test -p uze --test integrations real_codex_dogfood -- --ignored 2>/dev/null || \
+	$(CARGO) test -p uze --test integrations real_codex_dogfood
+
+harness-matrix: ## Regenerate the README harness matrix (used by lefthook's --check).
+	$(CARGO) run --quiet --bin uze-harness-matrix
 
 fmt: ## Check formatting (cargo fmt --check).
 	$(CARGO) fmt --check
@@ -71,8 +76,20 @@ LAB_IMAGE ?= conformance-harness:latest
 lab-image: ## Build the Lab harness image (installs channel-latest harnesses).
 	docker build -f conformance/Dockerfile -t $(LAB_IMAGE) .
 
-lab-run: ## Run the isolation vertical for $(HARNESS) (3x clean is the gate).
+lab-run: ## Run the isolation vertical for $(HARNESS) (3x clean is the gate; gate enforced per ADR-035).
 	python3 conformance/lab.py --harness $(HARNESS)
+
+lab-evidence: ## Record the in-repo evidence summary for $(HARNESS) (ADR-035).
+	python3 conformance/lab.py --harness $(HARNESS) --write-summary
+
+lab-sandbox: ## Interactive sandbox for $(HARNESS): recorded TUI session (or shell with SHELL=1); -- cmd... for scripted commands.
+	python3 conformance/lab.py --harness $(HARNESS) --sandbox $(if $(SHELL),--shell,)
+
+lab-experiment: ## Run an experiment scenario outside the canonical suite (EXPERIMENT=vendor/name; optional VARIATION=spec).
+	python3 conformance/lab.py --harness $(HARNESS) --experiment $(EXPERIMENT) $(if $(VARIATION),--variation $(VARIATION),)
+
+lab-matrix: ## Cross-harness compatibility matrix over VARIANTS (default conformance/variants.json).
+	python3 conformance/lab.py --matrix $(if $(VARIANTS),$(VARIANTS),conformance/variants.json) $(if $(HARNESSES),--harnesses $(HARNESSES),)
 
 lab-replay: ## Replay the most recent recorded TUI session (rendered correctly, ANSI intact).
 	@watch="$${LAB_REPLAY:-$$(ls -t /tmp/harness-conformance/*/run*/tui.typescript 2>/dev/null | head -n 1)}"; \
@@ -92,6 +109,3 @@ lab-replay: ## Replay the most recent recorded TUI session (rendered correctly, 
 	fi; \
 	echo "replaying $$watch"; \
 	scriptreplay --timing "$${watch%.typescript}.timing" "$$watch"
-test-real-harness: ## Run L2 probes that need real vendor binaries (skip cleanly when absent).
-	$(CARGO) test -p uze --test integrations real_codex_dogfood -- --ignored 2>/dev/null || \
-	$(CARGO) test -p uze --test integrations real_codex_dogfood

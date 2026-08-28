@@ -1,0 +1,5 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "hook-fail-plugin",
+  "description": "Conformance fixture: a deny hook whose handler cannot run (missing script) — exercises the fail-closed contract (ADR-033) against real harnesses."
+}

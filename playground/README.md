@@ -3,12 +3,12 @@
 This is the deliberately small, evolving real-world test package for UZE.
 It is not a second fixture system and it is not part of UZE's product core.
 
-`make playground-lab` builds the current release binary and its local MCP
+`make wsl-lab` builds the current release binary and its local MCP
 server, then deploys both plus `default-plugin/` into the WSL distro named
 `Lab`:
 
 ```bash
-make playground-lab
+make wsl-lab
 
 # In Lab
 uze setup opencode

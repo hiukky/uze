@@ -1,0 +1,85 @@
+{
+  "_comment": "Adaptive-result registry (ADR-035): every check that may legitimately record ADAPTED. An ADAPTED verdict without an entry fails the run; a registered entry that starts passing fails (escalate) until promoted. `versions` pins observed harness versions; `*` covers any (bootstrap state \u2014 pin after the first probed runs). Update `observed_at` on any touch.",
+  "adaptive": [
+    {
+      "harness": "antigravity",
+      "check": "user-only-skill-adapted",
+      "suite": "tui",
+      "reason": "Antigravity CLI offers no documented explicit-only invocation mechanism, so the user-only skill stays visible to the model; recorded as a vendor limitation, never fabricated.",
+      "versions": [
+        "*"
+      ],
+      "observed_at": "2026-08-26"
+    },
+    {
+      "harness": "antigravity",
+      "check": "hooks-allow-execution-gap",
+      "suite": "hooks > allow",
+      "reason": "AGY 1.1.21 observed: the hook `allow` decision did not produce an observable tool execution in the lab turn (no function response; the vendor confirmation flow may still gate the first run_command).",
+      "versions": [
+        "*"
+      ],
+      "observed_at": "2026-08-26"
+    },
+    {
+      "harness": "opencode",
+      "check": "mcp-tool-executed-in-tui",
+      "suite": "mcp",
+      "reason": "OpenCode V2 beta: the real runtime answers a scripted call to the delivered tool name with `Unknown tool` \u2014 the tool message exists but the MCP server never ran.",
+      "versions": [
+        "*"
+      ],
+      "observed_at": "2026-08-26"
+    },
+    {
+      "harness": "opencode",
+      "check": "hooks-deny-v2-limitation",
+      "suite": "hooks > deny",
+      "reason": "OpenCode V2 exposes no input-based block (spec: the action-level deny lives in the permission hook, which carries no tool input); the guard handler runs via the owned bridge and the tool still executes.",
+      "versions": [
+        "*"
+      ],
+      "observed_at": "2026-08-26"
+    },
+    {
+      "harness": "opencode",
+      "check": "hooks-order-v2-limitation",
+      "suite": "hooks > order",
+      "reason": "OpenCode V2 exposes no input-based block, so a first-deny cannot stop later handlers observably; both handlers run and neither marker reaches the conversation.",
+      "versions": [
+        "*"
+      ],
+      "observed_at": "2026-08-26"
+    },
+    {
+      "harness": "opencode",
+      "check": "hooks-deny-tool-executed",
+      "suite": "hooks > deny",
+      "reason": "The delivered MCP tool is not exposed on this channel, so handler execution through the bridge is not observable \u2014 the turn and marker semantics are the real harness evidence.",
+      "versions": [
+        "*"
+      ],
+      "observed_at": "2026-08-26"
+    },
+    {
+      "harness": "opencode",
+      "check": "hooks-order-tool-executed",
+      "suite": "hooks > order",
+      "reason": "The delivered MCP tool is not exposed on this channel, so handler execution through the bridge is not observable \u2014 the turn and marker semantics are the real harness evidence.",
+      "versions": [
+        "*"
+      ],
+      "observed_at": "2026-08-26"
+    },
+    {
+      "harness": "opencode",
+      "check": "hooks-allow-tool-executed",
+      "suite": "hooks > allow",
+      "reason": "The scripted call is answered `Unknown tool` by the runtime (the delivered MCP tool is not exposed at execution time on this channel), so handler execution through the bridge is not observable \u2014 the turn and marker semantics are the real harness evidence. Observed after the model-exposed escalation (the tool reached the request, execution did not).",
+      "versions": [
+        "*"
+      ],
+      "observed_at": "2026-08-27"
+    }
+  ]
+}

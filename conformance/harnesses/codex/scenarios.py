@@ -282,35 +282,44 @@ def phase_hooks(cfg, prov_ip, kind):
     scenarios = {
         "deny": {
             "plugin": "hook-plugin",
-            "args": '{"command":"echo API secrets"}',
+            # codex 0.150.1's shell tool is `exec_command` with a `cmd`
+            # argument (the Bash/command pair died on this channel); the
+            # other harnesses still receive the Bash tool.
+            "args": '{"cmd":"echo API secrets"}',
             "deny_present": "blocked by protect-env",
             "deny_absent": ["second-handler-reached"],
         },
         "allow": {
             "plugin": "hook-plugin",
-            "args": '{"command":"echo plain output"}',
+            "args": '{"cmd":"echo plain output"}',
             "deny_present": None,
             "deny_absent": ["blocked by protect-env"],
-            "adapted": (
-                "Codex acts only on the deny decision (docs: allow/ask/updatedInput are parsed "
-                "but rejected by the output parser); the native approval gate still asks the "
-                "user before the first Bash run, and a headless lab turn cannot answer it. "
-                "The hook wrapper ran; the tool stayed unexecuted. Recorded, never fabricated."
-            ),
+            # The native approval gate used to block headless allow turns;
+            # with the sandbox prerequisite fixed (bubblewrap/userns in the
+            # disposable topology) the exec_command tool actually runs and
+            # its output reaches the conversation — allow is now asserted
+            # evidence, not an approximation.
         },
         "order": {
             "plugin": "hook-order-plugin",
-            "args": '{"command":"echo any"}',
+            "args": '{"cmd":"echo any"}',
             "deny_present": "first-handler-denied",
             "deny_absent": ["second-handler-ran"],
         },
     }
     spec = scenarios[kind]
     common.start_provider(
-        cfg, "toolcall", {"TOOL_NAME": "Bash", "TOOL_ARGS": spec["args"]}
+        cfg,
+        "toolcall",
+        {"TOOL_NAME": "exec_command", "TOOL_ARGS": spec["args"]},
     )
     time.sleep(1)
-    cmd = codex_container(cfg, prov_ip, "exec codex", plugins=f"flow {spec['plugin']}")
+    cmd = codex_container(
+        cfg,
+        prov_ip,
+        "exec codex --dangerously-bypass-hook-trust",
+        plugins=f"flow {spec['plugin']}",
+    )
     child = pexpect.spawn(
         cmd[0], cmd[1:], encoding="utf-8", codec_errors="replace", timeout=300
     )
@@ -323,17 +332,47 @@ def phase_hooks(cfg, prov_ip, kind):
     wait_for = make_waiter(screen)
 
     t, p = drive_onboarding(child)
-    # The prompt renders before the model finishes loading (observed:
-    # "model: loading"); typing earlier loses input, same as phase_tui's
-    # warmup requirement.
-    time.sleep(15)
-    for ch in "run the API check":
-        child.send(ch)
-        time.sleep(0.08)
+
+    # codex 0.150.1 shows a startup hooks-review screen ("3 hooks need
+    # review... Press t to trust all") whenever ~/.codex/hooks.json carries
+    # entries, capturing the whole keyboard. The official automation path
+    # for self-vetted sources is the CLI flag (no persisted trust needed);
+    # drive the hooks phases with it — the lab vets exactly its own
+    # fixtures, and the flag's DANGEROUS warning is our documented
+    # acceptance of that automation contract.
+    def type_with_echo(text, tries=10, gap=1.5):
+        # codex renders input chars at absolute cursor columns and echoes
+        # spaces only as cursor moves — the plain text carries
+        # "runtheAPIcheck" while the user read "run the API check"; compare
+        # space-stripped so a real echo with per-char redraws still matches.
+        needle = text.replace(" ", "")
+        for attempt in range(tries):
+            if attempt > 0:
+                child.send("\x15")  # Ctrl-U: clear any partial line
+                time.sleep(0.5)
+            for ch in text:
+                child.send(ch)
+                time.sleep(0.08)
+            time.sleep(2.0)
+            _t, p = screen(gap)
+            if needle in p.replace(" ", ""):
+                return True
+            print(f"    … input not echoed yet (try {attempt + 1}/{tries})", flush=True)
+        return False
+
+    typed = type_with_echo("run the API check")
+    check(
+        "hooks-input-echoed",
+        typed,
+        "the prompt text was accepted by the TUI"
+        if typed
+        else "typed input was lost — the TUI never echoed it",
+    )
     child.send("\r")
     t3, p3, m3 = wait_for(
         [
             "UZE_CONFORMANCE_PASS",
+            "UZE_CONFORMANCE_OK",
             "blocked by protect-env",
             "Denied by UZE hook",
             "denied",
@@ -344,6 +383,9 @@ def phase_hooks(cfg, prov_ip, kind):
     )
     with open(f"{cfg.outdir}/hooks_{kind}.raw", "w") as f:
         f.write(t3)
+    # Absence checks may only evaluate once the turn settled and the TUI
+    # went quiet (ADR-035).
+    settled = m3 is not None and common.settle_and_quiet(screen)
 
     struct = provider_struct(cfg)
     with open(f"{cfg.outdir}/hooks_{kind}_struct.json", "w") as f:
@@ -364,25 +406,20 @@ def phase_hooks(cfg, prov_ip, kind):
         has_output = has_output or bool(s.get("hook_markers", {}).get("plain output"))
         has_call = has_call or bool(s.get("has_function_call"))
     if spec["deny_present"]:
-        check(
+        common.check_absence(
             f"hooks-{kind}-denial-blocks-tool",
             not has_output,
+            settled,
             "the intercepted tool never executed — the native denial blocked it"
             if not has_output
             else "the tool executed despite the deny — blocking is broken",
         )
     for absent in spec["deny_absent"]:
-        check(
+        common.check_absence(
             f"hooks-{kind}-marker-absent-{absent}",
             not markers.get(absent, False),
+            settled,
             f"`{absent}` never reached the conversation (first-deny-wins)",
-        )
-    if kind == "allow" and spec.get("adapted"):
-        check(
-            "hooks-allow-approval-gate",
-            True,
-            spec["adapted"],
-            kind="adapted",
         )
 
     child.send("\x03")

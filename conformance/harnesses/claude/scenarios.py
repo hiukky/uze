@@ -69,11 +69,15 @@ def claude_container(cfg, prov_ip, final_cmd, plugins="flow mcp-plugin"):
 
 
 def drive_onboarding(child):
-    """Dialogs: theme -> API key (Yes) -> security notes -> trust (Yes) ->
-    Tips/What's-new popup -> prompt. Returns (screen, plain, marker)."""
+    """Dialogs: Welcome/Security guide (2.1.250 first-run) -> API key (Yes)
+    -> theme -> security notes -> trust (Yes) -> Tips/What's-new popup ->
+    prompt. Returns (screen, plain, marker)."""
     screen = make_screen(child)
     wait_for = make_waiter(screen)
     DIALOGS = [
+        "Welcome to Claude Code",
+        "Security guide",
+        "Yes, I trust this folder",
         "Detected a custom API key",
         "theme",
         "Security notes",
@@ -81,18 +85,38 @@ def drive_onboarding(child):
         "Accessing workspace",
         "login method",
         "Opus5",
+        "Opus",
+        "API Usage Billing",
         "❯",
     ]
     t, p, m = wait_for(DIALOGS, tries=16, stop_on_death=True)
-    for i in range(8):
+    for i in range(10):
         if m == "Detected a custom API key":
             child.send("\x1b[A")
             time.sleep(0.3)
             child.send("\r")  # Yes
         elif m in ("theme", "Security notes"):
             child.send("\r")
-        elif m in ("Quick safety check", "Accessing workspace"):
-            child.send("\r")  # trust Yes
+        elif m in (
+            "Welcome to Claude Code",
+            "Security guide",
+            "Quick safety check",
+            "Accessing workspace",
+        ):
+            # 2.1.250 first-run: the folder-trust screen defaults to
+            # "❯ No, exit" — plain Enter would quit the TUI. Select
+            # "Yes, I trust this folder" first.
+            if "No, exit" in p and "Yes, I trust" in p:
+                child.send("\x1b[B")
+                time.sleep(0.3)
+            child.send("\r")
+        elif "Yes, I trust this folder" in p and "No, exit" in p:
+            # 2.1.250: keep "Yes" selected (down from "No, exit") before
+            # confirming, and re-confirm if the guide stays up.
+            if "❯" in p and "❯ No, exit" in p.replace(" ", ""):
+                child.send("\x1b[B")
+                time.sleep(0.3)
+            child.send("\r")
         elif m == "login method":
             child.send("\x1b[B")
             time.sleep(0.3)
@@ -100,13 +124,28 @@ def drive_onboarding(child):
         else:
             break
         t, p, m = wait_for(DIALOGS, tries=14, stop_on_death=True)
-        if m in ("Opus5", "❯"):
+        if m in ("Opus5", "Opus", "API Usage Billing", "❯"):
+            break
+        # The 2.1.250 prompt frame carries the model/status bar content;
+        # "❯" alone is invalid here (it appears on every option screen).
+        if t and ("Opus" in p or "API Usage Billing" in p):
             break
     # The Tips/What's-new overlay popup does not block the prompt; the first
     # slash-command keystroke dismisses it. Never send Esc here (Esc on an
-    # empty prompt exits the TUI).
-    if m not in ("Opus5", "❯"):
-        t, p, m = wait_for(["Opus5", "❯"], tries=8, stop_on_death=True)
+    # empty prompt exits the TUI). 2.1.250 labels the model "Opus 5 (1M
+    # context)" and paints the prompt once — the last good frame may carry
+    # it while the matched marker was an earlier dialog, so return on
+    # CONTENT (Opus/status bar/prompt arrow), never on a stale or empty
+    # read.
+    for _ in range(10):
+        if t and ("Opus" in p or "API Usage Billing" in p):
+            return t, p, m
+        t, p, m = wait_for(
+            ["Opus5", "Opus", "API Usage Billing", "❯"],
+            tries=4,
+            gap=2.0,
+            stop_on_death=True,
+        )
     return t, p, m
 
 
@@ -128,13 +167,22 @@ def phase_tui(cfg, prov_ip):
             f.write(t)
 
     t, p, m = drive_onboarding(child)
+    # 2.1.250 renders the prompt in spaced bursts; a race can hand the
+    # phase an empty first frame even though the prompt is up. Re-wait for
+    # a real prompt frame before snapshotting/asserting.
+    if not t or ("Opus" not in p and "API Usage Billing" not in p):
+        t, p, m = wait_for(
+            ["Opus", "API Usage Billing", "❯"], tries=8, gap=2.0, stop_on_death=True
+        )
+        if not t:
+            t, p, m = wait_for(["❯"], tries=4, gap=2.0, stop_on_death=True)
     snap("01_prompt", t)
     joined = p.replace(" ", "")
     check(
         "tui-reached-prompt",
-        "Opus5" in joined and "❯" in p,
+        ("Opus" in joined and "❯" in p) or ("APIUsageBilling" in joined and "❯" in p),
         "claude TUI reached its prompt"
-        if "Opus5" in joined
+        if "Opus" in joined or "APIUsageBilling" in joined
         else p[-120:].replace("\n", " "),
     )
     check(
@@ -324,6 +372,10 @@ def phase_hooks(cfg, prov_ip, kind):
     t3, p3, m3 = wait_for(
         ["UZE_CONFORMANCE_PASS"] + spec["tui_markers"], tries=24, gap=2.5
     )
+    # Absence checks below may only evaluate once the turn settled AND the
+    # TUI went quiet (ADR-035): "never appeared" is not provable while the
+    # surface can still be rendering.
+    settled = m3 is not None and common.settle_and_quiet(screen)
     snap = f"{cfg.outdir}/hooks_{kind}.raw"
     with open(snap, "w") as f:
         f.write(t3)
@@ -349,17 +401,19 @@ def phase_hooks(cfg, prov_ip, kind):
         has_result = has_result or bool(s.get("has_tool_result"))
         has_tool_result = has_tool_result or bool(s.get("has_tool_result"))
     if spec["deny_present"]:
-        check(
+        common.check_absence(
             f"hooks-{kind}-denial-blocks-tool",
             not has_output,
+            settled,
             "the intercepted tool never executed — the native denial blocked it"
             if not has_output
             else "the tool executed despite the deny — blocking is broken",
         )
     for absent in spec["deny_absent"]:
-        check(
+        common.check_absence(
             f"hooks-{kind}-marker-absent-{absent}",
             not markers.get(absent, False),
+            settled,
             f"`{absent}` never reached the conversation (first-deny-wins)",
         )
     if kind == "allow":

@@ -10,7 +10,6 @@ TLS-intercepted providers, PTY screen/waiter helpers, and the evidence
 import contextlib
 import json
 import os
-import re
 import subprocess
 import time
 
@@ -52,8 +51,12 @@ class Config:
         self.outdir = os.environ.get(
             "AGY_OUTDIR", f"/tmp/harness-conformance/{harness}/run{run}"
         )
-        self.net = "uze-harness-offline"
-        self.prov_name = "fake-provider"
+        # Nonced per process so concurrent labs (vertical loop + sandbox +
+        # experiment + matrix cells) never share or fight over a network —
+        # cross-talk between two labs' providers would corrupt evidence.
+        nonce = os.getpid()
+        self.net = f"uze-harness-offline-{nonce}"
+        self.prov_name = f"fake-provider-{nonce}"
         self.cert_dir = os.path.join(self.outdir, "certs")
         self.mcp_proof = "UZE_MCP_CONFORMANCE_PROOF_1"
         self.mcp_fixture_bin = "/usr/local/bin/uze-mcp-conformance-fixture"
@@ -62,10 +65,20 @@ class Config:
 
 results = []
 
+# Stamped by lab.py so every verdict carries harness provenance (ADR-035):
+# the gate keys registrations by (harness, check).
+CURRENT_HARNESS: str | None = None
+
 # Active describe() group stack (Jest-style): group names are indented in
 # the live log and carried into every verdict entry, so a growing suite
 # (skills, mcp, hooks, ...) stays interpretable.
 SUITE_STACK: list[str] = []
+
+
+def reset_results():
+    """Clears the verdict accumulator for a fresh run (each vertical starts
+    from zero evidence; nothing carries across runs)."""
+    results.clear()
 
 
 @contextlib.contextmanager
@@ -88,6 +101,60 @@ def suite_path(name: str) -> str:
     return " > ".join([*SUITE_STACK, name])
 
 
+def settle_and_quiet(screen, quiet=None, budget=None):
+    """Requires a window with no new TUI bytes before absence checks may
+    evaluate (ADR-035): 'never appeared' is only provable once the turn
+    settled and the surface went quiet. Returns True when the quiet window
+    elapsed within the budget. Window lengths are env-overridable
+    (`UZE_CONFORMANCE_QUIET_MS` / `UZE_CONFORMANCE_QUIET_BUDGET_S`) for
+    debugging short-run failures."""
+    quiet = (
+        quiet
+        if quiet is not None
+        else float(os.environ.get("UZE_CONFORMANCE_QUIET_MS", "2500")) / 1000
+    )
+    budget = (
+        budget
+        if budget is not None
+        else float(os.environ.get("UZE_CONFORMANCE_QUIET_BUDGET_S", "12.0"))
+    )
+    deadline = time.time() + budget
+    last_bytes = time.time()
+    while time.time() < deadline:
+        t, _p = screen(0.5)
+        if t:
+            last_bytes = time.time()
+        if time.time() - last_bytes >= quiet:
+            return True
+    return False
+
+
+def check_absence(name, ok, settled, detail=""):
+    """Absence assertion under the settled-turn contract (ADR-035).
+
+    An absence (a marker that must never appear) is only provable once the
+    turn settled and the TUI went quiet. An unsettled turn FAILS the check
+    with that reason recorded — it can never pass by accident.
+    """
+    suite = suite_path(name)
+    indent = "  " * len(SUITE_STACK)
+    if not settled:
+        detail = f"turn never settled — absence not proven ({detail})"
+        results.append(
+            {
+                "check": name,
+                "suite": suite,
+                "pass": False,
+                "detail": detail,
+                "kind": "assert",
+                "harness": CURRENT_HARNESS,
+            }
+        )
+        print(f"{indent}❌ [FAIL   ] {name}  ({detail})", flush=True)
+        return
+    check(name, ok, detail)
+
+
 def check(name, ok, detail="", kind="assert"):
     suite = suite_path(name)
     indent = "  " * len(SUITE_STACK)
@@ -98,6 +165,7 @@ def check(name, ok, detail="", kind="assert"):
             "pass": bool(ok),
             "detail": detail,
             "kind": kind,
+            "harness": CURRENT_HARNESS,
         }
     )
     tag = "PASS" if ok else "FAIL"
@@ -141,6 +209,7 @@ def validate_marketplace(cfg):
         "mcp-plugin": "./plugins/mcp-plugin",
         "hook-plugin": "./plugins/hook-plugin",
         "hook-order-plugin": "./plugins/hook-order-plugin",
+        "hook-fail-plugin": "./plugins/hook-fail-plugin",
     }
     if plugins != expected:
         raise RuntimeError(f"invalid conformance marketplace inventory: {plugins}")
@@ -157,6 +226,8 @@ def validate_marketplace(cfg):
         "plugins/hook-order-plugin/hooks.json",
         "plugins/hook-order-plugin/scripts/order-1",
         "plugins/hook-order-plugin/scripts/order-2",
+        "plugins/hook-fail-plugin/hooks.json",
+        "plugins/hook-fail-plugin/plugin.json",
     )
     for relative_path in required:
         path = os.path.join(cfg.marketplace_source, relative_path)
@@ -275,8 +346,16 @@ def start_provider(cfg, mode, extra_env=None):
             f"TOOL_ARGS={os.environ.get('HOOK_ARGS', '{}')}",
         ]
     provider = os.path.join(cfg.repo, "harnesses", cfg.harness)
+    shared_mounts = [
+        "-v",
+        f"{cfg.repo}/shared/variation.py:/app/variation.py:ro",
+        "-v",
+        f"{cfg.repo}/shared/capture.py:/app/capture.py:ro",
+        "-v",
+        f"{cfg.repo}/shared/websocket.py:/app/websocket.py:ro",
+    ]
     if cfg.harness == "antigravity":
-        mounts = ["-v", f"{provider}/provider.py:/app/fp.py:ro"]
+        mounts = ["-v", f"{provider}/provider.py:/app/fp.py:ro", *shared_mounts]
         if mode == "static":
             mounts += [
                 "-v",
@@ -325,6 +404,7 @@ def start_provider(cfg, mode, extra_env=None):
             cfg.net,
             "-v",
             f"{provider}/provider.py:/app/fp.py:ro",
+            *shared_mounts,
             *env,
             PROVIDER_IMG,
             "python",
@@ -357,6 +437,7 @@ def start_provider(cfg, mode, extra_env=None):
             f"{leaf_crt}:/app/leaf.crt:ro",
             "-v",
             f"{leaf_key}:/app/leaf.key:ro",
+            *shared_mounts,
             *env,
             PROVIDER_IMG,
             "python",
@@ -386,6 +467,7 @@ def start_provider(cfg, mode, extra_env=None):
             f"{leaf_crt}:/app/leaf.crt:ro",
             "-v",
             f"{leaf_key}:/app/leaf.key:ro",
+            *shared_mounts,
             *env,
             PROVIDER_IMG,
             "python",
@@ -416,10 +498,209 @@ def provider_struct(cfg):
         return []
 
 
+def pull_captures(cfg):
+    """Pulls the provider's raw request log (--discovery) beside the run
+    evidence. Absent log / provider already gone = no-op — captures are best
+    effort by design; raw captures never enter the repository."""
+    try:
+        r = subprocess.run(
+            [
+                "docker",
+                "cp",
+                f"{cfg.prov_name}:/app/raw-requests.log",
+                os.path.join(cfg.outdir, "raw-requests.log"),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+# ============================================================================
+# Version provenance (ADR-035): every run probes the harness's real version
+# with the vendor's own `--version` flag — the same probes the product
+# integrations use for detection — so a channel bump is an explicit report
+# event, never a silent behavior change. Probes run inside the Lab image
+# with `--network none`; a failure records `unknown`, never a crash.
+# ============================================================================
+
+VERSION_PROBES = {
+    "claude": ["claude", "--version"],
+    "codex": ["codex", "--version"],
+    # The Lab image ships the real binary as `opencode2` (the `opencode`
+    # name is the uze shim inside scenario setups) — same resolution order
+    # as uze-integrations' resolve_opencode_binary.
+    "opencode": ["opencode2", "--version"],
+    "antigravity": ["agy", "--version"],
+}
+
+
+def _image_command(cmd, timeout=30):
+    try:
+        out = subprocess.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--network",
+                "none",
+                "-e",
+                "HOME=/home/node",
+                HARNESS_IMAGE,
+                *cmd,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        first = out.stdout.strip().splitlines()[0].strip() if out.stdout.strip() else ""
+        return first or "unknown"
+    except Exception:
+        return "unknown"
+
+
+def probe_harness_version(cfg):
+    """The probed harness version, or `unknown` when the probe could not run."""
+    probe = VERSION_PROBES.get(cfg.harness)
+    return _image_command(probe) if probe else "unknown"
+
+
+def uze_version(cfg):
+    """The `uze` binary version baked into the Lab image."""
+    return _image_command(["uze", "--version"])
+
+
+def image_id(cfg):
+    try:
+        out = subprocess.run(
+            ["docker", "image", "inspect", "-f", "{{.Id}}", HARNESS_IMAGE],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        return out.stdout.strip().replace("sha256:", "")[:16] or "unknown"
+    except Exception:
+        return "unknown"
+
+
+def repo_revision(cfg):
+    """The fixture tree revision baked into this run (repo HEAD)."""
+    try:
+        out = subprocess.run(
+            ["git", "-C", cfg.repo, "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        return out.stdout.strip()[:16] or "unknown"
+    except Exception:
+        return "unknown"
+
+
+def previous_harness_version(cfg):
+    """The harness version recorded by the last committed summary, if any —
+    the baseline for the version-drift report event."""
+    try:
+        with open(os.path.join(cfg.repo, "evidence", f"{cfg.harness}.json")) as f:
+            return json.load(f).get("harness_version")
+    except Exception:
+        return None
+
+
+def run_manifest(cfg, harness_version, started_at, crash=None):
+    """The per-run provenance record (ADR-035): harness probe, uze version,
+    fixture revision, image id, timestamps, and an explicit version-drift
+    event vs. the previous committed summary."""
+    previous = previous_harness_version(cfg)
+    drift = None
+    if (
+        previous
+        and harness_version
+        and previous != harness_version
+        and harness_version != "unknown"
+    ):
+        drift = {"from": previous, "to": harness_version}
+    return {
+        "harness": cfg.harness,
+        "harness_version": harness_version,
+        "previous_harness_version": previous,
+        "version_drift": drift,
+        "uze_version": uze_version(cfg),
+        "fixture_revision": repo_revision(cfg),
+        "image_id": image_id(cfg),
+        "started_at": started_at,
+        "finished_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "outdir": cfg.outdir,
+        "crash": crash,
+    }
+
+
+def write_evidence_summary(cfg, manifest, outcome, retry=0):
+    """Writes the per-harness evidence summary (ADR-035) — versions,
+    per-kind counts, gate verdict. Written next to the run evidence by
+    default (`UZE_EVIDENCE_DIR`), or into `conformance/evidence/` for
+    local runs; CI stores summaries as Actions artifacts, never pushed."""
+    target = os.environ.get("UZE_EVIDENCE_DIR") or os.path.join(cfg.repo, "evidence")
+    os.makedirs(target, exist_ok=True)
+    path = os.path.join(target, f"{cfg.harness}.json")
+    summary = {
+        "harness": cfg.harness,
+        "harness_version": manifest["harness_version"],
+        "uze_version": manifest["uze_version"],
+        "fixture_revision": manifest["fixture_revision"],
+        "recorded_at": manifest["finished_at"],
+        "gate": {
+            "passed": outcome["passed"],
+            "total": outcome["total"],
+            "known_adapted": outcome["known_adapted"],
+            "retry": retry,
+            "failures": [
+                {
+                    "check": r["check"],
+                    "suite": r["suite"],
+                    "adjudication": r["gate"]["adjudication"],
+                    "detail": r["detail"],
+                    "gate_reason": r["gate"]["reason"],
+                }
+                for r in outcome["failures"]
+            ],
+        },
+    }
+    with open(path, "w") as f:
+        json.dump(summary, f, indent=1)
+        f.write("\n")
+    return path
+
+
 def docker_base(cfg, prov_ip, final_cmd, tty=True):
-    cmd = ["docker", "run", "--rm"] + (["-it"] if tty else []) + ["--network", cfg.net]
+    cmd = (
+        [
+            "docker",
+            "run",
+            "--rm",
+            # The codex harness sandboxes its own tool execution with
+            # bubblewrap, which needs user namespaces; the Lab's default
+            # seccomp blocks CLONE_NEWUSER, so the sandbox errors out and the
+            # allow path never executes. The topology is already disposable
+            # and rootless (`--internal` net, tmpfs, no socket) — relaxing
+            # userns for the harness's own sandbox is the documented
+            # prerequisite, not an escape hatch.
+            "--security-opt",
+            "seccomp=unconfined",
+        ]
+        + (["-it"] if tty else [])
+        + ["--network", cfg.net]
+    )
     for h in HARNESS_HOSTS.get(cfg.harness, []):
         cmd += ["--add-host", f"{h}:{prov_ip}"]
+    # Compatibility-matrix cells (matrix.py) overlay a host-built variant
+    # market onto the in-image fixture path; canonical runs never set this.
+    matrix_mount = os.environ.get("UZE_MARKETPLACE_MOUNT")
+    if matrix_mount:
+        cmd += ["-v", f"{matrix_mount}:/opt/uze-conformance-fixtures/marketplace:ro"]
     cmd += [
         "--tmpfs",
         "/tmp:rw,exec,nosuid,nodev,size=128m,uid=1000,gid=1000,mode=700",
@@ -511,6 +792,55 @@ class CastRecorder:
         self.timing.close()
 
 
+def ansi_strip(text):
+    """Removes ANSI escape sequences from a raw TUI stream, state-machine
+    style, returning plain text safe for contiguous-marker matching.
+
+    Handles the full xterm grammar: CSI (ESC [ ... final byte, with
+    parameters and intermediates), OSC (ESC ] ... BEL or ESC \\ — codex
+    renders spinner lines with OSC 8 hyperlinks terminated by ST, which a
+    partial regex left as corrupted interleaved characters), DCS/PM/APC/SOS
+    (ESC P/^/_/X ... ST), charset selection (ESC ( ...), and lone ESC.
+    """
+    plain = []
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == "\x1b":
+            if i + 1 >= n:
+                i += 1
+                continue
+            nxt = text[i + 1]
+            if nxt == "[":
+                # CSI: consume through the final byte (0x40-0x7E).
+                j = i + 2
+                while j < n and (text[j] < "\x40" or text[j] > "\x7e"):
+                    j += 1
+                i = j + 1
+            elif nxt in "P^_X]":
+                # DCS/PM/APC/SOS/OSC: consume until ST (ESC \) or BEL.
+                j = i + 2
+                while j < n:
+                    if text[j] == "\x07":
+                        j += 1
+                        break
+                    if text[j] == "\x1b" and j + 1 < n and text[j + 1] == "\\":
+                        j += 2
+                        break
+                    j += 1
+                i = j
+            elif nxt in "()#%*+":
+                # Charset/width selection: two-char sequence.
+                i += 3
+            else:
+                i += 2
+        else:
+            plain.append(ch)
+            i += 1
+    return "".join(plain)
+
+
 def make_screen(child):
     def screen(wait=2.2):
         time.sleep(wait)
@@ -518,8 +848,7 @@ def make_screen(child):
             t = child.read_nonblocking(size=250000, timeout=6)
         except Exception:
             t = ""
-        p = re.sub(r"\x1b\][^\x07]*\x07", "", t)
-        p = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", p).replace("\x1b", "")
+        p = ansi_strip(t)
         return t, p
 
     # Expose the child so the waiter can abort early when the harness

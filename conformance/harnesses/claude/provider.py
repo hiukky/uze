@@ -31,6 +31,9 @@ import os
 import ssl
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+import capture
+import variation
+
 STRUCT_PATH = os.environ.get("PROVIDER_STRUCT", "/tmp/claude-struct.json")
 MODE = os.environ.get("PROVIDER_MODE", "static")
 RESPONSE_TEXT = os.environ.get("RESPONSE_TEXT", "UZE_CONFORMANCE_OK")
@@ -79,6 +82,8 @@ def structural_summary(body_text):
         "hook_markers": {m: (m in body) for m in HOOK_MARKERS},
         "mcp_proof_present": MCP_PROOF in body,
         "user_text_present": '"type": "text"' in body and '"role": "user"' in body,
+        "preview": body[:900],
+        "len": len(body),
     }
 
 
@@ -177,6 +182,8 @@ def tool_use_events():
 
 class H(BaseHTTPRequestHandler):
     def _handle(self):
+
+        capture.capture(self)
         ln = int(self.headers.get("Content-Length", 0) or 0)
         body = self.rfile.read(ln).decode("utf-8", "replace") if ln else ""
         n = COUNTER["n"]
@@ -217,7 +224,7 @@ class H(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
-        self.wfile.write(payload)
+        variation.emit(self.wfile, payload)
 
     do_POST = _handle
     do_GET = _handle

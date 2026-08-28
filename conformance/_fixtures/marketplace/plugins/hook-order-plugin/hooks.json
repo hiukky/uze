@@ -3,7 +3,7 @@
     "PreToolUse": [
       {
         "id": "protect-order",
-        "matcher": "shell",
+        "matcher": "shell|native:exec_command",
         "effect": "deny",
         "hooks": [
           { "type": "command", "command": "${PLUGIN_ROOT}/scripts/order-1", "timeout": 10 },

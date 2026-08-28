@@ -3,7 +3,7 @@
     "PreToolUse": [
       {
         "id": "protect-env",
-        "matcher": "shell",
+        "matcher": "shell|native:exec_command",
         "effect": "deny",
         "hooks": [
           { "type": "command", "command": "${PLUGIN_ROOT}/scripts/guard", "timeout": 10 },

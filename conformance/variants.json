@@ -1,0 +1,49 @@
+{
+  "_comment": "Compatibility-matrix variants (conformance-exploration-sandbox): each variant overlays the canonical fixture marketplace (conformance/_fixtures/marketplace) — content replaces a file, null deletes it. Run: python3 conformance/lab.py --matrix conformance/variants.json [--harnesses a,b,c].",
+  "variants": [
+    {
+      "id": "canonical",
+      "overlay": {}
+    },
+    {
+      "id": "hooks-deny-effect",
+      "overlay": {
+        "plugins/hook-plugin/hooks.json": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "id": "protect-env",
+                "matcher": "shell|file.write",
+                "effect": "deny",
+                "hooks": [{ "type": "command", "command": "${PLUGIN_ROOT}/scripts/guard", "timeout": 10 }]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "hooks-native-matcher",
+      "overlay": {
+        "plugins/hook-plugin/hooks.json": {
+          "hooks": {
+            "PreToolUse": [
+              {
+                "id": "protect-native-bash",
+                "matcher": "native:Bash|native:bash|native:run_command",
+                "effect": "deny",
+                "hooks": [{ "type": "command", "command": "${PLUGIN_ROOT}/scripts/guard", "timeout": 10 }]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "skill-user-only",
+      "overlay": {
+        "plugins/flow/skills/commit/SKILL.md": "---\nname: commit\ndescription: Flow commit skill.\ninvoke:\n  model: false\n  user: true\n---\n\n# Commit\nUser-only commit workflow.\n"
+      }
+    }
+  ]
+}

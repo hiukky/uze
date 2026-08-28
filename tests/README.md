@@ -80,7 +80,7 @@ cargo test -p uze --test acceptance      # L3 only (the release signal)
 cargo test -p uze --test integrations    # conformance + per-harness semantics
 cargo test -p uze --test projection      # naming/labels/shared roots
 make test-acceptance / make test-conformance  # same as above
-make test-real-harness                   # L2 probes that need real vendor binaries
+make harness-test                   # L2 probes that need real vendor binaries
 ```
 
 Real-harness policy: a probe skips cleanly when the binary is absent

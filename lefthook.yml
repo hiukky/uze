@@ -35,5 +35,5 @@ pre-push:
       run: ruff check conformance/
     harness-matrix:
       # Deterministic README matrix: regenerates via `make
-      # docs-harness-matrix`; a stale matrix fails the push.
+      # harness-matrix`; a stale matrix fails the push.
       run: cargo run --quiet --bin uze-harness-matrix -- --check

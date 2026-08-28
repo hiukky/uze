@@ -93,14 +93,99 @@ Evidence JSON goes under `AGY_OUTDIR` (default
 every asserted check passed (ADAPTED counts as passing — it is an honest
 vendor-limitation record, never a rewrite).
 
+## Gate semantics and evidence integrity (ADR-035)
+
+Every run is adjudicated against `conformance/evidence/expected.json`, the
+**adaptive-result registry** — the anti-false-positive contract:
+
+- an **ADAPTED result without a registry entry** fails the run (a harness
+  losing a capability can never pass silently);
+- a **registered ADAPTED check that starts passing** fails with an
+  *escalate* verdict until the scenario is promoted to an asserted check
+  and the entry removed;
+- entries record a reason and observed harness versions (`*` covers any;
+  pin versions once probed runs establish them) — a vendor bump that
+  changes the meaning of a registered adaptation fails visibly.
+
+Every run also records **version provenance**: the real harness version is
+probed with the vendor's own `--version` flag (`claude --version`,
+`codex --version`, `opencode --version`, `agy --version` — the same probes
+the product integrations use), and the run manifest in `verdict.json`
+carries harness/uze versions, fixture revision, image id, and timestamps. A
+harness version change vs. the previous committed summary is reported as an
+explicit `VERSION DRIFT` event.
+
+**Absence assertions** (a marker that must never appear) evaluate only after
+the turn settled and the TUI went quiet (`settle_and_quiet` + `check_absence`
+in `shared/common.py`); an unsettled turn fails the check instead of passing
+by accident.
+
+Per-harness **evidence summaries** are written beside the run evidence and
+uploaded as **Actions artifacts** (retention-days 90; local runs write into
+`conformance/evidence/` for the version-drift baseline) — the audit trail
+without CI-to-main push races or commit churn (ADR-035 revised).
+
+**CI gate**: PR runs each vertical once (with `--retry-once`, which reruns
+only a run-level crash, never an assertion failure); the nightly
+`conformance-stability` job runs each vertical **3 consecutive times** and
+fails on any flake — the promotion gate for changing the registry or the
+suite. Verify the gate locally with `python3 conformance/tests/test_gate.py`
+(no docker needed).
+
+## Exploration modes (sandbox, experiments, variations, matrix)
+
+The Lab doubles as an exploration surface for the agent or a maintainer —
+the same real-harness + synthetic-world topology, made interactive:
+
+- **`lab.py --harness <h> --sandbox [--shell] [-- cmd...]`** keeps the
+  disposable network + provider alive and hands over a recorded session:
+  the harness's own TUI (default), a rootless shell inside the harness
+  container with the fixture market pre-registered (`--shell`), or one
+  scripted command (`-- cmd...` — the non-interactive path agents use).
+  Sessions are recorded with the usual cast/timing evidence; teardown is
+  disposable unless `--keep`. `make lab-sandbox HARNESS=<h>`.
+- **Experiments** (`conformance/experiments/<vendor>/<name>.py`) are
+  versioned hypotheses outside the canonical suite — same scenario
+  contract, no gate registry. A new finding is an experiment first;
+  promotion into the canonical suite requires **3 consecutive clean runs**
+  (the same rule as the registry). `lab.py --harness <h> --experiment
+  <vendor>/<name>` — verdict recorded under
+  `<outdir>/experiments/<vendor>-<name>/verdict.json`.
+- **Adversarial variations** (`--variation SPEC`) script degraded provider
+  paths: `slow_sse:<s>`, `disconnect_after:<n>`, `duplicate:<event>`,
+  `malformed:<event>`, `chopped:<n>`. Providers emit through
+  `shared/variation.py`; a kind a provider cannot express is *recorded* as
+  its observed tolerance (`/app/variation.json`), never faked. Unset spec =
+  exactly the canonical single write.
+- **Compatibility matrix** (`lab.py --matrix conformance/variants.json
+  [--harnesses a,b,c]`) runs every (variant × harness) cell — overlay
+  variants on the fixture marketplace (`hooks.json` shapes, `invoke:`
+  policies, AGENTS.md forms) — through the harness's canonical vertical,
+  and renders one PASS/ADAPTED/FAIL grid with evidence links under
+  `conformance/matrix/<run>/`. Trade-offs are measured, never assumed;
+  cells are independent runs, on-demand/nightly only (never the PR gate).
+  `make lab-matrix VARIANTS=... HARNESSES=...`.
+
+- **`--discovery`** captures every raw request the harness sends to the
+  provider (provider-side, no proxy topology) beside the run evidence as
+  `raw-requests.log` — raw captures never enter the repository. Works on
+  sandbox, experiment, and canonical runs.
+
 ## How each harness's synthetic world hooks in
 
 | Harness | Hook | Provider |
 |---|---|---|
 | Antigravity | `GOOGLE_GEMINI_BASE_URL` + API-key mode | plain HTTP 9999 |
 | Claude | TLS interception of hardcoded hosts (`/etc/hosts` + `NODE_EXTRA_CA_CERTS`) | TLS 443, Anthropic Messages SSE |
-| Codex | TLS interception of `api.openai.com` + `auth.json` seed | TLS 443, WS-accept-then-close + Responses SSE |
+| Codex | TLS interception of `api.openai.com` + `auth.json` seed | TLS 443, WebSocket (RFC 6455, JSON events per frame) + Responses SSE fallback |
 | OpenCode | custom `baseURL` in the global `opencode.json` (no TLS needed) | plain HTTP 9999, Chat Completions SSE |
+
+Harness containers run with `--security-opt seccomp=unconfined`: codex's
+own tool sandbox (bubblewrap) needs user namespaces, which the default
+seccomp profile blocks — the topology is already disposable and rootless
+(`--internal` net, tmpfs, no Docker socket), so relaxing userns for the
+harness's own sandboxing is a documented prerequisite, not an escape
+hatch.
 
 The per-run TLS certs are generated with openssl into the run's outdir —
 nothing is committed, nothing is reused across runs.
@@ -110,8 +195,9 @@ nothing is committed, nothing is reused across runs.
 `_fixtures/marketplace/` is the Lab's dedicated, complete marketplace. Each
 vertical starts from a fresh copy and selects the plugins it needs, so the
 same `flow` Skills, MCP resources, and portable-hook plugins (`hook-plugin`,
-`hook-order-plugin` — ADR-033) are exercised across harnesses without each
-scenario rebuilding them by hand. `lab.py` validates
+`hook-order-plugin`, `hook-fail-plugin` — the fail-closed contract fixture —
+ADR-033) are exercised across harnesses without each scenario rebuilding
+them by hand. `lab.py` validates
 the inventory and the MCP runtime placeholders before it starts Docker.
 
 This is intentionally separate from `tests/_fixtures/`: those fixtures are

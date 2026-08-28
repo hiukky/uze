@@ -100,7 +100,7 @@ need to).
   infrastructure in `crates/uze-testkit` (isolated `TestEnvironment`,
   `FakeHarness`, canonical/scenario fixtures), and the taxonomy documented
   in `tests/README.md` (L0-L4).
-- `playground/` — WSL/distro install helpers (`make install-wsl-lab`) and a
+- `playground/` — WSL/distro install helpers (`make wsl-lab`) and a
   default local plugin used for manual dogfooding.
 - `docs/adr/` — numbered architecture decision records (read before making
   a structural change; recent ones cover generated native-package

@@ -11,7 +11,7 @@
 //! ```
 //!
 //! `--check` exits non-zero when README.md is stale (wired into the
-//! lefthook pre-push and `make docs-harness-matrix`); without the flag it
+//! lefthook pre-push and `make harness-matrix`); without the flag it
 //! rewrites README.md in place. Nothing here hardcodes a harness's
 //! capability claim — every cell is derived from the code that implements
 //! it, so a capability change that forgets the docs fails the push.
@@ -344,9 +344,7 @@ fn main() {
     let expected = replace_block(&readme, &block);
     if readme != expected {
         if check {
-            eprintln!(
-                "README.md harness matrix is stale — run `make docs-harness-matrix` and commit."
-            );
+            eprintln!("README.md harness matrix is stale — run `make harness-matrix` and commit.");
             std::process::exit(1);
         }
         std::fs::write(README, expected).expect("README.md is writable");

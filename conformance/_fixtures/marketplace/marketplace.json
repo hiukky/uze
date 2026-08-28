@@ -21,6 +21,11 @@
       "name": "hook-order-plugin",
       "source": "./plugins/hook-order-plugin",
       "description": "Portable hooks: two-handler PreToolUse group proving first-deny-wins ordering (ADR-033)."
+    },
+    {
+      "name": "hook-fail-plugin",
+      "source": "./plugins/hook-fail-plugin",
+      "description": "Portable hooks: a declared deny whose handler cannot run — the fail-closed contract against real harnesses (ADR-033)."
     }
   ]
 }

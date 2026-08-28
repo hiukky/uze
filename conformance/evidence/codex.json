@@ -1,0 +1,14 @@
+{
+ "harness": "codex",
+ "harness_version": "codex-cli 0.150.1",
+ "uze_version": "uze 0.0.0-alpha.14",
+ "fixture_revision": "2da9e429c6e82e36",
+ "recorded_at": "2026-08-28T05:07:10+0000",
+ "gate": {
+  "passed": 22,
+  "total": 22,
+  "known_adapted": 0,
+  "retry": 0,
+  "failures": []
+ }
+}

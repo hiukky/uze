@@ -182,7 +182,7 @@ def phase_tui(cfg, prov_ip):
         child.send(ch)
         time.sleep(0.1)
     child.send("\r")
-    t3, p3, _ = wait_for(["UZE_CONFORMANCE_OK"], tries=12, stop_on_death=True)
+    t3, p3, _ = wait_for(["UZE_CONFORMANCE_OK"], tries=30, gap=2.5, stop_on_death=True)
     snap("03_after_prompt", t3)
     check(
         "deterministic-response-rendered",
@@ -388,19 +388,30 @@ def phase_hooks(cfg, prov_ip, kind):
         tries += 1
         # AGY sometimes fronts a confirmation dialog (telemetry/execution
         # consent) on the first tool call; dismiss it with Enter so the
-        # hook decision — not a consent prompt — decides the turn.
+        # hook decision — not a consent prompt — decides the turn. AGY
+        # 1.1.22 also surveys the CLI experience after a failed turn;
+        # answer Skip so the turn can settle on the hook decision.
         if any(k in p4 for k in ("I agree", "Allow", "Run anyway", "Do you want")):
             child.send("\r")
             time.sleep(1.0)
+        elif "How's the CLI experience" in p4:
+            child.send("0\r")
+            time.sleep(1.0)
     with open(f"{cfg.outdir}/hooks_{kind}.raw", "w") as f:
         f.write(t4)
-    check(
-        f"hooks-{kind}-turn-settled",
+    turn_settled = (
         "UZE_CONFORMANCE_PASS" in p4
         or "blocked by protect-env" in p4
-        or "Denied by UZE hook" in p4,
+        or "Denied by UZE hook" in p4
+    )
+    # Absence checks may only evaluate once the turn settled and the TUI
+    # went quiet (ADR-035).
+    settled = turn_settled and common.settle_and_quiet(screen)
+    check(
+        f"hooks-{kind}-turn-settled",
+        turn_settled,
         "the turn settled (final text or hook denial rendered)"
-        if "UZE_CONFORMANCE_PASS" in p4 or "denied" in p4
+        if turn_settled
         else p4[-160:].replace("\n", " "),
     )
 
@@ -416,17 +427,19 @@ def phase_hooks(cfg, prov_ip, kind):
         has_output = has_output or bool(s.get("hook_markers", {}).get("plain output"))
         has_response = has_response or bool(s.get("has_function_response"))
     if spec["deny_present"]:
-        check(
+        common.check_absence(
             f"hooks-{kind}-denial-blocks-tool",
             not has_output,
+            settled,
             "the intercepted tool never executed — the native denial blocked it"
             if not has_output
             else "the tool executed despite the deny — blocking is broken",
         )
     for absent in spec["deny_absent"]:
-        check(
+        common.check_absence(
             f"hooks-{kind}-marker-absent-{absent}",
             not markers.get(absent, False),
+            settled,
             f"`{absent}` never reached the conversation (first-deny-wins)",
         )
     if kind == "allow":

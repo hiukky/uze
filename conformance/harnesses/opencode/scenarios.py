@@ -456,6 +456,9 @@ def phase_hooks(cfg, prov_ip, kind):
     )
     with open(f"{cfg.outdir}/hooks_{kind}.raw", "w") as f:
         f.write(t3)
+    # Absence checks may only evaluate once the turn settled and the TUI
+    # went quiet (ADR-035).
+    settled = m3 is not None and common.settle_and_quiet(screen)
     check(
         f"hooks-{kind}-turn-settled",
         m3 is not None,
@@ -491,9 +494,10 @@ def phase_hooks(cfg, prov_ip, kind):
             kind="adapted",
         )
     for absent in spec["deny_absent"]:
-        check(
+        common.check_absence(
             f"hooks-{kind}-marker-absent-{absent}",
             not markers.get(absent, False),
+            settled,
             f"`{absent}` never reached the conversation",
         )
     if proof_returned:

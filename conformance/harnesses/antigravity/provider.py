@@ -34,6 +34,9 @@ import os
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+import capture
+import variation
+
 STRUCT_PATH = os.environ.get("PROVIDER_STRUCT", "/tmp/agy-provider-struct.json")
 RESP_SSE = os.environ.get("PROVIDER_RESP", "")
 MODE = os.environ.get("PROVIDER_MODE", "static")
@@ -119,6 +122,8 @@ def sse(obj):
 
 class H(BaseHTTPRequestHandler):
     def _handle(self):
+
+        capture.capture(self)
         length = int(self.headers.get("Content-Length", 0) or 0)
         body = self.rfile.read(length).decode("utf-8", "replace") if length else ""
         n = COUNTER["n"]
@@ -192,7 +197,7 @@ class H(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream; charset=UTF-8")
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
-        self.wfile.write(payload)
+        variation.emit(self.wfile, payload)
 
     do_POST = _handle
     do_GET = _handle

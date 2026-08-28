@@ -1,0 +1,12 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "id": "fail-closed-guard",
+        "matcher": "shell|file.write",
+        "effect": "deny",
+        "hooks": [{ "type": "command", "command": "${PLUGIN_ROOT}/scripts/absent", "timeout": 5 }]
+      }
+    ]
+  }
+}
