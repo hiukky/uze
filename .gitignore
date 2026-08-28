@@ -1,3 +1,6 @@
 /target/
 /conformance/target/
 /conformance/.env
+
+# Playwright MCP debug output (screenshots, snapshots, console logs)
+/.playwright-mcp/
