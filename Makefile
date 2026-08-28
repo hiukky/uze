@@ -47,7 +47,7 @@ harness-test: ## L2 probes that need real vendor binaries (skip cleanly when abs
 	$(CARGO) test -p uze --test integrations real_codex_dogfood -- --ignored 2>/dev/null || \
 	$(CARGO) test -p uze --test integrations real_codex_dogfood
 
-harness-matrix: ## Regenerate the README harness matrix (used by lefthook's --check).
+harness-matrix: ## Regenerate the docs harness matrix (used by lefthook's --check).
 	$(CARGO) run --quiet --bin uze-harness-matrix
 
 fmt: ## Check formatting (cargo fmt --check).

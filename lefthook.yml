@@ -34,6 +34,6 @@ pre-push:
       glob: "*.py"
       run: ruff check conformance/
     harness-matrix:
-      # Deterministic README matrix: regenerates via `make
-      # harness-matrix`; a stale matrix fails the push.
+      # Deterministic docs matrix (web/content/docs/harnesses.mdx):
+      # regenerates via `make harness-matrix`; a stale matrix fails the push.
       run: cargo run --quiet --bin uze-harness-matrix -- --check

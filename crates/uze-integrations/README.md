@@ -16,7 +16,7 @@ root**: the only place that constructs the concrete integration types.
 `builtin(&home)` composes the environment-based set; `isolated(root,
 &home)` composes the same set against a throwaway root for tooling and
 tests. Everything else — `UzeApplication::from_env`, the PATH shim
-dispatch, the README harness-matrix generator — consumes the registry or
+dispatch, the docs harness-matrix generator — consumes the registry or
 the `IntegrationPort` contract, never a concrete type.
 
 ```rust
