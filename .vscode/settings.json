@@ -2,7 +2,11 @@
   "files.exclude": {
     "**/target": true,
     "**/.git": true,
-    "**/__pycache__":true
+    "**/.next": true,
+    "**/node_modules": true,
+    "**/__pycache__":true,
+    "**/.ruff_cache":true,
+    "**/.playwright-mcp":true
   },
   "search.exclude": {
     "**/target": true,
