@@ -40,12 +40,14 @@ impl UzeHome {
         self.root.join("store")
     }
 
-    pub fn packages_dir(&self) -> PathBuf {
-        self.store_dir().join("packages")
+    pub fn plugins_dir(&self) -> PathBuf {
+        self.store_dir().join("plugins")
     }
 
-    pub fn package_dir(&self, id: &PackageId) -> PathBuf {
-        self.packages_dir().join(id.as_str())
+    pub fn plugin_dir(&self, id: &PackageId) -> PathBuf {
+        self.plugins_dir()
+            .join(id.marketplace())
+            .join(id.plugin_name())
     }
 
     pub fn state_dir(&self) -> PathBuf {
@@ -128,7 +130,7 @@ impl UzeHome {
 
     pub fn ensure_layout(&self) -> Result<()> {
         for directory in [
-            self.packages_dir(),
+            self.plugins_dir(),
             self.state_dir(),
             self.cache_dir(),
             self.runtime_dir(),

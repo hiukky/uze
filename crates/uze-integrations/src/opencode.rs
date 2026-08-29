@@ -557,15 +557,14 @@ impl OpenCodeIntegration {
         receipt: &AttachmentReceipt,
         bridge_path: &Path,
     ) -> AttachmentInspection {
-        let Ok(package) =
-            PackageId::from_plugin_name(&receipt.package_id, Path::new("plugin.json"))
+        let Ok(package) = PackageId::from_qualified(&receipt.package_id, Path::new("plugin.json"))
         else {
             return AttachmentInspection {
                 state: AttachmentState::Blocked,
                 reason: "receipt package id is not a stored package id".to_owned(),
             };
         };
-        let package_root = self.uze_home.package_dir(&package);
+        let package_root = self.uze_home.plugin_dir(&package);
         // The expected bridge covers exactly the groups this integration
         // still owns receipts for — a bridge regenerated after one group's
         // detach is not drift just because the manifest still declares it.
@@ -627,8 +626,8 @@ impl OpenCodeIntegration {
         let package_id = receipt.package_id.as_str();
         let identity = receipt.resource_identity.clone();
         let remaining = self.active_hook_ids(package_id, identity.as_deref())?;
-        let package = PackageId::from_plugin_name(package_id, Path::new("plugin.json"))?;
-        let package_root = self.uze_home.package_dir(&package);
+        let package = PackageId::from_qualified(package_id, Path::new("plugin.json"))?;
+        let package_root = self.uze_home.plugin_dir(&package);
         let groups = hook_projection::groups_with_ids(&package_root, &|id| {
             remaining.iter().any(|active| active == id)
         })?;

@@ -156,7 +156,7 @@ impl CodexIntegration {
                 Some(&catalogue_root),
             )?;
         }
-        let selector = format!("{}@{MARKETPLACE_NAME}", package.id.as_str());
+        let selector = format!("{}@{MARKETPLACE_NAME}", package.id.native_plugin_name());
         run_quiet(
             executable,
             &self.command_home,
@@ -202,7 +202,10 @@ impl CodexIntegration {
                 Some(&marketplace_root),
             )?;
         }
-        let selector = format!("{}@{GENERATED_MARKETPLACE_NAME}", package.id.as_str());
+        let selector = format!(
+            "{}@{GENERATED_MARKETPLACE_NAME}",
+            package.id.native_plugin_name()
+        );
         run_quiet(
             executable,
             &self.command_home,

@@ -100,9 +100,9 @@ impl UzeApplication {
         let dependencies: Vec<LockedPlugin> = lock.plugins.values().cloned().collect();
         let installed: Vec<String> = lock
             .plugins
-            .keys()
-            .filter(|name| installed_ids.contains(name.as_str()))
-            .cloned()
+            .iter()
+            .filter(|(name, locked)| installed_ids.contains(&Self::locked_plugin_id(name, locked)))
+            .map(|(name, _)| name.clone())
             .collect();
         let missing: Vec<LockedPlugin> = Self::missing_locked_plugins(&lock, &installed_ids)
             .into_iter()
@@ -153,9 +153,16 @@ impl UzeApplication {
     ) -> Vec<(&'lock str, &'lock LockedPlugin)> {
         lock.plugins
             .iter()
-            .filter(|(name, _)| !installed_ids.contains(name.as_str()))
+            .filter(|(name, locked)| !installed_ids.contains(&Self::locked_plugin_id(name, locked)))
             .map(|(name, locked)| (name.as_str(), locked))
             .collect()
+    }
+
+    fn locked_plugin_id(name: &str, locked: &LockedPlugin) -> String {
+        match &locked.source {
+            PluginSource::Marketplace { marketplace, .. } => format!("{name}@{marketplace}"),
+            PluginSource::Git { .. } => format!("{name}@local"),
+        }
     }
 
     /// Resolves a locked plugin's source into an acquirable `PackageSource`.
@@ -280,13 +287,19 @@ impl UzeApplication {
         // Acquire and ingest (reuses existing lifecycle).
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.home)?;
         let materialized = self.acquire(&package_source)?;
-        let report = self.install_materialized(materialized, authority, &[], false)?;
+        let report = self.install_materialized_from_marketplace(
+            materialized,
+            marketplace,
+            authority,
+            &[],
+            false,
+        )?;
 
         // What was actually acquired is the source of truth for `resolved`
         // — read back from the Store rather than trusting the request,
         // the same discipline `Provenance` itself exists to enforce.
         let resolved = ResolvedPlugin::from_resolved_source(
-            &self.package_by_name(plugin)?.provenance.resolved,
+            &self.package_by_name(&report.plugin.id)?.provenance.resolved,
         );
 
         lock.plugins.insert(
@@ -376,7 +389,17 @@ impl UzeApplication {
         for (name, locked) in missing {
             let package_source = self.resolve_locked_plugin_source(&lock, &name, &locked.source)?;
             let materialized = self.acquire(&package_source)?;
-            self.install_materialized(materialized, authority, &[], false)?;
+            let marketplace = match &locked.source {
+                PluginSource::Marketplace { marketplace, .. } => marketplace.as_str(),
+                PluginSource::Git { .. } => "local",
+            };
+            self.install_materialized_from_marketplace(
+                materialized,
+                marketplace,
+                authority,
+                &[],
+                false,
+            )?;
             installed_plugins.push(name);
         }
 

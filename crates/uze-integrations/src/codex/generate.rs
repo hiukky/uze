@@ -145,7 +145,7 @@ fn generated_manifest_document(package: &StoredPackage) -> serde_json::Value {
     let (description, version) = read_name_fields(package);
 
     let mut document = serde_json::json!({
-        "name": package.id.as_str(),
+        "name": package.id.native_plugin_name(),
         "version": version,
         "description": description,
     });
@@ -418,7 +418,7 @@ fn generated_catalogue_document(packages: &[StoredPackage]) -> serde_json::Value
         .into_iter()
         .map(|package| {
             serde_json::json!({
-                "name": package.id.as_str(),
+                "name": package.id.native_plugin_name(),
                 "source": { "source": "local", "path": format!("./{}", package.id.as_str()) },
                 "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
                 "category": "Developer tools"

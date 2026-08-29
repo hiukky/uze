@@ -216,10 +216,10 @@ pub(super) fn catalogue_document(packages: &[StoredPackage]) -> serde_json::Valu
         .into_iter()
         .map(|package| {
             serde_json::json!({
-                "name": package.id.as_str(),
+                "name": package.id.native_plugin_name(),
                 // Relative to the catalogue root by necessity — see
                 // `CodexIntegration::catalogue_root`.
-                "source": { "source": "local", "path": format!("./packages/{}", package.id.as_str()) },
+                "source": { "source": "local", "path": format!("./plugins/{}/{}", package.id.marketplace(), package.id.plugin_name()) },
                 "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
                 "category": "Developer tools"
             })

@@ -15,8 +15,11 @@ use crate::{
     importer::{AgentPluginImporter, ForeignImporter},
 };
 
-/// An opaque package identity sourced from the external Agent Plugin name.
-/// It is store state, not a UZE package manifest or a replacement standard.
+/// An installed plugin identity, qualified by its marketplace.
+///
+/// A plugin name is only unique inside a marketplace. The qualified form is
+/// deliberately the state/receipt identity so `git@one` and `git@two` can
+/// coexist without sharing bytes or lifecycle records.
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct PackageId(String);
 
@@ -26,6 +29,10 @@ impl PackageId {
     }
 
     pub fn from_plugin_name(name: &str, manifest: &Path) -> Result<Self> {
+        Self::from_marketplace_plugin("local", name, manifest)
+    }
+
+    pub fn from_marketplace_plugin(marketplace: &str, name: &str, manifest: &Path) -> Result<Self> {
         // The id is later used as a bare CLI argument to vendor tooling
         // (e.g. `codex plugin remove <id>@marketplace`, with no `--`
         // separator available before it). A leading `-` would let a
@@ -38,14 +45,52 @@ impl PackageId {
             && name.chars().all(|character| {
                 character.is_ascii_alphanumeric() || character == '-' || character == '_'
             });
+        let valid_marketplace = !marketplace.is_empty()
+            && !marketplace.starts_with('-')
+            && marketplace.chars().all(|character| {
+                character.is_ascii_alphanumeric() || character == '-' || character == '_'
+            });
+        if !valid_marketplace {
+            return Err(UzeError::InvalidPackageName {
+                path: manifest.to_path_buf(),
+                name: marketplace.to_owned(),
+            });
+        }
         if valid {
-            Ok(Self(name.to_owned()))
+            Ok(Self(format!("{name}@{marketplace}")))
         } else {
             Err(UzeError::InvalidPackageName {
                 path: manifest.to_path_buf(),
                 name: name.to_owned(),
             })
         }
+    }
+
+    pub fn from_qualified(value: &str, manifest: &Path) -> Result<Self> {
+        let (name, marketplace) =
+            value
+                .rsplit_once('@')
+                .ok_or_else(|| UzeError::InvalidPackageName {
+                    path: manifest.to_path_buf(),
+                    name: value.to_owned(),
+                })?;
+        Self::from_marketplace_plugin(marketplace, name, manifest)
+    }
+
+    pub fn plugin_name(&self) -> &str {
+        self.0.rsplit_once('@').map_or(&self.0, |(name, _)| name)
+    }
+
+    pub fn marketplace(&self) -> &str {
+        self.0
+            .rsplit_once('@')
+            .map_or("local", |(_, marketplace)| marketplace)
+    }
+
+    /// A filesystem- and vendor-manifest-safe name for a generated native
+    /// marketplace. The canonical identity remains `plugin@marketplace`.
+    pub fn native_plugin_name(&self) -> String {
+        format!("{}--{}", self.marketplace(), self.plugin_name())
     }
 }
 
@@ -102,6 +147,15 @@ impl UzeStore {
     /// and is compared only through `Provenance::same_origin` — this module
     /// never reads a field of it or matches a source mechanism.
     pub fn ingest(&self, package: &MaterializedPackage) -> Result<StoredPackage> {
+        self.ingest_from_marketplace(package, "local")
+    }
+
+    /// Ingests a materialized plugin under the marketplace that resolved it.
+    pub fn ingest_from_marketplace(
+        &self,
+        package: &MaterializedPackage,
+        marketplace: &str,
+    ) -> Result<StoredPackage> {
         let source = package.root();
         let manifest = source.join("plugin.json");
         let imported = AgentPluginImporter
@@ -122,7 +176,7 @@ impl UzeStore {
             .get("name")
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| UzeError::MissingPackageName(manifest.clone()))?;
-        let id = PackageId::from_plugin_name(name, &manifest)?;
+        let id = PackageId::from_marketplace_plugin(marketplace, name, &manifest)?;
 
         // Every source passes through this one check, so a local package and
         // a remote one are held to the same rule. It runs before any byte is
@@ -142,7 +196,19 @@ impl UzeStore {
             });
         }
 
-        let destination = self.home.package_dir(&id);
+        let destination = self.home.plugin_dir(&id);
+        fs::create_dir_all(
+            destination
+                .parent()
+                .expect("plugin directory has a marketplace parent"),
+        )
+        .map_err(|source_error| UzeError::Write {
+            path: destination
+                .parent()
+                .expect("plugin directory has a marketplace parent")
+                .to_path_buf(),
+            source: source_error,
+        })?;
         fs::create_dir(&destination).map_err(|source_error| UzeError::Write {
             path: destination.clone(),
             source: source_error,
@@ -169,7 +235,7 @@ impl UzeStore {
             .packages
             .get(id)
             .ok_or_else(|| UzeError::UnknownPackage(id.as_str().to_owned()))?;
-        let root = self.home.package_dir(id);
+        let root = self.home.plugin_dir(id);
         Ok(StoredPackage {
             id: id.clone(),
             manifest: root.join("plugin.json"),
@@ -198,7 +264,7 @@ impl UzeStore {
         if registry.packages.remove(id).is_none() {
             return Err(UzeError::UnknownPackage(id.as_str().to_owned()));
         }
-        let root = self.home.package_dir(id);
+        let root = self.home.plugin_dir(id);
         if let Err(source) = fs::remove_dir_all(&root)
             && source.kind() != std::io::ErrorKind::NotFound
         {

@@ -165,7 +165,10 @@ impl ClaudeIntegration {
         if !claude_marketplace_exists(executable, &self.command_home, &catalogue_root) {
             run_claude_marketplace_add(executable, &self.command_home, &catalogue_root)?;
         }
-        let selector = format!("{}@{CLAUDE_MARKETPLACE_NAME}", package.id.as_str());
+        let selector = format!(
+            "{}@{CLAUDE_MARKETPLACE_NAME}",
+            package.id.native_plugin_name()
+        );
         if claude_plugin_installed(executable, &self.command_home, &selector) {
             return Ok(Some(claude_package_receipt(
                 self.id(),
@@ -201,7 +204,10 @@ impl ClaudeIntegration {
         if !claude_marketplace_exists(executable, &self.command_home, &marketplace_root) {
             run_claude_marketplace_add(executable, &self.command_home, &marketplace_root)?;
         }
-        let selector = format!("{}@{GENERATED_MARKETPLACE_NAME}", package.id.as_str());
+        let selector = format!(
+            "{}@{GENERATED_MARKETPLACE_NAME}",
+            package.id.native_plugin_name()
+        );
         if claude_plugin_installed(executable, &self.command_home, &selector) {
             return Ok(Some(generated_package_receipt(
                 self.id(),

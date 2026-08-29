@@ -99,7 +99,15 @@ impl UzeApplication {
         let source = PackageSource::Local {
             path: plugin_source,
         };
-        let report = self.add_plugin(source, authority)?;
+        let _mutation = uze_core::persistence::MutationLock::acquire(&self.home)?;
+        let materialized = self.acquire(&source)?;
+        let report = self.install_materialized_from_marketplace(
+            materialized,
+            &marketplace_name,
+            authority,
+            &[],
+            false,
+        )?;
         uze_core::state::plugin_marketplace_record(
             &self.home,
             &report.plugin.id,
@@ -209,11 +217,16 @@ impl UzeApplication {
         name: &str,
         authority: &dyn TrustAuthority,
     ) -> Result<AddPluginReport> {
-        self.add_plugin(
-            PackageSource::Embedded {
-                id: name.to_owned(),
-            },
+        let _mutation = uze_core::persistence::MutationLock::acquire(&self.home)?;
+        let materialized = self.acquire(&PackageSource::Embedded {
+            id: name.to_owned(),
+        })?;
+        self.install_materialized_from_marketplace(
+            materialized,
+            "uze-official",
             authority,
+            &[],
+            false,
         )
     }
 }

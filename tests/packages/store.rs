@@ -37,7 +37,7 @@ fn uze_home_derives_every_owned_path_from_one_root() {
 
     assert_eq!(home.root(), root.as_path());
     assert_eq!(home.store_dir(), root.join("store"));
-    assert_eq!(home.packages_dir(), root.join("store/packages"));
+    assert_eq!(home.plugins_dir(), root.join("store/plugins"));
     assert_eq!(home.state_dir(), root.join("state"));
     assert_eq!(home.cache_dir(), root.join("cache"));
     assert_eq!(home.runtime_dir(), root.join("runtime"));
@@ -57,7 +57,7 @@ fn store_installs_one_agent_plugin_once_without_a_uze_manifest() {
 
     assert_eq!(first.id, second.id);
     assert_eq!(store.registration_count().unwrap(), 1);
-    assert_eq!(first.root, home.package_dir(&first.id));
+    assert_eq!(first.root, home.plugin_dir(&first.id));
     assert!(first.manifest.is_file());
     assert!(home.registry_path().is_file());
     assert!(home.cache_dir().is_dir());
@@ -69,6 +69,52 @@ fn store_installs_one_agent_plugin_once_without_a_uze_manifest() {
     );
 
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn store_keeps_same_named_plugins_from_distinct_marketplaces_separate() {
+    let root = temporary_home("marketplace-qualified-identity");
+    let home = UzeHome::at(&root);
+    let store = UzeStore::new(home.clone());
+    let materialized =
+        uze::acquisition::acquire(&uze::PackageSource::local(package_fixture())).unwrap();
+
+    let from_alpha = store
+        .ingest_from_marketplace(&materialized, "alpha")
+        .unwrap();
+    let from_beta = store
+        .ingest_from_marketplace(&materialized, "beta")
+        .unwrap();
+
+    assert_eq!(from_alpha.id.as_str(), "uze-agent-skill-conformance@alpha");
+    assert_eq!(from_beta.id.as_str(), "uze-agent-skill-conformance@beta");
+    assert_ne!(from_alpha.root, from_beta.root);
+    assert_eq!(
+        from_alpha.root,
+        root.join("store/plugins/alpha/uze-agent-skill-conformance")
+    );
+    assert_eq!(
+        from_beta.root,
+        root.join("store/plugins/beta/uze-agent-skill-conformance")
+    );
+    assert_eq!(store.registration_count().unwrap(), 2);
+}
+
+#[test]
+fn store_rejects_an_invalid_marketplace_name_before_writing_plugin_bytes() {
+    let root = temporary_home("invalid-marketplace");
+    let home = UzeHome::at(&root);
+    let store = UzeStore::new(home.clone());
+    let materialized =
+        uze::acquisition::acquire(&uze::PackageSource::local(package_fixture())).unwrap();
+
+    assert!(
+        store
+            .ingest_from_marketplace(&materialized, "not/a-marketplace")
+            .is_err()
+    );
+    assert!(!home.plugins_dir().join("not/a-marketplace").exists());
+    assert_eq!(store.registration_count().unwrap(), 0);
 }
 
 #[test]

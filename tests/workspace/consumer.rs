@@ -170,7 +170,7 @@ fn install_project_environment_reproduces_a_lock_on_a_fresh_machine() {
             .list_plugins()
             .unwrap()
             .iter()
-            .any(|p| p.id == "flow"),
+            .any(|p| p.id == "flow@test-market"),
         "install_project_environment must actually install the missing plugin"
     );
 }
@@ -216,7 +216,10 @@ fn remove_project_plugin_removes_from_lock_but_not_from_the_store() {
         "removed plugin must be gone from the lock"
     );
     assert!(
-        app.list_plugins().unwrap().iter().any(|p| p.id == "flow"),
+        app.list_plugins()
+            .unwrap()
+            .iter()
+            .any(|p| p.id == "flow@test-market"),
         "remove_project_plugin must NOT touch the Store -- only the lock"
     );
 }
@@ -239,6 +242,60 @@ fn remove_project_plugin_reports_no_lock_and_not_in_lock_distinctly() {
         not_in_lock,
         RemoveProjectPluginReport::NotInLock { .. }
     ));
+}
+
+#[test]
+fn same_named_plugins_from_two_marketplaces_coexist_and_require_qualified_lookup() {
+    let base = temp("same-name-marketplaces");
+    let home = UzeHome::at(base.join("home"));
+    let first = base.join("first-market");
+    let second = base.join("second-market");
+    write_marketplace(&first, "first", "flow");
+    write_marketplace(&second, "second", "flow");
+    uze_core::state::marketplace_add(
+        &home,
+        "first",
+        uze_core::PackageSource::Local { path: first },
+    )
+    .unwrap();
+    uze_core::state::marketplace_add(
+        &home,
+        "second",
+        uze_core::PackageSource::Local { path: second },
+    )
+    .unwrap();
+    let app = UzeApplication::new(home.clone(), Vec::new());
+
+    app.plugin_install("flow@first", &AlwaysTrust).unwrap();
+    app.plugin_install("flow@second", &AlwaysTrust).unwrap();
+
+    let ids: Vec<_> = app
+        .list_plugins()
+        .unwrap()
+        .into_iter()
+        .map(|plugin| plugin.id)
+        .collect();
+    assert_eq!(ids, vec!["flow@first", "flow@second"]);
+    assert!(
+        home.plugin_dir(
+            &uze::PackageId::from_marketplace_plugin(
+                "first",
+                "flow",
+                std::path::Path::new("plugin.json"),
+            )
+            .unwrap()
+        )
+        .is_dir()
+    );
+    assert!(matches!(
+        app.remove_plugin("flow"),
+        Err(uze::UzeError::ExposureUnavailable(_))
+    ));
+    assert!(matches!(
+        app.remove_plugin("flow@first"),
+        Ok(uze::application::RemovePluginReport::Removed { .. })
+    ));
+    assert_eq!(app.list_plugins().unwrap()[0].id, "flow@second");
 }
 
 #[test]

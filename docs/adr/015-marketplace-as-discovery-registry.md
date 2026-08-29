@@ -1,6 +1,6 @@
 # Marketplace as Discovery Registry, Plugin as Installable Unit
 
-Status: Accepted
+Status: Superseded in part by [ADR-036](036-qualify-store-plugins-by-marketplace.md)
 
 ## Context
 

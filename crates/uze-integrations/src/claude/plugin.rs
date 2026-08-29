@@ -150,8 +150,8 @@ pub(super) fn claude_catalogue_document(packages: &[StoredPackage]) -> serde_jso
                 })
                 .unwrap_or_else(|| ("UZE-managed Claude plugin".to_owned(), "0.1.0".to_owned()));
             serde_json::json!({
-                "name": package.id.as_str(),
-                "source": format!("./packages/{}", package.id.as_str()),
+                "name": package.id.native_plugin_name(),
+                "source": format!("./plugins/{}/{}", package.id.marketplace(), package.id.plugin_name()),
                 "description": description,
                 "version": version
             })

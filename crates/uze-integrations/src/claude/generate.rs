@@ -146,7 +146,7 @@ fn generated_manifest_document(package: &StoredPackage) -> serde_json::Value {
 
     let mut document = serde_json::json!({
         "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
-        "name": package.id.as_str(),
+        "name": package.id.native_plugin_name(),
         "version": version,
         "description": description,
     });
@@ -383,7 +383,7 @@ fn generated_catalogue_document(packages: &[StoredPackage]) -> serde_json::Value
         .map(|package| {
             let (description, version) = read_name_fields(package);
             serde_json::json!({
-                "name": package.id.as_str(),
+                "name": package.id.native_plugin_name(),
                 "source": format!("./{}", package.id.as_str()),
                 "description": description,
                 "version": version,

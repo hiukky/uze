@@ -69,7 +69,10 @@ fn an_absolute_symlink_escape_is_rejected() {
     assert_escape_rejected(result, "an absolute symlink");
     // Rejected before any byte was written, so nothing is left half-installed.
     assert!(
-        !home.packages_dir().join("containment-fixture").exists(),
+        !home
+            .plugins_dir()
+            .join("local/containment-fixture")
+            .exists(),
         "a rejected package still left bytes in the store"
     );
 

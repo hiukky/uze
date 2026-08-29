@@ -51,7 +51,7 @@ impl UzeApplication {
     /// actionable, never hidden behind a healthy-native row).
     fn hook_health(&self, reconciliation: &ReconciliationReport) -> Vec<HookHealth> {
         use uze_core::{hook::PortableHook, integration::receipt_location, store::PackageId};
-        let Ok(id) = PackageId::from_plugin_name(
+        let Ok(id) = PackageId::from_qualified(
             &reconciliation.package_id,
             std::path::Path::new("plugin.json"),
         ) else {

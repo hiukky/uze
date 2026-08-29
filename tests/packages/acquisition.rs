@@ -352,7 +352,7 @@ fn an_acquired_repository_ingests_into_the_store_with_both_sources_recorded() {
     let materialized = acquire(&PackageSource::git(&fixture.url)).unwrap();
     let installed = store.ingest(&materialized).expect("ingestion succeeds");
 
-    assert_eq!(installed.id.as_str(), "git-fixture");
+    assert_eq!(installed.id.as_str(), "git-fixture@local");
     assert!(installed.root.join("skills/example/SKILL.md").is_file());
     assert!(matches!(
         installed.provenance.requested,
@@ -499,7 +499,7 @@ fn denied_trust_leaves_the_store_completely_untouched() {
 
     assert!(application.list_plugins().unwrap().is_empty());
     assert!(
-        !home.packages_dir().join("git-fixture").exists(),
+        !home.plugins_dir().join("local/git-fixture").exists(),
         "a denied package left bytes in the store"
     );
 }
@@ -522,7 +522,7 @@ fn a_non_interactive_process_reports_trust_required_rather_than_assuming_consent
         other => panic!("expected TRUST_REQUIRED, got {other}"),
     }
     assert!(error.to_string().contains("TRUST_REQUIRED"));
-    assert!(!home.packages_dir().join("git-fixture").exists());
+    assert!(!home.plugins_dir().join("local/git-fixture").exists());
 }
 
 /// A local path is unchanged from the posture UZE has always had: the

@@ -42,6 +42,23 @@ impl UzeApplication {
         already_trusted: &[trust::ExecutableCapability],
         replacing_installed: bool,
     ) -> Result<AddPluginReport> {
+        self.install_materialized_from_marketplace(
+            materialized,
+            "local",
+            authority,
+            already_trusted,
+            replacing_installed,
+        )
+    }
+
+    pub(crate) fn install_materialized_from_marketplace(
+        &self,
+        materialized: uze_core::MaterializedPackage,
+        marketplace: &str,
+        authority: &dyn TrustAuthority,
+        already_trusted: &[trust::ExecutableCapability],
+        replacing_installed: bool,
+    ) -> Result<AddPluginReport> {
         // Any installation changes vendor-visible state; cached inspection
         // verdicts must not outlive it (ADR 024).
         self.inspection_cache.invalidate();
@@ -65,7 +82,9 @@ impl UzeApplication {
         // delivery attempt.
         self.prepare_detected_integrations(None)?;
 
-        let installed = self.store.ingest(&materialized)?;
+        let installed = self
+            .store
+            .ingest_from_marketplace(&materialized, marketplace)?;
 
         // Derived views refresh before attachment: a native package delivery
         // reads the view it was just given. A failure here is recorded, never

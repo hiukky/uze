@@ -283,12 +283,18 @@ impl UzeApplication {
             .store
             .package_ids()?
             .iter()
-            .any(|package_id| package_id.as_str() == id);
+            .any(|package_id| package_id.as_str() == format!("{id}@uze-official"));
         if already_installed {
             return Ok(false);
         }
         let materialized = bootstrap::materialize(id)?;
-        match self.install_materialized(materialized, &trust::NoTrustAuthority, &[], false) {
+        match self.install_materialized_from_marketplace(
+            materialized,
+            "uze-official",
+            &trust::NoTrustAuthority,
+            &[],
+            false,
+        ) {
             Ok(_) => Ok(true),
             Err(_) => {
                 // Production resilience: the Store entry is already persisted
@@ -711,13 +717,19 @@ impl UzeApplication {
     /// that.
 
     pub(crate) fn package_by_name(&self, name: &str) -> Result<StoredPackage> {
-        self.store
+        let matches: Vec<_> = self
+            .store
             .package_ids()?
             .into_iter()
-            .find(|id| id.as_str() == name)
-            .map(|id| self.store.package(&id))
-            .transpose()?
-            .ok_or_else(|| UzeError::UnknownPackage(name.to_owned()))
+            .filter(|id| id.as_str() == name || id.plugin_name() == name)
+            .collect();
+        match matches.as_slice() {
+            [id] => self.store.package(id),
+            [] => Err(UzeError::UnknownPackage(name.to_owned())),
+            _ => Err(UzeError::ExposureUnavailable(format!(
+                "plugin `{name}` is installed from multiple marketplaces; use `plugin@marketplace`"
+            ))),
+        }
     }
 
     pub(crate) fn plugin_summary(&self, package: &StoredPackage) -> Result<PluginSummary> {
