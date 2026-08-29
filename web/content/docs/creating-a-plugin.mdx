@@ -1,0 +1,216 @@
+---
+title: Creating a plugin
+description: The canonical package layout — skills, MCP, agents, hooks — and how to test and publish one
+---
+
+# Creating a plugin
+
+uze is **Plugin First, Capability Aware** (ADR-008): the package you author is the distribution
+unit, and each capability inside it is the compatibility unit. You write one canonical layout;
+uze delivers it through each harness's own native surface — see
+[Standards, not another format](/docs/concepts/standards) for why the layout looks the way it
+does.
+
+## The canonical layout
+
+<Files>
+  <Folder name="my-plugin" defaultOpen>
+    <File name="plugin.json — required, identity" />
+    <Folder name="skills" defaultOpen>
+      <File name="<name>/SKILL.md" />
+    </Folder>
+    <Folder name="agents" defaultOpen>
+      <File name="<name>.md" />
+    </Folder>
+    <File name="hooks.json" />
+    <File name="mcp.json" />
+  </Folder>
+</Files>
+
+Every part after `plugin.json` is optional — ship only what your plugin needs. uze's Store
+preserves every byte verbatim; nothing here is re-serialized into an internal schema.
+
+### `plugin.json`
+
+The [Agent Plugins](https://agent-plugins.org) `1.0.0` schema, minimal:
+
+```json
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "flow",
+  "description": "What this plugin does, in one sentence."
+}
+```
+
+This is the repo's own official plugin, verbatim (`plugins/uze/plugin.json`) — a real, minimal
+example, not a hypothetical one.
+
+## Skills
+
+A Skill is the canonical capability — `skills/<name>/SKILL.md`, Markdown with frontmatter:
+
+```markdown
+---
+name: review
+description: Review the current changes
+invoke:
+  model: false
+  user: true
+---
+
+Body the model reads when the skill runs.
+```
+
+The portable semantics are `invoke: {model, user}` — **who may invoke it**, not a separate
+capability kind:
+
+| `model` | `user` | Meaning |
+| --- | --- | --- |
+| `true` | `true` | default — normal interactive/discoverable skill |
+| `true` | `false` | background/model-only capability |
+| `false` | `true` | explicit user action |
+| `false` | `false` | invalid — nobody could invoke it; uze never projects it |
+
+No `invoke:` block means the default (`model: true, user: true`) — an existing `SKILL.md` with no
+frontmatter block behaves exactly as before. Every harness translates this policy into its own
+encoding (Claude's frontmatter, Codex's `agents/openai.yaml`, OpenCode's `metadata.opencode`) —
+see [Capabilities](/docs/concepts/capabilities) for the per-harness route.
+
+<Callout type="warn">
+  `commands/` is not a canonical directory. A vendor-administered `commands/` folder inside an
+  explicit vendor envelope is native delivery you shipped yourself; uze never rediscovers it as
+  a portable capability.
+</Callout>
+
+## MCP servers
+
+`mcp.json` at the package root, the standard `mcpServers` shape:
+
+```json
+{
+  "mcpServers": {
+    "search": { "command": "my-mcp-server", "args": ["--stdio"] }
+  }
+}
+```
+
+Delivered natively wherever the harness has a native mechanism (`claude mcp add`, `codex mcp add`,
+`agy mcp add`, OpenCode's global config), or folded into the native/generated plugin envelope when
+one exists.
+
+## Agents
+
+A portable agent profile — Markdown, `agents/<name>.md`:
+
+```markdown
+---
+name: planner
+description: Breaks a task into an ordered implementation plan.
+---
+
+Everything below the frontmatter is the agent's instructions.
+```
+
+Only `name`, `description`, and the body are claimed as the portable subset (ADR-031). Claude
+Code, OpenCode, and Antigravity receive their documented native Markdown-agent surface; Codex has
+no on-disk Markdown agent format, so uze generates its documented standalone TOML file instead —
+`name`/`description`/`developer_instructions` mapped straight from your frontmatter and body,
+never hand-edited afterward. Vendor-only fields (model, permissions, delegation) stay unclaimed:
+an integration either genuinely preserves a field or reports the route as adapted, never a silent
+best guess.
+
+## Hooks
+
+One authored `hooks.json` plus plain scripts — a narrow command ABI, not a plugin runtime
+(ADR-033):
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "shell|file.write",
+        "effect": "deny",
+        "hooks": [{ "type": "command", "command": "${PLUGIN_ROOT}/scripts/check", "timeout": 10 }]
+      }
+    ]
+  }
+}
+```
+
+- **Events**: `PreToolUse`, `PostToolUse`, `Stop` — no others are canonical.
+- **Matcher**: `|`-separated portable tool aliases (`shell`, `file.read`, `file.write`,
+  `file.edit`, `search.files`, `search.web`, `agent.spawn`, `agent.message`), or an explicit
+  `native:<tool>` escape hatch. Omitted, it matches every tool.
+- **Effect**: `observe` (default), `allow`, `ask`, `deny`, or `transform` (`PreToolUse` only).
+- Your handler reads one normalized JSON object on stdin and may write one bounded JSON decision
+  (`{"decision": "allow|ask|deny", "reason": "..."}`) on stdout. Exit `3` is the canonical hard
+  deny; any other failure is fail-open for `observe`/`allow` and fail-closed for
+  `deny`/`ask`/`transform`.
+
+<Callout type="info">
+  Claude, Codex, and Antigravity get native hook configuration; OpenCode — which only exposes
+  hooks as TypeScript plugin callbacks — gets an owned, regenerable bridge, so you never need a
+  TypeScript toolchain to ship a hook that works there too.
+</Callout>
+
+<Callout type="warn">
+  Hook commands and MCP server commands are **executable capabilities** — uze's single
+  acquisition trust prompt lists every process your package can cause to run before anything is
+  installed, so authors can't smuggle in a surprise command and consumers always see the full
+  list up front.
+</Callout>
+
+## Testing it locally
+
+There's no bare `uze add <path>` — a plugin is always resolved through a marketplace, even a
+one-plugin local one. Point uze at the directory that holds your `marketplace.json` (see
+[below](#publishing-through-a-marketplace)), not at the plugin itself:
+
+```bash
+$ uze market add ./my-marketplace
+$ uze my-plugin@my-marketplace          # add it to the current project (agents.lock)
+$ uze plugin inspect my-plugin          # capabilities + per-harness delivery, before or after install
+```
+
+`plugin inspect` is read-only and safe to run repeatedly — it's the fastest way to see exactly
+what uze thinks your package contains and how each harness will receive it, before committing to
+an install.
+
+## Publishing through a marketplace
+
+A marketplace is a `marketplace.json` registry manifest at the root of a Git repo or local
+directory, listing one or more plugins by relative source:
+
+```json
+{
+  "name": "my-marketplace",
+  "owner": { "name": "you", "url": "https://github.com/you" },
+  "plugins": [
+    {
+      "name": "my-plugin",
+      "source": "./plugins/my-plugin",
+      "description": "One sentence.",
+      "keywords": ["example"]
+    }
+  ]
+}
+```
+
+This is the repo's own official marketplace manifest (`marketplace.json` at the repo root), shown
+verbatim — this repository *is* uze's own marketplace, `plugins/uze` included. Push it to a Git
+repo and anyone can consume it:
+
+```bash
+$ uze market add https://github.com/you/my-marketplace
+$ uze my-plugin@my-marketplace
+```
+
+`marketplace.json` was briefly named `agents.json` (ADR-023) and reverted (ADR-032) — if you see
+that name in older material, it's the same manifest under its current, correct filename.
+
+<Cards>
+  <Card title="Capabilities" href="/docs/concepts/capabilities" />
+  <Card title="Harness compatibility" href="/docs/harnesses" />
+  <Card title="CLI reference" href="/docs/cli" />
+</Cards>

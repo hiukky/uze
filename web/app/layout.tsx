@@ -1,4 +1,5 @@
 import { RootProvider } from 'fumadocs-ui/provider/next';
+import { Banner } from 'fumadocs-ui/components/banner';
 import './global.css';
 import { IBM_Plex_Mono, IBM_Plex_Sans } from 'next/font/google';
 import type { Metadata } from 'next';
@@ -29,10 +30,17 @@ export default function Layout({ children }: LayoutProps<'/'>) {
   return (
     <html
       lang="en"
-      className={`${plexSans.variable} ${plexMono.variable}`}
+      className={`${plexSans.variable} ${plexMono.variable} scrollbar-thin scrollbar-thumb-muted scrollbar-track-transparent scrollbar-thumb-rounded-full`}
       suppressHydrationWarning
     >
       <body className="flex flex-col min-h-screen font-sans">
+        <Banner id="alpha-2026-08" className="font-mono text-xs tracking-tight">
+          <span className="text-accent">Alpha</span>
+          <span className="mx-2 text-fd-muted-foreground">·</span>
+          APIs and harness behavior are still changing
+          <span className="mx-2 text-fd-muted-foreground">·</span>
+          no packaged installer yet, build from source
+        </Banner>
         <RootProvider>{children}</RootProvider>
       </body>
     </html>

@@ -177,6 +177,18 @@ impl IntegrationPort for AntigravityIntegration {
         &["agy", "antigravity-cli"]
     }
 
+    /// Skills stay model-discoverable and slash-invocable (ADR-031) — same
+    /// surface as Claude Code and OpenCode; only Codex differs (`$`).
+    fn invocation_prefix(&self) -> &'static str {
+        "/"
+    }
+
+    /// Google Antigravity's own apple-touch-icon, fetched directly from
+    /// antigravity.google — not a third party's redistribution.
+    fn icon_path(&self) -> Option<&'static str> {
+        Some("/harnesses/antigravity.png")
+    }
+
     /// Reads the shared `AGENTS.md` natively (official docs: identical
     /// workspace context rules) plus the legacy `GEMINI.md` global-rules
     /// file, which is observed for portability reporting only.

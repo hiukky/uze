@@ -3,19 +3,14 @@ title: Architecture
 description: The one-way dependency layering and the invariants that hold it together
 ---
 
+import { ArchitectureDiagram } from '@/components/architecture-diagram';
+
 # Architecture
 
-Dependency direction is one-way and enforced by tests, not just convention:
+Dependency direction is one-way and enforced by tests, not just convention. Both orchestration and
+the vendor adapters depend on the neutral core — never the reverse:
 
-```
-CLI / TUI (src/)
-      ↓
-uze-application  (orchestration: add/install/remove/update/context)
-      ↓
-uze-core         (domain contracts: Package, Store, Engine, Router,
-      ↑           IntegrationPort, capability/exposure model)
-uze-integrations (Claude, Codex, Antigravity, OpenCode — implement IntegrationPort)
-```
+<ArchitectureDiagram />
 
 - **`uze-core` never names a harness.** No Claude, Codex, OpenCode, or Antigravity string in
   production code — enforced by `core_never_names_a_vendor_harness`; the same neutrality holds for
@@ -29,18 +24,22 @@ uze-integrations (Claude, Codex, Antigravity, OpenCode — implement Integration
 
 ## Repository layout
 
-```
-crates/uze-core          harness-agnostic domain
-crates/uze-application   product facade — lifecycle orchestration
-crates/uze-integrations  one module per harness + shared helpers
-src/                     CLI parsing, TUI, runtime PATH shim, performance taxonomy
-tests/                   domain-organized integration suites (L0–L4)
-conformance/             Harness Conformance Lab (Python, disposable Docker)
-docs/adr/                architecture decision records (numbered)
-docs/architecture/       invariants — properties the architecture holds today
-openspec/                spec-driven change proposals
-plugins/uze              the official /uze Skill (this repo is uze's marketplace)
-```
+<Files>
+  <Folder name="crates" defaultOpen>
+    <Folder name="uze-core — harness-agnostic domain" />
+    <Folder name="uze-application — product facade, lifecycle orchestration" />
+    <Folder name="uze-integrations — one module per harness + shared helpers" />
+  </Folder>
+  <Folder name="src — CLI parsing, TUI, runtime PATH shim, performance taxonomy" />
+  <Folder name="tests — domain-organized integration suites (L0–L4)" />
+  <Folder name="conformance — Harness Conformance Lab (Python, disposable Docker)" />
+  <Folder name="docs" defaultOpen>
+    <Folder name="adr — architecture decision records (numbered)" />
+    <Folder name="architecture — invariants the architecture holds today" />
+  </Folder>
+  <Folder name="openspec — spec-driven change proposals" />
+  <Folder name="plugins/uze — the official /uze Skill (this repo is uze's marketplace)" />
+</Files>
 
 ## Invariants
 

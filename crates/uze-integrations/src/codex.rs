@@ -292,6 +292,14 @@ impl IntegrationPort for CodexIntegration {
         "$"
     }
 
+    /// Codex has no distinct mark of its own (no logo/icon file anywhere in
+    /// openai/codex, only a README splash banner) — this is OpenAI's own
+    /// mark, fetched directly from openai.com's favicon, not a third
+    /// party's redistribution.
+    fn icon_path(&self) -> Option<&'static str> {
+        Some("/harnesses/codex.png")
+    }
+
     /// Reads the shared `AGENTS.md` natively (it is the origin harness for
     /// the convention); UZE maintains no artifact for it.
     fn context_delivery(&self) -> ContextDelivery {

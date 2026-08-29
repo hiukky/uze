@@ -1,6 +1,7 @@
 @import 'tailwindcss';
 @import 'fumadocs-ui/css/lib/default-colors.css';
 @import 'fumadocs-ui/css/preset.css';
+@plugin 'tailwind-scrollbar';
 
 /*
   uze — theme lifted from the TUI's own palette (src/ui.rs), not invented for
@@ -56,6 +57,20 @@ html {
 html > body[data-scroll-locked] {
   margin-right: 0px !important;
   --removed-body-scroll-bar-size: 0px !important;
+}
+
+/* harness logos inlined by uze-harness-matrix in content/docs/harnesses.mdx */
+.harness-table-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.harness-table-icon {
+  width: 14px;
+  height: 14px;
+  border-radius: 2px;
+  flex-shrink: 0;
 }
 
 /* signature diagram — one canonical source, drawn out to its native surfaces */

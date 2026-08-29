@@ -246,6 +246,11 @@ impl IntegrationPort for ClaudeIntegration {
         "/"
     }
 
+    /// simple-icons' `claudecode` mark (MIT), recolored to `currentColor`.
+    fn icon_path(&self) -> Option<&'static str> {
+        Some("/harnesses/claude-code.svg")
+    }
+
     /// Reads project context only through the `@AGENTS.md` bridge region in
     /// `CLAUDE.md` — the vendor's own documented interop path.
     fn context_delivery(&self) -> ContextDelivery {

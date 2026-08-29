@@ -5,6 +5,13 @@ description: The model behind uze — store, engine, router, receipts, delivery
 
 # Concepts
 
+## Standards first
+
+uze doesn't invent a competing format for what already has one. It adopts AGENTS.md, Agent
+Skills, MCP, and Agent Plugins directly, and models only the confirmed gap standards leave
+uncovered — see [Standards, not another format](/docs/concepts/standards) for the full reasoning
+and where `agents.lock`, `marketplace.json`, and the canonical package envelope fit in.
+
 ## Store, Engine, Router
 
 - **Store** — owns installed package bytes. It is the single source of truth: it never writes
@@ -52,18 +59,17 @@ delete and rebuild from the Store + Engine alone.
 
 ## Machine scope vs project scope
 
-```
-~/.uze (machine)                    project/ (project)
-─────────────────────               ─────────────────────
-uze add | remove | update           uze context inspect | plan | reconcile
-uze market | plugin | harness       uze install | remove (agents.lock)
-```
+| `~/.uze` (machine) | `project/` (project) |
+| --- | --- |
+| `uze add \| remove \| update` | `uze context inspect \| plan \| reconcile` |
+| `uze market \| plugin \| harness` | `uze install \| remove` (`agents.lock`) |
 
 Neither touches the other's state. `AGENTS.md` is the portable baseline for project context;
 a generated bridge (e.g. `CLAUDE.md` with an `@AGENTS.md` import) is the only projection uze
 maintains — and never outside its own managed regions.
 
 <Cards>
+  <Card title="Standards, not another format" href="/docs/concepts/standards" />
   <Card title="Capabilities" href="/docs/concepts/capabilities" />
   <Card title="Project context" href="/docs/concepts/context" />
 </Cards>

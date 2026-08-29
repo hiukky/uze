@@ -7,15 +7,38 @@ description: Install uze, set up harnesses, and add your first plugin
 
 ## Install
 
-```bash
-curl -fsSL https://hiukky.com/uze/install.sh | sh
-```
+<Callout type="warn">
+  uze is alpha — no packaged release has shipped yet. Building from source is the only way to
+  run uze today; the installer below already exists and will just say so until the first
+  release does.
+</Callout>
 
-Prefer building from source during alpha?
+<Tabs items={['Linux', 'macOS', 'Windows', 'Source']} defaultIndex={3}>
+  <Tab value="Linux">
+    ```bash
+    curl -fsSL https://uze.hiukky.com/i | sh
+    ```
 
-```bash
-cargo install --path . --locked
-```
+    Prebuilt binary for `x86_64`/`aarch64`, glibc or musl auto-detected; verifies a SHA-256
+    checksum before installing into `~/.local/bin` (or `$XDG_BIN_HOME`). Not live yet — it prints
+    build-from-source instructions until the first GitHub release ships.
+  </Tab>
+  <Tab value="macOS">
+    Planned, not yet supported — see the **Source** tab.
+  </Tab>
+  <Tab value="Windows">
+    Planned, not yet supported — see the **Source** tab.
+  </Tab>
+  <Tab value="Source">
+    ```bash
+    git clone https://github.com/hiukky/uze.git
+    cd uze
+    cargo install --path . --locked
+    ```
+
+    Works today on anything Rust's stable toolchain targets.
+  </Tab>
+</Tabs>
 
 ## Set up harnesses
 
@@ -79,5 +102,6 @@ $ uze install     # install this project's environment from agents.lock
 ## What happens next
 
 - [Concepts](/docs/concepts) — the model behind the loop.
+- [Creating a plugin](/docs/creating-a-plugin) — the canonical layout, and how to publish one.
 - [Harnesses](/docs/harnesses) — what each harness gets, natively.
 - [CLI reference](/docs/cli) — every command.

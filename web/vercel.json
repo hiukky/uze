@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/i",
+      "destination": "https://raw.githubusercontent.com/hiukky/uze/main/install.sh"
+    }
+  ]
+}

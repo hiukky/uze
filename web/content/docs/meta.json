@@ -1,10 +1,15 @@
 {
   "pages": [
+    "---Start here---",
     "index",
     "getting-started",
     "concepts",
+    "---Guides---",
+    "creating-a-plugin",
+    "---Reference---",
     "harnesses",
     "cli",
+    "---Project---",
     "architecture",
     "development",
     "roadmap"

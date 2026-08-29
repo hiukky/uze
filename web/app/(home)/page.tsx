@@ -1,10 +1,31 @@
 import Link from 'next/link';
 
+// Icon sources: Claude Code / OpenCode are simple-icons paths (recolored to
+// the theme, since an <image>-embedded SVG renders in its own document and
+// can't inherit currentColor); Codex / Antigravity have no distinct mark of
+// their own — these are OpenAI's and Google Antigravity's actual favicons,
+// fetched from their own sites (public/harnesses/, not redistributed by a
+// third party), shown at their real brand colors.
 const harnesses = [
-  { name: 'Claude Code', delivery: 'native plugin' },
-  { name: 'Codex', delivery: 'native plugin' },
-  { name: 'OpenCode', delivery: 'native skills + bridge' },
-  { name: 'Antigravity', delivery: 'native plugin' },
+  {
+    name: 'Claude Code',
+    delivery: 'native plugin',
+    icon: {
+      type: 'path' as const,
+      d: 'M21 10.5h3v3h-3v3h-1.5v3H18v-3h-1.5v3H15v-3H9v3H7.5v-3H6v3H4.5v-3H3v-3H0v-3h3v-6h18Zm-15 0h1.5v-3H6Zm10.5 0H18v-3h-1.5z',
+    },
+  },
+  { name: 'Codex', delivery: 'native plugin', icon: { type: 'image' as const, href: '/harnesses/codex.png' } },
+  {
+    name: 'OpenCode',
+    delivery: 'native skills + bridge',
+    icon: { type: 'path' as const, d: 'M22 24H2V0h20zM17 4.8H7v14.4h10z' },
+  },
+  {
+    name: 'Antigravity',
+    delivery: 'native plugin',
+    icon: { type: 'image' as const, href: '/harnesses/antigravity.png' },
+  },
 ];
 
 const rowY = [30, 104, 178, 252];
@@ -34,7 +55,7 @@ export default function HomePage() {
   return (
     <main className="flex flex-col items-center flex-1 px-6 font-sans">
       {/* Hero */}
-      <section className="grid md:grid-cols-[1fr_1fr] gap-12 md:gap-8 items-center w-full max-w-4xl py-20 md:py-28">
+      <section className="grid md:grid-cols-[1fr_1fr] gap-12 md:gap-8 items-center content-center w-full max-w-4xl min-h-[calc(100dvh_-_var(--fd-banner-height,0px)_-_3.5rem)] py-20 md:py-28">
         <div>
           <div className="inline-flex items-center gap-2 text-[11px] font-mono uppercase tracking-[0.2em] text-muted">
             <span className="size-1.5 bg-accent" aria-hidden />
@@ -170,8 +191,24 @@ export default function HomePage() {
                     fill="none"
                     stroke="var(--color-line)"
                   />
-                  <text
+                  <rect
                     x="262"
+                    y={y - 13}
+                    width="18"
+                    height="18"
+                    rx="2"
+                    fill="var(--color-surface)"
+                    stroke="var(--color-line)"
+                  />
+                  {h.icon.type === 'path' ? (
+                    <g transform={`translate(265, ${y - 10}) scale(0.5)`}>
+                      <path d={h.icon.d} fill="var(--color-ink)" />
+                    </g>
+                  ) : (
+                    <image href={h.icon.href} x="265" y={y - 10} width="12" height="12" />
+                  )}
+                  <text
+                    x="286"
                     y={y - 2}
                     fontFamily="var(--font-mono)"
                     fontWeight="700"
@@ -181,7 +218,7 @@ export default function HomePage() {
                     {h.name}
                   </text>
                   <text
-                    x="262"
+                    x="286"
                     y={y + 11}
                     fontFamily="var(--font-mono)"
                     fontSize="7.5"
@@ -202,7 +239,7 @@ export default function HomePage() {
       </section>
 
       {/* Spec rows */}
-      <section className="w-full max-w-3xl border-t border-line pb-24">
+      <section className="w-full max-w-3xl border-t border-line">
         {spec.map((item) => (
           <Link
             key={item.term}
@@ -225,6 +262,19 @@ export default function HomePage() {
           </Link>
         ))}
       </section>
+
+      <footer className="w-full max-w-3xl border-t border-line py-10 text-center">
+        <p className="inline-flex items-center gap-2 text-[11px] font-mono text-muted">
+          <span className="size-1.5 bg-accent" aria-hidden />
+          Built with 🖤 by{' '}
+          <a
+            href="https://hiukky.com"
+            className="text-ink hover:text-accent transition-colors"
+          >
+            Romullo (@hiukky)
+          </a>
+        </p>
+      </footer>
     </main>
   );
 }

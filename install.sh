@@ -1,7 +1,7 @@
 #!/bin/sh
 # uze — official Linux installer.
 #
-#   curl -fsSL https://hiukky.com/uze/install.sh | sh
+#   curl -fsSL https://uze.hiukky.com/i | sh
 #
 # Downloads the prebuilt `uze` binary for this machine from GitHub
 # Releases, verifies its SHA-256 checksum, and installs it into the user
@@ -32,6 +32,31 @@ need tar
 need sha256sum
 need mktemp
 need install
+
+# --- pre-release check ---------------------------------------------------------
+# No GitHub Release has been published yet, so downloading "latest" would 404
+# on the archive itself with no useful message. Check first and say so plainly
+# instead of failing partway through a curl pipe. Only applies to the real
+# default GitHub releases path: an explicit UZE_VERSION is a deliberate pin
+# (fails with the normal download error if it doesn't exist), and a custom
+# UZE_BASE_URL (a mirror, or the offline installer-test.sh fixture server)
+# is never GitHub's release API to begin with.
+if [ -z "${UZE_VERSION:-}" ] && [ -z "${UZE_BASE_URL:-}" ]; then
+  latest_status="$(curl -sS -o /dev/null -w '%{http_code}' \
+    "https://api.github.com/repos/hiukky/uze/releases/latest" 2>/dev/null || echo "000")"
+  if [ "$latest_status" = "404" ]; then
+    say "uze doesn't have a packaged release yet — coming soon."
+    say ""
+    say "Build from source instead:"
+    say ""
+    say "  git clone https://github.com/hiukky/uze.git"
+    say "  cd uze"
+    say "  cargo install --path . --locked"
+    say ""
+    say "Track release progress: https://github.com/hiukky/uze/releases"
+    exit 1
+  fi
+fi
 
 # --- platform -----------------------------------------------------------------
 arch="$(uname -m)"

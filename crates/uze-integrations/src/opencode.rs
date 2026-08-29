@@ -100,6 +100,11 @@ impl IntegrationPort for OpenCodeIntegration {
         "/"
     }
 
+    /// simple-icons' `opencode` mark (MIT), recolored to `currentColor`.
+    fn icon_path(&self) -> Option<&'static str> {
+        Some("/harnesses/opencode.svg")
+    }
+
     /// Reads the shared `AGENTS.md` natively (preferred over `CLAUDE.md`
     /// per its own docs); UZE maintains no artifact for it.
     fn context_delivery(&self) -> ContextDelivery {

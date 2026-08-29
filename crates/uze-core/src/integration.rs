@@ -256,6 +256,13 @@ pub trait IntegrationPort {
         ""
     }
 
+    /// Public icon path (under the docs site's `public/`) for this harness's
+    /// logo, or `None` where no distinct mark exists yet. Presentation-only,
+    /// rendered by docs/matrix tooling; never used for lookup or matching.
+    fn icon_path(&self) -> Option<&'static str> {
+        None
+    }
+
     /// The integration, not the resource representation, selects how the
     /// harness receives a capability from a composed UZE environment.
     fn exposure_plan(&self, resource: &crate::project::Resource) -> ExposurePlan;

@@ -226,9 +226,20 @@ fn matrix_block() -> String {
     for harness in harnesses() {
         let integration = harness.integration.as_ref();
         let package = package_route(integration).map(route_symbol).unwrap_or("⚪");
+        let label = match integration.icon_path() {
+            // Raw HTML in MDX is parsed as JSX, not HTML — `style` must be an
+            // object there, so a plain CSS string 500s the build. className
+            // (harness-table-icon/-cell, styled in app/global.css) instead.
+            // The icon and label are wrapped in one inline-flex span so they
+            // never wrap onto separate lines in a narrow column.
+            Some(icon) => format!(
+                "<span className=\"harness-table-cell\"><img src=\"{icon}\" alt=\"\" className=\"harness-table-icon\" />{}</span>",
+                integration.display_name()
+            ),
+            None => integration.display_name().to_owned(),
+        };
         out.push_str(&format!(
-            "| {} | 🟢 | {} | {} | {} | {} | {} | {} | {} |\n",
-            integration.display_name(),
+            "| {label} | 🟢 | {} | {} | {} | {} | {} | {} | {} |\n",
             route_symbol(effective_route(
                 integration,
                 &default_skill,
