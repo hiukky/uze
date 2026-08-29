@@ -93,7 +93,9 @@ need to).
   `conformance/harnesses/<vendor>/fixtures/`. Run with
   `python3 conformance/lab.py --harness <h>`; replay a recorded run with
   `make lab-replay`. The CI `conformance` job runs all four verticals
-  (matrix).
+  (matrix). Debugging a failure: see the `conformance-debug` skill (fast
+  `--sandbox` reproduction loop, seconds not minutes) before iterating
+  against the full gate run.
 - `tests/` — domain-organized integration suites (one `main.rs` per
   domain: `cli/`, `memory/`, `packages/`, `workspace/`, `lifecycle/`,
   `projection/`, `integrations/`, `acceptance/`), shared test
