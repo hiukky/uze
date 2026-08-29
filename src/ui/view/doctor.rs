@@ -465,6 +465,7 @@ mod tests {
             ledger_error: None,
             integration_state_error: None,
             provisioning_state_error: None,
+            maintenance: Default::default(),
         }
     }
 

@@ -261,7 +261,9 @@ pub(super) fn attach_explicit_plugin(
     let name = plugin_manifest_name(package).ok_or_else(|| {
         UzeError::ExposureUnavailable("package has no usable plugin name".to_owned())
     })?;
-    preflight_name_free(executable, integration, &name)?;
+    if !preflight_name_free(executable, integration, &name) {
+        return Ok(None);
+    }
     let args: Vec<&Path> = vec![Path::new("plugin"), Path::new("install"), &package.root];
     run_quiet(
         Path::new(executable),
@@ -301,7 +303,9 @@ pub(super) fn attach_generated_plugin(
     let name = plugin_manifest_name(package).ok_or_else(|| {
         UzeError::ExposureUnavailable("package has no usable plugin name".to_owned())
     })?;
-    preflight_name_free(executable, integration, &name)?;
+    if !preflight_name_free(executable, integration, &name) {
+        return Ok(None);
+    }
     let derived_dir =
         super::generate::materialize_generated_plugin(&integration.uze_home, package)?;
     let args: Vec<&Path> = vec![Path::new("plugin"), Path::new("install"), &derived_dir];
@@ -338,12 +342,10 @@ pub(super) fn attach_generated_plugin(
 /// verb merges over an existing same-name plugin (verified: stale files
 /// survive a re-install), so a name already registered — with no receipt in
 /// the ledger — is foreign state, not something to clobber or silently
-/// resume. The reconcile surface surfaces this as an actionable error.
-fn preflight_name_free(
-    executable: &str,
-    integration: &AntigravityIntegration,
-    name: &str,
-) -> Result<()> {
+/// resume. It is nevertheless a successful no-op: the harness already
+/// exposes a native plugin under the requested name, and UZE must neither
+/// replace it nor present ordinary setup as failed.
+fn preflight_name_free(executable: &str, integration: &AntigravityIntegration, name: &str) -> bool {
     // If the listing itself is unreadable (agy absent, malformed output),
     // let the install verb speak for itself rather than double-guessing here.
     if let Ok(listing) = installed_plugins(executable, &integration.command_home) {
@@ -356,12 +358,10 @@ fn preflight_name_free(
                 })
             });
         if already {
-            return Err(UzeError::ExposureUnavailable(format!(
-                "Antigravity already has an imported plugin named `{name}` that UZE does not own; refusing to overwrite it"
-            )));
+            return false;
         }
     }
-    Ok(())
+    true
 }
 
 /// Deterministic content fingerprint of a directory tree (relative path +

@@ -43,7 +43,7 @@ pub mod view;
 mod worker;
 
 use hit::Hit;
-use model::{Focus, Overlay, ROUTES, Route, TuiModel};
+use model::{Focus, Overlay, ROUTES, Route, Status, TuiModel};
 use worker::{Intent, dispatch, drain_worker_results, spawn_startup};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -141,7 +141,11 @@ fn is_protected_plugin(
 pub fn run(home: UzeHome) -> Result<()> {
     let mut terminal = TerminalSession::start()?;
     let (sender, receiver) = mpsc::channel();
-    let mut model = TuiModel::default();
+    let mut model = TuiModel {
+        status: Status::Working("Refreshing environment…".to_owned()),
+        maintenance_in_flight: true,
+        ..TuiModel::default()
+    };
     spawn_startup(home.clone(), sender.clone(), model.context_root.clone());
     loop {
         terminal.draw(&mut model)?;
@@ -883,6 +887,7 @@ mod tests {
             ledger_error: None,
             integration_state_error: None,
             provisioning_state_error: None,
+            maintenance: Default::default(),
         });
         model.harnesses_selected = 0;
         model
@@ -1209,6 +1214,7 @@ mod tests {
             ledger_error: None,
             integration_state_error: None,
             provisioning_state_error: None,
+            maintenance: Default::default(),
         };
         let issues = classify_doctor(Some(&doctor));
         assert_eq!(issues[0].severity, Severity::High);
@@ -1343,6 +1349,7 @@ mod tests {
                 ledger_error: None,
                 integration_state_error: None,
                 provisioning_state_error: None,
+                maintenance: Default::default(),
             }),
             ..RefreshData::default()
         });
@@ -1389,6 +1396,7 @@ mod tests {
             ledger_error: None,
             integration_state_error: None,
             provisioning_state_error: None,
+            maintenance: Default::default(),
         });
         let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
         let mut hits = Vec::new();

@@ -191,8 +191,11 @@ impl UzeApplication {
                             integration: integration.id().to_owned(),
                             location,
                         });
-                        provided = plan.provided_resource_identities;
                     }
+                    // See `attach_package_to`: `None` can mean a native
+                    // plugin is already externally present. Do not create
+                    // duplicate capability-level fallbacks in that case.
+                    provided = plan.provided_resource_identities;
                 }
             }
             for resource in &resources {

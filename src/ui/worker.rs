@@ -70,7 +70,11 @@ pub(crate) fn dispatch(
     match intent {
         Intent::None | Intent::Quit => {}
         Intent::Refresh => {
+            if model.maintenance_in_flight {
+                return;
+            }
             model.status = Status::Working("Refreshing environment…".to_owned());
+            model.maintenance_in_flight = true;
             spawn_refresh(home.clone(), sender.clone(), model.context_root.clone());
         }
         Intent::InspectPlugin(id) => {
@@ -245,23 +249,17 @@ fn spawn_refresh(home: UzeHome, sender: Sender<WorkerResult>, context_root: Path
 /// the alternate screen was even entered, so the terminal appeared frozen
 /// for that whole stretch.
 ///
-/// Two stages: the health refresh goes out first (milliseconds, since the
-/// inspection cache serves `Matched` verdicts and `ensure_default_plugins`
-/// skip-attaches steady-state packages), then the background bootstrap, and
-/// a second refresh picks up whatever it changed (a fresh `UZE_HOME` gets
-/// its default plugins installed between the two). Every subsequent
-/// refresh (`Intent::Refresh`) goes through the plain `spawn_refresh`;
-/// seeding defaults only needs to happen once, at launch.
+/// Bootstrap and refresh share one worker so startup paints immediately while
+/// all machine maintenance stays off the rendering/event loop. Every
+/// subsequent refresh (`Intent::Refresh`) goes through `spawn_refresh` and
+/// is coalesced while this worker is in flight.
 pub(crate) fn spawn_startup(home: UzeHome, sender: Sender<WorkerResult>, context_root: PathBuf) {
     thread::spawn(move || {
-        let first =
-            load_refresh_data(home.clone(), &context_root).map_err(|error| error.to_string());
-        let _ = sender.send(WorkerResult::Refreshed(first));
         if let Ok(app) = tui_application(home.clone()) {
             let _ = app.ensure_default_plugins();
         }
-        let second = load_refresh_data(home, &context_root).map_err(|error| error.to_string());
-        let _ = sender.send(WorkerResult::Refreshed(second));
+        let refreshed = load_refresh_data(home, &context_root).map_err(|error| error.to_string());
+        let _ = sender.send(WorkerResult::Refreshed(refreshed));
     });
 }
 
@@ -374,7 +372,21 @@ pub(crate) fn drain_worker_results(
 ) {
     while let Ok(result) = receiver.try_recv() {
         match result {
-            WorkerResult::Refreshed(Ok(data)) => model.refreshed(data),
+            WorkerResult::Refreshed(Ok(data)) => {
+                let repaired = data
+                    .doctor
+                    .as_ref()
+                    .map(|doctor| doctor.maintenance.repaired_count())
+                    .unwrap_or_default();
+                model.refreshed(data);
+                model.maintenance_in_flight = false;
+                if repaired > 0 {
+                    model.status = Status::Success(format!(
+                        "Synchronized {repaired} attachment{}",
+                        if repaired == 1 { "" } else { "s" }
+                    ));
+                }
+            }
             WorkerResult::PluginInspected(Ok(inspection)) => {
                 model.plugin_detail = Some(inspection);
                 model.status = Status::Idle;
@@ -409,8 +421,11 @@ pub(crate) fn drain_worker_results(
                 model.status = Status::Success(message);
                 let _ = report;
             }
-            WorkerResult::Refreshed(Err(error))
-            | WorkerResult::PluginInspected(Err(error))
+            WorkerResult::Refreshed(Err(error)) => {
+                model.maintenance_in_flight = false;
+                model.status = Status::Error(error);
+            }
+            WorkerResult::PluginInspected(Err(error))
             | WorkerResult::MarketplaceInspected(Err(error))
             | WorkerResult::Mutated(Err(error))
             | WorkerResult::ContextAnalyzed(Err(error))
@@ -443,5 +458,73 @@ fn update_message(report: UpdatePluginReport) -> String {
                 report.package_id
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{path::PathBuf, sync::mpsc};
+
+    use crate::application::{DoctorReport, MaintenanceOutcome, MaintenanceReport, StoreHealth};
+
+    use super::*;
+
+    fn refreshed_with_repair() -> RefreshData {
+        RefreshData {
+            doctor: Some(DoctorReport {
+                uze_home: PathBuf::from("/home/uze"),
+                store: StoreHealth::Ready,
+                plugins: Vec::new(),
+                harnesses: Vec::new(),
+                attachments: Vec::new(),
+                ledger_error: None,
+                integration_state_error: None,
+                provisioning_state_error: None,
+                maintenance: MaintenanceReport {
+                    outcomes: vec![MaintenanceOutcome::Repaired {
+                        plugin: "fixture@local".to_owned(),
+                        integration: "fixture".to_owned(),
+                        receipt: "fixture:skill".to_owned(),
+                    }],
+                },
+            }),
+            ..RefreshData::default()
+        }
+    }
+
+    #[test]
+    fn repaired_maintenance_is_a_success_notification_not_a_problem() {
+        let (sender, receiver) = mpsc::channel();
+        sender
+            .send(WorkerResult::Refreshed(Ok(refreshed_with_repair())))
+            .unwrap();
+        let mut model = TuiModel {
+            maintenance_in_flight: true,
+            ..TuiModel::default()
+        };
+
+        drain_worker_results(&mut model, &receiver);
+
+        assert!(!model.maintenance_in_flight);
+        assert_eq!(
+            model.status,
+            Status::Success("Synchronized 1 attachment".to_owned())
+        );
+    }
+
+    #[test]
+    fn refresh_is_coalesced_while_maintenance_is_in_flight() {
+        let (sender, receiver) = mpsc::channel();
+        let home = UzeHome::at(std::env::temp_dir().join("uze-worker-coalesce"));
+        let mut model = TuiModel {
+            maintenance_in_flight: true,
+            ..TuiModel::default()
+        };
+
+        dispatch(Intent::Refresh, &home, &sender, &mut model);
+
+        assert!(receiver.try_recv().is_err());
+        assert!(model.maintenance_in_flight);
+        assert_eq!(model.status, Status::Idle);
     }
 }

@@ -125,6 +125,10 @@ pub(crate) struct TuiModel {
     pub(crate) focus: Focus,
     pub(crate) overlay: Overlay,
     pub(crate) status: Status,
+    /// At most one health/maintenance worker is allowed at a time. Refresh
+    /// intents while it runs are deliberately coalesced rather than spawning
+    /// competing inspections against the same receipt ledger.
+    pub(crate) maintenance_in_flight: bool,
 
     pub(crate) plugins: Vec<PluginSummary>,
     pub(crate) plugins_selected: usize,
@@ -180,6 +184,7 @@ impl Default for TuiModel {
             focus: Focus::Sidebar,
             overlay: Overlay::None,
             status: Status::Idle,
+            maintenance_in_flight: false,
             plugins: Vec::new(),
             plugins_selected: 0,
             plugin_detail: None,

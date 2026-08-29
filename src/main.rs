@@ -1467,6 +1467,12 @@ fn render_doctor(report: &DoctorReport) -> String {
     if let Some(error) = &report.provisioning_state_error {
         text.push_str(&format!("\nProvisioning state\n  blocked: {error}\n"));
     }
+    if !report.maintenance.outcomes.is_empty() {
+        text.push_str("\nMaintenance\n");
+        for outcome in &report.maintenance.outcomes {
+            text.push_str(&format!("  {:?}\n", outcome));
+        }
+    }
     text
 }
 

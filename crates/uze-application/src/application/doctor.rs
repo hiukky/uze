@@ -26,6 +26,7 @@ impl UzeApplication {
     /// receipt), which is exactly the honest cost of the first evidence —
     /// paid once per TTL window, not on every screen.
     pub fn doctor(&self) -> DoctorReport {
+        let maintenance = self.maintain_environment();
         let mut report = self.doctor_shell();
         let attachments = report
             .plugins
@@ -40,6 +41,7 @@ impl UzeApplication {
             })
             .collect();
         report.attachments = attachments;
+        report.maintenance = maintenance;
         report
     }
 
@@ -153,6 +155,7 @@ impl UzeApplication {
             ledger_error,
             integration_state_error,
             provisioning_state_error,
+            maintenance: MaintenanceReport::default(),
         }
     }
 

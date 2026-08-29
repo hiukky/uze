@@ -73,3 +73,4 @@ never renumbered), using this structure (Michael Nygard style):
 - [033 — Adopt a canonical portable Hook capability](033-adopt-portable-hook-capability.md)
 - [034 — Adopt GitHub Releases as the official Linux distribution channel](034-adopt-github-releases-linux-distribution.md)
 - [036 — Qualify Store plugins by marketplace](036-qualify-store-plugins-by-marketplace.md)
+- [037 — Adopt bounded environment maintenance](037-adopt-bounded-environment-maintenance.md)

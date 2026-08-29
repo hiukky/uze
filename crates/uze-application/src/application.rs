@@ -40,6 +40,7 @@ mod context;
 mod doctor;
 mod inspection_cache;
 mod lifecycle;
+mod maintenance;
 mod marketplace;
 mod overview;
 mod project_environment;
@@ -52,6 +53,7 @@ pub use project_environment::{
 };
 
 // Re-export overview read models for TUI/CLI access.
+pub use maintenance::{MaintenanceOutcome, MaintenanceReport};
 pub use overview::{
     MarketplaceState, MemoryState, OverviewMarketplace, OverviewWorkspaceSummary,
     ProjectEnvironmentState, ProjectOverview,
@@ -1355,6 +1357,7 @@ pub struct DoctorReport {
     pub ledger_error: Option<String>,
     pub integration_state_error: Option<String>,
     pub provisioning_state_error: Option<String>,
+    pub maintenance: MaintenanceReport,
 }
 
 /// The friendliest name available for a resource in a `PluginCapability`
@@ -2518,9 +2521,7 @@ mod tests {
             if let uze_core::ResourceOrigin::Package { id, .. } = &resource.origin
                 && id.as_str().eq("uze")
             {
-                return Err(UzeError::ExposureUnavailable(
-                    "Antigravity already has an imported plugin named `uze` that UZE does not own; refusing to overwrite it".to_owned(),
-                ));
+                return Ok(None);
             }
             let path = self.root.join(resource.name());
             #[cfg(unix)]
@@ -2557,9 +2558,7 @@ mod tests {
             _package: &StoredPackage,
             _plan: &PackageExposurePlan,
         ) -> Result<Option<AttachmentReceipt>> {
-            Err(UzeError::ExposureUnavailable(
-                "Antigravity already has an imported plugin named `uze` that UZE does not own; refusing to overwrite it".to_owned(),
-            ))
+            Ok(None)
         }
     }
 
@@ -2652,19 +2651,11 @@ mod tests {
         );
         assert!(
             foreign.configured,
-            "foreign harness stays configured despite attach warning"
+            "externally present harness stays configured"
         );
         assert!(
-            foreign.attach_error.is_some(),
-            "foreign harness must surface attach_error as warning, not fatal"
-        );
-        assert!(
-            foreign
-                .attach_error
-                .as_deref()
-                .unwrap()
-                .contains("already has an imported plugin"),
-            "wrong attach_error: {:?}",
+            foreign.attach_error.is_none(),
+            "external native delivery is a successful no-op: {:?}",
             foreign.attach_error
         );
 
@@ -2696,8 +2687,8 @@ mod tests {
                 root: foreign_root.clone(),
             })],
         );
-        // Two packages: default `uze` (will fail for this integration) and
-        // the canonical skill fixture (should succeed).
+        // Two packages: default `uze` is externally available and the
+        // canonical skill fixture still attaches.
         app.ensure_default_plugins().unwrap();
         app.add_plugin(
             uze_core::PackageSource::local(fixture()),
@@ -2707,10 +2698,7 @@ mod tests {
 
         let foreign: &dyn IntegrationPort = app.integrations[0].as_ref();
         let result = app.attach_stored_packages_to(foreign);
-        assert!(
-            result.is_err(),
-            "overall attach should still report the first error"
-        );
+        assert!(result.is_ok(), "external native delivery is not an error");
 
         // But the non-conflicting package must still have been attempted and
         // recorded — per-package resilience, not abort-on-first.
@@ -2750,7 +2738,7 @@ mod tests {
             .unwrap()
             .attach_error
             .clone();
-        assert!(foreign_first.is_some());
+        assert!(foreign_first.is_none());
 
         let second = app.setup(None).unwrap();
         let foreign_second = second
@@ -2761,7 +2749,7 @@ mod tests {
             .clone();
         assert_eq!(
             foreign_first, foreign_second,
-            "repeated setup must be stable and not duplicate or hide the warning"
+            "repeated setup must keep the external native no-op silent"
         );
 
         fs::remove_dir_all(root).unwrap();

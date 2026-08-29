@@ -551,6 +551,49 @@ pub trait IntegrationPort {
     fn detach_receipt(&self, receipt: &AttachmentReceipt) -> Result<AttachmentInspection> {
         detach_standard_receipt(receipt)
     }
+
+    /// Restores a receipt that has been inspected as `Missing`, but only for
+    /// standard artifacts whose full desired state is carried by the receipt
+    /// itself. Integrations must opt in explicitly for every other artifact:
+    /// a missing vendor registration is not proof that re-running a vendor
+    /// command cannot replace user-owned state.
+    ///
+    /// Callers must inspect again after this method returns. A race that puts
+    /// a foreign entry at the target is rejected by the normal attachment
+    /// primitives rather than overwritten.
+    fn repair_missing_receipt(&self, receipt: &AttachmentReceipt) -> Result<bool> {
+        match &receipt.artifact {
+            ManagedArtifact::SymlinkReference { path, target } => {
+                let Some(parent) = path.parent() else {
+                    return Ok(false);
+                };
+                let Some(entry_name) = path.file_name().and_then(|name| name.to_str()) else {
+                    return Ok(false);
+                };
+                ExposureMechanism::ManagedUserScopeReference {
+                    discovery_root: parent.to_path_buf(),
+                    entry_name: entry_name.to_owned(),
+                    source: target.clone(),
+                }
+                .attach()?;
+                Ok(true)
+            }
+            ManagedArtifact::ManagedTextRegion {
+                target_file,
+                region_identity,
+                expected_content,
+            } => {
+                ExposureMechanism::ManagedTextRegion {
+                    target_file: target_file.clone(),
+                    region_identity: region_identity.clone(),
+                    expected_content: expected_content.clone(),
+                }
+                .attach_text_region()?;
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
 }
 
 /// The naming default every integration inherits unless it overrides
