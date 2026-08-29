@@ -149,7 +149,19 @@ if [ "$1" = "plugin" ]; then
     list) echo '{{"imports":[]}}'; exit 0 ;;
     install)
       mkdir -p "$HOME/.gemini/config/plugins"
-      cp -R "$3/." "$HOME/.gemini/config/plugins/$(basename "$3")/" 2>/dev/null || true
+      staged="$HOME/.gemini/config/plugins/$(basename "$3")"
+      cp -R "$3/." "$staged/" 2>/dev/null || true
+      # Real `agy` stages the copy under the plugin's own declared
+      # manifest name (plugin.json's "name" field), not the source
+      # directory's basename (verified against real agy 1.1.22 — see
+      # antigravity/plugin.rs's attach_generated_plugin) — a generated
+      # envelope's source dir is named after the qualified package id,
+      # which differs from the plugin's bare declared name.
+      declared=$(sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$staged/plugin.json" 2>/dev/null | head -n 1)
+      if [ -n "$declared" ] && [ "$declared" != "$(basename "$3")" ]; then
+        rm -rf "$HOME/.gemini/config/plugins/$declared"
+        mv "$staged" "$HOME/.gemini/config/plugins/$declared"
+      fi
       exit 0
       ;;
     uninstall) exit 0 ;;

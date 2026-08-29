@@ -26,7 +26,7 @@ resolver = "3"
 [workspace.package]
 # UZE v0 is released as SemVer pre-releases. Increment this value before
 # producing any distributable binary; every workspace crate inherits it.
-version = "0.0.0-alpha.14"
+version = "0.0.0-alpha.15"
 license = "Apache-2.0"
 authors = ["Romullo Sousa (hiukky)"]
 
@@ -41,6 +41,14 @@ thiserror = "2"
 ratatui = "0.30"
 crossterm = "0.29"
 indicatif = "0.18"
+# CLI presentation kit: anstyle is the same style engine `clap`'s own
+# Styles builder uses, so the text `progress` renders and the errors/usage
+# `clap` renders share one palette instead of two hand-maintained ones.
+# dialoguer replaces raw `stdin().read_line()` prompts with proper
+# confirm/select/input widgets; comfy-table replaces hand-padded columns.
+anstyle = "1"
+dialoguer = "0.11"
+comfy-table = "7"
 
 # MCP fixtures and the local playground server are test/development support;
 # neither is linked into UZE's application/core crates.

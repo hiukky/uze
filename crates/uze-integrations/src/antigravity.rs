@@ -173,6 +173,10 @@ impl IntegrationPort for AntigravityIntegration {
         "Antigravity"
     }
 
+    fn description(&self) -> &'static str {
+        "Google's agentic coding CLI"
+    }
+
     fn aliases(&self) -> &'static [&'static str] {
         &["agy", "antigravity-cli"]
     }

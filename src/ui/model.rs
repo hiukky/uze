@@ -21,16 +21,14 @@ pub(crate) enum Route {
     Overview,
     Plugins,
     Marketplace,
-    Context,
     Harnesses,
     Doctor,
 }
 
-pub(crate) const ROUTES: [Route; 6] = [
+pub(crate) const ROUTES: [Route; 5] = [
     Route::Overview,
     Route::Marketplace,
     Route::Plugins,
-    Route::Context,
     Route::Harnesses,
     Route::Doctor,
 ];
@@ -41,7 +39,6 @@ impl Route {
             Route::Overview => "Overview",
             Route::Plugins => "Plugins",
             Route::Marketplace => "Marketplace",
-            Route::Context => "Context",
             Route::Harnesses => "Harnesses",
             Route::Doctor => "Doctor",
         }

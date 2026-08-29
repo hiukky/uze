@@ -387,6 +387,25 @@ impl UzeApplication {
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.home)?;
         let mut installed_plugins = Vec::new();
         for (name, locked) in missing {
+            // A fresh machine reproducing a cloned `agents.lock` has never
+            // run `market add` — `project_environment()`'s own diagnostics
+            // already promise "(will be resolved from lock source on
+            // install)" for exactly this case, so this registers the
+            // locked marketplace globally (from the source the lock itself
+            // carries) before ingesting from it. Idempotent for a
+            // same-source re-run; a genuinely different source already
+            // registered under this name surfaces as `MarketplaceConflict`
+            // rather than silently mis-attributing the package.
+            if let PluginSource::Marketplace { marketplace, .. } = &locked.source
+                && marketplace != "uze-official"
+                && let Some(locked_mp) = lock.marketplaces.get(marketplace)
+            {
+                uze_core::state::marketplace_add(
+                    &self.home,
+                    marketplace,
+                    PackageSource::from(locked_mp.source.clone()),
+                )?;
+            }
             let package_source = Self::resolve_locked_plugin_source(&lock, &name, &locked.source)?;
             let materialized = self.acquire(&package_source)?;
             let marketplace = match &locked.source {
@@ -431,10 +450,10 @@ impl UzeApplication {
         let installed_ids = self.installed_plugin_ids();
         let plugins = lock
             .plugins
-            .keys()
-            .map(|name| ProjectPluginHealth {
+            .iter()
+            .map(|(name, locked)| ProjectPluginHealth {
                 plugin: name.clone(),
-                installed: installed_ids.contains(name.as_str()),
+                installed: installed_ids.contains(&Self::locked_plugin_id(name, locked)),
             })
             .collect();
         ProjectLockStatus::Present { plugins }

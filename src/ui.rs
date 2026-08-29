@@ -274,7 +274,6 @@ fn render(frame: &mut ratatui::Frame<'_>, model: &TuiModel, hits: &mut Vec<(Rect
         Route::Overview => view::overview::render_overview(frame, columns[1], model),
         Route::Plugins => view::plugins::render_plugins(frame, columns[1], model, hits),
         Route::Marketplace => view::marketplace::render_marketplace(frame, columns[1], model, hits),
-        Route::Context => view::context::render_context(frame, columns[1], model),
         Route::Harnesses => view::harnesses::render_harnesses(frame, columns[1], model, hits),
         Route::Doctor => view::doctor::render_doctor(frame, columns[1], model),
     }
@@ -426,7 +425,6 @@ fn route_subtitle(route: Route) -> &'static str {
         Route::Overview => "status & health",
         Route::Marketplace => "browse & install",
         Route::Plugins => "installed plugins",
-        Route::Context => "AGENTS.md bridges",
         Route::Harnesses => "detected agents",
         Route::Doctor => "diagnostics",
     }
@@ -670,8 +668,7 @@ fn route_hint(model: &TuiModel) -> &'static str {
         Route::Marketplace => {
             "↑↓ select · enter inspect · i install · a add marketplace · / search · esc close"
         }
-        Route::Context => "a analyze · p apply",
-        Route::Harnesses => "↑↓ select · s setup · ? status · esc close",
+        Route::Harnesses => "↑↓ select · s setup · a analyze · p apply · ? status · esc close",
         Route::Doctor => "r refresh · ? help",
     }
 }
@@ -827,9 +824,10 @@ mod tests {
     /// nothing-loaded-yet placeholder every other test leaves in place.
     fn model_with_data() -> TuiModel {
         use crate::application::{
-            HarnessHealth, ManagedStateSummary, PackageManagedState, StoreHealth,
+            HarnessContextDelivery, HarnessContextStatus, HarnessHealth, ManagedStateSummary,
+            PackageManagedState, Portability, ProjectContextStatus, StoreHealth,
         };
-        use uze_core::integration::{HarnessDetection, PublicationStatus};
+        use uze_core::integration::{AttachmentState, HarnessDetection, PublicationStatus};
         use uze_core::router::HarnessCapabilities;
 
         let mut model = model_with_plugins(&["one", "two"]);
@@ -852,6 +850,7 @@ mod tests {
                 HarnessHealth {
                     integration: "claude-code".to_owned(),
                     display_name: "Claude Code".to_owned(),
+                    description: "Anthropic's official coding agent CLI".to_owned(),
                     detection: HarnessDetection {
                         present: true,
                         version: Some("1.0.0".to_owned()),
@@ -861,18 +860,24 @@ mod tests {
                     provisioning: None,
                     publication: PublicationStatus::Published,
                     capabilities: HarnessCapabilities::default(),
-                    native_instructions: true,
+                    native_instructions: false,
+                    runtime_shim_active: true,
                 },
                 HarnessHealth {
                     integration: "codex".to_owned(),
                     display_name: "Codex".to_owned(),
-                    detection: HarnessDetection::default(),
+                    description: "OpenAI's coding agent CLI".to_owned(),
+                    detection: HarnessDetection {
+                        present: true,
+                        version: Some("0.9.0".to_owned()),
+                    },
                     setup: "not configured".to_owned(),
                     strategy: None,
                     provisioning: None,
                     publication: PublicationStatus::NotApplicable,
                     capabilities: HarnessCapabilities::default(),
-                    native_instructions: false,
+                    native_instructions: true,
+                    runtime_shim_active: true,
                 },
             ],
             attachments: vec![PackageManagedState {
@@ -891,6 +896,39 @@ mod tests {
             integration_state_error: None,
             provisioning_state_error: None,
             maintenance: MaintenanceReport::default(),
+        });
+        model.context_status = Some(ProjectContextStatus {
+            root: PathBuf::from("/home/project"),
+            canonical: PathBuf::from("/home/project/AGENTS.md"),
+            sources: Vec::new(),
+            contributions: Vec::new(),
+            orphaned_regions: Vec::new(),
+            malformed_regions: Vec::new(),
+            harnesses: vec![
+                // Claude Code only ever reads context through a `CLAUDE.md`
+                // bridge (never natively) — `needed: false` here means
+                // AGENTS.md currently has no matched package contribution
+                // to bridge, not that the bridge itself is unhealthy. The
+                // regression this guards: a `Matched` bridge must still
+                // read "Bridged", never collapse to "Not needed".
+                HarnessContextStatus {
+                    integration: "claude-code".to_owned(),
+                    display_name: "Claude Code".to_owned(),
+                    delivery: HarnessContextDelivery::Bridge {
+                        needed: false,
+                        state: AttachmentState::Matched,
+                    },
+                },
+                HarnessContextStatus {
+                    integration: "codex".to_owned(),
+                    display_name: "Codex".to_owned(),
+                    delivery: HarnessContextDelivery::Native,
+                },
+            ],
+            portability: Portability::Portable,
+            warnings: vec![
+                "AGENTS.md carries a region for a plugin that is no longer installed".to_owned(),
+            ],
         });
         model.harnesses_selected = 0;
         model
@@ -1357,10 +1395,10 @@ mod tests {
             ..RefreshData::default()
         });
 
-        // Sidebar order: Overview → Marketplace → Plugins → Context →
-        // Harnesses → Doctor. No deep-request intent anywhere.
+        // Sidebar order: Overview → Marketplace → Plugins → Harnesses →
+        // Doctor. No deep-request intent anywhere.
         let mut last_intent = Intent::None;
-        for _ in 0..5 {
+        for _ in 0..4 {
             last_intent = model.apply_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         }
         assert_eq!(model.route, Route::Doctor);

@@ -170,6 +170,7 @@ impl UzeApplication {
             .map(|integration| HarnessHealth {
                 integration: integration.id().to_owned(),
                 display_name: integration.display_name().to_owned(),
+                description: integration.description().to_owned(),
                 detection: self.detect_cached(integration.as_ref()),
                 setup: integration_status(integration.status(&self.home)),
                 strategy: state::get(&self.home, integration.id())
@@ -188,8 +189,23 @@ impl UzeApplication {
                     integration.context_delivery(),
                     ContextDelivery::Native { .. }
                 ),
+                runtime_shim_active: self.runtime_shim_is_active(integration.as_ref()),
             })
             .collect()
+    }
+
+    fn runtime_shim_is_active(&self, integration: &dyn IntegrationPort) -> bool {
+        if !integration.supports_runtime_integration() {
+            return true;
+        }
+        let expected = self.home.shims_dir().join(integration.shim_name());
+        std::env::var_os("PATH")
+            .and_then(|path| {
+                std::env::split_paths(&path)
+                    .map(|directory| directory.join(integration.shim_name()))
+                    .find(|candidate| candidate.is_file())
+            })
+            .is_some_and(|resolved| resolved == expected)
     }
 
     pub fn harness_list(&self) -> Vec<HarnessHealth> {

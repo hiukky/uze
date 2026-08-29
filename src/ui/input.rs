@@ -71,7 +71,7 @@ impl TuiModel {
 
     fn content_key(&mut self, key: KeyEvent) -> Intent {
         match key.code {
-            KeyCode::Left | KeyCode::Char('h') if self.route != Route::Context => {
+            KeyCode::Left | KeyCode::Char('h') => {
                 self.focus = Focus::Sidebar;
                 Intent::None
             }
@@ -160,17 +160,17 @@ impl TuiModel {
                     Intent::Setup(harness.integration.clone())
                 })
             }
-            KeyCode::Char('a') if self.route == Route::Context => {
+            KeyCode::Char('a') if self.route == Route::Harnesses => {
                 Intent::ContextAnalyze(self.workspace_root())
             }
-            // Global "add marketplace" everywhere else — Context keeps `a`
+            // Global "add marketplace" everywhere else — Harnesses keeps `a`
             // for analyze above, since that arm is matched first.
             KeyCode::Char('a') => {
                 self.overlay = Overlay::AddMarketplace(String::new());
                 self.focus = Focus::Overlay;
                 Intent::None
             }
-            KeyCode::Char('p') if self.route == Route::Context => {
+            KeyCode::Char('p') if self.route == Route::Harnesses => {
                 if self
                     .context_plan
                     .as_ref()

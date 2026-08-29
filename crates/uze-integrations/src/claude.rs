@@ -245,6 +245,10 @@ impl IntegrationPort for ClaudeIntegration {
         "Claude Code"
     }
 
+    fn description(&self) -> &'static str {
+        "Anthropic's official coding agent CLI"
+    }
+
     fn invocation_prefix(&self) -> &'static str {
         "/"
     }

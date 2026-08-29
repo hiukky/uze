@@ -533,37 +533,50 @@ impl UzeApplication {
         let shim_path = shims_dir.join(shim_name);
         refresh_shim_symlink(&uze_binary, &shim_path)?;
 
-        let on_path = std::env::var_os("PATH")
-            .map(|path| std::env::split_paths(&path).any(|entry| entry == shims_dir))
+        let shim_precedes_real_executable = std::env::var_os("PATH")
+            .map(|path| {
+                let entries: Vec<_> = std::env::split_paths(&path).collect();
+                let shim_position = entries.iter().position(|entry| entry == &shims_dir);
+                let executable_position = resolved
+                    .parent()
+                    .and_then(|parent| entries.iter().position(|entry| entry == parent));
+                matches!(
+                    (shim_position, executable_position),
+                    (Some(shim), Some(executable)) if shim < executable
+                )
+            })
             .unwrap_or(false);
 
         let mut rc_file_updated = None;
         let mut path_hint = None;
-        if !on_path {
-            let manual_export = format!("export PATH=\"{}:$PATH\"", shims_dir.display());
-            match std::env::var_os("HOME")
-                .map(PathBuf::from)
-                .and_then(|home_dir| uze_core::shell_path::detect_shell_rc(&home_dir))
-            {
-                Some(target) => match uze_core::shell_path::ensure_path_line(&target, &shims_dir) {
-                    Ok(changed) => {
-                        if changed {
-                            rc_file_updated = Some(target.rc_file.clone());
-                        }
+        let manual_export = format!("export PATH=\"{}:$PATH\"", shims_dir.display());
+        match std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .and_then(|home_dir| uze_core::shell_path::detect_shell_rc(&home_dir))
+        {
+            Some(target) => match uze_core::shell_path::ensure_path_line(&target, &shims_dir) {
+                Ok(changed) => {
+                    if changed {
+                        rc_file_updated = Some(target.rc_file.clone());
+                    }
+                    if !shim_precedes_real_executable {
                         path_hint = Some(format!(
                             "open a new terminal, or run: source {}",
                             target.rc_file.display()
                         ));
                     }
-                    // The rc file has a marker in a shape this function
-                    // doesn't recognize (edited by hand, presumably) —
-                    // refuse to guess, fall back to the manual instruction.
-                    Err(_) => path_hint = Some(manual_export),
-                },
-                // No detected shell (uncommon shell, `$SHELL`/`$HOME` unset)
-                // — nothing to edit, same manual fallback.
-                None => path_hint = Some(manual_export),
-            }
+                }
+                // The rc file has a marker in a shape this function doesn't
+                // recognize (edited by hand, presumably) — refuse to guess,
+                // fall back to the manual instruction when the current shell
+                // does not resolve the shim first.
+                Err(_) if !shim_precedes_real_executable => path_hint = Some(manual_export),
+                Err(_) => {}
+            },
+            // No detected shell (uncommon shell, `$SHELL`/`$HOME` unset) —
+            // nothing to edit, same manual fallback when needed.
+            None if !shim_precedes_real_executable => path_hint = Some(manual_export),
+            None => {}
         }
 
         Ok(Some(RuntimeShimSetup {
@@ -1163,6 +1176,9 @@ pub struct HarnessHealth {
     /// display only. `integration` above stays the stable id everything
     /// else (setup, state, doctor matching) is keyed on.
     pub display_name: String,
+    /// A one-line, human-facing description (`IntegrationPort::description`)
+    /// — display only, never a lookup key.
+    pub description: String,
     pub detection: HarnessDetection,
     pub setup: String,
     pub strategy: Option<String>,
@@ -1180,6 +1196,10 @@ pub struct HarnessHealth {
     /// — so this is sourced from the same `NATIVE_INSTRUCTION_INTEGRATIONS`
     /// list `context_reconcile` itself uses, not re-derived.
     pub native_instructions: bool,
+    /// Whether invoking this harness's command name resolves to UZE's
+    /// runtime shim. A configured harness with a shadowed shim is not ready:
+    /// its runtime context projection would be bypassed.
+    pub runtime_shim_active: bool,
 }
 
 /// One recognized instructions file's observed state — never whether UZE
@@ -2868,6 +2888,72 @@ mod tests {
         fn aliases(&self) -> &'static [&'static str] {
             &["shim-test"]
         }
+    }
+
+    #[test]
+    fn runtime_shim_repairs_an_rc_file_when_the_shims_dir_is_already_shadowed() {
+        let root = temp("runtime-shim-shadowed");
+        let home = UzeHome::at(root.join("uze-home"));
+        let shims_dir = home.shims_dir();
+        let real_bin_dir = root.join(".local/bin");
+        fs::create_dir_all(&shims_dir).unwrap();
+        fs::create_dir_all(&real_bin_dir).unwrap();
+        let real_executable = real_bin_dir.join("shim-test");
+        fs::write(&real_executable, "#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            fs::set_permissions(&real_executable, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let rc_file = root.join(".zshrc");
+        fs::write(
+            &rc_file,
+            format!(
+                concat!(
+                    "# >>> uze shims path >>>\n",
+                    "export PATH=\"{}:$PATH\"\n",
+                    "# <<< uze shims path <<<\n",
+                    "export PATH=\"{}:$PATH\"\n",
+                ),
+                shims_dir.display(),
+                real_bin_dir.display(),
+            ),
+        )
+        .unwrap();
+        let path = std::env::join_paths([real_bin_dir.as_path(), shims_dir.as_path()]).unwrap();
+        let mut environment = uze_testkit::env::scope();
+        environment
+            .set("HOME", &root)
+            .set("SHELL", "/bin/zsh")
+            .set("PATH", path);
+        assert_eq!(
+            uze_core::shell_path::detect_shell_rc(&root)
+                .expect("zsh rc is detected")
+                .rc_file,
+            rc_file
+        );
+
+        let app = UzeApplication::new(home, Vec::new());
+        let setup = app
+            .ensure_runtime_shim(&ShimConflictingIntegration {})
+            .unwrap()
+            .expect("runtime-enabled integration creates a shim");
+        assert_eq!(setup.rc_file_updated, Some(rc_file.clone()));
+        assert!(setup.path_hint.is_some(), "current shell remains shadowed");
+        let rc = fs::read_to_string(&rc_file).unwrap();
+        assert!(rc.starts_with(&format!(
+            "export PATH=\"{}:$PATH\"\n",
+            real_bin_dir.display()
+        )));
+        assert!(rc.ends_with(&format!(
+            "# >>> uze shims path >>>\nexport PATH=\"{}:$PATH\"\n# <<< uze shims path <<<\n",
+            shims_dir.display()
+        )));
+
+        drop(environment);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

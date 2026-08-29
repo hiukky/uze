@@ -256,8 +256,8 @@ fn builtin_name_followed_by_at_market_is_still_shorthand() {
 
 /// `uze --help` must name the Project/Machine split explicitly
 /// (`specs/cli-command-grammar/spec.md`'s "Top-level help names both
-/// scopes" requirement) and list `market`/`plugin`/`harness` under the
-/// machine heading, with the shorthand shown in Usage.
+/// scopes" requirement) and list the machine operations under the machine
+/// heading, with the shorthand shown in Usage.
 #[test]
 fn help_names_the_project_machine_split() {
     let home = temporary_home("help-split");
@@ -268,12 +268,39 @@ fn help_names_the_project_machine_split() {
     assert!(stdout.contains("Project:"), "missing Project heading");
     assert!(stdout.contains("Machine:"), "missing Machine heading");
     assert!(stdout.contains("<plugin>@<market>"), "missing Usage line");
-    for namespace in ["market", "plugin", "harness"] {
+    for namespace in ["market", "plugin", "setup"] {
         assert!(
             stdout.contains(namespace),
             "Machine heading must list `{namespace}`"
         );
     }
+    let _ = std::fs::remove_dir_all(home);
+}
+
+#[test]
+fn setup_consolidates_harness_operations_without_a_harness_namespace() {
+    let home = temporary_home("setup-surface");
+    std::fs::create_dir_all(&home).unwrap();
+
+    let help = uze(&home).args(["setup", "help"]).output().unwrap();
+    assert!(help.status.success());
+    let help = String::from_utf8_lossy(&help.stdout);
+    for usage in [
+        "uze setup <harness>...",
+        "uze setup list",
+        "uze setup inspect <harness>",
+    ] {
+        assert!(help.contains(usage), "setup help missing `{usage}`: {help}");
+    }
+
+    let root_help = uze(&home).args(["--help"]).output().unwrap();
+    assert!(root_help.status.success());
+    assert!(
+        !String::from_utf8_lossy(&root_help.stdout)
+            .lines()
+            .any(|line| line.trim_start().starts_with("harness ")),
+        "the redundant namespace must not be part of the command surface"
+    );
     let _ = std::fs::remove_dir_all(home);
 }
 
@@ -295,6 +322,38 @@ fn market_help_is_self_contained() {
             "market --help unexpectedly mentions unrelated `{unrelated}`: {stdout}"
         );
     }
+    let _ = std::fs::remove_dir_all(home);
+}
+
+#[test]
+fn every_public_help_route_uses_the_uze_renderer_and_dash_help_is_rejected() {
+    let home = temporary_home("unified-help");
+    std::fs::create_dir_all(&home).unwrap();
+
+    for argument in ["help", "--help", "-h"] {
+        let output = uze(&home).args([argument]).output().unwrap();
+        assert!(output.status.success(), "root `{argument}` must succeed");
+        assert!(String::from_utf8_lossy(&output.stdout).contains("UZE"));
+    }
+    for (command, title) in [
+        ("context", "UZE context"),
+        ("market", "UZE market"),
+        ("plugin", "UZE plugin"),
+        ("setup", "UZE setup"),
+    ] {
+        let output = uze(&home).args([command, "--help"]).output().unwrap();
+        assert!(output.status.success(), "{command} help must succeed");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains(title), "expected custom title in: {stdout}");
+        assert!(
+            !stdout.contains("Usage:"),
+            "the generated Clap help must not leak through: {stdout}"
+        );
+    }
+
+    let invalid = uze(&home).args(["-help"]).output().unwrap();
+    assert!(!invalid.status.success());
+    assert!(String::from_utf8_lossy(&invalid.stderr).contains("`-help` is not supported"));
     let _ = std::fs::remove_dir_all(home);
 }
 

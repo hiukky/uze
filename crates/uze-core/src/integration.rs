@@ -180,6 +180,15 @@ pub trait IntegrationPort {
         self.id()
     }
 
+    /// A one-line, human-facing description (`uze doctor`, the TUI
+    /// Harnesses list) — never hardcoded outside `uze-integrations`
+    /// (`cli_and_tui_never_name_a_vendor_harness`/
+    /// `application_never_names_a_vendor_harness` enforce this). Defaults
+    /// to empty; an integration overrides it with its own short blurb.
+    fn description(&self) -> &'static str {
+        ""
+    }
+
     fn capabilities(&self) -> HarnessCapabilities;
 
     /// The hook semantics this harness can preserve (ADR-033): the semantic

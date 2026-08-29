@@ -74,11 +74,14 @@ fn desired_line(kind: ShellKind, shims_dir: &Path) -> String {
 }
 
 /// Idempotently ensures a marked block containing exactly the right line
-/// exists in `target.rc_file`. Returns `Ok(true)` if it wrote a change,
-/// `Ok(false)` if the file already had exactly this content. Refuses to
-/// touch the file (returns `Err`) if it finds only one of the two markers —
-/// that shape means something other than this function edited it last, and
-/// guessing at a fix would risk corrupting content that isn't ours.
+/// is the final PATH-affecting content in `target.rc_file`. Keeping UZE's
+/// owned block last means a later vendor installer cannot shadow its shims
+/// by prepending its own bin directory after this block. Returns `Ok(true)`
+/// if it wrote a change, `Ok(false)` if the file already had exactly this
+/// content in the required position. Refuses to touch the file (returns
+/// `Err`) if it finds only one of the two markers — that shape means
+/// something other than this function edited it last, and guessing at a fix
+/// would risk corrupting content that isn't ours.
 pub fn ensure_path_line(target: &ShellRcTarget, shims_dir: &Path) -> Result<bool> {
     let wanted = desired_line(target.kind, shims_dir);
     let existing = match fs::read_to_string(&target.rc_file) {
@@ -97,12 +100,14 @@ pub fn ensure_path_line(target: &ShellRcTarget, shims_dir: &Path) -> Result<bool
 
     match (begin, end) {
         (Some(b), Some(e)) if e > b => {
-            if e == b + 2 && lines[b + 1] == wanted {
+            if e == b + 2 && lines[b + 1] == wanted && e + 1 == lines.len() {
                 return Ok(false);
             }
-            let mut rebuilt: Vec<&str> = lines[..=b].to_vec();
+            let mut rebuilt: Vec<&str> = lines[..b].to_vec();
+            rebuilt.extend(&lines[e + 1..]);
+            rebuilt.push(BEGIN);
             rebuilt.push(&wanted);
-            rebuilt.extend(&lines[e..]);
+            rebuilt.push(END);
             write_atomic(
                 &target.rc_file,
                 format!("{}\n", rebuilt.join("\n")).as_bytes(),
@@ -186,6 +191,35 @@ mod tests {
         };
         assert!(ensure_path_line(&target, Path::new("/home/x/.uze/shims")).unwrap());
         assert!(!ensure_path_line(&target, Path::new("/home/x/.uze/shims")).unwrap());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn moves_the_owned_block_after_later_path_exports() {
+        let root = scratch_dir("moves-to-end");
+        let rc_file = root.join(".zshrc");
+        let target = ShellRcTarget {
+            kind: ShellKind::Zsh,
+            rc_file: rc_file.clone(),
+        };
+        let shims = Path::new("/home/x/.uze/shims");
+        ensure_path_line(&target, shims).unwrap();
+        fs::write(
+            &rc_file,
+            format!(
+                "{}export PATH=\"/home/x/.local/bin:$PATH\"\n",
+                fs::read_to_string(&rc_file).unwrap()
+            ),
+        )
+        .unwrap();
+
+        assert!(ensure_path_line(&target, shims).unwrap());
+        let content = fs::read_to_string(&rc_file).unwrap();
+        assert!(content.starts_with("export PATH=\"/home/x/.local/bin:$PATH\"\n"));
+        assert!(content.ends_with(&format!(
+            "{BEGIN}\nexport PATH=\"/home/x/.uze/shims:$PATH\"\n{END}\n"
+        )));
+        assert!(!ensure_path_line(&target, shims).unwrap());
         let _ = fs::remove_dir_all(&root);
     }
 

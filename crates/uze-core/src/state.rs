@@ -253,8 +253,21 @@ pub fn marketplace_remove(home: &UzeHome, name: &str) -> Result<()> {
             "marketplace `{name}` not found"
         )));
     }
+    // `plugin_marketplaces.json` is written at exactly one call site
+    // (a successful non-official install) and only cleared on remove — it
+    // is a cache of the Store's own ids, not the source of truth, and can
+    // drift (a plugin's entry never gets backfilled by, say, `update`). The
+    // Store's `PackageId` is already marketplace-qualified (ADR-036: every
+    // id ends `@<marketplace>`), so it is checked directly here rather than
+    // trusted to have mirrored every install into the ledger.
     let plugin_map = load_plugin_marketplace_registry(home)?;
-    if plugin_map.plugins.values().any(|m| m == name) {
+    let store = crate::store::UzeStore::new(home.clone());
+    let still_installed = plugin_map.plugins.values().any(|m| m == name)
+        || store
+            .package_ids()?
+            .iter()
+            .any(|id| id.marketplace() == name);
+    if still_installed {
         return Err(UzeError::ExposureUnavailable(format!(
             "marketplace `{name}` still has installed plugins; remove them first"
         )));

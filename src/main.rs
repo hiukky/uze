@@ -30,7 +30,8 @@ use uze::{
 #[command(
     name = "uze",
     version,
-    about = "Manage one local agent plugin environment"
+    about = "Manage one local agent plugin environment",
+    styles = progress::clap_styles()
 )]
 struct Cli {
     /// Show delivery evidence and full attachment details
@@ -79,18 +80,17 @@ enum Command {
         #[command(subcommand)]
         action: PluginAction,
     },
-    /// Manage agent harness integrations (machine-level)
-    Harness {
-        #[command(subcommand)]
-        action: HarnessAction,
-    },
     /// Run diagnostics
     Doctor {
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
-    /// Set up harness integrations
-    Setup { harness: Option<String> },
+    /// Provision harness integrations, or inspect their readiness
+    Setup {
+        /// Harness ids to provision. Omit to provision every registered harness.
+        #[arg(value_name = "HARNESS", num_args = 0..)]
+        arguments: Vec<String>,
+    },
     /// Internal runtime dispatch: runs a package's hook commands for one
     /// hook event (ADR-033). Harness integrations emit invocations of this
     /// exact form into managed hook configuration; it is not for
@@ -224,24 +224,6 @@ enum PluginAction {
     },
 }
 
-#[derive(Debug, Subcommand)]
-enum HarnessAction {
-    /// List detected harnesses and their setup state.
-    List {
-        #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
-        format: OutputFormat,
-    },
-    /// Inspect one harness's detection/setup/provisioning detail.
-    Inspect {
-        name: String,
-        #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
-        format: OutputFormat,
-    },
-    /// Provision this harness — identical to root `uze setup <name>`; this
-    /// is the namespaced spelling, not a second implementation.
-    Setup { name: Option<String> },
-}
-
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum OutputFormat {
     Text,
@@ -282,14 +264,19 @@ fn main() {
         shim::run(&name);
     }
 
-    // Check for --help flag and render custom colored help. This is the
-    // one thing still special-cased ahead of `clap` — it only changes how
-    // help is *rendered*, not what argument dispatches where, so it does
-    // not reintroduce the parallel-grammar problem the project shorthand
-    // used to have (see `docs/adr/019-...md`).
+    // Help is presentation-only, but every public command routes through the
+    // same renderer before Clap can emit its unstyled generated help.
     let args: Vec<String> = std::env::args().collect();
-    if args.len() == 2 && (args[1] == "--help" || args[1] == "-h") {
-        print_colored_help();
+    if args.iter().skip(1).any(|argument| argument == "-help") {
+        Cli::command()
+            .error(
+                ErrorKind::UnknownArgument,
+                "`-help` is not supported; use `help`, `--help`, or `-h`",
+            )
+            .exit();
+    }
+    if let Some(topic) = help_topic(&args[1..]) {
+        print_help(topic);
         return;
     }
 
@@ -299,13 +286,110 @@ fn main() {
     }
 }
 
-fn print_colored_help() {
-    let cyan = "\x1b[36m";
-    let green = "\x1b[32m";
-    let reset = "\x1b[0m";
-    let bold = "\x1b[1m";
-    let muted = "\x1b[2m";
+#[derive(Clone, Copy)]
+enum HelpTopic {
+    Root,
+    Install,
+    Remove,
+    Status,
+    Context,
+    Market,
+    Plugin,
+    Setup,
+    Doctor,
+}
 
+fn help_topic(arguments: &[String]) -> Option<HelpTopic> {
+    let (path, requested) = match arguments {
+        [command] if command == "help" || command == "--help" || command == "-h" => (&[][..], true),
+        [command, path @ ..] if command == "help" && path.len() <= 1 => (path, true),
+        [path @ .., command] if command == "help" || command == "--help" || command == "-h" => {
+            (path, true)
+        }
+        _ => (&[][..], false),
+    };
+    if !requested {
+        return None;
+    }
+    match path {
+        [] => Some(HelpTopic::Root),
+        [command, ..] if command == "install" => Some(HelpTopic::Install),
+        [command, ..] if command == "remove" => Some(HelpTopic::Remove),
+        [command, ..] if command == "status" => Some(HelpTopic::Status),
+        [command, ..] if command == "context" => Some(HelpTopic::Context),
+        [command, ..] if command == "market" => Some(HelpTopic::Market),
+        [command, ..] if command == "plugin" => Some(HelpTopic::Plugin),
+        [command, ..] if command == "setup" => Some(HelpTopic::Setup),
+        [command, ..] if command == "doctor" => Some(HelpTopic::Doctor),
+        _ => None,
+    }
+}
+
+fn print_help(topic: HelpTopic) {
+    match topic {
+        HelpTopic::Root => print_root_help(),
+        HelpTopic::Install => print_command_help(
+            "UZE install",
+            "Install this project's environment from agents.lock.",
+            "uze install [path] [--trust]",
+            &[],
+        ),
+        HelpTopic::Remove => print_command_help(
+            "UZE remove",
+            "Remove a plugin from this project without touching the machine store.",
+            "uze remove <plugin>",
+            &[],
+        ),
+        HelpTopic::Status => print_command_help(
+            "UZE status",
+            "Show this project's environment readiness.",
+            "uze status [path]",
+            &[],
+        ),
+        HelpTopic::Context => print_command_help(
+            "UZE context",
+            "Inspect and reconcile this project's AGENTS.md context.",
+            "uze context <command>",
+            &[
+                ("inspect", "Read the current context without writing"),
+                ("plan", "Preview reconciliation without writing"),
+                ("reconcile", "Apply the project context plan"),
+            ],
+        ),
+        HelpTopic::Market => print_command_help(
+            "UZE market",
+            "Manage marketplace sources installed on this machine.",
+            "uze market <command>",
+            &[
+                ("add <source>", "Register a marketplace source"),
+                ("list", "List registered marketplaces"),
+                ("inspect <name>", "Show a marketplace's details"),
+                ("remove <name>", "Remove a marketplace source"),
+            ],
+        ),
+        HelpTopic::Plugin => print_command_help(
+            "UZE plugin",
+            "Manage plugins installed on this machine.",
+            "uze plugin <command>",
+            &[
+                ("install <name@market>", "Install a plugin"),
+                ("list", "List installed plugins"),
+                ("inspect <name>", "Show plugin delivery details"),
+                ("update <name>", "Update an installed plugin"),
+                ("remove <name>", "Remove a plugin from this machine"),
+            ],
+        ),
+        HelpTopic::Setup => print_setup_help(),
+        HelpTopic::Doctor => print_command_help(
+            "UZE doctor",
+            "Run machine diagnostics for the UZE store and integrations.",
+            "uze doctor",
+            &[],
+        ),
+    }
+}
+
+fn print_root_help() {
     let version = env!("CARGO_PKG_VERSION");
     let desc = "Agent environment manager";
     // Center within the commands block width (indent 2 + cmd 12 + gap 2 + longest desc ~44 = 60)
@@ -319,63 +403,113 @@ fn print_colored_help() {
             format!("{}{}", " ".repeat(left), s)
         }
     };
-    println!("{}", center(&format!("{}UZE{}", bold, reset)));
-    println!("{}", center(&format!("{}v{}{}", muted, version, reset)));
-    println!("{}", center(&format!("{}{}{}", muted, desc, reset)));
+    println!("{}", progress::title(center("UZE")));
+    println!("{}", progress::label(center(&format!("v{version}"))));
+    println!("{}", progress::label(center(desc)));
     println!();
-    println!("{}Usage:{}", muted, reset);
+    println!("{}", progress::section("Usage"));
     println!("  uze <plugin>@<market>");
     println!("  uze <command> [options]");
     println!();
-    println!("{}Project:{}", muted, reset);
-    // tabular: command column is 12 wide, then two spaces, then description
-    const W: usize = 12;
-    let row = |cmd: &str, desc: &str, color: &str| {
-        let pad = " ".repeat(W - cmd.len());
-        format!("  {}{}{}{}  {}", color, cmd, reset, pad, desc)
-    };
-    println!(
-        "{}",
-        row(
-            "install",
-            "Install this project's environment from agents.lock",
-            cyan
-        )
-    );
-    println!(
-        "{}",
-        row("remove", "Remove a plugin from this project", cyan)
-    );
-    println!(
-        "{}",
-        row("status", "Show this project's environment status", cyan)
-    );
-    println!(
-        "{}",
-        row("context", "Manage this project's AGENTS.md context", cyan)
-    );
+    // One shared table across both groups: they're both plain command
+    // lists, so they must land in the same gutter even though they're
+    // printed under separate headings.
+    let [project_rows, machine_rows] = progress::aligned_groups(vec![
+        vec![
+            vec![
+                progress::accent("install"),
+                "Install this project's environment from agents.lock".to_owned(),
+            ],
+            vec![
+                progress::accent("remove"),
+                "Remove a plugin from this project".to_owned(),
+            ],
+            vec![
+                progress::accent("status"),
+                "Show this project's environment status".to_owned(),
+            ],
+            vec![
+                progress::accent("context"),
+                "Manage this project's AGENTS.md context".to_owned(),
+            ],
+        ],
+        vec![
+            vec![
+                progress::accent("market"),
+                "Manage marketplace sources".to_owned(),
+            ],
+            vec![
+                progress::accent("plugin"),
+                "Manage plugins installed on this machine".to_owned(),
+            ],
+            vec![
+                progress::accent("setup"),
+                "Provision or inspect harness integrations".to_owned(),
+            ],
+            vec![progress::accent("doctor"), "Run diagnostics".to_owned()],
+        ],
+    ])
+    .try_into()
+    .expect("aligned_groups preserves the number of groups passed in");
+    println!("{}", progress::section("Project:"));
+    println!("{project_rows}");
     println!();
-    println!("{}Machine:{}", muted, reset);
-    println!("{}", row("market", "Manage marketplace sources", cyan));
-    println!(
-        "{}",
-        row("plugin", "Manage plugins installed on this machine", cyan)
-    );
-    println!(
-        "{}",
-        row("harness", "Manage agent harness integrations", cyan)
-    );
-    println!("{}", row("doctor", "Run diagnostics", cyan));
-    println!("{}", row("setup", "Set up harness integrations", cyan));
+    println!("{}", progress::section("Machine:"));
+    println!("{machine_rows}");
     println!();
-    println!("{}Options:{}", muted, reset);
-    const OW: usize = 14;
-    let opt_row = |opt: &str, desc: &str| {
-        let pad = " ".repeat(OW - opt.len());
-        format!("  {}{}{}{}  {}", green, opt, reset, pad, desc)
-    };
-    println!("{}", opt_row("-h, --help", "Print help"));
-    println!("{}", opt_row("-V, --version", "Print version"));
+    println!("{}", progress::section("Options"));
+    println!(
+        "{}",
+        progress::aligned_rows(vec![
+            vec![
+                progress::success_text("-h, --help"),
+                "Print help".to_owned(),
+            ],
+            vec![
+                progress::success_text("-V, --version"),
+                "Print version".to_owned(),
+            ],
+        ])
+    );
+}
+
+fn print_command_help(title: &str, description: &str, usage: &str, commands: &[(&str, &str)]) {
+    println!("{}", progress::title(title));
+    println!("{}", progress::label(description));
+    println!();
+    println!("{}", progress::section("Usage"));
+    println!("  {usage}");
+    if !commands.is_empty() {
+        println!();
+        println!("{}", progress::section("Commands"));
+        println!(
+            "{}",
+            progress::aligned_rows(
+                commands
+                    .iter()
+                    .map(|(command, description)| vec![
+                        progress::accent(command),
+                        description.to_string()
+                    ])
+                    .collect()
+            )
+        );
+    }
+    println!();
+    println!("{}", progress::section("Options"));
+    println!(
+        "{}",
+        progress::aligned_rows(vec![
+            vec![
+                progress::success_text("help, --help, -h"),
+                "Show this help".to_owned(),
+            ],
+            vec![
+                progress::success_text("--verbose"),
+                "Show delivery evidence".to_owned(),
+            ],
+        ])
+    );
 }
 
 fn run(cli: Cli) -> Result<()> {
@@ -580,11 +714,20 @@ fn run(cli: Cli) -> Result<()> {
                         spinner.finish_and_clear();
                         match format {
                             OutputFormat::Text => {
-                                progress::success(&format!(
-                                    "Installed plugin: {}",
-                                    report.plugin.id
-                                ));
-                                println!("  Store path: {}", report.plugin.store_path.display());
+                                println!(
+                                    "{}",
+                                    progress::report_title(
+                                        "Plugin installed",
+                                        Some(&report.plugin.id)
+                                    )
+                                );
+                                println!(
+                                    "{}",
+                                    progress::key_value(
+                                        "Store path",
+                                        report.plugin.store_path.display().to_string()
+                                    )
+                                );
                                 print!("{}", render_add_report(&report, verbose, &app));
                                 for publication in &report.publications {
                                     if let Some(error) = &publication.error {
@@ -609,16 +752,33 @@ fn run(cli: Cli) -> Result<()> {
                 let plugins = app.list_plugins()?;
                 match format {
                     OutputFormat::Text => {
-                        println!("Plugins");
-                        for plugin in plugins {
-                            if plugin.active_name == plugin.id {
-                                println!("{}  {} capabilities", plugin.id, plugin.capability_count);
-                            } else {
-                                println!(
-                                    "{}  (origin: {})  {} capabilities",
-                                    plugin.active_name, plugin.id, plugin.capability_count
-                                );
-                            }
+                        println!(
+                            "{}",
+                            progress::report_title("Plugins", Some("Installed on this machine"))
+                        );
+                        if plugins.is_empty() {
+                            println!("  No plugins installed");
+                        } else {
+                            println!(
+                                "{}",
+                                progress::aligned_rows(
+                                    plugins
+                                        .iter()
+                                        .map(|plugin| {
+                                            let origin = if plugin.active_name == plugin.id {
+                                                String::new()
+                                            } else {
+                                                progress::label(format!("origin: {}", plugin.id))
+                                            };
+                                            vec![
+                                                progress::title(&plugin.active_name),
+                                                origin,
+                                                format!("{} capabilities", plugin.capability_count),
+                                            ]
+                                        })
+                                        .collect()
+                                )
+                            );
                         }
                     }
                     OutputFormat::Json => print_json(&plugins),
@@ -651,23 +811,6 @@ fn run(cli: Cli) -> Result<()> {
                 }
             }
         },
-        Command::Harness { action } => match action {
-            HarnessAction::List { format } => {
-                let harnesses = app.harness_list();
-                match format {
-                    OutputFormat::Text => print!("{}", render_harness_list(&harnesses)),
-                    OutputFormat::Json => print_json(&harnesses),
-                }
-            }
-            HarnessAction::Inspect { name, format } => {
-                let harness = app.harness_inspect(&name)?;
-                match format {
-                    OutputFormat::Text => print!("{}", render_harness_detail(&harness)),
-                    OutputFormat::Json => print_json(&harness),
-                }
-            }
-            HarnessAction::Setup { name } => run_setup(&app, &home, name.as_deref(), verbose)?,
-        },
         Command::Doctor { format } => {
             let spinner = progress::spinner("Running diagnostics...");
             let report = app.doctor();
@@ -677,7 +820,7 @@ fn run(cli: Cli) -> Result<()> {
                 OutputFormat::Json => print_json(&report),
             }
         }
-        Command::Setup { harness } => run_setup(&app, &home, harness.as_deref(), verbose)?,
+        Command::Setup { arguments } => run_setup_command(&app, &home, &arguments, verbose)?,
         Command::External(args) => run_shorthand(&app, args, verbose)?,
         Command::HookExec {
             adapter,
@@ -769,11 +912,77 @@ fn run_hook_exec(
     Ok(rendered.exit_code)
 }
 
-/// `uze setup [harness]` and `uze harness setup [name]` are the same
-/// operation under two spellings — see
-/// `specs/harness-namespace/spec.md`'s "Namespaced and root setup are
-/// equivalent" scenario. One function, two call sites, so they cannot
-/// silently drift apart.
+fn run_setup_command(
+    app: &UzeApplication,
+    home: &UzeHome,
+    arguments: &[String],
+    verbose: bool,
+) -> Result<()> {
+    match arguments {
+        [] => run_setup(app, home, arguments, verbose),
+        [command] if command == "list" => {
+            print!("{}", render_harness_list(&app.harness_list()));
+            Ok(())
+        }
+        [command, name] if command == "inspect" => {
+            print!("{}", render_harness_detail(&app.harness_inspect(name)?));
+            Ok(())
+        }
+        [command] if command == "inspect" => {
+            setup_usage_error("`uze setup inspect` requires a harness name")
+        }
+        [command] if command == "help" => {
+            print_setup_help();
+            Ok(())
+        }
+        [command, ..] if command == "list" || command == "inspect" || command == "help" => {
+            setup_usage_error(
+                "use `uze setup list`, `uze setup inspect <harness>`, or `uze setup <harness>...`",
+            )
+        }
+        harnesses => run_setup(app, home, harnesses, verbose),
+    }
+}
+
+fn setup_usage_error(message: &str) -> ! {
+    Cli::command()
+        .error(ErrorKind::InvalidValue, message)
+        .exit()
+}
+
+fn print_setup_help() {
+    println!("{}", progress::title("UZE setup"));
+    println!(
+        "{}",
+        progress::label("Provision and inspect machine harness integrations.")
+    );
+    println!();
+    println!("{}", progress::section("Usage"));
+    println!("  uze setup");
+    println!("  uze setup <harness>...");
+    println!("  uze setup list");
+    println!("  uze setup inspect <harness>");
+    println!();
+    println!("{}", progress::section("Options"));
+    println!(
+        "{}",
+        progress::aligned_rows(vec![
+            vec![
+                progress::success_text("help, --help, -h"),
+                "Show this help".to_owned(),
+            ],
+            vec![
+                progress::success_text("--verbose"),
+                "Show delivery evidence".to_owned(),
+            ],
+        ])
+    );
+}
+
+/// `uze setup` is the single machine-level harness surface. With no
+/// arguments it provisions every registered harness; with one or more ids it
+/// provisions exactly those ids. `list` and `inspect` remain read-only views
+/// under the same verb, so users do not need to learn a redundant namespace.
 ///
 /// Progress contract: `setup` runs harnesses **sequentially
 /// in registration order**, one opaque container per harness. The vendor
@@ -783,16 +992,16 @@ fn run_hook_exec(
 fn run_setup(
     app: &UzeApplication,
     home: &UzeHome,
-    harness: Option<&str>,
+    harnesses: &[String],
     verbose: bool,
 ) -> Result<()> {
-    let targets: Vec<String> = match harness {
-        Some(name) => vec![name.to_owned()],
-        None => app
-            .harness_list()
+    let targets: Vec<String> = if harnesses.is_empty() {
+        app.harness_list()
             .into_iter()
             .map(|h| h.integration)
-            .collect(),
+            .collect()
+    } else {
+        harnesses.to_vec()
     };
     if targets.is_empty() {
         println!("No harnesses registered");
@@ -823,6 +1032,8 @@ fn run_setup(
     let logs_dir = home.state_dir().join("logs");
     let _ = std::fs::create_dir_all(&logs_dir);
     let mut had_warning = false;
+    let mut shell_path_hints = Vec::new();
+    let mut shell_path_shim_names = Vec::new();
 
     for (idx, id) in targets.iter().enumerate() {
         let step = idx + 1;
@@ -895,15 +1106,18 @@ fn run_setup(
                 }
                 println!("{}", summary);
                 if let Some(shim) = &result.runtime_shim {
-                    println!(
-                        "  ↳ shim: {} (remove symlink to disable)",
-                        shim.shim_path.display().to_string().dim()
-                    );
+                    println!("  ↳ shim: {}", shim.shim_path.display().to_string().dim());
                     if let Some(rc) = &shim.rc_file_updated {
                         println!("    added to PATH in {}", rc.display().to_string().cyan());
                     }
                     if let Some(hint) = &shim.path_hint {
-                        println!("    → {}", hint.dim());
+                        shell_path_hints.push(hint.clone());
+                        if let Some(name) = shim.shim_path.file_name().and_then(|n| n.to_str()) {
+                            let name = name.to_owned();
+                            if !shell_path_shim_names.contains(&name) {
+                                shell_path_shim_names.push(name);
+                            }
+                        }
                     }
                 }
                 if let Some(err) = &result.attach_error {
@@ -1004,6 +1218,14 @@ fn run_setup(
             }
         }
     }
+    if let Some(command) = shell_path_reload_command(&shell_path_hints) {
+        println!("\nShell PATH was updated. Run this in the current terminal:");
+        println!("  {}", command.cyan().bold());
+        println!("Then verify:");
+        for name in &shell_path_shim_names {
+            println!("  {}", format!("which {}", name).cyan().bold());
+        }
+    }
     if had_warning {
         if is_tty {
             eprintln!(
@@ -1026,6 +1248,29 @@ fn run_setup(
         println!("\nSetup completed — all {} harness(es) ready.", total);
     }
     Ok(())
+}
+
+fn shell_path_reload_command(hints: &[String]) -> Option<&str> {
+    let hint = hints.first()?;
+    Some(
+        hint.strip_prefix("open a new terminal, or run: ")
+            .unwrap_or(hint),
+    )
+}
+
+#[cfg(test)]
+mod setup_output_tests {
+    use super::shell_path_reload_command;
+
+    #[test]
+    fn shell_reload_command_is_deduplicated_for_many_harnesses() {
+        let hints = vec![
+            "open a new terminal, or run: source ~/.zshrc".to_owned(),
+            "open a new terminal, or run: source ~/.zshrc".to_owned(),
+            "open a new terminal, or run: source ~/.zshrc".to_owned(),
+        ];
+        assert_eq!(shell_path_reload_command(&hints), Some("source ~/.zshrc"));
+    }
 }
 
 fn chrono_stamp() -> String {
@@ -1204,8 +1449,17 @@ fn run_shorthand(app: &UzeApplication, args: Vec<String>, verbose: bool) -> Resu
 
     match shorthand.format {
         OutputFormat::Text => {
-            println!("Added plugin to project: {plugin}@{marketplace}");
-            println!("Store path: {}", report.plugin.store_path.display());
+            println!(
+                "{}",
+                progress::report_title(
+                    "Added to project",
+                    Some(&format!("{plugin}@{marketplace}"))
+                )
+            );
+            println!(
+                "{}",
+                progress::key_value("Store path", report.plugin.store_path.display().to_string())
+            );
             print!(
                 "{}",
                 render_add_report(&report, verbose || shorthand.verbose, app)
@@ -1241,8 +1495,6 @@ struct PromptingAuthority;
 
 impl uze::trust::TrustAuthority for PromptingAuthority {
     fn authorize(&self, request: &uze::trust::TrustRequest) -> uze::trust::TrustOutcome {
-        use std::io::Write;
-
         println!();
         if request.previously_trusted {
             println!(
@@ -1265,15 +1517,15 @@ impl uze::trust::TrustAuthority for PromptingAuthority {
                 capability.arguments.join(" ")
             );
         }
-        print!("\nTrust and install? [y/N] ");
-        let _ = std::io::stdout().flush();
-        let mut answer = String::new();
-        if std::io::stdin().read_line(&mut answer).is_err() {
-            return uze::trust::TrustOutcome::Unavailable;
-        }
-        match answer.trim() {
-            "y" | "Y" | "yes" => uze::trust::TrustOutcome::Granted,
-            _ => uze::trust::TrustOutcome::Denied,
+        println!();
+        match dialoguer::Confirm::new()
+            .with_prompt("Trust and install?")
+            .default(false)
+            .interact()
+        {
+            Ok(true) => uze::trust::TrustOutcome::Granted,
+            Ok(false) => uze::trust::TrustOutcome::Denied,
+            Err(_) => uze::trust::TrustOutcome::Unavailable,
         }
     }
 }
@@ -1311,33 +1563,33 @@ impl uze::naming::NameCollisionAuthority for PromptingCollisionAuthority {
         &self,
         request: &uze::naming::NameCollisionRequest,
     ) -> uze::naming::NameCollisionResolution {
-        use std::io::Write;
-
         println!();
         println!(
             "`{}` is already active as `{}` — installing `{}` under the same name would silently \
              shadow it in every harness.",
             request.name, request.existing, request.requested
         );
-        print!(
-            "\n[k]eep existing (default), [r]eplace it, or [a]lias this install to a new name? "
-        );
-        let _ = std::io::stdout().flush();
-        let mut answer = String::new();
-        if std::io::stdin().read_line(&mut answer).is_err() {
-            return uze::naming::NameCollisionResolution::Abort;
-        }
-        match answer.trim() {
-            "r" | "R" | "replace" => uze::naming::NameCollisionResolution::Replace,
-            "a" | "A" | "alias" => {
-                print!("New local name: ");
-                let _ = std::io::stdout().flush();
-                let mut alias = String::new();
-                if std::io::stdin().read_line(&mut alias).is_err() || alias.trim().is_empty() {
-                    return uze::naming::NameCollisionResolution::Abort;
+        println!();
+        let choice = dialoguer::Select::new()
+            .with_prompt("How should this be resolved?")
+            .items(&[
+                "Keep existing (default)",
+                "Replace it",
+                "Alias this install to a new name",
+            ])
+            .default(0)
+            .interact_opt();
+        match choice {
+            Ok(Some(1)) => uze::naming::NameCollisionResolution::Replace,
+            Ok(Some(2)) => match dialoguer::Input::<String>::new()
+                .with_prompt("New local name")
+                .interact_text()
+            {
+                Ok(alias) if !alias.trim().is_empty() => {
+                    uze::naming::NameCollisionResolution::Alias(alias.trim().to_owned())
                 }
-                uze::naming::NameCollisionResolution::Alias(alias.trim().to_owned())
-            }
+                _ => uze::naming::NameCollisionResolution::Abort,
+            },
             _ => uze::naming::NameCollisionResolution::Abort,
         }
     }
@@ -1351,14 +1603,16 @@ fn print_json(value: &impl serde::Serialize) {
 }
 
 fn render_inspection(report: &PluginInspection) -> String {
-    let mut text = format!(
-        "{}\n\nSource\n  {}\n\nCapabilities\n",
-        report.plugin.id, report.plugin.source
-    );
+    let mut text = progress::report_title(&report.plugin.id, Some("Plugin inspection"));
+    text.push('\n');
+    text.push_str(&progress::report_section("Source"));
+    text.push_str(&format!("  {}\n\n", report.plugin.source));
+    text.push_str(&progress::report_section("Capabilities"));
     for capability in &report.capabilities {
         text.push_str(&format!("  {:?}  {}\n", capability.kind, capability.name));
     }
-    text.push_str("\nDelivery\n");
+    text.push('\n');
+    text.push_str(&progress::report_section("Delivery"));
     for delivery in &report.deliveries {
         let package = delivery
             .package_plan
@@ -1381,8 +1635,10 @@ fn render_inspection(report: &PluginInspection) -> String {
         }
     }
     let state = &report.managed_state;
+    text.push('\n');
+    text.push_str(&progress::report_section("Managed state"));
     text.push_str(&format!(
-        "\nManaged state\n  {} matched\n  {} missing\n  {} drifted\n  {} conflicts\n  {} blocked\n",
+        "  {} matched\n  {} missing\n  {} drifted\n  {} conflicts\n  {} blocked\n",
         state.matched, state.missing, state.drifted, state.conflicts, state.blocked
     ));
     if let Some(error) = &state.ledger_error {
@@ -1398,7 +1654,7 @@ fn render_inspection(report: &PluginInspection) -> String {
 /// human label (`app.integration_label`) — the report's own keys stay the
 /// stable ids, which is what `--format json` emits.
 fn render_add_report(report: &AddPluginReport, verbose: bool, app: &UzeApplication) -> String {
-    let mut out = String::new();
+    let mut out = format!("\n{}", progress::report_section("Delivery"));
     let attachments: BTreeMap<&str, &PathBuf> = report
         .attachments
         .iter()
@@ -1439,49 +1695,84 @@ fn render_add_report(report: &AddPluginReport, verbose: bool, app: &UzeApplicati
 fn render_update(report: &uze::application::UpdatePluginReport) -> String {
     use uze::application::UpdatePluginReport;
     match report {
-        UpdatePluginReport::Updated { plugin, .. } => format!("Updated {}\n", plugin.id),
-        UpdatePluginReport::Blocked { report, plan } => format!(
-            "Update blocked for {}: {:?}\n{}\n",
-            report.package_id,
-            plan,
-            render_managed_state(
-                &report
-                    .receipts
-                    .iter()
-                    .map(|receipt| receipt.inspection.state)
-                    .collect::<Vec<_>>(),
-            )
+        UpdatePluginReport::Updated { plugin, .. } => format!(
+            "{} Updated {}\n",
+            progress::success_icon(),
+            progress::title(&plugin.id)
         ),
+        UpdatePluginReport::Blocked { report, plan } => {
+            let mut text = progress::report_title("Update blocked", Some(&report.package_id));
+            text.push_str(&format!(
+                "{}\n\n",
+                progress::warning_text(format!("Plan: {plan:?}"))
+            ));
+            text.push_str(&progress::report_section("Managed state"));
+            text.push_str(&format!(
+                "{}\n",
+                render_managed_state(
+                    &report
+                        .receipts
+                        .iter()
+                        .map(|receipt| receipt.inspection.state)
+                        .collect::<Vec<_>>(),
+                )
+            ));
+            text
+        }
     }
 }
 
 fn render_remove(report: &RemovePluginReport) -> String {
     match report {
         RemovePluginReport::AlreadyAbsent { plugin } => {
-            format!("No UZE state remains for {plugin}\n")
-        }
-        RemovePluginReport::Removed { plugin, .. } => format!("Removed {plugin}\n"),
-        RemovePluginReport::Blocked { report, plan } => format!(
-            "Removal blocked for {}: {:?}\n{}\n",
-            report.package_id,
-            plan,
-            render_managed_state(
-                &report
-                    .receipts
-                    .iter()
-                    .map(|receipt| receipt.inspection.state)
-                    .collect::<Vec<_>>(),
+            format!(
+                "{} No UZE state remains for {plugin}\n",
+                progress::success_icon()
             )
-        ),
+        }
+        RemovePluginReport::Removed { plugin, .. } => {
+            format!(
+                "{} Removed {}\n",
+                progress::success_icon(),
+                progress::title(plugin)
+            )
+        }
+        RemovePluginReport::Blocked { report, plan } => {
+            let mut text = progress::report_title("Removal blocked", Some(&report.package_id));
+            text.push_str(&format!(
+                "{}\n\n",
+                progress::warning_text(format!("Plan: {plan:?}"))
+            ));
+            text.push_str(&progress::report_section("Managed state"));
+            text.push_str(&format!(
+                "{}\n",
+                render_managed_state(
+                    &report
+                        .receipts
+                        .iter()
+                        .map(|receipt| receipt.inspection.state)
+                        .collect::<Vec<_>>(),
+                )
+            ));
+            text
+        }
     }
 }
 
 fn render_install(report: &uze::application::InstallReport) -> String {
     use uze::application::InstallReport;
     match report {
-        InstallReport::NoChanges => "Project environment is already up to date.\n".to_owned(),
+        InstallReport::NoChanges => format!(
+            "{} Project environment is already up to date.\n",
+            progress::success_icon()
+        ),
         InstallReport::Installed { plugins } => {
-            let mut text = format!("Installed {} plugin(s):\n", plugins.len());
+            let mut text = progress::report_title("Installed environment", None);
+            text.push_str(&format!(
+                "{} plugin(s) are ready\n\n",
+                progress::success_text(plugins.len().to_string())
+            ));
+            text.push_str(&progress::report_section("Packages"));
             for plugin in plugins {
                 text.push_str(&format!("  {plugin}\n"));
             }
@@ -1491,17 +1782,36 @@ fn render_install(report: &uze::application::InstallReport) -> String {
 }
 
 fn render_doctor(report: &DoctorReport) -> String {
-    let mut text = format!(
-        "UZE Home\n  {}\n\nStore\n  {:?}\n\nPlugins\n  {} installed\n\nHarnesses\n",
-        report.uze_home.display(),
-        report.store,
-        report.plugins.len()
-    );
+    let mut text =
+        progress::report_title("Environment diagnostics", Some("Read-only health report"));
+    text.push('\n');
+    text.push_str(&progress::report_section("UZE Home"));
+    text.push_str(&format!("  {}\n\n", report.uze_home.display()));
+    text.push_str(&progress::report_section("Store"));
+    text.push_str(&format!("  {:?}\n\n", report.store));
+    text.push_str(&progress::report_section("Plugins"));
+    text.push_str(&format!("  {} installed\n\n", report.plugins.len()));
+    text.push_str(&progress::report_section("Harnesses"));
+    text.push_str(&progress::aligned_rows(
+        report
+            .harnesses
+            .iter()
+            .map(|harness| {
+                let detected = if harness.detection.present {
+                    progress::success_text("detected")
+                } else {
+                    progress::label("not detected")
+                };
+                vec![
+                    progress::title(&harness.display_name),
+                    detected,
+                    progress::label(format!("setup: {}", harness.setup)),
+                ]
+            })
+            .collect(),
+    ));
+    text.push('\n');
     for harness in &report.harnesses {
-        text.push_str(&format!(
-            "  {}  detected: {}  setup: {}\n",
-            harness.display_name, harness.detection.present, harness.setup
-        ));
         if let Some(provisioning) = &harness.provisioning {
             text.push_str(&format!(
                 "    provisioning: {:?} via {} ({:?})\n",
@@ -1512,7 +1822,8 @@ fn render_doctor(report: &DoctorReport) -> String {
             text.push_str(&format!("    package view not published: {reason}\n"));
         }
     }
-    text.push_str("\nAttachments\n");
+    text.push('\n');
+    text.push_str(&progress::report_section("Attachments"));
     for attachment in &report.attachments {
         let state = &attachment.state;
         text.push_str(&format!(
@@ -1578,42 +1889,79 @@ fn harness_label_of(report: &DoctorReport, id: &str) -> String {
 }
 
 fn render_market_list(marketplaces: &[MarketplaceSummary]) -> String {
-    let mut text = "Marketplaces\n".to_owned();
-    for market in marketplaces {
-        text.push_str(&format!(
-            "{}  {}  {}\n",
-            market.name, market.source, market.plugin_count
-        ));
+    let mut text = progress::report_title("Marketplaces", Some("Machine-scoped sources"));
+    text.push('\n');
+    if marketplaces.is_empty() {
+        text.push_str("  No marketplaces registered\n");
+        return text;
     }
+    text.push_str(&progress::aligned_rows(
+        marketplaces
+            .iter()
+            .map(|market| {
+                vec![
+                    progress::title(&market.name),
+                    progress::label(&market.source),
+                    format!("{} plugins", market.plugin_count),
+                ]
+            })
+            .collect(),
+    ));
+    text.push('\n');
     text
 }
 
 fn render_market_detail(detail: &MarketplaceSummary) -> String {
-    format!(
-        "{}\n\nSource\n  {}\n\nPlugins\n  {}\n",
-        detail.name, detail.source, detail.plugin_count
-    )
+    let mut text = progress::report_title(&detail.name, Some("Marketplace"));
+    text.push('\n');
+    text.push_str(&progress::report_section("Source"));
+    text.push_str(&format!("  {}\n\n", detail.source));
+    text.push_str(&progress::report_section("Plugins"));
+    text.push_str(&format!("  {}\n", detail.plugin_count));
+    text
 }
 
 fn render_harness_list(harnesses: &[HarnessHealth]) -> String {
-    let mut text = "Harnesses\n".to_owned();
-    for harness in harnesses {
-        text.push_str(&format!(
-            "  {}  detected: {}  setup: {}\n",
-            harness.display_name, harness.detection.present, harness.setup
-        ));
+    let mut text = progress::report_title("Harnesses", Some("Machine integration health"));
+    text.push('\n');
+    if harnesses.is_empty() {
+        text.push_str("  No harnesses registered\n");
+        return text;
     }
+    text.push_str(&progress::aligned_rows(
+        harnesses
+            .iter()
+            .map(|harness| {
+                let detected = if harness.detection.present {
+                    progress::success_text("detected")
+                } else {
+                    progress::label("not detected")
+                };
+                vec![
+                    progress::title(&harness.display_name),
+                    detected,
+                    progress::label(format!("setup: {}", harness.setup)),
+                ]
+            })
+            .collect(),
+    ));
     text
 }
 
 fn render_harness_detail(harness: &HarnessHealth) -> String {
-    let mut text = format!(
-        "{}\n\nDetection\n  present: {}\n  version: {}\n\nSetup\n  {}\n",
-        harness.display_name,
-        harness.detection.present,
-        harness.detection.version.as_deref().unwrap_or("unknown"),
-        harness.setup
-    );
+    let mut text = progress::report_title(&harness.display_name, Some("Harness integration"));
+    text.push('\n');
+    text.push_str(&progress::report_section("Detection"));
+    text.push_str(&format!(
+        "{}\n{}\n\n",
+        progress::key_value("present", harness.detection.present.to_string()),
+        progress::key_value(
+            "version",
+            harness.detection.version.as_deref().unwrap_or("unknown")
+        )
+    ));
+    text.push_str(&progress::report_section("Setup"));
+    text.push_str(&format!("  {}\n", harness.setup));
     if let Some(provisioning) = &harness.provisioning {
         text.push_str(&format!(
             "\nProvisioning\n  {:?} via {} ({:?})\n",
@@ -1624,53 +1972,151 @@ fn render_harness_detail(harness: &HarnessHealth) -> String {
 }
 
 fn render_status(report: &StatusReport) -> String {
-    let mut text = format!(
-        "Project\n  Context       {}\n\nHarnesses\n",
-        render_portability(&report.portability)
-    );
+    let (headline, detail) = status_headline(report);
+    let mut text =
+        progress::report_title("Project status", Some(&report.root.display().to_string()));
+    text.push('\n');
+    text.push_str(&format!("{} {}\n", status_icon(report), headline));
+    text.push_str(&format!("  {}\n", progress::label(detail)));
+
+    text.push('\n');
+    text.push_str(&progress::report_section("Context coverage"));
     for harness in &report.harnesses {
-        let delivery = match &harness.delivery {
-            HarnessContextDelivery::Native => "native".to_owned(),
-            HarnessContextDelivery::NotDetected => "not installed".to_owned(),
-            HarnessContextDelivery::Bridge { state, .. } => format!("bridged ({state:?})"),
-        };
-        text.push_str(&format!("  {}  {delivery}\n", harness.display_name));
+        text.push_str(&render_status_harness(harness));
     }
+
+    text.push('\n');
+    text.push_str(&progress::report_section("Project environment"));
     text.push_str(&format!(
-        "\nPackages\n  {} installed\n  {} contributing here\n",
-        report.packages_installed, report.packages_contributing_here
+        "{}\n{}\n",
+        progress::key_value(
+            "Installed",
+            format!("{} on this machine", report.packages_installed)
+        ),
+        progress::key_value(
+            "In this project",
+            format!("{} contributing", report.packages_contributing_here)
+        )
     ));
     text.push_str(&render_project_lock_status(&report.project_lock));
-    if report.issues.is_empty() {
-        text.push_str("\nHealth\n  no issues\n");
-    } else {
-        text.push_str("\nHealth\n");
-        for issue in &report.issues {
-            text.push_str(&format!("  {issue}\n"));
+
+    let next_step = status_next_step(report);
+    if !report.issues.is_empty() || next_step.is_some() {
+        text.push('\n');
+        text.push_str(&progress::report_section("Next step"));
+        if let Some(next_step) = next_step {
+            text.push_str(&format!("  {}\n", progress::accent(next_step)));
         }
+        for issue in &report.issues {
+            text.push_str(&format!("  {} {}\n", progress::warning_icon(), issue));
+        }
+    } else {
+        text.push('\n');
+        text.push_str(&progress::report_section("Health"));
+        text.push_str(&format!("  {} no issues\n", progress::success_icon()));
     }
     text
+}
+
+fn status_headline(report: &StatusReport) -> (String, &'static str) {
+    if !report.issues.is_empty() {
+        return (
+            progress::warning_heading("Needs attention"),
+            "Some project context needs reconciliation.",
+        );
+    }
+    if locked_plugin_count(&report.project_lock) > 0 {
+        return (
+            progress::warning_heading("Environment not installed"),
+            "The project lock lists packages that are missing locally.",
+        );
+    }
+    match &report.portability {
+        Portability::Portable => (
+            progress::success_heading("Ready"),
+            "Project context is available to every detected harness.",
+        ),
+        _ => (
+            progress::warning_heading("Needs attention"),
+            "Review the project context before starting work.",
+        ),
+    }
+}
+
+fn status_icon(report: &StatusReport) -> String {
+    if report.issues.is_empty() && locked_plugin_count(&report.project_lock) == 0 {
+        progress::success_icon()
+    } else {
+        progress::warning_icon()
+    }
+}
+
+fn render_status_harness(harness: &uze::application::HarnessContextStatus) -> String {
+    let state = match &harness.delivery {
+        HarnessContextDelivery::Native => progress::success_text("Native"),
+        HarnessContextDelivery::NotDetected => progress::label("Not installed"),
+        HarnessContextDelivery::Bridge {
+            state: uze::integration::AttachmentState::Matched,
+            ..
+        } => progress::success_text("Bridged"),
+        HarnessContextDelivery::Bridge { needed: false, .. } => progress::label("Not needed"),
+        HarnessContextDelivery::Bridge { .. } => progress::warning_text("Needs reconciliation"),
+    };
+    format!("  {:<16} {state}\n", harness.display_name)
+}
+
+fn locked_plugin_count(status: &uze::application::ProjectLockStatus) -> usize {
+    match status {
+        uze::application::ProjectLockStatus::Present { plugins } => {
+            plugins.iter().filter(|plugin| !plugin.installed).count()
+        }
+        _ => 0,
+    }
+}
+
+fn status_next_step(report: &StatusReport) -> Option<&'static str> {
+    if locked_plugin_count(&report.project_lock) > 0 {
+        Some("Run `uze install` to install the locked project packages.")
+    } else if !report.issues.is_empty() || !matches!(report.portability, Portability::Portable) {
+        Some("Run `uze context reconcile` to repair project context.")
+    } else {
+        None
+    }
 }
 
 fn render_project_lock_status(status: &uze::application::ProjectLockStatus) -> String {
     use uze::application::ProjectLockStatus;
     match status {
-        ProjectLockStatus::Absent => String::new(),
+        ProjectLockStatus::Absent => {
+            let mut text = format!("\n{}", progress::report_section("Project lock"));
+            text.push_str(&format!(
+                "  {}\n",
+                progress::label("No agents.lock in this project.")
+            ));
+            text
+        }
         ProjectLockStatus::Malformed { reason } => {
-            format!("\nProject lock\n  agents.lock is malformed: {reason}\n")
+            format!(
+                "\n{}  {} agents.lock is malformed: {reason}\n",
+                progress::report_section("Project lock"),
+                progress::warning_icon()
+            )
         }
         ProjectLockStatus::Present { plugins } => {
-            let mut text = "\nProject lock\n".to_owned();
+            let mut text = format!("\n{}", progress::report_section("Project lock"));
             if plugins.is_empty() {
-                text.push_str("  agents.lock has no plugins\n");
+                text.push_str(&format!(
+                    "  {}\n",
+                    progress::label("agents.lock has no plugins.")
+                ));
             }
             for plugin in plugins {
                 let state = if plugin.installed {
-                    "installed"
+                    progress::success_text("installed")
                 } else {
-                    "missing (run `uze install`)"
+                    progress::warning_text("missing (run `uze install`)")
                 };
-                text.push_str(&format!("  {}  {state}\n", plugin.plugin));
+                text.push_str(&format!("  {:<16} {state}\n", plugin.plugin));
             }
             text
         }
@@ -1678,7 +2124,12 @@ fn render_project_lock_status(status: &uze::application::ProjectLockStatus) -> S
 }
 
 fn render_context_status(status: &ProjectContextStatus) -> String {
-    let mut text = format!("Context for {}\n\nSources\n", status.canonical.display());
+    let mut text = progress::report_title(
+        "Project context",
+        Some(&status.canonical.display().to_string()),
+    );
+    text.push('\n');
+    text.push_str(&progress::report_section("Sources"));
     for source in &status.sources {
         if !source.exists {
             text.push_str(&format!("  {}  absent\n", source.file_name));
@@ -1695,7 +2146,8 @@ fn render_context_status(status: &ProjectContextStatus) -> String {
         || !status.orphaned_regions.is_empty()
         || !status.malformed_regions.is_empty()
     {
-        text.push_str("\nContributions\n");
+        text.push('\n');
+        text.push_str(&progress::report_section("Contributions"));
         for contribution in &status.contributions {
             text.push_str(&format!(
                 "  {}  {:?}\n",
@@ -1713,7 +2165,8 @@ fn render_context_status(status: &ProjectContextStatus) -> String {
             ));
         }
     }
-    text.push_str("\nHarnesses\n");
+    text.push('\n');
+    text.push_str(&progress::report_section("Harnesses"));
     for harness in &status.harnesses {
         let delivery = match &harness.delivery {
             HarnessContextDelivery::Native => "native".to_owned(),
@@ -1775,7 +2228,10 @@ fn render_action(action: &PlannedAction) -> String {
 /// Bridge rows show the human label (`app.integration_label`); the plan's
 /// own keys stay the stable ids — which is what `--format json` emits.
 fn render_context_plan(plan: &ContextPlan, app: &UzeApplication) -> String {
-    let mut text = format!("Plan for {}\n", plan.agents_md.display());
+    let mut text =
+        progress::report_title("Context plan", Some(&plan.agents_md.display().to_string()));
+    text.push('\n');
+    text.push_str(&progress::report_section("Changes"));
     for contribution in &plan.agents_md_plan.contributions {
         text.push_str(&format!(
             "  {}  {}\n",
@@ -1813,7 +2269,12 @@ fn render_context_reconciliation(
     report: &ContextReconciliationReport,
     app: &UzeApplication,
 ) -> String {
-    let mut text = format!("Reconciled {}\n\n", report.agents_md.display());
+    let mut text = progress::report_title(
+        "Context reconciled",
+        Some(&report.agents_md.display().to_string()),
+    );
+    text.push('\n');
+    text.push_str(&progress::report_section("Packages"));
     for package in &report.packages {
         text.push_str(&format!("  {}  {:?}\n", package.package_id, package.state));
     }

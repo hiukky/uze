@@ -291,6 +291,10 @@ impl IntegrationPort for CodexIntegration {
         "Codex"
     }
 
+    fn description(&self) -> &'static str {
+        "OpenAI's coding agent CLI"
+    }
+
     fn invocation_prefix(&self) -> &'static str {
         "$"
     }

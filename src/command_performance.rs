@@ -80,15 +80,6 @@ pub const CLASSIFICATION: &[(&str, PerformanceClass)] = &[
             "re-resolves an installed plugin's source, a network operation for a non-local source",
         ),
     ),
-    // Machine scope: harness.
-    ("harness list", PerformanceClass::Budgeted),
-    ("harness inspect", PerformanceClass::Budgeted),
-    (
-        "harness setup",
-        PerformanceClass::JustifiedSlow(
-            "provisions or updates harness executables through each harness's official installer",
-        ),
-    ),
     // Diagnostics.
     ("doctor", PerformanceClass::Budgeted),
     (
@@ -167,14 +158,6 @@ pub const BUDGETED_COMMAND_TESTS: &[(&str, &str)] = &[
     ),
     (
         "plugin remove",
-        "uze_application::application::tests::cache_warm_detect_cached_meets_the_performance_budget",
-    ),
-    (
-        "harness list",
-        "uze_application::application::tests::cache_warm_detect_cached_meets_the_performance_budget",
-    ),
-    (
-        "harness inspect",
         "uze_application::application::tests::cache_warm_detect_cached_meets_the_performance_budget",
     ),
 ];

@@ -142,18 +142,24 @@ fn install_project_environment_reproduces_a_lock_on_a_fresh_machine() {
         .unwrap();
 
     // "Machine B": same UZE_HOME layout path but a fresh Store directory,
-    // simulating `git clone` + `uze install` with no prior `uze add`.
+    // simulating `git clone` + `uze install` with no prior `uze add`. This
+    // machine deliberately never calls `add_marketplace_to_global_registry`
+    // — that is the whole point: `resolve_locked_plugin_source` reads the
+    // marketplace source straight from the lock to *acquire* the plugin,
+    // regardless of the global registry's state, but `market list` must
+    // still end up knowing about it afterward (see the assertion below) —
+    // a fresh machine that only ever ran `uze install` must be able to
+    // `uze market inspect test-market` same as one that ran `market add`
+    // by hand first.
     let fresh_home = fx.uze_home.parent().unwrap().join("home-fresh-machine");
     let fresh_app = UzeApplication::new(UzeHome::at(&fresh_home), Vec::new());
-    // The fresh machine also needs the marketplace registered globally --
-    // matching what `uze marketplace add` would do before `uze install`
-    // (the lock's own marketplace source is used to *acquire*, but
-    // `resolve_locked_plugin_source` reads it straight from the lock, not
-    // the global registry, so this isn't even required for install to
-    // work -- asserted implicitly by not calling it here).
     assert!(
         fresh_app.list_plugins().unwrap().is_empty(),
         "fresh machine starts with nothing installed"
+    );
+    assert!(
+        fresh_app.marketplace_list().unwrap().len() == 1,
+        "fresh machine starts with only the embedded uze-official marketplace"
     );
 
     let report = fresh_app
@@ -173,6 +179,34 @@ fn install_project_environment_reproduces_a_lock_on_a_fresh_machine() {
             .any(|p| p.id == "flow@test-market"),
         "install_project_environment must actually install the missing plugin"
     );
+    assert!(
+        fresh_app
+            .marketplace_list()
+            .unwrap()
+            .iter()
+            .any(|m| m.name == "test-market"),
+        "install_project_environment must register the locked marketplace globally too — \
+         otherwise the plugin is installed but orphaned from `market list`/`market inspect`, \
+         and every UI that cross-references the marketplace catalog (Marketplace tab, Plugins \
+         tab badges/descriptions) shows it as unrecognized"
+    );
+
+    // `project_lock_status` must recognize the plugin as installed by its
+    // marketplace-qualified id ("flow@test-market"), the same id
+    // `installed_plugin_ids`/`missing_locked_plugins` compare against —
+    // never by the lock's bare plugin-name key ("flow"), which never
+    // matches a real Store id and would make `uze status` report a
+    // marketplace-sourced plugin as permanently missing even right after a
+    // successful install.
+    match fresh_app.project_lock_status(&fx.project_root) {
+        ProjectLockStatus::Present { plugins } => {
+            assert!(
+                plugins.iter().any(|p| p.plugin == "flow" && p.installed),
+                "expected `flow` to be reported installed, got {plugins:?}"
+            );
+        }
+        other => panic!("expected Present, got {other:?}"),
+    }
 }
 
 #[test]

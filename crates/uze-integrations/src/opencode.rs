@@ -97,6 +97,10 @@ impl IntegrationPort for OpenCodeIntegration {
         "OpenCode"
     }
 
+    fn description(&self) -> &'static str {
+        "Open-source, model-agnostic coding agent CLI"
+    }
+
     fn invocation_prefix(&self) -> &'static str {
         "/"
     }

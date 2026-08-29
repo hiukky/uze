@@ -19,12 +19,13 @@ impl UzeApplication {
         if !project_root.is_dir() {
             return Err(UzeError::NotDirectory(project_root.to_path_buf()));
         }
-        let canonical = project_root
-            .canonicalize()
-            .map_err(|source| UzeError::Read {
-                path: project_root.to_path_buf(),
-                source,
-            })?;
+        // Resolves upward the same way `add_project_plugin`/
+        // `install_project_environment` do (nearest `agents.lock`/
+        // `AGENTS.md`/`.git`) — a caller pointing at a subdirectory of a
+        // project must land on the same root every other project-scoped
+        // command finds, not silently inspect the subdirectory itself as
+        // if it had no context at all.
+        let canonical = uze_core::project_root::resolve_project_root(project_root)?;
 
         let agents_md_path = canonical.join("AGENTS.md");
         let contributions_input = self.instruction_contributions()?;
@@ -147,7 +148,8 @@ impl UzeApplication {
         if !project_root.is_dir() {
             return Err(UzeError::NotDirectory(project_root.to_path_buf()));
         }
-        let agents_md = project_root.join("AGENTS.md");
+        let canonical = uze_core::project_root::resolve_project_root(project_root)?;
+        let agents_md = canonical.join("AGENTS.md");
         let contributions = self.instruction_contributions()?;
         let agents_md_plan = instruction_context::plan_agents_md(&agents_md, &contributions);
 
@@ -173,7 +175,7 @@ impl UzeApplication {
                 if !self.detect_cached(integration.as_ref()).present {
                     return None;
                 }
-                let bridge_file = project_root.join(file_name);
+                let bridge_file = canonical.join(file_name);
                 let state = text_region::inspect(
                     &bridge_file,
                     INSTRUCTION_BRIDGE_IDENTITY,
@@ -202,7 +204,8 @@ impl UzeApplication {
         if !project_root.is_dir() {
             return Err(UzeError::NotDirectory(project_root.to_path_buf()));
         }
-        let agents_md = project_root.join("AGENTS.md");
+        let canonical = uze_core::project_root::resolve_project_root(project_root)?;
+        let agents_md = canonical.join("AGENTS.md");
         let contributions = self.instruction_contributions()?;
         let agents_md_report = instruction_context::reconcile_agents_md(&agents_md, &contributions);
 
@@ -216,7 +219,7 @@ impl UzeApplication {
                 if !self.detect_cached(integration.as_ref()).present {
                     return None;
                 }
-                let bridge_file = project_root.join(file_name);
+                let bridge_file = canonical.join(file_name);
                 let inspection = text_region::reconcile(
                     &bridge_file,
                     INSTRUCTION_BRIDGE_IDENTITY,
