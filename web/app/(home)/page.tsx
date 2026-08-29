@@ -55,7 +55,7 @@ export default function HomePage() {
   return (
     <main className="flex flex-col items-center flex-1 px-6 font-sans">
       {/* Hero */}
-      <section className="grid md:grid-cols-[1fr_1fr] gap-12 md:gap-8 items-center content-center w-full max-w-4xl min-h-[calc(100dvh_-_var(--fd-banner-height,0px)_-_3.5rem)] py-20 md:py-28">
+      <section className="grid md:grid-cols-[1fr_1fr] gap-12 md:gap-8 items-center content-center w-full max-w-6xl min-h-[calc(100dvh_-_3.5rem)] py-20 md:py-28">
         <div>
           <div className="inline-flex items-center gap-2 text-[11px] font-mono uppercase tracking-[0.2em] text-muted">
             <span className="size-1.5 bg-accent" aria-hidden />
@@ -90,11 +90,14 @@ export default function HomePage() {
           </div>
         </div>
 
-        {/* Signature diagram — one canonical package, four native surfaces */}
-        <div className="flex flex-col gap-2">
+        {/* Signature diagram — one canonical package, four native surfaces.
+            min-width keeps the embedded SVG-unit labels legible instead of
+            shrinking past readable size on narrow viewports; the wrapper
+            scrolls horizontally there instead, same as a wide table. */}
+        <div className="flex flex-col gap-2 overflow-x-auto">
           <svg
             viewBox="0 0 480 300"
-            className="uze-diagram w-full h-auto max-w-md mx-auto"
+            className="uze-diagram h-auto w-full min-w-[420px] max-w-xl mx-auto"
             role="img"
             aria-label="uze routes one plugin package to Claude Code, Codex, OpenCode, and Antigravity, each through its own native surface"
           >

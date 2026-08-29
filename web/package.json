@@ -9,7 +9,6 @@
     "types:check": "next typegen && tsc --noEmit"
   },
   "dependencies": {
-    "@xyflow/react": "^12.11.5",
     "cnfast": "^0.1.0",
     "fumadocs-core": "^16.15.4",
     "fumadocs-mdx": "^15.4.0",

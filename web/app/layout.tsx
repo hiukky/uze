@@ -34,12 +34,16 @@ export default function Layout({ children }: LayoutProps<'/'>) {
       suppressHydrationWarning
     >
       <body className="flex flex-col min-h-screen font-sans">
-        <Banner id="alpha-2026-08" className="font-mono text-xs tracking-tight">
+        <Banner
+          id="alpha-2026-08"
+          height="auto"
+          className="relative flex-wrap gap-x-2 gap-y-1 px-12 py-2.5 text-center font-mono text-xs tracking-tight"
+        >
           <span className="text-accent">Alpha</span>
           <span className="mx-2 text-fd-muted-foreground">·</span>
           APIs and harness behavior are still changing
-          <span className="mx-2 text-fd-muted-foreground">·</span>
-          no packaged installer yet, build from source
+          <span className="mx-2 hidden text-fd-muted-foreground sm:inline">·</span>
+          <span className="hidden sm:inline">no packaged installer yet, build from source</span>
         </Banner>
         <RootProvider>{children}</RootProvider>
       </body>

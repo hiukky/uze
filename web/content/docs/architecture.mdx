@@ -3,14 +3,21 @@ title: Architecture
 description: The one-way dependency layering and the invariants that hold it together
 ---
 
-import { ArchitectureDiagram } from '@/components/architecture-diagram';
-
 # Architecture
 
 Dependency direction is one-way and enforced by tests, not just convention. Both orchestration and
 the vendor adapters depend on the neutral core — never the reverse:
 
-<ArchitectureDiagram />
+```mermaid
+graph TD
+    CLI["CLI / TUI<br/>src/"]
+    APP["uze-application<br/>orchestration: add · install · remove · update · context"]
+    CORE["uze-core<br/>Package · Store · Engine · Router · IntegrationPort"]
+    INTEG["uze-integrations<br/>Claude Code · Codex · OpenCode · Antigravity"]
+
+    CLI --> APP --> CORE
+    INTEG --> CORE
+```
 
 - **`uze-core` never names a harness.** No Claude, Codex, OpenCode, or Antigravity string in
   production code — enforced by `core_never_names_a_vendor_harness`; the same neutrality holds for
@@ -27,18 +34,18 @@ the vendor adapters depend on the neutral core — never the reverse:
 <Files>
   <Folder name="crates" defaultOpen>
     <Folder name="uze-core — harness-agnostic domain" />
-    <Folder name="uze-application — product facade, lifecycle orchestration" />
-    <Folder name="uze-integrations — one module per harness + shared helpers" />
+    <Folder name="uze-application — orchestration" />
+    <Folder name="uze-integrations — vendor adapters" />
   </Folder>
-  <Folder name="src — CLI parsing, TUI, runtime PATH shim, performance taxonomy" />
-  <Folder name="tests — domain-organized integration suites (L0–L4)" />
-  <Folder name="conformance — Harness Conformance Lab (Python, disposable Docker)" />
+  <Folder name="src — CLI, TUI, runtime shim" />
+  <Folder name="tests — integration suites (L0–L4)" />
+  <Folder name="conformance — Harness Conformance Lab" />
   <Folder name="docs" defaultOpen>
-    <Folder name="adr — architecture decision records (numbered)" />
-    <Folder name="architecture — invariants the architecture holds today" />
+    <Folder name="adr — decision records" />
+    <Folder name="architecture — current invariants" />
   </Folder>
-  <Folder name="openspec — spec-driven change proposals" />
-  <Folder name="plugins/uze — the official /uze Skill (this repo is uze's marketplace)" />
+  <Folder name="openspec — change proposals" />
+  <Folder name="plugins/uze — the official /uze Skill" />
 </Files>
 
 ## Invariants
