@@ -79,7 +79,7 @@ fn claude_generated_package_covers_a_user_only_skill_and_materializes_the_marker
     // The generated envelope materializes the marker file, not a symlink of
     // the raw canonical bytes.
     let generated_root = home.state_dir().join("attachments/claude/generated");
-    let generated_skill = generated_root.join("flow/skills/review/SKILL.md");
+    let generated_skill = generated_root.join("flow@local/skills/review/SKILL.md");
     assert!(
         generated_skill.is_file(),
         "materialized SKILL.md expected at {}",

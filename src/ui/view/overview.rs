@@ -411,8 +411,7 @@ pub(crate) fn portability_label(portability: &Portability) -> &'static str {
 pub(crate) fn portability_style(status: Option<&ProjectContextStatus>) -> Style {
     match status.map(|s| &s.portability) {
         Some(Portability::Portable) => Style::default().fg(SUCCESS),
-        Some(Portability::NoContext) => Style::default().fg(MUTED),
+        None | Some(Portability::NoContext) => Style::default().fg(MUTED),
         Some(_) => Style::default().fg(WARNING),
-        None => Style::default().fg(MUTED),
     }
 }

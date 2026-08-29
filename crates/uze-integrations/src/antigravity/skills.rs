@@ -67,17 +67,23 @@ pub(super) fn generated_skill_dir(uze_home: &UzeHome, resource: &Resource) -> Pa
 /// Antigravity's physical invocation label — the UZE semantic label
 /// (`flow:review`) verbatim. `agy plugin validate` accepts `:` in skill
 /// names (verified against 1.1.19).
-pub(super) fn antigravity_invocation_label(resource: &Resource) -> Option<String> {
-    use uze_core::integration::qualified_capability_name;
-    let uze_core::project::ResourceOrigin::Package { id, .. } = &resource.origin else {
-        return None;
-    };
+pub(super) fn antigravity_invocation_label(
+    uze_home: &UzeHome,
+    resource: &Resource,
+) -> Option<String> {
+    use uze_core::integration::{active_plugin_name, qualified_capability_name};
+    let active_name = active_plugin_name(uze_home, resource)?;
     let logical = resource.logical_capability_name()?;
-    Some(qualified_capability_name(id.as_str(), &logical))
+    Some(qualified_capability_name(&active_name, &logical))
 }
 
-pub(super) fn antigravity_skill_exposure_name_candidates(resource: &Resource) -> Vec<String> {
-    antigravity_invocation_label(resource).into_iter().collect()
+pub(super) fn antigravity_skill_exposure_name_candidates(
+    uze_home: &UzeHome,
+    resource: &Resource,
+) -> Vec<String> {
+    antigravity_invocation_label(uze_home, resource)
+        .into_iter()
+        .collect()
 }
 
 /// Deterministically materializes (or refreshes) one Skill's delivered
@@ -102,7 +108,7 @@ pub(super) fn materialize_generated_skill(
         path: dir.clone(),
         source,
     })?;
-    let label = antigravity_invocation_label(resource).unwrap_or_else(|| resource.name());
+    let label = antigravity_invocation_label(uze_home, resource).unwrap_or_else(|| resource.name());
     let (description, body) = parse_skill_body(&resource.capability.payload);
     let mut skill = String::from("---\n");
     skill.push_str(&format!("name: {label}\n"));

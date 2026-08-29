@@ -1449,7 +1449,13 @@ mod tests {
         // Re-attach restores the exact entry beside the drifted user copy;
         // removal then deletes exactly the UZE entry and leaves the user's
         // edited copy untouched.
-        merge_event_entry(&config, HookEvent::PreToolUse, &entry, &[expected.clone()]).unwrap();
+        merge_event_entry(
+            &config,
+            HookEvent::PreToolUse,
+            &entry,
+            std::slice::from_ref(&expected),
+        )
+        .unwrap();
         assert_eq!(
             remove_event_entry(&config, HookEvent::PreToolUse, &expected)
                 .unwrap()
@@ -1609,6 +1615,7 @@ mod tests {
         assert_eq!(agy_post.stdout.as_deref(), Some(&b"{}"[..]));
     }
 
+    #[test]
     fn stop_payloads_carry_no_tool_and_transform_survives_rendering() {
         let stop = serde_json::json!({"stop_hook_active": true});
         let input = claude_normalize_input(&stop, HookEvent::Stop).unwrap();

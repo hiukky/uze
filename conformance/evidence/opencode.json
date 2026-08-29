@@ -1,14 +1,162 @@
 {
  "harness": "opencode",
- "harness_version": "opencode2 v0.0.0-beta-18414",
+ "harness_version": "opencode2 v0.0.0-beta-18684",
  "uze_version": "uze 0.0.0-alpha.14",
- "fixture_revision": "12ac1ee16f95bcb3",
- "recorded_at": "2026-08-28T11:29:17-0300",
+ "fixture_revision": "3908e0a5833e8f1f",
+ "recorded_at": "2026-08-29T02:50:38-0300",
  "gate": {
-  "passed": 28,
-  "total": 28,
-  "known_adapted": 6,
+  "passed": 3,
+  "total": 24,
+  "known_adapted": 2,
   "retry": 0,
-  "failures": []
+  "failures": [
+   {
+    "check": "tui-reached-prompt",
+    "suite": "tui > tui-reached-prompt",
+    "adjudication": "asserted",
+    "detail": "",
+    "gate_reason": null
+   },
+   {
+    "check": "skills-surface-in-tui",
+    "suite": "tui > skills-surface-in-tui",
+    "adjudication": "asserted",
+    "detail": "/skills opens the skill management surface",
+    "gate_reason": null
+   },
+   {
+    "check": "qualified-uze-skills-visible",
+    "suite": "tui > qualified-uze-skills-visible",
+    "adjudication": "asserted",
+    "detail": "/skills\r ",
+    "gate_reason": null
+   },
+   {
+    "check": "mcp-server-connected-in-tui",
+    "suite": "tui > mcp-server-connected-in-tui",
+    "adjudication": "asserted",
+    "detail": "^[^[/mcps\r ",
+    "gate_reason": null
+   },
+   {
+    "check": "deterministic-response-rendered",
+    "suite": "tui > deterministic-response-rendered",
+    "adjudication": "asserted",
+    "detail": "^[^[hi\r ",
+    "gate_reason": null
+   },
+   {
+    "check": "provider-request-captured",
+    "suite": "tui > provider-request-captured",
+    "adjudication": "asserted",
+    "detail": "no provider request captured",
+    "gate_reason": null
+   },
+   {
+    "check": "toolcall-turn-settled",
+    "suite": "mcp.toolcall > toolcall-turn-settled",
+    "adjudication": "asserted",
+    "detail": "use the uze_conformance mcp tool\r ",
+    "gate_reason": null
+   },
+   {
+    "check": "mcp-tool-model-exposed",
+    "suite": "mcp.toolcall > mcp-tool-model-exposed",
+    "adjudication": "unregistered_adapt",
+    "detail": "ADAPTED on this channel: the delivered server connects and the runtime enumerates its tool (`mcp connected ... tools=1` server-log evidence; /mcps shows `Connected \u2713`), but the model request carries only the agent's built-in tools \u2014 MCP tools are not injected into the request on this channel, so a scripted round-trip cannot start from a model-visible definition. Recorded, never fabricated.",
+    "gate_reason": "unregistered ADAPTED result \u2014 investigate the behavior and record it, or register the entry in conformance/evidence/expected.json"
+   },
+   {
+    "check": "mcp-tool-executed-in-tui",
+    "suite": "mcp.toolcall > mcp-tool-executed-in-tui",
+    "adjudication": "asserted",
+    "detail": "no MCP tool result observed in the provider requests",
+    "gate_reason": null
+   },
+   {
+    "check": "hooks-tui-reached-prompt",
+    "suite": "hooks > deny > hooks-tui-reached-prompt",
+    "adjudication": "asserted",
+    "detail": "",
+    "gate_reason": null
+   },
+   {
+    "check": "hooks-deny-turn-settled",
+    "suite": "hooks > deny > hooks-deny-turn-settled",
+    "adjudication": "asserted",
+    "detail": "",
+    "gate_reason": null
+   },
+   {
+    "check": "hooks-deny-marker-absent-blocked by protect-env",
+    "suite": "hooks > deny > hooks-deny-marker-absent-blocked by protect-env",
+    "adjudication": "asserted",
+    "detail": "turn never settled \u2014 absence not proven (`blocked by protect-env` never reached the conversation)",
+    "gate_reason": null
+   },
+   {
+    "check": "hooks-deny-tool-executed",
+    "suite": "hooks > deny > hooks-deny-tool-executed",
+    "adjudication": "asserted",
+    "detail": "no tool result observed",
+    "gate_reason": null
+   },
+   {
+    "check": "hooks-tui-reached-prompt",
+    "suite": "hooks > allow > hooks-tui-reached-prompt",
+    "adjudication": "asserted",
+    "detail": "",
+    "gate_reason": null
+   },
+   {
+    "check": "hooks-allow-turn-settled",
+    "suite": "hooks > allow > hooks-allow-turn-settled",
+    "adjudication": "asserted",
+    "detail": "",
+    "gate_reason": null
+   },
+   {
+    "check": "hooks-allow-marker-absent-blocked by protect-env",
+    "suite": "hooks > allow > hooks-allow-marker-absent-blocked by protect-env",
+    "adjudication": "asserted",
+    "detail": "turn never settled \u2014 absence not proven (`blocked by protect-env` never reached the conversation)",
+    "gate_reason": null
+   },
+   {
+    "check": "hooks-allow-tool-executed",
+    "suite": "hooks > allow > hooks-allow-tool-executed",
+    "adjudication": "asserted",
+    "detail": "no tool result observed",
+    "gate_reason": null
+   },
+   {
+    "check": "hooks-tui-reached-prompt",
+    "suite": "hooks > order > hooks-tui-reached-prompt",
+    "adjudication": "asserted",
+    "detail": "",
+    "gate_reason": null
+   },
+   {
+    "check": "hooks-order-turn-settled",
+    "suite": "hooks > order > hooks-order-turn-settled",
+    "adjudication": "asserted",
+    "detail": "",
+    "gate_reason": null
+   },
+   {
+    "check": "hooks-order-marker-absent-second-handler-ran",
+    "suite": "hooks > order > hooks-order-marker-absent-second-handler-ran",
+    "adjudication": "asserted",
+    "detail": "turn never settled \u2014 absence not proven (`second-handler-ran` never reached the conversation)",
+    "gate_reason": null
+   },
+   {
+    "check": "hooks-order-tool-executed",
+    "suite": "hooks > order > hooks-order-tool-executed",
+    "adjudication": "asserted",
+    "detail": "no tool result observed",
+    "gate_reason": null
+   }
+  ]
  }
 }

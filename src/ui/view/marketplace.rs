@@ -382,7 +382,7 @@ fn plugin_line<'a>(
         for span in &mut spans {
             span.style = span.style.bg(SELECTED_BG);
         }
-        let used: usize = spans.iter().map(|s| s.width()).sum();
+        let used: usize = spans.iter().map(Span::width).sum();
         let gap = (row_width as usize).saturating_sub(used);
         spans.push(Span::styled(
             " ".repeat(gap),

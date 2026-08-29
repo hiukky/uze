@@ -101,7 +101,7 @@ pub(super) fn materialize_generated_skill(
         .path
         .parent()
         .expect("SKILL.md has a parent");
-    let label = codex_invocation_label(resource).unwrap_or_else(|| resource.name());
+    let label = codex_invocation_label(uze_home, resource).unwrap_or_else(|| resource.name());
     crate::shared::skill::write_superset_skill_wrapper(
         &dir,
         canonical_dir,
@@ -116,21 +116,24 @@ pub(super) fn materialize_generated_skill(
 /// (`flow:review`) verbatim: Codex accepted colon-named skills in
 /// codex-cli 0.149.0 (verified: `flow:review` appears in the model-visible
 /// list exactly as named, and the explicit-only policy keeps working).
-pub(super) fn codex_invocation_label(resource: &Resource) -> Option<String> {
-    use uze_core::integration::qualified_capability_name;
-    let uze_core::project::ResourceOrigin::Package { id, .. } = &resource.origin else {
-        return None;
-    };
+pub(super) fn codex_invocation_label(uze_home: &UzeHome, resource: &Resource) -> Option<String> {
+    use uze_core::integration::{active_plugin_name, qualified_capability_name};
+    let active_name = active_plugin_name(uze_home, resource)?;
     let logical = resource.logical_capability_name()?;
-    Some(qualified_capability_name(id.as_str(), &logical))
+    Some(qualified_capability_name(&active_name, &logical))
 }
 
 /// Codex derives a skill's user-facing identity from its `name` (verified:
 /// frontmatter `name` wins over the directory name), so the single
 /// candidate is the stable namespaced label itself — no bare alias, no
 /// collision-dependent qualification (ADR-026).
-pub(super) fn codex_skill_exposure_name_candidates(resource: &Resource) -> Vec<String> {
-    codex_invocation_label(resource).into_iter().collect()
+pub(super) fn codex_skill_exposure_name_candidates(
+    uze_home: &UzeHome,
+    resource: &Resource,
+) -> Vec<String> {
+    codex_invocation_label(uze_home, resource)
+        .into_iter()
+        .collect()
 }
 
 impl CodexIntegration {
@@ -224,7 +227,7 @@ impl CodexIntegration {
             .path
             .parent()
             .expect("SKILL.md has a parent");
-        let label = codex_skill_exposure_name_candidates(resource)
+        let label = codex_skill_exposure_name_candidates(&self.uze_home, resource)
             .first()
             .cloned()
             .unwrap_or_else(|| {

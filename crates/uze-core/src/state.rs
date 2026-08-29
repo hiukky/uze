@@ -98,8 +98,7 @@ pub fn is_installed(home: &UzeHome, harness: &str) -> bool {
     get(home, harness)
         .ok()
         .flatten()
-        .map(|record| record.installed)
-        .unwrap_or(false)
+        .is_some_and(|record| record.installed)
 }
 
 /// Idempotently records or refreshes one harness's integration state. A

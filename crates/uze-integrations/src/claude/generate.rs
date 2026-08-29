@@ -146,7 +146,7 @@ fn generated_manifest_document(package: &StoredPackage) -> serde_json::Value {
 
     let mut document = serde_json::json!({
         "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
-        "name": package.id.native_plugin_name(),
+        "name": package.active_name.as_str(),
         "version": version,
         "description": description,
     });
@@ -269,87 +269,101 @@ fn materialize_generated_skills(package: &StoredPackage, envelope_dir: &Path) ->
             },
         )?;
         if policy.is_default() {
-            // Byte-preserving: the whole canonical directory is referenced.
-            match fs::symlink_metadata(&target_dir) {
-                Ok(metadata) if metadata.file_type().is_symlink() => {
-                    let current =
-                        fs::read_link(&target_dir).map_err(|source_error| UzeError::Read {
-                            path: target_dir.clone(),
-                            source: source_error,
-                        })?;
-                    if current != canonical_dir {
-                        fs::remove_dir_all(&target_dir).map_err(|source_error| {
-                            UzeError::Write {
-                                path: target_dir.clone(),
-                                source: source_error,
-                            }
-                        })?;
-                        symlink(canonical_dir, &target_dir)?;
-                    }
-                }
-                Ok(_) => return Err(UzeError::ManagedEntryConflict(target_dir.clone())),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    symlink(canonical_dir, &target_dir)?;
-                }
-                Err(error) => {
-                    return Err(UzeError::Read {
-                        path: target_dir.clone(),
-                        source: error,
-                    });
-                }
-            }
+            materialize_byte_preserving_skill(canonical_dir, &target_dir)?;
             continue;
         }
-        match fs::symlink_metadata(&target_dir) {
-            Ok(metadata) if metadata.file_type().is_symlink() => {
-                fs::remove_file(&target_dir).map_err(|source_error| UzeError::Write {
-                    path: target_dir.clone(),
+        materialize_wrapped_skill(canonical_dir, &target_dir, policy, &skill_name)?;
+    }
+    Ok(())
+}
+
+/// Default-policy skills reference the whole canonical directory: no wrapper
+/// is generated, so the harness sees the author's own `SKILL.md` byte for
+/// byte.
+fn materialize_byte_preserving_skill(canonical_dir: &Path, target_dir: &Path) -> Result<()> {
+    match fs::symlink_metadata(target_dir) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            let current = fs::read_link(target_dir).map_err(|source_error| UzeError::Read {
+                path: target_dir.to_path_buf(),
+                source: source_error,
+            })?;
+            if current != canonical_dir {
+                fs::remove_dir_all(target_dir).map_err(|source_error| UzeError::Write {
+                    path: target_dir.to_path_buf(),
                     source: source_error,
                 })?;
-            }
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(UzeError::Read {
-                    path: target_dir.clone(),
-                    source: error,
-                });
+                symlink(canonical_dir, target_dir)?;
             }
         }
-        fs::create_dir_all(&target_dir).map_err(|source_error| UzeError::Write {
-            path: target_dir.clone(),
-            source: source_error,
-        })?;
-        let bytes = fs::read(canonical_dir.join("SKILL.md")).map_err(|error| UzeError::Read {
-            path: canonical_dir.join("SKILL.md"),
-            source: error,
-        })?;
-        let document = super::skills::claude_wrapper_skill_document(&bytes, &policy, &skill_name);
-        fs::write(target_dir.join("SKILL.md"), document).map_err(|source_error| {
-            UzeError::Write {
-                path: target_dir.join("SKILL.md"),
+        Ok(_) => return Err(UzeError::ManagedEntryConflict(target_dir.to_path_buf())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            symlink(canonical_dir, target_dir)?;
+        }
+        Err(error) => {
+            return Err(UzeError::Read {
+                path: target_dir.to_path_buf(),
+                source: error,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Non-default-policy skills get a generated wrapper `SKILL.md` (the
+/// invocation policy baked into its frontmatter); everything else in the
+/// canonical skill directory stays referenced so the wrapper never silently
+/// drops scripts/references.
+fn materialize_wrapped_skill(
+    canonical_dir: &Path,
+    target_dir: &Path,
+    policy: uze_core::skill::SkillInvocationPolicy,
+    skill_name: &str,
+) -> Result<()> {
+    match fs::symlink_metadata(target_dir) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            fs::remove_file(target_dir).map_err(|source_error| UzeError::Write {
+                path: target_dir.to_path_buf(),
                 source: source_error,
-            }
-        })?;
-        // Everything else in the canonical skill directory stays referenced:
-        // a materialized SKILL.md must not silently drop scripts/references.
-        for entry in fs::read_dir(canonical_dir).map_err(|error| UzeError::Read {
+            })?;
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(UzeError::Read {
+                path: target_dir.to_path_buf(),
+                source: error,
+            });
+        }
+    }
+    fs::create_dir_all(target_dir).map_err(|source_error| UzeError::Write {
+        path: target_dir.to_path_buf(),
+        source: source_error,
+    })?;
+    let bytes = fs::read(canonical_dir.join("SKILL.md")).map_err(|error| UzeError::Read {
+        path: canonical_dir.join("SKILL.md"),
+        source: error,
+    })?;
+    let document = super::skills::claude_wrapper_skill_document(&bytes, &policy, skill_name);
+    fs::write(target_dir.join("SKILL.md"), document).map_err(|source_error| UzeError::Write {
+        path: target_dir.join("SKILL.md"),
+        source: source_error,
+    })?;
+    for entry in fs::read_dir(canonical_dir).map_err(|error| UzeError::Read {
+        path: canonical_dir.to_path_buf(),
+        source: error,
+    })? {
+        let entry = entry.map_err(|error| UzeError::Read {
             path: canonical_dir.to_path_buf(),
             source: error,
-        })? {
-            let entry = entry.map_err(|error| UzeError::Read {
-                path: canonical_dir.to_path_buf(),
-                source: error,
-            })?;
-            let name = entry.file_name();
-            if name == "SKILL.md" {
-                continue;
-            }
-            let source = entry.path();
-            let target = target_dir.join(&name);
-            if !target.exists() && !target.is_symlink() {
-                symlink(&source, &target)?;
-            }
+        })?;
+        let name = entry.file_name();
+        if name == "SKILL.md" {
+            continue;
+        }
+        let source = entry.path();
+        let target = target_dir.join(&name);
+        if !target.exists() && !target.is_symlink() {
+            symlink(&source, &target)?;
         }
     }
     Ok(())
@@ -383,7 +397,7 @@ fn generated_catalogue_document(packages: &[StoredPackage]) -> serde_json::Value
         .map(|package| {
             let (description, version) = read_name_fields(package);
             serde_json::json!({
-                "name": package.id.native_plugin_name(),
+                "name": package.active_name.as_str(),
                 "source": format!("./{}", package.id.as_str()),
                 "description": description,
                 "version": version,
@@ -533,6 +547,7 @@ mod generated_native_tests {
             uze_core::store::PackageId::from_plugin_name("flow", &pkg_root.join("plugin.json"))
                 .unwrap();
         let pkg = StoredPackage {
+            active_name: id.plugin_name().to_owned(),
             id,
             root: pkg_root.clone(),
             manifest: pkg_root.join("plugin.json"),
@@ -667,6 +682,7 @@ mod generated_native_tests {
             uze_core::store::PackageId::from_plugin_name("mcp-only", &pkg_root.join("plugin.json"))
                 .unwrap();
         let pkg = StoredPackage {
+            active_name: id.plugin_name().to_owned(),
             id,
             root: pkg_root.clone(),
             manifest: pkg_root.join("plugin.json"),
@@ -696,6 +712,7 @@ mod generated_native_tests {
             uze_core::store::PackageId::from_plugin_name("empty", &pkg_root.join("plugin.json"))
                 .unwrap();
         let pkg = StoredPackage {
+            active_name: id.plugin_name().to_owned(),
             id,
             root: pkg_root.clone(),
             manifest: pkg_root.join("plugin.json"),
@@ -856,6 +873,7 @@ mod generated_native_tests {
             uze_core::store::PackageId::from_plugin_name("mcp-solo", &pkg_root.join("plugin.json"))
                 .unwrap();
         let pkg = StoredPackage {
+            active_name: id.plugin_name().to_owned(),
             id,
             root: pkg_root.clone(),
             manifest: pkg_root.join("plugin.json"),
@@ -956,6 +974,7 @@ mod generated_native_tests {
         )
         .unwrap();
         let pkg = StoredPackage {
+            active_name: id.plugin_name().to_owned(),
             id,
             root: pkg_root.clone(),
             manifest: pkg_root.join("plugin.json"),

@@ -382,7 +382,10 @@ fn two_packages_share_one_agents_md_and_exactly_one_bridge_per_harness() {
         .unwrap();
     let report = application.context_reconcile(&project).unwrap();
     assert_eq!(report.packages.len(), 1);
-    assert_eq!(report.packages[0].package_id, "uze-instructions-fixture-b");
+    assert_eq!(
+        report.packages[0].package_id,
+        "uze-instructions-fixture-b@local"
+    );
     assert_eq!(report.removed_orphans.len(), 1);
     let content = agents_md_content(&project);
     assert!(!content.contains("uze-instructions-fixture-a"));

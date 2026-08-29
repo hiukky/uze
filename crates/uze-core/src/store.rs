@@ -40,16 +40,8 @@ impl PackageId {
         // that vendor CLI rather than as the id itself, so it is rejected
         // here at the one chokepoint every package id is constructed
         // through — not just re-checked at each call site.
-        let valid = !name.is_empty()
-            && !name.starts_with('-')
-            && name.chars().all(|character| {
-                character.is_ascii_alphanumeric() || character == '-' || character == '_'
-            });
-        let valid_marketplace = !marketplace.is_empty()
-            && !marketplace.starts_with('-')
-            && marketplace.chars().all(|character| {
-                character.is_ascii_alphanumeric() || character == '-' || character == '_'
-            });
+        let valid = is_valid_name_component(name);
+        let valid_marketplace = is_valid_name_component(marketplace);
         if !valid_marketplace {
             return Err(UzeError::InvalidPackageName {
                 path: manifest.to_path_buf(),
@@ -86,12 +78,19 @@ impl PackageId {
             .rsplit_once('@')
             .map_or("local", |(_, marketplace)| marketplace)
     }
+}
 
-    /// A filesystem- and vendor-manifest-safe name for a generated native
-    /// marketplace. The canonical identity remains `plugin@marketplace`.
-    pub fn native_plugin_name(&self) -> String {
-        format!("{}--{}", self.marketplace(), self.plugin_name())
-    }
+/// The one charset/shape rule every plugin name, marketplace name, and
+/// local active-name alias is held to (ADR-038): a leading `-` would let a
+/// carelessly named entry be parsed as a flag by a vendor CLI that takes it
+/// as a bare positional argument, so it is rejected at every chokepoint
+/// that turns operator/manifest text into one of these tokens.
+fn is_valid_name_component(value: &str) -> bool {
+    !value.is_empty()
+        && !value.starts_with('-')
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || character == '-' || character == '_'
+        })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -102,6 +101,13 @@ pub struct StoredPackage {
     /// Where this package came from. Carried for reporting and for a later
     /// reinstall; the Store itself never reads inside it.
     pub provenance: Provenance,
+    /// The local token this plugin currently invokes under — `id.plugin_name()`
+    /// unless an install-time alias resolved a collision with another
+    /// marketplace's same-named plugin (ADR-038). This is what a harness's
+    /// generated manifest/catalog and every Skill/Command label use; `id`
+    /// remains the real, marketplace-qualified identity everywhere else
+    /// (Store paths, receipts, removal, update).
+    pub active_name: String,
 }
 
 #[derive(Clone, Debug)]
@@ -124,6 +130,15 @@ struct PackageRegistry {
 struct Registration {
     #[serde(rename = "source")]
     provenance: Provenance,
+    /// `None` means "no alias was ever chosen" — the local name defaults to
+    /// `id.plugin_name()`. A registration written before this field existed
+    /// deserializes as `None` here too (`#[serde(default)]`), which is
+    /// exactly the correct meaning for it: every pre-existing install was
+    /// implicitly active under its own bare plugin name, no migration
+    /// needed. `Some(alias)` is only ever written by an explicit `alias`
+    /// collision resolution at install time.
+    #[serde(default)]
+    active_name: Option<String>,
 }
 
 impl UzeStore {
@@ -150,11 +165,29 @@ impl UzeStore {
         self.ingest_from_marketplace(package, "local")
     }
 
-    /// Ingests a materialized plugin under the marketplace that resolved it.
+    /// Ingests a materialized plugin under the marketplace that resolved it,
+    /// active under its own bare plugin name. Fails with
+    /// `PluginNameCollision` when that name is already active under a
+    /// different marketplace-qualified identity — see
+    /// `ingest_with_active_name` for the `alias`/`replace` resolutions.
     pub fn ingest_from_marketplace(
         &self,
         package: &MaterializedPackage,
         marketplace: &str,
+    ) -> Result<StoredPackage> {
+        self.ingest_with_active_name(package, marketplace, None)
+    }
+
+    /// Ingests a materialized plugin, optionally under an explicit local
+    /// `active_name` alias rather than its own bare plugin name — the
+    /// `alias` collision resolution (ADR-038). `None` behaves exactly like
+    /// [`ingest_from_marketplace`]: the bare plugin name is both the
+    /// collision check and the name recorded.
+    pub fn ingest_with_active_name(
+        &self,
+        package: &MaterializedPackage,
+        marketplace: &str,
+        active_name: Option<&str>,
     ) -> Result<StoredPackage> {
         let source = package.root();
         let manifest = source.join("plugin.json");
@@ -177,6 +210,15 @@ impl UzeStore {
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| UzeError::MissingPackageName(manifest.clone()))?;
         let id = PackageId::from_marketplace_plugin(marketplace, name, &manifest)?;
+        let requested_active = active_name.unwrap_or(name);
+        if let Some(alias) = active_name
+            && !is_valid_name_component(alias)
+        {
+            return Err(UzeError::InvalidPackageName {
+                path: manifest.clone(),
+                name: alias.to_owned(),
+            });
+        }
 
         // Every source passes through this one check, so a local package and
         // a remote one are held to the same rule. It runs before any byte is
@@ -193,6 +235,24 @@ impl UzeStore {
                 id: id.as_str().to_owned(),
                 existing: existing.provenance.requested.display(),
                 requested: package.provenance().requested.display(),
+            });
+        }
+        // A plugin name is only reserved once actively claimed: two
+        // packages coexist fine in the Store (ADR-036, bytes never share
+        // state), but only one of them may answer to a given invocation
+        // name at a time — the other would silently shadow it in every
+        // harness (verified against real Claude Code: whichever loads
+        // first wins `/name:capability`, with zero indication the other
+        // exists). This is the one place every install path passes
+        // through, so the check cannot be bypassed by a different entry
+        // point (ADR-038).
+        if let Some(holder) = Self::active_name_holder(&registry, requested_active)
+            && holder != &id
+        {
+            return Err(UzeError::PluginNameCollision {
+                name: requested_active.to_owned(),
+                existing: holder.as_str().to_owned(),
+                requested: id.as_str().to_owned(),
             });
         }
 
@@ -223,6 +283,9 @@ impl UzeStore {
             id.clone(),
             Registration {
                 provenance: package.provenance().clone(),
+                active_name: active_name
+                    .filter(|alias| *alias != name)
+                    .map(str::to_owned),
             },
         );
         self.save_registry(&registry)?;
@@ -236,12 +299,81 @@ impl UzeStore {
             .get(id)
             .ok_or_else(|| UzeError::UnknownPackage(id.as_str().to_owned()))?;
         let root = self.home.plugin_dir(id);
+        let active_name = registration
+            .active_name
+            .clone()
+            .unwrap_or_else(|| id.plugin_name().to_owned());
         Ok(StoredPackage {
             id: id.clone(),
             manifest: root.join("plugin.json"),
             root,
             provenance: registration.provenance.clone(),
+            active_name,
         })
+    }
+
+    /// The local invocation name `id` currently answers to, without paying
+    /// for a full [`package`] resolution (no root/manifest path building).
+    /// Falls back to the bare plugin name for an id this Store does not
+    /// recognize — permissive, since this is a naming convenience read, not
+    /// an existence check; callers that need existence use [`package`].
+    pub fn active_name_for(&self, id: &PackageId) -> String {
+        self.load_registry()
+            .ok()
+            .and_then(|registry| {
+                registry
+                    .packages
+                    .get(id)
+                    .and_then(|r| r.active_name.clone())
+            })
+            .unwrap_or_else(|| id.plugin_name().to_owned())
+    }
+
+    /// The installed package currently active under local name `name`, if
+    /// any — either because it is its own bare plugin name and holds no
+    /// alias, or because an `alias` resolution explicitly claimed `name`
+    /// for it. At most one package ever holds a given active name (enforced
+    /// at ingest time), so this never needs to report ambiguity.
+    pub fn find_by_active_name(&self, name: &str) -> Result<Option<PackageId>> {
+        let registry = self.load_registry()?;
+        Ok(Self::active_name_holder(&registry, name).cloned())
+    }
+
+    fn active_name_holder<'a>(registry: &'a PackageRegistry, name: &str) -> Option<&'a PackageId> {
+        registry.packages.iter().find_map(|(id, registration)| {
+            let active = registration
+                .active_name
+                .as_deref()
+                .unwrap_or(id.plugin_name());
+            (active == name).then_some(id)
+        })
+    }
+
+    /// Re-points `id`'s local invocation name — the `alias` resolution
+    /// applied after the fact (e.g. freeing up a bare name a since-removed
+    /// package used to hold). `None` clears any alias, reverting to the
+    /// bare plugin name. Does not check for a collision against the new
+    /// name: a caller choosing to repoint an existing registration has
+    /// already made that decision (ingest-time collision checking is what
+    /// protects a *new* install from silently shadowing one already active).
+    pub fn set_active_name(&self, id: &PackageId, name: Option<&str>) -> Result<()> {
+        if let Some(alias) = name
+            && !is_valid_name_component(alias)
+        {
+            return Err(UzeError::InvalidPackageName {
+                path: self.home.plugin_dir(id).join("plugin.json"),
+                name: alias.to_owned(),
+            });
+        }
+        let mut registry = self.load_registry()?;
+        let registration = registry
+            .packages
+            .get_mut(id)
+            .ok_or_else(|| UzeError::UnknownPackage(id.as_str().to_owned()))?;
+        registration.active_name = name
+            .filter(|alias| *alias != id.plugin_name())
+            .map(str::to_owned);
+        self.save_registry(&registry)
     }
 
     pub fn registration_count(&self) -> Result<usize> {
@@ -254,6 +386,40 @@ impl UzeStore {
     /// locally installed package.
     pub fn package_ids(&self) -> Result<Vec<PackageId>> {
         Ok(self.load_registry()?.packages.into_keys().collect())
+    }
+
+    /// Removes registry entries whose backing directory is gone — a
+    /// registration that survives whatever stopped writing its bytes
+    /// (an interrupted install, manual cleanup, or an id-format change
+    /// leaving an old entry's directory unreachable under the current
+    /// `plugin_dir` formula — the exact fallout of this project's own
+    /// marketplace-qualification, which computes `plugin_dir` from
+    /// `id.marketplace()`/`id.plugin_name()` and left every
+    /// pre-qualification id's directory unreachable under it).
+    ///
+    /// A registry entry is the Store's sole claim that a package is
+    /// installed; once its directory is gone, that claim is simply false,
+    /// not merely unhealthy — so this prunes rather than reports it, the
+    /// same way a `Missing` receipt is either repaired or forgotten, never
+    /// left to keep asserting something false. Returns the ids pruned, so
+    /// a caller can also clean up anything that still references them
+    /// (receipts, project locks).
+    pub fn prune_ghost_registrations(&self) -> Result<Vec<PackageId>> {
+        let mut registry = self.load_registry()?;
+        let ghosts: Vec<PackageId> = registry
+            .packages
+            .keys()
+            .filter(|id| !self.home.plugin_dir(id).is_dir())
+            .cloned()
+            .collect();
+        if ghosts.is_empty() {
+            return Ok(ghosts);
+        }
+        for id in &ghosts {
+            registry.packages.remove(id);
+        }
+        self.save_registry(&registry)?;
+        Ok(ghosts)
     }
 
     /// Removes only UZE-owned package bytes and its registry entry. Callers
@@ -356,7 +522,7 @@ fn resolve_lexically(link: &Path, target: &Path) -> PathBuf {
     let base = if target.is_absolute() {
         PathBuf::new()
     } else {
-        link.parent().unwrap_or(Path::new("")).to_path_buf()
+        link.parent().unwrap_or_else(|| Path::new("")).to_path_buf()
     };
     let mut resolved = base;
     for component in target.components() {
@@ -386,7 +552,7 @@ fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
             path: source.to_path_buf(),
             source: source_error,
         })?;
-    entries.sort_by_key(|entry| entry.file_name());
+    entries.sort_by_key(std::fs::DirEntry::file_name);
     for entry in entries {
         let source_path = entry.path();
         let destination_path = destination.join(entry.file_name());

@@ -106,8 +106,7 @@ pub fn resolve_real_executable(names: &[&str], shims_dir: &Path) -> Option<PathB
 fn is_executable_file(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     std::fs::metadata(path)
-        .map(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
-        .unwrap_or(false)
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
 }
 
 #[cfg(not(unix))]
@@ -153,7 +152,7 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
     const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
     const PRIME: u64 = 0x0000_0100_0000_01b3;
     bytes.iter().fold(OFFSET_BASIS, |hash, &byte| {
-        (hash ^ byte as u64).wrapping_mul(PRIME)
+        (hash ^ u64::from(byte)).wrapping_mul(PRIME)
     })
 }
 

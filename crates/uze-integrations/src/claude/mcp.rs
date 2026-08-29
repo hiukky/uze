@@ -200,6 +200,11 @@ pub(super) fn inspect_claude_mcp(
 /// calling process's own environment.
 #[allow(dead_code)]
 pub fn detach_mcp_entry(executable: &Path, command_home: &Path, entry_name: &str) -> Result<()> {
+    if !is_cli_safe_token(entry_name) {
+        return Err(UzeError::ExposureUnavailable(format!(
+            "MCP server name `{entry_name}` would be parsed as a flag by `claude mcp remove`, not a name; refusing to detach."
+        )));
+    }
     let output =
         capture(executable, command_home, &["mcp", "remove", entry_name]).map_err(|error| {
             UzeError::ExposureUnavailable(format!(

@@ -12,7 +12,7 @@ impl UzeApplication {
     pub fn list_marketplaces(&self) -> Result<Vec<MarketplaceSummary>> {
         let (name, entries) = bootstrap::entries()?;
         Ok(vec![MarketplaceSummary {
-            name: name.clone(),
+            name,
             source: "embedded:uze-official".to_owned(),
             plugin_count: entries.len(),
         }])
@@ -81,10 +81,26 @@ impl UzeApplication {
         spec: &str,
         authority: &dyn TrustAuthority,
     ) -> Result<AddPluginReport> {
+        self.plugin_install_resolving(spec, authority, &uze_core::naming::NoNameCollisionAuthority)
+    }
+
+    /// `plugin_install`, with an explicit answer for a bare-plugin-name
+    /// collision with an already-active, differently-marketplaced package
+    /// (ADR-038) — see `add_plugin_resolving`.
+    pub fn plugin_install_resolving(
+        &self,
+        spec: &str,
+        authority: &dyn TrustAuthority,
+        name_authority: &dyn uze_core::naming::NameCollisionAuthority,
+    ) -> Result<AddPluginReport> {
         let (plugin_name, marketplace_name) =
             uze_core::project_lock::parse_plugin_marketplace_spec(spec)?;
         if marketplace_name == "uze-official" {
-            return self.install_from_marketplace(&plugin_name, authority);
+            return self.install_from_marketplace_resolving(
+                &plugin_name,
+                authority,
+                name_authority,
+            );
         }
         let record =
             uze_core::state::marketplace_get(&self.home, &marketplace_name)?.ok_or_else(|| {
@@ -107,6 +123,7 @@ impl UzeApplication {
             authority,
             &[],
             false,
+            name_authority,
         )?;
         uze_core::state::plugin_marketplace_record(
             &self.home,
@@ -133,7 +150,13 @@ impl UzeApplication {
 
         let (_name, official_entries) = bootstrap::entries()?;
         out.extend(official_entries.into_iter().map(|entry| {
-            let installed_package = installed.get(entry.name.as_str());
+            // `installed` is keyed by the full `plugin@marketplace` identity
+            // (ADR-036); a catalog entry's own `name` is bare, scoped to
+            // *this* marketplace listing, so the lookup must reconstruct the
+            // qualified id it would have installed under — matching by bare
+            // name alone would (and did) also match a same-named plugin
+            // installed from an entirely different marketplace.
+            let installed_package = installed.get(format!("{}@uze-official", entry.name).as_str());
             let update_available = installed_package
                 .and_then(|package| bootstrap::has_update(&entry.name, &package.root).ok());
             MarketplacePluginSummary {
@@ -152,7 +175,7 @@ impl UzeApplication {
                 continue;
             };
             out.extend(manifest.plugins.into_iter().map(|entry| {
-                let installed_package = installed.get(entry.name.as_str());
+                let installed_package = installed.get(format!("{}@{name}", entry.name).as_str());
                 MarketplacePluginSummary {
                     marketplace: name.clone(),
                     name: entry.name.clone(),
@@ -217,6 +240,21 @@ impl UzeApplication {
         name: &str,
         authority: &dyn TrustAuthority,
     ) -> Result<AddPluginReport> {
+        self.install_from_marketplace_resolving(
+            name,
+            authority,
+            &uze_core::naming::NoNameCollisionAuthority,
+        )
+    }
+
+    /// `install_from_marketplace`, with an explicit answer for a
+    /// bare-plugin-name collision (ADR-038) — see `add_plugin_resolving`.
+    pub fn install_from_marketplace_resolving(
+        &self,
+        name: &str,
+        authority: &dyn TrustAuthority,
+        name_authority: &dyn uze_core::naming::NameCollisionAuthority,
+    ) -> Result<AddPluginReport> {
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.home)?;
         let materialized = self.acquire(&PackageSource::Embedded {
             id: name.to_owned(),
@@ -227,6 +265,7 @@ impl UzeApplication {
             authority,
             &[],
             false,
+            name_authority,
         )
     }
 }

@@ -55,6 +55,25 @@ fn temp(label: &str) -> PathBuf {
     uze_testkit::temp::scratch(label)
 }
 
+/// `setup` probes `$SHELL` (`shell_path::detect_shell_rc`) to decide
+/// whether to append a PATH line to the *operator's real* shell rc file —
+/// by design, never mocked (see `shell_path`'s own module doc: "never
+/// invoked implicitly"). Calling `UzeApplication::setup` in-process, as
+/// this file's tests do, is exactly the invocation shape that check can't
+/// tell apart from a real `uze setup` run — it would otherwise edit the
+/// real `~/.zshrc`/`~/.bashrc` on whatever machine runs this test.
+/// Blanking `$SHELL` to an unrecognized value makes `detect_shell_rc`
+/// return `None`, so `setup` falls back to its manual-instruction path and
+/// never opens any file outside the test's own `root`.
+fn setup_without_touching_the_real_shell_rc(
+    application: &UzeApplication,
+    requested: Option<&str>,
+) -> uze::Result<Vec<uze::application::SetupResult>> {
+    uze_testkit::env::with_env_var("SHELL", "uze-test-no-recognized-shell", || {
+        application.setup(requested)
+    })
+}
+
 /// Never spawns a process. Provisioning only needs *a* verified outcome to
 /// unlock `setup`'s attach step — the real vendor installer/updater must
 /// never run against the developer's actual `claude` CLI just because a
@@ -261,7 +280,7 @@ fn default_candidates_carry_no_uze_collision_prefix() {
         skill_fixture(&root.join("fixtures"), "security-tools", "review"),
     );
     let candidates = default_exposure_name_candidates(&resource);
-    assert_eq!(candidates, vec!["security-tools-review".to_owned()]);
+    assert_eq!(candidates, vec!["security-tools@local-review".to_owned()]);
     assert!(!candidates[0].starts_with("uze-"));
     fs::remove_dir_all(root).unwrap();
 }
@@ -322,7 +341,7 @@ fn a_legacy_named_receipt_is_migrated_to_the_stable_label_not_frozen_forever() {
     // Re-run setup/attach — the legacy artifact is exactly UZE-owned
     // (Matched), so it migrates to the stable label: the legacy entry is
     // removed, one labeled entry exists, and no second artifact is created.
-    application.setup(None).unwrap();
+    setup_without_touching_the_real_shell_rc(&application, None).unwrap();
 
     let mut after_listing: Vec<String> = fs::read_dir(&skills_dir)
         .unwrap()
@@ -362,7 +381,7 @@ fn a_legacy_store_link_is_upgraded_to_a_qualified_skill_wrapper() {
     std::os::unix::fs::symlink(&canonical, &entry).unwrap();
     rewrite_receipt_target(&root, &summary.id, &wrapper, &canonical);
 
-    let setup = application.setup(None).unwrap();
+    let setup = setup_without_touching_the_real_shell_rc(&application, None).unwrap();
     assert!(
         setup.iter().all(|result| result.attach_error.is_none()),
         "the legacy link migration must reattach cleanly: {setup:#?}"
@@ -408,7 +427,7 @@ fn a_legacy_name_taken_over_by_foreign_content_is_surrendered_and_relabeled() {
 
     // Re-run setup — the foreign occupant keeps its content untouched; UZE
     // attaches under its stable label and the stale receipt is forgotten.
-    application.setup(None).unwrap();
+    setup_without_touching_the_real_shell_rc(&application, None).unwrap();
     assert_eq!(
         fs::read_to_string(legacy_path.join("SKILL.md")).unwrap(),
         "user's own skill",
@@ -558,7 +577,7 @@ fn inspect_matched_missing_drifted_and_detach_all_still_work_under_new_naming() 
 
     // Re-add is idempotent: recreates exactly the same (existing-receipt)
     // artifact name.
-    application.setup(None).unwrap();
+    setup_without_touching_the_real_shell_rc(&application, None).unwrap();
     assert!(agents_home.join("skills/acme:review").is_symlink());
     let inspection = application.inspect_plugin("acme").unwrap();
     assert_eq!(inspection.managed_state.matched, 1);
@@ -584,7 +603,7 @@ fn inspect_matched_missing_drifted_and_detach_all_still_work_under_new_naming() 
 
     // Fix it back, then remove cleanly; remove twice is a safe no-op.
     fs::remove_file(agents_home.join("skills/acme:review")).unwrap();
-    application.setup(None).unwrap();
+    setup_without_touching_the_real_shell_rc(&application, None).unwrap();
     assert!(matches!(
         application.remove_plugin("acme").unwrap(),
         uze::application::RemovePluginReport::Removed { .. }

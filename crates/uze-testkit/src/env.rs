@@ -90,7 +90,7 @@ impl Drop for ProcessEnvGuard<'_> {
 pub fn scope() -> ProcessEnvGuard<'static> {
     let lock = PROCESS_ENV_LOCK
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     ProcessEnvGuard {
         _lock: lock,
         mutated: Vec::new(),

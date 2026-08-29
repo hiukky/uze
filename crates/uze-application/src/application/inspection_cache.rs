@@ -294,7 +294,7 @@ mod tests {
 
         let artifact = ManagedArtifact::SymlinkReference {
             path: link.clone(),
-            target: target.clone(),
+            target,
         };
         let fingerprint = managed_artifact_fingerprint(&artifact).expect("symlink carries one");
         let cache = InspectionCache::new(&base);

@@ -24,7 +24,7 @@ use uze_core::{
     hook::{HookAdapterPort, HookCommandInput, HookDispatchOutcome, HookEvent, HookNativeOutput},
     integration::{
         AttachmentInspection, AttachmentReceipt, AttachmentState, ContextDelivery,
-        HarnessDetection, IntegrationPort, ManagedArtifact, PublicationStatus,
+        HarnessDetection, IntegrationPort, ManagedArtifact, PublicationStatus, active_plugin_name,
         default_exposure_name_candidates, detach_standard_receipt, inspect_standard_receipt,
         qualified_exposure_name_candidates,
     },
@@ -165,10 +165,7 @@ impl ClaudeIntegration {
         if !claude_marketplace_exists(executable, &self.command_home, &catalogue_root) {
             run_claude_marketplace_add(executable, &self.command_home, &catalogue_root)?;
         }
-        let selector = format!(
-            "{}@{CLAUDE_MARKETPLACE_NAME}",
-            package.id.native_plugin_name()
-        );
+        let selector = format!("{}@{CLAUDE_MARKETPLACE_NAME}", package.active_name.as_str());
         if claude_plugin_installed(executable, &self.command_home, &selector) {
             return Ok(Some(claude_package_receipt(
                 self.id(),
@@ -206,7 +203,7 @@ impl ClaudeIntegration {
         }
         let selector = format!(
             "{}@{GENERATED_MARKETPLACE_NAME}",
-            package.id.native_plugin_name()
+            package.active_name.as_str()
         );
         if claude_plugin_installed(executable, &self.command_home, &selector) {
             return Ok(Some(generated_package_receipt(
@@ -373,7 +370,10 @@ impl IntegrationPort for ClaudeIntegration {
         if resource.capability.kind != CapabilityKind::AgentSkill {
             return default_exposure_name_candidates(resource);
         }
-        qualified_exposure_name_candidates(resource)
+        let Some(active_name) = active_plugin_name(&self.uze_home, resource) else {
+            return Vec::new();
+        };
+        qualified_exposure_name_candidates(resource, &active_name)
     }
 
     fn package_exposure_plan(
@@ -486,7 +486,7 @@ impl IntegrationPort for ClaudeIntegration {
                 // stays the namespace (`flow`): Claude then exposes the
                 // skill as `/flow:review` (ADR-026) instead of double
                 // namespacing it (`/flow:flow:review`).
-                let namespace = resource_package_id(resource);
+                let namespace = active_plugin_name(&self.uze_home, resource);
                 let policy = resource.skill_invocation();
                 materialize_shim(
                     source,
@@ -704,16 +704,6 @@ fn unsupported(resource: &Resource, rationale: &str) -> ExposurePlan {
             rationale: rationale.to_owned(),
         },
         evidence: rationale.to_owned(),
-    }
-}
-
-/// The plugin id of a package-owned resource — the namespace half of the
-/// stable invocation label (ADR-026). `None` for a project-owned resource,
-/// which has no managed attachment.
-fn resource_package_id(resource: &Resource) -> Option<String> {
-    match &resource.origin {
-        uze_core::project::ResourceOrigin::Package { id, .. } => Some(id.as_str().to_owned()),
-        uze_core::project::ResourceOrigin::Project { .. } => None,
     }
 }
 

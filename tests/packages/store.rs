@@ -71,8 +71,15 @@ fn store_installs_one_agent_plugin_once_without_a_uze_manifest() {
     fs::remove_dir_all(root).unwrap();
 }
 
+/// ADR-036's Store layout is unchanged: two same-named plugins from distinct
+/// marketplaces can always coexist as *bytes*, each under its own
+/// `store/plugins/<marketplace>/<plugin>` directory and registry entry.
+/// ADR-038 adds a second, independent layer on top: at most one of them may
+/// be *active* under that bare name at a time (the name a harness actually
+/// invokes) — ingesting a second one under the same default name is refused,
+/// not silently allowed to shadow the first.
 #[test]
-fn store_keeps_same_named_plugins_from_distinct_marketplaces_separate() {
+fn store_keeps_same_named_plugins_from_distinct_marketplaces_separate_but_only_one_active() {
     let root = temporary_home("marketplace-qualified-identity");
     let home = UzeHome::at(&root);
     let store = UzeStore::new(home.clone());
@@ -82,12 +89,36 @@ fn store_keeps_same_named_plugins_from_distinct_marketplaces_separate() {
     let from_alpha = store
         .ingest_from_marketplace(&materialized, "alpha")
         .unwrap();
-    let from_beta = store
-        .ingest_from_marketplace(&materialized, "beta")
-        .unwrap();
-
     assert_eq!(from_alpha.id.as_str(), "uze-agent-skill-conformance@alpha");
+    assert_eq!(from_alpha.active_name, "uze-agent-skill-conformance");
+
+    // A second marketplace's plugin sharing the same bare name is refused by
+    // default — not because its bytes can't coexist (they can, and do, once
+    // resolved), but because it would silently shadow `alpha`'s claim on
+    // every harness's `/uze-agent-skill-conformance:*` invocation.
+    let collision = store
+        .ingest_from_marketplace(&materialized, "beta")
+        .unwrap_err();
+    assert!(matches!(
+        collision,
+        uze::UzeError::PluginNameCollision { existing, requested, .. }
+            if existing == "uze-agent-skill-conformance@alpha"
+                && requested == "uze-agent-skill-conformance@beta"
+    ));
+    // The refused install must not have written anything.
+    assert_eq!(store.registration_count().unwrap(), 1);
+
+    // Resolved with an explicit alias, `beta`'s copy installs and coexists —
+    // its own bytes, its own registration, active under the chosen name.
+    let from_beta = store
+        .ingest_with_active_name(
+            &materialized,
+            "beta",
+            Some("uze-agent-skill-conformance-beta"),
+        )
+        .unwrap();
     assert_eq!(from_beta.id.as_str(), "uze-agent-skill-conformance@beta");
+    assert_eq!(from_beta.active_name, "uze-agent-skill-conformance-beta");
     assert_ne!(from_alpha.root, from_beta.root);
     assert_eq!(
         from_alpha.root,
@@ -98,6 +129,18 @@ fn store_keeps_same_named_plugins_from_distinct_marketplaces_separate() {
         root.join("store/plugins/beta/uze-agent-skill-conformance")
     );
     assert_eq!(store.registration_count().unwrap(), 2);
+    assert_eq!(
+        store
+            .find_by_active_name("uze-agent-skill-conformance")
+            .unwrap(),
+        Some(from_alpha.id.clone())
+    );
+    assert_eq!(
+        store
+            .find_by_active_name("uze-agent-skill-conformance-beta")
+            .unwrap(),
+        Some(from_beta.id.clone())
+    );
 }
 
 #[test]

@@ -5,8 +5,12 @@
 use std::collections::BTreeSet;
 
 use uze_core::{
-    PackageSource, Result,
+    PackageSource, Result, UzeError,
     integration::{AttachmentState, receipt_location},
+    naming::{
+        NameCollisionAuthority, NameCollisionRequest, NameCollisionResolution,
+        NoNameCollisionAuthority,
+    },
     state,
     trust::{self, TrustAuthority},
 };
@@ -28,26 +32,38 @@ impl UzeApplication {
         source: PackageSource,
         authority: &dyn TrustAuthority,
     ) -> Result<AddPluginReport> {
+        self.add_plugin_resolving(source, authority, &NoNameCollisionAuthority)
+    }
+
+    /// `add_plugin`, with an explicit answer for what to do if the
+    /// package's bare plugin name is already active under a different
+    /// marketplace (ADR-038) — the CLI/TUI's interactive `--alias`/
+    /// `--replace` entry point. Plain `add_plugin` refuses without asking.
+    pub fn add_plugin_resolving(
+        &self,
+        source: PackageSource,
+        authority: &dyn TrustAuthority,
+        name_authority: &dyn NameCollisionAuthority,
+    ) -> Result<AddPluginReport> {
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.home)?;
+        // An embedded snapshot is always the official marketplace, never
+        // `local` — `install_from_marketplace` takes this same path and
+        // relies on it for the official-plugin protection/removal rules to
+        // recognize the result.
+        let marketplace = match &source {
+            PackageSource::Embedded { .. } => "uze-official",
+            _ => "local",
+        };
         // Acquisition brings the bytes to a local directory and owns their
         // cleanup; the Store only ever sees a materialized package.
         let materialized = self.acquire(&source)?;
-        self.install_materialized(materialized, authority, &[], false)
-    }
-
-    pub(crate) fn install_materialized(
-        &self,
-        materialized: uze_core::MaterializedPackage,
-        authority: &dyn TrustAuthority,
-        already_trusted: &[trust::ExecutableCapability],
-        replacing_installed: bool,
-    ) -> Result<AddPluginReport> {
         self.install_materialized_from_marketplace(
             materialized,
-            "local",
+            marketplace,
             authority,
-            already_trusted,
-            replacing_installed,
+            &[],
+            false,
+            name_authority,
         )
     }
 
@@ -58,10 +74,51 @@ impl UzeApplication {
         authority: &dyn TrustAuthority,
         already_trusted: &[trust::ExecutableCapability],
         replacing_installed: bool,
+        name_authority: &dyn NameCollisionAuthority,
+    ) -> Result<AddPluginReport> {
+        self.install_materialized_from_marketplace_as(
+            materialized,
+            marketplace,
+            None,
+            authority,
+            already_trusted,
+            replacing_installed,
+            name_authority,
+        )
+    }
+
+    /// `install_materialized_from_marketplace`, requesting an explicit local
+    /// active name instead of the package's own bare plugin name (ADR-038)
+    /// — used only by `update_plugin`, to restore an `alias` a past
+    /// collision resolution gave this exact package across its
+    /// remove-then-reinstall cycle. `None` behaves identically to the
+    /// wrapper above.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn install_materialized_from_marketplace_as(
+        &self,
+        materialized: uze_core::MaterializedPackage,
+        marketplace: &str,
+        requested_active_name: Option<&str>,
+        authority: &dyn TrustAuthority,
+        already_trusted: &[trust::ExecutableCapability],
+        replacing_installed: bool,
+        name_authority: &dyn NameCollisionAuthority,
     ) -> Result<AddPluginReport> {
         // Any installation changes vendor-visible state; cached inspection
         // verdicts must not outlive it (ADR 024).
         self.inspection_cache.invalidate();
+        // Deliberately does NOT run `reconcile_orphaned_receipts` here.
+        // Attach's own conflict detection needs the first look at whatever
+        // occupies a shared projection slot: a receipt that is Matched but
+        // keyed by an id nothing installs under any more is exactly as
+        // consistent with "the previous generation's incompatible wrapper,
+        // a real conflict a person must see" as it is with "a plain
+        // rename/removal, safe to clean" — the two are indistinguishable
+        // from here, and only the second is safe to resolve without a
+        // person looking. `uze doctor` (`maintain_environment`) is the
+        // explicit, narrower place that reconciliation belongs; a blocked
+        // install's `ProjectionConflict` is the correct, honest outcome
+        // when the ambiguity can't be resolved silently.
         // Trust is decided here — after the package is materialized and can
         // be inspected honestly, and strictly before anything is written to
         // the Store or shown to a harness. Neither the Store nor any
@@ -82,9 +139,12 @@ impl UzeApplication {
         // delivery attempt.
         self.prepare_detected_integrations(None)?;
 
-        let installed = self
-            .store
-            .ingest_from_marketplace(&materialized, marketplace)?;
+        let installed = self.ingest_resolving_name_collision(
+            &materialized,
+            marketplace,
+            requested_active_name,
+            name_authority,
+        )?;
 
         // Derived views refresh before attachment: a native package delivery
         // reads the view it was just given. A failure here is recorded, never
@@ -132,7 +192,8 @@ impl UzeApplication {
                                 == AttachmentState::Matched
                     });
                 if already_attached {
-                    provided = plan.provided_resource_identities.clone();
+                    // `continue` skips straight past the resource loop below,
+                    // so there is no `provided` left to assign here.
                     continue;
                 }
                 // Migration: if this package was previously decomposed, detach
@@ -222,5 +283,67 @@ impl UzeApplication {
             attachments,
             publications,
         })
+    }
+
+    /// Ingests `materialized` under `requested_active_name` (or its own bare
+    /// plugin name, when `None` — every ordinary install), asking
+    /// `name_authority` to resolve a collision with an already-active,
+    /// differently-marketplaced package instead of failing outright
+    /// (ADR-038). `Alias` retries the ingest under the chosen local name.
+    /// `Replace` removes the existing active package first — only once that
+    /// is proven `Safe`, exactly the rule `remove_plugin` enforces, so a
+    /// `Blocked` removal aborts the whole replace with the existing package
+    /// left exactly as it was — then retries the ingest under the name it
+    /// just freed. Any other ingest error (an unrelated `PackageConflict`, a
+    /// bad manifest) is never routed through the authority at all.
+    fn ingest_resolving_name_collision(
+        &self,
+        materialized: &uze_core::MaterializedPackage,
+        marketplace: &str,
+        requested_active_name: Option<&str>,
+        name_authority: &dyn NameCollisionAuthority,
+    ) -> Result<uze_core::StoredPackage> {
+        let (name, existing, requested) = match self.store.ingest_with_active_name(
+            materialized,
+            marketplace,
+            requested_active_name,
+        ) {
+            Ok(installed) => return Ok(installed),
+            Err(UzeError::PluginNameCollision {
+                name,
+                existing,
+                requested,
+            }) => (name, existing, requested),
+            Err(other) => return Err(other),
+        };
+        let request = NameCollisionRequest {
+            name: name.clone(),
+            existing: existing.clone(),
+            requested: requested.clone(),
+        };
+        match name_authority.resolve(&request) {
+            NameCollisionResolution::Abort => Err(UzeError::PluginNameCollision {
+                name,
+                existing,
+                requested,
+            }),
+            NameCollisionResolution::Alias(alias) => {
+                self.store
+                    .ingest_with_active_name(materialized, marketplace, Some(&alias))
+            }
+            NameCollisionResolution::Replace => {
+                match self.detach_and_remove(&existing, false)? {
+                    RemovePluginReport::Removed { .. }
+                    | RemovePluginReport::AlreadyAbsent { .. } => self
+                        .store
+                        .ingest_with_active_name(materialized, marketplace, requested_active_name),
+                    RemovePluginReport::Blocked { .. } => Err(UzeError::PluginNameCollision {
+                        name,
+                        existing,
+                        requested,
+                    }),
+                }
+            }
+        }
     }
 }

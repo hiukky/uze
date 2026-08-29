@@ -302,7 +302,7 @@ impl IntegrationPort for AntigravityIntegration {
     /// policy — capability naming policies are never mixed.
     fn exposure_name_candidates(&self, resource: &Resource) -> Vec<String> {
         if resource.capability.kind == CapabilityKind::AgentSkill {
-            return skills::antigravity_skill_exposure_name_candidates(resource);
+            return skills::antigravity_skill_exposure_name_candidates(&self.uze_home, resource);
         }
         default_exposure_name_candidates(resource)
     }

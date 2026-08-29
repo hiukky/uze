@@ -133,7 +133,7 @@ pub(crate) fn dispatch(
                 sender.clone(),
                 model.context_root.clone(),
                 grant,
-                name.clone(),
+                name,
                 move |app, authority| {
                     app.plugin_install(&spec, authority)
                         .map(|report| format!("Installed {}", report.plugin.id))

@@ -48,7 +48,7 @@ fn one_plugin_reaches_every_harness_with_no_duplicate_delivery() {
 
     // Claude: generated native package envelope under UZE_HOME state.
     let claude_envelope = env.uze_home.join(
-        "state/attachments/claude/generated/uze-agent-skill-conformance/.claude-plugin/plugin.json",
+        "state/attachments/claude/generated/uze-agent-skill-conformance@test/.claude-plugin/plugin.json",
     );
     assertions::assert_file(&claude_envelope, "claude generated envelope");
 
@@ -74,7 +74,7 @@ fn one_plugin_reaches_every_harness_with_no_duplicate_delivery() {
     let receipts = ledger["receipts"].as_object().unwrap();
     let for_package: Vec<_> = receipts
         .values()
-        .filter(|receipt| receipt["package_id"] == "uze-agent-skill-conformance")
+        .filter(|receipt| receipt["package_id"] == "uze-agent-skill-conformance@test")
         .collect();
     // One package-level (or one capability-level) receipt per integration —
     // never both, never two of the same kind. The exact count differs by
@@ -163,9 +163,9 @@ fn invocation_policy_projects_per_harness_classification() {
         review_target.join("SKILL.md").is_file(),
         "the wrapper must carry the skill bytes, got {review_target:?}"
     );
-    let codex_policy = env
-        .uze_home
-        .join("state/attachments/codex/generated/policy-fixture/skills/review/agents/openai.yaml");
+    let codex_policy = env.uze_home.join(
+        "state/attachments/codex/generated/policy-fixture@test/skills/review/agents/openai.yaml",
+    );
     assert!(
         codex_policy.is_file(),
         "codex user-only delivery must carry the policy sidecar"

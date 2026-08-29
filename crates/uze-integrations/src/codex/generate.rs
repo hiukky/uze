@@ -145,7 +145,7 @@ fn generated_manifest_document(package: &StoredPackage) -> serde_json::Value {
     let (description, version) = read_name_fields(package);
 
     let mut document = serde_json::json!({
-        "name": package.id.native_plugin_name(),
+        "name": package.active_name.as_str(),
         "version": version,
         "description": description,
     });
@@ -281,13 +281,13 @@ fn materialize_generated_skills(package: &StoredPackage, envelope_dir: &Path) ->
                         symlink(canonical_dir, &target_dir)?;
                     }
                 }
-                Ok(_) => return Err(UzeError::ManagedEntryConflict(target_dir.clone())),
+                Ok(_) => return Err(UzeError::ManagedEntryConflict(target_dir)),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                     symlink(canonical_dir, &target_dir)?;
                 }
                 Err(error) => {
                     return Err(UzeError::Read {
-                        path: target_dir.clone(),
+                        path: target_dir,
                         source: error,
                     });
                 }
@@ -418,7 +418,7 @@ fn generated_catalogue_document(packages: &[StoredPackage]) -> serde_json::Value
         .into_iter()
         .map(|package| {
             serde_json::json!({
-                "name": package.id.native_plugin_name(),
+                "name": package.active_name.as_str(),
                 "source": { "source": "local", "path": format!("./{}", package.id.as_str()) },
                 "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
                 "category": "Developer tools"
@@ -576,6 +576,7 @@ mod generated_native_tests {
             uze_core::store::PackageId::from_plugin_name("flow", &pkg_root.join("plugin.json"))
                 .unwrap();
         let pkg = StoredPackage {
+            active_name: id.plugin_name().to_owned(),
             id,
             root: pkg_root.clone(),
             manifest: pkg_root.join("plugin.json"),
@@ -926,6 +927,7 @@ mod generated_native_tests {
         )
         .unwrap();
         let pkg = StoredPackage {
+            active_name: id.plugin_name().to_owned(),
             id,
             root: pkg_root.clone(),
             manifest: pkg_root.join("plugin.json"),

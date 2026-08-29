@@ -246,6 +246,10 @@ fn remove_project_plugin_reports_no_lock_and_not_in_lock_distinctly() {
 
 #[test]
 fn same_named_plugins_from_two_marketplaces_coexist_and_require_qualified_lookup() {
+    // ADR-036's Store layout (bytes/registrations coexist per marketplace)
+    // is unchanged; ADR-038 adds that only one of them may be *active*
+    // under the bare name at a time. Plain `plugin_install` refuses the
+    // second one; resolving with an explicit alias lets both coexist.
     let base = temp("same-name-marketplaces");
     let home = UzeHome::at(base.join("home"));
     let first = base.join("first-market");
@@ -267,7 +271,30 @@ fn same_named_plugins_from_two_marketplaces_coexist_and_require_qualified_lookup
     let app = UzeApplication::new(home.clone(), Vec::new());
 
     app.plugin_install("flow@first", &AlwaysTrust).unwrap();
-    app.plugin_install("flow@second", &AlwaysTrust).unwrap();
+    let collision = app.plugin_install("flow@second", &AlwaysTrust).unwrap_err();
+    assert!(matches!(
+        collision,
+        uze::UzeError::PluginNameCollision { existing, requested, .. }
+            if existing == "flow@first" && requested == "flow@second"
+    ));
+    // Refused: only `flow@first` is installed.
+    assert_eq!(
+        app.list_plugins()
+            .unwrap()
+            .into_iter()
+            .map(|plugin| plugin.id)
+            .collect::<Vec<_>>(),
+        vec!["flow@first"]
+    );
+
+    app.plugin_install_resolving(
+        "flow@second",
+        &AlwaysTrust,
+        &uze_core::naming::FixedResolution(uze_core::naming::NameCollisionResolution::Alias(
+            "flow-second".to_owned(),
+        )),
+    )
+    .unwrap();
 
     let ids: Vec<_> = app
         .list_plugins()
@@ -287,15 +314,20 @@ fn same_named_plugins_from_two_marketplaces_coexist_and_require_qualified_lookup
         )
         .is_dir()
     );
+    // Once resolved, at most one package ever answers to a bare name at all
+    // (ADR-038) — `flow` now unambiguously means "whichever is active under
+    // it", never the old "installed from multiple marketplaces" refusal.
+    // The aliased one is addressable the same way, by its own active name.
     assert!(matches!(
-        app.remove_plugin("flow"),
-        Err(uze::UzeError::ExposureUnavailable(_))
-    ));
-    assert!(matches!(
-        app.remove_plugin("flow@first"),
+        app.remove_plugin("flow-second"),
         Ok(uze::application::RemovePluginReport::Removed { .. })
     ));
-    assert_eq!(app.list_plugins().unwrap()[0].id, "flow@second");
+    assert_eq!(app.list_plugins().unwrap()[0].id, "flow@first");
+    assert!(matches!(
+        app.remove_plugin("flow"),
+        Ok(uze::application::RemovePluginReport::Removed { .. })
+    ));
+    assert!(app.list_plugins().unwrap().is_empty());
 }
 
 #[test]

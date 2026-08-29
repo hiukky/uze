@@ -351,8 +351,30 @@ fn emit_vendor_marketplace(state_dir: &Path, vendor: MarketplaceVendor) -> Strin
             block.push_str("        root=$(cat \"$state_dir/root\" 2>/dev/null)\n");
             block.push_str("        name=$(cat \"$state_dir/name\" 2>/dev/null)\n");
             block.push_str("        while IFS= read -r sel; do\n");
-            block.push_str("          id=\"${sel%%@*}\"\n");
-            block.push_str("          entry=$(printf '{\"pluginId\":\"%s\",\"enabled\":true,\"installed\":true,\"marketplaceName\":\"%s\",\"path\":\"%s/%s\"}' \"$sel\" \"$name\" \"$root\" \"$id\")\n");
+            // `sel` is the vendor selector `{active_name}@{native
+            // marketplace}` (ADR-038: `active_name` is bare, never
+            // marketplace-qualified). The real Codex resolves an install by
+            // looking up `active_name` in its own catalogue and reporting
+            // back that entry's `source.path` — the generated dir named by
+            // the qualified `{plugin}@{marketplace}` id (see
+            // `codex::generate::generated_catalogue_document`), which has no
+            // fixed relationship to `active_name` any more (an alias can
+            // make them differ). Do the same lookup here, against the exact
+            // catalogue UZE wrote, instead of deriving the path from the
+            // selector's shape.
+            block.push_str("          active=\"${sel%%@*}\"\n");
+            block.push_str("          catalog=\"$root/.agents/plugins/marketplace.json\"\n");
+            block.push_str(
+                "          nameline=$(grep -n \"\\\"name\\\": *\\\"$active\\\"\" \"$catalog\" 2>/dev/null | head -1 | cut -d: -f1)\n",
+            );
+            block.push_str("          relpath=\"\"\n");
+            block.push_str("          if [ -n \"$nameline\" ]; then\n");
+            block.push_str(
+                "            relpath=$(tail -n \"+$nameline\" \"$catalog\" | sed -n 's/.*\"path\" *: *\"\\([^\"]*\\)\".*/\\1/p' | head -1)\n",
+            );
+            block.push_str("          fi\n");
+            block.push_str("          relpath=\"${relpath#./}\"\n");
+            block.push_str("          entry=$(printf '{\"pluginId\":\"%s\",\"enabled\":true,\"installed\":true,\"marketplaceName\":\"%s\",\"path\":\"%s/%s\"}' \"$sel\" \"$name\" \"$root\" \"$relpath\")\n");
             block.push_str("          out=\"$out$entry,\"\n");
             block.push_str("        done < \"$state_dir/installed\" 2>/dev/null\n");
             block.push_str("        printf '{\"installed\":[%s]}' \"${out%,}\"\n");

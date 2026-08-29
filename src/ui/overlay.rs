@@ -16,7 +16,7 @@ impl TuiModel {
     pub(crate) fn overlay_key(&mut self, key: KeyEvent) -> Intent {
         let overlay = self.overlay.clone();
         match (&overlay, key.code) {
-            (Overlay::Help, _) | (Overlay::HarnessHelp, _) => {
+            (Overlay::Help | Overlay::HarnessHelp, _) => {
                 self.close_overlay();
                 Intent::None
             }
@@ -41,15 +41,12 @@ impl TuiModel {
                     Intent::None
                 }
             }
-            (Overlay::ConfirmRemove { id, .. }, KeyCode::Char('y') | KeyCode::Char('Y')) => {
+            (Overlay::ConfirmRemove { id, .. }, KeyCode::Char('y' | 'Y')) => {
                 let id = id.clone();
                 self.close_overlay();
                 Intent::Remove(id)
             }
-            (
-                Overlay::ConfirmRemove { .. },
-                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc,
-            ) => {
+            (Overlay::ConfirmRemove { .. }, KeyCode::Char('n' | 'N') | KeyCode::Esc) => {
                 self.close_overlay();
                 Intent::None
             }

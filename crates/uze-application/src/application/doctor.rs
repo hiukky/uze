@@ -226,8 +226,10 @@ impl UzeApplication {
         self.integrations
             .iter()
             .find(|candidate| candidate.id() == integration)
-            .map(|candidate| candidate.display_name().to_owned())
-            .unwrap_or_else(|| integration.to_owned())
+            .map_or_else(
+                || integration.to_owned(),
+                |candidate| candidate.display_name().to_owned(),
+            )
     }
 
     pub fn status(&self, project_root: &std::path::Path) -> Result<StatusReport> {
@@ -275,6 +277,7 @@ impl UzeApplication {
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::BTreeMap,
         fs,
         path::{Path, PathBuf},
         sync::{
@@ -416,7 +419,7 @@ mod tests {
                 artifact: ManagedArtifact::IntegrationOwned {
                     kind: "test".to_owned(),
                     selector: "flow".to_owned(),
-                    detail: Default::default(),
+                    detail: BTreeMap::default(),
                 },
             },
         )
@@ -470,7 +473,7 @@ mod tests {
                 artifact: ManagedArtifact::IntegrationOwned {
                     kind: "test".to_owned(),
                     selector: "flow".to_owned(),
-                    detail: Default::default(),
+                    detail: BTreeMap::default(),
                 },
             },
         )
@@ -520,7 +523,7 @@ mod tests {
                 artifact: ManagedArtifact::IntegrationOwned {
                     kind: "test".to_owned(),
                     selector: "flow".to_owned(),
-                    detail: Default::default(),
+                    detail: BTreeMap::default(),
                 },
             },
         )

@@ -105,16 +105,15 @@ impl TuiModel {
             KeyCode::Enter => self.open_or_act(),
             KeyCode::Char('r') if self.route == Route::Plugins => {
                 if let Some(plugin) = self.selected_plugin() {
-                    if is_protected_plugin(plugin, &self.marketplace_plugins) {
-                        self.overlay = Overlay::ProtectedPlugin(plugin.id.clone());
-                        self.focus = Focus::Overlay;
+                    self.overlay = if is_protected_plugin(plugin, &self.marketplace_plugins) {
+                        Overlay::ProtectedPlugin(plugin.id.clone())
                     } else {
-                        self.overlay = Overlay::ConfirmRemove {
+                        Overlay::ConfirmRemove {
                             id: plugin.id.clone(),
                             focus: 1,
-                        };
-                        self.focus = Focus::Overlay;
-                    }
+                        }
+                    };
+                    self.focus = Focus::Overlay;
                 }
                 Intent::None
             }

@@ -220,7 +220,7 @@ fn claude_merges_into_settings_json_preserving_foreign_content() {
         panic!("Claude hook plan is a managed config entry");
     };
     assert_eq!(*config_file, settings);
-    assert_eq!(entry_name, "hook-demo:protect-env");
+    assert_eq!(entry_name, "hook-demo@local:protect-env");
     assert_eq!(*event, Some(HookEvent::PreToolUse));
 
     let receipt = claude
@@ -237,7 +237,7 @@ fn claude_merges_into_settings_json_preserving_foreign_content() {
         panic!("Claude hook receipt is a HookConfigEntry");
     };
     assert_eq!(*config_file, settings);
-    assert_eq!(entry_name, "hook-demo:protect-env");
+    assert_eq!(entry_name, "hook-demo@local:protect-env");
     assert_eq!(*event, Some(HookEvent::PreToolUse));
 
     let document: serde_json::Value =
@@ -421,7 +421,7 @@ fn codex_writes_its_own_hooks_json_command_form() {
         panic!("Codex hook plan is a managed config entry");
     };
     assert_eq!(*config_file, hooks_file);
-    assert_eq!(entry_name, "hook-demo:protect-env");
+    assert_eq!(entry_name, "hook-demo@local:protect-env");
     assert_eq!(*event, Some(HookEvent::PreToolUse));
 
     let receipt = codex
@@ -552,7 +552,7 @@ fn opencode_bridge_lifecycle_preserves_foreign_plugins_in_the_directory() {
     let protect = hook_resource(&resources, "watch");
     let integration = opencode(&root);
     let config = root.join("config/opencode.json");
-    let bridge = root.join("config/plugins/uze-hooks-hook-demo.ts");
+    let bridge = root.join("config/plugins/uze-hooks-hook-demo@local.ts");
     // A foreign plugin file already lives in the harness's global plugin
     // directory; the config itself is never touched by hook delivery.
     fs::create_dir_all(config.parent().unwrap().join("plugins")).unwrap();
@@ -659,7 +659,7 @@ fn opencode_bridge_is_package_scoped_and_regenerates_across_groups() {
     let first = hook_resource(&resources, "observe-first").clone();
     let second = hook_resource(&resources, "observe-second").clone();
     let integration = opencode(&_root);
-    let bridge = _root.join("config/plugins/uze-hooks-hook-demo.ts");
+    let bridge = _root.join("config/plugins/uze-hooks-hook-demo@local.ts");
 
     let receipt_first = integration.attach_receipt(&first).unwrap().unwrap();
     // Production records each receipt right after its attach, so the next
@@ -764,6 +764,7 @@ fn antigravity_plans_hooks_through_the_generated_named_plugin() {
             &uze::store::StoredPackage {
                 id: PackageId::from_plugin_name("hook-demo", &_root.join("pkg/plugin.json"))
                     .unwrap(),
+                active_name: "hook-demo".to_owned(),
                 root: _root.join("pkg"),
                 manifest: _root.join("pkg/plugin.json"),
                 provenance: uze::acquisition::Provenance {

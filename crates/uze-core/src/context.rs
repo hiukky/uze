@@ -34,8 +34,17 @@ pub struct InstructionContribution {
 /// The stable, collision-safe region identity a package's contribution owns
 /// inside the shared file. Deterministic from the package id alone — two
 /// reconcile calls for the same package always agree on this identity.
+/// `:`-joined rather than `id.as_str()`'s `@`: `text_region::identity_is_valid`
+/// restricts a region identity to `[a-zA-Z0-9:_./-]`, which `@` falls outside
+/// of. `plugin_name`/`marketplace` can themselves never contain `:` (the one
+/// chokepoint every `PackageId` is validated through forbids it), so the two
+/// parts joined by `:` remain exactly as collision-safe as the qualified id.
 pub fn region_identity_for(package_id: &PackageId) -> String {
-    format!("package:{}:instructions", package_id.as_str())
+    format!(
+        "package:{}:{}:instructions",
+        package_id.plugin_name(),
+        package_id.marketplace()
+    )
 }
 
 /// Prefix every identity this module creates carries, used only to decide

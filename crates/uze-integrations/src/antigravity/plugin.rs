@@ -315,7 +315,17 @@ pub(super) fn attach_generated_plugin(
         &format!("agy plugin install `{name}`"),
         &args,
     )?;
-    let staged_dir = integration.plugins_dir.join(&name);
+    // Antigravity stages a copy named after the *source* directory it was
+    // given, not the plugin's own declared manifest name — and `derived_dir`
+    // is named by the qualified Store id (`generated_package_dir_for_id`),
+    // not `name`. Using `name` here would look for the staged copy under
+    // the wrong directory whenever the two differ (always, since
+    // `PackageId`s are marketplace-qualified — see ADR-036).
+    let staged_dir = integration.plugins_dir.join(
+        derived_dir
+            .file_name()
+            .expect("generated plugin dir has a name"),
+    );
     let fingerprint = fingerprint_dir(&staged_dir)?;
     Ok(Some(AttachmentReceipt {
         package_id: package.id.as_str().to_owned(),
@@ -464,6 +474,7 @@ mod plugin_tests {
             uze_core::store::PackageId::from_plugin_name("flow", &pkg_root.join("plugin.json"))
                 .unwrap();
         let pkg = StoredPackage {
+            active_name: id.plugin_name().to_owned(),
             id,
             root: pkg_root.clone(),
             manifest: pkg_root.join("plugin.json"),
@@ -738,7 +749,7 @@ mod plugin_tests {
         let (_root, pkg) = make_package("plan-explicit", r#"{"name":"flow","description":"d"}"#);
         let r_a = skill_resource(&pkg, "skills", "commit");
         let uze_home = UzeHome::at(_root.join("uze"));
-        let integration = AntigravityIntegration::new(_root.join("agents"), uze_home.clone());
+        let integration = AntigravityIntegration::new(_root.join("agents"), uze_home);
         let plan = integration
             .package_exposure_plan(&pkg, &[&r_a])
             .expect("explicit route applies");
@@ -755,7 +766,7 @@ mod plugin_tests {
         let (_root, pkg) = make_package("plan-invalid", r#"{"name":"Bad Name!"}"#);
         let r_a = skill_resource(&pkg, "skills", "commit");
         let uze_home = UzeHome::at(_root.join("uze"));
-        let integration = AntigravityIntegration::new(_root.join("agents"), uze_home.clone());
+        let integration = AntigravityIntegration::new(_root.join("agents"), uze_home);
         assert!(
             integration.package_exposure_plan(&pkg, &[&r_a]).is_none(),
             "a package whose canonical name is not a valid Antigravity plugin name must fall back to capability-level delivery"

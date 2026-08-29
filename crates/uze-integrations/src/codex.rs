@@ -156,7 +156,7 @@ impl CodexIntegration {
                 Some(&catalogue_root),
             )?;
         }
-        let selector = format!("{}@{MARKETPLACE_NAME}", package.id.native_plugin_name());
+        let selector = format!("{}@{MARKETPLACE_NAME}", package.active_name.as_str());
         run_quiet(
             executable,
             &self.command_home,
@@ -204,7 +204,7 @@ impl CodexIntegration {
         }
         let selector = format!(
             "{}@{GENERATED_MARKETPLACE_NAME}",
-            package.id.native_plugin_name()
+            package.active_name.as_str()
         );
         run_quiet(
             executable,
@@ -404,7 +404,7 @@ impl IntegrationPort for CodexIntegration {
     /// stays on the default fully-qualified policy.
     fn exposure_name_candidates(&self, resource: &Resource) -> Vec<String> {
         if resource.capability.kind == CapabilityKind::AgentSkill {
-            return codex_skill_exposure_name_candidates(resource);
+            return codex_skill_exposure_name_candidates(&self.uze_home, resource);
         }
         default_exposure_name_candidates(resource)
     }
@@ -772,7 +772,7 @@ fn projection_conflict(
         .capability
         .path
         .parent()
-        .map(|parent| parent.to_path_buf())
+        .map(Path::to_path_buf)
         .unwrap_or_else(|| resource.capability.path.clone());
     UzeError::ProjectionConflict(Box::new(uze_core::error::ProjectionConflictDetails {
         entry: entry.to_path_buf(),

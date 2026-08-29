@@ -114,7 +114,7 @@ impl IntegrationRegistry {
     }
 
     pub fn ids(&self) -> Vec<&'static str> {
-        self.iter().map(|integration| integration.id()).collect()
+        self.iter().map(IntegrationPort::id).collect()
     }
 
     /// The shim symlink names this registry's runtime-integration opt-ins
@@ -123,7 +123,7 @@ impl IntegrationRegistry {
     pub fn shim_names(&self) -> Vec<&'static str> {
         self.iter()
             .filter(|integration| integration.supports_runtime_integration())
-            .map(|integration| integration.shim_name())
+            .map(IntegrationPort::shim_name)
             .collect()
     }
 
@@ -141,7 +141,7 @@ mod tests {
 
     use uze_core::home::UzeHome;
 
-    use super::IntegrationRegistry;
+    use super::{IntegrationPort, IntegrationRegistry};
 
     fn registry() -> (UzeHome, IntegrationRegistry) {
         let nonce = SystemTime::now()
@@ -162,7 +162,7 @@ mod tests {
         let ids = registry.ids();
         assert_eq!(ids.len(), 4, "registration order is the built-in order");
         assert!(ids.iter().all(|id| !id.is_empty()));
-        assert_eq!(registry.get(ids[0]).map(|i| i.id()), Some(ids[0]));
+        assert_eq!(registry.get(ids[0]).map(IntegrationPort::id), Some(ids[0]));
     }
 
     #[test]

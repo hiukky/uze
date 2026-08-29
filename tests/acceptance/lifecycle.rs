@@ -45,7 +45,7 @@ fn remove_lifecycle_cleans_artifacts_and_keeps_project_lock_untouched() {
         ],
     );
     let report: serde_json::Value = serde_json::from_slice(&inspect.stdout).expect("json report");
-    assert_eq!(report["plugin"]["id"], "uze-agent-skill-conformance");
+    assert_eq!(report["plugin"]["id"], "uze-agent-skill-conformance@test");
 
     let remove = env.run_ok(
         uze_bin(),

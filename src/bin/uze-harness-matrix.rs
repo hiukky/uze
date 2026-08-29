@@ -125,6 +125,7 @@ fn stub_package() -> StoredPackage {
     let root = pkg_root();
     StoredPackage {
         id: PackageId::from_plugin_name("flow", &root.join("plugin.json")).unwrap(),
+        active_name: "flow".to_owned(),
         root: root.clone(),
         manifest: root.join("plugin.json"),
         provenance: Provenance {

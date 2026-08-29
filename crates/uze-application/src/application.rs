@@ -296,6 +296,7 @@ impl UzeApplication {
             &trust::NoTrustAuthority,
             &[],
             false,
+            &uze_core::naming::NoNameCollisionAuthority,
         ) {
             Ok(_) => Ok(true),
             Err(_) => {
@@ -719,6 +720,17 @@ impl UzeApplication {
     /// that.
 
     pub(crate) fn package_by_name(&self, name: &str) -> Result<StoredPackage> {
+        // A plugin is addressable by its active local name (ADR-038) first —
+        // its own bare plugin name unless an install-time alias resolved a
+        // collision, in which case only one installed package ever answers
+        // to a given name at all, so this can never be ambiguous. Falls
+        // through to the qualified-id/bare-plugin-name lookup only for a
+        // name nothing is currently active under (defensive: normal install
+        // flows never leave two packages sharing a bare `plugin_name()`
+        // with neither of them active under it).
+        if let Some(id) = self.store.find_by_active_name(name)? {
+            return self.store.package(&id);
+        }
         let matches: Vec<_> = self
             .store
             .package_ids()?
@@ -742,6 +754,7 @@ impl UzeApplication {
         };
         Ok(PluginSummary {
             id: package.id.as_str().to_owned(),
+            active_name: package.active_name.clone(),
             source: package.provenance.requested.display(),
             store_path: package.root.clone(),
             capability_count: environment.resources.len(),
@@ -934,6 +947,12 @@ impl UzeApplication {
 #[derive(Clone, Debug, Serialize)]
 pub struct PluginSummary {
     pub id: String,
+    /// The local name this plugin currently invokes under (ADR-038) — its
+    /// own bare plugin name unless an install-time `alias` resolution gave
+    /// it a different one to coexist with another marketplace's same-named
+    /// plugin. Always present, never itself marketplace-qualified; `id`
+    /// carries the real, marketplace-qualified identity (the origin).
+    pub active_name: String,
     /// Human-facing description of where this package came from. Display
     /// only: the typed provenance stays in the registry, and nothing parses
     /// this back.
@@ -1487,6 +1506,26 @@ mod tests {
         router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus},
     };
 
+    /// `setup` probes `$SHELL` (`shell_path::detect_shell_rc`) to decide
+    /// whether to append a PATH line to the *operator's real* shell rc
+    /// file — by design, never mocked, since it edits the interactive
+    /// shell the developer actually uses (see `shell_path`'s own module
+    /// doc: "never invoked implicitly"). Calling `UzeApplication::setup`
+    /// in-process, as these tests do, is exactly the invocation shape
+    /// that check can't tell apart from a real `uze setup` run — it would
+    /// otherwise edit the real `~/.zshrc`/`~/.bashrc` on whatever machine
+    /// runs this test. Blanking `$SHELL` to an unrecognized value makes
+    /// `detect_shell_rc` return `None`, so `setup` falls back to its
+    /// manual-instruction path and never opens any file outside `home`.
+    fn setup_without_touching_the_real_shell_rc(
+        app: &UzeApplication,
+        requested: Option<&str>,
+    ) -> Result<Vec<SetupResult>> {
+        uze_testkit::env::with_env_var("SHELL", "uze-test-no-recognized-shell", || {
+            app.setup(requested)
+        })
+    }
+
     struct SymlinkIntegration;
     impl IntegrationPort for SymlinkIntegration {
         fn id(&self) -> &'static str {
@@ -1574,7 +1613,7 @@ mod tests {
             Ok(Some(AttachmentReceipt {
                 package_id: match &resource.origin {
                     uze_core::ResourceOrigin::Package { id, .. } => id.as_str().to_owned(),
-                    _ => unreachable!(),
+                    uze_core::ResourceOrigin::Project { .. } => unreachable!(),
                 },
                 resource_identity: Some(resource.identity()),
                 integration: self.id().to_owned(),
@@ -1633,7 +1672,7 @@ mod tests {
             Ok(Some(AttachmentReceipt {
                 package_id: match &resource.origin {
                     uze_core::ResourceOrigin::Package { id, .. } => id.as_str().to_owned(),
-                    _ => unreachable!(),
+                    uze_core::ResourceOrigin::Project { .. } => unreachable!(),
                 },
                 resource_identity: Some(resource.identity()),
                 integration: self.id().to_owned(),
@@ -1757,7 +1796,7 @@ mod tests {
                 strategy: "symlink".to_owned(),
                 artifact: ManagedArtifact::SymlinkReference {
                     path: managed.clone(),
-                    target: expected.clone(),
+                    target: expected,
                 },
             },
         )
@@ -1806,6 +1845,231 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    /// ADR-038 `replace`: the existing active plugin is fully removed and
+    /// the new install claims the bare name it freed — the happy path with
+    /// no receipts to make removal unsafe.
+    #[test]
+    pub(crate) fn replace_resolution_removes_the_existing_active_plugin_and_installs_the_new_one() {
+        let root = temp("replace-happy");
+        let home = UzeHome::at(&root);
+        let app = UzeApplication::new(home.clone(), vec![Box::new(SymlinkIntegration)]);
+        let acquired =
+            uze_core::acquisition::acquire(&uze_core::PackageSource::local(fixture())).unwrap();
+        let alpha = app
+            .install_materialized_from_marketplace(
+                acquired,
+                "alpha",
+                &uze_core::trust::AlwaysTrust,
+                &[],
+                false,
+                &uze_core::naming::NoNameCollisionAuthority,
+            )
+            .unwrap();
+        assert_eq!(alpha.plugin.active_name, "uze-agent-skill-conformance");
+
+        let acquired =
+            uze_core::acquisition::acquire(&uze_core::PackageSource::local(fixture())).unwrap();
+        let beta = app
+            .install_materialized_from_marketplace(
+                acquired,
+                "beta",
+                &uze_core::trust::AlwaysTrust,
+                &[],
+                false,
+                &uze_core::naming::FixedResolution(
+                    uze_core::naming::NameCollisionResolution::Replace,
+                ),
+            )
+            .unwrap();
+
+        assert_eq!(beta.plugin.id, "uze-agent-skill-conformance@beta");
+        assert_eq!(beta.plugin.active_name, "uze-agent-skill-conformance");
+        assert!(
+            app.store
+                .package(
+                    &uze_core::store::PackageId::from_qualified(
+                        &alpha.plugin.id,
+                        std::path::Path::new("plugin.json"),
+                    )
+                    .unwrap()
+                )
+                .is_err()
+        );
+        let ids: Vec<_> = app
+            .list_plugins()
+            .unwrap()
+            .into_iter()
+            .map(|plugin| plugin.id)
+            .collect();
+        assert_eq!(ids, vec!["uze-agent-skill-conformance@beta".to_owned()]);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// ADR-038 `replace`, unsafe case: the existing active plugin has a
+    /// drifted receipt, so removing it is not `Safe` — the whole replace
+    /// aborts with the structured collision error, and the existing plugin
+    /// is left exactly as it was (never partially detached, never removed).
+    #[test]
+    pub(crate) fn replace_resolution_aborts_and_preserves_the_existing_plugin_when_removal_is_blocked()
+     {
+        use std::os::unix::fs::symlink;
+        let root = temp("replace-blocked");
+        let home = UzeHome::at(&root);
+        let app = UzeApplication::new(home.clone(), vec![Box::new(SymlinkIntegration)]);
+        let acquired =
+            uze_core::acquisition::acquire(&uze_core::PackageSource::local(fixture())).unwrap();
+        let alpha = app
+            .install_materialized_from_marketplace(
+                acquired,
+                "alpha",
+                &uze_core::trust::AlwaysTrust,
+                &[],
+                false,
+                &uze_core::naming::NoNameCollisionAuthority,
+            )
+            .unwrap();
+        let alpha_id = alpha.plugin.id.clone();
+
+        // Foreign content now occupies the managed slot: the receipt inspects
+        // Drifted, so `plan_remove` refuses to touch it.
+        let managed = root.join("managed");
+        let foreign = root.join("foreign");
+        fs::create_dir_all(&foreign).unwrap();
+        symlink(&foreign, &managed).unwrap();
+        state::record_receipt(
+            &home,
+            "receipt".to_owned(),
+            AttachmentReceipt {
+                package_id: alpha_id.clone(),
+                resource_identity: None,
+                integration: "test".to_owned(),
+                strategy: "symlink".to_owned(),
+                artifact: ManagedArtifact::SymlinkReference {
+                    path: managed.clone(),
+                    target: app
+                        .store
+                        .package(
+                            &uze_core::store::PackageId::from_qualified(
+                                &alpha_id,
+                                std::path::Path::new("plugin.json"),
+                            )
+                            .unwrap(),
+                        )
+                        .unwrap()
+                        .root,
+                },
+            },
+        )
+        .unwrap();
+
+        let acquired =
+            uze_core::acquisition::acquire(&uze_core::PackageSource::local(fixture())).unwrap();
+        let result = app.install_materialized_from_marketplace(
+            acquired,
+            "beta",
+            &uze_core::trust::AlwaysTrust,
+            &[],
+            false,
+            &uze_core::naming::FixedResolution(uze_core::naming::NameCollisionResolution::Replace),
+        );
+        assert!(matches!(
+            result,
+            Err(UzeError::PluginNameCollision { existing, requested, .. })
+                if existing == alpha_id && requested == "uze-agent-skill-conformance@beta"
+        ));
+        // The existing plugin is untouched: still registered, receipt intact,
+        // foreign symlink never disturbed.
+        assert!(
+            app.store
+                .package(
+                    &uze_core::store::PackageId::from_qualified(
+                        &alpha_id,
+                        std::path::Path::new("plugin.json"),
+                    )
+                    .unwrap()
+                )
+                .is_ok()
+        );
+        assert_eq!(fs::read_link(&managed).unwrap(), foreign);
+        assert!(
+            app.store
+                .package(
+                    &uze_core::store::PackageId::from_qualified(
+                        "uze-agent-skill-conformance@beta",
+                        std::path::Path::new("plugin.json"),
+                    )
+                    .unwrap()
+                )
+                .is_err(),
+            "the beta install must never have been ingested"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// ADR-038: `update_plugin` re-resolves the source and reinstalls under
+    /// the same marketplace-qualified id, but must never silently revert an
+    /// aliased plugin back to its bare plugin name — the alias is a fact
+    /// about *this* installation, not something an update should erase.
+    #[test]
+    pub(crate) fn update_preserves_an_aliased_plugins_active_name() {
+        let root = temp("update-alias");
+        let home = UzeHome::at(&root);
+        let app = UzeApplication::new(home.clone(), vec![Box::new(SymlinkIntegration)]);
+        let acquired =
+            uze_core::acquisition::acquire(&uze_core::PackageSource::local(fixture())).unwrap();
+        app.install_materialized_from_marketplace(
+            acquired,
+            "alpha",
+            &uze_core::trust::AlwaysTrust,
+            &[],
+            false,
+            &uze_core::naming::NoNameCollisionAuthority,
+        )
+        .unwrap();
+
+        let acquired =
+            uze_core::acquisition::acquire(&uze_core::PackageSource::local(fixture())).unwrap();
+        let beta = app
+            .install_materialized_from_marketplace(
+                acquired,
+                "beta",
+                &uze_core::trust::AlwaysTrust,
+                &[],
+                false,
+                &uze_core::naming::FixedResolution(
+                    uze_core::naming::NameCollisionResolution::Alias("conformance-beta".to_owned()),
+                ),
+            )
+            .unwrap();
+        assert_eq!(beta.plugin.active_name, "conformance-beta");
+
+        let updated = app
+            .update_plugin("conformance-beta", &uze_core::trust::AlwaysTrust)
+            .unwrap();
+        let UpdatePluginReport::Updated { plugin, .. } = updated else {
+            panic!("expected Updated, got {updated:?}");
+        };
+        assert_eq!(plugin.id, "uze-agent-skill-conformance@beta");
+        assert_eq!(
+            plugin.active_name, "conformance-beta",
+            "update must not revert the alias to the bare plugin name"
+        );
+        // Still resolvable by its alias, and the other package's own bare
+        // name is unaffected.
+        assert_eq!(
+            app.package_by_name("conformance-beta").unwrap().id.as_str(),
+            "uze-agent-skill-conformance@beta"
+        );
+        assert_eq!(
+            app.package_by_name("uze-agent-skill-conformance")
+                .unwrap()
+                .id
+                .as_str(),
+            "uze-agent-skill-conformance@alpha"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     pub(crate) fn doctor_reports_corrupt_ledger_without_destructive_work() {
         let root = temp("doctor");
@@ -1813,7 +2077,7 @@ mod tests {
         home.ensure_layout().unwrap();
         fs::write(home.state_dir().join("attachments.json"), "bad").unwrap();
         fs::write(home.integrations_state_path(), "bad").unwrap();
-        let app = UzeApplication::new(home.clone(), vec![Box::new(SymlinkIntegration)]);
+        let app = UzeApplication::new(home, vec![Box::new(SymlinkIntegration)]);
         let report = app.doctor();
         assert!(report.ledger_error.is_some());
         assert!(report.integration_state_error.is_some());
@@ -1904,9 +2168,9 @@ mod tests {
                 .package_ids()
                 .unwrap()
                 .iter()
-                .any(|id| id.as_str() == "multi-mcp-plugin")
+                .any(|id| id.as_str() == "multi-mcp-plugin@local")
         );
-        let receipts = state::receipts(&home, Some("multi-mcp-plugin")).unwrap();
+        let receipts = state::receipts(&home, Some("multi-mcp-plugin@local")).unwrap();
         assert_eq!(receipts.len(), 1);
         assert_eq!(app.doctor().attachments[0].state.matched, 1);
         fs::remove_dir_all(root).unwrap();
@@ -1956,7 +2220,7 @@ mod tests {
             &uze_core::trust::AlwaysTrust,
         )
         .unwrap();
-        let receipts = state::receipts(&home, Some("multi-mcp-plugin")).unwrap();
+        let receipts = state::receipts(&home, Some("multi-mcp-plugin@local")).unwrap();
         assert_eq!(receipts.len(), 2);
         assert_ne!(
             receipts[0].1.resource_identity,
@@ -1967,7 +2231,7 @@ mod tests {
             RemovePluginReport::Removed { .. }
         ));
         assert!(
-            state::receipts(&home, Some("multi-mcp-plugin"))
+            state::receipts(&home, Some("multi-mcp-plugin@local"))
                 .unwrap()
                 .is_empty()
         );
@@ -1992,7 +2256,11 @@ mod tests {
             .into_iter()
             .map(|p| p.id)
             .collect();
-        assert_eq!(installed, bootstrap::DEFAULT_PLUGIN_IDS);
+        let expected: Vec<String> = bootstrap::DEFAULT_PLUGIN_IDS
+            .iter()
+            .map(|name| format!("{name}@uze-official"))
+            .collect();
+        assert_eq!(installed, expected);
 
         assert!(
             !app.ensure_default_plugins().unwrap(),
@@ -2057,11 +2325,11 @@ mod tests {
             })],
         );
         app.ensure_default_plugins().unwrap();
-        let before = state::receipts(&home, Some("uze")).unwrap();
+        let before = state::receipts(&home, Some("uze@uze-official")).unwrap();
         assert!(!before.is_empty());
 
         app.ensure_default_plugins().unwrap();
-        let after = state::receipts(&home, Some("uze")).unwrap();
+        let after = state::receipts(&home, Some("uze@uze-official")).unwrap();
         assert_eq!(before, after);
         fs::remove_dir_all(root).unwrap();
     }
@@ -2090,8 +2358,14 @@ mod tests {
             },
         );
 
-        let result =
-            app.install_materialized(materialized, &uze_core::trust::NoTrustAuthority, &[], false);
+        let result = app.install_materialized_from_marketplace(
+            materialized,
+            "local",
+            &uze_core::trust::NoTrustAuthority,
+            &[],
+            false,
+            &uze_core::naming::NoNameCollisionAuthority,
+        );
         assert!(matches!(result, Err(UzeError::TrustRequired { .. })));
         assert!(
             app.list_plugins().unwrap().is_empty(),
@@ -2138,7 +2412,7 @@ mod tests {
         let err = app.remove_plugin("uze").unwrap_err();
         assert!(
             err.to_string()
-                .contains("official marketplace plugin `uze` is protected"),
+                .contains("official marketplace plugin `uze@uze-official` is protected"),
             "expected protected error, got: {err}"
         );
 
@@ -2472,7 +2746,7 @@ mod tests {
             Ok(Some(AttachmentReceipt {
                 package_id: match &resource.origin {
                     uze_core::ResourceOrigin::Package { id, .. } => id.as_str().to_owned(),
-                    _ => unreachable!(),
+                    uze_core::ResourceOrigin::Project { .. } => unreachable!(),
                 },
                 resource_identity: Some(resource.identity()),
                 integration: self.id().to_owned(),
@@ -2542,7 +2816,7 @@ mod tests {
             Ok(Some(AttachmentReceipt {
                 package_id: match &resource.origin {
                     uze_core::ResourceOrigin::Package { id, .. } => id.as_str().to_owned(),
-                    _ => unreachable!(),
+                    uze_core::ResourceOrigin::Project { .. } => unreachable!(),
                 },
                 resource_identity: Some(resource.identity()),
                 integration: self.id().to_owned(),
@@ -2608,12 +2882,8 @@ mod tests {
         let app = UzeApplication::new(
             home.clone(),
             vec![
-                Box::new(HealthySymlinkIntegration {
-                    root: healthy_root.clone(),
-                }),
-                Box::new(ForeignFailingIntegration {
-                    root: foreign_root.clone(),
-                }),
+                Box::new(HealthySymlinkIntegration { root: healthy_root }),
+                Box::new(ForeignFailingIntegration { root: foreign_root }),
             ],
         );
         // Seed store with the default `uze` package (the one Antigravity
@@ -2631,7 +2901,7 @@ mod tests {
         let fake_bin = root.join("bin");
         fs::create_dir_all(&fake_bin).unwrap();
 
-        let results = app.setup(None).unwrap();
+        let results = setup_without_touching_the_real_shell_rc(&app, None).unwrap();
         assert_eq!(results.len(), 2, "both harnesses must be reported");
 
         let healthy = results
@@ -2683,9 +2953,7 @@ mod tests {
 
         let app = UzeApplication::new(
             home.clone(),
-            vec![Box::new(ForeignFailingIntegration {
-                root: foreign_root.clone(),
-            })],
+            vec![Box::new(ForeignFailingIntegration { root: foreign_root })],
         );
         // Two packages: default `uze` is externally available and the
         // canonical skill fixture still attaches.
@@ -2705,7 +2973,7 @@ mod tests {
         let receipts = state::receipts(&home, None).unwrap();
         let has_fixture_receipt = receipts.iter().any(|(_, r)| {
             r.integration == "antigravity"
-                && r.package_id == "uze-agent-skill-conformance"
+                && r.package_id == "uze-agent-skill-conformance@local"
                 && r.resource_identity.is_some()
         });
         assert!(
@@ -2724,14 +2992,12 @@ mod tests {
         fs::create_dir_all(&foreign_root).unwrap();
 
         let app = UzeApplication::new(
-            home.clone(),
-            vec![Box::new(ForeignFailingIntegration {
-                root: foreign_root.clone(),
-            })],
+            home,
+            vec![Box::new(ForeignFailingIntegration { root: foreign_root })],
         );
         app.ensure_default_plugins().unwrap();
 
-        let first = app.setup(None).unwrap();
+        let first = setup_without_touching_the_real_shell_rc(&app, None).unwrap();
         let foreign_first = first
             .iter()
             .find(|r| r.integration == "antigravity")
@@ -2740,7 +3006,7 @@ mod tests {
             .clone();
         assert!(foreign_first.is_none());
 
-        let second = app.setup(None).unwrap();
+        let second = setup_without_touching_the_real_shell_rc(&app, None).unwrap();
         let foreign_second = second
             .iter()
             .find(|r| r.integration == "antigravity")
@@ -2787,9 +3053,9 @@ mod tests {
         // SAFETY: single-threaded test, restores PATH afterwards.
         unsafe { std::env::set_var("PATH", &new_path) };
 
-        let app = UzeApplication::new(home.clone(), vec![Box::new(ShimConflictingIntegration {})]);
+        let app = UzeApplication::new(home, vec![Box::new(ShimConflictingIntegration {})]);
 
-        let results = app.setup(None).unwrap();
+        let results = setup_without_touching_the_real_shell_rc(&app, None).unwrap();
         let shim_result = results
             .iter()
             .find(|r| r.integration == "shim-test")

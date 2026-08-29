@@ -187,7 +187,7 @@ fn the_store_writes_no_harness_owned_artifact_of_its_own_accord() {
         .collect();
     assert_eq!(
         store_entries,
-        BTreeSet::from(["packages".to_owned()]),
+        BTreeSet::from(["plugins".to_owned()]),
         "the Store published something a harness reads"
     );
 
@@ -231,19 +231,19 @@ fn a_derived_view_is_rebuilt_from_the_package_set_alone() {
     let published = fs::read_to_string(&catalogue).expect("view was published");
     assert!(published.contains("uze-plugin-first-conformance"));
 
-    // Corrupt it, then prove the view holds nothing that exists only there:
-    // `setup` reconstructs it byte for byte from the Store.
+    // Corrupt it, then prove the view holds nothing that exists only
+    // there: it is reconstructed byte for byte from the Store alone.
+    // `doctor()` itself repairs stale derived views as bounded, safe
+    // maintenance (`maintain_environment`, called before it builds its
+    // report), so the repair is already visible in the same call that
+    // observes it — there is no separate "still broken" moment to catch.
     fs::write(&catalogue, "garbage").unwrap();
-    assert!(matches!(
-        application.doctor().harnesses[0].publication,
-        PublicationStatus::Unpublished(_)
-    ));
-    application.setup(None).expect("setup repairs the view");
-    assert_eq!(fs::read_to_string(&catalogue).unwrap(), published);
     assert_eq!(
         application.doctor().harnesses[0].publication,
-        PublicationStatus::Published
+        PublicationStatus::Published,
+        "doctor's own maintenance pass must have rebuilt the corrupted view"
     );
+    assert_eq!(fs::read_to_string(&catalogue).unwrap(), published);
 
     let _ = fs::remove_dir_all(home.root());
 }
@@ -340,17 +340,25 @@ fn harness_selection_comes_from_the_registered_integrations() {
         vec![Box::new(PublishingIntegration::new(views))],
     );
 
-    // By id, and by an alias the integration itself declares.
-    for name in ["fake-native", "fake"] {
-        let results = application.setup(Some(name)).expect("registered harness");
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].integration, "fake-native");
-    }
+    // `setup` probes `$SHELL` to decide whether to edit the operator's
+    // real shell rc file (`shell_path::detect_shell_rc`) — blanking it to
+    // an unrecognized value keeps this in-process call from touching
+    // whatever `~/.zshrc`/`~/.bashrc` exists on the machine running this
+    // test.
+    uze_testkit::env::with_env_var("SHELL", "uze-test-no-recognized-shell", || {
+        // By id, and by an alias the integration itself declares.
+        for name in ["fake-native", "fake"] {
+            let results = application.setup(Some(name)).expect("registered harness");
+            assert_eq!(results.len(), 1);
+            assert_eq!(results[0].integration, "fake-native");
+        }
 
-    // A harness the composition root does not register is unknown, and the
-    // error names what *is* registered rather than a hardcoded catalogue.
-    let error = application.setup(Some("codex")).unwrap_err().to_string();
-    assert!(error.contains("fake-native"), "error was: {error}");
+        // A harness the composition root does not register is unknown, and
+        // the error names what *is* registered rather than a hardcoded
+        // catalogue.
+        let error = application.setup(Some("codex")).unwrap_err().to_string();
+        assert!(error.contains("fake-native"), "error was: {error}");
+    });
 
     let _ = fs::remove_dir_all(home.root());
 }

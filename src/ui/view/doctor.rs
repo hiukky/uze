@@ -126,8 +126,6 @@ pub(crate) enum Severity {
 #[derive(Clone, Debug)]
 pub(crate) struct Issue {
     pub(crate) severity: Severity,
-    #[allow(dead_code)]
-    message: String,
 }
 
 /// Classifies `DoctorReport` findings into actionable severities. Deliberately
@@ -139,22 +137,19 @@ pub(crate) fn classify_doctor(doctor: Option<&DoctorReport>) -> Vec<Issue> {
         return Vec::new();
     };
     let mut issues = Vec::new();
-    if let Some(error) = &doctor.ledger_error {
+    if doctor.ledger_error.is_some() {
         issues.push(Issue {
             severity: Severity::High,
-            message: format!("Attachment ledger is unreadable: {error}"),
         });
     }
-    if let Some(error) = &doctor.integration_state_error {
+    if doctor.integration_state_error.is_some() {
         issues.push(Issue {
             severity: Severity::High,
-            message: format!("Integration state is unreadable: {error}"),
         });
     }
-    if let Some(error) = &doctor.provisioning_state_error {
+    if doctor.provisioning_state_error.is_some() {
         issues.push(Issue {
             severity: Severity::High,
-            message: format!("Provisioning state is unreadable: {error}"),
         });
     }
     for package in &doctor.attachments {
@@ -162,44 +157,25 @@ pub(crate) fn classify_doctor(doctor: Option<&DoctorReport>) -> Vec<Issue> {
         if state.conflicts > 0 || state.blocked > 0 {
             issues.push(Issue {
                 severity: Severity::High,
-                message: format!(
-                    "{}: {} conflict(s), {} blocked — needs manual resolution",
-                    package.plugin, state.conflicts, state.blocked
-                ),
             });
         }
         if state.drifted > 0 {
             issues.push(Issue {
                 severity: Severity::Medium,
-                message: format!(
-                    "{}: {} attachment(s) drifted from what UZE expects",
-                    package.plugin, state.drifted
-                ),
             });
         }
         if state.missing > 0 {
             issues.push(Issue {
                 severity: Severity::Low,
-                message: format!(
-                    "{}: {} attachment(s) missing",
-                    package.plugin, state.missing
-                ),
             });
         }
         for hook in &package.hooks {
             // A hook whose route cannot preserve its declared semantics is
             // an honest, actionable finding (ADR-033 doctor spec) — never
             // hidden behind a healthy-native row.
-            if let Some(loss) = &hook.weakened {
+            if hook.weakened.is_some() {
                 issues.push(Issue {
                     severity: Severity::Medium,
-                    message: format!(
-                        "{}: hook `{}` on {} is {:?} — {loss}",
-                        package.plugin,
-                        hook.hook,
-                        hook_harness_label(doctor, &hook.harness),
-                        hook.route
-                    ),
                 });
             }
             match hook.state {
@@ -208,24 +184,11 @@ pub(crate) fn classify_doctor(doctor: Option<&DoctorReport>) -> Vec<Issue> {
                 ) => {
                     issues.push(Issue {
                         severity: Severity::High,
-                        message: format!(
-                            "{}: hook `{}` on {} attachment is {:?}",
-                            package.plugin,
-                            hook.hook,
-                            hook_harness_label(doctor, &hook.harness),
-                            hook.state
-                        ),
                     });
                 }
                 Some(AttachmentState::Missing) => {
                     issues.push(Issue {
                         severity: Severity::Low,
-                        message: format!(
-                            "{}: hook `{}` on {} attachment missing",
-                            package.plugin,
-                            hook.hook,
-                            hook_harness_label(doctor, &hook.harness)
-                        ),
                     });
                 }
                 _ => {}
@@ -236,10 +199,6 @@ pub(crate) fn classify_doctor(doctor: Option<&DoctorReport>) -> Vec<Issue> {
         if harness.detection.present && harness.setup.contains("not configured") {
             issues.push(Issue {
                 severity: Severity::Medium,
-                message: format!(
-                    "{} is installed but not configured — run setup",
-                    harness.display_name
-                ),
             });
         }
     }
@@ -247,7 +206,6 @@ pub(crate) fn classify_doctor(doctor: Option<&DoctorReport>) -> Vec<Issue> {
         if plugin.update_available == Some(true) {
             issues.push(Issue {
                 severity: Severity::Low,
-                message: format!("{}: update available", plugin.id),
             });
         }
     }

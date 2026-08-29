@@ -101,6 +101,7 @@ fn build_package(
     }
     let id = PackageId::from_plugin_name(name, &pkg_root.join("plugin.json")).unwrap();
     let package = StoredPackage {
+        active_name: id.plugin_name().to_owned(),
         id,
         root: pkg_root.clone(),
         manifest: pkg_root.join("plugin.json"),

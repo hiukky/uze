@@ -158,7 +158,7 @@ impl UzeApplication {
             .collect()
     }
 
-    fn locked_plugin_id(name: &str, locked: &LockedPlugin) -> String {
+    pub(crate) fn locked_plugin_id(name: &str, locked: &LockedPlugin) -> String {
         match &locked.source {
             PluginSource::Marketplace { marketplace, .. } => format!("{name}@{marketplace}"),
             PluginSource::Git { .. } => format!("{name}@local"),
@@ -170,7 +170,6 @@ impl UzeApplication {
     /// `install_project_environment` (reproducing existing entries), so
     /// the two can never resolve the same kind of source differently.
     fn resolve_locked_plugin_source(
-        &self,
         lock: &ProjectLock,
         plugin: &str,
         source: &PluginSource,
@@ -237,7 +236,7 @@ impl UzeApplication {
                 uze_core::state::marketplace_get(&self.home, marketplace)?.ok_or_else(|| {
                     UzeError::UnknownPackage(format!("marketplace `{marketplace}` not found"))
                 })?;
-            let source = MarketplaceSource::from(global.source.clone());
+            let source = MarketplaceSource::from(global.source);
             // TODO: Resolve marketplace to get commit SHA for resolved.revision.
             // For now, use empty resolved (will be populated on install).
             (source, ResolvedMarketplace { revision: None })
@@ -282,7 +281,7 @@ impl UzeApplication {
             marketplace: marketplace.to_owned(),
             plugin: plugin.to_owned(),
         };
-        let package_source = self.resolve_locked_plugin_source(&lock, plugin, &plugin_source)?;
+        let package_source = Self::resolve_locked_plugin_source(&lock, plugin, &plugin_source)?;
 
         // Acquire and ingest (reuses existing lifecycle).
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.home)?;
@@ -293,6 +292,7 @@ impl UzeApplication {
             authority,
             &[],
             false,
+            &uze_core::naming::NoNameCollisionAuthority,
         )?;
 
         // What was actually acquired is the source of truth for `resolved`
@@ -387,7 +387,7 @@ impl UzeApplication {
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.home)?;
         let mut installed_plugins = Vec::new();
         for (name, locked) in missing {
-            let package_source = self.resolve_locked_plugin_source(&lock, &name, &locked.source)?;
+            let package_source = Self::resolve_locked_plugin_source(&lock, &name, &locked.source)?;
             let materialized = self.acquire(&package_source)?;
             let marketplace = match &locked.source {
                 PluginSource::Marketplace { marketplace, .. } => marketplace.as_str(),
@@ -399,6 +399,7 @@ impl UzeApplication {
                 authority,
                 &[],
                 false,
+                &uze_core::naming::NoNameCollisionAuthority,
             )?;
             installed_plugins.push(name);
         }

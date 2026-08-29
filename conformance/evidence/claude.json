@@ -1,14 +1,134 @@
 {
  "harness": "claude",
- "harness_version": "2.1.250 (Claude Code)",
+ "harness_version": "2.1.251 (Claude Code)",
  "uze_version": "uze 0.0.0-alpha.14",
- "fixture_revision": "12ac1ee16f95bcb3",
- "recorded_at": "2026-08-28T11:18:51-0300",
+ "fixture_revision": "3908e0a5833e8f1f",
+ "recorded_at": "2026-08-29T02:36:43-0300",
  "gate": {
-  "passed": 18,
+  "passed": 1,
   "total": 18,
   "known_adapted": 0,
   "retry": 0,
-  "failures": []
+  "failures": [
+   {
+    "check": "tui-reached-prompt",
+    "suite": "tui > tui-reached-prompt",
+    "adjudication": "asserted",
+    "detail": "",
+    "gate_reason": null
+   },
+   {
+    "check": "synthetic-credential",
+    "suite": "tui > synthetic-credential",
+    "adjudication": "asserted",
+    "detail": "billing row shows API usage (API key mode)",
+    "gate_reason": null
+   },
+   {
+    "check": "plugin-surface-in-tui",
+    "suite": "tui > plugin-surface-in-tui",
+    "adjudication": "asserted",
+    "detail": "/plugin opens the plugins surface",
+    "gate_reason": null
+   },
+   {
+    "check": "agent-visible-in-tui",
+    "suite": "tui > agent-visible-in-tui",
+    "adjudication": "asserted",
+    "detail": "^[/agents\r ",
+    "gate_reason": null
+   },
+   {
+    "check": "mcp-server-connected-in-tui",
+    "suite": "tui > mcp-server-connected-in-tui",
+    "adjudication": "asserted",
+    "detail": "/mcp shows the UZE MCP server connected with 1 tool",
+    "gate_reason": null
+   },
+   {
+    "check": "deterministic-response-rendered",
+    "suite": "tui > deterministic-response-rendered",
+    "adjudication": "asserted",
+    "detail": "^[hi\r ",
+    "gate_reason": null
+   },
+   {
+    "check": "model-visible-skill-present",
+    "suite": "tui > model-visible-skill-present",
+    "adjudication": "asserted",
+    "detail": "flow:commit in the primary request claude sent to its provider",
+    "gate_reason": null
+   },
+   {
+    "check": "provider-request-captured",
+    "suite": "tui > provider-request-captured",
+    "adjudication": "asserted",
+    "detail": "request body structurally recorded (tools/skill markers)",
+    "gate_reason": null
+   },
+   {
+    "check": "hooks-deny-turn-settled",
+    "suite": "hooks > deny > hooks-deny-turn-settled",
+    "adjudication": "asserted",
+    "detail": "",
+    "gate_reason": null
+   },
+   {
+    "check": "hooks-deny-denial-blocks-tool",
+    "suite": "hooks > deny > hooks-deny-denial-blocks-tool",
+    "adjudication": "asserted",
+    "detail": "turn never settled \u2014 absence not proven (the intercepted tool never executed \u2014 the native denial blocked it)",
+    "gate_reason": null
+   },
+   {
+    "check": "hooks-deny-marker-absent-second-handler-reached",
+    "suite": "hooks > deny > hooks-deny-marker-absent-second-handler-reached",
+    "adjudication": "asserted",
+    "detail": "turn never settled \u2014 absence not proven (`second-handler-reached` never reached the conversation (first-deny-wins))",
+    "gate_reason": null
+   },
+   {
+    "check": "hooks-allow-turn-settled",
+    "suite": "hooks > allow > hooks-allow-turn-settled",
+    "adjudication": "asserted",
+    "detail": "",
+    "gate_reason": null
+   },
+   {
+    "check": "hooks-allow-marker-absent-blocked by protect-env",
+    "suite": "hooks > allow > hooks-allow-marker-absent-blocked by protect-env",
+    "adjudication": "asserted",
+    "detail": "turn never settled \u2014 absence not proven (`blocked by protect-env` never reached the conversation (first-deny-wins))",
+    "gate_reason": null
+   },
+   {
+    "check": "hooks-allow-tool-executed",
+    "suite": "hooks > allow > hooks-allow-tool-executed",
+    "adjudication": "asserted",
+    "detail": "no tool_result observed",
+    "gate_reason": null
+   },
+   {
+    "check": "hooks-order-turn-settled",
+    "suite": "hooks > order > hooks-order-turn-settled",
+    "adjudication": "asserted",
+    "detail": "",
+    "gate_reason": null
+   },
+   {
+    "check": "hooks-order-denial-blocks-tool",
+    "suite": "hooks > order > hooks-order-denial-blocks-tool",
+    "adjudication": "asserted",
+    "detail": "turn never settled \u2014 absence not proven (the intercepted tool never executed \u2014 the native denial blocked it)",
+    "gate_reason": null
+   },
+   {
+    "check": "hooks-order-marker-absent-second-handler-ran",
+    "suite": "hooks > order > hooks-order-marker-absent-second-handler-ran",
+    "adjudication": "asserted",
+    "detail": "turn never settled \u2014 absence not proven (`second-handler-ran` never reached the conversation (first-deny-wins))",
+    "gate_reason": null
+   }
+  ]
  }
 }

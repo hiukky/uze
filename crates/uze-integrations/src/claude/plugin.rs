@@ -150,7 +150,7 @@ pub(super) fn claude_catalogue_document(packages: &[StoredPackage]) -> serde_jso
                 })
                 .unwrap_or_else(|| ("UZE-managed Claude plugin".to_owned(), "0.1.0".to_owned()));
             serde_json::json!({
-                "name": package.id.native_plugin_name(),
+                "name": package.active_name.as_str(),
                 "source": format!("./plugins/{}/{}", package.id.marketplace(), package.id.plugin_name()),
                 "description": description,
                 "version": version
@@ -452,6 +452,7 @@ mod claude_native_coverage_tests {
             uze_core::store::PackageId::from_plugin_name("test-pkg", &pkg_root.join("plugin.json"))
                 .unwrap();
         let pkg = uze_core::store::StoredPackage {
+            active_name: id.plugin_name().to_owned(),
             id,
             root: pkg_root.clone(),
             manifest: pkg_root.join("plugin.json"),
@@ -485,7 +486,7 @@ mod claude_native_coverage_tests {
             Capability {
                 kind: CapabilityKind::AgentSkill,
                 representation: Representation::Standard,
-                path: path.clone(),
+                path,
                 payload: body.as_bytes().to_vec(),
             },
         )
@@ -502,8 +503,8 @@ mod claude_native_coverage_tests {
             Capability {
                 kind: CapabilityKind::Mcp,
                 representation: Representation::Standard,
-                path: path.clone(),
-                payload: payload.clone(),
+                path,
+                payload,
             },
             name.to_owned(),
         )
@@ -784,6 +785,7 @@ mod claude_native_coverage_tests {
                 &pkg2_root.join("plugin.json"),
             )
             .unwrap(),
+            active_name: "pkg-two".to_owned(),
             root: pkg2_root.clone(),
             manifest: pkg2_root.join("plugin.json"),
             provenance: uze_core::acquisition::Provenance {
@@ -796,7 +798,7 @@ mod claude_native_coverage_tests {
             },
         };
         let doc1 = claude_catalogue_document(&[pkg1.clone(), pkg2.clone()]);
-        let doc1_again = claude_catalogue_document(&[pkg1.clone(), pkg2.clone()]);
+        let doc1_again = claude_catalogue_document(&[pkg1, pkg2]);
         assert_eq!(doc1, doc1_again);
         assert_eq!(doc1["name"], "uze-local");
         assert_eq!(doc1["plugins"].as_array().unwrap().len(), 2);
@@ -818,6 +820,7 @@ mod claude_native_coverage_tests {
                 &pkg_root.join("plugin.json"),
             )
             .unwrap(),
+            active_name: "no-claude".to_owned(),
             root: pkg_root.clone(),
             manifest: pkg_root.join("plugin.json"),
             provenance: uze_core::acquisition::Provenance {

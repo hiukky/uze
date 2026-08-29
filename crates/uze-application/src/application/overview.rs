@@ -59,7 +59,7 @@ impl UzeApplication {
             root: root.clone(),
             kind: resolved.kind,
             project: self.project_overview(&root, has_lock),
-            marketplace: has_manifest.then(|| self.marketplace_overview(&root)),
+            marketplace: has_manifest.then(|| Self::marketplace_overview(&root)),
         })
     }
 
@@ -77,9 +77,11 @@ impl UzeApplication {
                 let declared = lock.plugins.len();
                 let missing: Vec<String> = lock
                     .plugins
-                    .keys()
-                    .filter(|name| !installed_ids.contains(name.as_str()))
-                    .cloned()
+                    .iter()
+                    .filter(|(name, locked)| {
+                        !installed_ids.contains(&Self::locked_plugin_id(name, locked))
+                    })
+                    .map(|(name, _)| name.clone())
                     .collect();
                 let environment = if missing.is_empty() {
                     // Nothing declared, nothing required — or everything
@@ -110,7 +112,7 @@ impl UzeApplication {
         }
     }
 
-    fn marketplace_overview(&self, root: &Path) -> OverviewMarketplace {
+    fn marketplace_overview(root: &Path) -> OverviewMarketplace {
         match Self::load_marketplace_manifest(&PackageSource::Local {
             path: root.to_path_buf(),
         }) {
@@ -326,13 +328,26 @@ mod tests {
             }
         }
 
-        fn install(&self, source: &Path) {
+        /// Installs as though acquired through marketplace `marketplace` —
+        /// what a real `add_project_plugin` install does — so the Store's
+        /// package id agrees with what `write_lock` declared, matching
+        /// production behavior instead of the always-`local` shortcut
+        /// `add_plugin` takes for a bare `uze add <path>`.
+        fn install_from(&self, source: &Path, marketplace: &str) {
+            let materialized = self
+                .app
+                .acquire(&PackageSource::Local {
+                    path: source.to_path_buf(),
+                })
+                .unwrap();
             self.app
-                .add_plugin(
-                    PackageSource::Local {
-                        path: source.to_path_buf(),
-                    },
+                .install_materialized_from_marketplace(
+                    materialized,
+                    marketplace,
                     &AlwaysTrust,
+                    &[],
+                    false,
+                    &uze_core::naming::NoNameCollisionAuthority,
                 )
                 .unwrap();
         }
@@ -384,8 +399,8 @@ mod tests {
         write_plugin(&market, "flow");
         write_plugin(&market, "std");
         write_lock(&root, &["flow", "std"], "test");
-        fx.install(&market.join("flow"));
-        fx.install(&market.join("std"));
+        fx.install_from(&market.join("flow"), "test");
+        fx.install_from(&market.join("std"), "test");
 
         let project = fx.project(&root);
         assert_eq!(project.environment, ProjectEnvironmentState::Ready);
@@ -426,7 +441,7 @@ mod tests {
         write_plugin(&market, "flow");
         write_plugin(&market, "std");
         write_lock(&root, &["flow", "std"], "test");
-        fx.install(&market.join("flow"));
+        fx.install_from(&market.join("flow"), "test");
 
         let project = fx.project(&root);
         assert_eq!(
@@ -491,7 +506,7 @@ mod tests {
             fs::create_dir_all(&root).unwrap();
             write_lock(&root, &["flow", "std"], "test");
             if installed > 0 {
-                fx.install(&market.join("flow"));
+                fx.install_from(&market.join("flow"), "test");
             }
             let project = fx.project(&root);
             assert_eq!(

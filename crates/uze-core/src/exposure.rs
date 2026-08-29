@@ -121,7 +121,7 @@ impl ExposureMechanism {
     /// `ManagedUserScopeReference`; returns the created/verified entry path.
     /// Never touches an entry it does not already own.
     pub fn attach(&self) -> Result<PathBuf> {
-        let ExposureMechanism::ManagedUserScopeReference {
+        let Self::ManagedUserScopeReference {
             discovery_root,
             entry_name,
             source,
@@ -179,7 +179,7 @@ impl ExposureMechanism {
     /// mechanism describes. Only valid for that variant; delegates entirely
     /// to `crate::text_region`, which owns every safety rule.
     pub fn attach_text_region(&self) -> Result<PathBuf> {
-        let ExposureMechanism::ManagedTextRegion {
+        let Self::ManagedTextRegion {
             target_file,
             region_identity,
             expected_content,
@@ -197,7 +197,7 @@ impl ExposureMechanism {
     /// only if it still points at `source`. Never removes an entry it did
     /// not create, and never removes the shared discovery directory itself.
     pub fn detach(&self) -> Result<()> {
-        let ExposureMechanism::ManagedUserScopeReference {
+        let Self::ManagedUserScopeReference {
             discovery_root,
             entry_name,
             source,
@@ -324,51 +324,14 @@ impl ExposurePlan {
             ExposureMechanism::FilesystemProjection {
                 source,
                 target_relative,
-            } => {
-                let runtime = home.runtime_session_dir(integration, session);
-                let target = workspace.join(target_relative);
-                if target.exists() || target.is_symlink() {
-                    return Err(UzeError::RuntimePathExists(target));
-                }
-                let parent = target.parent().expect("projection target has a parent");
-                let created_directories = create_missing_directories(parent)?;
-                fs::create_dir_all(parent).map_err(|source_error| UzeError::Write {
-                    path: parent.to_path_buf(),
-                    source: source_error,
-                })?;
-                create_symlink(source, &target)?;
-                fs::create_dir_all(&runtime).map_err(|source_error| UzeError::Write {
-                    path: runtime.clone(),
-                    source: source_error,
-                })?;
-                let metadata = serde_json::json!({
-                    "managed_by": "uze",
-                    "integration": integration,
-                    "session": session,
-                    "workspace": workspace,
-                    "target": target,
-                    "source": source,
-                });
-                fs::write(
-                    runtime.join("managed-exposure.json"),
-                    serde_json::to_vec_pretty(&metadata)
-                        .expect("metadata serialization is infallible"),
-                )
-                .map_err(|source_error| UzeError::Write {
-                    path: runtime.join("managed-exposure.json"),
-                    source: source_error,
-                })?;
-                Ok(PreparedExposure {
-                    working_directory: workspace.to_path_buf(),
-                    arguments: Vec::new(),
-                    runtime_directory: Some(runtime),
-                    managed: Some(ManagedExposureArtifact {
-                        target,
-                        runtime_directory: home.runtime_session_dir(integration, session),
-                        created_directories,
-                    }),
-                })
-            }
+            } => prepare_filesystem_projection(
+                home,
+                integration,
+                session,
+                workspace,
+                source,
+                target_relative,
+            ),
             ExposureMechanism::ManagedUserScopeReference { .. } => {
                 // A persistent, user-scope reference is not a session-scoped
                 // managed artifact: it is created/refreshed once via
@@ -434,6 +397,58 @@ impl ExposurePlan {
             }
         }
     }
+}
+
+fn prepare_filesystem_projection(
+    home: &UzeHome,
+    integration: &str,
+    session: &str,
+    workspace: &Path,
+    source: &Path,
+    target_relative: &Path,
+) -> Result<PreparedExposure> {
+    let runtime = home.runtime_session_dir(integration, session);
+    let target = workspace.join(target_relative);
+    if target.exists() || target.is_symlink() {
+        return Err(UzeError::RuntimePathExists(target));
+    }
+    let parent = target.parent().expect("projection target has a parent");
+    let created_directories = create_missing_directories(parent)?;
+    fs::create_dir_all(parent).map_err(|source_error| UzeError::Write {
+        path: parent.to_path_buf(),
+        source: source_error,
+    })?;
+    create_symlink(source, &target)?;
+    fs::create_dir_all(&runtime).map_err(|source_error| UzeError::Write {
+        path: runtime.clone(),
+        source: source_error,
+    })?;
+    let metadata = serde_json::json!({
+        "managed_by": "uze",
+        "integration": integration,
+        "session": session,
+        "workspace": workspace,
+        "target": target,
+        "source": source,
+    });
+    fs::write(
+        runtime.join("managed-exposure.json"),
+        serde_json::to_vec_pretty(&metadata).expect("metadata serialization is infallible"),
+    )
+    .map_err(|source_error| UzeError::Write {
+        path: runtime.join("managed-exposure.json"),
+        source: source_error,
+    })?;
+    Ok(PreparedExposure {
+        working_directory: workspace.to_path_buf(),
+        arguments: Vec::new(),
+        runtime_directory: Some(runtime),
+        managed: Some(ManagedExposureArtifact {
+            target,
+            runtime_directory: home.runtime_session_dir(integration, session),
+            created_directories,
+        }),
+    })
 }
 
 fn create_missing_directories(parent: &Path) -> Result<Vec<PathBuf>> {

@@ -354,8 +354,8 @@ fn render_titlebar(
     // screen, which is where the full problem + evidence + solution list
     // lives. The hit rect covers the indicator only, so "UZE" and the hair-
     // line stay inert.
-    let prefix_width: usize = left.iter().take(4).map(|s| s.width()).sum();
-    let health_width: usize = left.iter().skip(4).map(|s| s.width()).sum();
+    let prefix_width: usize = left.iter().take(4).map(Span::width).sum();
+    let health_width: usize = left.iter().skip(4).map(Span::width).sum();
     let health_rect = Rect::new(
         inner
             .x
@@ -790,7 +790,9 @@ mod tests {
     use ratatui::{Terminal, backend::TestBackend, layout::Rect};
 
     use crate::UzeHome;
-    use crate::application::{DoctorReport, MarketplacePluginSummary, PluginSummary};
+    use crate::application::{
+        DoctorReport, MaintenanceReport, MarketplacePluginSummary, PluginSummary,
+    };
 
     use super::hit::Hit;
     use super::model::{Focus, Overlay, ROUTES, RefreshData, Route, TrustedRetry, TuiModel};
@@ -802,6 +804,7 @@ mod tests {
     fn plugin(id: &str) -> PluginSummary {
         PluginSummary {
             id: id.to_owned(),
+            active_name: id.to_owned(),
             source: "embedded:example".to_owned(),
             store_path: PathBuf::from("/store/example"),
             capability_count: 2,
@@ -887,7 +890,7 @@ mod tests {
             ledger_error: None,
             integration_state_error: None,
             provisioning_state_error: None,
-            maintenance: Default::default(),
+            maintenance: MaintenanceReport::default(),
         });
         model.harnesses_selected = 0;
         model
@@ -1214,7 +1217,7 @@ mod tests {
             ledger_error: None,
             integration_state_error: None,
             provisioning_state_error: None,
-            maintenance: Default::default(),
+            maintenance: MaintenanceReport::default(),
         };
         let issues = classify_doctor(Some(&doctor));
         assert_eq!(issues[0].severity, Severity::High);
@@ -1349,7 +1352,7 @@ mod tests {
                 ledger_error: None,
                 integration_state_error: None,
                 provisioning_state_error: None,
-                maintenance: Default::default(),
+                maintenance: MaintenanceReport::default(),
             }),
             ..RefreshData::default()
         });
@@ -1396,7 +1399,7 @@ mod tests {
             ledger_error: None,
             integration_state_error: None,
             provisioning_state_error: None,
-            maintenance: Default::default(),
+            maintenance: MaintenanceReport::default(),
         });
         let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
         let mut hits = Vec::new();
@@ -1514,7 +1517,7 @@ mod tests {
                 memory: MemoryState::Ready,
                 declared_plugins: declared,
                 installed_plugins: installed,
-                missing_plugins: missing.iter().map(|s| s.to_string()).collect(),
+                missing_plugins: missing.iter().map(ToString::to_string).collect(),
             },
             marketplace: None,
         }
@@ -1557,7 +1560,7 @@ mod tests {
             ..TuiModel::default()
         };
         let intent = model.apply_key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
-        assert_eq!(intent, Intent::InstallProjectEnvironment(root.clone()));
+        assert_eq!(intent, Intent::InstallProjectEnvironment(root));
     }
 
     #[test]
@@ -2007,18 +2010,15 @@ mod tests {
         std::fs::write(market.join("flow/skills/uze-test/SKILL.md"), "# s\n").unwrap();
         let lock = uze_core::project_lock::ProjectLock {
             version: 1,
-            marketplaces: [(
+            marketplaces: std::iter::once((
                 "test".to_owned(),
                 uze_core::project_lock::LockedMarketplace {
-                    source: uze_core::project_lock::MarketplaceSource::Path {
-                        path: market.clone(),
-                    },
+                    source: uze_core::project_lock::MarketplaceSource::Path { path: market },
                     resolved: uze_core::project_lock::ResolvedMarketplace::default(),
                 },
-            )]
-            .into_iter()
+            ))
             .collect(),
-            plugins: [(
+            plugins: std::iter::once((
                 "flow".to_owned(),
                 uze_core::project_lock::LockedPlugin {
                     source: uze_core::project_lock::PluginSource::Marketplace {
@@ -2031,8 +2031,7 @@ mod tests {
                         integrity: None,
                     },
                 },
-            )]
-            .into_iter()
+            ))
             .collect(),
         };
         uze_core::project_lock::save_lock(&project, &lock).unwrap();
@@ -2073,7 +2072,7 @@ mod tests {
         };
         let (sender, receiver) = mpsc::channel();
         super::worker::dispatch(
-            Intent::InstallProjectEnvironment(project.clone()),
+            Intent::InstallProjectEnvironment(project),
             &uze_home,
             &sender,
             &mut model,

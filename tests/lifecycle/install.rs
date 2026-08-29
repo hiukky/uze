@@ -57,7 +57,7 @@ fn one_plugin_install_is_planned_once_for_native_and_decomposed_harnesses() {
     let root = temp("shared-store");
     let home = UzeHome::at(&root);
     let (package, environment) = installed(&home);
-    assert_eq!(package.id.as_str(), "uze-plugin-first-conformance");
+    assert_eq!(package.id.as_str(), "uze-plugin-first-conformance@local");
     assert_eq!(UzeStore::new(home.clone()).registration_count().unwrap(), 1);
     assert_eq!(environment.resources.len(), 2);
     assert!(
@@ -212,11 +212,11 @@ fn one_plugin_install_is_planned_once_for_native_and_decomposed_harnesses() {
     // label (ADR-026) — the path-derived OpenCode V2 slash ID, user-visible
     // like Claude's.
     assert_eq!(
-        config["mcp"]["servers"]["uze-plugin-first-conformance-conformance"]["type"],
+        config["mcp"]["servers"]["uze-plugin-first-conformance@local-conformance"]["type"],
         "local"
     );
     assert_eq!(
-        config["mcp"]["servers"]["uze-plugin-first-conformance-conformance"]["command"][0],
+        config["mcp"]["servers"]["uze-plugin-first-conformance@local-conformance"]["command"][0],
         "__UZE_MCP_FIXTURE_BINARY__"
     );
     assert!(

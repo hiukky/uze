@@ -216,7 +216,7 @@ pub(super) fn catalogue_document(packages: &[StoredPackage]) -> serde_json::Valu
         .into_iter()
         .map(|package| {
             serde_json::json!({
-                "name": package.id.native_plugin_name(),
+                "name": package.active_name.as_str(),
                 // Relative to the catalogue root by necessity — see
                 // `CodexIntegration::catalogue_root`.
                 "source": { "source": "local", "path": format!("./plugins/{}/{}", package.id.marketplace(), package.id.plugin_name()) },
@@ -432,6 +432,7 @@ mod codex_native_coverage_tests {
             uze_core::store::PackageId::from_plugin_name("test-pkg", &pkg_root.join("plugin.json"))
                 .unwrap();
         let pkg = uze_core::store::StoredPackage {
+            active_name: id.plugin_name().to_owned(),
             id,
             root: pkg_root.clone(),
             manifest: pkg_root.join("plugin.json"),
@@ -457,7 +458,7 @@ mod codex_native_coverage_tests {
             Capability {
                 kind: CapabilityKind::AgentSkill,
                 representation: Representation::Standard,
-                path: path.clone(),
+                path,
                 payload: Vec::new(),
             },
         )
@@ -474,8 +475,8 @@ mod codex_native_coverage_tests {
             Capability {
                 kind: CapabilityKind::Mcp,
                 representation: Representation::Standard,
-                path: path.clone(),
-                payload: payload.clone(),
+                path,
+                payload,
             },
             name.to_owned(),
         )

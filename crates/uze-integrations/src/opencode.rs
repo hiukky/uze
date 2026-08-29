@@ -28,8 +28,9 @@ use uze_core::{
     hook::PortableHook,
     integration::{
         AttachmentInspection, AttachmentReceipt, AttachmentState, ContextDelivery,
-        HarnessDetection, IntegrationPort, ManagedArtifact, default_exposure_name_candidates,
-        detach_standard_receipt, inspect_standard_receipt, qualified_exposure_name_candidates,
+        HarnessDetection, IntegrationPort, ManagedArtifact, active_plugin_name,
+        default_exposure_name_candidates, detach_standard_receipt, inspect_standard_receipt,
+        qualified_exposure_name_candidates,
     },
     project::Resource,
     provisioning::{ProcessRunner, ProvisioningResult},
@@ -155,7 +156,10 @@ impl IntegrationPort for OpenCodeIntegration {
     /// never mixed just because all are `Resource`s.
     fn exposure_name_candidates(&self, resource: &Resource) -> Vec<String> {
         if resource.capability.kind == CapabilityKind::AgentSkill {
-            return qualified_exposure_name_candidates(resource);
+            let Some(active_name) = active_plugin_name(&self.uze_home, resource) else {
+                return Vec::new();
+            };
+            return qualified_exposure_name_candidates(resource, &active_name);
         }
         default_exposure_name_candidates(resource)
     }
@@ -485,7 +489,7 @@ impl OpenCodeIntegration {
                 path: resource.capability.path.clone(),
                 source,
             })?;
-        let active = self.active_hook_ids(package_id, None)?;
+        let active = self.active_hook_ids(package_id, None);
         let mut groups = hook_projection::groups_with_ids(package_root, &|id| {
             active.iter().any(|active| active == id)
         })?;
@@ -514,9 +518,9 @@ impl OpenCodeIntegration {
     /// package, extracted from each receipt's resource identity
     /// (`package:<id>:hooks.json:<group-id>`). `exclude` skips one receipt
     /// during its own detach, when the ledger still holds it.
-    fn active_hook_ids(&self, package_id: &str, exclude: Option<&str>) -> Result<Vec<String>> {
+    fn active_hook_ids(&self, package_id: &str, exclude: Option<&str>) -> Vec<String> {
         let Ok(ledger) = state::receipts(&self.uze_home, Some(package_id)) else {
-            return Ok(Vec::new());
+            return Vec::new();
         };
         let mut ids = Vec::new();
         for (_, receipt) in ledger {
@@ -541,7 +545,7 @@ impl OpenCodeIntegration {
         }
         ids.sort();
         ids.dedup();
-        Ok(ids)
+        ids
     }
 
     /// The bridge file itself is the entire managed artifact: it must exist
@@ -564,15 +568,7 @@ impl OpenCodeIntegration {
         // The expected bridge covers exactly the groups this integration
         // still owns receipts for — a bridge regenerated after one group's
         // detach is not drift just because the manifest still declares it.
-        let active = match self.active_hook_ids(&receipt.package_id, None) {
-            Ok(active) => active,
-            Err(_) => {
-                return AttachmentInspection {
-                    state: AttachmentState::Blocked,
-                    reason: "the hook receipt ledger cannot be read".to_owned(),
-                };
-            }
-        };
+        let active = self.active_hook_ids(&receipt.package_id, None);
         let Ok(groups) = hook_projection::groups_with_ids(&package_root, &|id| {
             active.iter().any(|active| active == id)
         }) else {
@@ -621,7 +617,7 @@ impl OpenCodeIntegration {
         }
         let package_id = receipt.package_id.as_str();
         let identity = receipt.resource_identity.clone();
-        let remaining = self.active_hook_ids(package_id, identity.as_deref())?;
+        let remaining = self.active_hook_ids(package_id, identity.as_deref());
         let package = PackageId::from_qualified(package_id, Path::new("plugin.json"))?;
         let package_root = self.uze_home.plugin_dir(&package);
         let groups = hook_projection::groups_with_ids(&package_root, &|id| {

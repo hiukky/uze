@@ -102,7 +102,7 @@ impl TempDir {
     pub fn new(label: &str) -> Self {
         let _guard = CREATE_LOCK
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let keep = std::env::var_os("UZE_TEST_KEEP").is_some();
         let path = std::env::temp_dir().join(format!(
             "uze-tests-{label}-{}-{}",

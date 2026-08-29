@@ -367,7 +367,7 @@ pub fn acquire(source: &PackageSource) -> Result<MaterializedPackage> {
             let commit = git::materialize(url, reference.as_deref(), &checkout)?;
             let root = match subdirectory {
                 Some(subdirectory) => git::resolve_subdirectory(&checkout, subdirectory)?,
-                None => checkout.clone(),
+                None => checkout,
             };
             materialized.retarget(
                 root,

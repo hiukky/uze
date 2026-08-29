@@ -31,7 +31,7 @@ impl UzeEngine {
         let project = resolve_project_resources(project_root)?;
         let mut resources = project.resources;
         resources.extend(self.package_resources(&self.store.package_ids()?)?);
-        resources.sort_by_key(|resource| resource.identity());
+        resources.sort_by_key(Resource::identity);
         Ok(EffectiveEnvironment {
             root: project.root,
             resources,
@@ -55,7 +55,7 @@ impl UzeEngine {
             let package = self.store.package(id)?;
             resources.extend(package_resources_at(&package.id, &package.root)?);
         }
-        resources.sort_by_key(|resource| resource.identity());
+        resources.sort_by_key(Resource::identity);
         Ok(resources)
     }
 }
@@ -88,7 +88,7 @@ pub fn package_resources_at(id: &PackageId, root: &std::path::Path) -> Result<Ve
     resources.extend(mcp_resources(id, root)?);
     resources.extend(agent_resources(id, root)?);
     resources.extend(hook_resources(id, root)?);
-    resources.sort_by_key(|resource| resource.identity());
+    resources.sort_by_key(Resource::identity);
     Ok(resources)
 }
 

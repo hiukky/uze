@@ -183,6 +183,16 @@ enum PluginAction {
         plugin: String,
         #[arg(long)]
         trust: bool,
+        /// If `plugin`'s bare name is already active from a different
+        /// marketplace, install this one under `NAME` instead, so both stay
+        /// active side by side. Conflicts with `--replace`.
+        #[arg(long, conflicts_with = "replace")]
+        alias: Option<String>,
+        /// If `plugin`'s bare name is already active from a different
+        /// marketplace, remove that one first (once safe to) and let this
+        /// install claim the name. Conflicts with `--alias`.
+        #[arg(long)]
+        replace: bool,
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
@@ -446,9 +456,9 @@ fn run(cli: Cli) -> Result<()> {
                         OutputFormat::Text => {
                             progress::success(&format!("Removed {plugin} from project"));
                         }
-                        OutputFormat::Json => print_json(&RemoveProjectPluginReport::Removed {
-                            plugin: plugin.clone(),
-                        }),
+                        OutputFormat::Json => {
+                            print_json(&RemoveProjectPluginReport::Removed { plugin })
+                        }
                     }
                 }
                 // Strictly project-scoped, by design (ADR-019): neither of
@@ -540,9 +550,12 @@ fn run(cli: Cli) -> Result<()> {
             PluginAction::Install {
                 plugin,
                 trust,
+                alias,
+                replace,
                 format,
             } => {
                 let authority = trust_authority(trust);
+                let name_authority = name_collision_authority(alias, replace);
                 let spinner = progress::spinner(&format!("Installing plugin {plugin}..."));
                 // Every install goes through a marketplace that must have
                 // been added first: `uze market add <market>` then
@@ -550,7 +563,11 @@ fn run(cli: Cli) -> Result<()> {
                 // (path or Git URL) is never accepted — the marketplace is
                 // the product's provenance contract (see ADR-019).
                 let installed = if plugin.contains('@') {
-                    app.plugin_install(&plugin, authority.as_ref())
+                    app.plugin_install_resolving(
+                        &plugin,
+                        authority.as_ref(),
+                        name_authority.as_ref(),
+                    )
                 } else {
                     return Err(uze::UzeError::UnknownPackage(format!(
                         "`{plugin}` is not a `name@marketplace` spec; add its marketplace with \
@@ -594,7 +611,14 @@ fn run(cli: Cli) -> Result<()> {
                     OutputFormat::Text => {
                         println!("Plugins");
                         for plugin in plugins {
-                            println!("{}  {} capabilities", plugin.id, plugin.capability_count);
+                            if plugin.active_name == plugin.id {
+                                println!("{}  {} capabilities", plugin.id, plugin.capability_count);
+                            } else {
+                                println!(
+                                    "{}  (origin: {})  {} capabilities",
+                                    plugin.active_name, plugin.id, plugin.capability_count
+                                );
+                            }
                         }
                     }
                     OutputFormat::Json => print_json(&plugins),
@@ -1250,6 +1274,71 @@ impl uze::trust::TrustAuthority for PromptingAuthority {
         match answer.trim() {
             "y" | "Y" | "yes" => uze::trust::TrustOutcome::Granted,
             _ => uze::trust::TrustOutcome::Denied,
+        }
+    }
+}
+
+/// Chooses who answers a plugin-name-collision question (ADR-038).
+///
+/// `--alias`/`--replace` answer it out of band. Without either, an
+/// interactive terminal prompts and anything else refuses to answer — a
+/// pipeline gets the structured `PluginNameCollision` error rather than a
+/// silent shadowing of the plugin already active under that name.
+fn name_collision_authority(
+    alias: Option<String>,
+    replace: bool,
+) -> Box<dyn uze::naming::NameCollisionAuthority> {
+    if let Some(alias) = alias {
+        return Box::new(uze::naming::FixedResolution(
+            uze::naming::NameCollisionResolution::Alias(alias),
+        ));
+    }
+    if replace {
+        return Box::new(uze::naming::FixedResolution(
+            uze::naming::NameCollisionResolution::Replace,
+        ));
+    }
+    if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
+        return Box::new(PromptingCollisionAuthority);
+    }
+    Box::new(uze::naming::NoNameCollisionAuthority)
+}
+
+struct PromptingCollisionAuthority;
+
+impl uze::naming::NameCollisionAuthority for PromptingCollisionAuthority {
+    fn resolve(
+        &self,
+        request: &uze::naming::NameCollisionRequest,
+    ) -> uze::naming::NameCollisionResolution {
+        use std::io::Write;
+
+        println!();
+        println!(
+            "`{}` is already active as `{}` — installing `{}` under the same name would silently \
+             shadow it in every harness.",
+            request.name, request.existing, request.requested
+        );
+        print!(
+            "\n[k]eep existing (default), [r]eplace it, or [a]lias this install to a new name? "
+        );
+        let _ = std::io::stdout().flush();
+        let mut answer = String::new();
+        if std::io::stdin().read_line(&mut answer).is_err() {
+            return uze::naming::NameCollisionResolution::Abort;
+        }
+        match answer.trim() {
+            "r" | "R" | "replace" => uze::naming::NameCollisionResolution::Replace,
+            "a" | "A" | "alias" => {
+                print!("New local name: ");
+                let _ = std::io::stdout().flush();
+                let mut alias = String::new();
+                if std::io::stdin().read_line(&mut alias).is_err() || alias.trim().is_empty() {
+                    return uze::naming::NameCollisionResolution::Abort;
+                }
+                uze::naming::NameCollisionResolution::Alias(alias.trim().to_owned())
+            }
+            _ => uze::naming::NameCollisionResolution::Abort,
         }
     }
 }

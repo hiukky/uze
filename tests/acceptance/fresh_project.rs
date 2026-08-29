@@ -33,7 +33,7 @@ fn fresh_machine_installs_canonical_plugin_and_inspects_healthy() {
         &with_json.iter().map(String::as_str).collect::<Vec<_>>(),
     );
     let report: serde_json::Value = serde_json::from_slice(&install.stdout).expect("json report");
-    assert_eq!(report["plugin"]["id"], "uze-agent-skill-conformance");
+    assert_eq!(report["plugin"]["id"], "uze-agent-skill-conformance@test");
     let store_path = PathBuf::from(report["plugin"]["store_path"].as_str().unwrap());
     assert!(
         store_path.starts_with(&env.uze_home),

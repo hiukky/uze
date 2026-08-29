@@ -101,9 +101,12 @@ pub(super) fn materialize_generated_skill(
         path: canonical_dir.join("SKILL.md"),
         source: error,
     })?;
-    let label = uze_core::integration::qualified_exposure_name_candidates(resource)
-        .into_iter()
-        .next()
+    let label = uze_core::integration::active_plugin_name(uze_home, resource)
+        .and_then(|active_name| {
+            uze_core::integration::qualified_exposure_name_candidates(resource, &active_name)
+                .into_iter()
+                .next()
+        })
         .unwrap_or_else(|| fallback_name.to_owned());
     crate::shared::skill::write_superset_skill_wrapper(
         &dir,
@@ -288,7 +291,7 @@ fn projection_conflict(
         .capability
         .path
         .parent()
-        .map(|parent| parent.to_path_buf())
+        .map(Path::to_path_buf)
         .unwrap_or_else(|| resource.capability.path.clone());
     UzeError::ProjectionConflict(Box::new(uze_core::error::ProjectionConflictDetails {
         entry: entry.to_path_buf(),

@@ -342,7 +342,7 @@ fn mcp_resource_routes_to_managed_vendor_config_once_setup_state_is_recorded() {
             claude_plan.mechanism
         );
     };
-    assert_eq!(entry_name, "uze-mcp-conformance-uze-conformance");
+    assert_eq!(entry_name, "uze-mcp-conformance@local-uze-conformance");
     assert_eq!(command.to_str().unwrap(), "__UZE_MCP_FIXTURE_BINARY__");
     assert!(args.is_empty());
 
@@ -402,4 +402,20 @@ fn detach_mcp_entry_removes_a_registered_entry_idempotently() {
     codex::detach_mcp_entry(&dir.join("codex"), &dir, "uze-example").unwrap();
 
     fs::remove_dir_all(dir).unwrap();
+}
+
+/// `detach_mcp_entry` passes `entry_name` as a bare positional argument to
+/// `claude mcp remove <name>` / `codex mcp remove <name>`, the same as
+/// `attach_mcp_entry` does for `mcp add`. A name starting with `-` must be
+/// refused rather than handed to the vendor CLI, where it would be parsed
+/// as a flag instead of the target name.
+#[test]
+fn detach_mcp_entry_refuses_a_name_that_would_be_parsed_as_a_flag() {
+    let bogus = PathBuf::from("/nonexistent/uze-detach-guard-test");
+    let error = claude::detach_mcp_entry(&bogus, &bogus, "--not-a-name")
+        .expect_err("a flag-shaped name must be refused before any process is spawned");
+    assert!(error.to_string().contains("--not-a-name"));
+    let error = codex::detach_mcp_entry(&bogus, &bogus, "--not-a-name")
+        .expect_err("a flag-shaped name must be refused before any process is spawned");
+    assert!(error.to_string().contains("--not-a-name"));
 }

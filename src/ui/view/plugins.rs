@@ -107,7 +107,7 @@ fn render_plugin_row(
     let catalog_marketplace = model
         .marketplace_plugins
         .iter()
-        .find(|m| m.name == plugin.id)
+        .find(|m| format!("{}@{}", m.name, m.marketplace) == plugin.id)
         .map(|m| m.marketplace.clone());
     // Official gets the same "✓ Official" badge the Marketplace tree shows
     // for its group header, not the literal "uze-official" string — the
@@ -137,7 +137,7 @@ fn render_plugin_row(
         TEXT_SECONDARY
     };
     let left = vec![Span::styled(
-        plugin.id.clone(),
+        plugin.active_name.clone(),
         Style::default().fg(name_fg),
     )];
     let right = vec![
@@ -145,7 +145,7 @@ fn render_plugin_row(
         Span::raw("  "),
         Span::styled(health, health_style(health)),
     ];
-    let used: usize = left.iter().chain(right.iter()).map(|s| s.width()).sum();
+    let used: usize = left.iter().chain(right.iter()).map(Span::width).sum();
     let gap = (rect.width as usize).saturating_sub(used);
     let mut name_spans = left;
     name_spans.push(Span::raw(" ".repeat(gap.max(2))));
@@ -158,7 +158,7 @@ fn render_plugin_row(
     let description = model
         .marketplace_plugins
         .iter()
-        .find(|m| m.name == plugin.id)
+        .find(|m| format!("{}@{}", m.name, m.marketplace) == plugin.id)
         .and_then(|m| m.description.clone())
         .unwrap_or_default();
     let mut desc_spans = vec![Span::styled(description, Style::default().fg(MUTED))];
@@ -168,7 +168,7 @@ fn render_plugin_row(
             span.style = span.style.bg(SELECTED_BG);
         }
         for spans in [&mut name_spans, &mut desc_spans] {
-            let used: usize = spans.iter().map(|s| s.width()).sum();
+            let used: usize = spans.iter().map(Span::width).sum();
             let gap = (rect.width as usize).saturating_sub(used);
             spans.push(Span::styled(
                 " ".repeat(gap),
@@ -219,12 +219,26 @@ fn render_plugin_drawer(
             Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
-            &plugin.id,
+            &plugin.active_name,
             Style::default()
                 .fg(TEXT_BRIGHT)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
+        // The active name is what every harness invokes (`/<active_name>:*`);
+        // `id` is the real, marketplace-qualified origin — shown separately
+        // whenever they differ, i.e. whenever an install-time `alias`
+        // resolved a name collision (ADR-038), so a person removing or
+        // inspecting this row is never left guessing which physical package
+        // it actually is.
+        Line::from(if plugin.active_name == plugin.id {
+            Span::styled(format!("Origin: {}", plugin.id), Style::default().fg(MUTED))
+        } else {
+            Span::styled(
+                format!("Origin: {} (aliased)", plugin.id),
+                Style::default().fg(WARNING),
+            )
+        }),
         Line::from(Span::styled(
             if is_official {
                 "Official".to_owned()

@@ -313,6 +313,7 @@ mod generated_native_tests {
             uze_core::store::PackageId::from_plugin_name("flow", &pkg_root.join("plugin.json"))
                 .unwrap();
         let pkg = StoredPackage {
+            active_name: id.plugin_name().to_owned(),
             id,
             root: pkg_root.clone(),
             manifest: pkg_root.join("plugin.json"),
@@ -400,7 +401,7 @@ mod generated_native_tests {
             BTreeSet::from([r_skill.identity(), r_mcp.identity()])
         );
         assert!(
-            !generated_root(&uze_home).join("flow").exists(),
+            !generated_root(&uze_home).join(pkg.id.as_str()).exists(),
             "planning must stay read-only"
         );
         let _ = fs::remove_dir_all(root);
@@ -425,7 +426,7 @@ mod generated_native_tests {
         );
         let resources = vec![&user_only];
         let uze_home = UzeHome::at(root.join("uze"));
-        let integration = AntigravityIntegration::new(root.join("agents"), uze_home.clone());
+        let integration = AntigravityIntegration::new(root.join("agents"), uze_home);
         assert!(
             integration
                 .package_exposure_plan(&pkg, &resources)
@@ -482,14 +483,14 @@ mod generated_native_tests {
         materialize_generated_plugin(&uze_home, &pkg).unwrap();
         let first = fs::read(
             generated_root(&uze_home)
-                .join("flow")
+                .join(pkg.id.as_str())
                 .join("mcp_config.json"),
         )
         .unwrap();
         materialize_generated_plugin(&uze_home, &pkg).unwrap();
         let second = fs::read(
             generated_root(&uze_home)
-                .join("flow")
+                .join(pkg.id.as_str())
                 .join("mcp_config.json"),
         )
         .unwrap();
@@ -529,7 +530,7 @@ mod generated_native_tests {
             "every canonical hook group is covered by the generated plugin"
         );
         assert!(
-            !generated_root(&uze_home).join("flow").exists(),
+            !generated_root(&uze_home).join(pkg.id.as_str()).exists(),
             "planning must stay read-only"
         );
         let _ = fs::remove_dir_all(root);
@@ -569,9 +570,9 @@ mod generated_native_tests {
         let (root, pkg) = make_package_with_mcp("removal");
         let uze_home = UzeHome::at(root.join("uze"));
         materialize_generated_plugin(&uze_home, &pkg).unwrap();
-        assert!(generated_root(&uze_home).join("flow").exists());
+        assert!(generated_root(&uze_home).join(pkg.id.as_str()).exists());
         remove_generated_plugin_by_id(&uze_home, pkg.id.as_str()).unwrap();
-        assert!(!generated_root(&uze_home).join("flow").exists());
+        assert!(!generated_root(&uze_home).join(pkg.id.as_str()).exists());
         assert!(
             pkg.root.join("skills/commit/SKILL.md").is_file(),
             "Store bytes untouched"

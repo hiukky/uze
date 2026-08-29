@@ -72,7 +72,7 @@ impl UzeApplication {
                         && integration.inspect_receipt(&receipt).state == AttachmentState::Matched
                 });
             if already_attached {
-                provided = plan.provided_resource_identities.clone();
+                provided = plan.provided_resource_identities;
             } else {
                 // Migration: decomposed → native. Detach covered capability receipts
                 // that are now provided by the package, but only if they are
@@ -152,6 +152,34 @@ impl UzeApplication {
         Ok(())
     }
 
+    /// Detaches `existing` and forgets its receipt once its inspected state
+    /// proves it's safe to reclaim the name (Matched, once detach confirms
+    /// it's gone; or already Missing/foreign-occupied). Returns `true` when
+    /// the receipt was dropped, in which case the caller falls back to a
+    /// fresh candidate name. A Drifted/Blocked receipt is left untouched —
+    /// the user intervened — and this returns `false`.
+    fn drop_stale_receipt(
+        &self,
+        integration: &dyn IntegrationPort,
+        existing: &AttachmentReceipt,
+        key: &str,
+    ) -> Result<bool> {
+        match integration.inspect_receipt(existing).state {
+            AttachmentState::Matched => {
+                if integration.detach_receipt(existing)?.state == AttachmentState::Missing {
+                    state::forget_receipt(&self.home, key)?;
+                    return Ok(true);
+                }
+                Ok(false)
+            }
+            AttachmentState::Missing | AttachmentState::Conflict => {
+                state::forget_receipt(&self.home, key)?;
+                Ok(true)
+            }
+            AttachmentState::Drifted | AttachmentState::Blocked => Ok(false),
+        }
+    }
+
     pub(crate) fn resolve_exposure_name(
         &self,
         resource: &Resource,
@@ -207,19 +235,8 @@ impl UzeApplication {
             if let (Some(old_name), Some(canonical_name)) = (&existing_name, &current_candidate)
                 && old_name != canonical_name
             {
-                let inspection = integration.inspect_receipt(existing);
-                match inspection.state {
-                    AttachmentState::Matched => {
-                        if integration.detach_receipt(existing)?.state == AttachmentState::Missing {
-                            state::forget_receipt(&self.home, key)?;
-                            return Ok(resolved);
-                        }
-                    }
-                    AttachmentState::Missing | AttachmentState::Conflict => {
-                        state::forget_receipt(&self.home, key)?;
-                        return Ok(resolved);
-                    }
-                    AttachmentState::Drifted | AttachmentState::Blocked => {}
+                if self.drop_stale_receipt(integration, existing, key)? {
+                    return Ok(resolved);
                 }
                 // Fall through to the fresh candidate below — do not reuse.
             } else if resource.capability.kind == CapabilityKind::AgentSkill
@@ -237,19 +254,8 @@ impl UzeApplication {
                 // receipt proves UZE owns this exact legacy link, so detach
                 // it and let the integration rebuild a wrapper. Foreign or
                 // drifted links keep the existing inspect-before-detach rule.
-                let inspection = integration.inspect_receipt(existing);
-                match inspection.state {
-                    AttachmentState::Matched => {
-                        if integration.detach_receipt(existing)?.state == AttachmentState::Missing {
-                            state::forget_receipt(&self.home, key)?;
-                            return Ok(resolved);
-                        }
-                    }
-                    AttachmentState::Missing | AttachmentState::Conflict => {
-                        state::forget_receipt(&self.home, key)?;
-                        return Ok(resolved);
-                    }
-                    AttachmentState::Drifted | AttachmentState::Blocked => {}
+                if self.drop_stale_receipt(integration, existing, key)? {
+                    return Ok(resolved);
                 }
             } else {
                 resolved.resolved_exposure_name = existing_name;
@@ -339,8 +345,7 @@ impl UzeApplication {
             uze_core::error::ProjectionConflictDetails {
                 entry: integration
                     .shared_agent_skill_root()
-                    .map(|root| root.join(&entry))
-                    .unwrap_or_else(|| PathBuf::from(&entry)),
+                    .map_or_else(|| PathBuf::from(&entry), |root| root.join(&entry)),
                 requested: resource.identity(),
                 requested_integration: integration.id().to_owned(),
                 requested_target,

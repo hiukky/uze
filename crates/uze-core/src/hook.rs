@@ -616,8 +616,7 @@ fn run_handler(
         Some(format!("`{command}` timed out after {}s", handler.timeout))
     } else if stdout_overflow {
         Some(format!(
-            "`{command}` stdout exceeded the {} byte cap",
-            MAX_HANDLER_STDOUT_BYTES
+            "`{command}` stdout exceeded the {MAX_HANDLER_STDOUT_BYTES} byte cap"
         ))
     } else if !denied_by_exit && !stdout_bytes.is_empty() {
         match serde_json::from_slice::<HookCommandOutput>(&stdout_bytes) {

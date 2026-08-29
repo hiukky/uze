@@ -57,8 +57,8 @@ enum Newline {
 impl Newline {
     fn separator(self) -> &'static str {
         match self {
-            Newline::Lf => "\n",
-            Newline::Crlf => "\r\n",
+            Self::Lf => "\n",
+            Self::Crlf => "\r\n",
         }
     }
 }

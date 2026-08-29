@@ -250,7 +250,7 @@ fn inspect_reports_an_installed_plugin_without_vendor_writes() {
 
     assert!(output.status.success());
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(report["plugin"]["id"], "uze-agent-skill-conformance");
+    assert_eq!(report["plugin"]["id"], "uze-agent-skill-conformance@test");
     assert_eq!(report["capabilities"].as_array().unwrap().len(), 1);
     assert_eq!(
         std::fs::read(home.join("state/attachments.json")).ok(),
@@ -265,7 +265,10 @@ fn add_and_inspect_use_the_same_injected_uze_home() {
     let add = install_via_marketplace_json(&home, &home, &package_fixture(), "/usr/bin:/bin");
     assert!(add.status.success());
     let installed: serde_json::Value = serde_json::from_slice(&add.stdout).unwrap();
-    assert_eq!(installed["plugin"]["id"], "uze-agent-skill-conformance");
+    assert_eq!(
+        installed["plugin"]["id"],
+        "uze-agent-skill-conformance@test"
+    );
     assert!(PathBuf::from(installed["plugin"]["store_path"].as_str().unwrap()).starts_with(&home));
 
     let inspect = Command::new(env!("CARGO_BIN_EXE_uze"))
@@ -283,12 +286,14 @@ fn add_and_inspect_use_the_same_injected_uze_home() {
         .unwrap();
     assert!(inspect.status.success());
     let report: serde_json::Value = serde_json::from_slice(&inspect.stdout).unwrap();
-    assert_eq!(report["plugin"]["id"], "uze-agent-skill-conformance");
+    assert_eq!(report["plugin"]["id"], "uze-agent-skill-conformance@test");
     assert!(
         report["plugin"]["store_path"]
             .as_str()
             .unwrap()
-            .contains("store/packages")
+            .contains("store/plugins"),
+        "store_path should live under the Store's plugins dir, got {}",
+        report["plugin"]["store_path"]
     );
     let _ = std::fs::remove_dir_all(home);
 }
@@ -528,7 +533,7 @@ fn setup_then_add_attaches_transparently_without_a_separate_sync_step() {
     let generated_root = uze_home.join("state/attachments/claude/generated");
     assert!(
         generated_root
-            .join("uze-agent-skill-conformance/.claude-plugin/plugin.json")
+            .join("uze-agent-skill-conformance@test/.claude-plugin/plugin.json")
             .is_file(),
         "the fixture's generated Claude envelope should exist"
     );
@@ -536,13 +541,13 @@ fn setup_then_add_attaches_transparently_without_a_separate_sync_step() {
     // the envelope's own `skills/` directory (ADR-030).
     assert!(
         generated_root
-            .join("uze-agent-skill-conformance/skills/uze-e2e")
+            .join("uze-agent-skill-conformance@test/skills/uze-e2e")
             .is_symlink(),
         "the generated envelope should reference the Store's skills/ by symlink, not a copy"
     );
     assert!(
         generated_root
-            .join("uze/.claude-plugin/plugin.json")
+            .join("uze@uze-official/.claude-plugin/plugin.json")
             .is_file(),
         "the default uze package's generated Claude envelope should exist too"
     );
@@ -671,7 +676,7 @@ fn setup_then_add_attaches_the_mcp_fixture_idempotently_and_removal_works() {
     // before asserting their shape.
     let mcp_receipts: Vec<_> = receipts
         .values()
-        .filter(|receipt| receipt["package_id"] == "uze-mcp-conformance")
+        .filter(|receipt| receipt["package_id"] == "uze-mcp-conformance@test")
         .collect();
     assert!(
         mcp_receipts.len() >= 3,
@@ -767,7 +772,10 @@ fn plugin_remove_uses_the_package_centric_application_flow() {
         .as_array()
         .unwrap()
         .clone();
-    let non_default: Vec<_> = plugins.iter().filter(|p| p["id"] != "uze").collect();
+    let non_default: Vec<_> = plugins
+        .iter()
+        .filter(|p| p["id"] != "uze@uze-official")
+        .collect();
     assert!(
         non_default.is_empty(),
         "expected no non-default plugins after remove, got {plugins:?}"
@@ -830,7 +838,7 @@ fn root_remove_no_longer_falls_back_to_global_removal() {
     assert!(
         plugins
             .iter()
-            .any(|p| p["id"] == "uze-agent-skill-conformance"),
+            .any(|p| p["id"] == "uze-agent-skill-conformance@test"),
         "package must survive a failed project-scoped remove, got {plugins:?}"
     );
     let _ = std::fs::remove_dir_all(home);

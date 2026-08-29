@@ -96,7 +96,7 @@ fn the_official_package_installs_through_the_unmodified_pipeline() {
             &uze::trust::AlwaysTrust,
         )
         .expect("the official uze package is a valid Agent Plugins 1.0 package");
-    assert_eq!(report.plugin.id, "uze");
+    assert_eq!(report.plugin.id, "uze@local");
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -143,7 +143,7 @@ fn the_package_receives_no_special_treatment_a_renamed_copy_behaves_identically(
     let report = application
         .add_plugin(PackageSource::local(renamed), &uze::trust::AlwaysTrust)
         .expect("an identical package under a different id installs the same way");
-    assert_eq!(report.plugin.id, "totally-different-name");
+    assert_eq!(report.plugin.id, "totally-different-name@local");
     let inspection = application
         .inspect_plugin("totally-different-name")
         .unwrap();

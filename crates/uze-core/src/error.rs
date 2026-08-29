@@ -44,6 +44,14 @@ pub enum UzeError {
         requested: String,
     },
     #[error(
+        "plugin name `{name}` is already active as `{existing}`; installing `{requested}` under it would silently shadow one of the two — pass a replace or alias resolution"
+    )]
+    PluginNameCollision {
+        name: String,
+        existing: String,
+        requested: String,
+    },
+    #[error(
         "package is not self-contained: `{link}` resolves to `{target}`, outside the package root"
     )]
     PackageEscapesRoot { link: PathBuf, target: PathBuf },

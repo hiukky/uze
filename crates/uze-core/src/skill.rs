@@ -119,7 +119,7 @@ pub fn parse_skill_invocation(bytes: &[u8]) -> Option<SkillInvocationPolicy> {
     let mut user = true;
     let mut invalid = false;
     let mut saw_invoke = false;
-    let mut lines = head.lines().peekable();
+    let mut lines = head.lines();
     while let Some(line) = lines.next() {
         let Some((key, _value)) = line.split_once(':') else {
             continue;

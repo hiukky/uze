@@ -359,7 +359,7 @@ pub fn files_named(root: &Path, expected_name: &str) -> Result<Vec<PathBuf>> {
                 path: directory.clone(),
                 source,
             })?;
-        entries.sort_by_key(|entry| entry.file_name());
+        entries.sort_by_key(std::fs::DirEntry::file_name);
         for entry in entries {
             let path = entry.path();
             // `symlink_metadata` deliberately, not `is_dir()`: the latter
@@ -399,7 +399,7 @@ pub fn files_with_extension(root: &Path, extension: &str) -> Result<Vec<PathBuf>
                 path: directory.clone(),
                 source,
             })?;
-        entries.sort_by_key(|entry| entry.file_name());
+        entries.sort_by_key(std::fs::DirEntry::file_name);
         for entry in entries {
             let path = entry.path();
             let metadata = fs::symlink_metadata(&path).map_err(|source| UzeError::Read {

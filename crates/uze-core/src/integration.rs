@@ -234,7 +234,7 @@ pub trait IntegrationPort {
     /// to the first alias, else the id. Shared by `ensure_runtime_shim`
     /// (creation) and the shim's own invocation detection (dispatch).
     fn shim_name(&self) -> &'static str {
-        self.aliases().first().copied().unwrap_or(self.id())
+        self.aliases().first().copied().unwrap_or_else(|| self.id())
     }
 
     /// How this harness consumes a project's shared `AGENTS.md` context
@@ -480,7 +480,7 @@ pub trait IntegrationPort {
         };
         let package_id = match &resource.origin {
             crate::project::ResourceOrigin::Package { id, .. } => id.as_str().to_owned(),
-            _ => return Ok(None),
+            crate::project::ResourceOrigin::Project { .. } => return Ok(None),
         };
         let plan = self.exposure_plan(resource);
         let strategy = format!("{:?}", plan.mechanism);
@@ -615,10 +615,27 @@ pub fn default_exposure_name_candidates(resource: &crate::project::Resource) -> 
 /// The stable, plugin-qualified invocation label (ADR-026):
 /// `<plugin>:<capability>`. This is a **presentation** label — it never
 /// replaces the canonical resource identity, the package layout, or the
-/// capability body. Deterministic and independent of which other plugins
-/// are installed.
-pub fn qualified_capability_name(package_id: &str, logical_name: &str) -> String {
-    format!("{package_id}:{logical_name}")
+/// capability body. `plugin` is the package's *active* local name
+/// (ADR-038) — its own bare name unless an install-time alias resolved a
+/// collision — never the marketplace-qualified identity. Deterministic and
+/// independent of which other plugins are installed.
+pub fn qualified_capability_name(active_plugin_name: &str, logical_name: &str) -> String {
+    format!("{active_plugin_name}:{logical_name}")
+}
+
+/// Resolves the resource's package to the local invocation name it is
+/// currently active under (`UzeStore::active_name_for`) — its own bare
+/// plugin name unless an install-time alias resolved a collision with
+/// another marketplace's same-named plugin (ADR-038). `None` for a
+/// Project-origin resource, which has no package identity to resolve.
+pub fn active_plugin_name(
+    home: &crate::home::UzeHome,
+    resource: &crate::project::Resource,
+) -> Option<String> {
+    let crate::project::ResourceOrigin::Package { id, .. } = &resource.origin else {
+        return None;
+    };
+    Some(crate::store::UzeStore::new(home.clone()).active_name_for(id))
 }
 
 /// The single candidate for every UZE-projected Skill: its own stable
@@ -626,18 +643,27 @@ pub fn qualified_capability_name(package_id: &str, logical_name: &str) -> String
 /// never a collision-dependent qualification (ADR-026). One candidate by
 /// construction, so installation order and the presence of other plugins
 /// cannot change it. Other capabilities (MCP) deliberately stay on
-/// [`default_exposure_name_candidates`].
-pub fn qualified_exposure_name_candidates(resource: &crate::project::Resource) -> Vec<String> {
-    let crate::project::ResourceOrigin::Package { id, .. } = &resource.origin else {
+/// [`default_exposure_name_candidates`]. `active_plugin_name` is the
+/// resolved local name from [`active_plugin_name()`] — callers with `&self`
+/// access to a `UzeHome` resolve it once and pass it in, rather than this
+/// pure label-formatting function doing its own state read.
+pub fn qualified_exposure_name_candidates(
+    resource: &crate::project::Resource,
+    active_plugin_name: &str,
+) -> Vec<String> {
+    if !matches!(
+        resource.origin,
+        crate::project::ResourceOrigin::Package { .. }
+    ) {
         return Vec::new();
-    };
+    }
     if resource.capability.kind != CapabilityKind::AgentSkill {
         return Vec::new();
     }
     let Some(logical) = resource.logical_capability_name() else {
         return Vec::new();
     };
-    vec![qualified_capability_name(id.as_str(), &logical)]
+    vec![qualified_capability_name(active_plugin_name, &logical)]
 }
 
 /// Extracts the physical exposure name a receipt's artifact already claims,
@@ -981,8 +1007,8 @@ pub fn assess_environment(
             let mut decision = route(&resource.capability, &capabilities);
             decision.route = exposure_plan.route;
             decision.verification = exposure_plan.verification.clone();
-            decision.rationale = exposure_plan.evidence.clone();
-            decision.evidence = exposure_plan.evidence.clone();
+            decision.rationale.clone_from(&exposure_plan.evidence);
+            decision.evidence.clone_from(&exposure_plan.evidence);
             IntegrationAssessment {
                 integration_id: integration.id().to_owned(),
                 capability_path: resource.display_path(&environment.root),
@@ -1031,9 +1057,7 @@ pub fn managed_artifact_fingerprint(artifact: &ManagedArtifact) -> Option<String
 /// the answer is `false` here and callers fall back to receipt existence.
 pub fn managed_artifact_present(artifact: &ManagedArtifact) -> bool {
     if let ManagedArtifact::SymlinkReference { path, target } = artifact {
-        return fs::read_link(path)
-            .map(|resolved| resolved == *target)
-            .unwrap_or(false);
+        return fs::read_link(path).is_ok_and(|resolved| resolved == *target);
     }
     false
 }

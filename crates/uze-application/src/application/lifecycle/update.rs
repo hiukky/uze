@@ -17,6 +17,13 @@ impl UzeApplication {
     ) -> Result<UpdatePluginReport> {
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.home)?;
         let installed = self.package_by_name(id)?;
+        // An update is a version change, never a re-namespacing (ADR-038):
+        // whatever local name this package currently answers to — its own
+        // bare name, or an `alias` a past collision resolution gave it —
+        // must come back exactly the same after the reinstall below removes
+        // and recreates its registration.
+        let active_name = installed.active_name.clone();
+        let bare_name = installed.id.plugin_name().to_owned();
 
         // Re-resolve the *request*, not the resolution: that is what makes a
         // branch move forward while a pinned commit stays put.
@@ -39,7 +46,20 @@ impl UzeApplication {
         }
         // Trust was already settled above against the previous capabilities,
         // so installation must not ask a second time for the same answer.
-        let report = self.install_materialized(materialized, &trust::AlwaysTrust, &[], true)?;
+        // Re-installs under the package's own marketplace, never `local`:
+        // an update is a version change, not a re-namespacing, and the
+        // official-plugin protection and any project lock both key on the
+        // marketplace-qualified id staying exactly what it was.
+        let requested_active_name = (active_name != bare_name).then_some(active_name.as_str());
+        let report = self.install_materialized_from_marketplace_as(
+            materialized,
+            installed.id.marketplace(),
+            requested_active_name,
+            &trust::AlwaysTrust,
+            &[],
+            true,
+            &uze_core::naming::NoNameCollisionAuthority,
+        )?;
         Ok(UpdatePluginReport::Updated {
             plugin: report.plugin,
             attachments: report.attachments,

@@ -356,7 +356,7 @@ fn model_only_skill_shared_root_reuse_carries_both_encodings() {
             "no Codex policy sidecar for a model=true Skill"
         );
         // Both consumers hold a Matched receipt against the same entry.
-        let receipts = uze::state::receipts(&uze_home, Some("flow")).unwrap();
+        let receipts = uze::state::receipts(&uze_home, Some("flow@local")).unwrap();
         // The shared-entry receipts are the SymlinkReference pair; Codex
         // also holds an integration-owned package receipt (its generated
         // envelope), which is not the surface this scenario asserts.
@@ -684,7 +684,7 @@ fn user_only_skill_codex_only_is_model_hidden() {
         );
         let envelope_skill = uze_home
             .state_dir()
-            .join("attachments/codex/generated/flow/skills/review");
+            .join("attachments/codex/generated/flow@local/skills/review");
         assert_eq!(
             fs::read_to_string(envelope_skill.join("agents/openai.yaml")).unwrap(),
             "policy:\n  allow_implicit_invocation: false\n",
@@ -762,7 +762,7 @@ fn repeated_setup_is_idempotent() {
     );
     let plugins = format!(
         r#"{{"installed":[{{"pluginId":"flow@uze-store","enabled":true,"installed":true,"marketplaceName":"uze-store","path":"{}"}}]}}"#,
-        generated_root.join("flow").display()
+        generated_root.join("flow@local").display()
     );
     with_truthful_fake_codex(&root, &marketplaces, &plugins, || {
         app.add_plugin(
@@ -778,7 +778,7 @@ fn repeated_setup_is_idempotent() {
             before, after,
             "update leaves the shared wrapper byte-identical"
         );
-        let receipt = uze::state::receipts(&uze_home, Some("flow"))
+        let receipt = uze::state::receipts(&uze_home, Some("flow@local"))
             .unwrap()
             .into_iter()
             .find(|(_, r)| r.integration == "opencode")
@@ -813,7 +813,7 @@ fn detach_codex_preserves_opencode_consumer() {
     );
     let plugins = format!(
         r#"{{"installed":[{{"pluginId":"flow@uze-store","enabled":true,"installed":true,"marketplaceName":"uze-store","path":"{}"}}]}}"#,
-        generated_root.join("flow").display()
+        generated_root.join("flow@local").display()
     );
     with_truthful_fake_codex(&root, &marketplaces, &plugins, || {
         app.add_plugin(
@@ -821,7 +821,7 @@ fn detach_codex_preserves_opencode_consumer() {
             &uze::trust::AlwaysTrust,
         )
         .expect("install");
-        let codex_receipt = uze::state::receipts(&uze_home, Some("flow"))
+        let codex_receipt = uze::state::receipts(&uze_home, Some("flow@local"))
             .unwrap()
             .into_iter()
             .find(|(_, r)| {
@@ -844,7 +844,7 @@ fn detach_codex_preserves_opencode_consumer() {
             codex_receipt.artifact
         );
         assert!(
-            !generated_root.join("flow").exists(),
+            !generated_root.join("flow@local").exists(),
             "the generated envelope is cleaned with Codex's receipt"
         );
         let entry = agents_home.join("skills/flow:review");
@@ -852,7 +852,7 @@ fn detach_codex_preserves_opencode_consumer() {
             entry.is_symlink(),
             "OpenCode's shared entry survives Codex detach"
         );
-        let opencode_receipt = uze::state::receipts(&uze_home, Some("flow"))
+        let opencode_receipt = uze::state::receipts(&uze_home, Some("flow@local"))
             .unwrap()
             .into_iter()
             .find(|(_, r)| r.integration == "opencode")
@@ -886,7 +886,7 @@ fn detach_opencode_preserves_codex_consumer() {
     );
     let plugins = format!(
         r#"{{"installed":[{{"pluginId":"flow@uze-store","enabled":true,"installed":true,"marketplaceName":"uze-store","path":"{}"}}]}}"#,
-        generated_root.join("flow").display()
+        generated_root.join("flow@local").display()
     );
     with_truthful_fake_codex(&root, &marketplaces, &plugins, || {
         app.add_plugin(
@@ -894,7 +894,7 @@ fn detach_opencode_preserves_codex_consumer() {
             &uze::trust::AlwaysTrust,
         )
         .expect("install");
-        let opencode_receipt = uze::state::receipts(&uze_home, Some("flow"))
+        let opencode_receipt = uze::state::receipts(&uze_home, Some("flow@local"))
             .unwrap()
             .into_iter()
             .find(|(_, r)| r.integration == "opencode")
@@ -921,11 +921,11 @@ fn detach_opencode_preserves_codex_consumer() {
             "OpenCode's wrapper is cleaned when unreferenced"
         );
         assert!(
-            generated_root.join("flow").exists(),
+            generated_root.join("flow@local").exists(),
             "Codex's generated envelope is untouched by OpenCode detach"
         );
         assert!(
-            uze::state::receipts(&uze_home, Some("flow"))
+            uze::state::receipts(&uze_home, Some("flow@local"))
                 .unwrap()
                 .iter()
                 .any(|(_, r)| r.integration == "codex"),
@@ -949,7 +949,7 @@ fn detach_last_consumer_cleans_projection() {
     );
     let plugins = format!(
         r#"{{"installed":[{{"pluginId":"flow@uze-store","enabled":true,"installed":true,"marketplaceName":"uze-store","path":"{}"}}]}}"#,
-        generated_root.join("flow").display()
+        generated_root.join("flow@local").display()
     );
     with_truthful_fake_codex(&root, &marketplaces, &plugins, || {
         app.add_plugin(
@@ -957,7 +957,7 @@ fn detach_last_consumer_cleans_projection() {
             &uze::trust::AlwaysTrust,
         )
         .expect("install");
-        let receipts: Vec<_> = uze::state::receipts(&uze_home, Some("flow"))
+        let receipts: Vec<_> = uze::state::receipts(&uze_home, Some("flow@local"))
             .unwrap()
             .into_iter()
             .map(|(_, r)| r)
@@ -983,10 +983,10 @@ fn detach_last_consumer_cleans_projection() {
             "no shared entry remains after the last consumer detaches"
         );
         assert!(
-            !generated_root.join("flow").exists(),
+            !generated_root.join("flow@local").exists(),
             "the generated envelope is gone with its receipt"
         );
-        let stale_opencode = uze::state::receipts(&uze_home, Some("flow"))
+        let stale_opencode = uze::state::receipts(&uze_home, Some("flow@local"))
             .unwrap()
             .into_iter()
             .find(|(_, r)| r.integration == "opencode")

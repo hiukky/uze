@@ -515,7 +515,7 @@ fn mcp_naming_is_unchanged() {
     );
     assert_eq!(
         opencode.exposure_name_candidates(mcp),
-        vec!["uze-mcp-conformance-uze-conformance".to_owned()]
+        vec!["uze-mcp-conformance@local-uze-conformance".to_owned()]
     );
 
     let (root2, _home, _package, resources) = stored_workflow("skill-label");

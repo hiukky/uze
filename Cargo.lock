@@ -2027,6 +2027,7 @@ dependencies = [
  "serde_json",
  "uze-core",
  "uze-integrations",
+ "uze-testkit",
 ]
 
 [[package]]

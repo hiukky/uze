@@ -16,6 +16,7 @@ pub mod hook;
 pub mod importer;
 pub mod importers;
 pub mod integration;
+pub mod naming;
 pub mod persistence;
 pub mod project;
 pub mod project_lock;
