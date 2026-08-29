@@ -40,6 +40,15 @@ progress in real time; quiet verification probes do not. Neither output mode
 persists command output. Timeouts, version verification, and nonzero exits
 become structured results. Normal tests never run a network installer.
 
+The CLI conformance suite owns a registry-complete setup matrix. It runs each
+registered `uze setup <harness>` against deterministic fake vendor binaries,
+then compares the exercised ids to `IntegrationRegistry`; a newly registered
+harness cannot silently miss setup coverage. A dedicated legacy-binary case
+captures route differences that cannot be expressed as a shared update verb,
+such as OpenCode's `opencode2` binary. The real Harness Conformance Lab stays
+focused on package behavior with network disabled; it does not execute vendor
+installers.
+
 `$UZE_HOME/state/provisioning.json` records only UZE-initiated action,
 integration id, platform/method, executable identity when observed, version,
 and time/outcome. It is distinct from `attachments.json`: a provision record

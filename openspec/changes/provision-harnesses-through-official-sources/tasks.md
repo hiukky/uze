@@ -46,5 +46,10 @@
       without duplicate native/capability attachments.
 - [ ] Test `add` never invokes a provision command, including when all
       harnesses are absent.
+- [x] Add a registry-complete CLI conformance matrix for `uze setup` that
+      covers every registered harness, its official update route, default shim
+      creation, and shim bypass without network access.
+- [x] Cover the OpenCode legacy `opencode2` route: it must use the official
+      installer instead of passing the stable-only `upgrade` subcommand.
 - [ ] Run cargo test, cargo clippy -- -D warnings, cargo fmt --check,
       openspec validate --all --strict, likec4 validate, and git diff --check.

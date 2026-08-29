@@ -142,10 +142,6 @@ impl IntegrationPort for OpenCodeIntegration {
 
     /// UZE keeps `opencode` as its stable shim name; the legacy `opencode2`
     /// alias is still resolved generically without mutating vendor paths.
-    fn supports_runtime_integration(&self) -> bool {
-        true
-    }
-
     fn runtime_executable_aliases(&self) -> &'static [&'static str] {
         &["opencode2"]
     }

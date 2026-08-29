@@ -198,10 +198,9 @@ pub trait IntegrationPort {
     /// This integration's opt-in contribution to a shim-mediated harness
     /// launch (`RUNTIME INFRASTRUCTURE`, see `harness_runtime`) — entirely
     /// separate from `exposure_plan`, which governs package/skill delivery.
-    /// The default is a pure passthrough: every integration except Claude
-    /// Code currently has no runtime projection story and inherits this
-    /// unchanged. Never fallible — see `HarnessRuntimeContribution`'s own
-    /// documentation for why fail-open is structural here.
+    /// The default is a pure passthrough. Never fallible — see
+    /// `HarnessRuntimeContribution`'s own documentation for why fail-open
+    /// is structural here.
     fn runtime_contribution(&self, _ctx: &RuntimeContext) -> HarnessRuntimeContribution {
         HarnessRuntimeContribution::passthrough()
     }
@@ -210,13 +209,12 @@ pub trait IntegrationPort {
     /// (`UzeHome::shims_dir`) for this harness, as an ordinary part of that
     /// one command — no separate flag or persisted enabled/disabled state.
     /// The shim symlink's own presence is the entire "is this on" answer:
-    /// removing it is how one turns it back off. Default `false` — an
-    /// integration whose `runtime_contribution` is still just the inherited
-    /// passthrough has nothing to gain from being shimmed, so opting in
-    /// here is a deliberate per-integration decision, not automatic from
-    /// overriding `runtime_contribution` alone.
+    /// removing it is how one turns it back off. Default `true`: every
+    /// registered harness receives the same transparent, generic launch
+    /// boundary after explicit setup. Integrations only override
+    /// `runtime_contribution` when they have extra runtime behavior.
     fn supports_runtime_integration(&self) -> bool {
-        false
+        true
     }
 
     /// Alternate names the real binary behind this harness's shim may be

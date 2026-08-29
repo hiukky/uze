@@ -7,6 +7,11 @@ integration's documented official installation or update route to ensure its
 CLI executable is available at the latest stable channel, then verify the
 executable before preparing UZE-owned integration state.
 
+After a verified setup, UZE SHALL create or refresh the generic runtime shim
+for that harness. The shim SHALL be created only by explicit `uze setup`, and
+SHALL be a transparent launch boundary unless the owning integration declares
+additional runtime contribution.
+
 #### Scenario: Harness executable is absent
 
 - **WHEN** `uze setup opencode` is invoked and OpenCode is not detected
@@ -75,3 +80,19 @@ harness-managed artifact is safe to remove.
 
 - **WHEN** no UZE provisioning record proves UZE initiated an installation
 - **THEN** a future removal operation MUST preserve the executable.
+
+### Requirement: Setup conformance covers every registered harness
+
+The deterministic conformance suite SHALL exercise `uze setup <harness>` for
+every integration registered by the product. Each scenario SHALL prove that
+setup dispatches the integration's documented official route, resolves a real
+vendor executable rather than UZE's runtime shim, and records a verified
+result and default runtime shim without invoking a network installer. Adding
+a registered harness without its setup scenario SHALL fail the suite.
+
+#### Scenario: A legacy executable has incompatible update syntax
+
+- **WHEN** only OpenCode's legacy `opencode2` executable is detected
+- **THEN** `uze setup opencode` uses OpenCode's documented installer route
+- **AND** it SHALL NOT invoke `opencode2 upgrade`
+- **AND** setup verifies the legacy executable before it prepares UZE state.

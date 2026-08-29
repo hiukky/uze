@@ -177,16 +177,16 @@ mod tests {
     #[test]
     fn shim_names_cover_exactly_the_runtime_integration_opt_ins() {
         let (_home, registry) = registry();
-        // The opt-in set, not a hand-maintained list: Claude and OpenCode
-        // declare `supports_runtime_integration`; Codex and Antigravity do
-        // not, so no shim symlink is ever created for them.
+        // Every registered harness gets a transparent runtime shim after
+        // explicit setup. The registry remains the one composition root for
+        // both the harness set and the names that shim dispatch accepts.
         let shim_names = registry.shim_names();
-        assert_eq!(shim_names, vec!["claude", "opencode"]);
+        assert_eq!(shim_names, vec!["claude", "codex", "opencode", "agy"]);
         for name in &shim_names {
             let integration = registry.by_shim_name(name).expect("shim name resolves");
             assert!(integration.supports_runtime_integration());
             assert_eq!(integration.shim_name(), *name);
         }
-        assert!(registry.by_shim_name("agy").is_none());
+        assert!(registry.by_shim_name("unknown").is_none());
     }
 }

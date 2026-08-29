@@ -131,6 +131,7 @@ fn fake_harness_bin_dir(label: &str) -> PathBuf {
     let dir = temporary_home(label);
     fs::create_dir_all(&dir).unwrap();
     let mcp_state_dir = dir.join("mcp-state");
+    let command_log = dir.join("commands.log");
     fs::create_dir_all(&mcp_state_dir).unwrap();
     for (name, version_line) in [
         ("claude", "9.9.9 (Fake Claude)"),
@@ -142,6 +143,7 @@ fn fake_harness_bin_dir(label: &str) -> PathBuf {
         let path = dir.join(name);
         let script = format!(
             r#"#!/bin/sh
+echo "$0|$*" >> "{command_log}"
 if [ "$1" = "plugin" ]; then
   case "$2" in
     list) echo '{{"imports":[]}}'; exit 0 ;;
@@ -181,11 +183,47 @@ fi
 echo '{version_line}'
 "#,
             state = mcp_state_dir.display(),
+            command_log = command_log.display(),
         );
         fs::write(&path, script).unwrap();
         let mut permissions = fs::metadata(&path).unwrap().permissions();
         permissions.set_mode(0o755);
         fs::set_permissions(&path, permissions).unwrap();
+    }
+    dir
+}
+
+/// A fake legacy V2-only installation. The isolated PATH deliberately has no
+/// stable `opencode`: this proves `uze setup opencode` handles `opencode2`
+/// without passing it the stable CLI's incompatible `upgrade` subcommand.
+#[cfg(unix)]
+fn fake_legacy_opencode_bin_dir(label: &str) -> PathBuf {
+    use std::{fs, os::unix::fs::PermissionsExt};
+
+    let dir = temporary_home(label);
+    fs::create_dir_all(&dir).unwrap();
+    let command_log = dir.join("commands.log");
+    for (name, script) in [
+        (
+            "opencode2",
+            format!(
+                "#!/bin/sh\necho \"$0|$*\" >> \"{}\"\necho 'opencode2 v9.9.9'\n",
+                command_log.display()
+            ),
+        ),
+        (
+            "sh",
+            format!(
+                "#!/bin/sh\necho \"$0|$*\" >> \"{}\"\nexit 0\n",
+                command_log.display()
+            ),
+        ),
+    ] {
+        let path = dir.join(name);
+        fs::write(&path, script).unwrap();
+        let mut permissions = fs::metadata(&path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions).unwrap();
     }
     dir
 }
@@ -303,6 +341,116 @@ fn doctor_reports_not_configured_before_any_setup() {
     // Default `uze` is seeded even when no harness is present.
     assert!(stdout.contains("uze"));
     let _ = std::fs::remove_dir_all(home);
+}
+
+/// L2 setup conformance: this list is intentionally compared to the product
+/// registry below. Registering another harness therefore requires an explicit
+/// setup scenario here rather than silently inheriting partial coverage.
+#[cfg(unix)]
+const SETUP_CONFORMANCE_HARNESSES: [(&str, &str, &str); 4] = [
+    ("claude-code", "claude", "update"),
+    ("codex", "codex", "update"),
+    ("opencode", "opencode", "upgrade"),
+    ("antigravity", "agy", "update"),
+];
+
+/// Every registered integration gets a deterministic `uze setup <harness>`
+/// command-level contract. The fake executables record their own invocations,
+/// proving the update reaches a real vendor binary on PATH rather than a UZE
+/// shim, while keeping installer/network behavior out of `cargo test`.
+#[test]
+#[cfg(unix)]
+fn setup_conformance_matrix_covers_every_registered_harness() {
+    use uze::{home::UzeHome, integrations::registry::IntegrationRegistry};
+
+    let registry_root = temporary_home("cli-setup-conformance-registry");
+    let registry_home = UzeHome::at(registry_root.join("uze"));
+    let registry = IntegrationRegistry::isolated(&registry_root, &registry_home);
+    let mut registered = registry.ids();
+    registered.sort_unstable();
+    let mut covered = SETUP_CONFORMANCE_HARNESSES
+        .iter()
+        .map(|(id, _, _)| *id)
+        .collect::<Vec<_>>();
+    covered.sort_unstable();
+    assert_eq!(
+        covered, registered,
+        "every registered harness needs setup conformance"
+    );
+
+    let home = temporary_home("cli-setup-conformance-home");
+    let uze_home = temporary_home("cli-setup-conformance-uze-home");
+    let fake_bin = fake_harness_bin_dir("cli-setup-conformance-bin");
+    let path = format!("{}:/usr/bin:/bin", fake_bin.display());
+
+    for (harness, executable, update_command) in SETUP_CONFORMANCE_HARNESSES {
+        let output = Command::new(env!("CARGO_BIN_EXE_uze"))
+            .env("UZE_HOME", &uze_home)
+            .env("HOME", &home)
+            .env("PATH", &path)
+            .args(["setup", harness])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "uze setup {harness} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains(&format!("{harness}: ready (update;")),
+            "unexpected setup output for {harness}: {stdout}"
+        );
+        assert!(
+            uze_home.join("shims").join(executable).is_symlink(),
+            "uze setup {harness} must create its default {executable} shim"
+        );
+        let commands = std::fs::read_to_string(fake_bin.join("commands.log")).unwrap();
+        assert!(
+            commands
+                .lines()
+                .any(|line| line.ends_with(&format!("/{executable}|{update_command}"))),
+            "{harness} did not use the documented {update_command} route through the resolved real {executable} binary: {commands}"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(registry_root);
+    let _ = std::fs::remove_dir_all(home);
+    let _ = std::fs::remove_dir_all(uze_home);
+    let _ = std::fs::remove_dir_all(fake_bin);
+}
+
+#[test]
+#[cfg(unix)]
+fn setup_opencode_legacy_binary_uses_installer_not_stable_upgrade() {
+    let home = temporary_home("cli-setup-opencode2-home");
+    let uze_home = temporary_home("cli-setup-opencode2-uze-home");
+    let fake_bin = fake_legacy_opencode_bin_dir("cli-setup-opencode2-bin");
+    let path = format!("{}:/usr/bin:/bin", fake_bin.display());
+
+    let output = Command::new(env!("CARGO_BIN_EXE_uze"))
+        .env("UZE_HOME", &uze_home)
+        .env("HOME", &home)
+        .env("PATH", &path)
+        .args(["setup", "opencode"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "uze setup opencode failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let commands = std::fs::read_to_string(fake_bin.join("commands.log")).unwrap();
+    assert!(commands.contains("opencode.ai/v2/install"), "{commands}");
+    assert!(commands.contains("opencode2|--version"), "{commands}");
+    assert!(
+        !commands.contains("opencode2|upgrade"),
+        "legacy OpenCode must not receive stable-only `upgrade`: {commands}"
+    );
+
+    let _ = std::fs::remove_dir_all(home);
+    let _ = std::fs::remove_dir_all(uze_home);
+    let _ = std::fs::remove_dir_all(fake_bin);
 }
 
 /// Deterministic end-to-end: `uze setup` against fake, PATH-resolvable

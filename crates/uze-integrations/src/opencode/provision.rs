@@ -70,8 +70,18 @@ pub(super) fn provision_opencode(
         ProvisionAction::Install
     };
     let command = match &resolved {
-        Some((which, _)) => ProcessSpec::new(which.clone(), ["upgrade"]).with_inherited_output(),
-        None => ProcessSpec::new(
+        Some((which, _))
+            if Path::new(which)
+                .file_name()
+                .is_some_and(|name| name == "opencode") =>
+        {
+            ProcessSpec::new(which.clone(), ["upgrade"]).with_inherited_output()
+        }
+        // `opencode2` is the legacy V2 beta binary. It accepts a positional
+        // project path rather than the stable CLI's `upgrade` command, so
+        // passing `upgrade` makes it try to `chdir` into that name. The V2
+        // installer is its documented install/update route.
+        _ => ProcessSpec::new(
             "sh",
             ["-c", "curl -fsSL https://opencode.ai/v2/install | bash"],
         )
@@ -108,7 +118,7 @@ pub(super) fn provision_opencode(
 
 #[cfg(test)]
 mod provision_tests {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use uze_core::home::UzeHome;
     use uze_core::integration::IntegrationPort;
@@ -189,7 +199,15 @@ mod provision_tests {
             uze_core::provisioning::ProvisionStatus::Verified
         );
         let commands = runner.commands.lock().unwrap();
-        if before.present {
+        if before.present
+            && resolve_opencode_binary(&integration.uze_home.shims_dir()).is_some_and(
+                |(path, _)| {
+                    Path::new(&path)
+                        .file_name()
+                        .is_some_and(|name| name == "opencode")
+                },
+            )
+        {
             assert_eq!(commands[0].arguments, ["upgrade"]);
         } else {
             assert_eq!(commands[0].program, "sh");
