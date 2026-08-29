@@ -32,7 +32,19 @@ pub(super) fn generated_root(uze_home: &UzeHome) -> PathBuf {
 }
 
 fn generated_package_dir_for_id(uze_home: &UzeHome, package_id: &str) -> PathBuf {
-    generated_root(uze_home).join(package_id)
+    generated_root(uze_home).join(sanitize_for_agy_path(package_id))
+}
+
+/// `agy plugin install <path>` parses a final path segment shaped like
+/// `name@marketplace` as a marketplace-qualified selector rather than a
+/// literal filesystem path, and fails with "unknown marketplace: ..." for
+/// any marketplace name not registered with AGY itself (verified against
+/// real agy 1.1.22). `PackageId`s are always marketplace-qualified this way
+/// (ADR-036), so the `@` is replaced before it ever reaches the vendor CLI;
+/// `remove_generated_plugin_by_id` uses the same helper so create/remove
+/// always agree on the directory name.
+fn sanitize_for_agy_path(package_id: &str) -> String {
+    package_id.replace('@', "--")
 }
 
 /// The canonical `mcp.json`'s declared server names, `Some` only when the
@@ -477,21 +489,37 @@ mod generated_native_tests {
     }
 
     #[test]
+    fn generated_dir_never_carries_an_at_sign() {
+        // `agy plugin install <path>` parses a final path segment shaped
+        // like `name@marketplace` as a marketplace selector, not a literal
+        // path, and fails with "unknown marketplace: ..." — regression
+        // coverage for that real-CLI quirk (verified against agy 1.1.22).
+        let (root, pkg) = make_package_with_mcp("no-at-sign");
+        assert!(
+            pkg.id.as_str().contains('@'),
+            "fixture must be marketplace-qualified"
+        );
+        let uze_home = UzeHome::at(root.join("uze"));
+        let dir = materialize_generated_plugin(&uze_home, &pkg).unwrap();
+        assert!(
+            !dir.file_name().unwrap().to_str().unwrap().contains('@'),
+            "generated dir name must not contain '@': {dir:?}"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn materialize_is_deterministic_across_rebuilds() {
         let (root, pkg) = make_package_with_mcp("deterministic");
         let uze_home = UzeHome::at(root.join("uze"));
         materialize_generated_plugin(&uze_home, &pkg).unwrap();
         let first = fs::read(
-            generated_root(&uze_home)
-                .join(pkg.id.as_str())
-                .join("mcp_config.json"),
+            generated_package_dir_for_id(&uze_home, pkg.id.as_str()).join("mcp_config.json"),
         )
         .unwrap();
         materialize_generated_plugin(&uze_home, &pkg).unwrap();
         let second = fs::read(
-            generated_root(&uze_home)
-                .join(pkg.id.as_str())
-                .join("mcp_config.json"),
+            generated_package_dir_for_id(&uze_home, pkg.id.as_str()).join("mcp_config.json"),
         )
         .unwrap();
         assert_eq!(first, second);
@@ -570,9 +598,9 @@ mod generated_native_tests {
         let (root, pkg) = make_package_with_mcp("removal");
         let uze_home = UzeHome::at(root.join("uze"));
         materialize_generated_plugin(&uze_home, &pkg).unwrap();
-        assert!(generated_root(&uze_home).join(pkg.id.as_str()).exists());
+        assert!(generated_package_dir_for_id(&uze_home, pkg.id.as_str()).exists());
         remove_generated_plugin_by_id(&uze_home, pkg.id.as_str()).unwrap();
-        assert!(!generated_root(&uze_home).join(pkg.id.as_str()).exists());
+        assert!(!generated_package_dir_for_id(&uze_home, pkg.id.as_str()).exists());
         assert!(
             pkg.root.join("skills/commit/SKILL.md").is_file(),
             "Store bytes untouched"

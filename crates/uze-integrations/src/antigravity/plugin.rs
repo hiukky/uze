@@ -315,17 +315,13 @@ pub(super) fn attach_generated_plugin(
         &format!("agy plugin install `{name}`"),
         &args,
     )?;
-    // Antigravity stages a copy named after the *source* directory it was
-    // given, not the plugin's own declared manifest name — and `derived_dir`
-    // is named by the qualified Store id (`generated_package_dir_for_id`),
-    // not `name`. Using `name` here would look for the staged copy under
-    // the wrong directory whenever the two differ (always, since
-    // `PackageId`s are marketplace-qualified — see ADR-036).
-    let staged_dir = integration.plugins_dir.join(
-        derived_dir
-            .file_name()
-            .expect("generated plugin dir has a name"),
-    );
+    // Antigravity stages a copy named after the plugin's own declared
+    // manifest name, not the source directory it was given (verified
+    // against real agy 1.1.22) — the same convention `attach_explicit_plugin`
+    // above already relies on. `derived_dir`'s own basename is the qualified
+    // Store id, never `name` (`generated_package_dir_for_id`), so it cannot
+    // be used to predict the staged path.
+    let staged_dir = integration.plugins_dir.join(&name);
     let fingerprint = fingerprint_dir(&staged_dir)?;
     Ok(Some(AttachmentReceipt {
         package_id: package.id.as_str().to_owned(),
