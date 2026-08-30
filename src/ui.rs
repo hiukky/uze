@@ -38,6 +38,7 @@ use crate::{
 mod hit;
 mod input;
 mod model;
+mod orchestrator;
 mod overlay;
 pub mod view;
 mod worker;
@@ -140,6 +141,23 @@ fn is_protected_plugin(
 /// production application composition root as the CLI.
 pub fn run(home: UzeHome) -> Result<()> {
     let mut terminal = TerminalSession::start()?;
+    loop {
+        let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        match orchestrator::attach_workspace(&mut terminal, &root)? {
+            orchestrator::WorkspaceExit::Quit => return Ok(()),
+            orchestrator::WorkspaceExit::Management => {
+                if matches!(
+                    run_management(&mut terminal, home.clone())?,
+                    ManagementExit::Quit
+                ) {
+                    return Ok(());
+                }
+            }
+        }
+    }
+}
+
+fn run_management(terminal: &mut TerminalSession, home: UzeHome) -> Result<ManagementExit> {
     let (sender, receiver) = mpsc::channel();
     let mut model = TuiModel {
         status: Status::Working("Refreshing environment…".to_owned()),
@@ -148,19 +166,32 @@ pub fn run(home: UzeHome) -> Result<()> {
     };
     spawn_startup(home.clone(), sender.clone(), model.context_root.clone());
     loop {
-        terminal.draw(&mut model)?;
+        model.tick = model.tick.wrapping_add(1);
+        let mut hits = Vec::new();
+        terminal.draw(|frame| render(frame, &model, &mut hits))?;
+        model.hits = hits;
         drain_worker_results(&mut model, &receiver);
         if event::poll(POLL_INTERVAL).map_err(io_error)? {
             match event::read().map_err(io_error)? {
                 Event::Key(key) => {
+                    if key
+                        .modifiers
+                        .contains(crossterm::event::KeyModifiers::CONTROL)
+                        && key.code == crossterm::event::KeyCode::Char('o')
+                    {
+                        return Ok(ManagementExit::Workspace);
+                    }
                     let intent = model.apply_key(key);
                     if intent == Intent::Quit {
-                        return Ok(());
+                        return Ok(ManagementExit::Quit);
                     }
                     dispatch(intent, &home, &sender, &mut model);
                 }
                 Event::Mouse(mouse) => {
                     let intent = model.apply_mouse(mouse);
+                    if intent == Intent::SwitchToWorkspace {
+                        return Ok(ManagementExit::Workspace);
+                    }
                     dispatch(intent, &home, &sender, &mut model);
                 }
                 Event::Resize(..) => {}
@@ -170,9 +201,22 @@ pub fn run(home: UzeHome) -> Result<()> {
     }
 }
 
+enum ManagementExit {
+    Workspace,
+    Quit,
+}
+
 // --- Terminal lifecycle ------------------------------------------------------
 
-struct TerminalSession {
+/// Owns the raw-mode/alternate-screen/mouse-capture lifecycle for the whole
+/// `run()` call, not per mode: management and the terminal workspace used to
+/// each open and tear down their own alternate screen on every Ctrl+O round
+/// trip, which — even done back-to-back with no perceptible gap — is two
+/// consecutive full-screen buffer swaps most terminal emulators render as a
+/// visible flash, reading as uze itself closing and reopening. One session,
+/// entered once and left once (on quit), makes switching modes just a
+/// different `draw` call into the same already-open screen.
+pub(crate) struct TerminalSession {
     terminal: Terminal<CrosstermBackend<Stdout>>,
 }
 
@@ -194,15 +238,12 @@ impl TerminalSession {
         Ok(Self { terminal })
     }
 
-    fn draw(&mut self, model: &mut TuiModel) -> Result<()> {
-        model.tick = model.tick.wrapping_add(1);
-        let mut hits = Vec::new();
-        self.terminal
-            .draw(|frame| render(frame, model, &mut hits))
-            .map(|_| ())
-            .map_err(io_error)?;
-        model.hits = hits;
-        Ok(())
+    pub(crate) fn size(&self) -> Result<ratatui::layout::Size> {
+        self.terminal.size().map_err(io_error)
+    }
+
+    pub(crate) fn draw(&mut self, render: impl FnOnce(&mut ratatui::Frame<'_>)) -> Result<()> {
+        self.terminal.draw(render).map(|_| ()).map_err(io_error)
     }
 }
 
@@ -246,18 +287,14 @@ fn render(frame: &mut ratatui::Frame<'_>, model: &TuiModel, hits: &mut Vec<(Rect
         frame.area().width,
         frame.area().height.saturating_sub(2),
     );
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(2),
-            Constraint::Min(3),
-            Constraint::Length(2),
-        ])
-        .split(area);
-    render_titlebar(frame, rows[0], model, hits);
-
-    let narrow = rows[1].width < 90;
-    let sidebar_width = if rows[1].width < 60 {
+    // Only two areas span the full frame height — menu (sidebar) and main
+    // container — there is no separate global header/footer row. The brand
+    // and health chrome that used to live in a titlebar now opens the
+    // sidebar instead (see `render_sidebar`); the help toolbar stays,
+    // scoped to the container column, since this is the one TUI it belongs
+    // in (the workspace/terminal mode never shows it).
+    let narrow = area.width < 90;
+    let sidebar_width = if area.width < 60 {
         16
     } else if narrow {
         18
@@ -267,19 +304,26 @@ fn render(frame: &mut ratatui::Frame<'_>, model: &TuiModel, hits: &mut Vec<(Rect
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Length(sidebar_width), Constraint::Min(10)])
-        .split(rows[1]);
+        .split(area);
     render_sidebar(frame, columns[0], model, narrow, hits);
 
+    let content_rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(3), Constraint::Length(2)])
+        .split(columns[1]);
+
     match model.route {
-        Route::Overview => view::overview::render_overview(frame, columns[1], model),
-        Route::Plugins => view::plugins::render_plugins(frame, columns[1], model, hits),
-        Route::Marketplace => view::marketplace::render_marketplace(frame, columns[1], model, hits),
-        Route::Harnesses => view::harnesses::render_harnesses(frame, columns[1], model, hits),
-        Route::Profiles => view::profiles::render_profiles(frame, columns[1], model, hits),
-        Route::Doctor => view::doctor::render_doctor(frame, columns[1], model),
+        Route::Overview => view::overview::render_overview(frame, content_rows[0], model),
+        Route::Plugins => view::plugins::render_plugins(frame, content_rows[0], model, hits),
+        Route::Marketplace => {
+            view::marketplace::render_marketplace(frame, content_rows[0], model, hits)
+        }
+        Route::Harnesses => view::harnesses::render_harnesses(frame, content_rows[0], model, hits),
+        Route::Profiles => view::profiles::render_profiles(frame, content_rows[0], model, hits),
+        Route::Doctor => view::doctor::render_doctor(frame, content_rows[0], model),
     }
 
-    render_footer(frame, rows[2], model);
+    render_footer(frame, content_rows[1], model);
 
     match &model.overlay {
         Overlay::None => {}
@@ -307,100 +351,6 @@ fn render(frame: &mut ratatui::Frame<'_>, model: &TuiModel, hits: &mut Vec<(Rect
     }
 }
 
-fn render_titlebar(
-    frame: &mut ratatui::Frame<'_>,
-    area: Rect,
-    model: &TuiModel,
-    hits: &mut Vec<(Rect, Hit)>,
-) {
-    let block = Block::default()
-        .borders(Borders::BOTTOM)
-        .border_style(Style::default().fg(BORDER));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    // The titlebar is compact identity chrome: name, then *only* the health
-    // indicator — never the in-flight operation message ("Installing …",
-    // "Added plugin …"), which lives in the footer where long text has its
-    // own line. Keeping operation text out of the header is what stops a
-    // long install root/path from wrapping into the project path and
-    // breaking the two-column layout.
-    let issues = model.issues().len();
-    let mut left = vec![
-        Span::styled(
-            " UZE",
-            Style::default()
-                .fg(TEXT_BRIGHT)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw("  "),
-        Span::styled("│", Style::default().fg(BORDER)),
-        Span::raw("  "),
-    ];
-    if model.doctor.is_none() {
-        let frame = SPINNER_FRAMES[model.tick % SPINNER_FRAMES.len()];
-        left.push(Span::styled(
-            format!("{frame} "),
-            Style::default().fg(MUTED),
-        ));
-        left.push(Span::styled("checking…", Style::default().fg(MUTED)));
-    } else if issues == 0 {
-        left.push(Span::styled("● ", Style::default().fg(SUCCESS)));
-        left.push(Span::styled("healthy", Style::default().fg(SUCCESS)));
-    } else {
-        left.push(Span::styled("● ", Style::default().fg(WARNING)));
-        left.push(Span::styled(
-            format!("{issues} issue(s)"),
-            Style::default().fg(WARNING),
-        ));
-    }
-    // The health block is clickable — anywhere on it jumps to the Doctor
-    // screen, which is where the full problem + evidence + solution list
-    // lives. The hit rect covers the indicator only, so "UZE" and the hair-
-    // line stay inert.
-    let prefix_width: usize = left.iter().take(4).map(Span::width).sum();
-    let health_width: usize = left.iter().skip(4).map(Span::width).sum();
-    let health_rect = Rect::new(
-        inner
-            .x
-            .saturating_add(prefix_width as u16)
-            .min(inner.right()),
-        inner.y,
-        (health_width.min(inner.width as usize) as u16).max(1),
-        1,
-    );
-    hits.push((health_rect, Hit::Route(Route::Doctor)));
-
-    // Path and branch, plain muted text with a faint dot separator — the
-    // design colors neither with the accent; this is identity chrome, not
-    // a call to action.
-    let mut right = vec![Span::styled(
-        display_project_path(&model.context_root),
-        Style::default().fg(MUTED),
-    )];
-    if let Some(branch) = git_branch(&model.context_root) {
-        right.push(Span::raw("  "));
-        right.push(Span::styled("·", Style::default().fg(TEXT_FAINT)));
-        right.push(Span::raw("  "));
-        right.push(Span::styled(branch, Style::default().fg(MUTED)));
-    }
-    // Version deliberately lives in exactly one place — the global footer,
-    // next to the keybinding hints — so it isn't repeated here and in the
-    // sidebar too.
-
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(10), Constraint::Percentage(45)])
-        .split(inner);
-    frame.render_widget(Paragraph::new(Line::from(left)), columns[0]);
-    frame.render_widget(
-        Paragraph::new(Line::from(right))
-            .alignment(ratatui::layout::Alignment::Right)
-            .block(Block::default().padding(Padding::new(0, 1, 0, 0))),
-        columns[1],
-    );
-}
-
 /// `~/relative/path` when `root` is under the user's home directory, else
 /// the path as-is — mirrors what a shell prompt usually shows.
 fn display_project_path(root: &std::path::Path) -> String {
@@ -410,19 +360,6 @@ fn display_project_path(root: &std::path::Path) -> String {
         return format!("~/{}", relative.display());
     }
     root.display().to_string()
-}
-
-/// Best-effort current branch name, read directly from `.git/HEAD` — no
-/// `git` subprocess, so this stays as cheap as every other read-only TUI
-/// refresh. `None` for anything not a plain git checkout (no repo, a
-/// worktree's `.git` file, a detached-but-unreadable state): silently
-/// omitted from the title bar rather than shown as an error.
-fn git_branch(project_root: &std::path::Path) -> Option<String> {
-    let head = std::fs::read_to_string(project_root.join(".git/HEAD")).ok()?;
-    let head = head.trim();
-    head.strip_prefix("ref: refs/heads/")
-        .map(str::to_owned)
-        .or_else(|| (head.len() >= 7).then(|| head[..7].to_owned()))
 }
 
 fn route_subtitle(route: Route) -> &'static str {
@@ -449,11 +386,14 @@ fn render_sidebar(
     hits: &mut Vec<(Rect, Hit)>,
 ) {
     // No fill, just a hairline right border — the sidebar sits on the same
-    // backdrop as everything else; only a thin divider marks the edge.
+    // backdrop as everything else; only a thin divider marks the edge. No
+    // top padding either: the mode toggle must land on the exact row the
+    // content column's own header does, or the two panes' dividers drift
+    // out of alignment by one row.
     let block = Block::default()
         .borders(Borders::RIGHT)
         .border_style(Style::default().fg(BORDER_FAINT))
-        .padding(Padding::new(1, 1, 1, 0));
+        .padding(Padding::new(1, 1, 0, 0));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -467,6 +407,26 @@ fn render_sidebar(
         y += height;
         Some(rect)
     };
+
+    // Mode toggle, one line: this used to be a global titlebar (brand +
+    // health + path/branch) spanning the whole frame; with only menu + main
+    // container left, the menu opens with just enough chrome to match the
+    // tab strip's height on the other TUI mode — a segmented "work" /
+    // "settings" control standing in for the Ctrl+O keybinding (still live,
+    // just no longer spelled out as text) instead of the old prose hint.
+    if let Some(rect) = row(1) {
+        let (work_rect, _manage_rect) = render_mode_toggle(frame, rect, false);
+        hits.push((work_rect, Hit::SwitchToWorkspace));
+    }
+    if let Some(rect) = row(1) {
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                "─".repeat(rect.width as usize),
+                Style::default().fg(BORDER_FAINT),
+            )),
+            rect,
+        );
+    }
 
     for route in ROUTES {
         // Selection reads as a left border accent, not a filled bar — the
@@ -526,6 +486,51 @@ fn render_sidebar(
 }
 
 // --- Shared helpers ---------------------------------------------------------
+
+/// The segmented "Work / Manage" control that opens both TUIs' sidebars —
+/// one shared render so the two modes stay visually identical. The active
+/// side reads as a filled chip (an intentional, narrowly-scoped exception to
+/// this design's usual no-filled-surfaces rule — see `render_sidebar`'s
+/// route rows below — because a mode switch this central needs the same
+/// affordance a GUI segmented control gives it, which plain color/weight on
+/// text alone doesn't). Returns the `Work`/`Manage` segment rects so each
+/// caller can wire up its own click target — the two modes use different
+/// hit-enum types (`Hit::SwitchToWorkspace` here,
+/// `WorkspaceHit::SwitchToManagement` in the workspace TUI), so this can't
+/// push a hit itself.
+fn render_mode_toggle(
+    frame: &mut ratatui::Frame<'_>,
+    rect: Rect,
+    workspace_active: bool,
+) -> (Rect, Rect) {
+    let filled = Style::default()
+        .bg(ACCENT)
+        .fg(BASE)
+        .add_modifier(Modifier::BOLD);
+    let ghost = Style::default().fg(NAV_INACTIVE);
+    let work = Span::styled(" Work ", if workspace_active { filled } else { ghost });
+    let gap = Span::raw(" ");
+    let manage = Span::styled(" Manage ", if workspace_active { ghost } else { filled });
+    let work_width = work.width() as u16;
+    let gap_width = gap.width() as u16;
+    let manage_width = manage.width() as u16;
+    // Centered, not flush left — this is the one focal control at the top
+    // of the menu, not a list item. The paragraph's own centering and the
+    // hit rects below must agree on the same starting column, so both use
+    // the same halved-remainder math rather than letting ratatui center the
+    // text while the rects assume a left-aligned start.
+    let total_width = work_width + gap_width + manage_width;
+    let start_x = rect.x + rect.width.saturating_sub(total_width) / 2;
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![work, gap, manage]))
+            .alignment(ratatui::layout::Alignment::Center),
+        rect,
+    );
+    (
+        Rect::new(start_x, rect.y, work_width, 1),
+        Rect::new(start_x + work_width + gap_width, rect.y, manage_width, 1),
+    )
+}
 
 /// Styled spans for one footer hint: `key action · key action …` chunks are
 /// split so the command/key part carries the accent (and bold) and the
@@ -1766,11 +1771,11 @@ mod tests {
     }
 
     #[test]
-    fn titlebar_health_click_opens_doctor_and_focuses_content() {
+    fn sidebar_work_toggle_click_mirrors_ctrl_o() {
         use ratatui::{Terminal, backend::TestBackend};
 
         let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
-        let mut model = TuiModel::default(); // doctor not loaded → "checking…"
+        let mut model = TuiModel::default();
         let mut hits = Vec::new();
         terminal
             .draw(|frame| render(frame, &model, &mut hits))
@@ -1778,21 +1783,15 @@ mod tests {
         model.hits = hits;
         let intent = model.apply_mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
-            column: 10,
+            column: 8,
             row: 1,
             modifiers: KeyModifiers::NONE,
         });
         assert_eq!(
             intent,
-            Intent::None,
-            "the cached full report is already loaded; opening Doctor needs no reload"
+            Intent::SwitchToWorkspace,
+            "clicking the sidebar's 'work' segment must mirror the Ctrl+O keybinding"
         );
-        assert_eq!(
-            model.route,
-            Route::Doctor,
-            "clicking the titlebar's health indicator must open the Doctor screen"
-        );
-        assert_eq!(model.focus, Focus::Content);
     }
 
     #[test]

@@ -7,6 +7,9 @@ use super::worker::Intent;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Hit {
     Route(Route),
+    /// The sidebar's "work" mode label — mirrors Ctrl+O, detaching from
+    /// management back to the terminal workspace.
+    SwitchToWorkspace,
     PluginRow(usize),
     MarketplaceRow(usize),
     /// A marketplace group's header row — clicking it expands/collapses
@@ -52,6 +55,7 @@ impl TuiModel {
                 self.focus = Focus::Content;
                 Intent::None
             }
+            Hit::SwitchToWorkspace => Intent::SwitchToWorkspace,
             Hit::PluginRow(index) => {
                 // Selecting only — same as arrow-key navigation. The
                 // richer async inspect fetch (deliveries/managed state,

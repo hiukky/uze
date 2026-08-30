@@ -83,6 +83,20 @@ pub const CLASSIFICATION: &[(&str, PerformanceClass)] = &[
     // Diagnostics.
     ("doctor", PerformanceClass::Budgeted),
     (
+        "terminal attach",
+        PerformanceClass::JustifiedSlow("starts or attaches an interactive local terminal client"),
+    ),
+    (
+        "terminal stop",
+        PerformanceClass::JustifiedSlow(
+            "terminates the explicitly requested persistent terminal session",
+        ),
+    ),
+    (
+        "terminal serve",
+        PerformanceClass::JustifiedSlow("internal persistent terminal server process"),
+    ),
+    (
         "setup",
         PerformanceClass::JustifiedSlow(
             "provisions or updates harness executables through each harness's official installer",

@@ -1,0 +1,17 @@
+[package]
+name = "uze-terminal"
+version.workspace = true
+edition = "2024"
+rust-version = "1.97"
+description = "Local persistent terminal runtime for UZE workspaces"
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+alacritty_terminal = "0.26"
+portable-pty = "0.9"
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"

@@ -74,3 +74,4 @@ never renumbered), using this structure (Michael Nygard style):
 - [034 — Adopt GitHub Releases as the official Linux distribution channel](034-adopt-github-releases-linux-distribution.md)
 - [036 — Qualify Store plugins by marketplace](036-qualify-store-plugins-by-marketplace.md)
 - [037 — Adopt bounded environment maintenance](037-adopt-bounded-environment-maintenance.md)
+- [038 — Adopt a local terminal runtime server](038-adopt-local-terminal-runtime-server.md)

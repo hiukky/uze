@@ -98,6 +98,16 @@ model {
       description 'Peer harness integration. It declares standards-backed capability routes independently of UZE Core.'
       technology 'Rust crate: uze-integrations'
     }
+
+    terminalRuntime = container 'Terminal Runtime Server' {
+      description 'Local per-workspace process owner for Unix PTYs, child-process lifecycle, terminal emulation, and private socket transport. It does not perform package maintenance or harness reconciliation.'
+      technology 'Rust crate: uze-terminal (ADR 038)'
+    }
+
+    workspaceClient = container 'Workspace Client' {
+      description 'Ratatui workspace presentation that draws UZE chrome and terminal-emulator snapshots, forwarding focused-pane input through the private local transport.'
+      technology 'Root Rust crate: uze'
+    }
   }
 
   developer -> uze.core.application 'uses package-centric CLI now and future TUI later'
@@ -107,6 +117,9 @@ model {
   uze.claudeIntegration -> claudeCode 'falls back to managed Skill and MCP attachment when no exact native envelope exists'
   uze.codexIntegration -> codex 'prefers standard local marketplace/native plugin delivery and skips consumed components'
   uze.opencodeIntegration -> opencode 'decomposes unknown plugin envelopes into global Skill discovery and managed MCP config'
+  developer -> uze.workspaceClient 'opens workspace tabs and panes'
+  uze.workspaceClient -> uze.terminalRuntime 'private local attach, input, resize, and detach protocol'
+  uze.terminalRuntime -> agentClient 'owns interactive shell or agent process PTYs'
 
   conformanceLab -> uze 'exercises the installable CLI and public application behavior'
   conformanceLab -> claudeCode 'runs opt-in real-harness conformance'

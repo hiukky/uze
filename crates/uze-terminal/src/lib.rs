@@ -1,0 +1,16 @@
+//! Local terminal runtime used by UZE's workspace client.
+//!
+//! The server owns pseudoterminals and emulation state.  UI clients only
+//! attach, render snapshots, and forward input; this keeps a pane alive when
+//! a client leaves the workspace.
+
+mod protocol;
+mod runtime;
+mod state;
+
+pub use protocol::{
+    CellAttributes, ClientEvent, ClientRequest, Cursor, PROTOCOL_VERSION, PaneDamage, PaneSnapshot,
+    RenderCell, TerminalColor,
+};
+pub use runtime::{RuntimeError, attach, read_event, send_request, serve, stop};
+pub use state::{Focus, Layout, Pane, PaneId, Session, Tab, TabId, Workspace, WorkspaceId};

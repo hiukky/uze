@@ -91,6 +91,11 @@ enum Command {
         #[arg(value_name = "HARNESS", num_args = 0..)]
         arguments: Vec<String>,
     },
+    /// Experimental persistent local terminal workspace
+    Terminal {
+        #[command(subcommand)]
+        action: TerminalAction,
+    },
     /// Internal runtime dispatch: runs a package's hook commands for one
     /// hook event (ADR-033). Harness integrations emit invocations of this
     /// exact form into managed hook configuration; it is not for
@@ -124,6 +129,20 @@ enum Command {
     /// hand-maintained priority list.
     #[command(external_subcommand)]
     External(Vec<String>),
+}
+
+#[derive(Debug, Subcommand)]
+enum TerminalAction {
+    /// Attach the workspace client, starting its local server when needed
+    Attach,
+    /// Stop this workspace's persistent terminal session
+    Stop,
+    /// Local server entry point; started only by the workspace runtime
+    #[command(hide = true)]
+    Serve {
+        #[arg(long)]
+        root: PathBuf,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -534,6 +553,19 @@ fn run(cli: Cli) -> Result<()> {
         println!();
         return Ok(());
     };
+    if let Command::Terminal { action } = command {
+        let root = std::env::current_dir().map_err(|source| uze::UzeError::Read {
+            path: PathBuf::from("."),
+            source,
+        })?;
+        return match action {
+            TerminalAction::Attach => uze::ui::run(home),
+            TerminalAction::Stop => uze_terminal::stop(&root)
+                .map_err(|error| uze::UzeError::AcquisitionFailed(error.to_string())),
+            TerminalAction::Serve { root } => uze_terminal::serve(root)
+                .map_err(|error| uze::UzeError::AcquisitionFailed(error.to_string())),
+        };
+    }
     let app = UzeApplication::from_env(home.clone())?;
     // Seed the default marketplace plugins (`plugins/uze`) on every CLI
     // invocation. This makes the Skill globally available without a manual
@@ -834,6 +866,9 @@ fn run(cli: Cli) -> Result<()> {
             // as a denial to targets that key off exit codes, and an error
             // must not print a second `uze:` line into the harness's stderr.
             std::process::exit(code);
+        }
+        Command::Terminal { .. } => {
+            unreachable!("terminal commands return before application setup")
         }
     }
     Ok(())

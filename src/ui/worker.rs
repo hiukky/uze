@@ -27,6 +27,9 @@ pub(crate) enum TrustGrant {
 pub(crate) enum Intent {
     None,
     Quit,
+    /// Mirrors the Ctrl+O keybinding — clicking the sidebar's "work" mode
+    /// label detaches from management the same way pressing the key does.
+    SwitchToWorkspace,
     Refresh,
     InspectPlugin(String),
     InspectMarketplacePlugin {
@@ -86,7 +89,7 @@ pub(crate) fn dispatch(
     model: &mut TuiModel,
 ) {
     match intent {
-        Intent::None | Intent::Quit => {}
+        Intent::None | Intent::Quit | Intent::SwitchToWorkspace => {}
         Intent::Refresh => {
             if model.maintenance_in_flight {
                 return;
