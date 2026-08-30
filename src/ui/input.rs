@@ -6,6 +6,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 
 use crate::application::ContextPlan;
 
+use super::hit::Hit;
 use super::is_protected_plugin;
 use super::model::{Focus, Overlay, ProfilePanel, ROUTES, Route, TuiModel};
 use super::worker::Intent;
@@ -302,9 +303,37 @@ impl TuiModel {
         }
     }
 
-    pub(crate) fn apply_mouse(&mut self, event: MouseEvent) -> Intent {
+    /// `total_width` is the terminal's current column count — needed only
+    /// for the sidebar-drag arm below (`clamp_sidebar_width`'s dynamic max
+    /// shrinks as the terminal narrows), which is otherwise the one mouse
+    /// gesture this method can't resolve from `self` alone.
+    pub(crate) fn apply_mouse(&mut self, event: MouseEvent, total_width: u16) -> Intent {
         match event.kind {
             MouseEventKind::Down(MouseButton::Left) => self.click(event.column, event.row),
+            // The resize handle's rect (pushed alongside every other hit at
+            // render time) tells us where the sidebar's right edge is; no
+            // separate layout recomputation needed here, unlike the
+            // workspace TUI's loop-level equivalent.
+            MouseEventKind::Drag(MouseButton::Left) if self.dragging_sidebar => {
+                if let Some(sidebar_x) = self
+                    .hits
+                    .iter()
+                    .find_map(|(rect, hit)| matches!(hit, Hit::ResizeSidebar).then_some(rect.x))
+                {
+                    let new_width = super::clamp_sidebar_width(
+                        event.column.saturating_sub(sidebar_x),
+                        total_width,
+                    );
+                    if self.sidebar_width != Some(new_width) {
+                        self.sidebar_width = Some(new_width);
+                    }
+                }
+                Intent::None
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                self.dragging_sidebar = false;
+                Intent::None
+            }
             MouseEventKind::ScrollDown if self.overlay == Overlay::None => {
                 self.focus = Focus::Content;
                 self.move_selection(1);

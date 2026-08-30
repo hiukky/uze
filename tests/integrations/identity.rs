@@ -317,6 +317,16 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
         if path.is_dir() {
             rust_files(&path, out);
         } else if path.extension().is_some_and(|ext| ext == "rs") {
+            // `tests.rs` is only ever reachable via `#[cfg(test)] mod
+            // tests;` — an out-of-line test module split into its own file
+            // is unconditionally test code, the same as an inline `#[cfg(test)]
+            // mod tests { .. }` block that `strip_test_modules` already
+            // skips; without this a file this large moving out of line
+            // (as `src/ui/tests.rs` did) reads as thousands of new lines of
+            // "production" fixture strings.
+            if path.file_name().is_some_and(|name| name == "tests.rs") {
+                continue;
+            }
             out.push(path);
         }
     }

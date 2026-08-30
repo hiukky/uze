@@ -281,6 +281,13 @@ pub(crate) struct TuiModel {
     /// Kept in one place rather than recomputed ad hoc from coordinates
     /// scattered through render functions.
     pub(crate) hits: Vec<(Rect, Hit)>,
+
+    /// User-dragged sidebar width; `None` falls back to the responsive
+    /// default (see `super::sidebar_width_for`). Mirrors the workspace
+    /// TUI's `WorkspaceModel::sidebar_width` — same field, same meaning,
+    /// same resize bounds, so the two sidebars feel identical to drag.
+    pub(crate) sidebar_width: Option<u16>,
+    pub(crate) dragging_sidebar: bool,
 }
 
 impl Default for TuiModel {
@@ -320,6 +327,8 @@ impl Default for TuiModel {
             workspace: None,
             tick: 0,
             hits: Vec::new(),
+            sidebar_width: None,
+            dragging_sidebar: false,
         }
     }
 }

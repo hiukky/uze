@@ -232,7 +232,7 @@ impl Server {
             .selected_tab()
             .focus
             .pane;
-        server.spawn_pane(first)?;
+        server.spawn_pane(first, None)?;
         Ok((server, damage_events))
     }
 
@@ -298,13 +298,14 @@ impl Server {
                     label,
                     columns,
                     rows,
+                    command,
                 } => {
                     let pane = self
                         .session
                         .lock()
                         .expect("session poisoned")
                         .add_tab(label, columns, rows);
-                    if self.spawn_pane(pane).is_err() {
+                    if self.spawn_pane(pane, command.as_deref()).is_err() {
                         let _ = events.send(ClientEvent::Error {
                             message: "could not create terminal pane".into(),
                         });
@@ -370,7 +371,7 @@ impl Server {
         }
     }
 
-    fn spawn_pane(&self, pane_id: PaneId) -> Result<(), RuntimeError> {
+    fn spawn_pane(&self, pane_id: PaneId, command: Option<&[String]>) -> Result<(), RuntimeError> {
         let pane = find_pane(&self.session.lock().expect("session poisoned"), pane_id)
             .ok_or_else(|| RuntimeError::Protocol("unknown pane".into()))?;
         let runtime = PaneRuntime::spawn(
@@ -379,6 +380,7 @@ impl Server {
             pane.columns,
             pane.rows,
             self.damage.clone(),
+            command,
         )?;
         // Best-effort: label the sidebar tree with the real shell name
         // immediately instead of leaving the "shell" placeholder until the
@@ -604,6 +606,7 @@ impl PaneRuntime {
         columns: u16,
         rows: u16,
         damage: mpsc::Sender<PaneId>,
+        command: Option<&[String]>,
     ) -> Result<Self, RuntimeError> {
         let pty = native_pty_system();
         let pair = pty
@@ -614,8 +617,17 @@ impl PaneRuntime {
                 pixel_height: 0,
             })
             .map_err(|error| RuntimeError::Pty(error.to_string()))?;
-        let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
-        let mut command = CommandBuilder::new(shell);
+        let mut command = match command {
+            Some([program, args @ ..]) => {
+                let mut builder = CommandBuilder::new(program);
+                builder.args(args);
+                builder
+            }
+            Some([]) | None => {
+                let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
+                CommandBuilder::new(shell)
+            }
+        };
         command.cwd(cwd);
         if env::var_os("TERM").is_none() {
             command.env("TERM", "xterm-256color");
@@ -946,7 +958,8 @@ mod tests {
     #[test]
     fn damage_since_last_is_sparse_after_a_small_change() {
         let (damage, _damage_events) = std::sync::mpsc::channel();
-        let pane = PaneRuntime::spawn(PaneId(9), PathBuf::from("/tmp"), 80, 24, damage).unwrap();
+        let pane =
+            PaneRuntime::spawn(PaneId(9), PathBuf::from("/tmp"), 80, 24, damage, None).unwrap();
         // Baseline covers every cell — a fresh client has nothing to diff against.
         let baseline = pane.damage_since_last();
         assert_eq!(baseline.changed.len(), 80 * 24);
@@ -979,7 +992,8 @@ mod tests {
     #[test]
     fn pane_process_keeps_output_until_explicit_stop() {
         let (damage, _damage_events) = std::sync::mpsc::channel();
-        let pane = PaneRuntime::spawn(PaneId(7), PathBuf::from("/tmp"), 80, 24, damage).unwrap();
+        let pane =
+            PaneRuntime::spawn(PaneId(7), PathBuf::from("/tmp"), 80, 24, damage, None).unwrap();
         pane.write(b"printf uze-runtime-live\\r");
         let mut rendered = String::new();
         for _ in 0..50 {
@@ -1002,7 +1016,8 @@ mod tests {
     #[test]
     fn foreground_status_reports_the_spawned_shell_and_its_cwd() {
         let (damage, _damage_events) = std::sync::mpsc::channel();
-        let pane = PaneRuntime::spawn(PaneId(11), PathBuf::from("/tmp"), 80, 24, damage).unwrap();
+        let pane =
+            PaneRuntime::spawn(PaneId(11), PathBuf::from("/tmp"), 80, 24, damage, None).unwrap();
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
         let expected_name = Path::new(&shell)
             .file_name()

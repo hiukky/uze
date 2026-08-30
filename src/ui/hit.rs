@@ -26,6 +26,11 @@ pub(crate) enum Hit {
     /// obvious intent — rather than only selecting it the way `HarnessRow`
     /// does.
     ProfileHarnessRow(usize),
+    /// The sidebar's right-border drag handle — mirrors the workspace TUI's
+    /// `WorkspaceHit::ResizeSidebar`. Mousedown here only arms dragging;
+    /// the actual width change happens in `apply_mouse` on the following
+    /// `Drag` events, which read this hit's rect back out of `self.hits`.
+    ResizeSidebar,
 }
 
 impl TuiModel {
@@ -115,6 +120,10 @@ impl TuiModel {
                 self.profile_panel = super::model::ProfilePanel::Harnesses;
                 self.focus = Focus::Content;
                 self.toggle_profile_harness_at(index);
+                Intent::None
+            }
+            Hit::ResizeSidebar => {
+                self.dragging_sidebar = true;
                 Intent::None
             }
         }

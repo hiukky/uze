@@ -5,13 +5,13 @@
 //! filled panels) so switching between the workspace and management
 //! contexts with Ctrl+O reads as one product, not two.
 
-use crate::{Result, UzeError};
+use crate::{Result, UzeError, UzeHome};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Padding, Paragraph},
+    widgets::{Block, Borders, Clear, Padding, Paragraph},
 };
 use std::{
     collections::BTreeMap,
@@ -21,6 +21,7 @@ use std::{
     thread,
     time::Duration,
 };
+use uze_integrations::registry::IntegrationRegistry;
 use uze_terminal::{
     CellAttributes, ClientEvent, ClientRequest, Cursor, PROTOCOL_VERSION, PaneId, PaneSnapshot,
     RenderCell, Session, TabId, TerminalColor, attach, read_event, send_request,
@@ -42,6 +43,8 @@ pub(crate) enum WorkspaceExit {
 pub(crate) fn attach_workspace(
     terminal: &mut super::TerminalSession,
     root: &Path,
+    sidebar_width: &mut Option<u16>,
+    home: &UzeHome,
 ) -> Result<WorkspaceExit> {
     // The handshake below must ship the real terminal size: it sizes the PTY
     // used for the session's *already-selected* pane (e.g. a tab restored
@@ -49,8 +52,12 @@ pub(crate) fn attach_workspace(
     // corrects the size actually visible in that loop's compute_layout call.
     // A placeholder here previously left a stale-selected pane pinned to a
     // wrong fixed size until something happened to trigger a fresh resize.
+    // `*sidebar_width` carries over whatever the user last dragged it to —
+    // in this mode or the management one, they share the one value (see
+    // `super::run`) — so the pane starts at its real width immediately
+    // instead of assuming the sidebar's responsive default.
     let size = terminal.size()?;
-    let layout = compute_layout(Rect::new(0, 0, size.width, size.height), None);
+    let layout = compute_layout(Rect::new(0, 0, size.width, size.height), *sidebar_width);
     let (columns, rows) = (layout.pane.width, layout.pane.height);
 
     let mut stream = attach(root, columns, rows).map_err(runtime_error)?;
@@ -77,6 +84,7 @@ pub(crate) fn attach_workspace(
     let mut model = WorkspaceModel {
         dirty: true,
         last_size: (columns, rows),
+        sidebar_width: *sidebar_width,
         ..WorkspaceModel::default()
     };
     // The server's session/pane state is persistent — reattaching after a
@@ -159,6 +167,41 @@ pub(crate) fn attach_workspace(
                     }
                     model.dirty = true;
                 }
+                Event::Key(key) if model.agent_picker.is_some() => {
+                    match key.code {
+                        KeyCode::Up => {
+                            if let Some(picker) = model.agent_picker.as_mut() {
+                                picker.selected = picker.selected.saturating_sub(1);
+                            }
+                        }
+                        KeyCode::Down => {
+                            if let Some(picker) = model.agent_picker.as_mut() {
+                                picker.selected = (picker.selected + 1)
+                                    .min(picker.options.len().saturating_sub(1));
+                            }
+                        }
+                        KeyCode::Enter => {
+                            if let Some(picker) = model.agent_picker.take()
+                                && let Some(option) = picker.options.get(picker.selected)
+                            {
+                                let _ = send_request(
+                                    &mut stream,
+                                    &ClientRequest::CreateTab {
+                                        label: option.display_name.clone(),
+                                        columns,
+                                        rows,
+                                        command: Some(option.command.clone()),
+                                    },
+                                );
+                            }
+                        }
+                        // Esc, or anything else — the picker only reacts to
+                        // Up/Down/Enter, so any other key just dismisses it
+                        // rather than leaking through to the pane.
+                        _ => model.agent_picker = None,
+                    }
+                    model.dirty = true;
+                }
                 Event::Key(key)
                     if key.modifiers.contains(KeyModifiers::CONTROL)
                         && key.code == KeyCode::Char('o') =>
@@ -183,6 +226,7 @@ pub(crate) fn attach_workspace(
                             label: "shell".into(),
                             columns,
                             rows,
+                            command: None,
                         },
                     );
                 }
@@ -238,6 +282,42 @@ pub(crate) fn attach_workspace(
                     // outside the thing being edited discards it rather
                     // than silently confirming or acting on the click.
                     model.renaming = None;
+                    model.dirty = true;
+                }
+                Event::Mouse(mouse)
+                    if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+                        && model.agent_picker.is_some() =>
+                {
+                    let hit = model
+                        .hits
+                        .iter()
+                        .find(|(rect, _)| {
+                            rect.x <= mouse.column
+                                && mouse.column < rect.x + rect.width
+                                && rect.y <= mouse.row
+                                && mouse.row < rect.y + rect.height
+                        })
+                        .map(|(_, hit)| *hit);
+                    match hit {
+                        Some(WorkspaceHit::PickAgent(index)) => {
+                            if let Some(picker) = model.agent_picker.take()
+                                && let Some(option) = picker.options.get(index)
+                            {
+                                let _ = send_request(
+                                    &mut stream,
+                                    &ClientRequest::CreateTab {
+                                        label: option.display_name.clone(),
+                                        columns,
+                                        rows,
+                                        command: Some(option.command.clone()),
+                                    },
+                                );
+                            }
+                        }
+                        // Click outside the picker's own rows discards it —
+                        // same rule `renaming` uses.
+                        _ => model.agent_picker = None,
+                    }
                     model.dirty = true;
                 }
                 Event::Mouse(mouse) if mouse.kind == MouseEventKind::Down(MouseButton::Left) => {
@@ -300,8 +380,28 @@ pub(crate) fn attach_workspace(
                                     label: "shell".into(),
                                     columns,
                                     rows,
+                                    command: None,
                                 },
                             );
+                        }
+                        WorkspaceHit::NewAgentMenu => {
+                            model.agent_picker = Some(AgentPicker {
+                                options: agent_options(home),
+                                selected: 0,
+                            });
+                            // Unlike every other arm here, this is a purely
+                            // local state change with no server round trip
+                            // to eventually mark the model dirty via
+                            // `apply()` — without this the popup exists in
+                            // `model` but the screen never redraws to show
+                            // it.
+                            model.dirty = true;
+                        }
+                        WorkspaceHit::PickAgent(_) => {
+                            // Only reachable while the picker is open, which
+                            // the guarded arm above already handles; a
+                            // stale hit here (picker just closed) is a
+                            // no-op.
                         }
                         WorkspaceHit::SwitchToManagement => {
                             let _ = send_request(&mut stream, &ClientRequest::Detach);
@@ -316,12 +416,17 @@ pub(crate) fn attach_workspace(
                     if mouse.kind == MouseEventKind::Drag(MouseButton::Left)
                         && model.dragging_sidebar =>
                 {
-                    let new_width = clamp_sidebar_width(
+                    let new_width = super::clamp_sidebar_width(
                         mouse.column.saturating_sub(layout.sidebar.x),
                         size.width,
                     );
                     if model.sidebar_width != Some(new_width) {
                         model.sidebar_width = Some(new_width);
+                        // Written straight through to the shared value (not
+                        // just kept on `model`) so a Ctrl+O switch to
+                        // management picks up this width immediately,
+                        // instead of only on the next drag.
+                        *sidebar_width = model.sidebar_width;
                         model.dirty = true;
                     }
                 }
@@ -340,6 +445,11 @@ enum WorkspaceHit {
     SelectTab(TabId),
     CloseTab(TabId),
     NewTab,
+    /// Opens the agent picker (`WorkspaceModel::agent_picker`) — "+ new
+    /// agent" beside "+ new tab" in the tab strip.
+    NewAgentMenu,
+    /// One row of the open agent picker, by index into its `options`.
+    PickAgent(usize),
     SwitchToManagement,
     ResizeSidebar,
 }
@@ -348,23 +458,48 @@ enum WorkspaceHit {
 /// double-click (enters tab rename); slower than this, it's just another
 /// single click.
 const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(400);
-/// Narrowest the sidebar can be dragged — tight, but still fits a tab's
-/// `●`/`○` marker, a short label, and its indented `cwd · process` caption
-/// without wrapping.
-const MIN_SIDEBAR_WIDTH: u16 = 14;
-/// Widest the sidebar can be dragged, regardless of how wide the terminal
-/// is — it's navigation, not the workspace; past this it's just width the
-/// pane could otherwise use.
-const MAX_SIDEBAR_WIDTH: u16 = 40;
-/// Dragging the sidebar border never shrinks the content column (pane +
-/// tab strip) below this many columns.
-const MIN_CONTENT_WIDTH: u16 = 30;
 
-fn clamp_sidebar_width(width: u16, total_width: u16) -> u16 {
-    let max = total_width
-        .saturating_sub(MIN_CONTENT_WIDTH)
-        .clamp(MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH);
-    width.clamp(MIN_SIDEBAR_WIDTH, max)
+/// One selectable row of the agent picker: what to show, and the `argv` to
+/// launch in the new pane if chosen.
+struct AgentOption {
+    display_name: String,
+    command: Vec<String>,
+}
+
+/// Open state of the "+ new agent" popup (`WorkspaceHit::NewAgentMenu`) —
+/// built fresh each time it opens from `agent_options`, never persisted.
+struct AgentPicker {
+    options: Vec<AgentOption>,
+    selected: usize,
+}
+
+/// The harnesses this picker offers, resolved entirely through the generic
+/// `IntegrationPort` contract (`.id()`/`.display_name()`/`.aliases()`) —
+/// never a hardcoded vendor list, which `src/` is not allowed to hold (see
+/// `tests/integrations/identity.rs::cli_and_tui_never_names_a_vendor_harness`).
+/// `aliases()` is the invocation word a person types (`claude`, where the
+/// stable id is `claude-code`); the other harnesses' id already is their
+/// binary name. A registry that fails to construct (rare — see
+/// `src/shim.rs`'s identical `.ok()` fallback) just yields no options
+/// rather than failing the whole workspace session.
+fn agent_options(home: &UzeHome) -> Vec<AgentOption> {
+    let Ok(registry) = IntegrationRegistry::builtin(home) else {
+        return Vec::new();
+    };
+    registry
+        .iter()
+        .map(|integration| {
+            let binary = integration
+                .aliases()
+                .first()
+                .copied()
+                .unwrap_or_else(|| integration.id());
+            AgentOption {
+                display_name: integration.display_name().to_owned(),
+                command: vec![binary.to_owned()],
+            }
+        })
+        .collect()
 }
 
 #[derive(Default)]
@@ -392,6 +527,9 @@ struct WorkspaceModel {
     /// management TUI's overlays use).
     renaming: Option<(TabId, String)>,
     last_click: Option<(std::time::Instant, WorkspaceHit)>,
+    /// Open state of the "+ new agent" popup; `None` when closed. Same
+    /// "click outside discards" rule as `renaming`.
+    agent_picker: Option<AgentPicker>,
 }
 impl WorkspaceModel {
     fn apply(&mut self, event: ClientEvent) {
@@ -500,8 +638,8 @@ fn compute_layout(frame_area: Rect, sidebar_width_override: Option<u16>) -> Work
         frame_area.height.saturating_sub(2),
     );
     let sidebar_width = sidebar_width_override
-        .map(|width| clamp_sidebar_width(width, area.width))
-        .unwrap_or_else(|| sidebar_width_for(area.width));
+        .map(|width| super::clamp_sidebar_width(width, area.width))
+        .unwrap_or_else(|| super::sidebar_width_for(area.width));
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Length(sidebar_width), Constraint::Min(10)])
@@ -510,20 +648,25 @@ fn compute_layout(frame_area: Rect, sidebar_width_override: Option<u16>) -> Work
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(2), Constraint::Min(1)])
         .split(columns[1]);
+    // The sidebar insets its own content 1 column from the divider on both
+    // sides (see its `Padding::new(1, 1, 0, 0)`); the pane draws raw PTY
+    // cells straight into whatever rect it's given, with no block/padding
+    // of its own, so without this inset it sat flush against the divider —
+    // glued to it while the sidebar's items sat a full column away. This is
+    // the rect the PTY is actually sized to (see the resize logic that
+    // reads `layout.pane.width/height`), so insetting it here — not just
+    // where it's drawn — keeps what the shell thinks its size is in sync
+    // with what's visible.
+    let pane = Rect::new(
+        content_rows[1].x + 1,
+        content_rows[1].y,
+        content_rows[1].width.saturating_sub(2),
+        content_rows[1].height,
+    );
     WorkspaceLayout {
         sidebar: columns[0],
         tab_strip: content_rows[0],
-        pane: content_rows[1],
-    }
-}
-
-fn sidebar_width_for(total_width: u16) -> u16 {
-    if total_width < 60 {
-        16
-    } else if total_width < 90 {
-        18
-    } else {
-        27
+        pane,
     }
 }
 
@@ -554,6 +697,109 @@ fn render(
     ));
     render_tab_strip(frame, layout.tab_strip, model, hits);
     render_pane(frame, layout.pane, model);
+    // Drawn last so it sits on top of the pane — same ordering the
+    // management TUI's overlays use in its own `render`. Anchored to the
+    // "+ agent" button itself (found back out of the hits `render_tab_strip`
+    // just pushed) rather than centered on the whole frame — a dropdown
+    // hanging off the thing you clicked, not a modal interrupting the
+    // screen.
+    if let Some(picker) = &model.agent_picker {
+        let anchor = hits
+            .iter()
+            .rev()
+            .find_map(|(rect, hit)| matches!(hit, WorkspaceHit::NewAgentMenu).then_some(*rect));
+        render_agent_picker(frame, frame.area(), anchor, picker, hits);
+    }
+}
+
+/// A small popup listing `agent_options`, opened by "+ agent" — a dropdown
+/// anchored just below that button (`anchor`), falling back to centered on
+/// `area` only if the button's own rect wasn't found. Not built on the
+/// management TUI's `render_modal`/`modal_block` (those are shaped for
+/// static text, not a selectable, hit-testable list) — this is
+/// self-contained, styled by hand to match the same palette.
+fn render_agent_picker(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    anchor: Option<Rect>,
+    picker: &AgentPicker,
+    hits: &mut Vec<(Rect, WorkspaceHit)>,
+) {
+    let content_width = picker
+        .options
+        .iter()
+        .map(|option| option.display_name.chars().count() as u16)
+        .max()
+        .unwrap_or(16)
+        .max("no harnesses found".len() as u16);
+    let width = (content_width + 6).min(area.width);
+    let height = (picker.options.len().max(1) as u16 + 2).min(area.height);
+    let popup = match anchor {
+        Some(anchor) => Rect::new(
+            anchor.x.min((area.x + area.width).saturating_sub(width)),
+            (anchor.y + anchor.height).min((area.y + area.height).saturating_sub(height)),
+            width,
+            height,
+        ),
+        None => Rect::new(
+            area.x + area.width.saturating_sub(width) / 2,
+            area.y + area.height.saturating_sub(height) / 2,
+            width,
+            height,
+        ),
+    };
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .title(" new agent ")
+        .title_style(
+            Style::default()
+                .fg(super::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(super::BORDER))
+        .style(Style::default().bg(super::BASE));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    if picker.options.is_empty() {
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                "no harnesses found",
+                Style::default().fg(super::MUTED),
+            )),
+            inner,
+        );
+        return;
+    }
+    for (index, option) in picker.options.iter().enumerate() {
+        if index as u16 >= inner.height {
+            break;
+        }
+        let row = Rect::new(inner.x, inner.y + index as u16, inner.width, 1);
+        let selected = index == picker.selected;
+        // A filled bar for the selected row, not just bold text — the same
+        // narrowly-scoped exception to this design's usual no-filled-
+        // surfaces rule the Work/Manage toggle already makes, for the same
+        // reason: a keyboard-navigable menu needs the affordance.
+        let (style, text) = if selected {
+            let style = Style::default()
+                .bg(super::ACCENT)
+                .fg(super::BASE)
+                .add_modifier(Modifier::BOLD);
+            let text = format!(
+                " {:<width$}",
+                option.display_name,
+                width = inner.width.saturating_sub(1) as usize
+            );
+            (style, text)
+        } else {
+            let style = Style::default().fg(super::NAV_INACTIVE);
+            (style, format!(" {}", option.display_name))
+        };
+        frame.render_widget(Paragraph::new(Span::styled(text, style)), row);
+        hits.push((row, WorkspaceHit::PickAgent(index)));
+    }
 }
 
 /// A workspace/tabs tree: one root row naming the workspace (the project
@@ -848,13 +1094,24 @@ fn render_tab_strip(
         spans.push(Span::raw("   "));
         x += width + 3;
     }
+    // Minimal: a distinct symbol and color per action instead of both
+    // reading "+ new ...", so the two are told apart at a glance rather
+    // than by their trailing word — "$" (shell) in the tab-strip's usual
+    // accent, "+" (add) in a second hue reserved for this one action.
     if x < inner.right() {
-        let new_tab_rect = Rect::new(x, inner.y, "+ new tab".len() as u16, 1);
-        spans.push(Span::styled(
-            "+ new tab",
-            Style::default().fg(super::ACCENT),
-        ));
+        let label = "$ tab";
+        let new_tab_rect = Rect::new(x, inner.y, label.len() as u16, 1);
+        spans.push(Span::styled(label, Style::default().fg(super::ACCENT)));
         hits.push((new_tab_rect, WorkspaceHit::NewTab));
+        x += label.len() as u16;
+        spans.push(Span::styled(" │ ", Style::default().fg(super::TEXT_FAINT)));
+        x += 3;
+    }
+    if x < inner.right() {
+        let label = "+ agent";
+        let new_agent_rect = Rect::new(x, inner.y, label.len() as u16, 1);
+        spans.push(Span::styled(label, Style::default().fg(super::BLUE)));
+        hits.push((new_agent_rect, WorkspaceHit::NewAgentMenu));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), inner);
 }

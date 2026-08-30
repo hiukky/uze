@@ -26,6 +26,11 @@ pub enum ClientRequest {
         label: String,
         columns: u16,
         rows: u16,
+        /// Command to run in the new pane's PTY, as `argv` — `None` (or
+        /// `Some(&[])`) keeps the default `$SHELL`. Lets a client open a
+        /// tab running a specific program directly instead of a shell the
+        /// user would otherwise have to type the program into themselves.
+        command: Option<Vec<String>>,
     },
     SelectTab {
         tab: TabId,
