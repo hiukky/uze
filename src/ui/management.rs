@@ -105,11 +105,14 @@ struct ManagementLayout {
 /// drag-resize behaves identically in both TUIs because both call the
 /// literal same width math, not just similarly-shaped code.
 fn compute_layout(frame_area: Rect, sidebar_width_override: Option<u16>) -> ManagementLayout {
+    // Flush against the top row, not inset by one — see
+    // `orchestrator::compute_layout`'s identical change and rationale; kept
+    // mirrored here for the same reason the rest of this function is.
     let area = Rect::new(
         frame_area.x,
-        frame_area.y + 1,
+        frame_area.y,
         frame_area.width,
-        frame_area.height.saturating_sub(2),
+        frame_area.height.saturating_sub(1),
     );
     let sidebar_width = sidebar_width_override
         .map(|width| super::clamp_sidebar_width(width, area.width))
@@ -137,12 +140,12 @@ pub(crate) fn render(
     hits: &mut Vec<(Rect, Hit)>,
 ) {
     // Edge to edge horizontally (no left/right inset — matches the design's
-    // `width:100%`), but with one blank row top and bottom: on a browser
-    // canvas `height:100vh` reads as flush; in a real terminal, text
-    // sitting on row 0 with nothing above it reads as clipped/cramped, not
-    // "inset like a window". One flat backdrop for the entire frame — no
-    // panel ever paints its own background; every division is a hairline
-    // border or padding, never a filled slab.
+    // `width:100%`) and flush against the top row; one blank row is still
+    // kept at the bottom (see `compute_layout`), so the last row doesn't
+    // read as clipped the way a top-row title would if it sat with nothing
+    // above it. One flat backdrop for the entire frame — no panel ever
+    // paints its own background; every division is a hairline border or
+    // padding, never a filled slab.
     frame.render_widget(
         Block::default().style(Style::default().bg(super::BASE).fg(super::TEXT_PRIMARY)),
         frame.area(),

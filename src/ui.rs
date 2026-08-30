@@ -121,6 +121,13 @@ const BORDER: Color = Color::Rgb(30, 31, 32);
 /// The Marketplace/Harnesses selected-row tint — `rgba(143,209,158,0.09)`
 /// (the accent itself, barely-there) pre-blended over `BASE`.
 const SELECTED_BG: Color = Color::Rgb(22, 30, 26);
+/// A hue-neutral highlight overlay — `rgba(255,255,255,0.09)` pre-blended
+/// over `BASE`, the same strength as `SELECTED_BG` but white instead of
+/// accent-tinted. For a highlight that marks "this whole block is where
+/// you are" without borrowing the accent's meaning (e.g. the active
+/// workspace space's envelope) — not every raised surface should read as
+/// "on-brand selected", just "raised above the background".
+const SURFACE_OVERLAY: Color = Color::Rgb(32, 34, 35);
 
 const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 

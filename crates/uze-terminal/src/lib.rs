@@ -13,4 +13,7 @@ pub use protocol::{
     RenderCell, TerminalColor,
 };
 pub use runtime::{RuntimeError, attach, read_event, send_request, serve, stop};
-pub use state::{Focus, Layout, Pane, PaneId, Session, Tab, TabId, Workspace, WorkspaceId};
+pub use state::{
+    Focus, Layout, Pane, PaneId, Session, Space, SpaceId, SpaceSeed, Tab, TabId, TabSeed,
+    Workspace, WorkspaceId,
+};

@@ -8,7 +8,7 @@
 use crate::{Result, UzeError, UzeHome};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind};
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Padding, Paragraph},
@@ -24,7 +24,8 @@ use std::{
 use uze_integrations::registry::IntegrationRegistry;
 use uze_terminal::{
     CellAttributes, ClientEvent, ClientRequest, Cursor, PROTOCOL_VERSION, PaneId, PaneSnapshot,
-    RenderCell, Session, TabId, TerminalColor, attach, read_event, send_request,
+    RenderCell, Session, Space, SpaceId, Tab, TabId, TerminalColor, attach, read_event,
+    send_request,
 };
 
 /// Input/redraw cadence. Unlike the pane content itself — which the server
@@ -87,6 +88,11 @@ pub(crate) fn attach_workspace(
         sidebar_width: *sidebar_width,
         ..WorkspaceModel::default()
     };
+    // Built once per attach, not per frame — a registered harness set
+    // doesn't change mid-session, and this loop's own redraw cadence is
+    // deliberately kept off any per-frame filesystem/env work (see `POLL`
+    // above).
+    let identities = agent_identities(home);
     // The server's session/pane state is persistent — reattaching after a
     // Ctrl+O round trip to management finds the same shells exactly as they
     // were left. But the client's own model always starts empty, so without
@@ -130,7 +136,7 @@ pub(crate) fn attach_workspace(
         if model.dirty {
             model.tick = model.tick.wrapping_add(1);
             let mut hits = Vec::new();
-            terminal.draw(|frame| render(frame, &model, &mut hits))?;
+            terminal.draw(|frame| render(frame, &model, &identities, &mut hits))?;
             model.hits = hits;
             model.dirty = false;
         }
@@ -139,14 +145,22 @@ pub(crate) fn attach_workspace(
                 Event::Key(key) if model.renaming.is_some() => {
                     match key.code {
                         KeyCode::Enter => {
-                            if let Some((tab, buffer)) = model.renaming.take() {
+                            if let Some((target, buffer)) = model.renaming.take() {
                                 let trimmed = buffer.trim().to_owned();
                                 if !trimmed.is_empty() {
                                     let _ = send_request(
                                         &mut stream,
-                                        &ClientRequest::RenameTab {
-                                            tab,
-                                            label: trimmed,
+                                        &match target {
+                                            RenameTarget::Tab(tab) => ClientRequest::RenameTab {
+                                                tab,
+                                                label: trimmed,
+                                            },
+                                            RenameTarget::Space(space) => {
+                                                ClientRequest::RenameSpace {
+                                                    space,
+                                                    label: trimmed,
+                                                }
+                                            }
                                         },
                                     );
                                 }
@@ -202,6 +216,20 @@ pub(crate) fn attach_workspace(
                     }
                     model.dirty = true;
                 }
+                Event::Key(key) if model.context_menu.is_some() => {
+                    // Enter confirms the menu's one "close" row; anything
+                    // else (Esc included) dismisses without acting — same
+                    // "only reacts to its own actions" rule the agent
+                    // picker above uses.
+                    if key.code == KeyCode::Enter
+                        && let Some(menu) = model.context_menu.take()
+                    {
+                        send_close_request(&mut stream, menu.target);
+                    } else {
+                        model.context_menu = None;
+                    }
+                    model.dirty = true;
+                }
                 Event::Key(key)
                     if key.modifiers.contains(KeyModifiers::CONTROL)
                         && key.code == KeyCode::Char('o') =>
@@ -223,7 +251,7 @@ pub(crate) fn attach_workspace(
                     let _ = send_request(
                         &mut stream,
                         &ClientRequest::CreateTab {
-                            label: "shell".into(),
+                            label: next_shell_label(&model),
                             columns,
                             rows,
                             command: None,
@@ -249,7 +277,7 @@ pub(crate) fn attach_workspace(
                     if let Some(tab) = model
                         .session
                         .as_ref()
-                        .and_then(|session| session.workspace.tabs.get(index))
+                        .and_then(|session| session.selected_space().tabs.get(index))
                     {
                         let _ =
                             send_request(&mut stream, &ClientRequest::SelectTab { tab: tab.id });
@@ -320,8 +348,11 @@ pub(crate) fn attach_workspace(
                     }
                     model.dirty = true;
                 }
-                Event::Mouse(mouse) if mouse.kind == MouseEventKind::Down(MouseButton::Left) => {
-                    let Some(hit) = model
+                Event::Mouse(mouse)
+                    if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+                        && model.context_menu.is_some() =>
+                {
+                    let hit = model
                         .hits
                         .iter()
                         .find(|(rect, _)| {
@@ -330,7 +361,33 @@ pub(crate) fn attach_workspace(
                                 && rect.y <= mouse.row
                                 && mouse.row < rect.y + rect.height
                         })
-                        .map(|(_, hit)| *hit)
+                        .map(|(_, hit)| *hit);
+                    // The popup's own row is the only place left that still
+                    // raises `CloseSpace`/`CloseTab` — every ordinary row
+                    // stopped pushing those hits once closing moved behind
+                    // this confirmation, so finding one here means the
+                    // click landed on the popup, not "outside" it.
+                    if let Some(menu) = model.context_menu.take()
+                        && matches!(
+                            hit,
+                            Some(WorkspaceHit::CloseSpace(_) | WorkspaceHit::CloseTab(_))
+                        )
+                    {
+                        send_close_request(&mut stream, menu.target);
+                    }
+                    model.dirty = true;
+                }
+                Event::Mouse(mouse) if mouse.kind == MouseEventKind::Down(MouseButton::Left) => {
+                    let Some((hit_rect, hit)) = model
+                        .hits
+                        .iter()
+                        .find(|(rect, _)| {
+                            rect.x <= mouse.column
+                                && mouse.column < rect.x + rect.width
+                                && rect.y <= mouse.row
+                                && mouse.row < rect.y + rect.height
+                        })
+                        .map(|(rect, hit)| (*rect, *hit))
                     else {
                         model.last_click = None;
                         continue;
@@ -342,17 +399,37 @@ pub(crate) fn attach_workspace(
                     model.last_click = Some((now, hit));
                     if is_double_click {
                         model.last_click = None;
-                        if let WorkspaceHit::SelectTab(tab) = hit {
-                            let label = model
-                                .session
-                                .as_ref()
-                                .and_then(|session| {
-                                    session.workspace.tabs.iter().find(|t| t.id == tab)
-                                })
-                                .map(|t| t.label.clone())
-                                .unwrap_or_default();
-                            model.renaming = Some((tab, label));
-                            model.dirty = true;
+                        match hit {
+                            WorkspaceHit::SelectTab(tab) => {
+                                let label = model
+                                    .session
+                                    .as_ref()
+                                    .and_then(|session| {
+                                        session
+                                            .workspace
+                                            .spaces
+                                            .iter()
+                                            .flat_map(|space| &space.tabs)
+                                            .find(|t| t.id == tab)
+                                    })
+                                    .map(|t| t.label.clone())
+                                    .unwrap_or_default();
+                                model.renaming = Some((RenameTarget::Tab(tab), label));
+                                model.dirty = true;
+                            }
+                            WorkspaceHit::SelectSpace(space) => {
+                                let label = model
+                                    .session
+                                    .as_ref()
+                                    .and_then(|session| {
+                                        session.workspace.spaces.iter().find(|s| s.id == space)
+                                    })
+                                    .map(|s| s.label.clone())
+                                    .unwrap_or_default();
+                                model.renaming = Some((RenameTarget::Space(space), label));
+                                model.dirty = true;
+                            }
+                            _ => {}
                         }
                         continue;
                     }
@@ -377,7 +454,7 @@ pub(crate) fn attach_workspace(
                             let _ = send_request(
                                 &mut stream,
                                 &ClientRequest::CreateTab {
-                                    label: "shell".into(),
+                                    label: next_shell_label(&model),
                                     columns,
                                     rows,
                                     command: None,
@@ -388,6 +465,7 @@ pub(crate) fn attach_workspace(
                             model.agent_picker = Some(AgentPicker {
                                 options: agent_options(home),
                                 selected: 0,
+                                anchor: hit_rect,
                             });
                             // Unlike every other arm here, this is a purely
                             // local state change with no server round trip
@@ -402,6 +480,48 @@ pub(crate) fn attach_workspace(
                             // the guarded arm above already handles; a
                             // stale hit here (picker just closed) is a
                             // no-op.
+                        }
+                        WorkspaceHit::SelectSpace(space) => {
+                            let _ =
+                                send_request(&mut stream, &ClientRequest::SelectSpace { space });
+                            // Resize the pane the same way `SelectTab` does
+                            // — switching spaces switches which tab (and so
+                            // which pane) is focused, same as switching
+                            // tabs within one space already does.
+                            if let Some(pane) = model.session.as_ref().and_then(|session| {
+                                session
+                                    .workspace
+                                    .spaces
+                                    .iter()
+                                    .find(|s| s.id == space)
+                                    .map(|s| s.selected_tab)
+                                    .and_then(|tab| model.pane_for_tab(tab))
+                            }) {
+                                let _ = send_request(
+                                    &mut stream,
+                                    &ClientRequest::Resize {
+                                        pane,
+                                        columns,
+                                        rows,
+                                    },
+                                );
+                            }
+                        }
+                        WorkspaceHit::CloseSpace(_) => {
+                            // Only reachable while the context menu is
+                            // open, which the guarded arm above already
+                            // handles — same as `PickAgent` above for the
+                            // agent picker.
+                        }
+                        WorkspaceHit::NewSpace => {
+                            let _ = send_request(
+                                &mut stream,
+                                &ClientRequest::CreateSpace {
+                                    label: next_space_label(&model),
+                                    columns,
+                                    rows,
+                                },
+                            );
                         }
                         WorkspaceHit::SwitchToManagement => {
                             let _ = send_request(&mut stream, &ClientRequest::Detach);
@@ -433,6 +553,51 @@ pub(crate) fn attach_workspace(
                 Event::Mouse(mouse) if mouse.kind == MouseEventKind::Up(MouseButton::Left) => {
                     model.dragging_sidebar = false;
                 }
+                Event::Mouse(mouse)
+                    if mouse.kind == MouseEventKind::Down(MouseButton::Right)
+                        && model.renaming.is_none()
+                        && model.agent_picker.is_none() =>
+                {
+                    // The only way to close a space or an agent tab: right-
+                    // click it, then confirm in the popup this opens (see
+                    // `ContextMenu`) — never a direct click, so a stray
+                    // click can't kill a running agent or a whole space's
+                    // worth of them by accident.
+                    let hit = model
+                        .hits
+                        .iter()
+                        .find(|(rect, _)| {
+                            rect.x <= mouse.column
+                                && mouse.column < rect.x + rect.width
+                                && rect.y <= mouse.row
+                                && mouse.row < rect.y + rect.height
+                        })
+                        .map(|(rect, hit)| (*rect, *hit));
+                    if let Some((anchor, WorkspaceHit::SelectSpace(space))) = hit
+                        && model
+                            .session
+                            .as_ref()
+                            .is_some_and(|session| session.workspace.spaces.len() > 1)
+                    {
+                        model.context_menu = Some(ContextMenu {
+                            target: CloseTarget::Space(space),
+                            anchor,
+                        });
+                        model.dirty = true;
+                    } else if let Some((anchor, WorkspaceHit::SelectTab(tab))) = hit
+                        && model.session.as_ref().is_some_and(|session| {
+                            session.workspace.spaces.iter().any(|space| {
+                                space.tabs.len() > 1 && space.tabs.iter().any(|t| t.id == tab)
+                            })
+                        })
+                    {
+                        model.context_menu = Some(ContextMenu {
+                            target: CloseTarget::Tab(tab),
+                            anchor,
+                        });
+                        model.dirty = true;
+                    }
+                }
                 Event::Resize(_, _) | Event::Mouse(_) => {}
                 _ => {}
             }
@@ -445,13 +610,31 @@ enum WorkspaceHit {
     SelectTab(TabId),
     CloseTab(TabId),
     NewTab,
-    /// Opens the agent picker (`WorkspaceModel::agent_picker`) — "+ new
-    /// agent" beside "+ new tab" in the tab strip.
+    /// Opens the agent picker (`WorkspaceModel::agent_picker`) — "+ agent"
+    /// in the tab strip, creating a new agent tab inside the selected space.
     NewAgentMenu,
     /// One row of the open agent picker, by index into its `options`.
     PickAgent(usize),
+    /// A space's header row in the sidebar — click selects it (switching
+    /// which space's tabs the tab strip and pane show).
+    SelectSpace(SpaceId),
+    CloseSpace(SpaceId),
+    /// The sidebar's "+ new" row — creates a new space directly (no
+    /// picker; unlike an agent tab, a space has no "kind" to choose).
+    NewSpace,
     SwitchToManagement,
     ResizeSidebar,
+}
+
+/// What [`WorkspaceModel::renaming`] is currently editing — a tab or a
+/// space header both use the exact same inline-edit interaction (double-
+/// click to enter, Enter/Esc/Backspace/typing to edit, click-away to
+/// discard), so one buffer serves both; this just says which request to
+/// send on commit.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RenameTarget {
+    Tab(TabId),
+    Space(SpaceId),
 }
 
 /// A second `Down(Left)` on the same hit within this window counts as a
@@ -471,35 +654,104 @@ struct AgentOption {
 struct AgentPicker {
     options: Vec<AgentOption>,
     selected: usize,
+    /// The tab strip's "+ agent" button's own rect — the popup anchors
+    /// just under it.
+    anchor: Rect,
 }
 
-/// The harnesses this picker offers, resolved entirely through the generic
-/// `IntegrationPort` contract (`.id()`/`.display_name()`/`.aliases()`) —
-/// never a hardcoded vendor list, which `src/` is not allowed to hold (see
+/// What a right-click-opened [`ContextMenu`] would close.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CloseTarget {
+    Space(SpaceId),
+    Tab(TabId),
+}
+
+/// Open state of the close-confirmation popup a right-click on a space
+/// header or agent tab raises. A space/tab is never closable from a plain
+/// left click any more — right-click, then this menu's own "close" row —
+/// deliberately two steps, so an accidental click can't kill a running
+/// agent or an entire space's worth of them. Built fresh on each
+/// right-click, never persisted.
+struct ContextMenu {
+    target: CloseTarget,
+    /// The right-clicked row's own rect — the popup anchors just under it,
+    /// same placement rule [`AgentPicker::anchor`] uses.
+    anchor: Rect,
+}
+
+/// One built-in harness's identity for recognizing which pane (if any) is
+/// running it — the same alias/id vocabulary [`agent_options`] offers in the
+/// "+ agent" picker, kept as its own small table so the sidebar/tab-strip
+/// classification that runs on every dirty frame (see
+/// [`agent_identity_for_tab`]) doesn't rebuild the registry each time; this
+/// is built once per [`attach_workspace`] call instead.
+struct AgentIdentity {
+    /// The short, typed name — an alias when the harness has one (`claude`,
+    /// where the stable id is `claude-code`), else its id (`codex`,
+    /// `opencode`, whose id already is their binary name). Also the exact
+    /// value `UZE_SHIM_NAME` carries (see `src/shim.rs`), which is what a
+    /// shim-launched pane's live process name (see
+    /// `uze_terminal::PaneRuntime::foreground_status`) resolves to.
+    binary: &'static str,
+    display_name: &'static str,
+}
+
+/// Resolved entirely through the generic `IntegrationPort` contract
+/// (`.id()`/`.display_name()`/`.aliases()`) — never a hardcoded vendor list,
+/// which `src/` is not allowed to hold (see
 /// `tests/integrations/identity.rs::cli_and_tui_never_names_a_vendor_harness`).
-/// `aliases()` is the invocation word a person types (`claude`, where the
-/// stable id is `claude-code`); the other harnesses' id already is their
-/// binary name. A registry that fails to construct (rare — see
-/// `src/shim.rs`'s identical `.ok()` fallback) just yields no options
-/// rather than failing the whole workspace session.
-fn agent_options(home: &UzeHome) -> Vec<AgentOption> {
+/// A registry that fails to construct (rare — see `src/shim.rs`'s identical
+/// `.ok()` fallback) just yields no identities rather than failing the
+/// whole workspace session.
+fn agent_identities(home: &UzeHome) -> Vec<AgentIdentity> {
     let Ok(registry) = IntegrationRegistry::builtin(home) else {
         return Vec::new();
     };
     registry
         .iter()
-        .map(|integration| {
-            let binary = integration
+        .map(|integration| AgentIdentity {
+            binary: integration
                 .aliases()
                 .first()
                 .copied()
-                .unwrap_or_else(|| integration.id());
-            AgentOption {
-                display_name: integration.display_name().to_owned(),
-                command: vec![binary.to_owned()],
-            }
+                .unwrap_or_else(|| integration.id()),
+            display_name: integration.display_name(),
         })
         .collect()
+}
+
+/// The harnesses the "+ agent" picker offers — one row per
+/// [`AgentIdentity`], `command` set to launch that identity's `binary`.
+fn agent_options(home: &UzeHome) -> Vec<AgentOption> {
+    agent_identities(home)
+        .into_iter()
+        .map(|identity| AgentOption {
+            display_name: identity.display_name.to_owned(),
+            command: vec![identity.binary.to_owned()],
+        })
+        .collect()
+}
+
+/// The recognized agent, if any, running in `tab`'s focused pane — matched
+/// against `identities` primarily by live foreground process name (a
+/// shim-launched process reports its invoked alias there via
+/// `UZE_SHIM_NAME`, not its raw `comm` — see
+/// `uze_terminal::PaneRuntime::foreground_status`), falling back to the
+/// tab's own label for the brief window right after it opens through the
+/// "+ agent" picker (label is seeded to the harness's display name) before
+/// the first status probe lands. Returns the harness's short binary/alias
+/// name (`claude`, `codex`, …) — what the sidebar and tab strip show in
+/// place of the raw process string, and what decides whether a tab lists
+/// under "agents" or "shell" at all.
+fn agent_identity_for_tab<'a>(identities: &'a [AgentIdentity], tab: &Tab) -> Option<&'a str> {
+    let process = pane_in_layout(&tab.layout, tab.focus.pane).map(|pane| pane.process.as_str());
+    identities
+        .iter()
+        .find(|identity| {
+            process.is_some_and(|process| process.eq_ignore_ascii_case(identity.binary))
+                || tab.label.eq_ignore_ascii_case(identity.display_name)
+        })
+        .map(|identity| identity.binary)
 }
 
 #[derive(Default)]
@@ -521,15 +773,18 @@ struct WorkspaceModel {
     /// Client-local presentation state — never sent to the server.
     sidebar_width: Option<u16>,
     dragging_sidebar: bool,
-    /// The tab being renamed and its live edit buffer. While set, all
-    /// keyboard input edits this instead of reaching the pane, and any
-    /// click elsewhere cancels it (same "click outside discards" rule the
-    /// management TUI's overlays use).
-    renaming: Option<(TabId, String)>,
+    /// What's being renamed (a tab or a space) and its live edit buffer.
+    /// While set, all keyboard input edits this instead of reaching the
+    /// pane, and any click elsewhere cancels it (same "click outside
+    /// discards" rule the management TUI's overlays use).
+    renaming: Option<(RenameTarget, String)>,
     last_click: Option<(std::time::Instant, WorkspaceHit)>,
     /// Open state of the "+ new agent" popup; `None` when closed. Same
     /// "click outside discards" rule as `renaming`.
     agent_picker: Option<AgentPicker>,
+    /// Open state of the right-click close-confirmation popup; `None` when
+    /// closed. Same "click outside discards" rule as `renaming`.
+    context_menu: Option<ContextMenu>,
 }
 impl WorkspaceModel {
     fn apply(&mut self, event: ClientEvent) {
@@ -577,14 +832,15 @@ impl WorkspaceModel {
     fn selected_tab(&self) -> Option<TabId> {
         self.session
             .as_ref()
-            .map(|session| session.workspace.selected_tab)
+            .map(|session| session.selected_tab().id)
     }
     fn pane_for_tab(&self, tab: TabId) -> Option<PaneId> {
         self.session.as_ref().and_then(|session| {
             session
                 .workspace
-                .tabs
+                .spaces
                 .iter()
+                .flat_map(|space| &space.tabs)
                 .find(|candidate| candidate.id == tab)
                 .map(|candidate| candidate.focus.pane)
         })
@@ -631,11 +887,17 @@ struct WorkspaceLayout {
 /// toolbar (see [`ui::render_footer`](crate::ui::render_footer) — that
 /// stays exclusive to the management TUI).
 fn compute_layout(frame_area: Rect, sidebar_width_override: Option<u16>) -> WorkspaceLayout {
+    // Flush against the top row, not inset by one — the mode toggle is
+    // this TUI's own top edge, and floating it a row down from the real
+    // terminal top just read as wasted vertical space. One blank row is
+    // still kept at the *bottom* (`saturating_sub(1)`, not `2`), matching
+    // `management::compute_layout`'s identical rationale there: unlike the
+    // top, that gap keeps the last row from reading as clipped.
     let area = Rect::new(
         frame_area.x,
-        frame_area.y + 1,
+        frame_area.y,
         frame_area.width,
-        frame_area.height.saturating_sub(2),
+        frame_area.height.saturating_sub(1),
     );
     let sidebar_width = sidebar_width_override
         .map(|width| super::clamp_sidebar_width(width, area.width))
@@ -675,6 +937,7 @@ fn compute_layout(frame_area: Rect, sidebar_width_override: Option<u16>) -> Work
 fn render(
     frame: &mut ratatui::Frame<'_>,
     model: &WorkspaceModel,
+    identities: &[AgentIdentity],
     hits: &mut Vec<(Rect, WorkspaceHit)>,
 ) {
     frame.render_widget(
@@ -682,7 +945,7 @@ fn render(
         frame.area(),
     );
     let layout = compute_layout(frame.area(), model.sidebar_width);
-    render_sidebar(frame, layout.sidebar, model, hits);
+    render_sidebar(frame, layout.sidebar, model, identities, hits);
     // The sidebar's own hairline right border doubles as a drag handle —
     // it sits just past `inner` (which `render_sidebar` never draws into),
     // so this can't collide with any row hit pushed there.
@@ -695,33 +958,31 @@ fn render(
         ),
         WorkspaceHit::ResizeSidebar,
     ));
-    render_tab_strip(frame, layout.tab_strip, model, hits);
+    render_tab_strip(frame, layout.tab_strip, model, identities, hits);
     render_pane(frame, layout.pane, model);
     // Drawn last so it sits on top of the pane — same ordering the
-    // management TUI's overlays use in its own `render`. Anchored to the
-    // "+ agent" button itself (found back out of the hits `render_tab_strip`
-    // just pushed) rather than centered on the whole frame — a dropdown
-    // hanging off the thing you clicked, not a modal interrupting the
-    // screen.
+    // management TUI's overlays use in its own `render`. Anchored to
+    // `picker.anchor` (the "+ agent" button's own rect) rather than
+    // centered on the whole frame — a dropdown hanging off the thing you
+    // clicked, not a modal interrupting the screen.
     if let Some(picker) = &model.agent_picker {
-        let anchor = hits
-            .iter()
-            .rev()
-            .find_map(|(rect, hit)| matches!(hit, WorkspaceHit::NewAgentMenu).then_some(*rect));
-        render_agent_picker(frame, frame.area(), anchor, picker, hits);
+        render_agent_picker(frame, frame.area(), picker.anchor, picker, hits);
+    }
+    if let Some(menu) = &model.context_menu {
+        render_context_menu(frame, frame.area(), menu, hits);
     }
 }
 
-/// A small popup listing `agent_options`, opened by "+ agent" — a dropdown
-/// anchored just below that button (`anchor`), falling back to centered on
-/// `area` only if the button's own rect wasn't found. Not built on the
-/// management TUI's `render_modal`/`modal_block` (those are shaped for
+/// A small popup listing `agent_options`, opened by the tab strip's
+/// "+ agent" button — a dropdown anchored just below it, creating the
+/// picked agent as a new tab in the currently selected space. Not built on
+/// the management TUI's `render_modal`/`modal_block` (those are shaped for
 /// static text, not a selectable, hit-testable list) — this is
 /// self-contained, styled by hand to match the same palette.
 fn render_agent_picker(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
-    anchor: Option<Rect>,
+    anchor: Rect,
     picker: &AgentPicker,
     hits: &mut Vec<(Rect, WorkspaceHit)>,
 ) {
@@ -734,20 +995,12 @@ fn render_agent_picker(
         .max("no harnesses found".len() as u16);
     let width = (content_width + 6).min(area.width);
     let height = (picker.options.len().max(1) as u16 + 2).min(area.height);
-    let popup = match anchor {
-        Some(anchor) => Rect::new(
-            anchor.x.min((area.x + area.width).saturating_sub(width)),
-            (anchor.y + anchor.height).min((area.y + area.height).saturating_sub(height)),
-            width,
-            height,
-        ),
-        None => Rect::new(
-            area.x + area.width.saturating_sub(width) / 2,
-            area.y + area.height.saturating_sub(height) / 2,
-            width,
-            height,
-        ),
-    };
+    let popup = Rect::new(
+        anchor.x.min((area.x + area.width).saturating_sub(width)),
+        (anchor.y + anchor.height).min((area.y + area.height).saturating_sub(height)),
+        width,
+        height,
+    );
     frame.render_widget(Clear, popup);
     let block = Block::default()
         .title(" new agent ")
@@ -802,17 +1055,77 @@ fn render_agent_picker(
     }
 }
 
-/// A workspace/tabs tree: one root row naming the workspace (the project
-/// directory), then every tab as a child row — `●`/`○` for
-/// selected/unselected plus its label, and a dim caption line underneath
-/// with its pane's live `cwd · process` (see
-/// [`uze_terminal::PaneRuntime::foreground_status`] on the server side).
-/// The sidebar used to just list tabs flatly; this makes explicit that one
-/// workspace (one project root, one server) owns many tabs/processes.
+/// The right-click close-confirmation popup — one "close" row, styled in
+/// `DANGER` to read as destructive, closing whatever [`ContextMenu::target`]
+/// names. Same anchoring mechanics as [`render_agent_picker`] (anchored
+/// just under the right-clicked row); see [`ContextMenu`]'s own doc comment
+/// for why this exists instead of a direct click.
+fn render_context_menu(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    menu: &ContextMenu,
+    hits: &mut Vec<(Rect, WorkspaceHit)>,
+) {
+    let (title, hit) = match menu.target {
+        CloseTarget::Space(space) => (" close space ", WorkspaceHit::CloseSpace(space)),
+        CloseTarget::Tab(tab) => (" close agent ", WorkspaceHit::CloseTab(tab)),
+    };
+    let label = "close";
+    let width = (title.len().max(label.len() + 2) as u16 + 2).min(area.width);
+    let height = 3.min(area.height);
+    let popup = Rect::new(
+        menu.anchor
+            .x
+            .min((area.x + area.width).saturating_sub(width)),
+        (menu.anchor.y + menu.anchor.height).min((area.y + area.height).saturating_sub(height)),
+        width,
+        height,
+    );
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .title(title)
+        .title_style(
+            Style::default()
+                .fg(super::DANGER)
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(super::BORDER))
+        .style(Style::default().bg(super::BASE));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let row = Rect::new(inner.x, inner.y, inner.width, 1);
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            format!(" {label}"),
+            Style::default().fg(super::DANGER),
+        )),
+        row,
+    );
+    hits.push((row, hit));
+}
+
+/// A two-level tree, one block per space the user has created (blank-line
+/// separated — see the loop below), each expanded (no collapse/accordion)
+/// into the agent tabs [`agent_identity_for_tab`] recognizes as running
+/// inside it — `●`/`○` for selected/unselected plus its label, and a dim
+/// caption line underneath with its pane's live `cwd · alias` (the alias in
+/// place of the raw process name — see [`agent_identity_for_tab`]). A space
+/// with no agent tabs shows its current `cwd` alone in place of the tree,
+/// so an empty space still reads as "somewhere", not blank. Plain shell
+/// tabs (and anything else not recognized as an agent) never appear here;
+/// they still exist in the tab strip above the pane (see
+/// [`render_tab_strip`]), scoped to whichever space is selected. The
+/// underlying workspace/directory this client is attached to (see
+/// `Workspace` in `uze-terminal`) is deliberately never shown — it's
+/// infrastructure the user never organizes by; spaces are the only unit
+/// that matters here.
 fn render_sidebar(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
     model: &WorkspaceModel,
+    identities: &[AgentIdentity],
     hits: &mut Vec<(Rect, WorkspaceHit)>,
 ) {
     let border_color = if model.dragging_sidebar {
@@ -880,121 +1193,246 @@ fn render_sidebar(
     };
 
     if let Some(rect) = row(1) {
+        // Right-aligned, not tucked under the workspace name like the space
+        // list below it — this reads as a header-row action (the same
+        // place "+ agent" sits in the tab strip above the pane) rather than
+        // as another tree item. Creates a space directly — a space has no
+        // "kind" to pick, unlike an agent tab, so no picker is needed here.
+        let label = "+ new";
+        let label_x = rect.x + rect.width.saturating_sub(label.len() as u16);
         frame.render_widget(
-            Paragraph::new(Span::styled(
-                workspace_name(&session.workspace.root),
-                Style::default()
-                    .fg(super::TEXT_BRIGHT)
-                    .add_modifier(Modifier::BOLD),
-            )),
+            Paragraph::new(Span::styled(label, Style::default().fg(super::ACCENT)))
+                .alignment(Alignment::Right),
             rect,
         );
+        hits.push((
+            Rect::new(label_x, rect.y, label.len() as u16, 1),
+            WorkspaceHit::NewSpace,
+        ));
     }
 
-    let tabs = &session.workspace.tabs;
-    let can_close = tabs.len() > 1;
-    for (index, tab) in tabs.iter().enumerate() {
-        let is_last = index + 1 == tabs.len();
-        let connector = if is_last { "└─ " } else { "├─ " };
-        let Some(label_rect) = row(1) else { break };
+    for space in &session.workspace.spaces {
+        let is_active_space = space.id == session.workspace.selected_space;
+        let Some(header_rect) = row(1) else { break };
+        render_space_header(frame, header_rect, session, space, model, hits);
 
-        let selected = tab.id == session.workspace.selected_tab;
-        let renaming_this = model
-            .renaming
-            .as_ref()
-            .filter(|(id, _)| *id == tab.id)
-            .map(|(_, buffer)| buffer.as_str());
-        let dot_fg = if selected {
-            super::ACCENT
-        } else {
-            super::TEXT_FAINT
-        };
-        let mut label_style = Style::default().fg(if selected {
-            super::TEXT_BRIGHT
-        } else {
-            super::NAV_INACTIVE
-        });
-        if selected {
-            label_style = label_style.add_modifier(Modifier::BOLD);
+        let agent_tabs: Vec<&Tab> = space
+            .tabs
+            .iter()
+            .filter(|tab| agent_identity_for_tab(identities, tab).is_some())
+            .collect();
+
+        if agent_tabs.is_empty() {
+            // Nothing running here yet — show where this space currently
+            // is instead of an empty gap under its header, so it still
+            // reads as "somewhere", not blank. Reads off the space's own
+            // selected tab (its bootstrap shell, absent any agent) rather
+            // than the workspace root, so it tracks a plain `cd` the same
+            // way an agent tab's own detail line already does.
+            if let Some(cwd_rect) = row(1) {
+                let cwd = space
+                    .tabs
+                    .iter()
+                    .find(|tab| tab.id == space.selected_tab)
+                    .and_then(|tab| pane_in_layout(&tab.layout, tab.focus.pane))
+                    .map(|pane| super::display_project_path(&pane.cwd))
+                    .unwrap_or_default();
+                let mut spans = vec![Span::styled(
+                    format!("  {cwd}"),
+                    Style::default().fg(super::TEXT_DIM),
+                )];
+                if is_active_space {
+                    fill_row_bg(&mut spans, cwd_rect.width, super::SURFACE_OVERLAY);
+                }
+                frame.render_widget(Paragraph::new(Line::from(spans)), cwd_rect);
+            }
         }
-        let connector_span = Span::styled(connector, Style::default().fg(super::TEXT_FAINT));
-        let label = match renaming_this {
-            Some(buffer) => Span::styled(
-                format!("{buffer}▏"),
-                Style::default()
-                    .fg(super::TEXT_BRIGHT)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            None => Span::styled(tab.label.clone(), label_style),
-        };
-        // `connector`'s box-drawing characters are multi-byte in UTF-8
-        // (`"├─ ".len()` is 7, not the 3 columns it actually occupies) —
-        // `.len()` here previously threw off the close-button padding,
-        // pushing `×` left of where it visually belongs. `Span::width()`
-        // measures display columns, matching what `label.width()` already
-        // does below.
-        let used = connector_span.width() + 2 + label.width();
-        let mut spans = vec![
-            connector_span,
-            Span::styled(
-                if selected { "● " } else { "○ " },
-                Style::default().fg(dot_fg),
-            ),
-            label,
-        ];
-        if renaming_this.is_none() && can_close && inner.width as usize > used + 2 {
-            let pad = inner.width as usize - used - 1;
-            spans.push(Span::raw(" ".repeat(pad)));
-            spans.push(Span::styled("×", Style::default().fg(super::TEXT_DIM)));
-            hits.push((
-                Rect::new(
-                    label_rect.x + inner.width.saturating_sub(1),
-                    label_rect.y,
-                    1,
-                    1,
+        for (index, tab) in agent_tabs.iter().enumerate() {
+            let is_last = index + 1 == agent_tabs.len();
+            // One extra level of indent versus a flat list — these tabs
+            // read as children of the space header row just drawn above.
+            let connector = if is_last { "  └─ " } else { "  ├─ " };
+            let Some(label_rect) = row(1) else { break };
+
+            let selected = tab.id == space.selected_tab;
+            let renaming_this = model
+                .renaming
+                .as_ref()
+                .filter(|(target, _)| *target == RenameTarget::Tab(tab.id))
+                .map(|(_, buffer)| buffer.as_str());
+            let dot_fg = if selected {
+                super::ACCENT
+            } else {
+                super::TEXT_FAINT
+            };
+            // Bright but not bold — bold is the space header's own marker
+            // for "this is the active space" (see `render_space_header`);
+            // an agent tab nested under it competing for the same weight
+            // read as two different things both shouting "I'm the one".
+            // The `●` dot above already says which tab is active.
+            let label_style = Style::default().fg(if selected {
+                super::TEXT_BRIGHT
+            } else {
+                super::NAV_INACTIVE
+            });
+            let connector_span = Span::styled(connector, Style::default().fg(super::TEXT_FAINT));
+            let label = match renaming_this {
+                Some(buffer) => Span::styled(
+                    format!("{buffer}▏"),
+                    Style::default()
+                        .fg(super::TEXT_BRIGHT)
+                        .add_modifier(Modifier::BOLD),
                 ),
-                WorkspaceHit::CloseTab(tab.id),
-            ));
-        }
-        frame.render_widget(Paragraph::new(Line::from(spans)), label_rect);
-        hits.push((label_rect, WorkspaceHit::SelectTab(tab.id)));
+                None => Span::styled(tab.label.clone(), label_style),
+            };
+            let mut spans = vec![
+                connector_span,
+                Span::styled(
+                    if selected { "● " } else { "○ " },
+                    Style::default().fg(dot_fg),
+                ),
+                label,
+            ];
+            if is_active_space {
+                fill_row_bg(&mut spans, label_rect.width, super::SURFACE_OVERLAY);
+            }
+            frame.render_widget(Paragraph::new(Line::from(spans)), label_rect);
+            hits.push((label_rect, WorkspaceHit::SelectTab(tab.id)));
 
-        if let Some(detail_rect) = row(1) {
-            let continuation = if is_last { "   " } else { "│  " };
-            let detail = pane_in_layout(&tab.layout, tab.focus.pane)
-                .map(|pane| {
-                    format!(
-                        "{} · {}",
-                        super::display_project_path(&pane.cwd),
-                        pane.process
-                    )
-                })
-                .unwrap_or_default();
-            frame.render_widget(
-                Paragraph::new(Line::from(vec![
+            if let Some(detail_rect) = row(1) {
+                let continuation = if is_last { "     " } else { "  │  " };
+                // The alias in place of the raw process name — this list only
+                // ever holds tabs `agent_identity_for_tab` already resolved, so
+                // it never falls back to showing something like a bare version
+                // string (see that function's doc comment).
+                let alias = agent_identity_for_tab(identities, tab).unwrap_or_default();
+                let detail = pane_in_layout(&tab.layout, tab.focus.pane)
+                    .map(|pane| format!("{} · {alias}", super::display_project_path(&pane.cwd)))
+                    .unwrap_or_default();
+                let mut spans = vec![
                     Span::styled(continuation, Style::default().fg(super::TEXT_FAINT)),
                     Span::styled(detail, Style::default().fg(super::TEXT_DIM)),
-                ])),
-                detail_rect,
-            );
-            // The label and its dim cwd/process caption read as one tree
-            // item — clicking the caption line must select the tab too,
-            // not just the label text above it.
-            hits.push((detail_rect, WorkspaceHit::SelectTab(tab.id)));
+                ];
+                if is_active_space {
+                    fill_row_bg(&mut spans, detail_rect.width, super::SURFACE_OVERLAY);
+                }
+                frame.render_widget(Paragraph::new(Line::from(spans)), detail_rect);
+                // The label and its dim cwd/process caption read as one tree
+                // item — clicking the caption line must select the tab too,
+                // not just the label text above it.
+                hits.push((detail_rect, WorkspaceHit::SelectTab(tab.id)));
+            }
+            // No blank row between tabs — a full row read as too much air once
+            // tried (each item is already only 2 rows tall), and the "├─"/"└─"
+            // connector on the next label is enough on its own to read as a new
+            // sibling starting, the same way `tree`/git-log-graph style output
+            // never blank-lines between nodes.
         }
-        // No blank row between tabs — a full row read as too much air once
-        // tried (each item is already only 2 rows tall), and the "├─"/"└─"
-        // connector on the next label is enough on its own to read as a new
-        // sibling starting, the same way `tree`/git-log-graph style output
-        // never blank-lines between nodes.
+        // One blank row *between* spaces (not between a tab and its own
+        // detail line, which stays tight per the comment above) — each
+        // space is its own block, and needs the breathing room a flat
+        // tab list didn't.
+        row(1);
     }
 }
 
-fn workspace_name(root: &std::path::Path) -> String {
-    root.file_name()
-        .and_then(|name| name.to_str())
-        .map(str::to_owned)
-        .unwrap_or_else(|| super::display_project_path(root))
+/// One space's header row in the sidebar tree — plain label for the rest,
+/// bright/bold for the active one. The active space's whole envelope
+/// (this header plus every tab/detail/cwd row nested under it — see the
+/// `is_active_space` fill in [`render_sidebar`]) gets a neutral
+/// [`super::SURFACE_OVERLAY`] background instead of a left accent bar, so
+/// the highlight reads as "this whole block is where you are" rather than
+/// a thin per-row marker or an on-brand "selected" tint (deliberately not
+/// `SELECTED_BG` — that one borrows the accent hue for a different kind of
+/// selection). Its own small function (unlike the tab row, which stays
+/// inline in [`render_sidebar`]) purely to keep that function's now-nested
+/// loop readable — this has no reuse motivation beyond that.
+fn render_space_header(
+    frame: &mut ratatui::Frame<'_>,
+    rect: Rect,
+    session: &Session,
+    space: &Space,
+    model: &WorkspaceModel,
+    hits: &mut Vec<(Rect, WorkspaceHit)>,
+) {
+    let selected = space.id == session.workspace.selected_space;
+    let renaming_this = model
+        .renaming
+        .as_ref()
+        .filter(|(target, _)| *target == RenameTarget::Space(space.id))
+        .map(|(_, buffer)| buffer.as_str());
+    let mut label_style = Style::default().fg(if selected {
+        super::TEXT_BRIGHT
+    } else {
+        super::NAV_INACTIVE
+    });
+    if selected {
+        label_style = label_style.add_modifier(Modifier::BOLD);
+    }
+    let label = match renaming_this {
+        Some(buffer) => Span::styled(
+            format!(" {buffer}▏"),
+            Style::default()
+                .fg(super::TEXT_BRIGHT)
+                .add_modifier(Modifier::BOLD),
+        ),
+        None => Span::styled(format!(" {}", space.label), label_style),
+    };
+    let mut spans = vec![label];
+    if selected {
+        fill_row_bg(&mut spans, rect.width, super::SURFACE_OVERLAY);
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), rect);
+    hits.push((rect, WorkspaceHit::SelectSpace(space.id)));
+}
+
+/// Stamps `bg` onto every span already in the row, then appends a
+/// trailing background-filled run of spaces so the highlight spans the
+/// row's full width instead of stopping at the last glyph — same pattern
+/// `render_plugin_row`/`render_marketplace_row` use for their own
+/// selected-row backgrounds.
+fn fill_row_bg<'a>(spans: &mut Vec<Span<'a>>, width: u16, bg: Color) {
+    for span in spans.iter_mut() {
+        span.style = span.style.bg(bg);
+    }
+    let used: usize = spans.iter().map(Span::width).sum();
+    let gap = (width as usize).saturating_sub(used);
+    spans.push(Span::styled(" ".repeat(gap), Style::default().bg(bg)));
+}
+
+/// The label a plain "$ shell" tab opens with — numbered off the selected
+/// space's current tab count (shells are per-space, same as everything
+/// else in the tab strip) so opening several in a row reads as "shell 2",
+/// "shell 3", … instead of every one showing the identical generic "shell".
+fn next_shell_label(model: &WorkspaceModel) -> String {
+    let count = model
+        .session
+        .as_ref()
+        .map_or(0, |session| session.selected_space().tabs.len());
+    format!("shell {}", count + 1)
+}
+
+/// The label a fresh space opens with — same numbering convention as
+/// [`next_shell_label`], off the workspace's current space count.
+fn next_space_label(model: &WorkspaceModel) -> String {
+    let count = model
+        .session
+        .as_ref()
+        .map_or(0, |session| session.workspace.spaces.len());
+    format!("space {}", count + 1)
+}
+
+/// The one action a [`ContextMenu`] ever confirms — sent from both the
+/// popup's own click zone and its keyboard Enter shortcut, so the request
+/// this actually builds only needs writing once.
+fn send_close_request<W: io::Write>(stream: &mut W, target: CloseTarget) {
+    let _ = send_request(
+        stream,
+        &match target {
+            CloseTarget::Space(space) => ClientRequest::CloseSpace { space },
+            CloseTarget::Tab(tab) => ClientRequest::CloseTab { tab },
+        },
+    );
 }
 
 fn pane_in_layout(layout: &uze_terminal::Layout, wanted: PaneId) -> Option<&uze_terminal::Pane> {
@@ -1007,15 +1445,22 @@ fn pane_in_layout(layout: &uze_terminal::Layout, wanted: PaneId) -> Option<&uze_
     }
 }
 
-/// The horizontal tab strip above the pane: an active-tab marker in
-/// `ACCENT`/bold-bright text (the same contrast the sidebar uses for
-/// selection, not a filled pill background — this design never paints
-/// filled surfaces), a dim `×` close affordance per tab once more than one
-/// exists, and a trailing `+` to open another.
+/// The horizontal tab strip above the pane: the *selected space's* shell
+/// tabs only — agent tabs live exclusively in the sidebar now (see
+/// [`render_sidebar`]), so a tab [`agent_identity_for_tab`] recognizes
+/// never appears here, the same way a shell tab never appears in the
+/// sidebar; other spaces' shell tabs don't appear here either, only the
+/// currently selected space's. An active-tab marker in `ACCENT`/bold-bright
+/// text (the same contrast the sidebar uses for selection, not a filled
+/// pill background — this design never paints filled surfaces), a dim `×`
+/// close affordance per tab once more than one exists in the selected
+/// space, and trailing `$ shell`/`+ agent` actions to open another of
+/// either kind (both land in the selected space).
 fn render_tab_strip(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
     model: &WorkspaceModel,
+    identities: &[AgentIdentity],
     hits: &mut Vec<(Rect, WorkspaceHit)>,
 ) {
     let block = Block::default()
@@ -1036,14 +1481,26 @@ fn render_tab_strip(
         return;
     };
 
-    let can_close = session.workspace.tabs.len() > 1;
+    // Scoped to the selected space — switching spaces (sidebar) switches
+    // which shells this strip shows, the actual "don't mix projects"
+    // payoff of spaces existing at all.
+    let space = session.selected_space();
+    // Closability is a per-space rule (the server refuses to remove a
+    // space's only tab — see `Session::remove_tab`), so it's judged
+    // against every tab in the selected space, not just the shell ones
+    // this strip goes on to show.
+    let can_close = space.tabs.len() > 1;
     let mut spans = Vec::new();
     let mut x = inner.x;
-    for tab in &session.workspace.tabs {
+    for tab in space
+        .tabs
+        .iter()
+        .filter(|tab| agent_identity_for_tab(identities, tab).is_none())
+    {
         if x >= inner.right() {
             break;
         }
-        let selected = tab.id == session.workspace.selected_tab;
+        let selected = tab.id == space.selected_tab;
         let marker_fg = if selected {
             super::ACCENT
         } else {
@@ -1063,9 +1520,9 @@ fn render_tab_strip(
         let renaming_this = model
             .renaming
             .as_ref()
-            .filter(|(id, _)| *id == tab.id)
+            .filter(|(target, _)| *target == RenameTarget::Tab(tab.id))
             .map(|(_, buffer)| buffer.as_str());
-        let label = match renaming_this {
+        let tab_label = match renaming_this {
             Some(buffer) => Span::styled(
                 format!("{buffer}▏"),
                 Style::default()
@@ -1075,9 +1532,9 @@ fn render_tab_strip(
             None => Span::styled(tab.label.clone(), label_style),
         };
         let start = x;
-        let mut width = marker.width() as u16 + label.width() as u16;
+        let mut width = marker.width() as u16 + tab_label.width() as u16;
         spans.push(marker);
-        spans.push(label);
+        spans.push(tab_label);
         if renaming_this.is_none() && can_close {
             spans.push(Span::raw(" "));
             spans.push(Span::styled("×", Style::default().fg(super::TEXT_DIM)));
@@ -1099,7 +1556,7 @@ fn render_tab_strip(
     // than by their trailing word — "$" (shell) in the tab-strip's usual
     // accent, "+" (add) in a second hue reserved for this one action.
     if x < inner.right() {
-        let label = "$ tab";
+        let label = "$ shell";
         let new_tab_rect = Rect::new(x, inner.y, label.len() as u16, 1);
         spans.push(Span::styled(label, Style::default().fg(super::ACCENT)));
         hits.push((new_tab_rect, WorkspaceHit::NewTab));
@@ -1212,4 +1669,73 @@ fn io_error(source: io::Error) -> UzeError {
 }
 fn runtime_error(error: uze_terminal::RuntimeError) -> UzeError {
     UzeError::AcquisitionFailed(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AgentIdentity, agent_identity_for_tab};
+    use uze_terminal::{Focus, Layout, Pane, PaneId, Tab, TabId};
+
+    fn identities() -> Vec<AgentIdentity> {
+        vec![
+            AgentIdentity {
+                binary: "claude",
+                display_name: "Claude Code",
+            },
+            AgentIdentity {
+                binary: "codex",
+                display_name: "Codex",
+            },
+        ]
+    }
+
+    fn tab_with(label: &str, process: &str) -> Tab {
+        let pane = Pane {
+            id: PaneId(1),
+            cwd: "/tmp".into(),
+            columns: 80,
+            rows: 24,
+            process: process.to_owned(),
+        };
+        Tab {
+            id: TabId(1),
+            label: label.to_owned(),
+            layout: Layout::Pane(pane),
+            focus: Focus { pane: PaneId(1) },
+        }
+    }
+
+    #[test]
+    fn recognizes_a_shim_launched_process_by_its_live_alias() {
+        // What `UZE_SHIM_NAME` resolves `pane.process` to for a shim-
+        // launched pane (see `src/shim.rs`) — a plain shell tab where
+        // someone manually typed `claude`, unrelated to the picker.
+        let tab = tab_with("shell 2", "claude");
+        assert_eq!(agent_identity_for_tab(&identities(), &tab), Some("claude"));
+    }
+
+    #[test]
+    fn recognizes_a_freshly_opened_agent_tab_by_its_seeded_label() {
+        // Right after "+ agent" creates the tab, before the first status
+        // probe has resolved `pane.process` past the server's "shell"
+        // placeholder.
+        let tab = tab_with("Codex", "shell");
+        assert_eq!(agent_identity_for_tab(&identities(), &tab), Some("codex"));
+    }
+
+    #[test]
+    fn a_plain_shell_matches_neither_signal() {
+        let tab = tab_with("shell", "zsh");
+        assert_eq!(agent_identity_for_tab(&identities(), &tab), None);
+    }
+
+    #[test]
+    fn an_unrecognized_process_name_does_not_match() {
+        // The exact motivating case: Claude Code's live comm resolves to
+        // its own version string, not `claude` — recognizable only via the
+        // shim-identity signal (`claude` from `UZE_SHIM_NAME`), not this
+        // raw process read alone.
+        let tab = tab_with("shell", "2.1.251");
+        assert_eq!(agent_identity_for_tab(&identities(), &tab), None);
+    }
 }

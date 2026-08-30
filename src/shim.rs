@@ -105,6 +105,7 @@ pub fn run(shim_name: &str) -> ! {
             &executable,
             &original_args,
             &HarnessRuntimeContribution::passthrough(),
+            shim_name,
         );
     }
 
@@ -126,7 +127,7 @@ pub fn run(shim_name: &str) -> ! {
         );
     }
 
-    exec_or_die(&executable, &original_args, &contribution);
+    exec_or_die(&executable, &original_args, &contribution, shim_name);
 }
 
 /// Exact argv passthrough: `contribution.extra_args` are prepended before
@@ -137,14 +138,24 @@ pub fn run(shim_name: &str) -> ! {
 /// stdin/stdout/stderr, controlling terminal, and pid directly — PTY,
 /// signals (Ctrl+C), and exit code all fall out of that for free, which is
 /// exactly why `exec` is used instead of spawn-and-wait.
+///
+/// `UZE_SHIM_NAME` is stamped unconditionally (even under `UZE_BYPASS`,
+/// which only skips `contribution` — this is identity bookkeeping, not
+/// runtime projection): the persistent terminal workspace (`uze-terminal`)
+/// reads it back from the launched process's live environment to recognize
+/// an agent pane, since a harness is free to overwrite its own `comm` (e.g.
+/// Claude Code sets its process title to its version string) in a way that
+/// erases the name a person actually typed.
 fn exec_or_die(
     executable: &Path,
     original_args: &[OsString],
     contribution: &HarnessRuntimeContribution,
+    shim_name: &str,
 ) -> ! {
     let mut command = std::process::Command::new(executable);
     command.args(&contribution.extra_args);
     command.args(original_args);
+    command.env("UZE_SHIM_NAME", shim_name);
     for (key, value) in &contribution.extra_env {
         command.env(key, value);
     }

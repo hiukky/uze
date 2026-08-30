@@ -986,7 +986,7 @@ fn sidebar_work_toggle_click_mirrors_ctrl_o() {
         MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: 8,
-            row: 1,
+            row: 0,
             modifiers: KeyModifiers::NONE,
         },
         100,

@@ -113,3 +113,44 @@ fn runtime_shim_active_internal_calls_resolve_real_executable_without_recursion(
         );
     }
 }
+
+/// The persistent terminal workspace (`uze-terminal`) recognizes an agent
+/// pane by reading `UZE_SHIM_NAME` back out of the launched process's live
+/// environment — necessary because a harness is free to overwrite its own
+/// `comm` (Claude Code sets its process title to its version string). This
+/// exercises the actual dispatch a shim symlink invocation takes
+/// (`src/shim.rs::run` → `exec_or_die`), not just the internal detection
+/// path the test above covers, and checks the one thing that dispatch must
+/// hand the real binary: its own invoked name, in its environment.
+#[cfg(unix)]
+#[test]
+fn shim_dispatch_stamps_its_own_invoked_name_into_the_real_binarys_environment() {
+    let env = TestEnvironment::isolated();
+    let shims = UzeHome::at(&env.uze_home).shims_dir();
+    std::fs::create_dir_all(&shims).unwrap();
+    let shim_entry = shims.join("claude");
+    std::os::unix::fs::symlink(uze_bin(), &shim_entry).unwrap();
+
+    // The "real" claude, further down PATH than the shim entry — dumps its
+    // own live environment so the assertion can see exactly what the shim
+    // exec'd it with.
+    let real_dir = env.root().join("real-bin");
+    create_executable(&real_dir.join("claude"), "#!/bin/sh\nenv\n");
+
+    let path = format!("{}:{}:/usr/bin:/bin", shims.display(), real_dir.display());
+    let output = env
+        .command(&shim_entry)
+        .env("PATH", &path)
+        .output()
+        .expect("shim-launched claude must run");
+    assert!(
+        output.status.success(),
+        "shim-launched claude failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.lines().any(|line| line == "UZE_SHIM_NAME=claude"),
+        "the real claude must see UZE_SHIM_NAME=claude in its environment, got: {stdout}"
+    );
+}

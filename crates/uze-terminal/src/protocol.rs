@@ -1,8 +1,14 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{PaneId, Session, TabId, WorkspaceId};
+use crate::{PaneId, Session, SpaceId, TabId, WorkspaceId};
 
-pub const PROTOCOL_VERSION: u16 = 1;
+/// Bumped for the `Space` grouping layer: the `Session`/`Workspace` shape
+/// changed (`Workspace::tabs` → `Workspace::spaces` of `Space`, each with
+/// its own `tabs`) and four requests were added. `Session` is in-memory
+/// only on the server (never persisted — see `runtime::serve`), so there is
+/// nothing to migrate; a server still running the previous shape simply
+/// fails this version check instead of desyncing.
+pub const PROTOCOL_VERSION: u16 = 2;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ClientRequest {
@@ -40,6 +46,21 @@ pub enum ClientRequest {
     },
     RenameTab {
         tab: TabId,
+        label: String,
+    },
+    CreateSpace {
+        label: String,
+        columns: u16,
+        rows: u16,
+    },
+    SelectSpace {
+        space: SpaceId,
+    },
+    CloseSpace {
+        space: SpaceId,
+    },
+    RenameSpace {
+        space: SpaceId,
         label: String,
     },
     Stop,
@@ -143,5 +164,29 @@ mod tests {
                 .unwrap(),
             request
         );
+    }
+
+    #[test]
+    fn space_requests_round_trip() {
+        let requests = [
+            ClientRequest::CreateSpace {
+                label: "frontend".into(),
+                columns: 80,
+                rows: 24,
+            },
+            ClientRequest::SelectSpace { space: SpaceId(1) },
+            ClientRequest::CloseSpace { space: SpaceId(1) },
+            ClientRequest::RenameSpace {
+                space: SpaceId(1),
+                label: "backend".into(),
+            },
+        ];
+        for request in requests {
+            assert_eq!(
+                serde_json::from_str::<ClientRequest>(&serde_json::to_string(&request).unwrap())
+                    .unwrap(),
+                request
+            );
+        }
     }
 }

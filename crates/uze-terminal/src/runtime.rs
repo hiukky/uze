@@ -24,7 +24,7 @@ use thiserror::Error;
 
 use crate::{
     CellAttributes, ClientEvent, ClientRequest, Cursor, PROTOCOL_VERSION, PaneDamage, PaneId,
-    PaneSnapshot, RenderCell, Session, TerminalColor, WorkspaceId,
+    PaneSnapshot, RenderCell, Session, SpaceSeed, TabSeed, TerminalColor, WorkspaceId,
 };
 
 /// ADR-038: the endpoint is local and user-private; no network transport is
@@ -140,6 +140,92 @@ impl Endpoint {
     }
 }
 
+/// Where a server persists this workspace's space/tab shape between runs —
+/// deliberately not `Endpoint::for_root`'s `XDG_RUNTIME_DIR`/temp directory
+/// (that's routinely wiped on reboot, exactly the case this needs to
+/// survive). `$UZE_HOME` (or `$HOME/.uze`) is resolved directly rather than
+/// through `uze-core`'s `UzeHome` so this crate's own dependency footprint
+/// stays untouched; `state/terminal/<identity>.json` mirrors the
+/// `state/…json` layout `UzeHome::state_dir()` already uses for everything
+/// else UZE persists. `None` only when neither env var resolves, which
+/// mirrors `UzeHome::from_env`'s own failure case.
+fn persisted_state_path(root: &Path) -> Option<PathBuf> {
+    let home = env::var_os("UZE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".uze")))?;
+    Some(
+        home.join("state")
+            .join("terminal")
+            .join(format!("{}.json", workspace_identity(root))),
+    )
+}
+
+/// What gets written to [`persisted_state_path`] — deliberately its own
+/// shape, not the wire-protocol `Session`: clients never need this (it
+/// carries a tab's original spawn `command`, which is respawned, never
+/// displayed), and keeping it separate means restoring what a workspace
+/// looked like never has to touch `PROTOCOL_VERSION`.
+#[derive(Default, Serialize, serde::Deserialize)]
+struct PersistedWorkspace {
+    spaces: Vec<PersistedSpace>,
+}
+
+#[derive(Serialize, serde::Deserialize)]
+struct PersistedSpace {
+    label: String,
+    tabs: Vec<PersistedTab>,
+}
+
+#[derive(Serialize, serde::Deserialize)]
+struct PersistedTab {
+    label: String,
+    cwd: PathBuf,
+    /// The `argv` this tab's pane was last spawned with (see
+    /// [`PaneRuntime::spawn_command`]) — `None` for a plain shell, `Some`
+    /// for whatever agent it was running, so restoring relaunches the same
+    /// program rather than dropping back to a bare shell.
+    command: Option<Vec<String>>,
+}
+
+/// Best-effort: a workspace with nothing persisted yet (first run, or the
+/// file is missing/unreadable/corrupt) is not an error — [`Server::new`]
+/// falls back to its ordinary fresh-bootstrap path exactly as if this
+/// returned `None` from the start.
+fn load_persisted_workspace(root: &Path) -> Option<PersistedWorkspace> {
+    let path = persisted_state_path(root)?;
+    let bytes = fs::read(path).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+/// Common interactive-shell `comm` names, plus the server's own generic
+/// "shell" placeholder before a pane's first status probe resolves —
+/// recognized here purely to say "not worth trying to relaunch this by
+/// name", the same judgment call `orchestrator.rs`'s sidebar used to make
+/// with an identical list before agent classification took it over
+/// client-side. This one is unrelated to that: naming ordinary shells is
+/// general POSIX-adjacent knowledge, not the specific-harness knowledge
+/// `uze-core`'s vendor-neutrality rule is actually about, so it's fine for
+/// this crate to hold.
+const PLAIN_SHELL_PROCESS_NAMES: [&str; 8] =
+    ["shell", "zsh", "bash", "sh", "dash", "fish", "ksh", "tcsh"];
+
+/// A best-effort relaunch command for a pane that was spawned plain (no
+/// explicit `argv` — see [`PaneRuntime::spawn_command`]) but whose last-
+/// known foreground process isn't an ordinary shell — `Some([process])` to
+/// try relaunching that same program by name on restore, `None` when it
+/// looks like nothing worth relaunching was there (a plain shell, or the
+/// probe never resolved). Works for a shim-launched agent typed straight
+/// into a "$ shell" tab specifically *because* `PaneRuntime::foreground_status`
+/// already resolves such a process to its invoked alias (`claude`, not a
+/// version string) via `UZE_SHIM_NAME` — this just trusts that value.
+fn relaunch_command_for_process(process: &str) -> Option<Vec<String>> {
+    let trimmed = process.trim();
+    if trimmed.is_empty() || PLAIN_SHELL_PROCESS_NAMES.contains(&trimmed) {
+        return None;
+    }
+    Some(vec![trimmed.to_owned()])
+}
+
 fn start_server(root: &Path, endpoint: &Endpoint) -> Result<(), RuntimeError> {
     let executable = env::current_exe()?;
     let child = std::process::Command::new(executable)
@@ -215,7 +301,43 @@ impl Server {
         root: PathBuf,
         endpoint: Endpoint,
     ) -> Result<(Self, mpsc::Receiver<PaneId>), RuntimeError> {
-        let session = Session::new(WorkspaceId(workspace_identity(&root)), root, 80, 24);
+        // A previous run's shape, if this workspace has one — see
+        // `persisted_state_path` for why a crash, a `kill -9`, or a reboot
+        // still leaves this behind even though nothing else about a pane's
+        // running state survives any of those.
+        let persisted = load_persisted_workspace(&root);
+        let seeds: Vec<SpaceSeed> = persisted
+            .as_ref()
+            .map(|workspace| {
+                workspace
+                    .spaces
+                    .iter()
+                    .map(|space| SpaceSeed {
+                        label: space.label.clone(),
+                        tabs: space
+                            .tabs
+                            .iter()
+                            .map(|tab| TabSeed {
+                                label: tab.label.clone(),
+                                cwd: tab.cwd.clone(),
+                            })
+                            .collect(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let restoring = !seeds.is_empty();
+        let session = if restoring {
+            Session::restore(
+                WorkspaceId(workspace_identity(&root)),
+                root.clone(),
+                80,
+                24,
+                seeds,
+            )
+        } else {
+            Session::new(WorkspaceId(workspace_identity(&root)), root, 80, 24)
+        };
         let (damage, damage_events) = mpsc::channel();
         let server = Self {
             session: Mutex::new(session),
@@ -225,15 +347,116 @@ impl Server {
             endpoint,
             damage,
         };
-        let first = server
-            .session
-            .lock()
-            .expect("session poisoned")
-            .selected_tab()
-            .focus
-            .pane;
-        server.spawn_pane(first, None)?;
+        if restoring && let Some(persisted) = &persisted {
+            // Zip the restored session's freshly-allocated tabs back up
+            // against the persisted commands they came from — safe because
+            // `Session::restore` walks `seeds` (built from `persisted` one
+            // line above) in the same order and never drops a space that
+            // came in with tabs, so the two always line up one for one.
+            let spawns: Vec<(PaneId, Option<Vec<String>>)> = server
+                .session
+                .lock()
+                .expect("session poisoned")
+                .workspace
+                .spaces
+                .iter()
+                .zip(&persisted.spaces)
+                .flat_map(|(space, persisted_space)| {
+                    space
+                        .tabs
+                        .iter()
+                        .zip(&persisted_space.tabs)
+                        .map(|(tab, persisted_tab)| (tab.focus.pane, persisted_tab.command.clone()))
+                })
+                .collect();
+            for (pane, command) in spawns {
+                // A persisted command is a guess (an agent binary that may
+                // since be uninstalled or renamed, or a best-effort
+                // relaunch built from a live process name — see
+                // `relaunch_command_for_process`) — one bad guess must
+                // never keep the rest of a restored workspace from coming
+                // back, so a failed spawn retries as a plain shell instead
+                // of propagating; a plain-shell spawn failing is the same
+                // fatal condition it always was.
+                let spawned = server.spawn_pane(pane, command.as_deref());
+                if spawned.is_err() && command.is_some() {
+                    let _ = server.spawn_pane(pane, None);
+                } else {
+                    spawned?;
+                }
+            }
+        } else {
+            let first = server
+                .session
+                .lock()
+                .expect("session poisoned")
+                .selected_tab()
+                .focus
+                .pane;
+            server.spawn_pane(first, None)?;
+        }
         Ok((server, damage_events))
+    }
+
+    /// Best-effort snapshot of the current space/tab shape to
+    /// [`persisted_state_path`] — called from [`Server::broadcast_session`]
+    /// (every structural change: a tab/space created, closed, renamed, or
+    /// moved to a new cwd), so whatever's on disk is never more than one
+    /// change stale, however this process eventually stops.
+    fn persist(&self) {
+        let Some(path) = persisted_state_path(
+            &self
+                .session
+                .lock()
+                .expect("session poisoned")
+                .workspace
+                .root,
+        ) else {
+            return;
+        };
+        let panes = self.panes.lock().expect("panes poisoned");
+        let session = self.session.lock().expect("session poisoned");
+        let workspace = PersistedWorkspace {
+            spaces: session
+                .workspace
+                .spaces
+                .iter()
+                .map(|space| PersistedSpace {
+                    label: space.label.clone(),
+                    tabs: space
+                        .tabs
+                        .iter()
+                        .filter_map(|tab| {
+                            let pane = find_in_layout(&tab.layout, tab.focus.pane)?;
+                            // A tab spawned plain but with something other
+                            // than a shell now running in it (someone typed
+                            // `claude` straight into a "$ shell" tab, never
+                            // going through "+ agent" at all) is exactly as
+                            // much "had an agent" as one `CreateTab` was
+                            // told to launch directly — restoring it back
+                            // to a bare shell would silently drop that.
+                            let command = panes
+                                .get(&tab.focus.pane)
+                                .and_then(|runtime| runtime.spawn_command.clone())
+                                .or_else(|| relaunch_command_for_process(&pane.process));
+                            Some(PersistedTab {
+                                label: tab.label.clone(),
+                                cwd: pane.cwd,
+                                command,
+                            })
+                        })
+                        .collect(),
+                })
+                .collect(),
+        };
+        drop(session);
+        drop(panes);
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        if let Ok(json) = serde_json::to_vec(&workspace) {
+            let _ = fs::write(&path, json);
+        }
     }
 
     fn handle_client(self: Arc<Self>, stream: UnixStream) {
@@ -313,17 +536,14 @@ impl Server {
                     self.broadcast_session();
                 }
                 ClientRequest::SelectTab { tab } => {
-                    let mut session = self.session.lock().expect("session poisoned");
-                    if session
-                        .workspace
-                        .tabs
-                        .iter()
-                        .any(|candidate| candidate.id == tab)
-                    {
-                        session.workspace.selected_tab = tab;
+                    let changed = self
+                        .session
+                        .lock()
+                        .expect("session poisoned")
+                        .select_tab(tab);
+                    if changed {
+                        self.broadcast_session();
                     }
-                    drop(session);
-                    self.broadcast_session();
                 }
                 ClientRequest::CloseTab { tab } => {
                     let removed = self
@@ -355,6 +575,67 @@ impl Server {
                         .lock()
                         .expect("session poisoned")
                         .rename_tab(tab, label);
+                    if changed {
+                        self.broadcast_session();
+                    }
+                }
+                ClientRequest::CreateSpace {
+                    label,
+                    columns,
+                    rows,
+                } => {
+                    let pane = self
+                        .session
+                        .lock()
+                        .expect("session poisoned")
+                        .add_space(label, columns, rows);
+                    if self.spawn_pane(pane, None).is_err() {
+                        let _ = events.send(ClientEvent::Error {
+                            message: "could not create terminal pane".into(),
+                        });
+                    }
+                    self.broadcast_session();
+                }
+                ClientRequest::SelectSpace { space } => {
+                    let changed = self
+                        .session
+                        .lock()
+                        .expect("session poisoned")
+                        .select_space(space);
+                    if changed {
+                        self.broadcast_session();
+                    }
+                }
+                ClientRequest::CloseSpace { space } => {
+                    let removed = self
+                        .session
+                        .lock()
+                        .expect("session poisoned")
+                        .remove_space(space);
+                    match removed {
+                        Some(panes) => {
+                            let mut runtimes = self.panes.lock().expect("panes poisoned");
+                            for pane in panes {
+                                if let Some(runtime) = runtimes.remove(&pane) {
+                                    runtime.stop();
+                                }
+                            }
+                            drop(runtimes);
+                            self.broadcast_session();
+                        }
+                        None => {
+                            let _ = events.send(ClientEvent::Error {
+                                message: "cannot close the workspace's only space".into(),
+                            });
+                        }
+                    }
+                }
+                ClientRequest::RenameSpace { space, label } => {
+                    let changed = self
+                        .session
+                        .lock()
+                        .expect("session poisoned")
+                        .rename_space(space, label);
                     if changed {
                         self.broadcast_session();
                     }
@@ -488,6 +769,7 @@ impl Server {
     /// of unchanged cells per tab, which is what made switching tabs feel
     /// slow.
     fn broadcast_session(&self) {
+        self.persist();
         let session = self.session.lock().expect("session poisoned").clone();
         self.clients
             .lock()
@@ -582,6 +864,11 @@ struct PaneRuntime {
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     child: Mutex<Box<dyn portable_pty::Child + Send + Sync>>,
     terminal: Arc<Mutex<Term<ReplySink>>>,
+    /// The `argv` this pane was spawned with, if it wasn't the default
+    /// shell — kept only so a workspace restart can respawn the same
+    /// command in the same tab (see [`Server::persisted_workspace`]); never
+    /// read back to change how this live pane behaves.
+    spawn_command: Option<Vec<String>>,
     /// The last snapshot actually sent to clients, so
     /// [`PaneRuntime::damage_since_last`] can diff against what they
     /// already have instead of resending every cell on every PTY read.
@@ -608,6 +895,9 @@ impl PaneRuntime {
         damage: mpsc::Sender<PaneId>,
         command: Option<&[String]>,
     ) -> Result<Self, RuntimeError> {
+        let spawn_command = command
+            .filter(|command| !command.is_empty())
+            .map(<[String]>::to_vec);
         let pty = native_pty_system();
         let pair = pty
             .openpty(PtySize {
@@ -684,6 +974,7 @@ impl PaneRuntime {
             writer,
             child: Mutex::new(child),
             terminal,
+            spawn_command,
             last_sent: Mutex::new(None),
         })
     }
@@ -727,8 +1018,12 @@ impl PaneRuntime {
             .expect("master poisoned")
             .process_group_leader()?;
         let cwd = std::fs::read_link(format!("/proc/{pgid}/cwd")).ok()?;
-        let comm = std::fs::read_to_string(format!("/proc/{pgid}/comm")).ok()?;
-        Some((cwd, comm.trim().to_owned()))
+        let process = shim_launched_name(pgid).or_else(|| {
+            std::fs::read_to_string(format!("/proc/{pgid}/comm"))
+                .ok()
+                .map(|comm| comm.trim().to_owned())
+        })?;
+        Some((cwd, process))
     }
     #[cfg(not(target_os = "linux"))]
     fn foreground_status(&self) -> Option<(PathBuf, String)> {
@@ -791,6 +1086,25 @@ impl PaneRuntime {
     }
 }
 
+/// The alias uze's PATH shim (`src/shim.rs`) launched this process group's
+/// leader under, if any — read from `UZE_SHIM_NAME` in its live
+/// environment. The shim sets this immediately before `exec`ing into the
+/// real binary, so it survives on the same pid for the rest of the
+/// process's life, unlike `comm`, which a harness is free to overwrite
+/// (Claude Code sets its own title to its version string, erasing the name
+/// a person actually typed). `None` for anything not launched through the
+/// shim — a bypassed launch, a harness that isn't shimmed, or a plain
+/// shell — in which case `foreground_status` falls back to `comm`.
+#[cfg(target_os = "linux")]
+fn shim_launched_name(pgid: libc::pid_t) -> Option<String> {
+    let environ = std::fs::read(format!("/proc/{pgid}/environ")).ok()?;
+    environ
+        .split(|&byte| byte == 0)
+        .find_map(|entry| entry.strip_prefix(b"UZE_SHIM_NAME="))
+        .filter(|value| !value.is_empty())
+        .map(|value| String::from_utf8_lossy(value).into_owned())
+}
+
 fn cell_coordinates(index: usize, columns: u16, cell: RenderCell) -> (u16, u16, RenderCell) {
     let row = (index / usize::from(columns)) as u16;
     let column = (index % usize::from(columns)) as u16;
@@ -851,8 +1165,9 @@ fn color(color: EngineColor) -> TerminalColor {
 fn find_pane(session: &Session, wanted: PaneId) -> Option<crate::Pane> {
     session
         .workspace
-        .tabs
+        .spaces
         .iter()
+        .flat_map(|space| &space.tabs)
         .find_map(|tab| find_in_layout(&tab.layout, wanted))
 }
 fn find_in_layout(layout: &crate::Layout, wanted: PaneId) -> Option<crate::Pane> {
@@ -904,7 +1219,10 @@ fn workspace_identity(root: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{PaneRuntime, ReplySink, snapshot, workspace_identity};
+    use super::{
+        Endpoint, PaneRuntime, PersistedSpace, PersistedTab, PersistedWorkspace, ReplySink, Server,
+        persisted_state_path, relaunch_command_for_process, snapshot, workspace_identity,
+    };
     use crate::{PaneId, TerminalColor};
     use alacritty_terminal::{
         Term,
@@ -913,9 +1231,19 @@ mod tests {
     };
     use std::{
         path::{Path, PathBuf},
+        sync::Mutex,
         thread,
         time::Duration,
     };
+
+    /// `UZE_HOME` is process-global; cargo runs this crate's tests in
+    /// parallel threads by default, so any two of the persistence tests
+    /// below setting it concurrently would race and read/write each
+    /// other's scratch directory. Every test that touches `UZE_HOME` locks
+    /// this for its entire body (guard held via the returned lock's scope)
+    /// so at most one of them is ever in flight at a time.
+    static UZE_HOME_ENV_LOCK: Mutex<()> = Mutex::new(());
+
     #[test]
     fn endpoint_identity_is_project_specific() {
         assert_eq!(
@@ -1038,5 +1366,281 @@ mod tests {
         let (cwd, process) = status.expect("foreground process must be observable on Linux");
         assert_eq!(cwd, PathBuf::from("/tmp"));
         assert_eq!(process, expected_name);
+    }
+
+    /// The kernel derives `comm` from the executed *file's own basename*,
+    /// not from anything a person typed — which is exactly why a real
+    /// Claude Code session reports its version number there instead of
+    /// `claude`: it runs from `~/.local/share/claude/versions/<version>`.
+    /// A copy of `sleep` under a version-number filename reproduces that
+    /// same shape without depending on Claude Code being installed.
+    /// `UZE_SHIM_NAME`, set by `src/shim.rs` right before it `exec`s into
+    /// the real binary, must survive that and still be what
+    /// `foreground_status` reports.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn foreground_status_prefers_the_shim_identity_over_a_version_named_comm() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let bin_dir = std::env::temp_dir().join(format!(
+            "uze-shim-identity-test-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let versioned_binary = bin_dir.join("2.1.251");
+        std::fs::copy("/bin/sleep", &versioned_binary).unwrap();
+
+        let (damage, _damage_events) = std::sync::mpsc::channel();
+        let pane = PaneRuntime::spawn(
+            PaneId(13),
+            PathBuf::from("/tmp"),
+            80,
+            24,
+            damage,
+            Some(&[
+                "/bin/sh".to_owned(),
+                "-c".to_owned(),
+                format!(
+                    "export UZE_SHIM_NAME=claude; exec {} 5",
+                    versioned_binary.display()
+                ),
+            ]),
+        )
+        .unwrap();
+
+        let mut status = None;
+        for _ in 0..50 {
+            status = pane.foreground_status();
+            if status
+                .as_ref()
+                .is_some_and(|(_, process)| process == "claude")
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        pane.stop();
+        let _ = std::fs::remove_dir_all(&bin_dir);
+
+        let (_, process) = status.expect("foreground process must be observable on Linux");
+        assert_eq!(process, "claude");
+    }
+
+    /// The whole point of persistence: a server that starts with nothing
+    /// running (simulating a reboot, a crash, `kill -9` — anything that
+    /// left no chance for a clean stop) still comes back with the same
+    /// spaces and tabs a previous instance for this same `root` had, each
+    /// tab's pane relaunched with whatever it was last spawned with —
+    /// `None` for a plain shell, the recorded `argv` for an agent.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_restarted_server_relaunches_the_same_spaces_tabs_and_agent_commands() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let scratch = std::env::temp_dir().join(format!(
+            "uze-terminal-persist-{}-{nonce}",
+            std::process::id()
+        ));
+        let uze_home = scratch.join("home");
+        let project = scratch.join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&uze_home).unwrap();
+
+        // See `UZE_HOME_ENV_LOCK`: held for the rest of this test so no
+        // other test's own `UZE_HOME` scoping can interleave with this
+        // one's. Restored exactly, not just cleared, on the way out.
+        let _env_guard = UZE_HOME_ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let previous_uze_home = std::env::var_os("UZE_HOME");
+        unsafe { std::env::set_var("UZE_HOME", &uze_home) };
+
+        let endpoint = Endpoint::for_root(&project).unwrap();
+        let (first, _damage) = Server::new(project.clone(), endpoint.clone()).unwrap();
+        let agent_pane =
+            first
+                .session
+                .lock()
+                .expect("session poisoned")
+                .add_space("frontend".into(), 80, 24);
+        first
+            .spawn_pane(agent_pane, Some(&["sleep".to_owned(), "5".to_owned()]))
+            .unwrap();
+        // `CreateSpace`'s real dispatch (`runtime.rs`'s `handle_client`)
+        // calls `broadcast_session`, which persists — replicated here
+        // directly since this test drives `Server` without a socket.
+        first.persist();
+        first.stop_panes();
+
+        let (second, _damage2) = Server::new(project.clone(), endpoint).unwrap();
+        {
+            let session = second.session.lock().expect("session poisoned");
+            assert_eq!(session.workspace.spaces.len(), 2, "both spaces restored");
+            let frontend = session
+                .workspace
+                .spaces
+                .iter()
+                .find(|space| space.label == "frontend")
+                .expect("the second space's own label survived restore");
+            let tab = &frontend.tabs[0];
+            let panes = second.panes.lock().expect("panes poisoned");
+            let runtime = panes
+                .get(&tab.focus.pane)
+                .expect("restored tab's pane was actually spawned");
+            assert_eq!(
+                runtime.spawn_command.as_deref(),
+                Some(["sleep".to_owned(), "5".to_owned()].as_slice()),
+                "restored tab relaunched with its original agent command"
+            );
+        }
+        second.stop_panes();
+
+        match previous_uze_home {
+            Some(value) => unsafe { std::env::set_var("UZE_HOME", value) },
+            None => unsafe { std::env::remove_var("UZE_HOME") },
+        }
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    #[test]
+    fn relaunch_command_for_process_recognizes_a_named_process_but_not_a_plain_shell() {
+        assert_eq!(relaunch_command_for_process("zsh"), None);
+        assert_eq!(relaunch_command_for_process("shell"), None);
+        assert_eq!(relaunch_command_for_process(""), None);
+        assert_eq!(relaunch_command_for_process("  "), None);
+        assert_eq!(
+            relaunch_command_for_process("claude"),
+            Some(vec!["claude".to_owned()])
+        );
+    }
+
+    /// The exact case that motivated `relaunch_command_for_process`: a tab
+    /// opened as a plain "$ shell" (never through "+ agent", so it has no
+    /// `spawn_command` of its own), where someone then typed an agent
+    /// straight into it — `update_pane_status` here stands in for the
+    /// status ticker's own probe reporting that live.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_plain_shell_tab_running_a_recognized_process_relaunches_as_that_process() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let scratch = std::env::temp_dir().join(format!(
+            "uze-terminal-persist-typed-{}-{nonce}",
+            std::process::id()
+        ));
+        let uze_home = scratch.join("home");
+        let project = scratch.join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&uze_home).unwrap();
+        let _env_guard = UZE_HOME_ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let previous_uze_home = std::env::var_os("UZE_HOME");
+        unsafe { std::env::set_var("UZE_HOME", &uze_home) };
+
+        let endpoint = Endpoint::for_root(&project).unwrap();
+        let (first, _damage) = Server::new(project.clone(), endpoint.clone()).unwrap();
+        let pane_id = first
+            .session
+            .lock()
+            .expect("session poisoned")
+            .selected_tab()
+            .focus
+            .pane;
+        first
+            .session
+            .lock()
+            .expect("session poisoned")
+            .update_pane_status(pane_id, project.clone(), "sleep".to_owned());
+        first.persist();
+        first.stop_panes();
+
+        let (second, _damage2) = Server::new(project.clone(), endpoint).unwrap();
+        {
+            let session = second.session.lock().expect("session poisoned");
+            let tab = session.selected_tab();
+            let panes = second.panes.lock().expect("panes poisoned");
+            let runtime = panes
+                .get(&tab.focus.pane)
+                .expect("restored tab's pane was actually spawned");
+            assert_eq!(
+                runtime.spawn_command.as_deref(),
+                Some(["sleep".to_owned()].as_slice()),
+                "a process typed straight into a plain shell tab still relaunches on restore"
+            );
+        }
+        second.stop_panes();
+
+        match previous_uze_home {
+            Some(value) => unsafe { std::env::set_var("UZE_HOME", value) },
+            None => unsafe { std::env::remove_var("UZE_HOME") },
+        }
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// A persisted command is a guess — the agent binary it names may have
+    /// been uninstalled or renamed since. That must degrade to a plain
+    /// shell in that one tab, never take the whole restored workspace down
+    /// with it.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_persisted_command_that_no_longer_resolves_falls_back_to_a_plain_shell() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let scratch = std::env::temp_dir().join(format!(
+            "uze-terminal-persist-stale-{}-{nonce}",
+            std::process::id()
+        ));
+        let uze_home = scratch.join("home");
+        let project = scratch.join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&uze_home).unwrap();
+        let _env_guard = UZE_HOME_ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let previous_uze_home = std::env::var_os("UZE_HOME");
+        unsafe { std::env::set_var("UZE_HOME", &uze_home) };
+
+        let path = persisted_state_path(&project).expect("resolvable under a scoped UZE_HOME");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let stale = PersistedWorkspace {
+            spaces: vec![PersistedSpace {
+                label: "space 1".into(),
+                tabs: vec![PersistedTab {
+                    label: "shell".into(),
+                    cwd: project.clone(),
+                    command: Some(vec!["definitely-not-a-real-binary-xyz".to_owned()]),
+                }],
+            }],
+        };
+        std::fs::write(&path, serde_json::to_vec(&stale).unwrap()).unwrap();
+
+        let endpoint = Endpoint::for_root(&project).unwrap();
+        let (server, _damage) = Server::new(project.clone(), endpoint)
+            .expect("a stale persisted command must not fail server startup");
+        let session = server.session.lock().expect("session poisoned");
+        let tab = session.selected_tab();
+        let panes = server.panes.lock().expect("panes poisoned");
+        assert!(
+            panes.contains_key(&tab.focus.pane),
+            "the tab still got a pane, spawned as a plain shell instead"
+        );
+        drop(panes);
+        drop(session);
+        server.stop_panes();
+
+        match previous_uze_home {
+            Some(value) => unsafe { std::env::set_var("UZE_HOME", value) },
+            None => unsafe { std::env::remove_var("UZE_HOME") },
+        }
+        let _ = std::fs::remove_dir_all(&scratch);
     }
 }
