@@ -2,56 +2,13 @@
  "harness": "antigravity",
  "harness_version": "1.1.22",
  "uze_version": "uze 0.0.0-alpha.14",
- "fixture_revision": "3908e0a5833e8f1f",
- "recorded_at": "2026-08-29T02:30:48-0300",
+ "fixture_revision": "8ec794cca301f19e",
+ "recorded_at": "2026-08-30T17:33:01-0300",
  "gate": {
-  "passed": 0,
-  "total": 6,
-  "known_adapted": 0,
+  "passed": 28,
+  "total": 28,
+  "known_adapted": 2,
   "retry": 0,
-  "failures": [
-   {
-    "check": "tui-started",
-    "suite": "tui > tui-started",
-    "adjudication": "asserted",
-    "detail": "onboarding never appeared: End Of File (EOF). Exception style platform.\n<pexpect.pty_spawn.spawn object at 0x7ff98ff23ad0>\ncommand: /usr/bin/docker\nargs: [b'/usr/bin/docker', b'run', b'--rm', b'--security-opt', b'seccomp=unconfined', b'-it', b'--network', b'uze-harness-offline-941434', b'--tmpfs', b'/tmp:rw,exec,nosuid,nodev,size=128m,uid=1000,gid=1000,mode=700', b'--tmpfs', b'/work:rw,exec,nosuid,nodev,size=512m,uid=1000,gid=1000,mode=700', b'-e', b'HOME=/work/home', b'-e', b'UZE_HOME=/work/home/.uze', b'-v', b'/home/hiukky/uze/conformance/harnesses/antigravity/fixtures:/app/fixtures:ro', b'conformance-harness:latest', b'sh', b'-c', b\"\\nset -e\\nexport PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/.local/bin\\nexport HOME=/work/home UZE_HOME=/work/home/.uze\\nexport GEMINI_API_KEY=uze-conformance-invalid-by-design\\nexport GOOGLE_GEMINI_BASE_URL=http://172.29.0.2:9999\\nexport AGY_CLI_DISABLE_AUTO_UPDATE=1\\nmkdir -p /work/home/.gemini/antigravity-cli\\ncp /app/fixtures/settings.json /work/home/.gemini/antigravity-cli/settings.json\\ncp /app/fixtures/jetski_state.pbtxt /work/home/.gemini/antigravity-cli/jetski_state.pbtxt\\ncp /app/fixtures/installation_id /work/home/.gemini/antigravity-cli/installation_id\\n\\ncp -r /opt/uze-conformance-fixtures/marketplace /work/market\\nsed -i 's|__UZE_MCP_FIXTURE_BINARY__|/usr/local/bin/uze-mcp-conformance-fixture|g; s|__UZE_MCP_CONFORMANCE_PROOF__|UZE_MCP_CONFORMANCE_PROOF_1|g' /work/market/plugins/mcp-plugin/mcp.json\\n\\nuze market add /work/market >/dev/null 2>&1\\nfor p in flow mcp-plugin; do uze plugin install $p@uze-lab >/dev/null 2>&1; done\\nexec agy\\n\"]\nbuffer (last 100 chars): ''\nbefore (last 100 chars): ''\nafter: <class 'pexpect.exceptions.EOF'>\nmatch: None\nmatch_index: None\nexitstatus: None\nflag_eof: True\npid: 941654\nchild_fd: 5\nclosed: False\ntimeout: 300\ndelimiter: <class 'pexpect.exceptions.EOF'>\nlogfile: None\nlogfile_read: <shared.common.CastRecorder object at 0x7ff9901b37a0>\nlogfile_send: None\nmaxread: 2000\nignorecase: False\nsearchwindowsize: None\ndelaybeforesend: 0.05\ndelayafterclose: 0.1\ndelayafterterminate: 0.1\nsearcher: searcher_re:\n    0: re.compile('Choose your color scheme')",
-    "gate_reason": null
-   },
-   {
-    "check": "mcp-plugin-registered",
-    "suite": "cli.state > mcp-plugin-registered",
-    "adjudication": "asserted",
-    "detail": "S1: plugin list shows the MCP plugin with an mcpServers component",
-    "gate_reason": null
-   },
-   {
-    "check": "mcp-server-configured",
-    "suite": "cli.state > mcp-server-configured",
-    "adjudication": "asserted",
-    "detail": "S2: staged mcp_config.json declares the server + proof arg",
-    "gate_reason": null
-   },
-   {
-    "check": "hooks-tui-started",
-    "suite": "hooks > deny > hooks-tui-started",
-    "adjudication": "asserted",
-    "detail": "onboarding never appeared: End Of File (EOF). Exception style platform.\n<pexpect.pty_spawn.spawn object at 0x7ff98fe46870>\ncommand: /usr/bin/docker\nargs: [b'/usr/bin/docker', b'run', b'--rm', b'--security-opt', b'seccomp=unconfined', b'-it', b'--network', b'uze-harness-offline-941434', b'--tmpfs', b'/tmp:rw,exec,nosuid,nodev,size=128m,uid=1000,gid=1000,mode=700', b'--tmpfs', b'/work:rw,exec,nosuid,nodev,size=512m,uid=1000,gid=1000,mode=700', b'-e', b'HOME=/work/home', b'-e', b'UZE_HOME=/work/home/.uze', b'-v', b'/home/hiukky/uze/conformance/harnesses/antigravity/fixtures:/app/fixtures:ro', b'conformance-harness:latest', b'sh', b'-c', b\"\\nset -e\\nexport PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/.local/bin\\nexport HOME=/work/home UZE_HOME=/work/home/.uze\\nexport GEMINI_API_KEY=uze-conformance-invalid-by-design\\nexport GOOGLE_GEMINI_BASE_URL=http://172.29.0.2:9999\\nexport AGY_CLI_DISABLE_AUTO_UPDATE=1\\nmkdir -p /work/home/.gemini/antigravity-cli\\ncp /app/fixtures/settings.json /work/home/.gemini/antigravity-cli/settings.json\\ncp /app/fixtures/jetski_state.pbtxt /work/home/.gemini/antigravity-cli/jetski_state.pbtxt\\ncp /app/fixtures/installation_id /work/home/.gemini/antigravity-cli/installation_id\\n\\ncp -r /opt/uze-conformance-fixtures/marketplace /work/market\\nsed -i 's|__UZE_MCP_FIXTURE_BINARY__|/usr/local/bin/uze-mcp-conformance-fixture|g; s|__UZE_MCP_CONFORMANCE_PROOF__|UZE_MCP_CONFORMANCE_PROOF_1|g' /work/market/plugins/mcp-plugin/mcp.json\\n\\nuze market add /work/market >/dev/null 2>&1\\nfor p in flow hook-plugin; do uze plugin install $p@uze-lab >/dev/null 2>&1; done\\nexec agy\\n\"]\nbuffer (last 100 chars): ''\nbefore (last 100 chars): ''\nafter: <class 'pexpect.exceptions.EOF'>\nmatch: None\nmatch_index: None\nexitstatus: None\nflag_eof: True\npid: 943125\nchild_fd: 7\nclosed: False\ntimeout: 300\ndelimiter: <class 'pexpect.exceptions.EOF'>\nlogfile: None\nlogfile_read: <shared.common.CastRecorder object at 0x7ff98fe46a50>\nlogfile_send: None\nmaxread: 2000\nignorecase: False\nsearchwindowsize: None\ndelaybeforesend: 0.05\ndelayafterclose: 0.1\ndelayafterterminate: 0.1\nsearcher: searcher_re:\n    0: re.compile('Choose your color scheme')",
-    "gate_reason": null
-   },
-   {
-    "check": "hooks-tui-started",
-    "suite": "hooks > allow > hooks-tui-started",
-    "adjudication": "asserted",
-    "detail": "onboarding never appeared: End Of File (EOF). Exception style platform.\n<pexpect.pty_spawn.spawn object at 0x7ff98fe7af30>\ncommand: /usr/bin/docker\nargs: [b'/usr/bin/docker', b'run', b'--rm', b'--security-opt', b'seccomp=unconfined', b'-it', b'--network', b'uze-harness-offline-941434', b'--tmpfs', b'/tmp:rw,exec,nosuid,nodev,size=128m,uid=1000,gid=1000,mode=700', b'--tmpfs', b'/work:rw,exec,nosuid,nodev,size=512m,uid=1000,gid=1000,mode=700', b'-e', b'HOME=/work/home', b'-e', b'UZE_HOME=/work/home/.uze', b'-v', b'/home/hiukky/uze/conformance/harnesses/antigravity/fixtures:/app/fixtures:ro', b'conformance-harness:latest', b'sh', b'-c', b\"\\nset -e\\nexport PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/.local/bin\\nexport HOME=/work/home UZE_HOME=/work/home/.uze\\nexport GEMINI_API_KEY=uze-conformance-invalid-by-design\\nexport GOOGLE_GEMINI_BASE_URL=http://172.29.0.2:9999\\nexport AGY_CLI_DISABLE_AUTO_UPDATE=1\\nmkdir -p /work/home/.gemini/antigravity-cli\\ncp /app/fixtures/settings.json /work/home/.gemini/antigravity-cli/settings.json\\ncp /app/fixtures/jetski_state.pbtxt /work/home/.gemini/antigravity-cli/jetski_state.pbtxt\\ncp /app/fixtures/installation_id /work/home/.gemini/antigravity-cli/installation_id\\n\\ncp -r /opt/uze-conformance-fixtures/marketplace /work/market\\nsed -i 's|__UZE_MCP_FIXTURE_BINARY__|/usr/local/bin/uze-mcp-conformance-fixture|g; s|__UZE_MCP_CONFORMANCE_PROOF__|UZE_MCP_CONFORMANCE_PROOF_1|g' /work/market/plugins/mcp-plugin/mcp.json\\n\\nuze market add /work/market >/dev/null 2>&1\\nfor p in flow hook-plugin; do uze plugin install $p@uze-lab >/dev/null 2>&1; done\\nexec agy\\n\"]\nbuffer (last 100 chars): ''\nbefore (last 100 chars): ''\nafter: <class 'pexpect.exceptions.EOF'>\nmatch: None\nmatch_index: None\nexitstatus: None\nflag_eof: True\npid: 943785\nchild_fd: 9\nclosed: False\ntimeout: 300\ndelimiter: <class 'pexpect.exceptions.EOF'>\nlogfile: None\nlogfile_read: <shared.common.CastRecorder object at 0x7ff98fe7ad20>\nlogfile_send: None\nmaxread: 2000\nignorecase: False\nsearchwindowsize: None\ndelaybeforesend: 0.05\ndelayafterclose: 0.1\ndelayafterterminate: 0.1\nsearcher: searcher_re:\n    0: re.compile('Choose your color scheme')",
-    "gate_reason": null
-   },
-   {
-    "check": "hooks-tui-started",
-    "suite": "hooks > order > hooks-tui-started",
-    "adjudication": "asserted",
-    "detail": "onboarding never appeared: End Of File (EOF). Exception style platform.\n<pexpect.pty_spawn.spawn object at 0x7ff98fe7b620>\ncommand: /usr/bin/docker\nargs: [b'/usr/bin/docker', b'run', b'--rm', b'--security-opt', b'seccomp=unconfined', b'-it', b'--network', b'uze-harness-offline-941434', b'--tmpfs', b'/tmp:rw,exec,nosuid,nodev,size=128m,uid=1000,gid=1000,mode=700', b'--tmpfs', b'/work:rw,exec,nosuid,nodev,size=512m,uid=1000,gid=1000,mode=700', b'-e', b'HOME=/work/home', b'-e', b'UZE_HOME=/work/home/.uze', b'-v', b'/home/hiukky/uze/conformance/harnesses/antigravity/fixtures:/app/fixtures:ro', b'conformance-harness:latest', b'sh', b'-c', b\"\\nset -e\\nexport PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/.local/bin\\nexport HOME=/work/home UZE_HOME=/work/home/.uze\\nexport GEMINI_API_KEY=uze-conformance-invalid-by-design\\nexport GOOGLE_GEMINI_BASE_URL=http://172.29.0.2:9999\\nexport AGY_CLI_DISABLE_AUTO_UPDATE=1\\nmkdir -p /work/home/.gemini/antigravity-cli\\ncp /app/fixtures/settings.json /work/home/.gemini/antigravity-cli/settings.json\\ncp /app/fixtures/jetski_state.pbtxt /work/home/.gemini/antigravity-cli/jetski_state.pbtxt\\ncp /app/fixtures/installation_id /work/home/.gemini/antigravity-cli/installation_id\\n\\ncp -r /opt/uze-conformance-fixtures/marketplace /work/market\\nsed -i 's|__UZE_MCP_FIXTURE_BINARY__|/usr/local/bin/uze-mcp-conformance-fixture|g; s|__UZE_MCP_CONFORMANCE_PROOF__|UZE_MCP_CONFORMANCE_PROOF_1|g' /work/market/plugins/mcp-plugin/mcp.json\\n\\nuze market add /work/market >/dev/null 2>&1\\nfor p in flow hook-order-plugin; do uze plugin install $p@uze-lab >/dev/null 2>&1; done\\nexec agy\\n\"]\nbuffer (last 100 chars): ''\nbefore (last 100 chars): ''\nafter: <class 'pexpect.exceptions.EOF'>\nmatch: None\nmatch_index: None\nexitstatus: None\nflag_eof: True\npid: 944450\nchild_fd: 11\nclosed: False\ntimeout: 300\ndelimiter: <class 'pexpect.exceptions.EOF'>\nlogfile: None\nlogfile_read: <shared.common.CastRecorder object at 0x7ff98fe7b530>\nlogfile_send: None\nmaxread: 2000\nignorecase: False\nsearchwindowsize: None\ndelaybeforesend: 0.05\ndelayafterclose: 0.1\ndelayafterterminate: 0.1\nsearcher: searcher_re:\n    0: re.compile('Choose your color scheme')",
-    "gate_reason": null
-   }
-  ]
+  "failures": []
  }
 }
