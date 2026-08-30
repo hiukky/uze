@@ -1,0 +1,18 @@
+[package]
+name = "uze-extensions"
+version.workspace = true
+edition = "2024"
+rust-version = "1.97"
+description = "Built-in TUI extensions for the uze workspace client"
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+uze-core = { path = "../uze-core" }
+ratatui = "0.30"
+crossterm = "0.29"
+syntect = "5"
+
+[dev-dependencies]
+uze-testkit = { path = "../uze-testkit" }

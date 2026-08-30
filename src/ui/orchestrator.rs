@@ -5,9 +5,10 @@
 //! filled panels) so switching between the workspace and management
 //! contexts with Ctrl+O reads as one product, not two.
 
-use super::git_diff;
 use crate::{Result, UzeError, UzeHome};
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind};
+use crossterm::event::{
+    self, Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -22,6 +23,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+use uze_extensions::{ExtensionHit, git_diff};
 use uze_integrations::registry::IntegrationRegistry;
 use uze_terminal::{
     CellAttributes, ClientEvent, ClientRequest, Cursor, PROTOCOL_VERSION, PaneId, PaneSnapshot,
@@ -423,13 +425,18 @@ pub(crate) fn attach_workspace(
                         .map(|(_, hit)| *hit);
                     // Mirrors `WorkspaceHit::ResizeSidebar` below: arms
                     // dragging instead of reaching `git_diff::handle_mouse`,
-                    // whose `WorkspaceHit` match has no arm for a hit that
-                    // isn't about the file tree or diff themselves.
-                    if hit == Some(WorkspaceHit::ResizeGitTree) {
+                    // which only knows about `ExtensionHit`s that are its
+                    // own — the resize handle's drag lifecycle belongs to
+                    // this workspace client, not the extension.
+                    let extension_hit = match hit {
+                        Some(WorkspaceHit::Extension(extension_hit)) => Some(extension_hit),
+                        _ => None,
+                    };
+                    if extension_hit == Some(ExtensionHit::ResizeTree) {
                         model.dragging_git_tree = true;
                     } else if let Some(view) = model.git_view.as_mut()
                         && matches!(
-                            git_diff::handle_mouse(view, hit),
+                            git_diff::handle_mouse(view, extension_hit),
                             git_diff::GitViewOutcome::Close
                         )
                     {
@@ -469,6 +476,14 @@ pub(crate) fn attach_workspace(
                     }
                     model.dirty = true;
                 }
+                Event::Mouse(mouse)
+                    if matches!(
+                        mouse.kind,
+                        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                    ) && model.no_modal_open() =>
+                {
+                    forward_mouse(&mut stream, &model, layout.pane, mouse);
+                }
                 Event::Mouse(mouse) if mouse.kind == MouseEventKind::Down(MouseButton::Left) => {
                     let Some((hit_rect, hit)) = model
                         .hits
@@ -482,6 +497,7 @@ pub(crate) fn attach_workspace(
                         .map(|(rect, hit)| (*rect, *hit))
                     else {
                         model.last_click = None;
+                        forward_mouse(&mut stream, &model, layout.pane, mouse);
                         continue;
                     };
                     let now = std::time::Instant::now();
@@ -618,10 +634,7 @@ pub(crate) fn attach_workspace(
                         WorkspaceHit::OpenGitView => {
                             open_git_view(&mut model);
                         }
-                        WorkspaceHit::GitSelectFile(_)
-                        | WorkspaceHit::GitSelectWorktree(_)
-                        | WorkspaceHit::ResizeGitTree
-                        | WorkspaceHit::CloseGitView => {
+                        WorkspaceHit::Extension(_) => {
                             // Only reachable while the git view is open,
                             // which its own guarded arm below already
                             // handles — same as `PickAgent`/`CloseSpace`
@@ -654,7 +667,24 @@ pub(crate) fn attach_workspace(
                         model.dirty = true;
                     }
                 }
+                Event::Mouse(mouse)
+                    if mouse.kind == MouseEventKind::Drag(MouseButton::Left)
+                        && !model.dragging_sidebar
+                        && !model.dragging_git_tree
+                        && model.no_modal_open() =>
+                {
+                    forward_mouse(&mut stream, &model, layout.pane, mouse);
+                }
                 Event::Mouse(mouse) if mouse.kind == MouseEventKind::Up(MouseButton::Left) => {
+                    // A drag this client never owned (neither flag was set,
+                    // and nothing modal was open to have owned it either) is
+                    // one it was forwarding into the pane above — the
+                    // matching release belongs there too, not just silently
+                    // dropped the way it was before pane forwarding existed.
+                    if !model.dragging_sidebar && !model.dragging_git_tree && model.no_modal_open()
+                    {
+                        forward_mouse(&mut stream, &model, layout.pane, mouse);
+                    }
                     model.dragging_sidebar = false;
                     model.dragging_git_tree = false;
                 }
@@ -710,11 +740,12 @@ pub(crate) fn attach_workspace(
     }
 }
 
-/// `pub(super)` (not private) so [`git_diff`] — a sibling module under
-/// `ui`, not a child of `orchestrator` — can construct Git-view hits
-/// from its own render function and push them into the same `hits` vec
-/// every other overlay already shares, rather than this workspace client
-/// threading a second, parallel hit-testing vec just for one overlay.
+/// `pub(super)` (not private) so `uze_extensions::git_diff` — a crate
+/// this one depends on, not a child module of `orchestrator` — can
+/// construct `ExtensionHit`s from its own render function; `Extension`
+/// below wraps them into the same `hits` vec every other overlay already
+/// shares, rather than this workspace client threading a second, parallel
+/// hit-testing vec just for one extension.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum WorkspaceHit {
     SelectTab(TabId),
@@ -733,21 +764,17 @@ pub(super) enum WorkspaceHit {
     /// The sidebar's "+ new" row — creates a new space directly (no
     /// picker; unlike an agent tab, a space has no "kind" to choose).
     NewSpace,
-    /// The tab strip's right-corner button — opens the git changes view
-    /// (`WorkspaceModel::git_view`), scoped to the active tab's live `cwd`.
+    /// The tab strip's right-corner button — opens the Git changes
+    /// extension (`WorkspaceModel::git_view`), scoped to the active tab's
+    /// live `cwd`.
     OpenGitView,
-    /// One row of the open git changes view's changed-files list, by index.
-    GitSelectFile(usize),
-    /// A primary or linked worktree heading in the Git changes view.
-    GitSelectWorktree(usize),
-    /// The Git changes view's tree/diff divider — mirrors `ResizeSidebar`
-    /// below, same mousedown-arms/`Drag`-events-move-it shape, just for
-    /// `WorkspaceModel::git_tree_width` instead of `sidebar_width`.
-    ResizeGitTree,
-    /// The "×" in the Git changes view's own top-right corner — the
-    /// click-driven counterpart to `Esc`/the shortcut that opened it (see
-    /// `GitViewOutcome::Close`, which both funnel through).
-    CloseGitView,
+    /// A hit the open extension's own render pass produced (a file row, a
+    /// worktree header, its tree/diff resize handle, its close button —
+    /// see `uze_extensions::ExtensionHit`), wrapped instead of given its
+    /// own `WorkspaceHit` variant per extension. The one Git extension
+    /// today owns every `ExtensionHit` variant that exists; a second
+    /// extension adds to that enum, not to this one.
+    Extension(ExtensionHit),
     SwitchToManagement,
     ResizeSidebar,
 }
@@ -971,6 +998,17 @@ impl WorkspaceModel {
             ClientEvent::Detached | ClientEvent::Stopped => {}
         }
     }
+    /// None of the modal overlays that own mouse input while they're open
+    /// (rename buffer, agent picker, context menu, Git changes view) are
+    /// currently up — the precondition for forwarding a drag/release/scroll
+    /// that isn't already claimed by one of them straight into the focused
+    /// pane's PTY instead of dropping it.
+    fn no_modal_open(&self) -> bool {
+        self.renaming.is_none()
+            && self.agent_picker.is_none()
+            && self.context_menu.is_none()
+            && self.git_view.is_none()
+    }
     fn focused_pane(&self) -> PaneId {
         self.session
             .as_ref()
@@ -1020,6 +1058,7 @@ fn blank_pane(pane: PaneId, columns: u16, rows: u16) -> PaneSnapshot {
         rows,
         cursor: Cursor { column: 0, row: 0 },
         alternate_screen: false,
+        mouse: uze_terminal::MouseMode::default(),
         cells: vec![blank_cell(); usize::from(columns) * usize::from(rows)],
     }
 }
@@ -1120,7 +1159,24 @@ fn render(
     // paying for a sidebar/tab-strip/pane render this frame will never
     // show.
     if let Some(view) = &model.git_view {
-        git_diff::render(frame, view, frame.area(), model.git_tree_width, hits);
+        // The extension pushes its own `ExtensionHit`s into a scratch vec
+        // (it has no reason to know about `WorkspaceHit` at all — that
+        // type lives one crate up); wrap each one on the way into the
+        // shared `hits` vec, the one place that translation needs to
+        // happen.
+        let mut extension_hits = Vec::new();
+        git_diff::render(
+            frame,
+            view,
+            frame.area(),
+            model.git_tree_width,
+            &mut extension_hits,
+        );
+        hits.extend(
+            extension_hits
+                .into_iter()
+                .map(|(rect, hit)| (rect, WorkspaceHit::Extension(hit))),
+        );
         return;
     }
     let layout = compute_layout(frame.area(), model.sidebar_width);
@@ -1435,6 +1491,11 @@ fn render_sidebar(
                     fill_row_bg(&mut spans, cwd_rect.width, super::SURFACE_OVERLAY);
                 }
                 frame.render_widget(Paragraph::new(Line::from(spans)), cwd_rect);
+                // The header and its cwd caption read as one tree item —
+                // clicking the caption must select the space too, not just
+                // the label text above it (same rule an agent tab's own
+                // detail line already follows).
+                hits.push((cwd_rect, WorkspaceHit::SelectSpace(space.id)));
             }
         }
         for (index, tab) in agent_tabs.iter().enumerate() {
@@ -1966,6 +2027,92 @@ fn color(color: TerminalColor) -> Color {
         TerminalColor::Indexed(index) => Color::Indexed(index),
     }
 }
+/// Encodes and forwards a click/drag/scroll that missed every uze chrome
+/// hit into the focused pane's PTY — the counterpart to `encode_key` for
+/// mouse input. A no-op unless the pane's own program has actually turned
+/// mouse reporting on (see `uze_terminal::MouseMode`): sending raw mouse
+/// escape sequences into a plain shell prompt would just inject garbage
+/// text at the cursor.
+fn forward_mouse<W: io::Write>(
+    stream: &mut W,
+    model: &WorkspaceModel,
+    pane: Rect,
+    mouse: MouseEvent,
+) {
+    let Some(snapshot) = model.panes.get(&model.focused_pane()) else {
+        return;
+    };
+    if !snapshot.mouse.reports_clicks {
+        return;
+    }
+    if matches!(mouse.kind, MouseEventKind::Drag(_)) && !snapshot.mouse.reports_drag {
+        return;
+    }
+    let Some((column, row)) = pane_relative(mouse, pane) else {
+        return;
+    };
+    let Some(bytes) = encode_mouse(mouse.kind, column, row, snapshot.mouse.sgr) else {
+        return;
+    };
+    let _ = send_request(
+        stream,
+        &ClientRequest::Input {
+            pane: model.focused_pane(),
+            bytes,
+        },
+    );
+}
+
+/// `mouse`'s position translated into 1-indexed coordinates relative to
+/// `pane`'s own top-left — the coordinate space every mouse-tracking
+/// protocol reports in — or `None` when it falls outside `pane` entirely
+/// (over the sidebar, tab strip, or an overlay uze's own hit-testing
+/// already would have claimed first).
+fn pane_relative(mouse: MouseEvent, pane: Rect) -> Option<(u16, u16)> {
+    if mouse.column < pane.x || mouse.row < pane.y {
+        return None;
+    }
+    let column = mouse.column - pane.x;
+    let row = mouse.row - pane.y;
+    if column >= pane.width || row >= pane.height {
+        return None;
+    }
+    Some((column + 1, row + 1))
+}
+
+/// The xterm mouse-tracking byte sequence for one click/drag/scroll event,
+/// at pane-relative `column`/`row` (see `pane_relative`) — SGR (mode 1006)
+/// when the pane asked for it, else the legacy X10 encoding every terminal
+/// still understands as a fallback, whose single-byte coordinates saturate
+/// at 223 rather than wrapping for anything larger.
+fn encode_mouse(kind: MouseEventKind, column: u16, row: u16, sgr: bool) -> Option<Vec<u8>> {
+    let (code, release) = match kind {
+        MouseEventKind::Down(MouseButton::Left) => (0u8, false),
+        MouseEventKind::Up(MouseButton::Left) => (0u8, true),
+        MouseEventKind::Drag(MouseButton::Left) => (32u8, false),
+        MouseEventKind::ScrollUp => (64u8, false),
+        MouseEventKind::ScrollDown => (65u8, false),
+        _ => return None,
+    };
+    if sgr {
+        Some(
+            format!(
+                "\x1b[<{code};{column};{row}{}",
+                if release { 'm' } else { 'M' }
+            )
+            .into_bytes(),
+        )
+    } else {
+        // Legacy X10: release never carries a button, always code 3; both
+        // axes are single bytes offset by 32, so anything past 223 would
+        // overflow into control-character range instead of wrapping.
+        let legacy_code = if release { 3 } else { code };
+        let cb = 32u16 + u16::from(legacy_code);
+        let cx = 32u16 + column.min(223);
+        let cy = 32u16 + row.min(223);
+        Some(vec![0x1b, b'[', b'M', cb as u8, cx as u8, cy as u8])
+    }
+}
 fn encode_key(key: KeyEvent) -> Option<Vec<u8>> {
     let control = key.modifiers.contains(KeyModifiers::CONTROL);
     match key.code {
@@ -1999,8 +2146,93 @@ fn runtime_error(error: uze_terminal::RuntimeError) -> UzeError {
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentIdentity, agent_identity_for_tab};
+    use super::{AgentIdentity, agent_identity_for_tab, encode_mouse, pane_relative};
+    use crossterm::event::{MouseButton, MouseEventKind};
+    use ratatui::layout::Rect;
     use uze_terminal::{Focus, Layout, Pane, PaneId, Tab, TabId};
+
+    #[test]
+    fn pane_relative_is_1_indexed_and_excludes_anything_outside_the_pane() {
+        let pane = Rect::new(10, 2, 40, 20);
+        assert_eq!(
+            pane_relative(mouse_at(10, 2, MouseEventKind::Moved), pane),
+            Some((1, 1))
+        );
+        assert_eq!(
+            pane_relative(mouse_at(49, 21, MouseEventKind::Moved), pane),
+            Some((40, 20))
+        );
+        // One past the pane's own bottom-right corner in either axis, and
+        // anything left of/above its origin (the sidebar, tab strip) — all
+        // outside.
+        assert_eq!(
+            pane_relative(mouse_at(50, 21, MouseEventKind::Moved), pane),
+            None
+        );
+        assert_eq!(
+            pane_relative(mouse_at(49, 22, MouseEventKind::Moved), pane),
+            None
+        );
+        assert_eq!(
+            pane_relative(mouse_at(9, 5, MouseEventKind::Moved), pane),
+            None
+        );
+        assert_eq!(
+            pane_relative(mouse_at(15, 1, MouseEventKind::Moved), pane),
+            None
+        );
+    }
+
+    #[test]
+    fn encode_mouse_sgr_matches_the_documented_wire_format() {
+        assert_eq!(
+            encode_mouse(MouseEventKind::Down(MouseButton::Left), 3, 5, true),
+            Some(b"\x1b[<0;3;5M".to_vec())
+        );
+        assert_eq!(
+            encode_mouse(MouseEventKind::Up(MouseButton::Left), 3, 5, true),
+            Some(b"\x1b[<0;3;5m".to_vec())
+        );
+        assert_eq!(
+            encode_mouse(MouseEventKind::Drag(MouseButton::Left), 3, 5, true),
+            Some(b"\x1b[<32;3;5M".to_vec())
+        );
+        assert_eq!(
+            encode_mouse(MouseEventKind::ScrollUp, 3, 5, true),
+            Some(b"\x1b[<64;3;5M".to_vec())
+        );
+        // Unsupported buttons/kinds (right/middle click, plain motion) stay
+        // unforwarded rather than guessing at an encoding for them.
+        assert_eq!(
+            encode_mouse(MouseEventKind::Down(MouseButton::Right), 3, 5, true),
+            None
+        );
+    }
+
+    #[test]
+    fn encode_mouse_legacy_x10_saturates_instead_of_overflowing_past_223() {
+        assert_eq!(
+            encode_mouse(MouseEventKind::Down(MouseButton::Left), 1, 1, false),
+            Some(vec![0x1b, b'[', b'M', 32, 33, 33])
+        );
+        assert_eq!(
+            encode_mouse(MouseEventKind::Up(MouseButton::Left), 1, 1, false),
+            Some(vec![0x1b, b'[', b'M', 32 + 3, 33, 33])
+        );
+        assert_eq!(
+            encode_mouse(MouseEventKind::Down(MouseButton::Left), 999, 999, false),
+            Some(vec![0x1b, b'[', b'M', 32, 32 + 223, 32 + 223])
+        );
+    }
+
+    fn mouse_at(column: u16, row: u16, kind: MouseEventKind) -> crossterm::event::MouseEvent {
+        crossterm::event::MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: crossterm::event::KeyModifiers::empty(),
+        }
+    }
 
     fn identities() -> Vec<AgentIdentity> {
         vec![

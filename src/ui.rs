@@ -53,7 +53,6 @@ use crate::{
     provisioning::{ProcessOutput, ProcessResult, ProcessRunner, ProcessSpec, SystemProcessRunner},
 };
 
-mod git_diff;
 mod hit;
 mod input;
 mod management;

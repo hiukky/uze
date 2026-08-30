@@ -1,14 +1,17 @@
-//! The workspace TUI's git changes overlay — a read-only "quick peek" at
+//! The workspace TUI's Git changes extension — a read-only "quick peek" at
 //! `git status`/`git diff` for whichever tab is active, so seeing what
 //! changed never requires leaving the terminal for an external editor.
+//! `uze-extensions`' first extension (see the crate root doc comment for
+//! the shape every extension after this one follows).
 //!
-//! Same popup shape `orchestrator`'s `AgentPicker`/`ContextMenu` already
+//! Same popup shape the workspace TUI's `AgentPicker`/`ContextMenu` already
 //! use (an `Option<T>` the caller renders last, on top of everything, and
 //! discards on `Esc`), just sized to the whole frame instead of a small
 //! anchored box — see `openspec/changes/add-git-diff-overlay/design.md`.
-//! Its own module (not folded into `orchestrator.rs`, already large) for
-//! the git subprocess handling, unified-diff parsing, and syntax
-//! highlighting this needs that nothing else in the client does.
+//! Its own module (originally its own file inside the TUI crate itself,
+//! before the `uze-extensions` split) for the git subprocess handling,
+//! unified-diff parsing, and syntax highlighting this needs that nothing
+//! else in the client does.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -28,13 +31,13 @@ use ratatui::{
 };
 use syntect::{easy::HighlightLines, highlighting::ThemeSet, parsing::SyntaxSet};
 
-use super::orchestrator::WorkspaceHit;
+use crate::{ExtensionHit, display_project_path, hint_spans, palette::*};
 
 /// What to do after a key/mouse event reaches an open [`GitView`] —
 /// `orchestrator`'s event loop only needs to know whether to keep the
 /// overlay open or clear `WorkspaceModel::git_view`, never any of this
 /// module's internals.
-pub(super) enum GitViewOutcome {
+pub enum GitViewOutcome {
     Stay,
     Close,
 }
@@ -45,15 +48,15 @@ const REFRESH_INTERVAL: Duration = Duration::from_millis(750);
 /// separate from [`GitView`]: the strip needs only a cheap status indicator,
 /// while opening the overlay can afford to load and highlight a full diff.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct GitChangeSummary {
-    pub(super) additions: u32,
-    pub(super) deletions: u32,
+pub struct GitChangeSummary {
+    pub additions: u32,
+    pub deletions: u32,
 }
 
 /// Returns a summary only when `cwd` resolves to a git repository with
 /// changes. `None` covers a non-repository, a missing/unusable `git`, and a
 /// clean worktree alike, which lets the caller omit its badge entirely.
-pub(super) fn change_summary(cwd: &Path) -> Option<GitChangeSummary> {
+pub fn change_summary(cwd: &Path) -> Option<GitChangeSummary> {
     let root = repository_root(cwd).ok()?;
     let status = run_git(
         &root,
@@ -115,10 +118,10 @@ impl FileStatus {
 
     fn color(self) -> Color {
         match self {
-            FileStatus::Modified => super::WARNING,
-            FileStatus::Added | FileStatus::Untracked => super::SUCCESS,
-            FileStatus::Deleted => super::DANGER,
-            FileStatus::Renamed => super::BLUE,
+            FileStatus::Modified => WARNING,
+            FileStatus::Added | FileStatus::Untracked => SUCCESS,
+            FileStatus::Deleted => DANGER,
+            FileStatus::Renamed => BLUE,
         }
     }
 }
@@ -197,7 +200,7 @@ struct DiffRow {
 /// Open state of the git changes overlay (`WorkspaceModel::git_view`).
 /// Built when raised and refreshed at a bounded cadence while it stays open,
 /// so collaborators and commands in another pane show up without reopening.
-pub(super) struct GitView {
+pub struct GitView {
     /// The repository root the view is scoped to, resolved once at open
     /// time from the active tab's live `cwd` — see `open`'s doc comment.
     root: PathBuf,
@@ -222,7 +225,7 @@ impl GitView {
     /// view opens (see `orchestrator::open_git_view`) — this resolves the
     /// enclosing repository root from it once, up front, and every
     /// subsequent `git` call in this view uses that root, not `cwd` again.
-    pub(super) fn open(cwd: PathBuf) -> Self {
+    pub fn open(cwd: PathBuf) -> Self {
         match repository_root(&cwd) {
             Ok(root) => match discover_worktrees(&root) {
                 Ok(worktrees) => {
@@ -324,11 +327,11 @@ impl GitView {
         }
     }
 
-    pub(super) fn refresh_due(&self) -> bool {
+    pub fn refresh_due(&self) -> bool {
         self.refreshed_at.elapsed() >= REFRESH_INTERVAL
     }
 
-    pub(super) fn refresh(&mut self) {
+    pub fn refresh(&mut self) {
         let selected_root = self
             .worktrees
             .get(self.selected_worktree)
@@ -457,7 +460,9 @@ fn discover_worktrees(active_root: &Path) -> Result<Vec<GitWorktree>, String> {
 }
 
 fn configured_worktrees_dir(main_root: &Path) -> Option<PathBuf> {
-    let lock = crate::project_lock::load_lock(main_root).ok().flatten()?;
+    let lock = uze_core::project_lock::load_lock(main_root)
+        .ok()
+        .flatten()?;
     let directory = lock.worktrees_dir?;
     main_root.join(directory).canonicalize().ok()
 }
@@ -747,7 +752,7 @@ fn highlight_one_line(
         .collect()
 }
 
-pub(super) fn handle_key(view: &mut GitView, key: KeyEvent) -> GitViewOutcome {
+pub fn handle_key(view: &mut GitView, key: KeyEvent) -> GitViewOutcome {
     if key.code == KeyCode::Esc
         || (key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('g'))
     {
@@ -786,11 +791,11 @@ pub(super) fn handle_key(view: &mut GitView, key: KeyEvent) -> GitViewOutcome {
     GitViewOutcome::Stay
 }
 
-pub(super) fn handle_mouse(view: &mut GitView, hit: Option<WorkspaceHit>) -> GitViewOutcome {
+pub fn handle_mouse(view: &mut GitView, hit: Option<ExtensionHit>) -> GitViewOutcome {
     match hit {
-        Some(WorkspaceHit::GitSelectFile(index)) => view.select(index),
-        Some(WorkspaceHit::GitSelectWorktree(index)) => view.select_worktree(index),
-        Some(WorkspaceHit::CloseGitView) => return GitViewOutcome::Close,
+        Some(ExtensionHit::SelectFile(index)) => view.select(index),
+        Some(ExtensionHit::SelectWorktree(index)) => view.select_worktree(index),
+        Some(ExtensionHit::Close) => return GitViewOutcome::Close,
         _ => {}
     }
     GitViewOutcome::Stay
@@ -801,7 +806,7 @@ pub(super) fn handle_mouse(view: &mut GitView, hit: Option<WorkspaceHit>) -> Git
 /// navigation): hovering the file list moves the selection, hovering the
 /// diff scrolls it, matching how a mouse wheel behaves everywhere else
 /// (VS Code included) regardless of which panel last had keyboard focus.
-pub(super) fn handle_scroll(
+pub fn handle_scroll(
     view: &mut GitView,
     frame_area: Rect,
     tree_width_override: Option<u16>,
@@ -838,28 +843,24 @@ pub(super) fn handle_scroll(
 /// would otherwise have drawn (sidebar, tab strip, pane, any other popup)
 /// is skipped by the caller for this frame instead of drawn and covered,
 /// see `orchestrator::render`.
-pub(super) fn render(
+pub fn render(
     frame: &mut ratatui::Frame<'_>,
     view: &GitView,
     area: Rect,
     tree_width_override: Option<u16>,
-    hits: &mut Vec<(Rect, WorkspaceHit)>,
+    hits: &mut Vec<(Rect, ExtensionHit)>,
 ) {
     frame.render_widget(Clear, area);
     let block = Block::default()
         .title(format!(
             " git changes — {} ",
-            super::display_project_path(&view.root)
+            display_project_path(&view.root)
         ))
-        .title_style(
-            Style::default()
-                .fg(super::ACCENT)
-                .add_modifier(Modifier::BOLD),
-        )
+        .title_style(Style::default().fg(ACCENT).add_modifier(Modifier::BOLD))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(super::BORDER))
+        .border_style(Style::default().fg(BORDER))
         .padding(Padding::new(1, 1, 1, 1))
-        .style(Style::default().bg(super::BASE));
+        .style(Style::default().bg(BASE));
     frame.render_widget(block, area);
     // A "×" in the top-right corner, the same click-driven close every
     // other overlay in this TUI offers — `Esc` still works too (see
@@ -873,17 +874,15 @@ pub(super) fn render(
     frame.render_widget(
         Paragraph::new(Span::styled(
             " × ",
-            Style::default()
-                .fg(super::DANGER)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(DANGER).add_modifier(Modifier::BOLD),
         )),
         close_rect,
     );
-    hits.push((close_rect, WorkspaceHit::CloseGitView));
+    hits.push((close_rect, ExtensionHit::Close));
 
     let (files_area, diff_area, footer) = content_columns(area, tree_width_override);
     // The tree's own right border doubles as the resize handle — same
-    // shape as the sidebar's own `WorkspaceHit::ResizeSidebar` push in
+    // shape as the sidebar's own `ExtensionHit::ResizeSidebar` push in
     // `orchestrator::render` (drag arm lives there too, alongside
     // `dragging_sidebar`/`dragging_git_tree`).
     hits.push((
@@ -893,15 +892,12 @@ pub(super) fn render(
             1,
             files_area.height,
         ),
-        WorkspaceHit::ResizeGitTree,
+        ExtensionHit::ResizeTree,
     ));
 
     if let Some(message) = &view.error {
         frame.render_widget(
-            Paragraph::new(Span::styled(
-                message.clone(),
-                Style::default().fg(super::DANGER),
-            )),
+            Paragraph::new(Span::styled(message.clone(), Style::default().fg(DANGER))),
             diff_area,
         );
         render_footer(frame, footer);
@@ -910,10 +906,7 @@ pub(super) fn render(
     if view.files.is_empty() {
         render_file_list(frame, files_area, view, hits);
         frame.render_widget(
-            Paragraph::new(Span::styled(
-                "no changes",
-                Style::default().fg(super::MUTED),
-            )),
+            Paragraph::new(Span::styled("no changes", Style::default().fg(MUTED))),
             diff_area,
         );
         render_footer(frame, footer);
@@ -926,13 +919,14 @@ pub(super) fn render(
 }
 
 /// Narrowest/widest the Git changes tree can be dragged, and the floor
-/// left for the diff column — same shape as `super::clamp_sidebar_width`'s
-/// three constants, just scoped to this overlay instead of the sidebar.
+/// left for the diff column — same shape as the host TUI's own
+/// `clamp_sidebar_width` (`src/ui.rs`), just scoped to this extension
+/// instead of the sidebar.
 const MIN_TREE_WIDTH: u16 = 20;
 const MAX_TREE_WIDTH: u16 = 50;
 const MIN_DIFF_WIDTH: u16 = 40;
 
-pub(super) fn clamp_tree_width(width: u16, total_width: u16) -> u16 {
+pub fn clamp_tree_width(width: u16, total_width: u16) -> u16 {
     let max = total_width
         .saturating_sub(MIN_DIFF_WIDTH)
         .clamp(MIN_TREE_WIDTH, MAX_TREE_WIDTH);
@@ -950,10 +944,7 @@ pub(super) fn clamp_tree_width(width: u16, total_width: u16) -> u16 {
 /// reading as a global app bar rather than something that belongs to the
 /// diff container specifically, and that same vertical split used to cut
 /// the tree column's own height short to match.
-pub(super) fn content_columns(
-    frame_area: Rect,
-    tree_width_override: Option<u16>,
-) -> (Rect, Rect, Rect) {
+pub fn content_columns(frame_area: Rect, tree_width_override: Option<u16>) -> (Rect, Rect, Rect) {
     let inner = Rect::new(
         frame_area.x + 2,
         frame_area.y + 2,
@@ -1062,28 +1053,23 @@ fn render_file_list(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
     view: &GitView,
-    hits: &mut Vec<(Rect, WorkspaceHit)>,
+    hits: &mut Vec<(Rect, ExtensionHit)>,
 ) {
     let panel = Block::default()
         .borders(Borders::RIGHT)
-        .border_style(Style::default().fg(super::BORDER))
+        .border_style(Style::default().fg(BORDER))
         .padding(Padding::new(1, 1, 0, 0))
-        .style(Style::default().bg(super::BASE));
+        .style(Style::default().bg(BASE));
     let inner = panel.inner(area);
     frame.render_widget(panel, area);
     let focused = view.focus == GitViewFocus::Files;
     let mut title = vec![Span::styled(
         "CHANGES",
         Style::default()
-            .fg(super::TEXT_SECONDARY)
+            .fg(TEXT_SECONDARY)
             .add_modifier(Modifier::BOLD),
     )];
-    push_right_aligned(
-        &mut title,
-        view.files.len().to_string(),
-        inner.width,
-        super::MUTED,
-    );
+    push_right_aligned(&mut title, view.files.len().to_string(), inner.width, MUTED);
     frame.render_widget(
         Paragraph::new(Line::from(title)),
         Rect::new(inner.x, inner.y, inner.width, 1),
@@ -1113,10 +1099,10 @@ fn render_file_list(
                 let rule_width = row.width.saturating_sub(label.len() as u16);
                 let left_rule = rule_width / 2;
                 let right_rule = rule_width - left_rule;
-                let rule_style = Style::default().fg(super::BORDER_FAINT);
+                let rule_style = Style::default().fg(BORDER_FAINT);
                 let spans = vec![
                     Span::styled("─".repeat(left_rule as usize), rule_style),
-                    Span::styled(label, Style::default().fg(super::TEXT_FAINT)),
+                    Span::styled(label, Style::default().fg(TEXT_FAINT)),
                     Span::styled("─".repeat(right_rule as usize), rule_style),
                 ];
                 frame.render_widget(Paragraph::new(Line::from(spans)), row);
@@ -1131,10 +1117,10 @@ fn render_file_list(
             } => {
                 let style = if *selected {
                     Style::default()
-                        .fg(super::TEXT_BRIGHT)
+                        .fg(TEXT_BRIGHT)
                         .add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().fg(super::TEXT_SECONDARY)
+                    Style::default().fg(TEXT_SECONDARY)
                 };
                 // Selection, not "is this the main worktree" — `●`/`○`
                 // means "this is the one you're on" everywhere else in the
@@ -1146,32 +1132,25 @@ fn render_file_list(
                 let mut spans = vec![
                     Span::styled(
                         if *selected { "● " } else { "○ " },
-                        Style::default().fg(if *selected {
-                            super::ACCENT
-                        } else {
-                            super::TEXT_FAINT
-                        }),
+                        Style::default().fg(if *selected { ACCENT } else { TEXT_FAINT }),
                     ),
                     Span::styled(
                         if *expanded { "▾ " } else { "▸ " },
-                        Style::default().fg(super::MUTED),
+                        Style::default().fg(MUTED),
                     ),
                     Span::styled(
                         truncate_label(name, row.width.saturating_sub(8) as usize),
                         style,
                     ),
                 ];
-                push_right_aligned(&mut spans, changes.to_string(), row.width, super::MUTED);
+                push_right_aligned(&mut spans, changes.to_string(), row.width, MUTED);
                 frame.render_widget(Paragraph::new(Line::from(spans)), row);
-                hits.push((row, WorkspaceHit::GitSelectWorktree(*index)));
+                hits.push((row, ExtensionHit::SelectWorktree(*index)));
             }
             FileTreeItem::Directory { name, depth } => {
                 let spans = vec![
                     Span::styled("  ".repeat(*depth), Style::default()),
-                    Span::styled(
-                        format!("{name}/"),
-                        Style::default().fg(super::TEXT_SECONDARY),
-                    ),
+                    Span::styled(format!("{name}/"), Style::default().fg(TEXT_SECONDARY)),
                 ];
                 frame.render_widget(Paragraph::new(Line::from(spans)), row);
             }
@@ -1180,12 +1159,12 @@ fn render_file_list(
                 let selected = *index == view.selected;
                 let label_style = if selected && focused {
                     Style::default()
-                        .fg(super::TEXT_BRIGHT)
+                        .fg(TEXT_BRIGHT)
                         .add_modifier(Modifier::BOLD)
                 } else if selected {
-                    Style::default().fg(super::TEXT_BRIGHT)
+                    Style::default().fg(TEXT_BRIGHT)
                 } else {
-                    Style::default().fg(super::NAV_INACTIVE)
+                    Style::default().fg(NAV_INACTIVE)
                 };
                 let mut spans = vec![
                     Span::styled("  ".repeat(*depth + 1), Style::default()),
@@ -1196,10 +1175,10 @@ fn render_file_list(
                     Span::styled(name.clone(), label_style),
                 ];
                 if selected {
-                    fill_row_bg(&mut spans, row.width, super::SURFACE_OVERLAY);
+                    fill_row_bg(&mut spans, row.width, SURFACE_OVERLAY);
                 }
                 frame.render_widget(Paragraph::new(Line::from(spans)), row);
-                hits.push((row, WorkspaceHit::GitSelectFile(*index)));
+                hits.push((row, ExtensionHit::SelectFile(*index)));
             }
         }
     }
@@ -1258,7 +1237,7 @@ fn fill_row_bg<'a>(spans: &mut Vec<Span<'a>>, width: u16, bg: Color) {
 }
 
 /// A subtle wash behind a removed unified-diff line — same family as
-/// `super::SELECTED_BG`/`super::SURFACE_OVERLAY` (barely-there tints over
+/// `SELECTED_BG`/`SURFACE_OVERLAY` (barely-there tints over
 /// `BASE`), just red-leaning instead of green/neutral.
 const DIFF_REMOVED_BG: Color = Color::Rgb(38, 22, 20);
 /// The added-line counterpart — green-leaning, same family and strength as
@@ -1292,7 +1271,7 @@ fn render_diff(frame: &mut ratatui::Frame<'_>, area: Rect, view: &GitView) {
     frame.render_widget(
         Paragraph::new(Span::styled(
             format!("DIFF · {selected_name}"),
-            Style::default().fg(super::TEXT_SECONDARY),
+            Style::default().fg(TEXT_SECONDARY),
         )),
         Rect::new(area.x, area.y, area.width, 1),
     );
@@ -1306,7 +1285,7 @@ fn render_diff(frame: &mut ratatui::Frame<'_>, area: Rect, view: &GitView) {
         frame.render_widget(
             Paragraph::new(Span::styled(
                 "no changes in this worktree",
-                Style::default().fg(super::MUTED),
+                Style::default().fg(MUTED),
             )),
             content,
         );
@@ -1364,17 +1343,9 @@ fn diff_cell_height(cell: &DiffCell, width: u16) -> u16 {
 /// then syntax-highlighted content wrapped to the available column width.
 fn render_diff_cell(frame: &mut ratatui::Frame<'_>, area: Rect, cell: &DiffCell) {
     let (marker, marker_style, bg) = match cell.kind {
-        DiffLineKind::Context => (" ", Style::default().fg(super::TEXT_FAINT), None),
-        DiffLineKind::Added => (
-            "+",
-            Style::default().fg(super::SUCCESS),
-            Some(DIFF_ADDED_BG),
-        ),
-        DiffLineKind::Removed => (
-            "-",
-            Style::default().fg(super::DANGER),
-            Some(DIFF_REMOVED_BG),
-        ),
+        DiffLineKind::Context => (" ", Style::default().fg(TEXT_FAINT), None),
+        DiffLineKind::Added => ("+", Style::default().fg(SUCCESS), Some(DIFF_ADDED_BG)),
+        DiffLineKind::Removed => ("-", Style::default().fg(DANGER), Some(DIFF_REMOVED_BG)),
     };
     let mut content_spans: Vec<Span<'_>> = cell
         .spans
@@ -1395,16 +1366,16 @@ fn render_diff_cell(frame: &mut ratatui::Frame<'_>, area: Rect, cell: &DiffCell)
             Span::styled(format!("{marker} "), marker_style),
             Span::styled(
                 format!("{:>4} ", cell.line_no),
-                Style::default().fg(super::TEXT_DIM),
+                Style::default().fg(TEXT_DIM),
             ),
         ]))
-        .style(Style::default().bg(bg.unwrap_or(super::BASE))),
+        .style(Style::default().bg(bg.unwrap_or(BASE))),
         columns[0],
     );
     frame.render_widget(
         Paragraph::new(Line::from(content_spans))
             .wrap(Wrap { trim: false })
-            .style(Style::default().bg(bg.unwrap_or(super::BASE))),
+            .style(Style::default().bg(bg.unwrap_or(BASE))),
         columns[1],
     );
 }
@@ -1416,11 +1387,11 @@ fn render_diff_cell(frame: &mut ratatui::Frame<'_>, area: Rect, cell: &DiffCell)
 fn render_footer(frame: &mut ratatui::Frame<'_>, area: Rect) {
     let block = Block::default()
         .borders(Borders::TOP)
-        .border_style(Style::default().fg(super::BORDER_FAINT));
+        .border_style(Style::default().fg(BORDER_FAINT));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     frame.render_widget(
-        Paragraph::new(Line::from(super::hint_spans(
+        Paragraph::new(Line::from(hint_spans(
             "↑↓ navigate · ←→ collapse/expand · ↵ diff · tab focus · esc close",
         ))),
         inner,

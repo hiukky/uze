@@ -2458,11 +2458,11 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
- "syntect",
  "thiserror 2.0.20",
  "tokio",
  "uze-application",
  "uze-core",
+ "uze-extensions",
  "uze-integrations",
  "uze-terminal",
  "uze-testkit",
@@ -2487,6 +2487,17 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.20",
+]
+
+[[package]]
+name = "uze-extensions"
+version = "0.0.0-alpha.15"
+dependencies = [
+ "crossterm",
+ "ratatui",
+ "syntect",
+ "uze-core",
+ "uze-testkit",
 ]
 
 [[package]]
