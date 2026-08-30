@@ -165,7 +165,7 @@ pub(crate) fn render_harnesses(
     let content = render_screen_header(
         frame,
         list_area,
-        "Harnesses",
+        "Integrations",
         "detected agents",
         Some(Span::styled(
             format!("{count} installed"),

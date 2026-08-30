@@ -30,11 +30,12 @@ never renumbered), using this structure (Michael Nygard style):
   technology/pattern choice with long-term consequences, a boundary that
   would be expensive to move later. Routine implementation choices don't
   need one.
-- Most ADRs are created automatically as part of an OpenSpec change (the
-  `adr` artifact, when the change's design.md contains a qualifying
-  decision) - see `openspec/config.yaml`. Use `/std:adr` to record one
-  ad hoc (a decision made outside an OpenSpec change, or backfilling a
-  decision that predates this convention).
+- Most ADRs are formalized when an OpenSpec change is archived (the
+  `operations.archive` guidance in `openspec/config.yaml`), for a decision
+  flagged in that change's design.md that held up through implementation -
+  not earlier, while the approach could still change. Use the `adr` skill
+  to record one ad hoc (a decision made outside an OpenSpec change, or
+  backfilling a decision that predates this convention).
 
 ## Index
 

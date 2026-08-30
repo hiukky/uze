@@ -42,7 +42,7 @@ impl Route {
             Route::Overview => "Overview",
             Route::Plugins => "Plugins",
             Route::Marketplace => "Marketplace",
-            Route::Harnesses => "Harnesses",
+            Route::Harnesses => "Integrations",
             Route::Profiles => "Profiles",
             Route::Doctor => "Doctor",
         }

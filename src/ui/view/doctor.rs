@@ -389,7 +389,7 @@ fn doctor_groups(doctor: Option<&DoctorReport>) -> Vec<(&'static str, Vec<Check>
 
     vec![
         ("Store", store),
-        ("Harnesses", harnesses),
+        ("Integrations", harnesses),
         ("Plugins", plugins),
     ]
 }

@@ -4,11 +4,7 @@
 TBD - created by archiving change overview-workspace-semantic-health. Update Purpose after archive.
 ## Requirements
 ### Requirement: Overview reports semantic project state
-The system SHALL report the workspace project half as semantic states, not
-file facts: `Environment` ∈ {NotConfigured, Invalid, InstallRequired,
-Ready}, `Memory` ∈ {None, Ready, Issue}, and a `Plugins` quantity. The
-state SHALL be computed by the Application layer; the TUI SHALL render it
-verbatim and never re-derive it from `agents.lock` bytes.
+The system SHALL report the workspace project half as semantic states, not file facts: `Environment` ∈ {NotConfigured, Invalid, InstallRequired, Ready}, `Memory` ∈ {None, Ready, Issue}, and a `Plugins` quantity. The state SHALL be computed by the Application layer; the TUI SHALL render it verbatim and never re-derive it from `agents.lock` bytes.
 
 #### Scenario: Plain directory
 - **WHEN** the cwd contains neither `agents.lock` nor `marketplace.json`
@@ -39,10 +35,7 @@ verbatim and never re-derive it from `agents.lock` bytes.
 - **THEN** Environment SHALL NOT be `Ready`
 
 ### Requirement: Overview reports marketplace state
-The system SHALL report a marketplace workspace as `Name` / `Plugins` /
-`Status`, where Status is `valid`, `N invalid` (declared sources
-missing/escaping), or `invalid manifest`. Marketplace health SHALL NOT
-depend on whether its packages are installed globally.
+The system SHALL report a marketplace workspace as `Name` / `Plugins` / `Status`, where Status is `valid`, `N invalid` (declared sources missing/escaping), or `invalid manifest`. Marketplace health SHALL NOT depend on whether its packages are installed globally.
 
 #### Scenario: Valid marketplace
 - **WHEN** `marketplace.json` parses and every declared source directory exists
@@ -57,12 +50,7 @@ depend on whether its packages are installed globally.
 - **THEN** Status is `invalid manifest` and the marketplace name is unknown
 
 ### Requirement: Overview mixes project and marketplace contextually
-The system SHALL show PROJECT and/or MARKETPLACE blocks based on the
-workspace kind: consumer → PROJECT only, marketplace → MARKETPLACE only,
-both anchors → both blocks, neither → the PROJECT three-row empty state.
-The blocks SHALL always render vertically (PROJECT above MARKETPLACE),
-never side-by-side. The empty state SHALL be compact (no verbose
-onboarding).
+The system SHALL show PROJECT and/or MARKETPLACE blocks based on the workspace kind: consumer → PROJECT only, marketplace → MARKETPLACE only, both anchors → both blocks, neither → the PROJECT three-row empty state. The blocks SHALL always render vertically (PROJECT above MARKETPLACE), never side-by-side. The empty state SHALL be compact (no verbose onboarding).
 
 #### Scenario: Hybrid workspace
 - **WHEN** both `agents.lock` and `marketplace.json` exist at the workspace root
@@ -94,3 +82,4 @@ when the Application reports `Ready`.
 #### Scenario: Invalid state is never actionable as install
 - **WHEN** Environment is `Invalid` or `NotConfigured`
 - **THEN** no `i install` action is offered
+

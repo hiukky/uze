@@ -1,6 +1,6 @@
 name: adr-driven
 version: 1
-description: spec-driven workflow plus optional Architecture Decision Records - proposal → specs → design → adr → tasks
+description: spec-driven workflow plus optional Architecture Decision Records - proposal → specs → design → tasks, with ADRs formalized at archive time for decisions that held
 artifacts:
   - id: proposal
     generates: proposal.md
@@ -160,56 +160,18 @@ artifacts:
       if a section would only restate them, point to them instead.
 
       Good design docs explain the "why" behind technical decisions. If any
-      decision here is architecturally significant and hard to reverse, it
-      is also a candidate for the `adr` artifact - don't duplicate the full
-      write-up, just flag it (e.g. "see ADR: <title>") once that artifact
-      exists.
+      decision here is architecturally significant and hard to reverse (a
+      new external dependency, a technology/pattern choice with long-term
+      consequences, a boundary expensive to move later), flag it under a
+      `## Candidate ADRs` note - title and one-line why, nothing more. This
+      is a flag, not a commitment: the design can still change while the
+      change is in flight, and premature ADRs churn (superseded before the
+      approach even stabilizes) are exactly what this note exists to avoid.
+      The ADR itself gets written at archive time (see `operations.archive`
+      in `openspec/config.yaml`), once whatever was actually built - not
+      necessarily what was flagged here - is known to hold.
     requires:
       - proposal
-
-  - id: adr
-    generates: "adr/*.md"
-    description: Architecture Decision Records for significant, hard-to-reverse decisions made in this change
-    template: adr.md
-    instruction: |
-      Create ADR entries ONLY for decisions from design.md's Decisions
-      section that are architecturally significant AND hard to reverse:
-      a new external dependency, a technology/pattern choice with
-      long-term consequences, a boundary that would be expensive to move
-      later. Most changes do not warrant one - routine implementation
-      choices, internal refactors, or anything easily revisited later do
-      NOT get an ADR.
-
-      If nothing in this change clears that bar, create no files under
-      `adr/` and say so explicitly instead of forcing an entry.
-
-      A change may produce zero, one, or several ADR entries - one file
-      per decision. Use the template's Context/Decision/Consequences
-      structure (Michael Nygard style): Context is the situation forcing
-      a choice, Decision is what was chosen (stated as a firm decision,
-      not a proposal), Consequences covers what becomes easier/harder as
-      a result, including trade-offs accepted.
-
-      After writing each draft here (`adr/<kebab-title>.md`), also create
-      the permanent numbered record at the repository root:
-      1. List existing files under `docs/adr/` (create the directory if
-         missing) and determine the next sequential number, 3 digits
-         zero-padded (001, 002, ...; continue the existing sequence, do
-         not restart per change).
-      2. Write `docs/adr/<NNN>-<kebab-title>.md` with the same content,
-         plus a trailing line: `Source change: openspec/changes/<change-name>/`.
-      3. This `docs/adr/` file is the permanent record. It is not moved
-         or deleted when this change is later archived - unlike specs,
-         ADRs are not "merged" anywhere else; the numbered file itself
-         is the source of truth from the moment it's created.
-
-      If this change modifies or reverses a decision recorded in an
-      existing ADR, do not edit that file's Decision retroactively -
-      Nygard-style ADRs are immutable once accepted. Instead, write a new
-      ADR that supersedes it, and add a line to the OLD file: `Status:
-      Superseded by docs/adr/<NNN>-<new-title>.md`.
-    requires:
-      - design
 
   - id: tasks
     generates: tasks.md
@@ -230,8 +192,9 @@ artifacts:
       - Each task MUST be a checkbox: `- [ ] X.Y Task description`
       - Tasks should be small enough to complete in one session
       - Order tasks by dependency (what must be done first?)
-      - If the `adr` artifact produced any entries, include a task that
-        confirms the matching `docs/adr/NNN-*.md` file(s) exist.
+      - Do not add a task for writing ADRs here - that happens at archive
+        time (see `operations.archive` in `openspec/config.yaml`), after
+        the approach in this change has actually held up.
 
       Example:
       ```

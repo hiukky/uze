@@ -58,6 +58,10 @@ rmcp = { version = "3", features = ["server", "transport-io", "macros"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std"] }
 schemars = "1"
 
+# Diff syntax highlighting for the workspace TUI's git changes overlay
+# (src/ui/git_diff.rs) — see ADR 039. Scoped to that one module.
+syntect = "5"
+
 [dev-dependencies]
 # Shared test infrastructure (TestEnvironment, FakeHarness, fixtures,
 # scenario builder) — see crates/uze-testkit and tests/README.md.

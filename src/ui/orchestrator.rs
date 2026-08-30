@@ -5,6 +5,7 @@
 //! filled panels) so switching between the workspace and management
 //! contexts with Ctrl+O reads as one product, not two.
 
+use super::git_diff;
 use crate::{Result, UzeError, UzeHome};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind};
 use ratatui::{
@@ -230,6 +231,17 @@ pub(crate) fn attach_workspace(
                     }
                     model.dirty = true;
                 }
+                Event::Key(key) if model.git_view.is_some() => {
+                    if let Some(view) = model.git_view.as_mut()
+                        && matches!(
+                            git_diff::handle_key(view, key),
+                            git_diff::GitViewOutcome::Close
+                        )
+                    {
+                        model.git_view = None;
+                    }
+                    model.dirty = true;
+                }
                 Event::Key(key)
                     if key.modifiers.contains(KeyModifiers::CONTROL)
                         && key.code == KeyCode::Char('o') =>
@@ -265,6 +277,12 @@ pub(crate) fn attach_workspace(
                     if let Some(tab) = model.selected_tab() {
                         let _ = send_request(&mut stream, &ClientRequest::CloseTab { tab });
                     }
+                }
+                Event::Key(key)
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && key.code == KeyCode::Char('g') =>
+                {
+                    open_git_view(&mut model);
                 }
                 Event::Key(key)
                     if key.modifiers.contains(KeyModifiers::ALT)
@@ -374,6 +392,40 @@ pub(crate) fn attach_workspace(
                         )
                     {
                         send_close_request(&mut stream, menu.target);
+                    }
+                    model.dirty = true;
+                }
+                Event::Mouse(mouse)
+                    if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+                        && model.git_view.is_some() =>
+                {
+                    let hit = model
+                        .hits
+                        .iter()
+                        .find(|(rect, _)| {
+                            rect.x <= mouse.column
+                                && mouse.column < rect.x + rect.width
+                                && rect.y <= mouse.row
+                                && mouse.row < rect.y + rect.height
+                        })
+                        .map(|(_, hit)| *hit);
+                    if let Some(view) = model.git_view.as_mut() {
+                        git_diff::handle_mouse(view, hit);
+                    }
+                    model.dirty = true;
+                }
+                Event::Mouse(mouse)
+                    if matches!(
+                        mouse.kind,
+                        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                    ) && model.git_view.is_some() =>
+                {
+                    if let Some(view) = model.git_view.as_mut() {
+                        git_diff::handle_scroll(
+                            view,
+                            Rect::new(0, 0, size.width, size.height),
+                            mouse,
+                        );
                     }
                     model.dirty = true;
                 }
@@ -523,6 +575,15 @@ pub(crate) fn attach_workspace(
                                 },
                             );
                         }
+                        WorkspaceHit::OpenGitView => {
+                            open_git_view(&mut model);
+                        }
+                        WorkspaceHit::GitSelectFile(_) => {
+                            // Only reachable while the git view is open,
+                            // which its own guarded arm below already
+                            // handles — same as `PickAgent`/`CloseSpace`
+                            // above for the other two overlays.
+                        }
                         WorkspaceHit::SwitchToManagement => {
                             let _ = send_request(&mut stream, &ClientRequest::Detach);
                             return Ok(WorkspaceExit::Management);
@@ -605,8 +666,13 @@ pub(crate) fn attach_workspace(
     }
 }
 
+/// `pub(super)` (not private) so [`git_diff`] — a sibling module under
+/// `ui`, not a child of `orchestrator` — can construct `GitSelectFile` hits
+/// from its own render function and push them into the same `hits` vec
+/// every other overlay already shares, rather than this workspace client
+/// threading a second, parallel hit-testing vec just for one overlay.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum WorkspaceHit {
+pub(super) enum WorkspaceHit {
     SelectTab(TabId),
     CloseTab(TabId),
     NewTab,
@@ -622,6 +688,11 @@ enum WorkspaceHit {
     /// The sidebar's "+ new" row — creates a new space directly (no
     /// picker; unlike an agent tab, a space has no "kind" to choose).
     NewSpace,
+    /// The tab strip's right-corner button — opens the git changes view
+    /// (`WorkspaceModel::git_view`), scoped to the active tab's live `cwd`.
+    OpenGitView,
+    /// One row of the open git changes view's changed-files list, by index.
+    GitSelectFile(usize),
     SwitchToManagement,
     ResizeSidebar,
 }
@@ -785,6 +856,11 @@ struct WorkspaceModel {
     /// Open state of the right-click close-confirmation popup; `None` when
     /// closed. Same "click outside discards" rule as `renaming`.
     context_menu: Option<ContextMenu>,
+    /// Open state of the git changes overlay; `None` when closed. Unlike
+    /// `renaming`/`agent_picker`/`context_menu` there is no "click outside
+    /// discards" rule — it covers the full frame, so there is no outside;
+    /// `Esc` (or the same shortcut that opened it) is the only dismissal.
+    git_view: Option<git_diff::GitView>,
 }
 impl WorkspaceModel {
     fn apply(&mut self, event: ClientEvent) {
@@ -944,6 +1020,15 @@ fn render(
         Block::default().style(Style::default().bg(super::BASE).fg(super::TEXT_PRIMARY)),
         frame.area(),
     );
+    // The git changes overlay covers the entire frame when open (see
+    // `git_diff::render`) — everything below would just be drawn and
+    // immediately hidden underneath it, so skip it outright rather than
+    // paying for a sidebar/tab-strip/pane render this frame will never
+    // show.
+    if let Some(view) = &model.git_view {
+        git_diff::render(frame, view, frame.area(), hits);
+        return;
+    }
     let layout = compute_layout(frame.area(), model.sidebar_width);
     render_sidebar(frame, layout.sidebar, model, identities, hits);
     // The sidebar's own hairline right border doubles as a drag handle —
@@ -1445,6 +1530,23 @@ fn pane_in_layout(layout: &uze_terminal::Layout, wanted: PaneId) -> Option<&uze_
     }
 }
 
+/// Opens the git changes overlay scoped to the *currently selected tab's*
+/// live `cwd` — the hierarchy the user gave for this feature is
+/// `Workspace > Space > Agent/Shell > Git`, one level further down than
+/// the space itself. Snapshotted once here; the view doesn't track further
+/// `cd`s in that tab while it's open (see `git_diff`'s own module doc).
+fn open_git_view(model: &mut WorkspaceModel) {
+    let Some(session) = model.session.as_ref() else {
+        return;
+    };
+    let tab = session.selected_tab();
+    let Some(pane) = pane_in_layout(&tab.layout, tab.focus.pane) else {
+        return;
+    };
+    model.git_view = Some(git_diff::GitView::open(pane.cwd.clone()));
+    model.dirty = true;
+}
+
 /// The horizontal tab strip above the pane: the *selected space's* shell
 /// tabs only — agent tabs live exclusively in the sidebar now (see
 /// [`render_sidebar`]), so a tab [`agent_identity_for_tab`] recognizes
@@ -1571,6 +1673,24 @@ fn render_tab_strip(
         hits.push((new_agent_rect, WorkspaceHit::NewAgentMenu));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), inner);
+
+    // Pinned to the strip's far-right corner rather than packed after the
+    // last tab like `$ shell`/`+ agent` — a global action, not scoped to
+    // any one tab, so it stays in the same spot regardless of how many
+    // tabs are open. Drawn as its own widget (on top of the line above)
+    // rather than appended to `spans`, the same reason the sidebar's own
+    // right-aligned "+ new" row isn't packed into that row's left-aligned
+    // content either.
+    let git_button = Span::styled("⎇ git", Style::default().fg(super::ACCENT));
+    let git_width = git_button.width() as u16;
+    let git_rect = Rect::new(
+        inner.x + inner.width.saturating_sub(git_width),
+        inner.y,
+        git_width,
+        1,
+    );
+    frame.render_widget(Paragraph::new(git_button), git_rect);
+    hits.push((git_rect, WorkspaceHit::OpenGitView));
 }
 
 fn render_pane(frame: &mut ratatui::Frame<'_>, area: Rect, model: &WorkspaceModel) {

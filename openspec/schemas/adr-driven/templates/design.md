@@ -14,6 +14,14 @@
 
 <!-- Key design decisions with rationale and alternatives considered -->
 
+## Candidate ADRs
+
+<!-- Only if a decision above is architecturally significant AND hard to
+reverse (new external dependency, long-term technology/pattern choice, a
+boundary expensive to move later): one line per candidate, title + why.
+Omit this section otherwise. This is a flag, not a commitment - the ADR
+itself is written at archive time, once the approach has held up. -->
+
 ## Risks / Trade-offs
 
 <!-- Known risks and trade-offs -->
