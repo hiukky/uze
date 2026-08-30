@@ -1024,10 +1024,12 @@ fn sidebar_resize_drag_updates_width() {
     );
     assert!(model.dragging_sidebar);
 
+    // The sidebar always starts at column 0, so the width should track the
+    // mouse's own column directly.
     model.apply_mouse(
         MouseEvent {
             kind: MouseEventKind::Drag(MouseButton::Left),
-            column: 55,
+            column: 32,
             row: 5,
             modifiers: KeyModifiers::NONE,
         },
@@ -1035,8 +1037,36 @@ fn sidebar_resize_drag_updates_width() {
     );
     assert_eq!(
         model.sidebar_width,
-        Some(24),
-        "dragging the handle to column 55 (24 columns past the sidebar's x=0 origin) must set that width"
+        Some(32),
+        "dragging the handle to column 32 (the sidebar's x=0 origin) must set that width"
+    );
+
+    // A regression check for a real bug: width used to be computed as a
+    // delta from the *previous* frame's border position (this hit rect's
+    // stale x), not the mouse's absolute column — so once the border moved,
+    // every further drag step measured from the wrong reference and the
+    // sidebar edge fought the mouse instead of tracking it. Re-rendering at
+    // the new width (as the real run loop does every tick) before a second,
+    // independent drag catches that: the width must still land exactly on
+    // the column dragged to, not drift from where the border now sits.
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| render(frame, &model, &mut hits))
+        .unwrap();
+    model.hits = hits;
+    model.apply_mouse(
+        MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: 35,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        },
+        100,
+    );
+    assert_eq!(
+        model.sidebar_width,
+        Some(35),
+        "a second drag after a re-render must still track the mouse's absolute column, not drift"
     );
 }
 

@@ -233,9 +233,12 @@ fn render_sidebar(
     // backdrop as everything else; only a thin divider marks the edge. No
     // top padding either: the mode toggle must land on the exact row the
     // content column's own header does, or the two panes' dividers drift
-    // out of alignment by one row. The border itself is the drag handle
-    // (see the `Hit::ResizeSidebar` push in `render`), so it picks up the
-    // same accent-while-dragging feedback the workspace sidebar uses.
+    // out of alignment by one row. No right padding either — mirrors the
+    // workspace sidebar's own `Padding::new(1, 0, 0, 0)`, content flush
+    // against the divider rather than floating a column away from it. The
+    // border itself is the drag handle (see the `Hit::ResizeSidebar` push
+    // in `render`), so it picks up the same accent-while-dragging feedback
+    // the workspace sidebar uses.
     let border_color = if model.dragging_sidebar {
         super::ACCENT
     } else {
@@ -244,7 +247,7 @@ fn render_sidebar(
     let block = Block::default()
         .borders(Borders::RIGHT)
         .border_style(Style::default().fg(border_color))
-        .padding(Padding::new(1, 1, 0, 0));
+        .padding(Padding::new(1, 0, 0, 0));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 

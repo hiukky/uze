@@ -790,6 +790,7 @@ pub(super) fn handle_mouse(view: &mut GitView, hit: Option<WorkspaceHit>) -> Git
     match hit {
         Some(WorkspaceHit::GitSelectFile(index)) => view.select(index),
         Some(WorkspaceHit::GitSelectWorktree(index)) => view.select_worktree(index),
+        Some(WorkspaceHit::CloseGitView) => return GitViewOutcome::Close,
         _ => {}
     }
     GitViewOutcome::Stay
@@ -800,11 +801,16 @@ pub(super) fn handle_mouse(view: &mut GitView, hit: Option<WorkspaceHit>) -> Git
 /// navigation): hovering the file list moves the selection, hovering the
 /// diff scrolls it, matching how a mouse wheel behaves everywhere else
 /// (VS Code included) regardless of which panel last had keyboard focus.
-pub(super) fn handle_scroll(view: &mut GitView, frame_area: Rect, mouse: MouseEvent) {
+pub(super) fn handle_scroll(
+    view: &mut GitView,
+    frame_area: Rect,
+    tree_width_override: Option<u16>,
+    mouse: MouseEvent,
+) {
     if view.error.is_some() || view.files.is_empty() {
         return;
     }
-    let (files_area, diff_area) = content_columns(frame_area);
+    let (files_area, diff_area, _footer) = content_columns(frame_area, tree_width_override);
     let in_column = |column: Rect| {
         column.x <= mouse.column
             && mouse.column < column.x + column.width
@@ -836,6 +842,7 @@ pub(super) fn render(
     frame: &mut ratatui::Frame<'_>,
     view: &GitView,
     area: Rect,
+    tree_width_override: Option<u16>,
     hits: &mut Vec<(Rect, WorkspaceHit)>,
 ) {
     frame.render_widget(Clear, area);
@@ -853,11 +860,41 @@ pub(super) fn render(
         .border_style(Style::default().fg(super::BORDER))
         .padding(Padding::new(1, 1, 1, 1))
         .style(Style::default().bg(super::BASE));
-    let inner = block.inner(area);
     frame.render_widget(block, area);
+    // A "×" in the top-right corner, the same click-driven close every
+    // other overlay in this TUI offers — `Esc` still works too (see
+    // `GitViewOutcome::Close`, which both this and the key handler funnel
+    // through), this is just the mouse-only path that was missing. Bold
+    // and `DANGER`-colored with a column of padding on each side, not the
+    // dim bare glyph a per-tab close `×` uses — this one closes the whole
+    // modal, not a single row, and needs the weight to read as the
+    // dedicated corner control that shape implies.
+    let close_rect = Rect::new(area.right().saturating_sub(4), area.y, 3, 1);
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            " × ",
+            Style::default()
+                .fg(super::DANGER)
+                .add_modifier(Modifier::BOLD),
+        )),
+        close_rect,
+    );
+    hits.push((close_rect, WorkspaceHit::CloseGitView));
 
-    let (files_area, diff_area) = content_columns(area);
-    let footer = Rect::new(inner.x, inner.bottom().saturating_sub(1), inner.width, 1);
+    let (files_area, diff_area, footer) = content_columns(area, tree_width_override);
+    // The tree's own right border doubles as the resize handle — same
+    // shape as the sidebar's own `WorkspaceHit::ResizeSidebar` push in
+    // `orchestrator::render` (drag arm lives there too, alongside
+    // `dragging_sidebar`/`dragging_git_tree`).
+    hits.push((
+        Rect::new(
+            files_area.right().saturating_sub(1),
+            files_area.y,
+            1,
+            files_area.height,
+        ),
+        WorkspaceHit::ResizeGitTree,
+    ));
 
     if let Some(message) = &view.error {
         frame.render_widget(
@@ -888,26 +925,53 @@ pub(super) fn render(
     render_footer(frame, footer);
 }
 
+/// Narrowest/widest the Git changes tree can be dragged, and the floor
+/// left for the diff column — same shape as `super::clamp_sidebar_width`'s
+/// three constants, just scoped to this overlay instead of the sidebar.
+const MIN_TREE_WIDTH: u16 = 20;
+const MAX_TREE_WIDTH: u16 = 50;
+const MIN_DIFF_WIDTH: u16 = 40;
+
+pub(super) fn clamp_tree_width(width: u16, total_width: u16) -> u16 {
+    let max = total_width
+        .saturating_sub(MIN_DIFF_WIDTH)
+        .clamp(MIN_TREE_WIDTH, MAX_TREE_WIDTH);
+    width.clamp(MIN_TREE_WIDTH, max)
+}
+
 /// The tree/diff split, derived from the outer overlay area so render and
 /// mouse hit-testing always share the exact same geometry. The tree stays
-/// deliberately narrow while the diff gets the remaining code width.
-fn content_columns(frame_area: Rect) -> (Rect, Rect) {
+/// deliberately narrow while the diff gets the remaining code width — this
+/// splits horizontally first, so the tree column spans the *entire* inner
+/// height (its right-border divider reaches edge to edge); only the diff
+/// side is then split again to carve out its own footer row, since the
+/// footer is scoped to the diff column alone (`diff_area`'s own x/width),
+/// not the full overlay width — it used to run under the tree column too,
+/// reading as a global app bar rather than something that belongs to the
+/// diff container specifically, and that same vertical split used to cut
+/// the tree column's own height short to match.
+pub(super) fn content_columns(
+    frame_area: Rect,
+    tree_width_override: Option<u16>,
+) -> (Rect, Rect, Rect) {
     let inner = Rect::new(
         frame_area.x + 2,
         frame_area.y + 2,
         frame_area.width.saturating_sub(4),
         frame_area.height.saturating_sub(4),
     );
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
-        .split(inner);
-    let tree_width = (rows[0].width / 4).clamp(24, 36);
+    let tree_width = tree_width_override
+        .map(|width| clamp_tree_width(width, inner.width))
+        .unwrap_or_else(|| (inner.width / 4).clamp(MIN_TREE_WIDTH, MAX_TREE_WIDTH));
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Length(tree_width), Constraint::Min(10)])
-        .split(rows[0]);
-    (columns[0], columns[1])
+        .split(inner);
+    let diff_rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(2)])
+        .split(columns[1]);
+    (columns[0], diff_rows[0], diff_rows[1])
 }
 
 /// Builds a stable, compact change navigator from repository-relative paths.
@@ -1038,15 +1102,24 @@ fn render_file_list(
         let row = Rect::new(list.x, list.y + offset as u16, list.width, 1);
         match item {
             FileTreeItem::LinkedWorktrees => {
-                frame.render_widget(
-                    Paragraph::new(Line::from(vec![Span::styled(
-                        "linked worktrees",
-                        Style::default()
-                            .fg(super::MUTED)
-                            .add_modifier(Modifier::BOLD),
-                    )])),
-                    row,
-                );
+                // A hairline-rule-with-label, not plain text on a blank
+                // line — a bare "linked worktrees" string one shade of
+                // muted below "CHANGES" read as just another row, not a
+                // section boundary between the main worktree's tree above
+                // and the linked ones below it. Deliberately quiet
+                // (`TEXT_FAINT`, no bold, just "WORKTREES") — a rule this
+                // secondary shouldn't compete with "CHANGES" for the eye.
+                let label = " WORKTREES ";
+                let rule_width = row.width.saturating_sub(label.len() as u16);
+                let left_rule = rule_width / 2;
+                let right_rule = rule_width - left_rule;
+                let rule_style = Style::default().fg(super::BORDER_FAINT);
+                let spans = vec![
+                    Span::styled("─".repeat(left_rule as usize), rule_style),
+                    Span::styled(label, Style::default().fg(super::TEXT_FAINT)),
+                    Span::styled("─".repeat(right_rule as usize), rule_style),
+                ];
+                frame.render_widget(Paragraph::new(Line::from(spans)), row);
             }
             FileTreeItem::Spacer => {}
             FileTreeItem::Worktree {
@@ -1063,14 +1136,17 @@ fn render_file_list(
                 } else {
                     Style::default().fg(super::TEXT_SECONDARY)
                 };
+                // Selection, not "is this the main worktree" — `●`/`○`
+                // means "this is the one you're on" everywhere else in the
+                // TUI (the sidebar's spaces and agent tabs); using it here
+                // for `main` instead meant it never moved when you
+                // actually selected a different worktree, and duplicated
+                // what the "WORKTREES" rule above already says about which
+                // entries are linked.
                 let mut spans = vec![
                     Span::styled(
-                        if view.worktrees[*index].main {
-                            "● "
-                        } else {
-                            "○ "
-                        },
-                        Style::default().fg(if view.worktrees[*index].main {
+                        if *selected { "● " } else { "○ " },
+                        Style::default().fg(if *selected {
                             super::ACCENT
                         } else {
                             super::TEXT_FAINT
@@ -1333,12 +1409,21 @@ fn render_diff_cell(frame: &mut ratatui::Frame<'_>, area: Rect, cell: &DiffCell)
     );
 }
 
+/// A hairline top border plus the hint text directly under it — the same
+/// shape `management::render_footer` uses, instead of the bare text this
+/// used to be with no border of its own, floating in whatever space the
+/// outer overlay's own generous padding happened to leave around it.
 fn render_footer(frame: &mut ratatui::Frame<'_>, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::TOP)
+        .border_style(Style::default().fg(super::BORDER_FAINT));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
     frame.render_widget(
         Paragraph::new(Line::from(super::hint_spans(
             "↑↓ navigate · ←→ collapse/expand · ↵ diff · tab focus · esc close",
         ))),
-        area,
+        inner,
     );
 }
 

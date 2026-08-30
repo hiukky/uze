@@ -6,7 +6,6 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 
 use crate::application::ContextPlan;
 
-use super::hit::Hit;
 use super::is_protected_plugin;
 use super::model::{Focus, Overlay, ProfilePanel, ROUTES, Route, TuiModel};
 use super::worker::Intent;
@@ -310,23 +309,19 @@ impl TuiModel {
     pub(crate) fn apply_mouse(&mut self, event: MouseEvent, total_width: u16) -> Intent {
         match event.kind {
             MouseEventKind::Down(MouseButton::Left) => self.click(event.column, event.row),
-            // The resize handle's rect (pushed alongside every other hit at
-            // render time) tells us where the sidebar's right edge is; no
-            // separate layout recomputation needed here, unlike the
-            // workspace TUI's loop-level equivalent.
+            // The sidebar always starts at column 0 — the frame this TUI
+            // draws into is always the full terminal — the same fact
+            // `orchestrator::compute_layout`'s drag arm relies on via its
+            // own `layout.sidebar.x`. This used to read the *previous*
+            // frame's `ResizeSidebar` hit rect instead (its right edge, not
+            // its left) as that reference point: each drag step measured
+            // from a stale, moving position, so the edge fought the mouse
+            // instead of tracking it — hence no layout recomputation
+            // needed here, just the mouse's own absolute column.
             MouseEventKind::Drag(MouseButton::Left) if self.dragging_sidebar => {
-                if let Some(sidebar_x) = self
-                    .hits
-                    .iter()
-                    .find_map(|(rect, hit)| matches!(hit, Hit::ResizeSidebar).then_some(rect.x))
-                {
-                    let new_width = super::clamp_sidebar_width(
-                        event.column.saturating_sub(sidebar_x),
-                        total_width,
-                    );
-                    if self.sidebar_width != Some(new_width) {
-                        self.sidebar_width = Some(new_width);
-                    }
+                let new_width = super::clamp_sidebar_width(event.column, total_width);
+                if self.sidebar_width != Some(new_width) {
+                    self.sidebar_width = Some(new_width);
                 }
                 Intent::None
             }

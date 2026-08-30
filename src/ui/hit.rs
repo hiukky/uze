@@ -27,9 +27,11 @@ pub(crate) enum Hit {
     /// does.
     ProfileHarnessRow(usize),
     /// The sidebar's right-border drag handle — mirrors the workspace TUI's
-    /// `WorkspaceHit::ResizeSidebar`. Mousedown here only arms dragging;
-    /// the actual width change happens in `apply_mouse` on the following
-    /// `Drag` events, which read this hit's rect back out of `self.hits`.
+    /// `WorkspaceHit::ResizeSidebar`. Mousedown here only arms dragging; the
+    /// actual width change happens in `apply_mouse` on the following `Drag`
+    /// events, purely from the mouse's own column (see that arm's comment
+    /// for why re-reading this hit's rect there was the wrong reference
+    /// point).
     ResizeSidebar,
 }
 

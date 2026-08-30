@@ -129,6 +129,15 @@ const SELECTED_BG: Color = Color::Rgb(22, 30, 26);
 /// workspace space's envelope) — not every raised surface should read as
 /// "on-brand selected", just "raised above the background".
 const SURFACE_OVERLAY: Color = Color::Rgb(32, 34, 35);
+/// A brighter variant of `SURFACE_OVERLAY` — `rgba(255,255,255,0.14)`
+/// instead of `0.09`, pre-blended the same way — for the tab strip's
+/// "+"/"✦" pair. At the plain overlay's strength the icons read as barely
+/// there against the strip's own backdrop; unlike the sidebar surfaces
+/// `SURFACE_OVERLAY` marks (which sit next to plain unfilled rows and so
+/// only need to read as "raised" by a little), this pair is plain
+/// decoration with no bold/color weight otherwise carrying it, so it needs
+/// the extra contrast.
+const SURFACE_OVERLAY_BRIGHT: Color = Color::Rgb(44, 46, 47);
 
 const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -264,10 +273,14 @@ const NAV_INACTIVE: Color = Color::Rgb(154, 152, 146);
 
 // --- Shared helpers ---------------------------------------------------------
 
-/// Narrowest either sidebar (workspace or management) can be dragged —
-/// tight, but still fits a short label and its indented detail line without
-/// wrapping.
-const MIN_SIDEBAR_WIDTH: u16 = 14;
+/// Narrowest either sidebar (workspace or management) can be dragged. Needs
+/// to comfortably fit an agent tab's indented detail line — connector +
+/// cwd on the left, the running agent's alias pinned to the row's own
+/// right edge (see `orchestrator::render_sidebar`'s agent-tab loop) — the
+/// widest row this menu draws; a bound tight enough to only fit a short
+/// label broke that layout once the alias moved off the end of the cwd
+/// text and onto a fixed right column.
+const MIN_SIDEBAR_WIDTH: u16 = 28;
 /// Widest either sidebar can be dragged, regardless of how wide the
 /// terminal is — it's navigation, not the workspace; past this it's just
 /// width the content column could otherwise use.
@@ -286,12 +299,15 @@ fn clamp_sidebar_width(width: u16, total_width: u16) -> u16 {
 }
 
 /// Shared responsive default sidebar width (no user drag override yet) for
-/// both TUIs.
+/// both TUIs. Every bucket stays at or above `MIN_SIDEBAR_WIDTH` — this
+/// path isn't run through `clamp_sidebar_width`, so a bucket smaller than
+/// the drag floor would reintroduce the same overflow on a narrow terminal
+/// that raising the floor was meant to fix.
 fn sidebar_width_for(total_width: u16) -> u16 {
     if total_width < 60 {
-        20
+        MIN_SIDEBAR_WIDTH
     } else if total_width < 90 {
-        24
+        30
     } else {
         32
     }
@@ -318,9 +334,31 @@ fn render_mode_toggle(
         .fg(BASE)
         .add_modifier(Modifier::BOLD);
     let ghost = Style::default().fg(NAV_INACTIVE);
-    let work = Span::styled(" Work ", if workspace_active { filled } else { ghost });
+    // Both segments share one width (the longer label, "Manage", plus 1
+    // column of padding on each side) instead of each hugging its own
+    // text — a segmented control reads as one toggle with two equal
+    // halves, not two differently sized labels that happen to sit next to
+    // each other.
+    let button_width = "Manage".len() as u16 + 2;
+    let centered = |label: &str| {
+        let extra = button_width.saturating_sub(label.len() as u16);
+        let left = extra / 2;
+        let right = extra - left;
+        format!(
+            "{}{label}{}",
+            " ".repeat(left as usize),
+            " ".repeat(right as usize)
+        )
+    };
+    let work = Span::styled(
+        centered("Work"),
+        if workspace_active { filled } else { ghost },
+    );
     let gap = Span::raw(" ");
-    let manage = Span::styled(" Manage ", if workspace_active { ghost } else { filled });
+    let manage = Span::styled(
+        centered("Manage"),
+        if workspace_active { ghost } else { filled },
+    );
     let work_width = work.width() as u16;
     let gap_width = gap.width() as u16;
     let manage_width = manage.width() as u16;

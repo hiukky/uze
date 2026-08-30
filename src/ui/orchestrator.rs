@@ -421,10 +421,37 @@ pub(crate) fn attach_workspace(
                                 && mouse.row < rect.y + rect.height
                         })
                         .map(|(_, hit)| *hit);
-                    if let Some(view) = model.git_view.as_mut() {
-                        git_diff::handle_mouse(view, hit);
+                    // Mirrors `WorkspaceHit::ResizeSidebar` below: arms
+                    // dragging instead of reaching `git_diff::handle_mouse`,
+                    // whose `WorkspaceHit` match has no arm for a hit that
+                    // isn't about the file tree or diff themselves.
+                    if hit == Some(WorkspaceHit::ResizeGitTree) {
+                        model.dragging_git_tree = true;
+                    } else if let Some(view) = model.git_view.as_mut()
+                        && matches!(
+                            git_diff::handle_mouse(view, hit),
+                            git_diff::GitViewOutcome::Close
+                        )
+                    {
+                        model.git_view = None;
                     }
                     model.dirty = true;
+                }
+                Event::Mouse(mouse)
+                    if mouse.kind == MouseEventKind::Drag(MouseButton::Left)
+                        && model.dragging_git_tree =>
+                {
+                    let frame_area = Rect::new(0, 0, size.width, size.height);
+                    let (tree_column, diff_column, _footer) =
+                        git_diff::content_columns(frame_area, model.git_tree_width);
+                    let new_width = git_diff::clamp_tree_width(
+                        mouse.column.saturating_sub(tree_column.x),
+                        tree_column.width + diff_column.width,
+                    );
+                    if model.git_tree_width != Some(new_width) {
+                        model.git_tree_width = Some(new_width);
+                        model.dirty = true;
+                    }
                 }
                 Event::Mouse(mouse)
                     if matches!(
@@ -436,6 +463,7 @@ pub(crate) fn attach_workspace(
                         git_diff::handle_scroll(
                             view,
                             Rect::new(0, 0, size.width, size.height),
+                            model.git_tree_width,
                             mouse,
                         );
                     }
@@ -590,7 +618,10 @@ pub(crate) fn attach_workspace(
                         WorkspaceHit::OpenGitView => {
                             open_git_view(&mut model);
                         }
-                        WorkspaceHit::GitSelectFile(_) | WorkspaceHit::GitSelectWorktree(_) => {
+                        WorkspaceHit::GitSelectFile(_)
+                        | WorkspaceHit::GitSelectWorktree(_)
+                        | WorkspaceHit::ResizeGitTree
+                        | WorkspaceHit::CloseGitView => {
                             // Only reachable while the git view is open,
                             // which its own guarded arm below already
                             // handles — same as `PickAgent`/`CloseSpace`
@@ -625,6 +656,7 @@ pub(crate) fn attach_workspace(
                 }
                 Event::Mouse(mouse) if mouse.kind == MouseEventKind::Up(MouseButton::Left) => {
                     model.dragging_sidebar = false;
+                    model.dragging_git_tree = false;
                 }
                 Event::Mouse(mouse)
                     if mouse.kind == MouseEventKind::Down(MouseButton::Right)
@@ -688,8 +720,9 @@ pub(super) enum WorkspaceHit {
     SelectTab(TabId),
     CloseTab(TabId),
     NewTab,
-    /// Opens the agent picker (`WorkspaceModel::agent_picker`) — "+ agent"
-    /// in the tab strip, creating a new agent tab inside the selected space.
+    /// Opens the agent picker (`WorkspaceModel::agent_picker`) — the tab
+    /// strip's "✦" button, creating a new agent tab inside the selected
+    /// space.
     NewAgentMenu,
     /// One row of the open agent picker, by index into its `options`.
     PickAgent(usize),
@@ -707,6 +740,14 @@ pub(super) enum WorkspaceHit {
     GitSelectFile(usize),
     /// A primary or linked worktree heading in the Git changes view.
     GitSelectWorktree(usize),
+    /// The Git changes view's tree/diff divider — mirrors `ResizeSidebar`
+    /// below, same mousedown-arms/`Drag`-events-move-it shape, just for
+    /// `WorkspaceModel::git_tree_width` instead of `sidebar_width`.
+    ResizeGitTree,
+    /// The "×" in the Git changes view's own top-right corner — the
+    /// click-driven counterpart to `Esc`/the shortcut that opened it (see
+    /// `GitViewOutcome::Close`, which both funnel through).
+    CloseGitView,
     SwitchToManagement,
     ResizeSidebar,
 }
@@ -739,8 +780,8 @@ struct AgentOption {
 struct AgentPicker {
     options: Vec<AgentOption>,
     selected: usize,
-    /// The tab strip's "+ agent" button's own rect — the popup anchors
-    /// just under it.
+    /// The tab strip's "✦" button's own rect — the popup anchors just
+    /// under it.
     anchor: Rect,
 }
 
@@ -766,7 +807,7 @@ struct ContextMenu {
 
 /// One built-in harness's identity for recognizing which pane (if any) is
 /// running it — the same alias/id vocabulary [`agent_options`] offers in the
-/// "+ agent" picker, kept as its own small table so the sidebar/tab-strip
+/// agent picker, kept as its own small table so the sidebar/tab-strip
 /// classification that runs on every dirty frame (see
 /// [`agent_identity_for_tab`]) doesn't rebuild the registry each time; this
 /// is built once per [`attach_workspace`] call instead.
@@ -805,7 +846,7 @@ fn agent_identities(home: &UzeHome) -> Vec<AgentIdentity> {
         .collect()
 }
 
-/// The harnesses the "+ agent" picker offers — one row per
+/// The harnesses the agent picker offers — one row per
 /// [`AgentIdentity`], `command` set to launch that identity's `binary`.
 fn agent_options(home: &UzeHome) -> Vec<AgentOption> {
     agent_identities(home)
@@ -823,7 +864,7 @@ fn agent_options(home: &UzeHome) -> Vec<AgentOption> {
 /// `UZE_SHIM_NAME`, not its raw `comm` — see
 /// `uze_terminal::PaneRuntime::foreground_status`), falling back to the
 /// tab's own label for the brief window right after it opens through the
-/// "+ agent" picker (label is seeded to the harness's display name) before
+/// agent picker (label is seeded to the harness's display name) before
 /// the first status probe lands. Returns the harness's short binary/alias
 /// name (`claude`, `codex`, …) — what the sidebar and tab strip show in
 /// place of the raw process string, and what decides whether a tab lists
@@ -875,6 +916,13 @@ struct WorkspaceModel {
     /// discards" rule — it covers the full frame, so there is no outside;
     /// `Esc` (or the same shortcut that opened it) is the only dismissal.
     git_view: Option<git_diff::GitView>,
+    /// User-dragged Git changes tree width; `None` falls back to its own
+    /// responsive default. Mirrors `sidebar_width`/`dragging_sidebar`
+    /// above, kept on the model rather than on `GitView` itself so it
+    /// survives closing and reopening the overlay within the same
+    /// session, the same way the sidebar's width survives switching tabs.
+    git_tree_width: Option<u16>,
+    dragging_git_tree: bool,
     /// Cached Git summary for the selected agent/shell tab's live cwd.
     /// Stored client-side because it is display chrome, not terminal session
     /// state that belongs in `uze-terminal`.
@@ -1028,19 +1076,23 @@ fn compute_layout(frame_area: Rect, sidebar_width_override: Option<u16>) -> Work
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(2), Constraint::Min(1)])
         .split(columns[1]);
-    // The sidebar insets its own content 1 column from the divider on both
-    // sides (see its `Padding::new(1, 1, 0, 0)`); the pane draws raw PTY
-    // cells straight into whatever rect it's given, with no block/padding
-    // of its own, so without this inset it sat flush against the divider —
-    // glued to it while the sidebar's items sat a full column away. This is
-    // the rect the PTY is actually sized to (see the resize logic that
-    // reads `layout.pane.width/height`), so insetting it here — not just
-    // where it's drawn — keeps what the shell thinks its size is in sync
-    // with what's visible.
+    // No left inset either, matching the sidebar's own flush
+    // `Padding::new(1, 0, 0, 0)` on its side of the same divider — the two
+    // panes' content used to sit at mismatched distances from it (sidebar
+    // text 1 column away, pane cells flush) until the sidebar's own inset
+    // dropped to 0; keeping both at 0 here is what makes the divider read
+    // as one straight line with even margins on both sides again, not a
+    // lopsided one. The right side keeps its 1-column margin — that's
+    // independent, matching the tab strip's own right padding against the
+    // frame's outer edge, nothing to do with the divider. This is the rect
+    // the PTY is actually sized to (see the resize logic that reads
+    // `layout.pane.width/height`), so insetting it here — not just where
+    // it's drawn — keeps what the shell thinks its size is in sync with
+    // what's visible.
     let pane = Rect::new(
-        content_rows[1].x + 1,
+        content_rows[1].x,
         content_rows[1].y,
-        content_rows[1].width.saturating_sub(2),
+        content_rows[1].width.saturating_sub(1),
         content_rows[1].height,
     );
     WorkspaceLayout {
@@ -1068,7 +1120,7 @@ fn render(
     // paying for a sidebar/tab-strip/pane render this frame will never
     // show.
     if let Some(view) = &model.git_view {
-        git_diff::render(frame, view, frame.area(), hits);
+        git_diff::render(frame, view, frame.area(), model.git_tree_width, hits);
         return;
     }
     let layout = compute_layout(frame.area(), model.sidebar_width);
@@ -1089,9 +1141,9 @@ fn render(
     render_pane(frame, layout.pane, model);
     // Drawn last so it sits on top of the pane — same ordering the
     // management TUI's overlays use in its own `render`. Anchored to
-    // `picker.anchor` (the "+ agent" button's own rect) rather than
-    // centered on the whole frame — a dropdown hanging off the thing you
-    // clicked, not a modal interrupting the screen.
+    // `picker.anchor` (the "✦" button's own rect) rather than centered on
+    // the whole frame — a dropdown hanging off the thing you clicked, not a
+    // modal interrupting the screen.
     if let Some(picker) = &model.agent_picker {
         render_agent_picker(frame, frame.area(), picker.anchor, picker, hits);
     }
@@ -1100,8 +1152,8 @@ fn render(
     }
 }
 
-/// A small popup listing `agent_options`, opened by the tab strip's
-/// "+ agent" button — a dropdown anchored just below it, creating the
+/// A small popup listing `agent_options`, opened by the tab strip's "✦"
+/// button — a dropdown anchored just below it, creating the
 /// picked agent as a new tab in the currently selected space. Not built on
 /// the management TUI's `render_modal`/`modal_block` (those are shaped for
 /// static text, not a selectable, hit-testable list) — this is
@@ -1262,11 +1314,14 @@ fn render_sidebar(
     };
     // No top padding: the mode toggle must land on the exact row the tab
     // strip's own content does (that block has none either), or the two
-    // panes' dividers drift out of alignment by one row.
+    // panes' dividers drift out of alignment by one row. No right padding
+    // either: sidebar content (the right-aligned "+ new" in particular)
+    // sits flush against the divider instead of floating a column away
+    // from it — only the left side keeps its 1-column inset.
     let block = Block::default()
         .borders(Borders::RIGHT)
         .border_style(Style::default().fg(border_color))
-        .padding(Padding::new(1, 1, 0, 0));
+        .padding(Padding::new(1, 0, 0, 0));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -1319,12 +1374,19 @@ fn render_sidebar(
         return;
     };
 
+    // A blank row below "+ new" — the same 1-row breathing room a space
+    // block gets after it (see the `row(1)` at the bottom of the loop
+    // below) — so it doesn't read as glued to the first space's name.
+    // Nothing above it: the divider row already separates it from the
+    // mode toggle, and stacking a second blank row there just reads as
+    // too much dead air for a compact menu.
     if let Some(rect) = row(1) {
         // Right-aligned, not tucked under the workspace name like the space
         // list below it — this reads as a header-row action (the same
-        // place "+ agent" sits in the tab strip above the pane) rather than
-        // as another tree item. Creates a space directly — a space has no
-        // "kind" to pick, unlike an agent tab, so no picker is needed here.
+        // place the "+"/"✦" buttons sit in the tab strip above the pane)
+        // rather than as another tree item. Creates a space directly — a
+        // space has no "kind" to pick, unlike an agent tab, so no picker
+        // is needed here.
         let label = "+ new";
         let label_x = rect.x + rect.width.saturating_sub(label.len() as u16);
         frame.render_widget(
@@ -1337,6 +1399,7 @@ fn render_sidebar(
             WorkspaceHit::NewSpace,
         ));
     }
+    row(1);
 
     for space in &session.workspace.spaces {
         let is_active_space = space.id == session.workspace.selected_space;
@@ -1433,12 +1496,35 @@ fn render_sidebar(
                 // it never falls back to showing something like a bare version
                 // string (see that function's doc comment).
                 let alias = agent_identity_for_tab(identities, tab).unwrap_or_default();
-                let detail = pane_in_layout(&tab.layout, tab.focus.pane)
-                    .map(|pane| format!("{} · {alias}", super::display_project_path(&pane.cwd)))
+                let cwd = pane_in_layout(&tab.layout, tab.focus.pane)
+                    .map(|pane| super::display_project_path(&pane.cwd))
                     .unwrap_or_default();
+                let continuation_span =
+                    Span::styled(continuation, Style::default().fg(super::TEXT_FAINT));
+                let cwd_span = Span::styled(cwd, Style::default().fg(super::TEXT_DIM));
+                let alias_span = Span::styled(alias, Style::default().fg(super::TEXT_DIM));
+                // Right-aligned, not tacked onto the cwd behind a "·" —
+                // cwd (where this tab lives) and the running agent are two
+                // different facts, and pinning the agent to the row's own
+                // right edge keeps its column stable as different tabs'
+                // cwds vary in length, instead of drifting with the text
+                // it used to follow. A 1-column trailing pad keeps it off
+                // the sidebar's own flush-right divider (see
+                // `render_sidebar`'s `Padding::new(1, 0, 0, 0)`) — that
+                // padding drop suits a button glued to the edge, not a
+                // plain text label.
+                const TRAILING_PAD: u16 = 1;
+                let used = continuation_span.width() as u16
+                    + cwd_span.width() as u16
+                    + alias_span.width() as u16
+                    + TRAILING_PAD;
+                let gap = detail_rect.width.saturating_sub(used);
                 let mut spans = vec![
-                    Span::styled(continuation, Style::default().fg(super::TEXT_FAINT)),
-                    Span::styled(detail, Style::default().fg(super::TEXT_DIM)),
+                    continuation_span,
+                    cwd_span,
+                    Span::raw(" ".repeat(gap as usize)),
+                    alias_span,
+                    Span::raw(" ".repeat(TRAILING_PAD as usize)),
                 ];
                 if is_active_space {
                     fill_row_bg(&mut spans, detail_rect.width, super::SURFACE_OVERLAY);
@@ -1595,11 +1681,13 @@ fn open_git_view(model: &mut WorkspaceModel) {
 /// never appears here, the same way a shell tab never appears in the
 /// sidebar; other spaces' shell tabs don't appear here either, only the
 /// currently selected space's. An active-tab marker in `ACCENT`/bold-bright
-/// text (the same contrast the sidebar uses for selection, not a filled
-/// pill background — this design never paints filled surfaces), a dim `×`
-/// close affordance per tab once more than one exists in the selected
-/// space, and trailing `$ shell`/`+ agent` actions to open another of
-/// either kind (both land in the selected space).
+/// text, wrapped in the same neutral [`super::SURFACE_OVERLAY`] chip the
+/// sidebar already uses for "this is where you are" (its active space's
+/// envelope, its agent tab rows) — this strip used to skip that fill and
+/// lean on text weight alone, which read as a lighter kind of "selected"
+/// than everywhere else in the TUI. A dim `×` close affordance per tab once
+/// more than one exists in the selected space, and trailing "+"/"✦" actions
+/// to open another of either kind (both land in the selected space).
 fn render_tab_strip(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
@@ -1607,10 +1695,15 @@ fn render_tab_strip(
     identities: &[AgentIdentity],
     hits: &mut Vec<(Rect, WorkspaceHit)>,
 ) {
+    // No left padding: the pane below sits flush against the divider (see
+    // `compute_layout`'s own `content_rows[1].x`, with no left inset
+    // either), so the first tab's marker has to start at that same column
+    // or it reads as offset from whatever the pane shows directly under it
+    // — a shell prompt in particular, which starts flush at column 0 too.
     let block = Block::default()
         .borders(Borders::BOTTOM)
         .border_style(Style::default().fg(super::BORDER_FAINT))
-        .padding(Padding::new(1, 1, 0, 0));
+        .padding(Padding::new(0, 1, 0, 0));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -1675,53 +1768,99 @@ fn render_tab_strip(
             ),
             None => Span::styled(tab.label.clone(), label_style),
         };
-        let start = x;
-        let mut width = marker.width() as u16 + tab_label.width() as u16;
-        spans.push(marker);
-        spans.push(tab_label);
-        if renaming_this.is_none() && can_close {
-            spans.push(Span::raw(" "));
-            spans.push(Span::styled("×", Style::default().fg(super::TEXT_DIM)));
+        let show_close = renaming_this.is_none() && can_close;
+        let content_width =
+            marker.width() as u16 + tab_label.width() as u16 + if show_close { 2 } else { 0 }; // " ×"
+        // 1 column of padding on each side, reserved whether or not this
+        // tab is selected — only the SURFACE_OVERLAY fill toggles with
+        // `selected`, never the width. Sizing the chip itself to
+        // `selected` used to mean every tab shifted horizontally the
+        // moment selection moved past it, reading as the whole strip
+        // "resizing" on every tab switch instead of just recoloring.
+        const PAD: u16 = 1;
+        let chip_start = x;
+        let chip_width = content_width + 2 * PAD;
+
+        let mut chip = vec![Span::raw(" ")];
+        chip.push(marker);
+        chip.push(tab_label);
+        if show_close {
+            chip.push(Span::raw(" "));
+            chip.push(Span::styled("×", Style::default().fg(super::TEXT_DIM)));
             hits.push((
-                Rect::new(start + width + 1, inner.y, 1, 1),
+                Rect::new(chip_start + PAD + content_width - 1, inner.y, 1, 1),
                 WorkspaceHit::CloseTab(tab.id),
             ));
-            width += 2;
+        }
+        chip.push(Span::raw(" "));
+        if selected {
+            fill_row_bg(&mut chip, chip_width, super::SURFACE_OVERLAY);
         }
         hits.push((
-            Rect::new(start, inner.y, width, 1),
+            Rect::new(chip_start, inner.y, chip_width, 1),
             WorkspaceHit::SelectTab(tab.id),
         ));
-        spans.push(Span::raw("   "));
-        x += width + 3;
+        spans.extend(chip);
+        // Just 1 column between chips, not 3 — each chip already reserves
+        // its own 1-column pad on both sides (see `PAD` above), so a full
+        // 3-column gap on top of that read as too much air once every tab
+        // carried that padding, not just the selected one.
+        spans.push(Span::raw(" "));
+        x += chip_width + 1;
     }
-    // The creation actions are one compact surface, distinct from the
-    // navigational shell tabs before them. Keep the separator inside that
-    // surface: it joins the two actions instead of reading as strip chrome.
+    // A "/" separates the tab list from the action buttons that follow —
+    // without it the gap before them read as just another inter-tab gap,
+    // not a boundary between two different kinds of thing. No leading
+    // space of its own — the loop above already ends on one (the last
+    // chip's trailing gap) — only a trailing one, so it sits exactly 1
+    // neutral column off the tab side and 1 off the button side; baking a
+    // space into both ends of `" / "` double-counted the left side and
+    // left it looking closer to the buttons than to the tabs. `MUTED`, not
+    // `BORDER_FAINT` — sitting on the plain backdrop out here (not a
+    // filled chip the way the "│" below does), `BORDER_FAINT` read as a
+    // near-invisible hairline.
     if x < inner.right() {
+        spans.push(Span::styled("/", Style::default().fg(super::MUTED)));
+        spans.push(Span::raw(" "));
+        x += 2;
+    }
+    // One button, split by a divider — not two separate chips: a bold "+"
+    // creates a new shell tab directly (the fast, default action), a "✦"
+    // beside it opens the agent picker for anything else. "✦" carries the
+    // accent (it's the one that summons an agent); "+" stays neutral,
+    // just bolder, since it's the plain/default action. The divider stays
+    // `BORDER_FAINT`, unlike the "/" above — it sits on this button's own
+    // `SURFACE_OVERLAY_BRIGHT` fill, not the plain backdrop, so it already
+    // has contrast `BORDER_FAINT` alone doesn't get out on the strip;
+    // `MUTED` here read as too bright against that lighter background,
+    // clashing with the plain "+"/"✦" glyphs it separates.
+    // `SURFACE_OVERLAY_BRIGHT` backs the whole pair: at the plain
+    // `SURFACE_OVERLAY` strength the icons read as barely there, since
+    // unlike the sidebar's filled rows this pair has no bold/color weight
+    // of its own otherwise carrying it.
+    let button_width: u16 = 7; // " + │ ✦ "
+    if x + button_width <= inner.right() {
         let action_start = x;
-        let shell_label = "$ shell";
         let mut actions = vec![
             Span::raw(" "),
-            Span::styled(shell_label, Style::default().fg(super::ACCENT)),
+            Span::styled(
+                "+",
+                Style::default()
+                    .fg(super::NAV_INACTIVE)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+            Span::styled("│", Style::default().fg(super::BORDER_FAINT)),
+            Span::raw(" "),
+            Span::styled("✦", Style::default().fg(super::ACCENT)),
+            Span::raw(" "),
         ];
-        let new_tab_rect = Rect::new(action_start + 1, inner.y, shell_label.len() as u16, 1);
-        hits.push((new_tab_rect, WorkspaceHit::NewTab));
-
-        let agent_label = "+ agent";
-        let shell_width = actions.iter().map(Span::width).sum::<usize>() as u16;
-        if action_start + shell_width + 3 + (agent_label.len() as u16) < inner.right() {
-            actions.push(Span::styled(" │ ", Style::default().fg(super::TEXT_FAINT)));
-            let agent_x = action_start + shell_width + 3;
-            actions.push(Span::styled(agent_label, Style::default().fg(super::BLUE)));
-            hits.push((
-                Rect::new(agent_x, inner.y, agent_label.len() as u16, 1),
-                WorkspaceHit::NewAgentMenu,
-            ));
-        }
-        actions.push(Span::raw(" "));
-        let action_width = actions.iter().map(Span::width).sum::<usize>() as u16;
-        fill_row_bg(&mut actions, action_width, super::SURFACE_OVERLAY);
+        hits.push((Rect::new(action_start, inner.y, 3, 1), WorkspaceHit::NewTab));
+        hits.push((
+            Rect::new(action_start + 4, inner.y, 3, 1),
+            WorkspaceHit::NewAgentMenu,
+        ));
+        fill_row_bg(&mut actions, button_width, super::SURFACE_OVERLAY_BRIGHT);
         spans.extend(actions);
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), inner);
@@ -1729,9 +1868,13 @@ fn render_tab_strip(
     // The status badge belongs to the active agent/shell tab's `cwd`, not
     // the workspace root. It is intentionally absent for a clean directory
     // or one outside Git; when it is present, it remains the entry point to
-    // the full changes overlay.
+    // the full changes overlay. The `SURFACE_OVERLAY` chip (1 column of
+    // padding on each side, same shape as an active tab's own chip) reads
+    // as clickable the way plain colored text on the bare backdrop
+    // doesn't.
     if let Some(summary) = model.git_badge.as_ref().and_then(|badge| badge.summary) {
-        let badge = Line::from(vec![
+        let mut badge = vec![
+            Span::raw(" "),
             Span::styled(
                 format!("+{}", summary.additions),
                 Style::default().fg(super::SUCCESS),
@@ -1741,15 +1884,17 @@ fn render_tab_strip(
                 format!("-{}", summary.deletions),
                 Style::default().fg(super::DANGER),
             ),
-        ]);
-        let badge_width = badge.width() as u16;
+            Span::raw(" "),
+        ];
+        let badge_width = badge.iter().map(Span::width).sum::<usize>() as u16;
+        fill_row_bg(&mut badge, badge_width, super::SURFACE_OVERLAY);
         let badge_rect = Rect::new(
             inner.x + inner.width.saturating_sub(badge_width),
             inner.y,
             badge_width,
             1,
         );
-        frame.render_widget(Paragraph::new(badge), badge_rect);
+        frame.render_widget(Paragraph::new(Line::from(badge)), badge_rect);
         hits.push((badge_rect, WorkspaceHit::OpenGitView));
     }
 }
@@ -1897,9 +2042,9 @@ mod tests {
 
     #[test]
     fn recognizes_a_freshly_opened_agent_tab_by_its_seeded_label() {
-        // Right after "+ agent" creates the tab, before the first status
-        // probe has resolved `pane.process` past the server's "shell"
-        // placeholder.
+        // Right after the agent picker creates the tab, before the first
+        // status probe has resolved `pane.process` past the server's
+        // "shell" placeholder.
         let tab = tab_with("Codex", "shell");
         assert_eq!(agent_identity_for_tab(&identities(), &tab), Some("codex"));
     }
