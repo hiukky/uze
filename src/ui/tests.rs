@@ -1597,10 +1597,9 @@ fn overview_install_intent_reaches_install_project_environment() {
 
     // `dispatch` builds its application through
     // `UzeApplication::from_env_with_runner`, whose integrations read
-    // `HOME`; serialize + restore it so the test is hermetic.
-    use std::sync::Mutex;
-    static HOME_LOCK: Mutex<()> = Mutex::new(());
-    let _guard = HOME_LOCK.lock().unwrap();
+    // process-global environment. Use the testkit-wide guard so concurrent
+    // tests which need a real executable on PATH cannot observe this setup.
+    let mut environment = uze_testkit::env::scope();
 
     let base = std::env::temp_dir().join(format!(
         "uze-ui-install-dispatch-{}-{}",
@@ -1624,6 +1623,7 @@ fn overview_install_intent_reaches_install_project_environment() {
     std::fs::write(market.join("flow/skills/uze-test/SKILL.md"), "# s\n").unwrap();
     let lock = uze_core::project_lock::ProjectLock {
         version: 1,
+        worktrees_dir: None,
         marketplaces: std::iter::once((
             "test".to_owned(),
             uze_core::project_lock::LockedMarketplace {
@@ -1650,12 +1650,8 @@ fn overview_install_intent_reaches_install_project_environment() {
     };
     uze_core::project_lock::save_lock(&project, &lock).unwrap();
 
-    let original_home = std::env::var_os("HOME");
-    let original_path = std::env::var_os("PATH");
-    // SAFETY: single-threaded access to HOME/PATH guarded by HOME_LOCK;
-    // none of the other tests in this binary read HOME.
-    unsafe { std::env::set_var("HOME", &base) };
-    unsafe { std::env::set_var("UZE_HOME", &home) };
+    environment.set("HOME", &base);
+    environment.set("UZE_HOME", &home);
     // Isolate PATH to a directory with nothing on it: on a machine
     // where `uze setup claude` has ever actually run, the real
     // `~/.uze/shims/claude` sits ahead of everything else on the
@@ -1669,7 +1665,7 @@ fn overview_install_intent_reaches_install_project_environment() {
     // clean machine.
     let empty_path_dir = base.join("empty-path");
     std::fs::create_dir_all(&empty_path_dir).unwrap();
-    unsafe { std::env::set_var("PATH", &empty_path_dir) };
+    environment.set("PATH", &empty_path_dir);
 
     let uze_home = UzeHome::at(&home);
     let mut model = TuiModel {
@@ -1722,18 +1718,5 @@ fn overview_install_intent_reaches_install_project_environment() {
         _ => panic!("expected Mutated(Ok(..)), got a different WorkerResult variant"),
     }
 
-    if let Some(home) = original_home {
-        // SAFETY: same guard as above.
-        unsafe { std::env::set_var("HOME", home) };
-    } else {
-        unsafe { std::env::remove_var("HOME") };
-    }
-    if let Some(path) = original_path {
-        // SAFETY: same guard as above.
-        unsafe { std::env::set_var("PATH", path) };
-    } else {
-        unsafe { std::env::remove_var("PATH") };
-    }
-    unsafe { std::env::remove_var("UZE_HOME") };
     std::fs::remove_dir_all(&base).ok();
 }

@@ -17,10 +17,10 @@ use ratatui::{
 use std::{
     collections::BTreeMap,
     io::{self, BufReader},
-    path::Path,
+    path::{Path, PathBuf},
     sync::mpsc,
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use uze_integrations::registry::IntegrationRegistry;
 use uze_terminal::{
@@ -36,6 +36,11 @@ use uze_terminal::{
 /// what made typing feel like it hung under any real system load) — this
 /// timeout only bounds keyboard/mouse latency.
 const POLL: Duration = Duration::from_millis(16);
+
+/// Git inspection runs locally but still launches a process. Refresh often
+/// enough to follow commands typed in the active pane without attaching that
+/// cost to every PTY damage redraw.
+const GIT_BADGE_REFRESH: Duration = Duration::from_millis(750);
 
 pub(crate) enum WorkspaceExit {
     Management,
@@ -116,6 +121,12 @@ pub(crate) fn attach_workspace(
         while let Ok(event) = receiver.try_recv() {
             model.apply(event);
         }
+        if let Some(view) = model.git_view.as_mut()
+            && view.refresh_due()
+        {
+            view.refresh();
+            model.dirty = true;
+        }
         let size = terminal.size()?;
         let layout = compute_layout(
             Rect::new(0, 0, size.width, size.height),
@@ -135,6 +146,7 @@ pub(crate) fn attach_workspace(
             );
         }
         if model.dirty {
+            model.refresh_git_badge();
             model.tick = model.tick.wrapping_add(1);
             let mut hits = Vec::new();
             terminal.draw(|frame| render(frame, &model, &identities, &mut hits))?;
@@ -578,7 +590,7 @@ pub(crate) fn attach_workspace(
                         WorkspaceHit::OpenGitView => {
                             open_git_view(&mut model);
                         }
-                        WorkspaceHit::GitSelectFile(_) => {
+                        WorkspaceHit::GitSelectFile(_) | WorkspaceHit::GitSelectWorktree(_) => {
                             // Only reachable while the git view is open,
                             // which its own guarded arm below already
                             // handles — same as `PickAgent`/`CloseSpace`
@@ -667,7 +679,7 @@ pub(crate) fn attach_workspace(
 }
 
 /// `pub(super)` (not private) so [`git_diff`] — a sibling module under
-/// `ui`, not a child of `orchestrator` — can construct `GitSelectFile` hits
+/// `ui`, not a child of `orchestrator` — can construct Git-view hits
 /// from its own render function and push them into the same `hits` vec
 /// every other overlay already shares, rather than this workspace client
 /// threading a second, parallel hit-testing vec just for one overlay.
@@ -693,6 +705,8 @@ pub(super) enum WorkspaceHit {
     OpenGitView,
     /// One row of the open git changes view's changed-files list, by index.
     GitSelectFile(usize),
+    /// A primary or linked worktree heading in the Git changes view.
+    GitSelectWorktree(usize),
     SwitchToManagement,
     ResizeSidebar,
 }
@@ -861,6 +875,16 @@ struct WorkspaceModel {
     /// discards" rule — it covers the full frame, so there is no outside;
     /// `Esc` (or the same shortcut that opened it) is the only dismissal.
     git_view: Option<git_diff::GitView>,
+    /// Cached Git summary for the selected agent/shell tab's live cwd.
+    /// Stored client-side because it is display chrome, not terminal session
+    /// state that belongs in `uze-terminal`.
+    git_badge: Option<GitBadge>,
+}
+
+struct GitBadge {
+    cwd: PathBuf,
+    summary: Option<git_diff::GitChangeSummary>,
+    checked_at: Instant,
 }
 impl WorkspaceModel {
     fn apply(&mut self, event: ClientEvent) {
@@ -920,6 +944,24 @@ impl WorkspaceModel {
                 .find(|candidate| candidate.id == tab)
                 .map(|candidate| candidate.focus.pane)
         })
+    }
+    fn refresh_git_badge(&mut self) {
+        let cwd = self.session.as_ref().and_then(|session| {
+            let tab = session.selected_tab();
+            pane_in_layout(&tab.layout, tab.focus.pane).map(|pane| pane.cwd.clone())
+        });
+        let now = Instant::now();
+        if self.git_badge.as_ref().is_some_and(|badge| {
+            cwd.as_ref().is_some_and(|cwd| cwd == &badge.cwd)
+                && now.duration_since(badge.checked_at) < GIT_BADGE_REFRESH
+        }) {
+            return;
+        }
+        self.git_badge = cwd.map(|cwd| GitBadge {
+            summary: git_diff::change_summary(&cwd),
+            cwd,
+            checked_at: now,
+        });
     }
 }
 
@@ -1653,44 +1695,63 @@ fn render_tab_strip(
         spans.push(Span::raw("   "));
         x += width + 3;
     }
-    // Minimal: a distinct symbol and color per action instead of both
-    // reading "+ new ...", so the two are told apart at a glance rather
-    // than by their trailing word — "$" (shell) in the tab-strip's usual
-    // accent, "+" (add) in a second hue reserved for this one action.
+    // The creation actions are one compact surface, distinct from the
+    // navigational shell tabs before them. Keep the separator inside that
+    // surface: it joins the two actions instead of reading as strip chrome.
     if x < inner.right() {
-        let label = "$ shell";
-        let new_tab_rect = Rect::new(x, inner.y, label.len() as u16, 1);
-        spans.push(Span::styled(label, Style::default().fg(super::ACCENT)));
+        let action_start = x;
+        let shell_label = "$ shell";
+        let mut actions = vec![
+            Span::raw(" "),
+            Span::styled(shell_label, Style::default().fg(super::ACCENT)),
+        ];
+        let new_tab_rect = Rect::new(action_start + 1, inner.y, shell_label.len() as u16, 1);
         hits.push((new_tab_rect, WorkspaceHit::NewTab));
-        x += label.len() as u16;
-        spans.push(Span::styled(" │ ", Style::default().fg(super::TEXT_FAINT)));
-        x += 3;
-    }
-    if x < inner.right() {
-        let label = "+ agent";
-        let new_agent_rect = Rect::new(x, inner.y, label.len() as u16, 1);
-        spans.push(Span::styled(label, Style::default().fg(super::BLUE)));
-        hits.push((new_agent_rect, WorkspaceHit::NewAgentMenu));
+
+        let agent_label = "+ agent";
+        let shell_width = actions.iter().map(Span::width).sum::<usize>() as u16;
+        if action_start + shell_width + 3 + (agent_label.len() as u16) < inner.right() {
+            actions.push(Span::styled(" │ ", Style::default().fg(super::TEXT_FAINT)));
+            let agent_x = action_start + shell_width + 3;
+            actions.push(Span::styled(agent_label, Style::default().fg(super::BLUE)));
+            hits.push((
+                Rect::new(agent_x, inner.y, agent_label.len() as u16, 1),
+                WorkspaceHit::NewAgentMenu,
+            ));
+        }
+        actions.push(Span::raw(" "));
+        let action_width = actions.iter().map(Span::width).sum::<usize>() as u16;
+        fill_row_bg(&mut actions, action_width, super::SURFACE_OVERLAY);
+        spans.extend(actions);
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), inner);
 
-    // Pinned to the strip's far-right corner rather than packed after the
-    // last tab like `$ shell`/`+ agent` — a global action, not scoped to
-    // any one tab, so it stays in the same spot regardless of how many
-    // tabs are open. Drawn as its own widget (on top of the line above)
-    // rather than appended to `spans`, the same reason the sidebar's own
-    // right-aligned "+ new" row isn't packed into that row's left-aligned
-    // content either.
-    let git_button = Span::styled("⎇ git", Style::default().fg(super::ACCENT));
-    let git_width = git_button.width() as u16;
-    let git_rect = Rect::new(
-        inner.x + inner.width.saturating_sub(git_width),
-        inner.y,
-        git_width,
-        1,
-    );
-    frame.render_widget(Paragraph::new(git_button), git_rect);
-    hits.push((git_rect, WorkspaceHit::OpenGitView));
+    // The status badge belongs to the active agent/shell tab's `cwd`, not
+    // the workspace root. It is intentionally absent for a clean directory
+    // or one outside Git; when it is present, it remains the entry point to
+    // the full changes overlay.
+    if let Some(summary) = model.git_badge.as_ref().and_then(|badge| badge.summary) {
+        let badge = Line::from(vec![
+            Span::styled(
+                format!("+{}", summary.additions),
+                Style::default().fg(super::SUCCESS),
+            ),
+            Span::raw(" "),
+            Span::styled(
+                format!("-{}", summary.deletions),
+                Style::default().fg(super::DANGER),
+            ),
+        ]);
+        let badge_width = badge.width() as u16;
+        let badge_rect = Rect::new(
+            inner.x + inner.width.saturating_sub(badge_width),
+            inner.y,
+            badge_width,
+            1,
+        );
+        frame.render_widget(Paragraph::new(badge), badge_rect);
+        hits.push((badge_rect, WorkspaceHit::OpenGitView));
+    }
 }
 
 fn render_pane(frame: &mut ratatui::Frame<'_>, area: Rect, model: &WorkspaceModel) {

@@ -25,6 +25,11 @@ pub const LOCK_FILE_NAME: &str = "agents.lock";
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ProjectLock {
     pub version: u32,
+    /// Directory containing this project's linked Git worktrees. Kept
+    /// relative to the project root so the lock remains portable across
+    /// clones and machines.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktrees_dir: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub marketplaces: BTreeMap<String, LockedMarketplace>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -35,6 +40,7 @@ impl Default for ProjectLock {
     fn default() -> Self {
         Self {
             version: SUPPORTED_LOCK_VERSION,
+            worktrees_dir: None,
             marketplaces: BTreeMap::new(),
             plugins: BTreeMap::new(),
         }
@@ -164,6 +170,15 @@ fn parse_lock_str(text: &str, path: &Path) -> Result<ProjectLock> {
         return Err(UzeError::UnsupportedLockVersion {
             found: lock.version,
             expected: SUPPORTED_LOCK_VERSION,
+        });
+    }
+    if let Some(directory) = &lock.worktrees_dir
+        && (directory.as_os_str().is_empty() || directory.is_absolute())
+    {
+        return Err(UzeError::MalformedLock {
+            path: path.to_path_buf(),
+            reason: "worktrees_dir must be a non-empty path relative to the project root"
+                .to_owned(),
         });
     }
     Ok(lock)
@@ -349,5 +364,13 @@ mod tests {
         let yaml = "version: 1\nmarketplaces: [";
         let err = parse_lock_str(yaml, &PathBuf::from("agents.lock")).unwrap_err();
         assert!(matches!(err, UzeError::MalformedLock { .. }));
+    }
+
+    #[test]
+    fn worktrees_dir_is_portable_and_must_be_relative() {
+        let path = PathBuf::from("agents.lock");
+        let lock = parse_lock_str("version: 1\nworktrees_dir: ../.worktrees\n", &path).unwrap();
+        assert_eq!(lock.worktrees_dir, Some(PathBuf::from("../.worktrees")));
+        assert!(parse_lock_str("version: 1\nworktrees_dir: /tmp/worktrees\n", &path).is_err());
     }
 }

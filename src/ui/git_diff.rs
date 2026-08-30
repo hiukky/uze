@@ -11,10 +11,12 @@
 //! highlighting this needs that nothing else in the client does.
 
 use std::{
+    collections::{BTreeMap, BTreeSet},
     io,
     path::{Path, PathBuf},
     process::Command,
     sync::OnceLock,
+    time::{Duration, Instant},
 };
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
@@ -22,7 +24,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap},
 };
 use syntect::{easy::HighlightLines, highlighting::ThemeSet, parsing::SyntaxSet};
 
@@ -35,6 +37,54 @@ use super::orchestrator::WorkspaceHit;
 pub(super) enum GitViewOutcome {
     Stay,
     Close,
+}
+
+const REFRESH_INTERVAL: Duration = Duration::from_millis(750);
+
+/// A compact summary for the workspace tab strip. It is deliberately
+/// separate from [`GitView`]: the strip needs only a cheap status indicator,
+/// while opening the overlay can afford to load and highlight a full diff.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct GitChangeSummary {
+    pub(super) additions: u32,
+    pub(super) deletions: u32,
+}
+
+/// Returns a summary only when `cwd` resolves to a git repository with
+/// changes. `None` covers a non-repository, a missing/unusable `git`, and a
+/// clean worktree alike, which lets the caller omit its badge entirely.
+pub(super) fn change_summary(cwd: &Path) -> Option<GitChangeSummary> {
+    let root = repository_root(cwd).ok()?;
+    let status = run_git(
+        &root,
+        &["status", "--porcelain=v1", "--untracked-files=all"],
+    )
+    .ok()?;
+    let files = parse_porcelain_status(&status, &root);
+    if files.is_empty() {
+        return None;
+    }
+
+    let mut summary = GitChangeSummary {
+        additions: 0,
+        deletions: 0,
+    };
+    for args in [
+        ["diff", "--numstat"].as_slice(),
+        ["diff", "--cached", "--numstat"].as_slice(),
+    ] {
+        let output = run_git(&root, args).ok()?;
+        let (additions, deletions) = parse_numstat(&output);
+        summary.additions += additions;
+        summary.deletions += deletions;
+    }
+    for file in files
+        .iter()
+        .filter(|file| file.status == FileStatus::Untracked)
+    {
+        summary.additions += untracked_line_count(&file.path);
+    }
+    Some(summary)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -75,12 +125,46 @@ impl FileStatus {
 
 struct ChangedFile {
     status: FileStatus,
+    worktree: usize,
     /// Absolute — resolved against the repository root (`GitView::root`),
     /// never the tab's `cwd` directly. `git status` reports paths relative
     /// to the repository root regardless of `-C`, which may differ from a
     /// tab whose `cwd` is a subdirectory; resolving to an absolute path
     /// once here means nothing downstream has to re-derive that.
     path: PathBuf,
+}
+
+struct GitWorktree {
+    root: PathBuf,
+    branch: String,
+    main: bool,
+}
+
+#[derive(Default)]
+struct FileTreeNode {
+    file_index: Option<usize>,
+    children: BTreeMap<String, FileTreeNode>,
+}
+
+enum FileTreeItem {
+    LinkedWorktrees,
+    Spacer,
+    Worktree {
+        index: usize,
+        name: String,
+        selected: bool,
+        expanded: bool,
+        changes: usize,
+    },
+    Directory {
+        name: String,
+        depth: usize,
+    },
+    File {
+        index: usize,
+        name: String,
+        depth: usize,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -111,14 +195,17 @@ struct DiffRow {
 }
 
 /// Open state of the git changes overlay (`WorkspaceModel::git_view`).
-/// Built once via [`GitView::open`] when it's raised, discarded on close —
-/// never re-fetches on its own; reopening picks up whatever changed.
+/// Built when raised and refreshed at a bounded cadence while it stays open,
+/// so collaborators and commands in another pane show up without reopening.
 pub(super) struct GitView {
     /// The repository root the view is scoped to, resolved once at open
     /// time from the active tab's live `cwd` — see `open`'s doc comment.
     root: PathBuf,
+    worktrees: Vec<GitWorktree>,
     files: Vec<ChangedFile>,
     selected: usize,
+    selected_worktree: usize,
+    collapsed_worktrees: BTreeSet<PathBuf>,
     diff: Vec<DiffRow>,
     /// Set instead of populating `files`/`diff` when the active tab's
     /// `cwd` isn't inside a git repository, `git` isn't on `PATH`, or a
@@ -127,6 +214,7 @@ pub(super) struct GitView {
     error: Option<String>,
     scroll: u16,
     focus: GitViewFocus,
+    refreshed_at: Instant,
 }
 
 impl GitView {
@@ -136,20 +224,42 @@ impl GitView {
     /// subsequent `git` call in this view uses that root, not `cwd` again.
     pub(super) fn open(cwd: PathBuf) -> Self {
         match repository_root(&cwd) {
-            Ok(root) => match run_git(
-                &root,
-                &["status", "--porcelain=v1", "--untracked-files=all"],
-            ) {
-                Ok(output) => {
-                    let files = parse_porcelain_status(&output, &root);
+            Ok(root) => match discover_worktrees(&root) {
+                Ok(worktrees) => {
+                    let mut files = Vec::new();
+                    for (worktree, entry) in worktrees.iter().enumerate() {
+                        let Ok(output) = run_git(
+                            &entry.root,
+                            &["status", "--porcelain=v1", "--untracked-files=all"],
+                        ) else {
+                            continue;
+                        };
+                        let mut changed = parse_porcelain_status(&output, &entry.root);
+                        for file in &mut changed {
+                            file.worktree = worktree;
+                        }
+                        files.extend(changed);
+                    }
+                    let selected = files
+                        .iter()
+                        .position(|file| worktrees[file.worktree].root == root)
+                        .unwrap_or(0);
+                    let selected_worktree = worktrees
+                        .iter()
+                        .position(|worktree| worktree.root == root)
+                        .unwrap_or(0);
                     let mut view = Self {
                         root,
+                        worktrees,
                         files,
-                        selected: 0,
+                        selected,
+                        selected_worktree,
+                        collapsed_worktrees: BTreeSet::new(),
                         diff: Vec::new(),
                         error: None,
                         scroll: 0,
                         focus: GitViewFocus::Files,
+                        refreshed_at: Instant::now(),
                     };
                     view.load_selected_diff();
                     view
@@ -163,12 +273,16 @@ impl GitView {
     fn with_error(root: PathBuf, message: String) -> Self {
         Self {
             root,
+            worktrees: Vec::new(),
             files: Vec::new(),
             selected: 0,
+            selected_worktree: 0,
+            collapsed_worktrees: BTreeSet::new(),
             diff: Vec::new(),
             error: Some(message),
             scroll: 0,
             focus: GitViewFocus::Files,
+            refreshed_at: Instant::now(),
         }
     }
 
@@ -180,8 +294,71 @@ impl GitView {
             return;
         }
         self.selected = index.min(self.files.len() - 1);
+        self.selected_worktree = self.files[self.selected].worktree;
         self.scroll = 0;
         self.load_selected_diff();
+    }
+
+    fn select_worktree(&mut self, index: usize) {
+        if index >= self.worktrees.len() {
+            return;
+        }
+        self.selected_worktree = index;
+        self.scroll = 0;
+        if let Some(file) = self.files.iter().position(|file| file.worktree == index) {
+            self.selected = file;
+            self.load_selected_diff();
+        } else {
+            self.diff.clear();
+        }
+    }
+
+    fn set_worktree_expanded(&mut self, index: usize, expanded: bool) {
+        let Some(worktree) = self.worktrees.get(index) else {
+            return;
+        };
+        if expanded {
+            self.collapsed_worktrees.remove(&worktree.root);
+        } else {
+            self.collapsed_worktrees.insert(worktree.root.clone());
+        }
+    }
+
+    pub(super) fn refresh_due(&self) -> bool {
+        self.refreshed_at.elapsed() >= REFRESH_INTERVAL
+    }
+
+    pub(super) fn refresh(&mut self) {
+        let selected_root = self
+            .worktrees
+            .get(self.selected_worktree)
+            .map(|worktree| worktree.root.clone());
+        let selected_path = self.files.get(self.selected).map(|file| file.path.clone());
+        let focus = self.focus;
+        let scroll = self.scroll;
+        let collapsed_worktrees = self.collapsed_worktrees.clone();
+        let mut refreshed = Self::open(self.root.clone());
+        refreshed.focus = focus;
+        refreshed.scroll = scroll;
+        refreshed.collapsed_worktrees = collapsed_worktrees;
+        if let Some(root) = selected_root
+            && let Some(worktree) = refreshed
+                .worktrees
+                .iter()
+                .position(|worktree| worktree.root == root)
+        {
+            refreshed.selected_worktree = worktree;
+            if let Some(path) = selected_path
+                && let Some(file) = refreshed.files.iter().position(|file| file.path == path)
+            {
+                refreshed.selected = file;
+                refreshed.load_selected_diff();
+            } else {
+                refreshed.select_worktree(worktree);
+            }
+        }
+        refreshed.refreshed_at = Instant::now();
+        *self = refreshed;
     }
 
     fn load_selected_diff(&mut self) {
@@ -191,9 +368,10 @@ impl GitView {
         };
         let path = file.path.clone();
         let status = file.status;
+        let root = self.worktrees[file.worktree].root.clone();
         let raw = if status == FileStatus::Untracked {
             run_git(
-                &self.root,
+                &root,
                 &[
                     "diff",
                     "--no-index",
@@ -203,7 +381,7 @@ impl GitView {
                 ],
             )
         } else {
-            run_git(&self.root, &["diff", "HEAD", "--", &path.to_string_lossy()])
+            run_git(&root, &["diff", "HEAD", "--", &path.to_string_lossy()])
         };
         self.diff = match raw {
             Ok(output) => {
@@ -234,6 +412,56 @@ fn repository_root(cwd: &Path) -> Result<PathBuf, String> {
     }
 }
 
+/// Lists the primary checkout plus linked worktrees configured by this
+/// project's portable `agents.lock`. Git's porcelain output is authoritative
+/// for branch/path pairing; the lock merely scopes which linked checkouts the
+/// viewer should surface.
+fn discover_worktrees(active_root: &Path) -> Result<Vec<GitWorktree>, String> {
+    let output = run_git(active_root, &["worktree", "list", "--porcelain"])?;
+    let mut listed = Vec::new();
+    for (index, record) in output
+        .split("\n\n")
+        .filter(|record| !record.is_empty())
+        .enumerate()
+    {
+        let mut root = None;
+        let mut branch = None;
+        for line in record.lines() {
+            if let Some(path) = line.strip_prefix("worktree ") {
+                root = Some(PathBuf::from(path));
+            } else if let Some(name) = line.strip_prefix("branch refs/heads/") {
+                branch = Some(name.to_owned());
+            }
+        }
+        if let Some(root) = root {
+            listed.push(GitWorktree {
+                root,
+                branch: branch.unwrap_or_else(|| "detached HEAD".to_owned()),
+                main: index == 0,
+            });
+        }
+    }
+    let Some(main) = listed.first() else {
+        return Err("git did not report a primary worktree".to_owned());
+    };
+    let configured = configured_worktrees_dir(&main.root);
+    Ok(listed
+        .into_iter()
+        .filter(|worktree| {
+            worktree.main
+                || configured
+                    .as_ref()
+                    .is_some_and(|directory| worktree.root.starts_with(directory))
+        })
+        .collect())
+}
+
+fn configured_worktrees_dir(main_root: &Path) -> Option<PathBuf> {
+    let lock = crate::project_lock::load_lock(main_root).ok().flatten()?;
+    let directory = lock.worktrees_dir?;
+    main_root.join(directory).canonicalize().ok()
+}
+
 /// Runs `git -C <root> <args>`, treating exit `0` *or* `1` as success —
 /// `git diff` (with or without `--no-index`) exits `1` whenever there's a
 /// diff to show, which is the ordinary case here, never a failure.
@@ -244,6 +472,35 @@ fn run_git(root: &Path, args: &[&str]) -> Result<String, String> {
     match output.status.code() {
         Some(0) | Some(1) => Ok(String::from_utf8_lossy(&output.stdout).into_owned()),
         _ => Err(String::from_utf8_lossy(&output.stderr).trim().to_owned()),
+    }
+}
+
+/// Totals Git's tab-separated `--numstat` output. Binary entries use `-`
+/// counts and intentionally contribute zero: there is no meaningful line
+/// delta to show in the compact badge.
+fn parse_numstat(output: &str) -> (u32, u32) {
+    output.lines().fold((0, 0), |(additions, deletions), line| {
+        let mut fields = line.split('\t');
+        let addition = fields.next().and_then(|value| value.parse::<u32>().ok());
+        let deletion = fields.next().and_then(|value| value.parse::<u32>().ok());
+        match (addition, deletion) {
+            (Some(addition), Some(deletion)) => (additions + addition, deletions + deletion),
+            _ => (additions, deletions),
+        }
+    })
+}
+
+/// `git diff` excludes untracked files, but the overlay presents them via
+/// `--no-index`; count their visible lines as additions so the badge and the
+/// overlay agree that they are changes.
+fn untracked_line_count(path: &Path) -> u32 {
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return 0;
+    };
+    if contents.is_empty() {
+        0
+    } else {
+        contents.lines().count().max(1) as u32
     }
 }
 
@@ -295,6 +552,7 @@ fn parse_porcelain_status(output: &str, root: &Path) -> Vec<ChangedFile> {
             };
             Some(ChangedFile {
                 status,
+                worktree: 0,
                 path: root.join(relative),
             })
         })
@@ -510,6 +768,17 @@ pub(super) fn handle_key(view: &mut GitView, key: KeyEvent) -> GitViewOutcome {
             GitViewFocus::Files => view.select(view.selected + 1),
             GitViewFocus::Diff => view.scroll = view.scroll.saturating_add(1),
         },
+        KeyCode::Left if view.focus == GitViewFocus::Files => {
+            view.set_worktree_expanded(view.selected_worktree, false);
+        }
+        KeyCode::Right if view.focus == GitViewFocus::Files => {
+            view.set_worktree_expanded(view.selected_worktree, true);
+        }
+        KeyCode::Enter if view.focus == GitViewFocus::Files => {
+            if !view.files.is_empty() {
+                view.focus = GitViewFocus::Diff;
+            }
+        }
         KeyCode::PageUp => view.scroll = view.scroll.saturating_sub(10),
         KeyCode::PageDown => view.scroll = view.scroll.saturating_add(10),
         _ => {}
@@ -518,8 +787,10 @@ pub(super) fn handle_key(view: &mut GitView, key: KeyEvent) -> GitViewOutcome {
 }
 
 pub(super) fn handle_mouse(view: &mut GitView, hit: Option<WorkspaceHit>) -> GitViewOutcome {
-    if let Some(WorkspaceHit::GitSelectFile(index)) = hit {
-        view.select(index);
+    match hit {
+        Some(WorkspaceHit::GitSelectFile(index)) => view.select(index),
+        Some(WorkspaceHit::GitSelectWorktree(index)) => view.select_worktree(index),
+        _ => {}
     }
     GitViewOutcome::Stay
 }
@@ -533,24 +804,24 @@ pub(super) fn handle_scroll(view: &mut GitView, frame_area: Rect, mouse: MouseEv
     if view.error.is_some() || view.files.is_empty() {
         return;
     }
-    let (files_col, diff_col) = content_columns(frame_area);
-    let in_column = |col: Rect| {
-        col.x <= mouse.column
-            && mouse.column < col.x + col.width
-            && col.y <= mouse.row
-            && mouse.row < col.y + col.height
+    let (files_area, diff_area) = content_columns(frame_area);
+    let in_column = |column: Rect| {
+        column.x <= mouse.column
+            && mouse.column < column.x + column.width
+            && column.y <= mouse.row
+            && mouse.row < column.y + column.height
     };
     match mouse.kind {
-        MouseEventKind::ScrollUp if in_column(files_col) => {
+        MouseEventKind::ScrollUp if in_column(files_area) => {
             view.select(view.selected.saturating_sub(1));
         }
-        MouseEventKind::ScrollDown if in_column(files_col) => {
+        MouseEventKind::ScrollDown if in_column(files_area) => {
             view.select(view.selected + 1);
         }
-        MouseEventKind::ScrollUp if in_column(diff_col) => {
+        MouseEventKind::ScrollUp if in_column(diff_area) => {
             view.scroll = view.scroll.saturating_sub(3);
         }
-        MouseEventKind::ScrollDown if in_column(diff_col) => {
+        MouseEventKind::ScrollDown if in_column(diff_area) => {
             view.scroll = view.scroll.saturating_add(3);
         }
         _ => {}
@@ -580,15 +851,13 @@ pub(super) fn render(
         )
         .borders(Borders::ALL)
         .border_style(Style::default().fg(super::BORDER))
+        .padding(Padding::new(1, 1, 1, 1))
         .style(Style::default().bg(super::BASE));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
-        .split(inner);
-    let footer = rows[1];
+    let (files_area, diff_area) = content_columns(area);
+    let footer = Rect::new(inner.x, inner.bottom().saturating_sub(1), inner.width, 1);
 
     if let Some(message) = &view.error {
         frame.render_widget(
@@ -596,50 +865,133 @@ pub(super) fn render(
                 message.clone(),
                 Style::default().fg(super::DANGER),
             )),
-            rows[0],
+            diff_area,
         );
         render_footer(frame, footer);
         return;
     }
     if view.files.is_empty() {
+        render_file_list(frame, files_area, view, hits);
         frame.render_widget(
             Paragraph::new(Span::styled(
                 "no changes",
                 Style::default().fg(super::MUTED),
             )),
-            rows[0],
+            diff_area,
         );
         render_footer(frame, footer);
         return;
     }
 
-    let (files_col, diff_col) = content_columns(area);
-    render_file_list(frame, files_col, view, hits);
-    render_diff(frame, diff_col, view);
+    render_file_list(frame, files_area, view, hits);
+    render_diff(frame, diff_area, view);
     render_footer(frame, footer);
 }
 
-/// The file-list/diff column split of the overlay's content row, derived
-/// straight from the *outer* frame area — shared by `render` and
-/// `handle_scroll` so hit-testing a wheel event against "which column is
-/// the cursor over" can never drift from what was actually drawn there.
+/// The tree/diff split, derived from the outer overlay area so render and
+/// mouse hit-testing always share the exact same geometry. The tree stays
+/// deliberately narrow while the diff gets the remaining code width.
 fn content_columns(frame_area: Rect) -> (Rect, Rect) {
     let inner = Rect::new(
-        frame_area.x + 1,
-        frame_area.y + 1,
-        frame_area.width.saturating_sub(2),
-        frame_area.height.saturating_sub(2),
+        frame_area.x + 2,
+        frame_area.y + 2,
+        frame_area.width.saturating_sub(4),
+        frame_area.height.saturating_sub(4),
     );
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(1), Constraint::Length(1)])
         .split(inner);
-    let files_width = (rows[0].width / 3).clamp(20, 40);
-    let cols = Layout::default()
+    let tree_width = (rows[0].width / 4).clamp(24, 36);
+    let columns = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(files_width), Constraint::Min(10)])
+        .constraints([Constraint::Length(tree_width), Constraint::Min(10)])
         .split(rows[0]);
-    (cols[0], cols[1])
+    (columns[0], columns[1])
+}
+
+/// Builds a stable, compact change navigator from repository-relative paths.
+/// The model retains a flat `files` vec because diff loading and selection
+/// are file-oriented; this projection is strictly presentation state.
+fn file_tree_items(view: &GitView) -> Vec<FileTreeItem> {
+    let mut items = Vec::new();
+    for (worktree_index, worktree) in view.worktrees.iter().enumerate() {
+        if worktree_index == 1 {
+            items.push(FileTreeItem::Spacer);
+            items.push(FileTreeItem::LinkedWorktrees);
+        } else if worktree_index > 1 {
+            items.push(FileTreeItem::Spacer);
+        }
+        let changes = view
+            .files
+            .iter()
+            .filter(|file| file.worktree == worktree_index)
+            .count();
+        let expanded = !view.collapsed_worktrees.contains(&worktree.root);
+        items.push(FileTreeItem::Worktree {
+            index: worktree_index,
+            name: worktree.branch.clone(),
+            selected: worktree_index == view.selected_worktree,
+            expanded,
+            changes,
+        });
+        if !expanded {
+            continue;
+        }
+        let mut root = FileTreeNode::default();
+        for (index, file) in view.files.iter().enumerate() {
+            if file.worktree != worktree_index {
+                continue;
+            }
+            let relative = file.path.strip_prefix(&worktree.root).unwrap_or(&file.path);
+            let components: Vec<String> = relative
+                .components()
+                .filter_map(|component| component.as_os_str().to_str().map(str::to_owned))
+                .collect();
+            let mut node = &mut root;
+            for component in &components {
+                node = node.children.entry(component.clone()).or_default();
+            }
+            node.file_index = Some(index);
+        }
+        collect_tree_items(&root, 1, &mut items);
+    }
+    items
+}
+
+fn collect_tree_items(node: &FileTreeNode, depth: usize, items: &mut Vec<FileTreeItem>) {
+    for (name, child) in &node.children {
+        if child.file_index.is_none() {
+            let (name, child) = compact_directory(name, child);
+            items.push(FileTreeItem::Directory { name, depth });
+            collect_tree_items(child, depth + 1, items);
+        }
+    }
+    for (name, child) in &node.children {
+        if let Some(index) = child.file_index {
+            items.push(FileTreeItem::File {
+                index,
+                name: name.clone(),
+                depth,
+            });
+        }
+    }
+}
+
+fn compact_directory<'a>(name: &str, mut node: &'a FileTreeNode) -> (String, &'a FileTreeNode) {
+    let mut path = name.to_owned();
+    while node.file_index.is_none() && node.children.len() == 1 {
+        let Some((child_name, child)) = node.children.first_key_value() else {
+            break;
+        };
+        if child.file_index.is_some() {
+            break;
+        }
+        path.push('/');
+        path.push_str(child_name);
+        node = child;
+    }
+    (path, node)
 }
 
 fn render_file_list(
@@ -648,139 +1000,343 @@ fn render_file_list(
     view: &GitView,
     hits: &mut Vec<(Rect, WorkspaceHit)>,
 ) {
+    let panel = Block::default()
+        .borders(Borders::RIGHT)
+        .border_style(Style::default().fg(super::BORDER))
+        .padding(Padding::new(1, 1, 0, 0))
+        .style(Style::default().bg(super::BASE));
+    let inner = panel.inner(area);
+    frame.render_widget(panel, area);
     let focused = view.focus == GitViewFocus::Files;
-    for (index, file) in view.files.iter().enumerate() {
-        if index as u16 >= area.height {
-            break;
+    let mut title = vec![Span::styled(
+        "CHANGES",
+        Style::default()
+            .fg(super::TEXT_SECONDARY)
+            .add_modifier(Modifier::BOLD),
+    )];
+    push_right_aligned(
+        &mut title,
+        view.files.len().to_string(),
+        inner.width,
+        super::MUTED,
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(title)),
+        Rect::new(inner.x, inner.y, inner.width, 1),
+    );
+    let list = Rect::new(
+        inner.x,
+        inner.y.saturating_add(1),
+        inner.width,
+        inner.height.saturating_sub(1),
+    );
+    let visible = list.height as usize;
+    let items = file_tree_items(view);
+    let selected_row = selected_tree_row(&items, view).unwrap_or(0);
+    let first = selected_row.saturating_sub(visible.saturating_sub(1));
+    for (offset, item) in items.iter().skip(first).take(visible).enumerate() {
+        let row = Rect::new(list.x, list.y + offset as u16, list.width, 1);
+        match item {
+            FileTreeItem::LinkedWorktrees => {
+                frame.render_widget(
+                    Paragraph::new(Line::from(vec![Span::styled(
+                        "linked worktrees",
+                        Style::default()
+                            .fg(super::MUTED)
+                            .add_modifier(Modifier::BOLD),
+                    )])),
+                    row,
+                );
+            }
+            FileTreeItem::Spacer => {}
+            FileTreeItem::Worktree {
+                index,
+                name,
+                selected,
+                expanded,
+                changes,
+            } => {
+                let style = if *selected {
+                    Style::default()
+                        .fg(super::TEXT_BRIGHT)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(super::TEXT_SECONDARY)
+                };
+                let mut spans = vec![
+                    Span::styled(
+                        if view.worktrees[*index].main {
+                            "● "
+                        } else {
+                            "○ "
+                        },
+                        Style::default().fg(if view.worktrees[*index].main {
+                            super::ACCENT
+                        } else {
+                            super::TEXT_FAINT
+                        }),
+                    ),
+                    Span::styled(
+                        if *expanded { "▾ " } else { "▸ " },
+                        Style::default().fg(super::MUTED),
+                    ),
+                    Span::styled(
+                        truncate_label(name, row.width.saturating_sub(8) as usize),
+                        style,
+                    ),
+                ];
+                push_right_aligned(&mut spans, changes.to_string(), row.width, super::MUTED);
+                frame.render_widget(Paragraph::new(Line::from(spans)), row);
+                hits.push((row, WorkspaceHit::GitSelectWorktree(*index)));
+            }
+            FileTreeItem::Directory { name, depth } => {
+                let spans = vec![
+                    Span::styled("  ".repeat(*depth), Style::default()),
+                    Span::styled(
+                        format!("{name}/"),
+                        Style::default().fg(super::TEXT_SECONDARY),
+                    ),
+                ];
+                frame.render_widget(Paragraph::new(Line::from(spans)), row);
+            }
+            FileTreeItem::File { index, name, depth } => {
+                let file = &view.files[*index];
+                let selected = *index == view.selected;
+                let label_style = if selected && focused {
+                    Style::default()
+                        .fg(super::TEXT_BRIGHT)
+                        .add_modifier(Modifier::BOLD)
+                } else if selected {
+                    Style::default().fg(super::TEXT_BRIGHT)
+                } else {
+                    Style::default().fg(super::NAV_INACTIVE)
+                };
+                let mut spans = vec![
+                    Span::styled("  ".repeat(*depth + 1), Style::default()),
+                    Span::styled(
+                        format!("{} ", file.status.glyph()),
+                        Style::default().fg(file.status.color()),
+                    ),
+                    Span::styled(name.clone(), label_style),
+                ];
+                if selected {
+                    fill_row_bg(&mut spans, row.width, super::SURFACE_OVERLAY);
+                }
+                frame.render_widget(Paragraph::new(Line::from(spans)), row);
+                hits.push((row, WorkspaceHit::GitSelectFile(*index)));
+            }
         }
-        let row = Rect::new(area.x, area.y + index as u16, area.width, 1);
-        let selected = index == view.selected;
-        let name = file
-            .path
-            .strip_prefix(&view.root)
-            .unwrap_or(&file.path)
-            .display()
-            .to_string();
-        let label_style = if selected && focused {
-            Style::default()
-                .fg(super::TEXT_BRIGHT)
-                .add_modifier(Modifier::BOLD)
-        } else if selected {
-            Style::default().fg(super::TEXT_BRIGHT)
-        } else {
-            Style::default().fg(super::NAV_INACTIVE)
-        };
-        let spans = vec![
-            Span::styled(
-                format!(" {} ", file.status.glyph()),
-                Style::default().fg(file.status.color()),
-            ),
-            Span::styled(name, label_style),
-        ];
-        frame.render_widget(Paragraph::new(Line::from(spans)), row);
-        hits.push((row, WorkspaceHit::GitSelectFile(index)));
     }
 }
 
-/// A subtle wash behind a removed line's left-column cell — same family as
+fn selected_tree_row(items: &[FileTreeItem], view: &GitView) -> Option<usize> {
+    let selected_root = view.worktrees.get(view.selected_worktree)?.root.clone();
+    let expanded = !view.collapsed_worktrees.contains(&selected_root);
+    if expanded
+        && let Some(row) = items.iter().position(
+            |item| matches!(item, FileTreeItem::File { index, .. } if *index == view.selected),
+        )
+    {
+        return Some(row);
+    }
+    items.iter().position(|item| {
+        matches!(item, FileTreeItem::Worktree { index, .. } if *index == view.selected_worktree)
+    })
+}
+
+fn push_right_aligned(spans: &mut Vec<Span<'static>>, value: String, width: u16, color: Color) {
+    let used: usize = spans.iter().map(Span::width).sum();
+    let value_width = value.chars().count();
+    let gap = (width as usize).saturating_sub(used + value_width);
+    if gap > 0 {
+        spans.push(Span::raw(" ".repeat(gap)));
+        spans.push(Span::styled(value, Style::default().fg(color)));
+    }
+}
+
+fn truncate_label(value: &str, width: usize) -> String {
+    if value.chars().count() <= width {
+        return value.to_owned();
+    }
+    let mut truncated = String::new();
+    let limit = width.saturating_sub(1);
+    for character in value.chars() {
+        if truncated.chars().count() + 1 > limit {
+            break;
+        }
+        truncated.push(character);
+    }
+    truncated.push('…');
+    truncated
+}
+
+fn fill_row_bg<'a>(spans: &mut Vec<Span<'a>>, width: u16, bg: Color) {
+    for span in spans.iter_mut() {
+        span.style = span.style.bg(bg);
+    }
+    let used: usize = spans.iter().map(Span::width).sum();
+    spans.push(Span::styled(
+        " ".repeat((width as usize).saturating_sub(used)),
+        Style::default().bg(bg),
+    ));
+}
+
+/// A subtle wash behind a removed unified-diff line — same family as
 /// `super::SELECTED_BG`/`super::SURFACE_OVERLAY` (barely-there tints over
 /// `BASE`), just red-leaning instead of green/neutral.
 const DIFF_REMOVED_BG: Color = Color::Rgb(38, 22, 20);
-/// The added-line counterpart, right-column cells — green-leaning, same
-/// family and strength as `DIFF_REMOVED_BG`.
+/// The added-line counterpart — green-leaning, same family and strength as
+/// `DIFF_REMOVED_BG`.
 const DIFF_ADDED_BG: Color = Color::Rgb(18, 32, 23);
 
-#[derive(Clone, Copy)]
-enum DiffSide {
-    Left,
-    Right,
-}
-
-/// Two columns — before (left, `Removed`/`Context`) and after (right,
-/// `Context`/`Added`) — rather than one interleaved `+`/`-` stream, so a
-/// change reads at a glance the way VS Code's own split diff view does,
-/// not as a stream of ± prefixes to parse line by line.
+/// One unified diff in the dedicated right-hand column. This avoids the old
+/// before/after split, which halved the useful code width again, while the
+/// tree remains available alongside it.
 fn render_diff(frame: &mut ratatui::Frame<'_>, area: Rect, view: &GitView) {
-    let cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(50),
-            Constraint::Length(1),
-            Constraint::Percentage(50),
-        ])
-        .split(area);
-    let (left, divider, right) = (cols[0], cols[1], cols[2]);
-    for (row_index, row) in view
-        .diff
-        .iter()
-        .enumerate()
-        .skip(view.scroll as usize)
-        .take(left.height as usize)
-    {
-        let y = left.y + (row_index - view.scroll as usize) as u16;
-        render_diff_cell(
-            frame,
-            Rect::new(left.x, y, left.width, 1),
-            row.left.as_ref(),
-            DiffSide::Left,
-        );
-        render_diff_cell(
-            frame,
-            Rect::new(right.x, y, right.width, 1),
-            row.right.as_ref(),
-            DiffSide::Right,
-        );
+    let selected_file = view
+        .files
+        .get(view.selected)
+        .filter(|file| file.worktree == view.selected_worktree);
+    let selected_name = view
+        .files
+        .get(view.selected)
+        .filter(|file| file.worktree == view.selected_worktree)
+        .and_then(|file| {
+            view.worktrees
+                .get(file.worktree)
+                .and_then(|worktree| file.path.strip_prefix(&worktree.root).ok())
+        })
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| {
+            view.worktrees
+                .get(view.selected_worktree)
+                .map(|worktree| worktree.branch.clone())
+                .unwrap_or_else(|| view.root.display().to_string())
+        });
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            format!("DIFF · {selected_name}"),
+            Style::default().fg(super::TEXT_SECONDARY),
+        )),
+        Rect::new(area.x, area.y, area.width, 1),
+    );
+    let content = Rect::new(
+        area.x,
+        area.y.saturating_add(1),
+        area.width,
+        area.height.saturating_sub(1),
+    );
+    if selected_file.is_none() {
         frame.render_widget(
-            Paragraph::new(Span::styled("│", Style::default().fg(super::BORDER_FAINT))),
-            Rect::new(divider.x, y, 1, 1),
+            Paragraph::new(Span::styled(
+                "no changes in this worktree",
+                Style::default().fg(super::MUTED),
+            )),
+            content,
         );
+        return;
+    }
+    let mut y = content.y;
+    for cell in unified_lines(&view.diff)
+        .into_iter()
+        .skip(view.scroll as usize)
+    {
+        let height = diff_cell_height(cell, content.width);
+        if y.saturating_add(height) > content.bottom() {
+            break;
+        }
+        render_diff_cell(frame, Rect::new(content.x, y, content.width, height), cell);
+        y = y.saturating_add(height);
     }
 }
 
-/// One cell of one side of a diff row — blank (nothing drawn, so the
-/// pane's own background shows through) when `cell` is `None`, which is
-/// exactly what a pure addition's left side (or a pure removal's right
-/// side) is: nothing on that side to show.
-fn render_diff_cell(
-    frame: &mut ratatui::Frame<'_>,
-    area: Rect,
-    cell: Option<&DiffCell>,
-    side: DiffSide,
-) {
-    let Some(cell) = cell else {
-        return;
+/// Expands paired rows back into their unified representation. Context is
+/// shared by both sides and shown once; a replacement retains its natural
+/// `-old` then `+new` ordering.
+fn unified_lines(rows: &[DiffRow]) -> Vec<&DiffCell> {
+    let mut lines = Vec::new();
+    for row in rows {
+        match (&row.left, &row.right) {
+            (Some(left), Some(right)) if left.kind == DiffLineKind::Context => {
+                lines.push(right);
+            }
+            (Some(left), Some(right)) => {
+                lines.push(left);
+                lines.push(right);
+            }
+            (Some(left), None) => lines.push(left),
+            (None, Some(right)) => lines.push(right),
+            (None, None) => {}
+        }
+    }
+    lines
+}
+
+const DIFF_GUTTER_WIDTH: u16 = 7;
+
+fn diff_cell_height(cell: &DiffCell, width: u16) -> u16 {
+    let content_width = width.saturating_sub(DIFF_GUTTER_WIDTH).max(1) as usize;
+    let text_width: usize = cell
+        .spans
+        .iter()
+        .map(|(style, text)| Span::styled(text.clone(), *style).width())
+        .sum();
+    (text_width.max(1).div_ceil(content_width)) as u16
+}
+
+/// One unified-diff line: a signed gutter, one stable line-number column,
+/// then syntax-highlighted content wrapped to the available column width.
+fn render_diff_cell(frame: &mut ratatui::Frame<'_>, area: Rect, cell: &DiffCell) {
+    let (marker, marker_style, bg) = match cell.kind {
+        DiffLineKind::Context => (" ", Style::default().fg(super::TEXT_FAINT), None),
+        DiffLineKind::Added => (
+            "+",
+            Style::default().fg(super::SUCCESS),
+            Some(DIFF_ADDED_BG),
+        ),
+        DiffLineKind::Removed => (
+            "-",
+            Style::default().fg(super::DANGER),
+            Some(DIFF_REMOVED_BG),
+        ),
     };
-    let bg = match (side, cell.kind) {
-        (DiffSide::Left, DiffLineKind::Removed) => Some(DIFF_REMOVED_BG),
-        (DiffSide::Right, DiffLineKind::Added) => Some(DIFF_ADDED_BG),
-        _ => None,
-    };
-    let mut spans = vec![Span::styled(
-        format!("{:>4} ", cell.line_no),
-        Style::default().fg(super::TEXT_DIM),
-    )];
-    spans.extend(
-        cell.spans
-            .iter()
-            .map(|(style, text)| Span::styled(text.clone(), *style)),
-    );
+    let mut content_spans: Vec<Span<'_>> = cell
+        .spans
+        .iter()
+        .map(|(style, text)| Span::styled(text.clone(), *style))
+        .collect();
     if let Some(bg) = bg {
-        for span in &mut spans {
+        for span in &mut content_spans {
             span.style = span.style.bg(bg);
         }
-        let used: usize = spans.iter().map(Span::width).sum();
-        let pad = (area.width as usize).saturating_sub(used);
-        if pad > 0 {
-            spans.push(Span::styled(" ".repeat(pad), Style::default().bg(bg)));
-        }
     }
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(DIFF_GUTTER_WIDTH), Constraint::Min(1)])
+        .split(area);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(format!("{marker} "), marker_style),
+            Span::styled(
+                format!("{:>4} ", cell.line_no),
+                Style::default().fg(super::TEXT_DIM),
+            ),
+        ]))
+        .style(Style::default().bg(bg.unwrap_or(super::BASE))),
+        columns[0],
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(content_spans))
+            .wrap(Wrap { trim: false })
+            .style(Style::default().bg(bg.unwrap_or(super::BASE))),
+        columns[1],
+    );
 }
 
 fn render_footer(frame: &mut ratatui::Frame<'_>, area: Rect) {
     frame.render_widget(
         Paragraph::new(Line::from(super::hint_spans(
-            "↑↓ navigate · tab focus · esc close",
+            "↑↓ navigate · ←→ collapse/expand · ↵ diff · tab focus · esc close",
         ))),
         area,
     );
@@ -814,8 +1370,105 @@ mod tests {
     }
 
     #[test]
+    fn projects_changed_paths_as_a_compact_worktree_navigator() {
+        let root = PathBuf::from("/repo");
+        let view = GitView {
+            root: root.clone(),
+            worktrees: vec![GitWorktree {
+                root: root.clone(),
+                branch: "main".to_owned(),
+                main: true,
+            }],
+            files: vec![
+                ChangedFile {
+                    status: FileStatus::Modified,
+                    worktree: 0,
+                    path: root.join("src/ui/git_diff.rs"),
+                },
+                ChangedFile {
+                    status: FileStatus::Added,
+                    worktree: 0,
+                    path: root.join("src/ui.rs"),
+                },
+                ChangedFile {
+                    status: FileStatus::Untracked,
+                    worktree: 0,
+                    path: root.join("README.md"),
+                },
+            ],
+            selected: 0,
+            selected_worktree: 0,
+            collapsed_worktrees: BTreeSet::new(),
+            diff: Vec::new(),
+            error: None,
+            scroll: 0,
+            focus: GitViewFocus::Files,
+            refreshed_at: Instant::now(),
+        };
+        let items = file_tree_items(&view);
+        assert!(
+            matches!(items[0], FileTreeItem::Worktree { ref name, selected: true, expanded: true, changes: 3, .. } if name == "main")
+        );
+        assert!(
+            matches!(items[1], FileTreeItem::Directory { ref name, depth: 1 } if name == "src")
+        );
+        assert!(matches!(items[2], FileTreeItem::Directory { ref name, depth: 2 } if name == "ui"));
+        assert!(
+            matches!(items[3], FileTreeItem::File { ref name, depth: 3, .. } if name == "git_diff.rs")
+        );
+        assert!(
+            matches!(items[4], FileTreeItem::File { ref name, depth: 2, .. } if name == "ui.rs")
+        );
+        assert!(
+            matches!(items[5], FileTreeItem::File { ref name, depth: 1, .. } if name == "README.md")
+        );
+    }
+
+    #[test]
+    fn hides_changed_files_for_a_collapsed_worktree() {
+        let root = PathBuf::from("/repo");
+        let mut view = GitView {
+            root: root.clone(),
+            worktrees: vec![GitWorktree {
+                root: root.clone(),
+                branch: "main".to_owned(),
+                main: true,
+            }],
+            files: vec![ChangedFile {
+                status: FileStatus::Modified,
+                worktree: 0,
+                path: root.join("src/lib.rs"),
+            }],
+            selected: 0,
+            selected_worktree: 0,
+            collapsed_worktrees: BTreeSet::new(),
+            diff: Vec::new(),
+            error: None,
+            scroll: 0,
+            focus: GitViewFocus::Files,
+            refreshed_at: Instant::now(),
+        };
+        view.set_worktree_expanded(0, false);
+        let items = file_tree_items(&view);
+        assert!(matches!(
+            items.as_slice(),
+            [FileTreeItem::Worktree {
+                expanded: false,
+                changes: 1,
+                ..
+            }]
+        ));
+        assert_eq!(selected_tree_row(&items, &view), Some(0));
+    }
+
+    #[test]
     fn ignores_blank_lines() {
         assert!(parse_porcelain_status("\n", Path::new("/repo")).is_empty());
+    }
+
+    #[test]
+    fn totals_text_numstat_and_ignores_binary_entries() {
+        assert_eq!(parse_numstat("2\t1\tsrc/lib.rs\n-\t-\timage.png\n"), (2, 1));
     }
 
     #[test]
@@ -859,6 +1512,7 @@ mod tests {
     /// the fixture-string tests above assume, not just those fixtures.
     #[test]
     fn open_reads_a_real_repositorys_staged_unstaged_and_untracked_changes() {
+        let _environment = uze_testkit::env::scope();
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -883,12 +1537,14 @@ mod tests {
         git(&["add", "tracked.rs"]);
         git(&["commit", "--quiet", "-m", "initial"]);
 
+        assert_eq!(change_summary(&root), None);
+
         std::fs::write(root.join("tracked.rs"), "fn one() {}\nfn two() {}\n").unwrap();
         std::fs::write(root.join("staged.rs"), "fn staged() {}\n").unwrap();
         git(&["add", "staged.rs"]);
         std::fs::write(root.join("new.rs"), "fn brand_new() {}\n").unwrap();
 
-        let view = GitView::open(root.clone());
+        let mut view = GitView::open(root.clone());
         assert!(view.error.is_none(), "unexpected error: {:?}", view.error);
         assert_eq!(
             view.files.len(),
@@ -903,13 +1559,86 @@ mod tests {
         assert!(statuses.contains(&FileStatus::Modified));
         assert!(statuses.contains(&FileStatus::Added));
         assert!(statuses.contains(&FileStatus::Untracked));
+        assert_eq!(
+            change_summary(&root),
+            Some(GitChangeSummary {
+                additions: 3,
+                deletions: 0,
+            })
+        );
         // The first file's diff loaded automatically on open.
         assert!(
             !view.diff.is_empty(),
             "expected a non-empty diff for the first file"
         );
 
+        std::fs::write(root.join("later.rs"), "fn later() {}\n").unwrap();
+        view.refresh();
+        assert!(
+            view.files
+                .iter()
+                .any(|file| file.path == root.join("later.rs")),
+            "refresh must pick up a change made while the viewer is open"
+        );
+
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn discovers_main_and_configured_linked_worktrees() {
+        let _environment = uze_testkit::env::scope();
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let parent =
+            std::env::temp_dir().join(format!("uze-worktree-test-{}-{nonce}", std::process::id()));
+        let root = parent.join("project");
+        let worktrees = parent.join("worktrees");
+        let feature = worktrees.join("feature");
+        std::fs::create_dir_all(&root).unwrap();
+        let git = |directory: &Path, args: &[&str]| {
+            let status = Command::new("git")
+                .arg("-C")
+                .arg(directory)
+                .args(args)
+                .status()
+                .expect("git must be on PATH for this test");
+            assert!(status.success(), "git {args:?} failed");
+        };
+        git(&root, &["init", "--quiet"]);
+        git(&root, &["config", "user.email", "test@example.com"]);
+        git(&root, &["config", "user.name", "Test"]);
+        git(&root, &["config", "commit.gpgsign", "false"]);
+        std::fs::write(root.join("README.md"), "# test\n").unwrap();
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "--quiet", "-m", "initial"]);
+        std::fs::create_dir_all(&worktrees).unwrap();
+        git(
+            &root,
+            &[
+                "worktree",
+                "add",
+                "--quiet",
+                "-b",
+                "feature",
+                feature.to_str().unwrap(),
+            ],
+        );
+        std::fs::write(
+            root.join("agents.lock"),
+            "version: 1\nworktrees_dir: ../worktrees\n",
+        )
+        .unwrap();
+
+        let discovered = discover_worktrees(&feature).unwrap();
+        assert_eq!(discovered.len(), 2);
+        assert!(discovered[0].main);
+        assert!(!discovered[0].branch.is_empty());
+        assert_eq!(discovered[1].branch, "feature");
+        assert_eq!(discovered[1].root, feature);
+
+        let _ = std::fs::remove_dir_all(parent);
     }
 
     #[test]
@@ -954,5 +1683,30 @@ mod tests {
         assert_eq!(rows[0].right.as_ref().unwrap().2, "new one");
         assert_eq!(rows[1].left.as_ref().unwrap().2, "old two");
         assert_eq!(rows[1].right.as_ref().unwrap().2, "new two");
+    }
+
+    #[test]
+    fn unified_lines_shows_context_once_and_replacements_in_diff_order() {
+        let rows = highlight_diff_rows(
+            pair_side_by_side(parse_unified_diff(
+                "@@ -1,2 +1,2 @@\n context\n-old\n+new\n",
+            )),
+            Path::new("example.rs"),
+        );
+        let lines = unified_lines(&rows);
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0].kind, DiffLineKind::Context);
+        assert_eq!(lines[1].kind, DiffLineKind::Removed);
+        assert_eq!(lines[2].kind, DiffLineKind::Added);
+    }
+
+    #[test]
+    fn diff_lines_expand_to_fit_the_available_column_width() {
+        let cell = DiffCell {
+            line_no: 1,
+            kind: DiffLineKind::Context,
+            spans: vec![(Style::default(), "abcdefgh".to_owned())],
+        };
+        assert_eq!(diff_cell_height(&cell, DIFF_GUTTER_WIDTH + 4), 2);
     }
 }
