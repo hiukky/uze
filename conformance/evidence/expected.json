@@ -22,6 +22,16 @@
       "observed_at": "2026-08-26"
     },
     {
+      "harness": "antigravity",
+      "check": "hooks-allow-turn-unsettled",
+      "suite": "hooks > allow",
+      "reason": "AGY 1.1.22 can leave an allowed run_command behind its vendor confirmation surface, so the hook outcome and the marker absence cannot be observed honestly.",
+      "versions": [
+        "1.1.22"
+      ],
+      "observed_at": "2026-08-30"
+    },
+    {
       "harness": "opencode",
       "check": "mcp-tool-executed-in-tui",
       "suite": "mcp",

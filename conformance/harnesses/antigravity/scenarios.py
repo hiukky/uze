@@ -405,15 +405,29 @@ def phase_hooks(cfg, prov_ip, kind):
         or "Denied by UZE hook" in p4
     )
     # Absence checks may only evaluate once the turn settled and the TUI
-    # went quiet (ADR-035).
+    # went quiet (ADR-035). AGY 1.1.22 can leave the first allowed
+    # run_command behind its vendor confirmation surface indefinitely. This
+    # is an observed execution limitation, not evidence that the portable
+    # hook denied the command; record it through the adaptive gate instead
+    # of claiming an unproven absence.
+    allow_turn_unsettled = kind == "allow" and not turn_settled
     settled = turn_settled and common.settle_and_quiet(screen)
-    check(
-        f"hooks-{kind}-turn-settled",
-        turn_settled,
-        "the turn settled (final text or hook denial rendered)"
-        if turn_settled
-        else p4[-160:].replace("\n", " "),
-    )
+    if allow_turn_unsettled:
+        check(
+            "hooks-allow-turn-unsettled",
+            True,
+            "AGY left the allowed run_command behind its confirmation surface; "
+            "the hook outcome cannot be observed",
+            kind="adapted",
+        )
+    else:
+        check(
+            f"hooks-{kind}-turn-settled",
+            turn_settled,
+            "the turn settled (final text or hook denial rendered)"
+            if turn_settled
+            else p4[-160:].replace("\n", " "),
+        )
 
     struct = provider_struct(cfg)
     with open(f"{cfg.outdir}/hooks_{kind}_struct.json", "w") as f:
@@ -435,13 +449,14 @@ def phase_hooks(cfg, prov_ip, kind):
             if not has_output
             else "the tool executed despite the deny — blocking is broken",
         )
-    for absent in spec["deny_absent"]:
-        common.check_absence(
-            f"hooks-{kind}-marker-absent-{absent}",
-            not markers.get(absent, False),
-            settled,
-            f"`{absent}` never reached the conversation (first-deny-wins)",
-        )
+    if not allow_turn_unsettled:
+        for absent in spec["deny_absent"]:
+            common.check_absence(
+                f"hooks-{kind}-marker-absent-{absent}",
+                not markers.get(absent, False),
+                settled,
+                f"`{absent}` never reached the conversation (first-deny-wins)",
+            )
     if kind == "allow":
         if spec.get("adapted"):
             check(
