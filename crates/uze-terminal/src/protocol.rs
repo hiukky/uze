@@ -17,7 +17,7 @@ use crate::{PaneId, Session, SpaceId, TabId, WorkspaceId};
 /// an unbumped old server, which silently kills its read thread and never
 /// surfaces as more than a pane stuck on "starting shell…". Any field
 /// added to either struct needs this bumped too, for the same reason.
-pub const PROTOCOL_VERSION: u16 = 3;
+pub const PROTOCOL_VERSION: u16 = 4;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ClientRequest {
@@ -41,6 +41,9 @@ pub enum ClientRequest {
         label: String,
         columns: u16,
         rows: u16,
+        /// Optional directory for the pane's first process. A missing value
+        /// keeps the workspace-root behavior used by ordinary shell tabs.
+        cwd: Option<std::path::PathBuf>,
         /// Command to run in the new pane's PTY, as `argv` — `None` (or
         /// `Some(&[])`) keeps the default `$SHELL`. Lets a client open a
         /// tab running a specific program directly instead of a shell the

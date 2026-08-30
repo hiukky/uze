@@ -219,6 +219,7 @@ pub(crate) fn attach_workspace(
                                         label: option.display_name.clone(),
                                         columns,
                                         rows,
+                                        cwd: selected_pane_cwd(&model),
                                         command: Some(option.command.clone()),
                                     },
                                 );
@@ -280,6 +281,7 @@ pub(crate) fn attach_workspace(
                             label: next_shell_label(&model),
                             columns,
                             rows,
+                            cwd: None,
                             command: None,
                         },
                     );
@@ -369,6 +371,7 @@ pub(crate) fn attach_workspace(
                                         label: option.display_name.clone(),
                                         columns,
                                         rows,
+                                        cwd: selected_pane_cwd(&model),
                                         command: Some(option.command.clone()),
                                     },
                                 );
@@ -565,6 +568,7 @@ pub(crate) fn attach_workspace(
                                     label: next_shell_label(&model),
                                     columns,
                                     rows,
+                                    cwd: None,
                                     command: None,
                                 },
                             );
@@ -1719,6 +1723,14 @@ fn pane_in_layout(layout: &uze_terminal::Layout, wanted: PaneId) -> Option<&uze_
     }
 }
 
+/// The new-agent picker inherits the selected pane's live directory. The
+/// runtime's workspace root is only a fallback for callers that omit it.
+fn selected_pane_cwd(model: &WorkspaceModel) -> Option<PathBuf> {
+    let session = model.session.as_ref()?;
+    let tab = session.selected_tab();
+    pane_in_layout(&tab.layout, tab.focus.pane).map(|pane| pane.cwd.clone())
+}
+
 /// Opens the git changes overlay scoped to the *currently selected tab's*
 /// live `cwd` — the hierarchy the user gave for this feature is
 /// `Workspace > Space > Agent/Shell > Git`, one level further down than
@@ -2146,10 +2158,13 @@ fn runtime_error(error: uze_terminal::RuntimeError) -> UzeError {
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentIdentity, agent_identity_for_tab, encode_mouse, pane_relative};
+    use super::{
+        AgentIdentity, WorkspaceModel, agent_identity_for_tab, encode_mouse, pane_relative,
+        selected_pane_cwd,
+    };
     use crossterm::event::{MouseButton, MouseEventKind};
     use ratatui::layout::Rect;
-    use uze_terminal::{Focus, Layout, Pane, PaneId, Tab, TabId};
+    use uze_terminal::{Focus, Layout, Pane, PaneId, Session, Tab, TabId, WorkspaceId};
 
     #[test]
     fn pane_relative_is_1_indexed_and_excludes_anything_outside_the_pane() {
@@ -2285,6 +2300,18 @@ mod tests {
     fn a_plain_shell_matches_neither_signal() {
         let tab = tab_with("shell", "zsh");
         assert_eq!(agent_identity_for_tab(&identities(), &tab), None);
+    }
+
+    #[test]
+    fn new_agent_uses_the_selected_panes_live_directory() {
+        let mut session = Session::new(WorkspaceId("workspace".into()), "/tmp/root".into(), 80, 24);
+        assert!(session.update_pane_status(PaneId(1), "/tmp/project/src".into(), "zsh".into()));
+        let model = WorkspaceModel {
+            session: Some(session),
+            ..WorkspaceModel::default()
+        };
+
+        assert_eq!(selected_pane_cwd(&model), Some("/tmp/project/src".into()));
     }
 
     #[test]

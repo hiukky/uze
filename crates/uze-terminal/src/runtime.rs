@@ -521,13 +521,14 @@ impl Server {
                     label,
                     columns,
                     rows,
+                    cwd,
                     command,
                 } => {
-                    let pane = self
-                        .session
-                        .lock()
-                        .expect("session poisoned")
-                        .add_tab(label, columns, rows);
+                    let pane = {
+                        let mut session = self.session.lock().expect("session poisoned");
+                        let cwd = cwd.unwrap_or_else(|| session.workspace.root.clone());
+                        session.add_tab(label, columns, rows, cwd)
+                    };
                     if self.spawn_pane(pane, command.as_deref()).is_err() {
                         let _ = events.send(ClientEvent::Error {
                             message: "could not create terminal pane".into(),

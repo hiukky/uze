@@ -312,12 +312,11 @@ impl Session {
         true
     }
 
-    pub fn add_tab(&mut self, label: String, columns: u16, rows: u16) -> PaneId {
+    pub fn add_tab(&mut self, label: String, columns: u16, rows: u16, cwd: PathBuf) -> PaneId {
         let tab_id = TabId(self.next_tab_id);
         let pane_id = PaneId(self.next_pane_id);
         self.next_tab_id += 1;
         self.next_pane_id += 1;
-        let root = self.workspace.root.clone();
         let space = self
             .workspace
             .spaces
@@ -329,7 +328,7 @@ impl Session {
             label,
             layout: Layout::Pane(Pane {
                 id: pane_id,
-                cwd: root,
+                cwd,
                 columns,
                 rows,
                 process: "shell".to_owned(),
@@ -463,8 +462,15 @@ mod tests {
             24,
         );
         assert_eq!(session.selected_tab().focus.pane, PaneId(1));
-        assert_eq!(session.add_tab("agent".into(), 100, 30), PaneId(2));
+        assert_eq!(
+            session.add_tab("agent".into(), 100, 30, PathBuf::from("/tmp/agent")),
+            PaneId(2)
+        );
         assert_eq!(session.selected_space().selected_tab, TabId(2));
+        let Layout::Pane(pane) = &session.selected_tab().layout else {
+            panic!("expected a single pane layout");
+        };
+        assert_eq!(pane.cwd, PathBuf::from("/tmp/agent"));
         let encoded = serde_json::to_string(&session).unwrap();
         assert_eq!(serde_json::from_str::<Session>(&encoded).unwrap(), session);
     }
@@ -479,7 +485,7 @@ mod tests {
         );
         assert_eq!(session.remove_tab(TabId(1)), None);
 
-        let second_pane = session.add_tab("agent".into(), 80, 24);
+        let second_pane = session.add_tab("agent".into(), 80, 24, PathBuf::from("/tmp/a"));
         assert_eq!(session.selected_space().selected_tab, TabId(2));
 
         let removed = session.remove_tab(TabId(2)).expect("second tab removed");
@@ -496,8 +502,8 @@ mod tests {
             80,
             24,
         );
-        session.add_tab("two".into(), 80, 24);
-        session.add_tab("three".into(), 80, 24);
+        session.add_tab("two".into(), 80, 24, PathBuf::from("/tmp/a"));
+        session.add_tab("three".into(), 80, 24, PathBuf::from("/tmp/a"));
         assert_eq!(session.selected_space().selected_tab, TabId(3));
 
         session.remove_tab(TabId(3)).expect("third tab removed");
@@ -567,7 +573,7 @@ mod tests {
 
         session.add_space("frontend".into(), 80, 24);
         let second_space = session.workspace.selected_space;
-        session.add_tab("extra".into(), 80, 24);
+        session.add_tab("extra".into(), 80, 24, PathBuf::from("/tmp/a"));
         assert_eq!(session.selected_space().tabs.len(), 2);
 
         let removed = session
