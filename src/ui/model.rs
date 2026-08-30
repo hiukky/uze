@@ -4,11 +4,12 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use ratatui::layout::Rect;
+use uze_core::preference::{Autonomy, ModelPreference, SandboxScope};
 
 use crate::application::{
     ContextPlan, DoctorReport, HarnessHealth, MarketplacePluginDetail, MarketplacePluginSummary,
-    OverviewWorkspaceSummary, PluginInspection, PluginSummary, ProjectContextStatus,
-    ProjectEnvironmentState,
+    OverviewWorkspaceSummary, PluginInspection, PluginSummary, ProfileApplyResult, ProfileSummary,
+    ProjectContextStatus, ProjectEnvironmentState,
 };
 
 use super::hit::Hit;
@@ -22,14 +23,16 @@ pub(crate) enum Route {
     Plugins,
     Marketplace,
     Harnesses,
+    Profiles,
     Doctor,
 }
 
-pub(crate) const ROUTES: [Route; 5] = [
+pub(crate) const ROUTES: [Route; 6] = [
     Route::Overview,
     Route::Marketplace,
     Route::Plugins,
     Route::Harnesses,
+    Route::Profiles,
     Route::Doctor,
 ];
 
@@ -40,6 +43,7 @@ impl Route {
             Route::Plugins => "Plugins",
             Route::Marketplace => "Marketplace",
             Route::Harnesses => "Harnesses",
+            Route::Profiles => "Profiles",
             Route::Doctor => "Doctor",
         }
     }
@@ -47,6 +51,83 @@ impl Route {
     pub(crate) fn index(self) -> usize {
         ROUTES.iter().position(|route| *route == self).unwrap()
     }
+}
+
+/// Which of the Profiles screen's three panels currently has the arrow keys,
+/// cycled by Tab/Shift+Tab while that route is focused — there is no
+/// existing intra-content multi-panel focus mechanism elsewhere in the TUI
+/// to reuse, since every other route is a single list (plus an optional
+/// slide-in drawer).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ProfilePanel {
+    List,
+    Editor,
+    Harnesses,
+}
+
+impl ProfilePanel {
+    pub(crate) fn next(self) -> Self {
+        match self {
+            Self::List => Self::Editor,
+            Self::Editor => Self::Harnesses,
+            Self::Harnesses => Self::List,
+        }
+    }
+
+    pub(crate) fn prev(self) -> Self {
+        match self {
+            Self::List => Self::Harnesses,
+            Self::Editor => Self::List,
+            Self::Harnesses => Self::Editor,
+        }
+    }
+}
+
+/// Number of rows in the Preferences editor panel (autonomy/sandbox/model) —
+/// the v1 preference set is deliberately this small; see the domain model's
+/// own doc comment for why `network`/`confirmations` aren't separate rows.
+pub(crate) const PREFERENCE_ROW_COUNT: usize = 3;
+
+fn cycle<T: Copy + PartialEq>(order: &[T], current: T, forward: bool) -> T {
+    let index = order
+        .iter()
+        .position(|value| *value == current)
+        .unwrap_or(0);
+    let len = order.len();
+    let next = if forward {
+        (index + 1) % len
+    } else {
+        (index + len - 1) % len
+    };
+    order[next]
+}
+
+fn cycle_autonomy(current: Autonomy, forward: bool) -> Autonomy {
+    const ORDER: [Autonomy; 4] = [
+        Autonomy::Manual,
+        Autonomy::Balanced,
+        Autonomy::Auto,
+        Autonomy::Unattended,
+    ];
+    cycle(&ORDER, current, forward)
+}
+
+fn cycle_sandbox(current: SandboxScope, forward: bool) -> SandboxScope {
+    const ORDER: [SandboxScope; 3] = [
+        SandboxScope::ReadOnly,
+        SandboxScope::WorkspaceWrite,
+        SandboxScope::FullAccess,
+    ];
+    cycle(&ORDER, current, forward)
+}
+
+fn cycle_model(current: ModelPreference, forward: bool) -> ModelPreference {
+    const ORDER: [ModelPreference; 3] = [
+        ModelPreference::Default,
+        ModelPreference::Fast,
+        ModelPreference::Capable,
+    ];
+    cycle(&ORDER, current, forward)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -79,6 +160,14 @@ pub(crate) enum Overlay {
     /// Free-text input, appended to on every character key and popped on
     /// backspace — see `TuiModel::overlay_key`'s `AddMarketplace` arms.
     AddMarketplace(String),
+    /// A new profile's id, typed the same way as `AddMarketplace`.
+    NewProfile(String),
+    /// Mirrors `ConfirmRemove` exactly, as its own variant rather than an
+    /// overload — `ConfirmRemove` is plugin-specific today.
+    ConfirmDeleteProfile {
+        id: String,
+        focus: usize,
+    },
     /// A mutation needs consent it wasn't given non-interactively. Confirming
     /// re-runs the *same* action with explicit trust — never a silent
     /// bypass; the operator sees exactly what would newly execute.
@@ -111,6 +200,7 @@ pub(crate) struct RefreshData {
     pub(crate) doctor: Option<DoctorReport>,
     pub(crate) marketplace_plugins: Vec<MarketplacePluginSummary>,
     pub(crate) marketplace_count: usize,
+    pub(crate) profiles: Vec<ProfileSummary>,
     pub(crate) context_status: Option<ProjectContextStatus>,
     /// The Overview's workspace-aware read model — present from the very
     /// first refresh onward (there is always a kind, even `NoWorkspace`).
@@ -155,6 +245,25 @@ pub(crate) struct TuiModel {
 
     pub(crate) plugin_drawer_open: bool,
 
+    pub(crate) profiles: Vec<ProfileSummary>,
+    pub(crate) profiles_selected: usize,
+    pub(crate) profile_panel: ProfilePanel,
+    pub(crate) profile_editor_selected: usize,
+    pub(crate) profile_harness_selected: usize,
+    /// Harness ids to apply the selected profile to. Session-only — never
+    /// persisted as part of the `Profile` domain object (v1 scope: profiles
+    /// hold only preferences).
+    pub(crate) profile_harness_selection: BTreeSet<String>,
+    /// Whether `profile_harness_selection` has received its one-time default
+    /// (every currently detected harness) — set once real `doctor` data is
+    /// available, so entering the route before the first refresh completes
+    /// doesn't lock in an empty selection.
+    pub(crate) profile_harness_defaulted: bool,
+    /// The last `apply` action's per-harness outcomes, shown as a one-word
+    /// badge next to each harness row. Empty (no badges) until an apply has
+    /// actually run this session.
+    pub(crate) profile_apply_results: Vec<ProfileApplyResult>,
+
     pub(crate) doctor: Option<DoctorReport>,
 
     pub(crate) context_root: PathBuf,
@@ -196,6 +305,14 @@ impl Default for TuiModel {
             harnesses_selected: 0,
             harnesses_drawer_open: false,
             plugin_drawer_open: false,
+            profiles: Vec::new(),
+            profiles_selected: 0,
+            profile_panel: ProfilePanel::List,
+            profile_editor_selected: 0,
+            profile_harness_selected: 0,
+            profile_harness_selection: BTreeSet::new(),
+            profile_harness_defaulted: false,
+            profile_apply_results: Vec::new(),
             doctor: None,
             context_root: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             context_status: None,
@@ -308,6 +425,75 @@ impl TuiModel {
             .and_then(|doctor| doctor.harnesses.get(self.harnesses_selected))
     }
 
+    pub(crate) fn selected_profile(&self) -> Option<&ProfileSummary> {
+        self.profiles.get(self.profiles_selected)
+    }
+
+    /// Profiles has three independently-scrolled sub-panels rather than one
+    /// list, so it bypasses the generic `move_selection`/`list_len`/
+    /// `selected_mut` dispatch (designed for exactly one selection per
+    /// route) and clamps whichever panel is currently focused.
+    pub(crate) fn move_profile_selection(&mut self, delta: isize) {
+        let clamp = |current: usize, len: usize| -> usize {
+            if len == 0 {
+                0
+            } else {
+                (current as isize + delta).clamp(0, len as isize - 1) as usize
+            }
+        };
+        match self.profile_panel {
+            ProfilePanel::List => {
+                self.profiles_selected = clamp(self.profiles_selected, self.profiles.len());
+            }
+            ProfilePanel::Editor => {
+                self.profile_editor_selected =
+                    clamp(self.profile_editor_selected, PREFERENCE_ROW_COUNT);
+            }
+            ProfilePanel::Harnesses => {
+                let len = self.doctor.as_ref().map_or(0, |d| d.harnesses.len());
+                self.profile_harness_selected = clamp(self.profile_harness_selected, len);
+            }
+        }
+    }
+
+    /// Cycles the Editor panel's currently-highlighted preference value and
+    /// returns the `Intent` that persists it. Mutates `self.profiles`
+    /// optimistically so the row reflects the new value immediately, without
+    /// waiting on the (silent, fire-and-forget) background write.
+    pub(crate) fn cycle_selected_preference(&mut self, forward: bool) -> super::worker::Intent {
+        let Some(profile) = self.profiles.get_mut(self.profiles_selected) else {
+            return super::worker::Intent::None;
+        };
+        match self.profile_editor_selected {
+            0 => {
+                profile.preferences.autonomy = cycle_autonomy(profile.preferences.autonomy, forward)
+            }
+            1 => profile.preferences.sandbox = cycle_sandbox(profile.preferences.sandbox, forward),
+            2 => profile.preferences.model = cycle_model(profile.preferences.model, forward),
+            _ => return super::worker::Intent::None,
+        }
+        super::worker::Intent::UpdatePreferences {
+            id: profile.id.clone(),
+            preferences: profile.preferences,
+        }
+    }
+
+    /// Toggles one harness's inclusion in the apply target set, by its
+    /// position in `doctor.harnesses` (the Harnesses panel's row index).
+    pub(crate) fn toggle_profile_harness_at(&mut self, index: usize) {
+        let Some(id) = self
+            .doctor
+            .as_ref()
+            .and_then(|doctor| doctor.harnesses.get(index))
+            .map(|harness| harness.integration.clone())
+        else {
+            return;
+        };
+        if !self.profile_harness_selection.remove(&id) {
+            self.profile_harness_selection.insert(id);
+        }
+    }
+
     pub(crate) fn list_len(&self) -> usize {
         match self.route {
             Route::Plugins => self.plugins.len(),
@@ -363,6 +549,27 @@ impl TuiModel {
         self.marketplace_plugins = data.marketplace_plugins;
         self.marketplace_count = data.marketplace_count;
         self.clamp_marketplace_selection();
+        self.profiles = data.profiles;
+        self.profiles_selected = self
+            .profiles_selected
+            .min(self.profiles.len().saturating_sub(1));
+        self.profile_harness_selected = self.profile_harness_selected.min(
+            self.doctor
+                .as_ref()
+                .map_or(0, |d| d.harnesses.len())
+                .saturating_sub(1),
+        );
+        if !self.profile_harness_defaulted
+            && let Some(doctor) = &self.doctor
+        {
+            self.profile_harness_selection = doctor
+                .harnesses
+                .iter()
+                .filter(|harness| harness.detection.present)
+                .map(|harness| harness.integration.clone())
+                .collect();
+            self.profile_harness_defaulted = true;
+        }
         if data.context_status.is_some() {
             self.context_status = data.context_status;
         }
@@ -410,6 +617,9 @@ impl TuiModel {
         if route == Route::Harnesses {
             self.harnesses_selected = 0;
             self.harnesses_drawer_open = true;
+        }
+        if route == Route::Profiles {
+            self.profile_panel = ProfilePanel::List;
         }
         self.route = route;
     }

@@ -159,6 +159,12 @@ pub enum UzeError {
     InvalidTextEncoding(PathBuf),
     #[error("another UZE mutation is already in progress at {0}")]
     MutationInProgress(PathBuf),
+    #[error("unknown profile `{0}`")]
+    UnknownProfile(String),
+    #[error("profile `{0}` already exists")]
+    ProfileAlreadyExists(String),
+    #[error("invalid profile id `{0}`: use lowercase letters, digits, `-`, or `_`")]
+    InvalidProfileId(String),
     #[error("failed to run `{program}`: {source}")]
     Process {
         program: String,

@@ -51,6 +51,37 @@ impl TuiModel {
                 Intent::None
             }
             (Overlay::ConfirmRemove { .. }, _) => Intent::None,
+            (
+                Overlay::ConfirmDeleteProfile { id, focus },
+                KeyCode::Tab | KeyCode::BackTab | KeyCode::Left | KeyCode::Right,
+            ) => {
+                let new_focus = 1 - *focus;
+                self.overlay = Overlay::ConfirmDeleteProfile {
+                    id: id.clone(),
+                    focus: new_focus,
+                };
+                Intent::None
+            }
+            (Overlay::ConfirmDeleteProfile { id, focus }, KeyCode::Enter) => {
+                if *focus == 1 {
+                    let id = id.clone();
+                    self.close_overlay();
+                    Intent::DeleteProfile(id)
+                } else {
+                    self.close_overlay();
+                    Intent::None
+                }
+            }
+            (Overlay::ConfirmDeleteProfile { id, .. }, KeyCode::Char('y' | 'Y')) => {
+                let id = id.clone();
+                self.close_overlay();
+                Intent::DeleteProfile(id)
+            }
+            (Overlay::ConfirmDeleteProfile { .. }, KeyCode::Char('n' | 'N') | KeyCode::Esc) => {
+                self.close_overlay();
+                Intent::None
+            }
+            (Overlay::ConfirmDeleteProfile { .. }, _) => Intent::None,
             (Overlay::ConfirmUpdate(id), KeyCode::Char('y') | KeyCode::Enter) => {
                 let id = id.clone();
                 self.close_overlay();
@@ -114,6 +145,32 @@ impl TuiModel {
                 Intent::None
             }
             (Overlay::AddMarketplace(_), _) => Intent::None,
+            (Overlay::NewProfile(input), KeyCode::Enter) => {
+                let id = slugify(input);
+                self.close_overlay();
+                if id.is_empty() {
+                    Intent::None
+                } else {
+                    Intent::CreateProfile(id)
+                }
+            }
+            (Overlay::NewProfile(_), KeyCode::Esc) => {
+                self.close_overlay();
+                Intent::None
+            }
+            (Overlay::NewProfile(input), KeyCode::Backspace) => {
+                let mut input = input.clone();
+                input.pop();
+                self.overlay = Overlay::NewProfile(input);
+                Intent::None
+            }
+            (Overlay::NewProfile(input), KeyCode::Char(c)) => {
+                let mut input = input.clone();
+                input.push(c);
+                self.overlay = Overlay::NewProfile(input);
+                Intent::None
+            }
+            (Overlay::NewProfile(_), _) => Intent::None,
             (Overlay::TrustRequired { retry, .. }, KeyCode::Char('y') | KeyCode::Enter) => {
                 let intent = match retry {
                     TrustedRetry::Install { name, marketplace } => Intent::Install {
@@ -516,6 +573,159 @@ pub(crate) fn render_add_marketplace(frame: &mut ratatui::Frame<'_>, area: Rect,
             Style::default().fg(MUTED),
         )),
         rows[3],
+    );
+}
+
+/// Normalizes free-text input into a profile-id slug: lowercase, runs of
+/// whitespace/underscores collapsed to one `-`, everything else outside
+/// `[a-z0-9-]` dropped. Trims leading/trailing `-`. Mirrors
+/// `profile_state::validate_id`'s accepted charset (plus `_`, folded into
+/// `-` here rather than rejected, since typing a space is the most likely
+/// way a user would separate words).
+fn slugify(input: &str) -> String {
+    let mut slug = String::new();
+    let mut pending_dash = false;
+    for ch in input.trim().chars() {
+        if ch.is_ascii_alphanumeric() {
+            if pending_dash && !slug.is_empty() {
+                slug.push('-');
+            }
+            pending_dash = false;
+            slug.push(ch.to_ascii_lowercase());
+        } else if ch == '-' || ch.is_whitespace() || ch == '_' {
+            pending_dash = true;
+        }
+    }
+    slug
+}
+
+pub(crate) fn render_new_profile(frame: &mut ratatui::Frame<'_>, area: Rect, input: &str) {
+    let width = 60.min(area.width.saturating_sub(4));
+    let height = 7.min(area.height.saturating_sub(2));
+    let popup = Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    );
+    frame.render_widget(Clear, popup);
+    let block = modal_block(" New profile ", ACCENT);
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .split(inner);
+    frame.render_widget(
+        Paragraph::new(Span::styled("Profile name", Style::default().fg(MUTED))),
+        rows[0],
+    );
+    let field = Line::from(vec![
+        Span::raw("› "),
+        Span::styled(
+            input.to_owned(),
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("▏", Style::default().fg(ACCENT)),
+    ]);
+    frame.render_widget(Paragraph::new(field), rows[1]);
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            "enter create · esc cancel",
+            Style::default().fg(MUTED),
+        )),
+        rows[3],
+    );
+}
+
+pub(crate) fn render_confirm_delete_profile(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    id: &str,
+    focus: usize,
+) {
+    let width = 52.min(area.width.saturating_sub(4));
+    let height = 8.min(area.height.saturating_sub(2));
+    let popup = Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    );
+    frame.render_widget(Clear, popup);
+
+    let cancel_style = if focus == 0 {
+        Style::default()
+            .fg(Color::Black)
+            .bg(TEXT_BRIGHT)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(MUTED)
+    };
+    let delete_style = if focus == 1 {
+        Style::default()
+            .fg(TEXT_BRIGHT)
+            .bg(DANGER)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(DANGER).add_modifier(Modifier::BOLD)
+    };
+
+    let message = Line::from(vec![
+        Span::raw("Delete profile "),
+        Span::styled(
+            id.to_owned(),
+            Style::default().fg(DANGER).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("?"),
+    ]);
+    let hint = Line::from(Span::styled(
+        "This only removes UZE's own record — no harness config is touched.",
+        Style::default().fg(MUTED),
+    ));
+    let buttons = Line::from(vec![
+        Span::styled("  Cancel  ", cancel_style),
+        Span::raw("  "),
+        Span::styled("  Delete  ", delete_style),
+    ]);
+    let footer = Line::from(Span::styled(
+        "tab switch · enter confirm · esc cancel · y/n",
+        Style::default().fg(MUTED),
+    ));
+
+    let block = modal_block(" Delete profile? ", DANGER);
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    let inner_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .split(inner);
+    frame.render_widget(
+        Paragraph::new(message).alignment(Alignment::Center),
+        inner_layout[0],
+    );
+    frame.render_widget(
+        Paragraph::new(hint).alignment(Alignment::Center),
+        inner_layout[1],
+    );
+    frame.render_widget(
+        Paragraph::new(buttons).alignment(Alignment::Center),
+        inner_layout[3],
+    );
+    frame.render_widget(
+        Paragraph::new(footer).alignment(Alignment::Center),
+        inner_layout[4],
     );
 }
 

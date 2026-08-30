@@ -4,11 +4,13 @@
 
 use std::{path::PathBuf, sync::mpsc::Sender, thread};
 
+use uze_core::preference::Preferences;
+
 use crate::{
     Result, UzeApplication, UzeError, UzeHome,
     application::{
-        ContextPlan, ContextReconciliationReport, InstallReport, ProjectContextStatus,
-        RemovePluginReport, UpdatePluginReport,
+        ContextPlan, ContextReconciliationReport, InstallReport, ProfileApplyResult,
+        ProjectContextStatus, RemovePluginReport, UpdatePluginReport,
     },
 };
 
@@ -45,6 +47,21 @@ pub(crate) enum Intent {
     /// Reproduce the detected consumer workspace's `agents.lock` through
     /// the exact same Application use case `uze install` invokes.
     InstallProjectEnvironment(PathBuf),
+    CreateProfile(String),
+    DeleteProfile(String),
+    SetActiveProfile(String),
+    /// Fired on every Editor-panel value cycle — deliberately silent/no
+    /// refresh (see `dispatch`'s arm), since the model already applied the
+    /// new value optimistically and a status toast per keystroke would be
+    /// noisy.
+    UpdatePreferences {
+        id: String,
+        preferences: Preferences,
+    },
+    ApplyProfile {
+        id: String,
+        harness_ids: Vec<String>,
+    },
 }
 
 pub(crate) enum WorkerResult {
@@ -59,6 +76,7 @@ pub(crate) enum WorkerResult {
     },
     ContextAnalyzed(std::result::Result<(ProjectContextStatus, ContextPlan), String>),
     ContextApplied(std::result::Result<(String, ContextReconciliationReport), String>),
+    ProfileApplied(std::result::Result<(String, Vec<ProfileApplyResult>), String>),
 }
 
 pub(crate) fn dispatch(
@@ -232,6 +250,63 @@ pub(crate) fn dispatch(
                 let _ = sender.send(WorkerResult::ContextApplied(result));
             });
         }
+        Intent::CreateProfile(id) => {
+            model.status = Status::Working(format!("Creating profile \"{id}\"…"));
+            spawn_mutation(
+                home.clone(),
+                sender.clone(),
+                model.context_root.clone(),
+                move |app| {
+                    app.create_profile(&id, None, Preferences::default())
+                        .map(|()| format!("Created profile \"{id}\""))
+                },
+            );
+        }
+        Intent::DeleteProfile(id) => {
+            model.status = Status::Working(format!("Deleting profile \"{id}\"…"));
+            spawn_mutation(
+                home.clone(),
+                sender.clone(),
+                model.context_root.clone(),
+                move |app| {
+                    app.delete_profile(&id)
+                        .map(|()| format!("Deleted profile \"{id}\""))
+                },
+            );
+        }
+        Intent::SetActiveProfile(id) => {
+            spawn_mutation(
+                home.clone(),
+                sender.clone(),
+                model.context_root.clone(),
+                move |app| {
+                    app.set_active_profile(&id)
+                        .map(|()| format!("\"{id}\" is now the active profile"))
+                },
+            );
+        }
+        Intent::UpdatePreferences { id, preferences } => {
+            let home = home.clone();
+            thread::spawn(move || {
+                if let Ok(app) = tui_application(home) {
+                    let _ = app.update_profile_preferences(&id, preferences);
+                }
+            });
+        }
+        Intent::ApplyProfile { id, harness_ids } => {
+            model.status = Status::Working(format!("Applying \"{id}\"…"));
+            let (home, sender) = (home.clone(), sender.clone());
+            thread::spawn(move || {
+                let result = tui_application(home)
+                    .and_then(|app| app.apply_profile(&id, &harness_ids))
+                    .map(|results| {
+                        let message = apply_message(&id, &results);
+                        (message, results)
+                    })
+                    .map_err(|error| error.to_string());
+                let _ = sender.send(WorkerResult::ProfileApplied(result));
+            });
+        }
     }
 }
 
@@ -276,6 +351,7 @@ fn load_refresh_data(home: UzeHome, context_root: &std::path::Path) -> Result<Re
     let doctor = app.doctor();
     let marketplace_count = app.marketplace_list()?.len();
     let marketplace_plugins = app.list_marketplace_plugins()?;
+    let profiles = app.list_profiles()?;
     // Workspace detection first, then context at the detected root: callers
     // deep inside a subdirectory get the workspace's own AGENTS.md/bridge
     // state, not a cwd-scoped one that misses it. Best-effort — a summary
@@ -291,6 +367,7 @@ fn load_refresh_data(home: UzeHome, context_root: &std::path::Path) -> Result<Re
         doctor: Some(doctor),
         marketplace_plugins,
         marketplace_count,
+        profiles,
         context_status,
         workspace,
     })
@@ -421,6 +498,10 @@ pub(crate) fn drain_worker_results(
                 model.status = Status::Success(message);
                 let _ = report;
             }
+            WorkerResult::ProfileApplied(Ok((message, results))) => {
+                model.profile_apply_results = results;
+                model.status = Status::Success(message);
+            }
             WorkerResult::Refreshed(Err(error)) => {
                 model.maintenance_in_flight = false;
                 model.status = Status::Error(error);
@@ -429,9 +510,45 @@ pub(crate) fn drain_worker_results(
             | WorkerResult::MarketplaceInspected(Err(error))
             | WorkerResult::Mutated(Err(error))
             | WorkerResult::ContextAnalyzed(Err(error))
-            | WorkerResult::ContextApplied(Err(error)) => model.status = Status::Error(error),
+            | WorkerResult::ContextApplied(Err(error))
+            | WorkerResult::ProfileApplied(Err(error)) => model.status = Status::Error(error),
         }
     }
+}
+
+/// `Applied profile "default" to 3 harnesses · 1 approximation` — the one
+/// concise status line the spec asks for; per-harness detail lives in the
+/// Harnesses panel's badges (`model.profile_apply_results`), not here.
+fn apply_message(id: &str, results: &[ProfileApplyResult]) -> String {
+    use uze_core::preference::PreferenceApplyOutcome;
+    let approximated = results
+        .iter()
+        .filter(|result| {
+            matches!(
+                result.outcome,
+                PreferenceApplyOutcome::AppliedWithApproximation { .. }
+            )
+        })
+        .count();
+    let failed = results
+        .iter()
+        .filter(|result| matches!(result.outcome, PreferenceApplyOutcome::Failed { .. }))
+        .count();
+    let mut message = format!(
+        "Applied profile \"{id}\" to {} harness{}",
+        results.len(),
+        if results.len() == 1 { "" } else { "es" }
+    );
+    if approximated > 0 {
+        message.push_str(&format!(
+            " · {approximated} approximation{}",
+            if approximated == 1 { "" } else { "s" }
+        ));
+    }
+    if failed > 0 {
+        message.push_str(&format!(" · {failed} failed",));
+    }
+    message
 }
 
 fn remove_message(report: RemovePluginReport) -> String {

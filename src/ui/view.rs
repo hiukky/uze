@@ -16,6 +16,7 @@ pub mod harnesses;
 pub mod marketplace;
 pub mod overview;
 pub mod plugins;
+pub mod profiles;
 
 /// The design's `selectedPackage.resources` field is a single flat string
 /// ("README, CHANGELOG") — this mirrors that exactly: every capability's

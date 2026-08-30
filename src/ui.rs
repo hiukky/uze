@@ -275,6 +275,7 @@ fn render(frame: &mut ratatui::Frame<'_>, model: &TuiModel, hits: &mut Vec<(Rect
         Route::Plugins => view::plugins::render_plugins(frame, columns[1], model, hits),
         Route::Marketplace => view::marketplace::render_marketplace(frame, columns[1], model, hits),
         Route::Harnesses => view::harnesses::render_harnesses(frame, columns[1], model, hits),
+        Route::Profiles => view::profiles::render_profiles(frame, columns[1], model, hits),
         Route::Doctor => view::doctor::render_doctor(frame, columns[1], model),
     }
 
@@ -295,6 +296,10 @@ fn render(frame: &mut ratatui::Frame<'_>, model: &TuiModel, hits: &mut Vec<(Rect
         Overlay::ProtectedPlugin(id) => overlay::render_protected_plugin(frame, frame.area(), id),
         Overlay::AddMarketplace(input) => {
             overlay::render_add_marketplace(frame, frame.area(), input)
+        }
+        Overlay::NewProfile(input) => overlay::render_new_profile(frame, frame.area(), input),
+        Overlay::ConfirmDeleteProfile { id, focus } => {
+            overlay::render_confirm_delete_profile(frame, frame.area(), id, *focus)
         }
         Overlay::TrustRequired { plugin, detail, .. } => {
             overlay::render_trust_required(frame, frame.area(), plugin, detail)
@@ -426,6 +431,7 @@ fn route_subtitle(route: Route) -> &'static str {
         Route::Marketplace => "browse & install",
         Route::Plugins => "installed plugins",
         Route::Harnesses => "detected agents",
+        Route::Profiles => "preferences",
         Route::Doctor => "diagnostics",
     }
 }
@@ -614,9 +620,12 @@ fn footer(model: &TuiModel) -> Text<'static> {
                 Focus::Sidebar => "↑↓/jk select route · enter/tab open · ? help · q quit",
                 _ => route_hint(model),
             },
-            Overlay::ConfirmRemove { .. } => "tab switch · enter confirm · esc cancel · y/n",
+            Overlay::ConfirmRemove { .. } | Overlay::ConfirmDeleteProfile { .. } => {
+                "tab switch · enter confirm · esc cancel · y/n"
+            }
             Overlay::ProtectedPlugin(_) => "esc/enter to dismiss",
             Overlay::AddMarketplace(_) => "type path/URL · enter add · esc cancel",
+            Overlay::NewProfile(_) => "type name · enter create · esc cancel",
             _ => "enter/y confirm · esc/n cancel",
         }
     };
@@ -669,6 +678,17 @@ fn route_hint(model: &TuiModel) -> &'static str {
             "↑↓ select · enter inspect · i install · a add marketplace · / search · esc close"
         }
         Route::Harnesses => "↑↓ select · s setup · a analyze · p apply · ? status · esc close",
+        Route::Profiles => match model.profile_panel {
+            model::ProfilePanel::List => {
+                "↑↓ select · enter edit · n new · d delete · s switch · a apply · tab panel · esc back"
+            }
+            model::ProfilePanel::Editor => {
+                "↑↓ select · ←→/enter change · tab panel · a apply · esc back"
+            }
+            model::ProfilePanel::Harnesses => {
+                "↑↓ select · space toggle · a apply · tab panel · esc back"
+            }
+        },
         Route::Doctor => "r refresh · ? help",
     }
 }
@@ -792,7 +812,10 @@ mod tests {
     };
 
     use super::hit::Hit;
-    use super::model::{Focus, Overlay, ROUTES, RefreshData, Route, TrustedRetry, TuiModel};
+    use super::model::{
+        Focus, Overlay, PREFERENCE_ROW_COUNT, ProfilePanel, ROUTES, RefreshData, Route,
+        TrustedRetry, TuiModel,
+    };
     use super::render;
     use super::view::doctor::{Severity, classify_doctor};
     use super::worker::{Intent, TrustGrant};
@@ -931,6 +954,28 @@ mod tests {
             ],
         });
         model.harnesses_selected = 0;
+        model.profiles = vec![
+            crate::application::ProfileSummary {
+                id: "dev-autonomous".to_owned(),
+                description: Some("My daily autonomous coding setup.".to_owned()),
+                active: true,
+                preferences: uze_core::preference::Preferences {
+                    autonomy: uze_core::preference::Autonomy::Auto,
+                    sandbox: uze_core::preference::SandboxScope::WorkspaceWrite,
+                    model: uze_core::preference::ModelPreference::Default,
+                },
+            },
+            crate::application::ProfileSummary {
+                id: "safe-mode".to_owned(),
+                description: None,
+                active: false,
+                preferences: uze_core::preference::Preferences::default(),
+            },
+        ];
+        model.profile_harness_selection = ["claude-code".to_owned(), "codex".to_owned()]
+            .into_iter()
+            .collect();
+        model.profile_harness_defaulted = true;
         model
     }
 
@@ -949,6 +994,8 @@ mod tests {
                 marketplace_plugins: base.marketplace_plugins.clone(),
                 doctor: base.doctor.clone(),
                 harnesses_selected: base.harnesses_selected,
+                profiles: base.profiles.clone(),
+                profile_harness_selection: base.profile_harness_selection.clone(),
                 focus: Focus::Content,
                 ..TuiModel::default()
             };
@@ -980,6 +1027,11 @@ mod tests {
             Overlay::ConfirmContextApply,
             Overlay::ProtectedPlugin("one".to_owned()),
             Overlay::AddMarketplace("/home/user/marketplace".to_owned()),
+            Overlay::NewProfile("dev-autonomous".to_owned()),
+            Overlay::ConfirmDeleteProfile {
+                id: "default".to_owned(),
+                focus: 1,
+            },
             Overlay::TrustRequired {
                 plugin: "one".to_owned(),
                 detail: "one -> mcp-server".to_owned(),
@@ -1233,6 +1285,233 @@ mod tests {
     }
 
     #[test]
+    fn profiles_read_only_navigation_never_produces_a_mutating_intent() {
+        let mut model = model_with_data();
+        model.set_route(Route::Profiles);
+        model.focus = Focus::Content;
+        for key in [
+            KeyCode::Down,
+            KeyCode::Up,
+            KeyCode::Char('j'),
+            KeyCode::Char('k'),
+            KeyCode::Tab,
+            KeyCode::BackTab,
+        ] {
+            let intent = model.apply_key(KeyEvent::new(key, KeyModifiers::NONE));
+            assert_eq!(
+                intent,
+                Intent::None,
+                "Profiles navigation must never mutate, got {intent:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn tab_cycles_the_three_profile_panels_while_content_is_focused() {
+        let mut model = model_with_data();
+        model.set_route(Route::Profiles);
+        model.focus = Focus::Content;
+        assert_eq!(model.profile_panel, ProfilePanel::List);
+        model.apply_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(model.profile_panel, ProfilePanel::Editor);
+        model.apply_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(model.profile_panel, ProfilePanel::Harnesses);
+        model.apply_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(model.profile_panel, ProfilePanel::List);
+        model.apply_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
+        assert_eq!(model.profile_panel, ProfilePanel::Harnesses);
+    }
+
+    #[test]
+    fn left_right_cycle_the_selected_preference_value_and_persist_it() {
+        let mut model = model_with_data();
+        model.set_route(Route::Profiles);
+        model.focus = Focus::Content;
+        model.profile_panel = ProfilePanel::Editor;
+        model.profile_editor_selected = 0; // autonomy
+        let before = model.profiles[0].preferences.autonomy;
+        let intent = model.apply_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        assert_ne!(
+            model.profiles[0].preferences.autonomy, before,
+            "cycling must mutate optimistically"
+        );
+        assert!(matches!(intent, Intent::UpdatePreferences { .. }));
+        let after_right = model.profiles[0].preferences.autonomy;
+        model.apply_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        assert_eq!(
+            model.profiles[0].preferences.autonomy, before,
+            "left must undo right's cycle step"
+        );
+        let _ = after_right;
+    }
+
+    #[test]
+    fn left_right_outside_the_editor_panel_falls_back_to_sidebar_focus() {
+        let mut model = model_with_data();
+        model.set_route(Route::Profiles);
+        model.focus = Focus::Content;
+        model.profile_panel = ProfilePanel::List;
+        model.apply_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        assert_eq!(model.focus, Focus::Sidebar);
+    }
+
+    #[test]
+    fn space_toggles_harness_selection_only_in_the_harnesses_panel() {
+        let mut model = model_with_data();
+        model.set_route(Route::Profiles);
+        model.focus = Focus::Content;
+        model.profile_harness_selected = 0;
+        let harness_id = model.doctor.as_ref().unwrap().harnesses[0]
+            .integration
+            .clone();
+        let was_selected = model.profile_harness_selection.contains(&harness_id);
+
+        // No-op outside the Harnesses panel.
+        model.profile_panel = ProfilePanel::List;
+        model.apply_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+        assert_eq!(
+            model.profile_harness_selection.contains(&harness_id),
+            was_selected
+        );
+
+        model.profile_panel = ProfilePanel::Harnesses;
+        model.apply_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+        assert_eq!(
+            model.profile_harness_selection.contains(&harness_id),
+            !was_selected
+        );
+    }
+
+    #[test]
+    fn n_opens_new_profile_overlay_and_submitting_creates_it() {
+        let mut model = model_with_data();
+        model.set_route(Route::Profiles);
+        model.focus = Focus::Content;
+        model.apply_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+        assert_eq!(model.overlay, Overlay::NewProfile(String::new()));
+        assert_eq!(model.focus, Focus::Overlay);
+        for ch in "Team Backend".chars() {
+            model.apply_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        let intent = model.apply_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(intent, Intent::CreateProfile("team-backend".to_owned()));
+        assert_eq!(model.overlay, Overlay::None);
+    }
+
+    #[test]
+    fn new_profile_overlay_esc_cancels_without_intent() {
+        let mut model = model_with_data();
+        model.set_route(Route::Profiles);
+        model.focus = Focus::Content;
+        model.apply_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+        for ch in "x".chars() {
+            model.apply_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        let intent = model.apply_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(intent, Intent::None);
+        assert_eq!(model.overlay, Overlay::None);
+    }
+
+    #[test]
+    fn d_on_the_list_panel_opens_a_delete_confirmation_that_a_stray_click_cannot_confirm() {
+        let mut model = model_with_data();
+        model.set_route(Route::Profiles);
+        model.focus = Focus::Content;
+        model.profile_panel = ProfilePanel::List;
+        model.profiles_selected = 0;
+        let id = model.profiles[0].id.clone();
+        model.apply_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        assert!(matches!(
+            &model.overlay,
+            Overlay::ConfirmDeleteProfile { id: confirmed_id, .. } if *confirmed_id == id
+        ));
+        assert_eq!(model.focus, Focus::Overlay);
+
+        let intent = model.apply_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(
+            intent,
+            Intent::None,
+            "a stray click must never confirm delete"
+        );
+        assert_eq!(model.overlay, Overlay::None);
+    }
+
+    #[test]
+    fn confirming_delete_with_y_emits_delete_profile_intent() {
+        let mut model = model_with_data();
+        model.set_route(Route::Profiles);
+        model.focus = Focus::Content;
+        model.profile_panel = ProfilePanel::List;
+        model.profiles_selected = 0;
+        let id = model.profiles[0].id.clone();
+        model.apply_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        let intent = model.apply_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        assert_eq!(intent, Intent::DeleteProfile(id));
+        assert_eq!(model.overlay, Overlay::None);
+    }
+
+    #[test]
+    fn s_on_the_list_panel_sets_the_selected_profile_active() {
+        let mut model = model_with_data();
+        model.set_route(Route::Profiles);
+        model.focus = Focus::Content;
+        model.profile_panel = ProfilePanel::List;
+        model.profiles_selected = 1;
+        let id = model.profiles[1].id.clone();
+        let intent = model.apply_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
+        assert_eq!(intent, Intent::SetActiveProfile(id));
+    }
+
+    #[test]
+    fn a_applies_the_selected_profile_to_every_checked_harness() {
+        let mut model = model_with_data();
+        model.set_route(Route::Profiles);
+        model.focus = Focus::Content;
+        model.profiles_selected = 0;
+        let id = model.profiles[0].id.clone();
+        let intent = model.apply_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        let Intent::ApplyProfile {
+            id: applied_id,
+            harness_ids,
+        } = intent
+        else {
+            panic!("expected ApplyProfile, got a different intent");
+        };
+        assert_eq!(applied_id, id);
+        assert_eq!(harness_ids.len(), model.profile_harness_selection.len());
+    }
+
+    #[test]
+    fn a_is_inert_with_no_harnesses_selected() {
+        let mut model = model_with_data();
+        model.set_route(Route::Profiles);
+        model.focus = Focus::Content;
+        model.profile_harness_selection.clear();
+        let intent = model.apply_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        assert_eq!(intent, Intent::None);
+    }
+
+    #[test]
+    fn editor_selection_clamps_to_the_preference_row_count() {
+        let mut model = model_with_data();
+        model.set_route(Route::Profiles);
+        model.profile_panel = ProfilePanel::Editor;
+        for _ in 0..10 {
+            model.move_profile_selection(1);
+        }
+        assert_eq!(model.profile_editor_selected, PREFERENCE_ROW_COUNT - 1);
+        for _ in 0..10 {
+            model.move_profile_selection(-1);
+        }
+        assert_eq!(model.profile_editor_selected, 0);
+    }
+
+    #[test]
     fn doctor_classifies_conflicts_as_high_and_missing_as_low() {
         use crate::application::{ManagedStateSummary, PackageManagedState};
         let doctor = DoctorReport {
@@ -1396,9 +1675,9 @@ mod tests {
         });
 
         // Sidebar order: Overview → Marketplace → Plugins → Harnesses →
-        // Doctor. No deep-request intent anywhere.
+        // Profiles → Doctor. No deep-request intent anywhere.
         let mut last_intent = Intent::None;
-        for _ in 0..4 {
+        for _ in 0..5 {
             last_intent = model.apply_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         }
         assert_eq!(model.route, Route::Doctor);

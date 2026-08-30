@@ -32,6 +32,7 @@ use uze_core::{
         default_exposure_name_candidates, detach_standard_receipt, inspect_standard_receipt,
         qualified_exposure_name_candidates,
     },
+    preference::{PreferenceApplyOutcome, PreferencePort, PreferenceTranslation, Preferences},
     project::Resource,
     provisioning::{ProcessRunner, ProvisioningResult},
     router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus},
@@ -40,6 +41,7 @@ use uze_core::{
 };
 
 mod mcp;
+mod preferences;
 mod provision;
 mod skills;
 
@@ -53,6 +55,7 @@ use provision::{provision_opencode, resolve_opencode_binary};
 /// discover user Agent Skills at `~/.agents/skills` and natively reads local
 /// MCP definitions from its global config, so this integration decomposes
 /// only those portable capabilities.
+#[derive(Clone)]
 pub struct OpenCodeIntegration {
     skills_dir: PathBuf,
     agents_dir: PathBuf,
@@ -390,6 +393,20 @@ impl IntegrationPort for OpenCodeIntegration {
             state: AttachmentState::Missing,
             reason: "OpenCode managed MCP entry detached".to_owned(),
         })
+    }
+}
+
+impl PreferencePort for OpenCodeIntegration {
+    fn preference_id(&self) -> &'static str {
+        IntegrationPort::id(self)
+    }
+
+    fn translate(&self, preferences: &Preferences) -> PreferenceTranslation {
+        preferences::translate(preferences)
+    }
+
+    fn apply(&self, preferences: &Preferences) -> Result<PreferenceApplyOutcome> {
+        preferences::apply(&self.config_path, preferences)
     }
 }
 

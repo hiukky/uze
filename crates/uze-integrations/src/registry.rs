@@ -11,9 +11,15 @@
 
 use std::path::Path;
 
-use uze_core::{Result, home::UzeHome, hook::HookAdapterPort, integration::IntegrationPort};
+use uze_core::{
+    Result, home::UzeHome, hook::HookAdapterPort, integration::IntegrationPort,
+    preference::PreferencePort,
+};
 
 use crate::{antigravity, claude, codex, opencode};
+
+/// `IntegrationRegistry::into_parts`'s return shape.
+pub type RegistryParts = (Vec<Box<dyn IntegrationPort>>, Vec<Box<dyn PreferencePort>>);
 
 /// The built-in integration set, in registration order.
 pub struct IntegrationRegistry {
@@ -24,6 +30,10 @@ pub struct IntegrationRegistry {
     /// the dispatcher. Built from the same constructors as `integrations`,
     /// so the adapter set cannot drift from the harness set.
     hook_adapters: Vec<Box<dyn HookAdapterPort>>,
+    /// Preference translation/apply for every registered harness — unlike
+    /// hooks, all four opt in. Built from the same constructors as
+    /// `integrations`, so the adapter set cannot drift from the harness set.
+    preference_adapters: Vec<Box<dyn PreferencePort>>,
 }
 
 impl IntegrationRegistry {
@@ -38,12 +48,18 @@ impl IntegrationRegistry {
             integrations: vec![
                 Box::new(claude.clone()),
                 Box::new(codex.clone()),
-                Box::new(opencode_integration),
+                Box::new(opencode_integration.clone()),
                 Box::new(antigravity_integration.clone()),
             ],
             hook_adapters: vec![
+                Box::new(claude.clone()),
+                Box::new(codex.clone()),
+                Box::new(antigravity_integration.clone()),
+            ],
+            preference_adapters: vec![
                 Box::new(claude),
                 Box::new(codex),
+                Box::new(opencode_integration),
                 Box::new(antigravity_integration),
             ],
         })
@@ -66,12 +82,18 @@ impl IntegrationRegistry {
             integrations: vec![
                 Box::new(claude.clone()),
                 Box::new(codex.clone()),
-                Box::new(opencode_integration),
+                Box::new(opencode_integration.clone()),
                 Box::new(antigravity_integration.clone()),
             ],
             hook_adapters: vec![
+                Box::new(claude.clone()),
+                Box::new(codex.clone()),
+                Box::new(antigravity_integration.clone()),
+            ],
+            preference_adapters: vec![
                 Box::new(claude),
                 Box::new(codex),
+                Box::new(opencode_integration),
                 Box::new(antigravity_integration),
             ],
         }
@@ -81,6 +103,13 @@ impl IntegrationRegistry {
     /// (`UzeApplication::new`, tests, callers that own their own composition).
     pub fn into_inner(self) -> Vec<Box<dyn IntegrationPort>> {
         self.integrations
+    }
+
+    /// Consumes the registry into both its integration list and its
+    /// preference adapters (`UzeApplication::from_env`), for a caller that
+    /// needs both without a second construction pass.
+    pub fn into_parts(self) -> RegistryParts {
+        (self.integrations, self.preference_adapters)
     }
 
     pub fn all(&self) -> &[Box<dyn IntegrationPort>] {
@@ -103,6 +132,18 @@ impl IntegrationRegistry {
             .iter()
             .map(Box::as_ref)
             .find(|adapter| adapter.adapter_id() == id)
+    }
+
+    /// The preference translation/apply adapter for a harness id.
+    pub fn preference_adapter(&self, id: &str) -> Option<&dyn PreferencePort> {
+        self.preference_adapters
+            .iter()
+            .map(Box::as_ref)
+            .find(|adapter| adapter.preference_id() == id)
+    }
+
+    pub fn preference_adapters(&self) -> impl Iterator<Item = &dyn PreferencePort> {
+        self.preference_adapters.iter().map(Box::as_ref)
     }
 
     /// Resolves a requested harness name against the registered set: an id

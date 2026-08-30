@@ -23,6 +23,7 @@ use uze_core::{
         AttachmentInspection, AttachmentState, HarnessDetection, IntegrationPort,
         IntegrationStatus, PublicationStatus,
     },
+    preference::PreferencePort,
     provisioning::{ProcessRunner, ProvisionStatus, ProvisioningResult, SystemProcessRunner},
     reconciliation::{
         PackageRemovalPlan, ReconciledReceipt, ReconciliationReport, reconcile_package,
@@ -43,8 +44,11 @@ mod lifecycle;
 mod maintenance;
 mod marketplace;
 mod overview;
+mod profile;
 mod project_environment;
 mod read_models;
+
+pub use profile::{ProfileApplyResult, ProfileSummary};
 
 // Re-export project environment types for CLI access.
 pub use project_environment::{
@@ -91,6 +95,12 @@ pub struct UzeApplication {
     home: UzeHome,
     store: UzeStore,
     integrations: Vec<Box<dyn IntegrationPort>>,
+    /// Preference translation/apply adapters (Profiles feature). Empty by
+    /// default from `new`/`new_with_runner` so the many existing call sites
+    /// that construct fake `IntegrationPort`-only fixtures keep compiling
+    /// unchanged; `from_env`/`from_env_with_runner` populate it from the
+    /// same `IntegrationRegistry` that supplies `integrations`.
+    preference_adapters: Vec<Box<dyn PreferencePort>>,
     runner: Box<dyn ProcessRunner>,
     detection_cache: DetectionCache,
     inspection_cache: crate::application::inspection_cache::InspectionCache,
@@ -102,7 +112,13 @@ impl UzeApplication {
     /// harnesses exist; this layer only knows there are integrations.
     pub fn from_env(home: UzeHome) -> Result<Self> {
         let registry = IntegrationRegistry::builtin(&home)?;
-        Ok(Self::new(home, registry.into_inner()))
+        let (integrations, preference_adapters) = registry.into_parts();
+        Ok(Self::new_with_runner_and_preferences(
+            home,
+            integrations,
+            preference_adapters,
+            Box::new(SystemProcessRunner),
+        ))
     }
 
     /// Dependency-injected constructor for deterministic contract tests or
@@ -119,7 +135,13 @@ impl UzeApplication {
     /// there.
     pub fn from_env_with_runner(home: UzeHome, runner: Box<dyn ProcessRunner>) -> Result<Self> {
         let registry = IntegrationRegistry::builtin(&home)?;
-        Ok(Self::new_with_runner(home, registry.into_inner(), runner))
+        let (integrations, preference_adapters) = registry.into_parts();
+        Ok(Self::new_with_runner_and_preferences(
+            home,
+            integrations,
+            preference_adapters,
+            runner,
+        ))
     }
 
     /// Test and embedding composition point for the process runner used only
@@ -130,12 +152,24 @@ impl UzeApplication {
         integrations: Vec<Box<dyn IntegrationPort>>,
         runner: Box<dyn ProcessRunner>,
     ) -> Self {
+        Self::new_with_runner_and_preferences(home, integrations, Vec::new(), runner)
+    }
+
+    /// Like `new_with_runner`, additionally wiring preference adapters for
+    /// the Profiles feature's `apply_profile`.
+    pub fn new_with_runner_and_preferences(
+        home: UzeHome,
+        integrations: Vec<Box<dyn IntegrationPort>>,
+        preference_adapters: Vec<Box<dyn PreferencePort>>,
+        runner: Box<dyn ProcessRunner>,
+    ) -> Self {
         Self {
             store: UzeStore::new(home.clone()),
             detection_cache: DetectionCache::new(&home),
             inspection_cache: inspection_cache::InspectionCache::new(&home),
             home,
             integrations,
+            preference_adapters,
             runner,
         }
     }

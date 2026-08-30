@@ -25,6 +25,7 @@ use uze_core::{
         HarnessDetection, IntegrationPort, ManagedArtifact, PublicationStatus,
         default_exposure_name_candidates, detach_standard_receipt, inspect_standard_receipt,
     },
+    preference::{PreferenceApplyOutcome, PreferencePort, PreferenceTranslation, Preferences},
     project::Resource,
     provisioning::{ProcessRunner, ProcessSpec, ProvisioningResult},
     router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus},
@@ -35,6 +36,7 @@ use uze_core::{
 mod generate;
 mod mcp;
 mod plugin;
+mod preferences;
 mod provision;
 mod skills;
 
@@ -113,6 +115,14 @@ impl CodexIntegration {
     /// entries are preserved.
     fn hooks_config_path(&self) -> PathBuf {
         self.command_home.join(".codex").join("hooks.json")
+    }
+
+    /// Codex's own `config.toml` (`docs/config-file/config-basic`) — the
+    /// user's shared config file. Only the keys UZE owns (`approval_policy`,
+    /// `sandbox_mode`, `sandbox_workspace_write.network_access`) are ever
+    /// touched; everything else, including comments, is preserved.
+    fn config_toml_path(&self) -> PathBuf {
+        self.command_home.join(".codex").join("config.toml")
     }
 
     /// Convenience constructor for the CLI composition root. Unused when
@@ -711,6 +721,20 @@ impl HookAdapterPort for CodexIntegration {
         event: HookEvent,
     ) -> std::result::Result<HookNativeOutput, String> {
         hook_projection::codex_render_output(outcome, event)
+    }
+}
+
+impl PreferencePort for CodexIntegration {
+    fn preference_id(&self) -> &'static str {
+        IntegrationPort::id(self)
+    }
+
+    fn translate(&self, preferences: &Preferences) -> PreferenceTranslation {
+        preferences::translate(preferences)
+    }
+
+    fn apply(&self, preferences: &Preferences) -> Result<PreferenceApplyOutcome> {
+        preferences::apply(&self.config_toml_path(), preferences)
     }
 }
 

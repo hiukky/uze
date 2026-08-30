@@ -17,6 +17,12 @@ pub(crate) enum Hit {
     /// it's currently collapsed.
     JumpToMarketplace(String),
     HarnessRow(usize),
+    ProfileRow(usize),
+    PreferenceRow(usize),
+    /// Clicking a harness checkbox toggles it immediately — the click's
+    /// obvious intent — rather than only selecting it the way `HarnessRow`
+    /// does.
+    ProfileHarnessRow(usize),
 }
 
 impl TuiModel {
@@ -86,6 +92,25 @@ impl TuiModel {
                 self.harnesses_selected = index;
                 self.harnesses_drawer_open = true;
                 self.focus = Focus::Content;
+                Intent::None
+            }
+            Hit::ProfileRow(index) => {
+                self.profiles_selected = index;
+                self.profile_panel = super::model::ProfilePanel::List;
+                self.focus = Focus::Content;
+                Intent::None
+            }
+            Hit::PreferenceRow(index) => {
+                self.profile_editor_selected = index;
+                self.profile_panel = super::model::ProfilePanel::Editor;
+                self.focus = Focus::Content;
+                Intent::None
+            }
+            Hit::ProfileHarnessRow(index) => {
+                self.profile_harness_selected = index;
+                self.profile_panel = super::model::ProfilePanel::Harnesses;
+                self.focus = Focus::Content;
+                self.toggle_profile_harness_at(index);
                 Intent::None
             }
         }

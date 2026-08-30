@@ -28,6 +28,7 @@ use uze_core::{
         default_exposure_name_candidates, detach_standard_receipt, inspect_standard_receipt,
         qualified_exposure_name_candidates,
     },
+    preference::{PreferenceApplyOutcome, PreferencePort, PreferenceTranslation, Preferences},
     project::Resource,
     provisioning::{ProcessRunner, ProcessSpec, ProvisioningResult},
     router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus},
@@ -38,6 +39,7 @@ use uze_core::{
 mod generate;
 mod mcp;
 mod plugin;
+mod preferences;
 mod provision;
 mod runtime;
 mod skills;
@@ -696,6 +698,22 @@ impl HookAdapterPort for ClaudeIntegration {
         event: HookEvent,
     ) -> std::result::Result<HookNativeOutput, String> {
         hook_projection::claude_render_output(outcome, event)
+    }
+}
+
+impl PreferencePort for ClaudeIntegration {
+    fn preference_id(&self) -> &'static str {
+        IntegrationPort::id(self)
+    }
+
+    fn translate(&self, preferences: &Preferences) -> PreferenceTranslation {
+        preferences::translate(preferences)
+    }
+
+    fn apply(&self, preferences: &Preferences) -> Result<PreferenceApplyOutcome> {
+        // Preferences share Claude's user-scope settings file with Hooks
+        // (ADR-033) — same file, disjoint keys.
+        preferences::apply(&self.hooks_config_path(), preferences)
     }
 }
 

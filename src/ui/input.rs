@@ -7,7 +7,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 use crate::application::ContextPlan;
 
 use super::is_protected_plugin;
-use super::model::{Focus, Overlay, ROUTES, Route, TuiModel};
+use super::model::{Focus, Overlay, ProfilePanel, ROUTES, Route, TuiModel};
 use super::worker::Intent;
 
 impl TuiModel {
@@ -31,6 +31,18 @@ impl TuiModel {
                 Intent::None
             }
             KeyCode::Char('q') => Intent::Quit,
+            // Profiles cycles its three sub-panels on Tab while Content is
+            // focused, instead of the generic Sidebar/Content toggle below —
+            // scoped tightly to this route so every other screen's Tab
+            // behavior is unchanged.
+            KeyCode::Tab if self.route == Route::Profiles && self.focus == Focus::Content => {
+                self.profile_panel = self.profile_panel.next();
+                Intent::None
+            }
+            KeyCode::BackTab if self.route == Route::Profiles && self.focus == Focus::Content => {
+                self.profile_panel = self.profile_panel.prev();
+                Intent::None
+            }
             KeyCode::Tab => {
                 self.focus = match self.focus {
                     Focus::Sidebar => Focus::Content,
@@ -71,8 +83,36 @@ impl TuiModel {
 
     fn content_key(&mut self, key: KeyEvent) -> Intent {
         match key.code {
+            // Left/Right only cycle a preference value in the Profiles
+            // Editor panel — everywhere else (including the other two
+            // Profiles panels) Left/`h` keeps its usual "back to sidebar"
+            // meaning, matched below.
+            KeyCode::Left
+                if self.route == Route::Profiles && self.profile_panel == ProfilePanel::Editor =>
+            {
+                self.cycle_selected_preference(false)
+            }
+            KeyCode::Right
+                if self.route == Route::Profiles && self.profile_panel == ProfilePanel::Editor =>
+            {
+                self.cycle_selected_preference(true)
+            }
             KeyCode::Left | KeyCode::Char('h') => {
                 self.focus = Focus::Sidebar;
+                Intent::None
+            }
+            KeyCode::Char(' ') if self.route == Route::Profiles => {
+                if self.profile_panel == ProfilePanel::Harnesses {
+                    self.toggle_profile_harness_at(self.profile_harness_selected);
+                }
+                Intent::None
+            }
+            KeyCode::Char('j') | KeyCode::Down if self.route == Route::Profiles => {
+                self.move_profile_selection(1);
+                Intent::None
+            }
+            KeyCode::Char('k') | KeyCode::Up if self.route == Route::Profiles => {
+                self.move_profile_selection(-1);
                 Intent::None
             }
             KeyCode::Char('j') | KeyCode::Down => {
@@ -91,6 +131,13 @@ impl TuiModel {
                     Intent::None
                 }
             }
+            KeyCode::Esc if self.route == Route::Profiles => {
+                // Collapses back to the List panel first, mirroring every
+                // other route's "Esc closes the drawer, doesn't touch
+                // Sidebar/Content focus" convention.
+                self.profile_panel = ProfilePanel::List;
+                Intent::None
+            }
             KeyCode::Esc => {
                 // Slides the open drawer away — the fetched detail stays
                 // cached, so reopening the same selection is instant.
@@ -101,6 +148,41 @@ impl TuiModel {
                     _ => {}
                 }
                 Intent::None
+            }
+            KeyCode::Char('n') if self.route == Route::Profiles => {
+                self.overlay = Overlay::NewProfile(String::new());
+                self.focus = Focus::Overlay;
+                Intent::None
+            }
+            KeyCode::Char('d')
+                if self.route == Route::Profiles && self.profile_panel == ProfilePanel::List =>
+            {
+                if let Some(profile) = self.selected_profile() {
+                    self.overlay = Overlay::ConfirmDeleteProfile {
+                        id: profile.id.clone(),
+                        focus: 1,
+                    };
+                    self.focus = Focus::Overlay;
+                }
+                Intent::None
+            }
+            KeyCode::Char('s')
+                if self.route == Route::Profiles && self.profile_panel == ProfilePanel::List =>
+            {
+                self.selected_profile()
+                    .map(|profile| Intent::SetActiveProfile(profile.id.clone()))
+                    .unwrap_or(Intent::None)
+            }
+            KeyCode::Char('a') if self.route == Route::Profiles => {
+                let harness_ids: Vec<String> =
+                    self.profile_harness_selection.iter().cloned().collect();
+                self.selected_profile()
+                    .filter(|_| !harness_ids.is_empty())
+                    .map(|profile| Intent::ApplyProfile {
+                        id: profile.id.clone(),
+                        harness_ids: harness_ids.clone(),
+                    })
+                    .unwrap_or(Intent::None)
             }
             KeyCode::Enter => self.open_or_act(),
             KeyCode::Char('r') if self.route == Route::Plugins => {
@@ -204,6 +286,18 @@ impl TuiModel {
                 self.marketplace_drawer_open = true;
                 self.marketplace_inspect_intent()
             }
+            // List: jump straight into editing, the same way Enter opens a
+            // drawer elsewhere. Editor: change the highlighted value (same
+            // step as Right). Harnesses: no-op — toggling is Space's job,
+            // deliberately not doubled onto Enter.
+            Route::Profiles => match self.profile_panel {
+                ProfilePanel::List => {
+                    self.profile_panel = ProfilePanel::Editor;
+                    Intent::None
+                }
+                ProfilePanel::Editor => self.cycle_selected_preference(true),
+                ProfilePanel::Harnesses => Intent::None,
+            },
             _ => Intent::None,
         }
     }

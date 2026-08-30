@@ -18,6 +18,8 @@ pub mod importers;
 pub mod integration;
 pub mod naming;
 pub mod persistence;
+pub mod preference;
+pub mod profile_state;
 pub mod project;
 pub mod project_lock;
 pub mod project_root;

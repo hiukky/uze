@@ -69,6 +69,7 @@ use uze_core::{
         HarnessDetection, IntegrationPort, ManagedArtifact, default_exposure_name_candidates,
         detach_standard_receipt, inspect_standard_receipt,
     },
+    preference::{PreferenceApplyOutcome, PreferencePort, PreferenceTranslation, Preferences},
     project::Resource,
     provisioning::{ProcessRunner, ProcessSpec, ProvisioningResult},
     router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus},
@@ -79,6 +80,7 @@ use uze_core::{
 mod generate;
 mod mcp;
 mod plugin;
+mod preferences;
 mod provision;
 mod skills;
 
@@ -147,6 +149,17 @@ impl AntigravityIntegration {
     pub fn from_env(uze_home: UzeHome) -> Result<Self> {
         let home = std::env::var_os("HOME").ok_or(UzeError::MissingHomeDirectory)?;
         Ok(Self::new(PathBuf::from(home).join(".agents"), uze_home))
+    }
+
+    /// `~/.gemini/antigravity-cli/settings.json` — same directory as
+    /// `skills_dir`/`agents_dir`'s parent (unverified against current docs
+    /// beyond two independently reproduced fetches; see `preferences`'s
+    /// module doc for the confidence caveat).
+    fn preferences_config_path(&self) -> PathBuf {
+        self.command_home
+            .join(".gemini")
+            .join("antigravity-cli")
+            .join("settings.json")
     }
 
     /// Same PATH-shim recursion hazard and the same fix as every peer
@@ -604,5 +617,19 @@ impl HookAdapterPort for AntigravityIntegration {
         event: HookEvent,
     ) -> std::result::Result<HookNativeOutput, String> {
         hook_projection::antigravity_render_output(outcome, event)
+    }
+}
+
+impl PreferencePort for AntigravityIntegration {
+    fn preference_id(&self) -> &'static str {
+        IntegrationPort::id(self)
+    }
+
+    fn translate(&self, preferences: &Preferences) -> PreferenceTranslation {
+        preferences::translate(preferences)
+    }
+
+    fn apply(&self, preferences: &Preferences) -> Result<PreferenceApplyOutcome> {
+        preferences::apply(&self.preferences_config_path(), preferences)
     }
 }
