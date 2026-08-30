@@ -103,7 +103,7 @@ jobs:
       # largest remaining gap. 90% global requires that plus real
       # codex/gemini harness tests, not shallow line chasing.
       - run: cargo llvm-cov --workspace --summary-only --fail-under-lines 68 --fail-under-regions 69
-      - run: cargo llvm-cov --workspace --lcov --output-path lcov.info
+      - run: cargo llvm-cov report --lcov --output-path lcov.info
       - uses: actions/upload-artifact@v7
         with:
           name: lcov
