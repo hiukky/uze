@@ -29,9 +29,9 @@ fn autonomy_mapping(autonomy: Autonomy) -> (CompatibilityRoute, &'static str) {
     match autonomy {
         Autonomy::Manual => (CompatibilityRoute::Native, "untrusted"),
         Autonomy::Balanced => (CompatibilityRoute::Native, "on-request"),
-        // `approval_policy` has no tier between "on-request" and "never" —
-        // Auto collapses onto the same value as Balanced.
-        Autonomy::Auto => (CompatibilityRoute::Adaptable, "on-request"),
+        // Codex expresses a Claude-style auto mode as no command approvals
+        // while retaining the separately configured sandbox boundary.
+        Autonomy::Auto => (CompatibilityRoute::Native, "never"),
         Autonomy::Unattended => (CompatibilityRoute::Native, "never"),
     }
 }
@@ -104,11 +104,7 @@ pub(crate) fn apply(
         PreferenceApplyDetail {
             route: autonomy_route,
             changed_keys: vec!["approval_policy".to_owned()],
-            note: (autonomy_route != CompatibilityRoute::Native).then(|| {
-                "Codex has no tier between on-request and never; auto uses the same value as \
-                 balanced"
-                    .to_owned()
-            }),
+            note: None,
         },
         PreferenceApplyDetail {
             route: sandbox_route,
@@ -158,12 +154,35 @@ mod tests {
     }
 
     #[test]
-    fn auto_autonomy_collapses_onto_balanced_and_is_flagged_adaptable() {
+    fn auto_autonomy_disables_command_approvals_while_preserving_the_sandbox() {
         let translation = translate(&Preferences {
             autonomy: Autonomy::Auto,
             ..Preferences::default()
         });
-        assert_eq!(translation.autonomy.route, CompatibilityRoute::Adaptable);
+        assert_eq!(translation.autonomy.route, CompatibilityRoute::Native);
+        assert_eq!(
+            translation.autonomy.native_summary,
+            "approval_policy = \"never\""
+        );
+    }
+
+    #[test]
+    fn auto_with_workspace_write_avoids_prompts_without_full_access() {
+        let path = temp_path("auto-workspace-write");
+        apply(
+            &path,
+            &Preferences {
+                autonomy: Autonomy::Auto,
+                sandbox: SandboxScope::WorkspaceWrite,
+                ..Preferences::default()
+            },
+        )
+        .unwrap();
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("approval_policy = \"never\""));
+        assert!(contents.contains("sandbox_mode = \"workspace-write\""));
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
