@@ -8,7 +8,16 @@ use crate::{PaneId, Session, SpaceId, TabId, WorkspaceId};
 /// only on the server (never persisted — see `runtime::serve`), so there is
 /// nothing to migrate; a server still running the previous shape simply
 /// fails this version check instead of desyncing.
-pub const PROTOCOL_VERSION: u16 = 2;
+///
+/// Bumped again for `MouseMode` on `PaneSnapshot`/`PaneDamage`: unlike a
+/// request-shape change (rejected cleanly by the check above, on the one
+/// message a client sends once), a *pushed* shape a still-running old
+/// server keeps sending forever has no such gate — a client built against
+/// the new shape fails to deserialize every `Snapshot`/`Damage` event from
+/// an unbumped old server, which silently kills its read thread and never
+/// surfaces as more than a pane stuck on "starting shell…". Any field
+/// added to either struct needs this bumped too, for the same reason.
+pub const PROTOCOL_VERSION: u16 = 3;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ClientRequest {
@@ -96,6 +105,7 @@ pub struct PaneSnapshot {
     pub rows: u16,
     pub cursor: Cursor,
     pub alternate_screen: bool,
+    pub mouse: MouseMode,
     pub cells: Vec<RenderCell>,
 }
 
@@ -111,7 +121,27 @@ pub struct PaneDamage {
     pub rows: u16,
     pub cursor: Cursor,
     pub alternate_screen: bool,
+    pub mouse: MouseMode,
     pub changed: Vec<(u16, u16, RenderCell)>,
+}
+
+/// What mouse tracking the pane's own program has asked the terminal for
+/// (xterm mouse-tracking modes 1000/1002/1003/1006), read straight off the
+/// PTY's VT state. The client uses this to decide whether a click/drag/
+/// scroll that misses uze's own chrome should be encoded and forwarded into
+/// the pane at all — forwarding into a pane that never asked for mouse
+/// reports would inject raw escape bytes into a plain shell prompt.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct MouseMode {
+    /// Button press/release/wheel reporting is on (mode 1000, or the two
+    /// motion modes below, which imply it).
+    pub reports_clicks: bool,
+    /// Motion while a button is held is also reported (mode 1002/1003) —
+    /// xterm doesn't send drag events under plain click-reporting alone.
+    pub reports_drag: bool,
+    /// SGR extended coordinate encoding (mode 1006) is on; otherwise the
+    /// legacy X10 encoding applies, which caps coordinates at 223.
+    pub sgr: bool,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

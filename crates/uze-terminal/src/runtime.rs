@@ -16,15 +16,15 @@ use alacritty_terminal::{
     grid::Dimensions,
     index::{Column, Line},
     term::{Config, TermMode, cell::Flags, test::TermSize},
-    vte::ansi::{Color as EngineColor, NamedColor, Processor},
+    vte::ansi::{Color as EngineColor, NamedColor, Processor, Rgb},
 };
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
 
 use crate::{
-    CellAttributes, ClientEvent, ClientRequest, Cursor, PROTOCOL_VERSION, PaneDamage, PaneId,
-    PaneSnapshot, RenderCell, Session, SpaceSeed, TabSeed, TerminalColor, WorkspaceId,
+    CellAttributes, ClientEvent, ClientRequest, Cursor, MouseMode, PROTOCOL_VERSION, PaneDamage,
+    PaneId, PaneSnapshot, RenderCell, Session, SpaceSeed, TabSeed, TerminalColor, WorkspaceId,
 };
 
 /// ADR-038: the endpoint is local and user-private; no network transport is
@@ -878,10 +878,50 @@ struct PaneRuntime {
 #[derive(Clone)]
 struct ReplySink(mpsc::Sender<Vec<u8>>);
 
+/// Mirrors `src/ui.rs`'s `BASE`/`TEXT_PRIMARY` — the exact colors a cell's
+/// `TerminalColor::Default{Background,Foreground}` renders as on screen (see
+/// `orchestrator::color`). A pane's own program can ask the terminal what
+/// its background/foreground actually is (OSC 10/11 — e.g. to pick a light-
+/// or dark-adapted UI, the way Codex's input surface does); answering with
+/// anything other than what's truly drawn would tell it a color that
+/// doesn't match, which is exactly what happens if the query goes
+/// unanswered and the asker falls back to its own default guess.
+const REPLY_BACKGROUND: Rgb = Rgb {
+    r: 10,
+    g: 12,
+    b: 13,
+};
+const REPLY_FOREGROUND: Rgb = Rgb {
+    r: 230,
+    g: 228,
+    b: 222,
+};
+
 impl EventListener for ReplySink {
     fn send_event(&self, event: Event) {
-        if let Event::PtyWrite(reply) = event {
-            let _ = self.0.send(reply.into_bytes());
+        match event {
+            Event::PtyWrite(reply) => {
+                let _ = self.0.send(reply.into_bytes());
+            }
+            // `Term::dynamic_color_sequence` (OSC 10/11/12 queries) never
+            // sends a `PtyWrite` itself — it hands back a formatting
+            // closure expecting the *caller* to resolve the color and
+            // write the reply. Left unhandled, a query like Codex's OSC 11
+            // background probe just hangs until it times out server-side,
+            // so the query answers here instead of falling through.
+            Event::ColorRequest(index, format) => {
+                let color = if index == NamedColor::Foreground as usize {
+                    Some(REPLY_FOREGROUND)
+                } else if index == NamedColor::Background as usize {
+                    Some(REPLY_BACKGROUND)
+                } else {
+                    None
+                };
+                if let Some(color) = color {
+                    let _ = self.0.send(format(color).into_bytes());
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -1079,6 +1119,7 @@ impl PaneRuntime {
             rows: current.rows,
             cursor: current.cursor,
             alternate_screen: current.alternate_screen,
+            mouse: current.mouse,
             changed,
         };
         *last_sent = Some(current);
@@ -1135,6 +1176,7 @@ fn snapshot(pane: PaneId, terminal: &Term<ReplySink>) -> PaneSnapshot {
             });
         }
     }
+    let mode = content.mode;
     PaneSnapshot {
         pane,
         columns,
@@ -1143,8 +1185,19 @@ fn snapshot(pane: PaneId, terminal: &Term<ReplySink>) -> PaneSnapshot {
             column: content.cursor.point.column.0 as u16,
             row: content.cursor.point.line.0 as u16,
         },
-        alternate_screen: content.mode.contains(TermMode::ALT_SCREEN),
+        alternate_screen: mode.contains(TermMode::ALT_SCREEN),
+        mouse: mouse_mode(mode),
         cells,
+    }
+}
+
+fn mouse_mode(mode: TermMode) -> MouseMode {
+    MouseMode {
+        reports_clicks: mode.intersects(
+            TermMode::MOUSE_REPORT_CLICK | TermMode::MOUSE_DRAG | TermMode::MOUSE_MOTION,
+        ),
+        reports_drag: mode.intersects(TermMode::MOUSE_DRAG | TermMode::MOUSE_MOTION),
+        sgr: mode.contains(TermMode::SGR_MOUSE),
     }
 }
 
@@ -1220,10 +1273,11 @@ fn workspace_identity(root: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        Endpoint, PaneRuntime, PersistedSpace, PersistedTab, PersistedWorkspace, ReplySink, Server,
-        persisted_state_path, relaunch_command_for_process, snapshot, workspace_identity,
+        Endpoint, PaneRuntime, PersistedSpace, PersistedTab, PersistedWorkspace, REPLY_BACKGROUND,
+        REPLY_FOREGROUND, ReplySink, Server, persisted_state_path, relaunch_command_for_process,
+        snapshot, workspace_identity,
     };
-    use crate::{PaneId, TerminalColor};
+    use crate::{MouseMode, PaneId, TerminalColor};
     use alacritty_terminal::{
         Term,
         term::{Config, test::TermSize},
@@ -1272,6 +1326,73 @@ mod tests {
         assert!(snapshot(PaneId(1), &terminal).alternate_screen);
         parser.advance(&mut terminal, b"\x1b[?1049l");
         assert!(!snapshot(PaneId(1), &terminal).alternate_screen);
+    }
+
+    #[test]
+    fn mouse_mode_reflects_what_the_pane_actually_asked_for() {
+        let (sender, _receiver) = std::sync::mpsc::channel();
+        let mut terminal = Term::new(Config::default(), &TermSize::new(12, 3), ReplySink(sender));
+        let mut parser: Processor = Processor::new();
+        assert_eq!(snapshot(PaneId(1), &terminal).mouse, MouseMode::default());
+
+        // Click reporting (1000) plus SGR extended coordinates (1006), no
+        // drag/motion — a plain click-tracking app (a pager's mouse mode,
+        // say), not one that also wants motion while a button is held.
+        parser.advance(&mut terminal, b"\x1b[?1000h\x1b[?1006h");
+        assert_eq!(
+            snapshot(PaneId(1), &terminal).mouse,
+            MouseMode {
+                reports_clicks: true,
+                reports_drag: false,
+                sgr: true,
+            }
+        );
+
+        // Drag reporting (1002) layers on top — the shape ratatui/textual/
+        // ink-style TUIs (Codex, OpenCode) actually request for click-and-
+        // drag UI like tab strips.
+        parser.advance(&mut terminal, b"\x1b[?1002h");
+        assert!(snapshot(PaneId(1), &terminal).mouse.reports_drag);
+
+        parser.advance(&mut terminal, b"\x1b[?1000l\x1b[?1002l\x1b[?1006l");
+        assert_eq!(snapshot(PaneId(1), &terminal).mouse, MouseMode::default());
+    }
+
+    #[test]
+    fn osc_background_and_foreground_queries_get_answered_instead_of_hanging() {
+        // Regression: `Term::dynamic_color_sequence` (what OSC 10/11
+        // queries dispatch to) never emits `Event::PtyWrite` itself — it
+        // hands back a formatting closure via `Event::ColorRequest` that
+        // the `EventListener` must resolve and write back. A listener that
+        // only forwards `PtyWrite` (as `ReplySink` used to) silently drops
+        // it, which is exactly what left a pane's own OSC 11 background
+        // probe — used by adaptive TUIs like Codex to pick a light- or
+        // dark-themed surface — unanswered.
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let mut terminal = Term::new(Config::default(), &TermSize::new(12, 3), ReplySink(sender));
+        let mut parser: Processor = Processor::new();
+
+        parser.advance(&mut terminal, b"\x1b]10;?\x1b\\");
+        let foreground_reply = receiver.try_recv().expect("OSC 10 reply");
+        assert_eq!(
+            foreground_reply,
+            format!(
+                "\x1b]10;rgb:{0:02x}{0:02x}/{1:02x}{1:02x}/{2:02x}{2:02x}\x1b\\",
+                REPLY_FOREGROUND.r, REPLY_FOREGROUND.g, REPLY_FOREGROUND.b
+            )
+            .into_bytes()
+        );
+
+        parser.advance(&mut terminal, b"\x1b]11;?\x1b\\");
+        let background_reply = receiver.try_recv().expect("OSC 11 reply");
+        assert_eq!(
+            background_reply,
+            format!(
+                "\x1b]11;rgb:{0:02x}{0:02x}/{1:02x}{1:02x}/{2:02x}{2:02x}\x1b\\",
+                REPLY_BACKGROUND.r, REPLY_BACKGROUND.g, REPLY_BACKGROUND.b
+            )
+            .into_bytes()
+        );
     }
 
     #[test]
