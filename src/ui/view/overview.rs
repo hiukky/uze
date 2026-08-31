@@ -116,28 +116,21 @@ pub(crate) fn render_overview(frame: &mut ratatui::Frame<'_>, area: Rect, model:
             );
         }
     }
-    y += 3;
+    // Keep the activity stream visually separate from the compact stat cards.
+    y += 5;
 
+    if alerts.is_empty() {
+        return;
+    }
     if y < content.y + content.height {
         frame.render_widget(
             Paragraph::new(Span::styled(
-                if alerts.is_empty() {
-                    "Current activity"
-                } else {
-                    "Needs attention"
-                },
+                "Needs attention",
                 Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
             )),
             Rect::new(content.x, y, content.width, 1),
         );
         y += 1;
-    }
-    if alerts.is_empty() {
-        frame.render_widget(
-            Paragraph::new(Span::styled("No action needed", Style::default().fg(MUTED))),
-            Rect::new(content.x, y, content.width, 1),
-        );
-        return;
     }
     for alert in alerts
         .iter()

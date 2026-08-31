@@ -1,15 +1,14 @@
 //! TUI view — Harnesses route.
 //!
 //! List on the left; a detail drawer slides in from the right once a
-//! harness is selected (`TuiModel::harnesses_drawer_open`), covering part
-//! of the list rather than sharing a permanent static split — the same
-//! interaction the design uses for Marketplace.
+//! harness is selected (`TuiModel::harnesses_drawer_open`), with a draggable
+//! left edge to balance the detail against the list.
 
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Clear, Paragraph},
+    widgets::{Block, Clear, Paragraph, Wrap},
 };
 
 use crate::integration::AttachmentState;
@@ -20,7 +19,7 @@ use crate::{
 };
 
 use super::super::hit::Hit;
-use super::super::model::TuiModel;
+use super::super::model::{ResizablePanel, TuiModel};
 use super::super::{
     ACCENT, BASE, BORDER, DANGER, MUTED, TEXT_BRIGHT, TEXT_DIM, TEXT_SECONDARY, TEXT_TERTIARY,
     WARNING,
@@ -150,12 +149,19 @@ pub(crate) fn render_harnesses(
     // The drawer overlays from the right rather than sharing a permanent
     // split, but the header/list still need to lay out *around* it when
     // it's open — otherwise their own right-aligned content runs straight
-    // under the drawer and gets clipped mid-word by its Clear. Split evenly
-    // rather than a fixed width: the list only ever needs two short columns
-    // (name, status), while the drawer's own content (Delivery strings,
-    // COMPATIBILITY rows) is what actually needs the room.
+    // under the drawer and gets clipped mid-word by its Clear. Its initial
+    // width is an even split; dragging the divider lets either panel take
+    // priority for the task at hand.
     let drawer_open = model.harnesses_drawer_open && model.selected_harness().is_some();
-    let drawer_width = if drawer_open { area.width / 2 } else { 0 };
+    let drawer_width = if drawer_open {
+        model
+            .harness_drawer_width
+            .unwrap_or(area.width / 2)
+            .clamp(24, area.width.saturating_sub(24).max(24))
+            .min(area.width)
+    } else {
+        0
+    };
     let list_area = Rect::new(
         area.x,
         area.y,
@@ -294,29 +300,44 @@ pub(crate) fn render_harnesses(
 
     if drawer_open && let Some(harness) = model.selected_harness() {
         let delivery = context_delivery_for(model.context_status.as_ref(), &harness.integration);
-        render_harness_drawer(frame, area, harness, delivery);
+        render_harness_drawer(frame, area, drawer_width, model, harness, delivery, hits);
     }
 }
 
 fn render_harness_drawer(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
+    width: u16,
+    model: &TuiModel,
     harness: &HarnessHealth,
     delivery: Option<&HarnessContextDelivery>,
+    hits: &mut Vec<(Rect, Hit)>,
 ) {
     let status = HarnessStatus::from(harness);
-    // Matches `render_harnesses`'s own `drawer_width` — an even split, not a
-    // fixed cap, so the list and drawer never disagree about where the
-    // boundary sits.
-    let width = area.width / 2;
+    // Receives the exact width already used by `render_harnesses`, so the
+    // list and drawer always agree about the draggable boundary.
+    let width = width.min(area.width);
     let drawer = Rect::new(area.x + area.width - width, area.y, width, area.height);
     frame.render_widget(Clear, drawer);
     frame.render_widget(
         Block::default()
             .borders(ratatui::widgets::Borders::LEFT)
-            .border_style(Style::default().fg(BORDER))
+            .border_style(Style::default().fg(
+                if model.dragging_panel == Some(ResizablePanel::HarnessDrawer) {
+                    ACCENT
+                } else {
+                    BORDER
+                },
+            ))
             .style(Style::default().bg(BASE)),
         drawer,
+    );
+    hits.insert(
+        0,
+        (
+            Rect::new(drawer.x, drawer.y, 1, drawer.height),
+            Hit::ResizePanel(ResizablePanel::HarnessDrawer),
+        ),
     );
     let inner = Rect::new(
         drawer.x + 2,
@@ -387,7 +408,7 @@ fn render_harness_drawer(
             Span::styled(status, style),
         ]));
     }
-    frame.render_widget(Paragraph::new(lines), inner);
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
 }
 
 /// A drawer key/value row's label, padded to the shared `LABEL_COL` column

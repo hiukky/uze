@@ -14,7 +14,7 @@ use uze_core::preference::{Autonomy, ModelPreference, PreferenceApplyOutcome, Sa
 
 use super::super::content_area;
 use super::super::hit::Hit;
-use super::super::model::{ProfilePanel, TuiModel};
+use super::super::model::{ProfilePanel, ResizablePanel, TuiModel};
 use super::super::{
     ACCENT, BLUE, BORDER, DANGER, MUTED, TEXT_BRIGHT, TEXT_SECONDARY, TEXT_TERTIARY, WARNING,
 };
@@ -25,12 +25,37 @@ pub(crate) fn render_profiles(
     model: &TuiModel,
     hits: &mut Vec<(Rect, Hit)>,
 ) {
+    let content = content_area(area);
+    let left_width = model
+        .profile_columns_width
+        .unwrap_or(content.width.saturating_mul(65) / 100)
+        .clamp(24, content.width.saturating_sub(24).max(24))
+        .min(content.width);
     let columns = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
-        .split(content_area(area));
+        .constraints([Constraint::Length(left_width), Constraint::Min(1)])
+        .split(content);
     render_profile_tree(frame, columns[0], model, hits);
     render_harnesses(frame, columns[1], model, hits);
+    let divider = Rect::new(
+        columns[0].right().saturating_sub(1),
+        content.y,
+        1,
+        content.height,
+    );
+    if model.dragging_panel == Some(ResizablePanel::ProfileColumns) {
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                "│\n".repeat(divider.height.saturating_sub(1) as usize) + "│",
+                Style::default().fg(ACCENT),
+            )),
+            divider,
+        );
+    }
+    hits.insert(
+        0,
+        (divider, Hit::ResizePanel(ResizablePanel::ProfileColumns)),
+    );
 }
 
 fn panel(right_border: bool) -> Block<'static> {
@@ -311,12 +336,9 @@ fn render_harnesses(
         return;
     }
 
-    let mut y = inner.y.saturating_add(2);
+    let first_harness_row = inner.y.saturating_add(2);
     let bottom = inner.y + inner.height.saturating_sub(1);
-    for (index, harness) in harnesses.iter().enumerate() {
-        if y >= bottom {
-            break;
-        }
+    for (y, (index, harness)) in (first_harness_row..bottom).zip(harnesses.iter().enumerate()) {
         let cursor = focused && index == model.profile_harness_selected;
         let checked = model
             .profile_harness_selection
@@ -351,7 +373,6 @@ fn render_harnesses(
         let rect = Rect::new(inner.x, y, inner.width, 1);
         frame.render_widget(Paragraph::new(Line::from(spans)), rect);
         hits.push((rect, Hit::ProfileHarnessRow(index)));
-        y += 1;
     }
 
     let selected = harnesses

@@ -2445,7 +2445,7 @@ dependencies = [
 
 [[package]]
 name = "uze"
-version = "0.0.0-alpha.15"
+version = "0.0.0-alpha.0"
 dependencies = [
  "anstyle",
  "bincode",
@@ -2471,7 +2471,7 @@ dependencies = [
 
 [[package]]
 name = "uze-application"
-version = "0.0.0-alpha.15"
+version = "0.0.0-alpha.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2482,7 +2482,7 @@ dependencies = [
 
 [[package]]
 name = "uze-core"
-version = "0.0.0-alpha.15"
+version = "0.0.0-alpha.0"
 dependencies = [
  "noyalib",
  "serde",
@@ -2492,7 +2492,7 @@ dependencies = [
 
 [[package]]
 name = "uze-extensions"
-version = "0.0.0-alpha.15"
+version = "0.0.0-alpha.0"
 dependencies = [
  "crossterm",
  "ratatui",
@@ -2503,7 +2503,7 @@ dependencies = [
 
 [[package]]
 name = "uze-integrations"
-version = "0.0.0-alpha.15"
+version = "0.0.0-alpha.0"
 dependencies = [
  "serde_json",
  "toml_edit",
@@ -2512,7 +2512,7 @@ dependencies = [
 
 [[package]]
 name = "uze-terminal"
-version = "0.0.0-alpha.15"
+version = "0.0.0-alpha.0"
 dependencies = [
  "alacritty_terminal",
  "bincode",
@@ -2525,7 +2525,7 @@ dependencies = [
 
 [[package]]
 name = "uze-testkit"
-version = "0.0.0-alpha.15"
+version = "0.0.0-alpha.0"
 dependencies = [
  "serde_json",
 ]

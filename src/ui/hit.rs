@@ -1,7 +1,7 @@
 //! TUI — mouse hit-testing: mapping a clicked screen coordinate back to the
 //! on-screen target it landed on.
 
-use super::model::{Focus, Overlay, Route, TuiModel};
+use super::model::{Focus, Overlay, ResizablePanel, Route, TuiModel};
 use super::worker::Intent;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -36,6 +36,8 @@ pub(crate) enum Hit {
     /// for why re-reading this hit's rect there was the wrong reference
     /// point).
     ResizeSidebar,
+    /// A route-local divider between two content panels.
+    ResizePanel(ResizablePanel),
 }
 
 impl TuiModel {
@@ -154,6 +156,10 @@ impl TuiModel {
             }
             Hit::ResizeSidebar => {
                 self.dragging_sidebar = true;
+                Intent::None
+            }
+            Hit::ResizePanel(panel) => {
+                self.dragging_panel = Some(panel);
                 Intent::None
             }
         }

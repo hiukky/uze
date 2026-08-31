@@ -15,20 +15,20 @@
 //! (`TuiModel::marketplace_visible_indices`) — headers, spacers, and
 //! collapsed/filtered-out plugins are a pure rendering/navigation concern
 //! layered on top of the flat, already-grouped `marketplace_rows` Vec. The
-//! detail drawer overlays the list from the right rather than sharing a
-//! permanent static split — see `TuiModel::marketplace_drawer_open`.
+//! detail drawer overlays the list from the right with a draggable left
+//! edge — see `TuiModel::marketplace_drawer_open`.
 
 use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
 use crate::application::{DoctorReport, MarketplacePluginSummary};
 
 use super::super::hit::Hit;
-use super::super::model::TuiModel;
+use super::super::model::{ResizablePanel, TuiModel};
 use super::super::{
     ACCENT, BASE, BLUE, BORDER, MUTED, SELECTED_BG, TEXT_BRIGHT, TEXT_DIM, TEXT_FAINT,
     TEXT_PRIMARY, TEXT_SECONDARY, WARNING, route_style,
@@ -258,7 +258,11 @@ pub(crate) fn render_plugins(
     if model.marketplace_drawer_open
         && let Some(plugin) = model.selected_marketplace_plugin()
     {
-        render_plugin_drawer(frame, full_area, model, &plugin, hits);
+        let drawer_width = model
+            .marketplace_drawer_width
+            .unwrap_or(52)
+            .clamp(24, full_area.width.saturating_sub(24).max(24));
+        render_plugin_drawer(frame, full_area, drawer_width, model, &plugin, hits);
     }
 }
 
@@ -409,11 +413,12 @@ fn plugin_line<'a>(
 fn render_plugin_drawer(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
+    width: u16,
     model: &TuiModel,
     plugin: &MarketplacePluginSummary,
     hits: &mut Vec<(Rect, Hit)>,
 ) {
-    let width = 52.min(area.width);
+    let width = width.min(area.width);
     let drawer = Rect::new(
         area.x + area.width - width,
         area.y - 1,
@@ -424,9 +429,22 @@ fn render_plugin_drawer(
     frame.render_widget(
         Block::default()
             .borders(Borders::LEFT)
-            .border_style(Style::default().fg(BORDER))
+            .border_style(Style::default().fg(
+                if model.dragging_panel == Some(ResizablePanel::MarketplaceDrawer) {
+                    ACCENT
+                } else {
+                    BORDER
+                },
+            ))
             .style(Style::default().bg(BASE)),
         drawer,
+    );
+    hits.insert(
+        0,
+        (
+            Rect::new(drawer.x, drawer.y, 1, drawer.height),
+            Hit::ResizePanel(ResizablePanel::MarketplaceDrawer),
+        ),
     );
 
     let sections_x = drawer.x + 2;
@@ -573,7 +591,7 @@ fn render_plugin_drawer(
         ]));
     }
 
-    frame.render_widget(Paragraph::new(lines), body);
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), body);
 
     if plugin.installed {
         let health = plugin_health(model.doctor.as_ref(), &model.marketplace_plugin_id(plugin));

@@ -310,7 +310,7 @@ pub(crate) fn attach_workspace(
                                 let _ = send_request(
                                     &mut stream,
                                     &ClientRequest::CreateTab {
-                                        label: option.display_name.clone(),
+                                        label: next_agent_label(&model),
                                         columns,
                                         rows,
                                         cwd: selected_pane_cwd(&model),
@@ -490,7 +490,7 @@ pub(crate) fn attach_workspace(
                                 let _ = send_request(
                                     &mut stream,
                                     &ClientRequest::CreateTab {
-                                        label: option.display_name.clone(),
+                                        label: next_agent_label(&model),
                                         columns,
                                         rows,
                                         cwd: selected_pane_cwd(&model),
@@ -1158,9 +1158,8 @@ fn agent_options(home: &UzeHome) -> Vec<AgentOption> {
 /// shim-launched process reports its invoked alias there via
 /// `UZE_SHIM_NAME`, not its raw `comm` — see
 /// `uze_terminal::PaneRuntime::foreground_status`), falling back to the
-/// tab's own label for the brief window right after it opens through the
-/// agent picker (label is seeded to the harness's display name) before
-/// the first status probe lands. Returns the harness's short binary/alias
+/// tab's own label only for legacy tabs created before generic agent labels
+/// were introduced. Returns the harness's short binary/alias
 /// name (`claude`, `codex`, …) — what the sidebar and tab strip show in
 /// place of the raw process string, and what decides whether a tab lists
 /// under "agents" or "shell" at all.
@@ -1749,12 +1748,11 @@ fn render_sidebar(
     } else {
         super::BORDER_FAINT
     };
-    // No top padding: the mode toggle must land on the exact row the tab
-    // strip's own content does (that block has none either), or the two
-    // panes' dividers drift out of alignment by one row. No right padding
-    // either: sidebar content (the right-aligned "+ new" in particular)
-    // sits flush against the divider instead of floating a column away
-    // from it — only the left side keeps its 1-column inset.
+    // No top padding: the header must land on the exact row the tab strip's
+    // own content does (that block has none either), or the two panes'
+    // dividers drift out of alignment by one row. No right padding either:
+    // the header action sits flush against the divider, with only the left
+    // side keeping its 1-column inset.
     let block = Block::default()
         .borders(Borders::RIGHT)
         .border_style(Style::default().fg(border_color))
@@ -1776,10 +1774,8 @@ fn render_sidebar(
     // Mode toggle, one line: this used to be a global titlebar (brand +
     // status + Ctrl+O hint + path) spanning the whole frame; with only menu
     // + main container left, the menu opens with just enough chrome to
-    // match the tab strip's height on the other TUI mode — a segmented
-    // "Work" / "Manage" control standing in for the Ctrl+O keybinding
-    // (still live, just no longer spelled out as text) instead of the old
-    // prose hint.
+    // match the tab strip's height on the other TUI mode — a centered
+    // segmented control stands in for the Ctrl+O keybinding.
     if let Some(rect) = row(1) {
         let (_work_rect, manage_rect) = super::render_mode_toggle(frame, rect, true);
         hits.push((manage_rect, WorkspaceHit::SwitchToManagement));
@@ -1811,19 +1807,28 @@ fn render_sidebar(
         return;
     };
 
-    // A blank row below "+ new" — the same 1-row breathing room a space
-    // block gets after it (see the `row(1)` at the bottom of the loop
-    // below) — so it doesn't read as glued to the first space's name.
-    // Nothing above it: the divider row already separates it from the
-    // mode toggle, and stacking a second blank row there just reads as
-    // too much dead air for a compact menu.
+    // The summary and creation action share the row directly below the
+    // header divider: the quiet count gives the workspace scope, while the
+    // right-aligned action remains the primary affordance.
     if let Some(rect) = row(1) {
-        // Right-aligned, not tucked under the workspace name like the space
-        // list below it — this reads as a header-row action (the same
-        // place the "+"/"✦" buttons sit in the tab strip above the pane)
-        // rather than as another tree item. Creates a space directly — a
-        // space has no "kind" to pick, unlike an agent tab, so no picker
-        // is needed here.
+        let agent_count = session
+            .workspace
+            .spaces
+            .iter()
+            .flat_map(|space| space.tabs.iter())
+            .filter(|tab| agent_identity_for_tab(identities, tab).is_some())
+            .count();
+        let count_label = format!(
+            "{agent_count} agent{}",
+            if agent_count == 1 { "" } else { "s" }
+        );
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                count_label,
+                Style::default().fg(super::TEXT_DIM),
+            )),
+            rect,
+        );
         let label = "+ new";
         let label_x = rect.x + rect.width.saturating_sub(label.len() as u16);
         frame.render_widget(
@@ -2077,6 +2082,28 @@ fn next_shell_label(model: &WorkspaceModel) -> String {
         .as_ref()
         .map_or(0, |session| session.selected_space().tabs.len());
     format!("shell {}", count + 1)
+}
+
+/// The label a new agent tab opens with. Agent labels are deliberately
+/// independent of the chosen harness: the picker selects what runs, while
+/// the tab is numbered by the user's workspace organization.
+fn next_agent_label(model: &WorkspaceModel) -> String {
+    let count = model.session.as_ref().map_or(0, |session| {
+        session
+            .selected_space()
+            .tabs
+            .iter()
+            .filter(|tab| is_generated_agent_label(&tab.label))
+            .count()
+    });
+    format!("agent {}", count + 1)
+}
+
+fn is_generated_agent_label(label: &str) -> bool {
+    label
+        .strip_prefix("agent ")
+        .and_then(|value| value.parse::<usize>().ok())
+        .is_some_and(|number| number > 0)
 }
 
 /// A sidebar action may target an agent in a background space, so its
@@ -2770,8 +2797,8 @@ fn runtime_error(error: uze_terminal::RuntimeError) -> UzeError {
 mod tests {
     use super::{
         AgentIdentity, WorkspaceModel, agent_identity_for_tab, blank_pane, can_close_tab_from_menu,
-        encode_mouse, forward_paste, forward_scroll, pane_relative, selected_pane_cwd,
-        tab_needs_replacement_shell, workspace_has_active_agent_operation,
+        encode_mouse, forward_paste, forward_scroll, next_agent_label, pane_relative,
+        selected_pane_cwd, tab_needs_replacement_shell, workspace_has_active_agent_operation,
     };
     use crossterm::event::{MouseButton, MouseEventKind};
     use ratatui::layout::Rect;
@@ -2974,12 +3001,20 @@ mod tests {
     }
 
     #[test]
-    fn recognizes_a_freshly_opened_agent_tab_by_its_seeded_label() {
-        // Right after the agent picker creates the tab, before the first
-        // status probe has resolved `pane.process` past the server's
-        // "shell" placeholder.
-        let tab = tab_with("Codex", "shell");
-        assert_eq!(agent_identity_for_tab(&identities(), &tab), Some("codex"));
+    fn new_agent_labels_are_numbered_independently_of_harnesses() {
+        let mut session = Session::new(WorkspaceId("workspace".into()), "/tmp".into(), 80, 24);
+        let model = WorkspaceModel {
+            session: Some(session.clone()),
+            ..WorkspaceModel::default()
+        };
+        assert_eq!(next_agent_label(&model), "agent 1");
+
+        session.add_tab("agent 1".into(), 80, 24, "/tmp".into());
+        let model = WorkspaceModel {
+            session: Some(session),
+            ..WorkspaceModel::default()
+        };
+        assert_eq!(next_agent_label(&model), "agent 2");
     }
 
     #[test]

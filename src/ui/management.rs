@@ -264,9 +264,8 @@ fn render_sidebar(
     // Mode toggle, one line: this used to be a global titlebar (brand +
     // health + path/branch) spanning the whole frame; with only menu + main
     // container left, the menu opens with just enough chrome to match the
-    // tab strip's height on the other TUI mode — a segmented "work" /
-    // "settings" control standing in for the Ctrl+O keybinding (still live,
-    // just no longer spelled out as text) instead of the old prose hint.
+    // tab strip's height on the other TUI mode — a centered segmented
+    // control stands in for the Ctrl+O keybinding.
     if let Some(rect) = row(1) {
         let (work_rect, _manage_rect) = super::render_mode_toggle(frame, rect, false);
         hits.push((work_rect, Hit::SwitchToWorkspace));

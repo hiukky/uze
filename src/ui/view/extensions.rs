@@ -15,11 +15,11 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
 use super::super::hit::Hit;
-use super::super::model::TuiModel;
+use super::super::model::{ResizablePanel, TuiModel};
 use super::super::{
     ACCENT, BASE, BORDER, MUTED, SELECTED_BG, TEXT_BRIGHT, TEXT_PRIMARY, TEXT_SECONDARY,
 };
@@ -71,7 +71,12 @@ pub(crate) fn render_extensions(
     if model.extension_drawer_open
         && let Some(extension) = model.selected_extension()
     {
-        render_extension_drawer(frame, area_for_drawer(area), extension);
+        let drawer_area = area_for_drawer(area);
+        let drawer_width = model
+            .extension_drawer_width
+            .unwrap_or(52)
+            .clamp(24, drawer_area.width.saturating_sub(24).max(24));
+        render_extension_drawer(frame, drawer_area, drawer_width, model, extension, hits);
     }
 }
 
@@ -136,9 +141,12 @@ fn render_extension_row(
 fn render_extension_drawer(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
+    width: u16,
+    model: &TuiModel,
     extension: &uze_extensions::registry::BuiltinExtension,
+    hits: &mut Vec<(Rect, Hit)>,
 ) {
-    let width = 52.min(area.width);
+    let width = width.min(area.width);
     let drawer = Rect::new(
         area.x + area.width - width,
         area.y - 1,
@@ -149,9 +157,22 @@ fn render_extension_drawer(
     frame.render_widget(
         Block::default()
             .borders(Borders::LEFT)
-            .border_style(Style::default().fg(BORDER))
+            .border_style(Style::default().fg(
+                if model.dragging_panel == Some(ResizablePanel::ExtensionDrawer) {
+                    ACCENT
+                } else {
+                    BORDER
+                },
+            ))
             .style(Style::default().bg(BASE)),
         drawer,
+    );
+    hits.insert(
+        0,
+        (
+            Rect::new(drawer.x, drawer.y, 1, drawer.height),
+            Hit::ResizePanel(ResizablePanel::ExtensionDrawer),
+        ),
     );
     // Same sectioning as the Plugins drawer: a body that scrolls/clips
     // naturally and a fixed 3-row status block beneath it, so the two can
@@ -207,7 +228,7 @@ fn render_extension_drawer(
             Style::default().fg(TEXT_SECONDARY),
         )),
     ];
-    frame.render_widget(Paragraph::new(lines), body);
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), body);
 
     render_status_line(
         frame,

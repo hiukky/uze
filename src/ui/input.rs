@@ -6,7 +6,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 
 use crate::application::ContextPlan;
 
-use super::model::{Focus, Overlay, ProfilePanel, ROUTES, Route, TuiModel};
+use super::model::{Focus, Overlay, ProfilePanel, ROUTES, ResizablePanel, Route, TuiModel};
 use super::worker::Intent;
 
 impl TuiModel {
@@ -317,8 +317,47 @@ impl TuiModel {
                 }
                 Intent::None
             }
+            MouseEventKind::Drag(MouseButton::Left) if self.dragging_panel.is_some() => {
+                let sidebar_width = self
+                    .sidebar_width
+                    .unwrap_or_else(|| super::sidebar_width_for(total_width));
+                let content_width = total_width.saturating_sub(sidebar_width);
+                let min_panel_width = 24;
+                let max_panel_width = content_width.saturating_sub(min_panel_width);
+                let pointer_in_content = event.column.saturating_sub(sidebar_width);
+                match self.dragging_panel {
+                    Some(ResizablePanel::MarketplaceDrawer) => {
+                        self.marketplace_drawer_width = Some(
+                            total_width
+                                .saturating_sub(event.column)
+                                .clamp(min_panel_width, max_panel_width),
+                        );
+                    }
+                    Some(ResizablePanel::ExtensionDrawer) => {
+                        self.extension_drawer_width = Some(
+                            total_width
+                                .saturating_sub(event.column)
+                                .clamp(min_panel_width, max_panel_width),
+                        );
+                    }
+                    Some(ResizablePanel::HarnessDrawer) => {
+                        self.harness_drawer_width = Some(
+                            total_width
+                                .saturating_sub(event.column)
+                                .clamp(min_panel_width, max_panel_width),
+                        );
+                    }
+                    Some(ResizablePanel::ProfileColumns) => {
+                        self.profile_columns_width =
+                            Some(pointer_in_content.clamp(min_panel_width, max_panel_width));
+                    }
+                    None => {}
+                }
+                Intent::None
+            }
             MouseEventKind::Up(MouseButton::Left) => {
                 self.dragging_sidebar = false;
+                self.dragging_panel = None;
                 Intent::None
             }
             MouseEventKind::ScrollDown if self.overlay == Overlay::None => {
@@ -341,5 +380,31 @@ impl TuiModel {
             }
             _ => Intent::None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+    use super::super::model::{ResizablePanel, TuiModel};
+
+    #[test]
+    fn dragging_a_content_divider_records_its_route_local_width() {
+        let mut model = TuiModel {
+            dragging_panel: Some(ResizablePanel::HarnessDrawer),
+            ..TuiModel::default()
+        };
+        model.apply_mouse(
+            MouseEvent {
+                kind: MouseEventKind::Drag(MouseButton::Left),
+                column: 80,
+                row: 4,
+                modifiers: KeyModifiers::NONE,
+            },
+            120,
+        );
+
+        assert_eq!(model.harness_drawer_width, Some(40));
     }
 }

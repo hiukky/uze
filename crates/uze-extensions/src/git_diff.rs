@@ -874,20 +874,11 @@ pub fn render(
         .padding(Padding::new(1, 1, 1, 1))
         .style(Style::default().bg(BASE));
     frame.render_widget(block, area);
-    // A "×" in the top-right corner, the same click-driven close every
-    // other overlay in this TUI offers — `Esc` still works too (see
-    // `GitViewOutcome::Close`, which both this and the key handler funnel
-    // through), this is just the mouse-only path that was missing. Bold
-    // and `DANGER`-colored with a column of padding on each side, not the
-    // dim bare glyph a per-tab close `×` uses — this one closes the whole
-    // modal, not a single row, and needs the weight to read as the
-    // dedicated corner control that shape implies.
-    let close_rect = Rect::new(area.right().saturating_sub(4), area.y, 3, 1);
+    // This closes the whole overlay, so make it an explicit, comfortably
+    // clickable control rather than the compact tab-close glyph.
+    let close_rect = Rect::new(area.right().saturating_sub(10), area.y, 9, 1);
     frame.render_widget(
-        Paragraph::new(Span::styled(
-            " × ",
-            Style::default().fg(DANGER).add_modifier(Modifier::BOLD),
-        )),
+        Paragraph::new(Span::styled(" ✕ close ", Style::default().fg(DANGER))),
         close_rect,
     );
     hits.push((close_rect, ExtensionHit::Close));

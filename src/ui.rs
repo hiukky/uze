@@ -286,17 +286,10 @@ fn sidebar_width_for(total_width: u16) -> u16 {
     }
 }
 
-/// The segmented "Work / Manage" control that opens both TUIs' sidebars —
-/// one shared render so the two modes stay visually identical. The active
-/// side reads as a filled chip (an intentional, narrowly-scoped exception to
-/// this design's usual no-filled-surfaces rule — see `render_sidebar`'s
-/// route rows below — because a mode switch this central needs the same
-/// affordance a GUI segmented control gives it, which plain color/weight on
-/// text alone doesn't). Returns the `Work`/`Manage` segment rects so each
-/// caller can wire up its own click target — the two modes use different
-/// hit-enum types (`Hit::SwitchToWorkspace` here,
-/// `WorkspaceHit::SwitchToManagement` in the workspace TUI), so this can't
-/// push a hit itself.
+/// The shared Work / Manage segmented control for both TUIs. The active
+/// mode is a filled chip so the compact menu preserves a clear, clickable
+/// indication of which surface is open. Returns both segment hit rects so
+/// each caller can map the inactive side to its own switch intent.
 fn render_mode_toggle(
     frame: &mut ratatui::Frame<'_>,
     rect: Rect,
@@ -306,12 +299,7 @@ fn render_mode_toggle(
         .bg(ACCENT)
         .fg(BASE)
         .add_modifier(Modifier::BOLD);
-    let ghost = Style::default().fg(NAV_INACTIVE);
-    // Both segments share one width (the longer label, "Manage", plus 1
-    // column of padding on each side) instead of each hugging its own
-    // text — a segmented control reads as one toggle with two equal
-    // halves, not two differently sized labels that happen to sit next to
-    // each other.
+    let ghost = Style::default().bg(SURFACE_OVERLAY).fg(NAV_INACTIVE);
     let button_width = "Manage".len() as u16 + 2;
     let centered = |label: &str| {
         let extra = button_width.saturating_sub(label.len() as u16);
@@ -335,11 +323,6 @@ fn render_mode_toggle(
     let work_width = work.width() as u16;
     let gap_width = gap.width() as u16;
     let manage_width = manage.width() as u16;
-    // Centered, not flush left — this is the one focal control at the top
-    // of the menu, not a list item. The paragraph's own centering and the
-    // hit rects below must agree on the same starting column, so both use
-    // the same halved-remainder math rather than letting ratatui center the
-    // text while the rects assume a left-aligned start.
     let total_width = work_width + gap_width + manage_width;
     let start_x = rect.x + rect.width.saturating_sub(total_width) / 2;
     frame.render_widget(

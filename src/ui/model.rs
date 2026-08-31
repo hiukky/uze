@@ -69,6 +69,17 @@ pub(crate) enum ProfilePanel {
     Harnesses,
 }
 
+/// A content-level divider in the Manage UI. These are deliberately kept
+/// separate from the shared sidebar width: a resize only changes the panel
+/// relationship within its current route.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ResizablePanel {
+    MarketplaceDrawer,
+    ExtensionDrawer,
+    HarnessDrawer,
+    ProfileColumns,
+}
+
 impl ProfilePanel {
     pub(crate) fn next(self) -> Self {
         match self {
@@ -298,6 +309,11 @@ pub(crate) struct TuiModel {
     /// same resize bounds, so the two sidebars feel identical to drag.
     pub(crate) sidebar_width: Option<u16>,
     pub(crate) dragging_sidebar: bool,
+    pub(crate) marketplace_drawer_width: Option<u16>,
+    pub(crate) extension_drawer_width: Option<u16>,
+    pub(crate) harness_drawer_width: Option<u16>,
+    pub(crate) profile_columns_width: Option<u16>,
+    pub(crate) dragging_panel: Option<ResizablePanel>,
 }
 
 impl Default for TuiModel {
@@ -343,6 +359,11 @@ impl Default for TuiModel {
             hits: Vec::new(),
             sidebar_width: None,
             dragging_sidebar: false,
+            marketplace_drawer_width: None,
+            extension_drawer_width: None,
+            harness_drawer_width: None,
+            profile_columns_width: None,
+            dragging_panel: None,
         }
     }
 }
