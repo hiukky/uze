@@ -1,7 +1,7 @@
 use std::{
     collections::BTreeMap,
     env, fs,
-    io::{self, BufRead, BufReader, Write},
+    io::{self, BufReader, Read, Write},
     os::unix::fs::PermissionsExt,
     os::unix::net::{UnixListener, UnixStream},
     path::{Path, PathBuf},
@@ -43,6 +43,17 @@ pub enum RuntimeError {
 
 pub fn attach(root: &Path, _columns: u16, _rows: u16) -> Result<UnixStream, RuntimeError> {
     let endpoint = Endpoint::for_root(root)?;
+    // A server left running from a previous build (e.g. a `cargo install
+    // --force` while it was still up) is *alive*, so the connect below
+    // would succeed — this has to be caught before that, not after, since
+    // some `PROTOCOL_VERSION` bumps changed the wire framing itself (see
+    // its doc comment); there's no guarantee an incompatible server can
+    // even parse an `Attach` request enough to answer with a clean
+    // `ClientEvent::Error` rather than hanging the connection.
+    if endpoint.socket.exists() && server_protocol_version(&endpoint.pid) != Some(PROTOCOL_VERSION)
+    {
+        replace_incompatible_server(&endpoint)?;
+    }
     match UnixStream::connect(&endpoint.socket) {
         Ok(stream) => Ok(stream),
         Err(error)
@@ -75,7 +86,7 @@ pub fn serve(root: PathBuf) -> Result<(), RuntimeError> {
     recover_stale_endpoint(&endpoint)?;
     let listener = UnixListener::bind(&endpoint.socket)?;
     fs::set_permissions(&endpoint.socket, fs::Permissions::from_mode(0o600))?;
-    fs::write(&endpoint.pid, std::process::id().to_string())?;
+    write_pid_file(&endpoint.pid, std::process::id())?;
     let (server, damage) = Server::new(root, endpoint.clone())?;
     let state = Arc::new(server);
     spawn_damage_broadcaster(Arc::clone(&state), damage);
@@ -235,7 +246,7 @@ fn start_server(root: &Path, endpoint: &Endpoint) -> Result<(), RuntimeError> {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()?;
-    fs::write(&endpoint.pid, child.id().to_string())?;
+    write_pid_file(&endpoint.pid, child.id())?;
     Ok(())
 }
 
@@ -273,16 +284,63 @@ fn recover_stale_endpoint(endpoint: &Endpoint) -> Result<(), RuntimeError> {
 }
 
 fn runtime_process_is_alive(pid_path: &Path) -> Result<bool, RuntimeError> {
-    let Ok(text) = fs::read_to_string(pid_path) else {
-        return Ok(false);
-    };
-    let Ok(pid) = text.trim().parse::<libc::pid_t>() else {
+    let Some(pid) = read_pid(pid_path) else {
         return Ok(false);
     };
     // `kill(pid, 0)` only inspects whether this process is addressable; it
     // does not send a signal. This is the proof required before stale socket
     // cleanup can remove the old endpoint.
     Ok(unsafe { libc::kill(pid, 0) == 0 })
+}
+
+/// A pid file's first line — see [`write_pid_file`].
+fn read_pid(pid_path: &Path) -> Option<libc::pid_t> {
+    let text = fs::read_to_string(pid_path).ok()?;
+    text.lines().next()?.trim().parse().ok()
+}
+
+/// The `PROTOCOL_VERSION` the server holding this pid file was compiled
+/// with, from the file's second line — `None` for a pid file written
+/// before this line existed, or one that's missing/unreadable/corrupt.
+/// [`attach`] treats all of those the same as a known mismatch: it can no
+/// longer assume anything about how that server speaks the wire protocol.
+fn server_protocol_version(pid_path: &Path) -> Option<u16> {
+    let text = fs::read_to_string(pid_path).ok()?;
+    text.lines().nth(1)?.trim().parse().ok()
+}
+
+/// Pairs a server's pid with the `PROTOCOL_VERSION` it was built with, so a
+/// later `attach` can tell "alive" apart from "alive and speaks a protocol
+/// this client understands" without opening a connection to find out — see
+/// `attach`'s pre-connect check.
+fn write_pid_file(pid_path: &Path, pid: u32) -> io::Result<()> {
+    fs::write(pid_path, format!("{pid}\n{PROTOCOL_VERSION}"))
+}
+
+/// Tears down a server that's alive but speaking a `PROTOCOL_VERSION` this
+/// client can't talk to, so `attach`'s subsequent connect lands on a fresh
+/// one instead. Unlike [`recover_stale_endpoint`] (a dead owner, socket
+/// already unusable), this owner is alive and mid-session, so it gets a
+/// cooperative `SIGTERM` first — its own persisted-workspace snapshot (see
+/// `persist`) is what lets the fresh server restore the same tabs — with
+/// `SIGKILL` only as a last resort if it doesn't exit promptly.
+fn replace_incompatible_server(endpoint: &Endpoint) -> Result<(), RuntimeError> {
+    if let Some(pid) = read_pid(&endpoint.pid) {
+        let is_alive = || unsafe { libc::kill(pid, 0) == 0 };
+        unsafe { libc::kill(pid, libc::SIGTERM) };
+        for _ in 0..40 {
+            if !is_alive() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+        if is_alive() {
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+    }
+    let _ = fs::remove_file(&endpoint.socket);
+    let _ = fs::remove_file(&endpoint.pid);
+    Ok(())
 }
 
 struct Server {
@@ -1239,24 +1297,38 @@ fn find_in_layout(layout: &crate::Layout, wanted: PaneId) -> Option<crate::Pane>
 pub fn send_request<W: Write>(writer: &mut W, value: &ClientRequest) -> Result<(), RuntimeError> {
     write_message(writer, value)
 }
-pub fn read_event<R: BufRead>(reader: &mut R) -> Result<Option<ClientEvent>, RuntimeError> {
+pub fn read_event<R: Read>(reader: &mut R) -> Result<Option<ClientEvent>, RuntimeError> {
     read_message(reader)
 }
+/// Length-prefixed bincode, not newline-delimited JSON: a `PaneSnapshot`
+/// carries one `RenderCell` per grid cell, and JSON's per-field text
+/// encoding of that (a `Snapshot`/`Damage` this size fires on every PTY
+/// repaint — scrolling an agent's own transcript, not just resizes) was
+/// measured spending hundreds of milliseconds in encode+decode alone on a
+/// realistic multi-tab session, which is what made switching Work/Manage
+/// and scrolling inside a pane both feel slow. Framing can't be
+/// newline-delimited any more since the payload is binary and may contain
+/// a literal `0x0A` byte anywhere in it.
 fn write_message<W: Write, T: Serialize>(writer: &mut W, value: &T) -> Result<(), RuntimeError> {
-    serde_json::to_writer(&mut *writer, value)
-        .map_err(|error| RuntimeError::Protocol(error.to_string()))?;
-    writer.write_all(b"\n")?;
+    let bytes =
+        bincode::serialize(value).map_err(|error| RuntimeError::Protocol(error.to_string()))?;
+    let len = u32::try_from(bytes.len())
+        .map_err(|_| RuntimeError::Protocol("message exceeds 4GiB frame limit".into()))?;
+    writer.write_all(&len.to_le_bytes())?;
+    writer.write_all(&bytes)?;
     writer.flush()?;
     Ok(())
 }
-fn read_message<R: BufRead, T: DeserializeOwned>(
-    reader: &mut R,
-) -> Result<Option<T>, RuntimeError> {
-    let mut line = String::new();
-    if reader.read_line(&mut line)? == 0 {
-        return Ok(None);
+fn read_message<R: Read, T: DeserializeOwned>(reader: &mut R) -> Result<Option<T>, RuntimeError> {
+    let mut len_bytes = [0u8; 4];
+    match reader.read_exact(&mut len_bytes) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
+        Err(error) => return Err(error.into()),
     }
-    serde_json::from_str(&line)
+    let mut buffer = vec![0u8; u32::from_le_bytes(len_bytes) as usize];
+    reader.read_exact(&mut buffer)?;
+    bincode::deserialize(&buffer)
         .map(Some)
         .map_err(|error| RuntimeError::Protocol(error.to_string()))
 }
@@ -1278,7 +1350,7 @@ mod tests {
     use super::{
         Endpoint, PaneRuntime, PersistedSpace, PersistedTab, PersistedWorkspace, REPLY_BACKGROUND,
         REPLY_FOREGROUND, ReplySink, Server, persisted_state_path, relaunch_command_for_process,
-        snapshot, workspace_identity,
+        replace_incompatible_server, server_protocol_version, snapshot, workspace_identity,
     };
     use crate::{MouseMode, PaneId, TerminalColor};
     use alacritty_terminal::{
@@ -1311,6 +1383,84 @@ mod tests {
             workspace_identity(Path::new("/tmp/a")),
             workspace_identity(Path::new("/tmp/b"))
         );
+    }
+
+    /// A pid file with no recorded version — exactly what a server built
+    /// before `write_pid_file` existed leaves behind — must read as
+    /// "unknown", not "compatible": see `attach`'s pre-connect check, which
+    /// treats this the same as a version that actively mismatches.
+    #[test]
+    fn server_protocol_version_is_unknown_without_a_recorded_version() {
+        let scratch = std::env::temp_dir().join(format!(
+            "uze-terminal-protocol-version-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&scratch).unwrap();
+        let pid_path = scratch.join("test.pid");
+
+        std::fs::write(&pid_path, "4242").unwrap();
+        assert_eq!(server_protocol_version(&pid_path), None);
+
+        std::fs::write(&pid_path, format!("4242\n{}", super::PROTOCOL_VERSION)).unwrap();
+        assert_eq!(
+            server_protocol_version(&pid_path),
+            Some(super::PROTOCOL_VERSION)
+        );
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// The actual recovery `attach` relies on when it finds a live server
+    /// it can no longer talk to: it must terminate that process and clear
+    /// both endpoint files, so the caller's next connect lands on a fresh
+    /// server instead of the one it just gave up on.
+    #[test]
+    fn replace_incompatible_server_kills_the_old_owner_and_clears_its_files() {
+        let scratch = std::env::temp_dir().join(format!(
+            "uze-terminal-replace-incompatible-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&scratch).unwrap();
+        let socket = scratch.join("test.sock");
+        let pid_path = scratch.join("test.pid");
+        std::fs::write(&socket, b"placeholder").unwrap();
+
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        // No version line: the exact shape `replace_incompatible_server` is
+        // meant to react to.
+        std::fs::write(&pid_path, pid.to_string()).unwrap();
+
+        let endpoint = Endpoint {
+            socket: socket.clone(),
+            pid: pid_path.clone(),
+        };
+        replace_incompatible_server(&endpoint).unwrap();
+
+        // `child` makes this test process the signaled child's parent, so
+        // (unlike the real server, which has no such relationship to the
+        // client that replaces it) it goes through a zombie state after
+        // dying — `kill(pid, 0)` alone would stay "addressable" until
+        // reaped. `try_wait` both reaps it and gives the real exit status.
+        let mut exited = child.try_wait().unwrap();
+        for _ in 0..40 {
+            if exited.is_some() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(25));
+            exited = child.try_wait().unwrap();
+        }
+        assert!(
+            exited.is_some(),
+            "old server process must not survive replace_incompatible_server"
+        );
+        assert!(!socket.exists());
+        assert!(!pid_path.exists());
+
+        let _ = std::fs::remove_dir_all(&scratch);
     }
 
     #[test]

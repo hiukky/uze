@@ -20,7 +20,13 @@ use crate::{PaneId, Session, SpaceId, TabId, WorkspaceId};
 ///
 /// Bumped again for `bracketed_paste` on the same two structs, for the
 /// same reason.
-pub const PROTOCOL_VERSION: u16 = 5;
+///
+/// Bumped again for the wire framing itself switching from newline-
+/// delimited JSON to length-prefixed bincode (see `runtime::write_message`)
+/// — an old client/server speaking the previous framing would otherwise
+/// misread a length prefix as JSON bytes or vice versa, corrupting the
+/// stream instead of failing this version check cleanly.
+pub const PROTOCOL_VERSION: u16 = 6;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ClientRequest {

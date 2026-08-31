@@ -2564,8 +2564,15 @@ mod tests {
         );
     }
 
+    /// Mirrors `uze_terminal::runtime`'s length-prefixed bincode framing
+    /// (a 4-byte little-endian length, then the payload) — `send_request`
+    /// writes real wire frames, not bare JSON, so a test reading `stream`
+    /// back has to strip the same prefix.
     fn decode_input_bytes(stream: &[u8]) -> Vec<u8> {
-        match serde_json::from_slice(stream).expect("one ClientRequest::Input line") {
+        let (len_bytes, payload) = stream.split_at(4);
+        let len = u32::from_le_bytes(len_bytes.try_into().unwrap()) as usize;
+        assert_eq!(payload.len(), len, "one ClientRequest::Input frame");
+        match bincode::deserialize(payload).expect("one ClientRequest::Input frame") {
             ClientRequest::Input { bytes, .. } => bytes,
             other => panic!("expected ClientRequest::Input, got {other:?}"),
         }

@@ -64,6 +64,9 @@ schemars = "1"
 # Shared test infrastructure (TestEnvironment, FakeHarness, fixtures,
 # scenario builder) — see crates/uze-testkit and tests/README.md.
 uze-testkit = { path = "crates/uze-testkit" }
+# Decodes the terminal runtime's wire frames in orchestrator.rs tests —
+# see uze-terminal's own bincode dependency for why the wire uses it.
+bincode = "1.3"
 
 [[bin]]
 name = "uze-mcp-conformance-fixture"
