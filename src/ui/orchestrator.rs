@@ -2599,10 +2599,10 @@ fn forward_mouse<W: io::Write>(
 }
 
 /// Forwards the wheel into a pane. Programs that requested xterm mouse
-/// reports receive a real mouse sequence; an alternate-screen program that
-/// did not request them gets the terminal's conventional alternate-scroll
-/// fallback (arrow keys). The latter is what lets terminal UIs such as Codex
-/// scroll when embedded in UZE's own mouse-capturing alternate screen.
+/// reports receive a real mouse sequence. Normal-screen programs receive a
+/// terminal scrollback request, matching a physical terminal; alternate
+/// screens retain the conventional arrow-key fallback because they have no
+/// normal-screen history to display.
 fn forward_scroll<W: io::Write>(
     stream: &mut W,
     model: &WorkspaceModel,
@@ -2616,19 +2616,31 @@ fn forward_scroll<W: io::Write>(
         forward_mouse(stream, model, pane, mouse);
         return;
     }
-    if !snapshot.alternate_screen {
+    if snapshot.alternate_screen {
+        let bytes = match mouse.kind {
+            MouseEventKind::ScrollUp => b"\x1b[A".to_vec(),
+            MouseEventKind::ScrollDown => b"\x1b[B".to_vec(),
+            _ => return,
+        };
+        let _ = send_request(
+            stream,
+            &ClientRequest::Input {
+                pane: model.focused_pane(),
+                bytes,
+            },
+        );
         return;
     }
-    let bytes = match mouse.kind {
-        MouseEventKind::ScrollUp => b"\x1b[A".to_vec(),
-        MouseEventKind::ScrollDown => b"\x1b[B".to_vec(),
+    let lines = match mouse.kind {
+        MouseEventKind::ScrollUp => 3,
+        MouseEventKind::ScrollDown => -3,
         _ => return,
     };
     let _ = send_request(
         stream,
-        &ClientRequest::Input {
+        &ClientRequest::Scroll {
             pane: model.focused_pane(),
-            bytes,
+            lines,
         },
     );
 }
@@ -3116,7 +3128,7 @@ mod tests {
     }
 
     #[test]
-    fn scroll_does_not_inject_arrow_keys_into_a_plain_shell() {
+    fn scroll_uses_terminal_scrollback_for_a_normal_screen_without_mouse_reporting() {
         let model = WorkspaceModel {
             session: Some(Session::new(
                 WorkspaceId("workspace".into()),
@@ -3134,7 +3146,13 @@ mod tests {
             Rect::new(0, 0, 80, 24),
             mouse_at(4, 5, MouseEventKind::ScrollDown),
         );
-        assert!(stream.is_empty());
+        assert_eq!(
+            decode_request(&stream),
+            ClientRequest::Scroll {
+                pane: PaneId(1),
+                lines: -3,
+            }
+        );
     }
 
     /// Mirrors `uze_terminal::runtime`'s length-prefixed bincode framing
@@ -3142,12 +3160,16 @@ mod tests {
     /// writes real wire frames, not bare JSON, so a test reading `stream`
     /// back has to strip the same prefix.
     fn decode_input_bytes(stream: &[u8]) -> Vec<u8> {
-        let (len_bytes, payload) = stream.split_at(4);
-        let len = u32::from_le_bytes(len_bytes.try_into().unwrap()) as usize;
-        assert_eq!(payload.len(), len, "one ClientRequest::Input frame");
-        match bincode::deserialize(payload).expect("one ClientRequest::Input frame") {
+        match decode_request(stream) {
             ClientRequest::Input { bytes, .. } => bytes,
             other => panic!("expected ClientRequest::Input, got {other:?}"),
         }
+    }
+
+    fn decode_request(stream: &[u8]) -> ClientRequest {
+        let (len_bytes, payload) = stream.split_at(4);
+        let len = u32::from_le_bytes(len_bytes.try_into().unwrap()) as usize;
+        assert_eq!(payload.len(), len, "one ClientRequest frame");
+        bincode::deserialize(payload).expect("one ClientRequest frame")
     }
 }

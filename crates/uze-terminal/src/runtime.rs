@@ -13,8 +13,7 @@ use std::{
 use alacritty_terminal::{
     Term,
     event::{Event, EventListener},
-    grid::Dimensions,
-    index::{Column, Line},
+    grid::{Dimensions, Scroll},
     term::{Config, TermMode, cell::Flags, test::TermSize},
     vte::ansi::{Color as EngineColor, NamedColor, Processor, Rgb},
 };
@@ -570,6 +569,7 @@ impl Server {
                     break;
                 }
                 ClientRequest::Input { pane, bytes } => self.write_input(pane, &bytes),
+                ClientRequest::Scroll { pane, lines } => self.scroll_pane(pane, lines),
                 ClientRequest::Resize {
                     pane,
                     columns,
@@ -798,6 +798,18 @@ impl Server {
     fn write_input(&self, pane: PaneId, bytes: &[u8]) {
         if let Some(runtime) = self.panes.lock().expect("panes poisoned").get(&pane) {
             runtime.write(bytes);
+        }
+    }
+
+    fn scroll_pane(&self, pane: PaneId, lines: i32) {
+        let changed = self
+            .panes
+            .lock()
+            .expect("panes poisoned")
+            .get(&pane)
+            .is_some_and(|runtime| runtime.scroll(lines));
+        if changed {
+            self.broadcast_pane_damage(pane);
         }
     }
 
@@ -1110,6 +1122,13 @@ impl PaneRuntime {
             let _ = writer.flush();
         }
     }
+
+    fn scroll(&self, lines: i32) -> bool {
+        let mut terminal = self.terminal.lock().expect("terminal poisoned");
+        let before = terminal.grid().display_offset();
+        terminal.scroll_display(Scroll::Delta(lines));
+        terminal.grid().display_offset() != before
+    }
     fn resize(&self, columns: u16, rows: u16) {
         let _ = self
             .master
@@ -1254,11 +1273,12 @@ fn snapshot(pane: PaneId, terminal: &Term<ReplySink>) -> PaneSnapshot {
     let content = terminal.renderable_content();
     let columns = terminal.grid().columns() as u16;
     let rows = terminal.grid().screen_lines() as u16;
-    let mut cells = Vec::with_capacity(usize::from(columns) * usize::from(rows));
-    for row in 0..rows {
-        for column in 0..columns {
-            let cell = &terminal.grid()[Line(row as i32)][Column(column as usize)];
-            cells.push(RenderCell {
+    let cells = terminal
+        .grid()
+        .display_iter()
+        .map(|indexed| {
+            let cell = indexed.cell;
+            RenderCell {
                 character: cell.c,
                 foreground: color(cell.fg),
                 background: color(cell.bg),
@@ -1271,9 +1291,9 @@ fn snapshot(pane: PaneId, terminal: &Term<ReplySink>) -> PaneSnapshot {
                     hidden: cell.flags.contains(Flags::HIDDEN),
                     strikeout: cell.flags.contains(Flags::STRIKEOUT),
                 },
-            });
-        }
-    }
+            }
+        })
+        .collect();
     let mode = content.mode;
     PaneSnapshot {
         pane,
@@ -1393,6 +1413,7 @@ mod tests {
     use crate::{MouseMode, PaneId, TerminalColor};
     use alacritty_terminal::{
         Term,
+        grid::Scroll,
         term::{Config, test::TermSize},
         vte::ansi::Processor,
     };
@@ -1613,6 +1634,25 @@ mod tests {
         terminal.resize(TermSize::new(20, 4));
         let rendered = snapshot(PaneId(1), &terminal);
         assert_eq!((rendered.columns, rendered.rows), (20, 4));
+    }
+
+    #[test]
+    fn snapshot_renders_the_scrollback_viewport() {
+        let (sender, _receiver) = std::sync::mpsc::channel();
+        let mut terminal = Term::new(Config::default(), &TermSize::new(8, 2), ReplySink(sender));
+        let mut parser: Processor = Processor::new();
+        parser.advance(&mut terminal, b"first\r\nsecond\r\nthird");
+
+        terminal.scroll_display(Scroll::Delta(1));
+        let rendered: String = snapshot(PaneId(1), &terminal)
+            .cells
+            .into_iter()
+            .map(|cell| cell.character)
+            .collect();
+
+        assert!(rendered.contains("first"));
+        assert!(rendered.contains("second"));
+        assert!(!rendered.contains("third"));
     }
 
     #[test]

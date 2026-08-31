@@ -26,7 +26,9 @@ use crate::{PaneId, Session, SpaceId, TabId, WorkspaceId};
 /// — an old client/server speaking the previous framing would otherwise
 /// misread a length prefix as JSON bytes or vice versa, corrupting the
 /// stream instead of failing this version check cleanly.
-pub const PROTOCOL_VERSION: u16 = 6;
+///
+/// Bumped again for terminal-owned scrollback requests.
+pub const PROTOCOL_VERSION: u16 = 7;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ClientRequest {
@@ -40,6 +42,12 @@ pub enum ClientRequest {
     Input {
         pane: PaneId,
         bytes: Vec<u8>,
+    },
+    /// Move the pane's terminal-owned scrollback viewport. Positive values
+    /// move toward older output; negative values return toward the live end.
+    Scroll {
+        pane: PaneId,
+        lines: i32,
     },
     Resize {
         pane: PaneId,
@@ -208,6 +216,19 @@ mod tests {
             workspace: WorkspaceId("w".into()),
             columns: 80,
             rows: 24,
+        };
+        assert_eq!(
+            serde_json::from_str::<ClientRequest>(&serde_json::to_string(&request).unwrap())
+                .unwrap(),
+            request
+        );
+    }
+
+    #[test]
+    fn scroll_request_round_trips() {
+        let request = ClientRequest::Scroll {
+            pane: PaneId(3),
+            lines: -3,
         };
         assert_eq!(
             serde_json::from_str::<ClientRequest>(&serde_json::to_string(&request).unwrap())
