@@ -8,13 +8,14 @@ use uze_testkit::fixtures;
 use uze_testkit::scenario::Scenario;
 use uze_testkit::temp::TestEnvironment;
 
-use crate::util::{marketplace_json, uze_bin};
+use crate::util::{install_fake_harnesses, marketplace_json, uze_bin};
 
 /// A1 — fresh machine: empty HOME/UZE_HOME, install a canonical plugin,
 /// Store correct, projection correct, inspect healthy.
 #[test]
 fn fresh_machine_installs_canonical_plugin_and_inspects_healthy() {
     let env = TestEnvironment::isolated();
+    let _harnesses = install_fake_harnesses(&env);
 
     // The default `uze` plugin is seeded even on an empty machine.
     let (market_args, install_args) = uze_testkit::marketplace::marketplace_install_args(
@@ -68,6 +69,7 @@ fn fresh_machine_installs_canonical_plugin_and_inspects_healthy() {
 #[test]
 fn fresh_clone_with_lock_install_marks_environment_ready() {
     let env = TestEnvironment::isolated();
+    let _harnesses = install_fake_harnesses(&env);
     let scenario = Scenario::new()
         .marketplace("ai", &marketplace_json("ai", "flow"))
         .marketplace_plugin("flow", fixtures::canonical("flow"))
@@ -113,9 +115,12 @@ fn fresh_clone_with_lock_install_marks_environment_ready() {
 #[test]
 fn marketplace_resolution_installs_plugin_by_shorthand() {
     let env = TestEnvironment::isolated();
+    let _harnesses = install_fake_harnesses(&env);
     let scenario = Scenario::new()
         .marketplace("ai", &marketplace_json("ai", "flow"))
         .marketplace_plugin("flow", fixtures::canonical("flow"))
+        .project_file("AGENTS.md", "# Project\n")
+        .project_file("agents.lock", "version: 1\n")
         .materialize(&env);
     let market = scenario.marketplace.as_ref().unwrap();
     env.run_ok(uze_bin(), &["market", "add", market.to_str().unwrap()]);
@@ -156,6 +161,7 @@ fn marketplace_resolution_installs_plugin_by_shorthand() {
 #[test]
 fn golden_environment_is_healthy() {
     let env = TestEnvironment::isolated();
+    let _harnesses = install_fake_harnesses(&env);
     let golden = fixtures::golden();
     let golden_market = golden.join("marketplace");
     let marketplace = std::fs::read_to_string(golden_market.join("marketplace.json"))

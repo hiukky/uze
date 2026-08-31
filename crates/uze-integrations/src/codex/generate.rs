@@ -19,7 +19,7 @@ use uze_core::{
     home::UzeHome,
     integration::{AttachmentReceipt, ManagedArtifact},
     project::Resource,
-    store::StoredPackage,
+    store::{StoredPackage, is_valid_qualified_id},
 };
 
 /// The second, UZE-owned marketplace this module publishes into —
@@ -391,6 +391,14 @@ fn materialize_user_only_skill_dir(
 /// `StoredPackage`) is available. Safe unconditionally: this directory is
 /// never anything but a Derived Artifact (ADR-013 §4).
 pub(super) fn remove_generated_package_by_id(uze_home: &UzeHome, package_id: &str) -> Result<()> {
+    // The id comes from the receipt ledger, not a constructor: refuse one
+    // that could not have been a real package id instead of joining it into
+    // a path and removing whatever the traversal lands on.
+    if !is_valid_qualified_id(package_id) {
+        return Err(UzeError::ExposureUnavailable(format!(
+            "refusing to remove generated envelope for malformed package id `{package_id}`"
+        )));
+    }
     let dir = generated_package_dir_for_id(uze_home, package_id);
     if dir.exists() {
         fs::remove_dir_all(&dir).map_err(|source| UzeError::Write { path: dir, source })?;

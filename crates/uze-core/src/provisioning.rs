@@ -5,8 +5,7 @@
 
 use std::{
     process::{Command, Stdio},
-    thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use serde::{Deserialize, Serialize};
@@ -14,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     error::{Result, UzeError},
     integration::HarnessDetection,
+    subprocess::{wait_with_timeout, with_process_group},
 };
 
 /// One integration-owned command. `program` and `arguments` are never
@@ -38,11 +38,6 @@ impl ProcessSpec {
             timeout: Duration::from_secs(300),
             output: ProcessOutput::Quiet,
         }
-    }
-
-    pub fn with_timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
-        self
     }
 
     /// Lets an explicit operator-visible action (such as an official vendor
@@ -92,34 +87,34 @@ impl ProcessRunner for SystemProcessRunner {
                 command.stdout(Stdio::inherit()).stderr(Stdio::inherit());
             }
         }
+        // `Quiet` runs (verification probes, background installs) are never
+        // watched by a user, so isolating into a new process group buys a
+        // reliable whole-tree kill on timeout — the installer can fork
+        // helpers (curl | bash), and the timeout must reach all of them.
+        //
+        // `Inherit` runs are the opposite: an operator is watching the
+        // terminal and expects Ctrl-C to reach the child directly. A new
+        // process group is detached from the terminal's foreground group,
+        // so the terminal's SIGINT would stop reaching only `uze` itself,
+        // leaving the child running invisibly in the background — worse
+        // than the single-process kill this mode falls back to on timeout.
+        let mut command = match spec.output {
+            ProcessOutput::Quiet => with_process_group(command),
+            ProcessOutput::Inherit => command,
+        };
         let mut child = command.spawn().map_err(|source| UzeError::Process {
             program: spec.program.clone(),
             source,
         })?;
-        let started = Instant::now();
-        loop {
-            if let Some(status) = child.try_wait().map_err(|source| UzeError::Process {
+        let (status, timed_out) =
+            wait_with_timeout(&mut child, spec.timeout).map_err(|source| UzeError::Process {
                 program: spec.program.clone(),
                 source,
-            })? {
-                return Ok(ProcessResult {
-                    success: status.success(),
-                    timed_out: false,
-                });
-            }
-            if started.elapsed() >= spec.timeout {
-                child.kill().map_err(|source| UzeError::Process {
-                    program: spec.program.clone(),
-                    source,
-                })?;
-                let _ = child.wait();
-                return Ok(ProcessResult {
-                    success: false,
-                    timed_out: true,
-                });
-            }
-            thread::sleep(Duration::from_millis(25));
-        }
+            })?;
+        Ok(ProcessResult {
+            success: status.success() && !timed_out,
+            timed_out,
+        })
     }
 }
 
@@ -199,5 +194,83 @@ mod tests {
         let probe = ProcessSpec::new("tool", ["--version"]);
         assert_eq!(installer.output, ProcessOutput::Inherit);
         assert_eq!(probe.output, ProcessOutput::Quiet);
+    }
+
+    #[cfg(unix)]
+    mod process_group_tests {
+        use super::*;
+        use std::time::Instant;
+
+        fn stat_field(pid: u32, index: usize) -> Option<u32> {
+            let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+            let after_comm = stat.rsplit_once(')')?.1;
+            after_comm.split_whitespace().nth(index)?.parse().ok()
+        }
+
+        fn pgid_of(pid: u32) -> u32 {
+            stat_field(pid, 2).expect("process must still be alive under /proc")
+        }
+
+        /// Finds the live child spawned as `/bin/sleep <marker>`, matched by
+        /// exact argv (never a substring) so a concurrently running test's
+        /// own spawned `sleep` — a different marker — can never be mistaken
+        /// for this one.
+        fn find_marked_sleep_child(marker: &str, deadline: Instant) -> u32 {
+            loop {
+                if let Ok(entries) = std::fs::read_dir("/proc") {
+                    for entry in entries.flatten() {
+                        let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
+                            continue;
+                        };
+                        let Ok(cmdline) = std::fs::read(entry.path().join("cmdline")) else {
+                            continue;
+                        };
+                        let args: Vec<&str> = cmdline
+                            .split(|&byte| byte == 0)
+                            .filter_map(|part| std::str::from_utf8(part).ok())
+                            .filter(|part| !part.is_empty())
+                            .collect();
+                        if args == ["/bin/sleep", marker] {
+                            return pid;
+                        }
+                    }
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "the marked `sleep {marker}` child never appeared under /proc"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+
+        #[test]
+        fn quiet_output_isolates_the_child_into_its_own_process_group() {
+            std::thread::spawn(|| {
+                let _ = SystemProcessRunner.run(&ProcessSpec::new("/bin/sleep", ["2"]));
+            });
+            let child_pid = find_marked_sleep_child("2", Instant::now() + Duration::from_secs(5));
+            assert_eq!(
+                pgid_of(child_pid),
+                child_pid,
+                "a Quiet-output child must become its own process-group leader so a timeout can \
+                 reliably kill the whole tree it may fork"
+            );
+        }
+
+        #[test]
+        fn inherited_output_child_stays_in_the_callers_process_group() {
+            let our_pgid = pgid_of(std::process::id());
+            std::thread::spawn(|| {
+                let _ = SystemProcessRunner
+                    .run(&ProcessSpec::new("/bin/sleep", ["3"]).with_inherited_output());
+            });
+            let child_pid = find_marked_sleep_child("3", Instant::now() + Duration::from_secs(5));
+            assert_eq!(
+                pgid_of(child_pid),
+                our_pgid,
+                "an Inherit-output child must stay in the caller's process group, or a terminal \
+                 SIGINT (Ctrl-C) would stop reaching it once it only reaches uze's own group"
+            );
+        }
     }
 }

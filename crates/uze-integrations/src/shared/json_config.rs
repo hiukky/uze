@@ -5,9 +5,9 @@
 //! non-object shape rather than overwrite it) — genuinely identical logic
 //! needed by every JSON-configured integration (Claude, OpenCode,
 //! Antigravity), so it lives here rather than being copied three times.
-//! Unlike `hooks.rs`, writes go through `persistence::write_atomic`: this is
-//! new code with no reason to keep that module's plain-`fs::write`
-//! inconsistency.
+//! Every write into a vendor config (here, in `hooks.rs`, and in OpenCode's
+//! MCP attach/detach) goes through `persistence::write_atomic` so a crash
+//! mid-merge can never corrupt a user config file.
 
 use std::{fs, path::Path};
 

@@ -6,13 +6,14 @@ use uze_testkit::fixtures;
 use uze_testkit::scenario::Scenario;
 use uze_testkit::temp::TestEnvironment;
 
-use crate::util::{marketplace_json, uze_bin};
+use crate::util::{install_fake_harnesses, marketplace_json, uze_bin};
 
 /// A9 — run from `project/subdir/deeper`: the nearest workspace root
 /// (`AGENTS.md` + lock) is resolved, never the subdirectory.
 #[test]
 fn nested_cwd_resolves_workspace_root_and_installs() {
     let env = TestEnvironment::isolated();
+    let _harnesses = install_fake_harnesses(&env);
     let scenario = Scenario::new()
         .marketplace("ai", &marketplace_json("ai", "flow"))
         .marketplace_plugin("flow", fixtures::canonical("flow"))
@@ -76,6 +77,7 @@ fn nested_cwd_resolves_workspace_root_and_installs() {
 #[test]
 fn workspace_overview_tracks_environment_readiness() {
     let env = TestEnvironment::isolated();
+    let _harnesses = install_fake_harnesses(&env);
     let scenario = Scenario::new()
         .marketplace("ai", &marketplace_json("ai", "flow"))
         .marketplace_plugin("flow", fixtures::canonical("flow"))

@@ -13,8 +13,7 @@
 //! only detects the invocation, resolves the real binary, asks the matching
 //! integration what to add, and `exec`s — no `UzeApplication`, no Store
 //! scan, no marketplace refresh, no network. Those are exactly the costs
-//! kept out of this hot path (see the Checkpoint 2 report's performance
-//! section).
+//! kept out of this hot path.
 //!
 //! `RUNTIME INFRASTRUCTURE`, not `CONTEXT DELIVERY POLICY` — this file
 //! neither knows nor cares whether runtime projection ever replaces the
@@ -175,8 +174,8 @@ fn run_replacing_process(mut command: std::process::Command, executable: &Path) 
 
 /// Non-Unix fallback: `exec`-style process replacement has no equivalent in
 /// `std` there, so this spawns and waits, forwarding the exit code. Not the
-/// primary, empirically-verified path — Windows/WSL is explicitly deferred
-/// (see the Checkpoint 1/2 reports); this only keeps the shim from being
+/// primary, empirically-verified path — Windows/WSL is explicitly deferred;
+/// this only keeps the shim from being
 /// Unix-only at compile time.
 #[cfg(not(unix))]
 fn run_replacing_process(mut command: std::process::Command, executable: &Path) -> ! {

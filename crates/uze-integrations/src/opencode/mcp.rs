@@ -12,6 +12,7 @@ use uze_core::{
     exposure::{ExposureMechanism, ExposurePlan},
     harness_runtime::resolve_real_executable,
     integration::{AttachmentInspection, AttachmentState, IntegrationPort},
+    persistence::write_atomic,
     project::Resource,
     router::{CompatibilityRoute, VerificationStatus},
     state,
@@ -136,14 +137,10 @@ pub(super) fn attach_mcp_config(
         path: parent.to_path_buf(),
         source,
     })?;
-    fs::write(
-        config_path,
-        serde_json::to_vec_pretty(&config).expect("config serializable"),
-    )
-    .map_err(|source| UzeError::Write {
-        path: config_path.to_path_buf(),
-        source,
-    })?;
+    // Atomic: a crash mid-write must not corrupt the user's opencode.json.
+    let mut bytes = serde_json::to_vec_pretty(&config).expect("config serializable");
+    bytes.push(b'\n');
+    write_atomic(config_path, &bytes)?;
     Ok(Some(config_path.to_path_buf()))
 }
 
@@ -156,7 +153,6 @@ pub(super) fn attach_mcp_entry(
     args: &[String],
     config_path: &Path,
 ) -> Result<Option<PathBuf>> {
-    // Safety: refuse flag-like names that would be parsed as CLI flags.
     if !is_cli_safe_token(entry_name) {
         return Err(UzeError::ExposureUnavailable(format!(
             "MCP server name `{entry_name}` would be parsed as a flag by `opencode mcp add`"

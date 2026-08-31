@@ -118,8 +118,10 @@ mod tests {
     use uze_core::{
         home::UzeHome,
         preference::{
-            Autonomy, ModelPreference, PreferencePort, PreferenceTranslation, SandboxScope,
+            Autonomy, ModelPreference, PreferenceMapping, PreferencePort, PreferenceTranslation,
+            SandboxScope,
         },
+        router::CompatibilityRoute,
     };
 
     use super::*;
@@ -165,7 +167,18 @@ mod tests {
             self.id
         }
         fn translate(&self, _preferences: &Preferences) -> PreferenceTranslation {
-            unimplemented!("not exercised by these tests")
+            // The profile lifecycle tests exercise apply (and its outcome),
+            // not translation; a static mapping keeps the fake honest
+            // without pretending to model any vendor's encoding.
+            let mapping = |route: CompatibilityRoute| PreferenceMapping {
+                route,
+                native_summary: "fake".to_owned(),
+            };
+            PreferenceTranslation {
+                autonomy: mapping(CompatibilityRoute::Native),
+                sandbox: mapping(CompatibilityRoute::Native),
+                model: mapping(CompatibilityRoute::Native),
+            }
         }
         fn apply(&self, _preferences: &Preferences) -> Result<PreferenceApplyOutcome> {
             self.result

@@ -21,6 +21,7 @@ use uze_core::{
         HookTool, PortableHook,
     },
     integration::{AttachmentInspection, AttachmentState},
+    persistence::write_atomic,
     project::Resource,
     router::{CompatibilityRoute, VerificationStatus},
 };
@@ -353,7 +354,8 @@ fn read_config_object(config_path: &Path) -> std::result::Result<serde_json::Val
 }
 
 /// Writes a config document with a trailing newline, creating missing
-/// parent directories for a UZE-created file.
+/// parent directories for a UZE-created file. Atomic (temp+rename) so a
+/// crash mid-merge can never corrupt a vendor config file.
 fn write_config(config_path: &Path, config: &serde_json::Value) -> Result<()> {
     let parent = config_path.parent().expect("hook config path has a parent");
     fs::create_dir_all(parent).map_err(|source| UzeError::Write {
@@ -362,10 +364,7 @@ fn write_config(config_path: &Path, config: &serde_json::Value) -> Result<()> {
     })?;
     let mut bytes = serde_json::to_vec_pretty(config).expect("hook config serializes");
     bytes.push(b'\n');
-    fs::write(config_path, bytes).map_err(|source| UzeError::Write {
-        path: config_path.to_path_buf(),
-        source,
-    })
+    write_atomic(config_path, &bytes)
 }
 
 /// The exact entries one integration already owns for one hook entry name

@@ -13,13 +13,26 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::mpsc,
+    thread,
+    time::Instant,
 };
 
-use crate::error::{Result, UzeError};
+use crate::{
+    error::{Result, UzeError},
+    subprocess::{kill_process_group, read_bounded, wait_with_timeout, with_process_group},
+};
 
 /// Wall-clock budget for any single Git invocation. A remote that never
 /// answers must fail rather than hang a `uze add` forever.
 const COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Per-stream cap for a Git invocation's captured output. Every caller in
+/// this module only ever reads small plumbing output (a ref name, a commit
+/// hash, a short failure line) — this exists purely as a defense-in-depth
+/// backstop against a hostile or misbehaving remote, not a real limit any
+/// legitimate invocation should approach.
+const GIT_OUTPUT_CAP: usize = 8 * 1024 * 1024;
 
 /// Upper bound on a materialized checkout. Crude on purpose: it exists so a
 /// hostile or accidentally enormous repository cannot fill the disk, not to
@@ -232,34 +245,68 @@ fn run(arguments: &[&str], working_directory: Option<&Path>) -> Result<String> {
         command.current_dir(directory);
     }
 
-    let mut child = command
+    let mut child = with_process_group(command)
         .spawn()
         .map_err(|error| UzeError::AcquisitionFailed(format!("could not run `git`: {error}")))?;
-    let deadline = std::time::Instant::now() + COMMAND_TIMEOUT;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) if std::time::Instant::now() < deadline => {
-                std::thread::sleep(std::time::Duration::from_millis(25));
-            }
-            Ok(None) => {
-                let _ = child.kill();
-                return Err(UzeError::AcquisitionFailed(format!(
-                    "`git {}` timed out",
-                    arguments.first().copied().unwrap_or("command")
-                )));
-            }
-            Err(error) => {
-                return Err(UzeError::AcquisitionFailed(format!(
-                    "could not wait for `git`: {error}"
-                )));
-            }
-        }
-    }
-    let output = child.wait_with_output().map_err(|error| {
-        UzeError::AcquisitionFailed(format!("could not read `git` output: {error}"))
+    let Some(mut stdout) = child.stdout.take() else {
+        return Err(UzeError::AcquisitionFailed(
+            "captured git stdout was not piped".to_owned(),
+        ));
+    };
+    let Some(mut stderr) = child.stderr.take() else {
+        return Err(UzeError::AcquisitionFailed(
+            "captured git stderr was not piped".to_owned(),
+        ));
+    };
+    let deadline = Instant::now() + COMMAND_TIMEOUT;
+    let timed_out_error = || {
+        UzeError::AcquisitionFailed(format!(
+            "`git {}` timed out",
+            arguments.first().copied().unwrap_or("command")
+        ))
+    };
+    // Readers report through a channel rather than a bare `wait_with_output`
+    // call: `git` itself can write more than the OS pipe buffer before
+    // exiting (a large `for-each-ref`/`log` listing, a verbose failure), and
+    // nothing was draining the pipes while `wait_with_timeout` below polls
+    // — `git`'s own write() would then block on the full buffer, so it never
+    // reaches exit, and the stall gets misreported as a timeout rather than
+    // what it actually is: backpressure from an unread pipe.
+    let (stdout_tx, stdout_rx) = mpsc::channel();
+    let (stderr_tx, stderr_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = stdout_tx.send(read_bounded(&mut stdout, GIT_OUTPUT_CAP));
+    });
+    thread::spawn(move || {
+        let _ = stderr_tx.send(read_bounded(&mut stderr, GIT_OUTPUT_CAP));
+    });
+    let (status, timed_out) = wait_with_timeout(&mut child, COMMAND_TIMEOUT).map_err(|error| {
+        UzeError::AcquisitionFailed(format!("could not wait for `git`: {error}"))
     })?;
-    if !output.status.success() {
+    if timed_out {
+        return Err(timed_out_error());
+    }
+    // `git` itself exited, but the same reasoning as above applies once more
+    // if it forked a helper (a credential helper, a submodule hook despite
+    // `core.hooksPath=/dev/null`) that inherited and still holds a pipe
+    // open: bound the wait for the readers by what remains of the deadline
+    // instead of joining unconditionally.
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    let (stdout_bytes, _) = match stdout_rx.recv_timeout(remaining) {
+        Ok(result) => result,
+        Err(_) => {
+            kill_process_group(child.id());
+            return Err(timed_out_error());
+        }
+    };
+    let (stderr_bytes, _) = match stderr_rx.recv_timeout(remaining) {
+        Ok(result) => result,
+        Err(_) => {
+            kill_process_group(child.id());
+            return Err(timed_out_error());
+        }
+    };
+    if !status.success() {
         // Git echoes the URL it was given. A rejected credential-bearing URL
         // never reaches this far, but a redirect or an embedded token in some
         // other position still must not survive into an error a user pastes
@@ -267,10 +314,10 @@ fn run(arguments: &[&str], working_directory: Option<&Path>) -> Result<String> {
         return Err(UzeError::AcquisitionFailed(redact(&format!(
             "`git {}` failed: {}",
             arguments.first().copied().unwrap_or("command"),
-            String::from_utf8_lossy(&output.stderr).trim()
+            String::from_utf8_lossy(&stderr_bytes).trim()
         ))));
     }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    Ok(String::from_utf8_lossy(&stdout_bytes).into_owned())
 }
 
 /// Replaces anything shaped like inline credentials in a message.
@@ -377,5 +424,82 @@ mod tests {
                 "accepted {subdirectory}"
             );
         }
+    }
+
+    fn temp(label: &str) -> PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("uze-git-{label}-{}-{nonce}", std::process::id()))
+    }
+
+    #[test]
+    fn run_drains_output_larger_than_the_pipe_buffer_instead_of_deadlocking() {
+        // Regression test: `wait_with_timeout`'s poll loop does not itself
+        // read the child's stdout/stderr, so if nothing drains those pipes
+        // concurrently, `git` blocks on its own `write()` once a ~64KB OS
+        // pipe buffer fills — it never reaches exit, and the stall gets
+        // misreported as a timeout. Forcing `for-each-ref` output well past
+        // that size reproduces the exact shape of hang this was fixed for.
+        //
+        // This test resolves `git` by name (via `PATH`), unlike its
+        // absolute-path siblings elsewhere in this crate's suite, so it
+        // must serialize against `harness_runtime`'s tests, which
+        // temporarily narrow process-global `PATH` — otherwise this can
+        // race into a spurious `NotFound` with no connection visible from
+        // either test's own code.
+        let _guard = crate::test_support::PROCESS_ENV_LOCK.lock().unwrap();
+        let root = temp("large-output");
+        fs::create_dir_all(&root).unwrap();
+        assert!(
+            Command::new("git")
+                .args(["init", "-q"])
+                .current_dir(&root)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            Command::new("git")
+                .args(["-c", "user.email=t@t", "-c", "user.name=t"])
+                .args(["commit", "-q", "--allow-empty", "-m", "root"])
+                .current_dir(&root)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let commit = String::from_utf8(
+            Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(&root)
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap();
+        let commit = commit.trim();
+        // Written directly rather than via 5000 individual `git tag` calls:
+        // this is setup for the test, not the behavior under test.
+        let mut packed_refs = "# pack-refs with: peeled fully-peeled sorted\n".to_owned();
+        for index in 0..5000 {
+            packed_refs.push_str(&format!("{commit} refs/tags/tag-{index:05}\n"));
+        }
+        fs::write(root.join(".git/packed-refs"), packed_refs).unwrap();
+
+        let started = Instant::now();
+        let listing = run(
+            &["for-each-ref", "--format=%(refname)", "refs/tags/"],
+            Some(&root),
+        )
+        .expect("a large but well-formed listing must not be mistaken for a hang");
+        assert!(
+            started.elapsed() < COMMAND_TIMEOUT,
+            "must finish well inside the timeout, not be saved only by eventually hitting it"
+        );
+        assert_eq!(listing.lines().count(), 5000, "no line may be lost");
+        assert!(listing.contains("refs/tags/tag-04999"));
+
+        let _ = fs::remove_dir_all(root);
     }
 }

@@ -44,6 +44,33 @@ fn sandbox_mapping(sandbox: SandboxScope) -> (CompatibilityRoute, &'static str) 
     }
 }
 
+/// Codex's automatic mode is intended to run the whole development loop,
+/// including the container-backed conformance lab. Keeping a workspace-only
+/// sandbox here makes that mode silently unable to reach the Docker socket
+/// even though it no longer asks for approval. Treat `Auto` as the cohesive
+/// "run it for me" preset and use Codex's full-access sandbox.
+fn effective_sandbox(preferences: &Preferences) -> SandboxScope {
+    match preferences.autonomy {
+        Autonomy::Auto => SandboxScope::FullAccess,
+        _ => preferences.sandbox,
+    }
+}
+
+/// `Some` naming the override whenever `effective_sandbox` raised the
+/// sandbox past what the profile actually asked for — the override in
+/// `effective_sandbox` must never apply silently: a user who explicitly
+/// chose `ReadOnly`/`WorkspaceWrite` and then picks `Auto` autonomy has to
+/// be able to see that their sandbox choice was not the one applied.
+fn sandbox_override_note(preferences: &Preferences, effective: SandboxScope) -> Option<String> {
+    (effective != preferences.sandbox).then(|| {
+        format!(
+            "sandbox raised to full-access because autonomy is Auto (overrides your configured \
+             {:?})",
+            preferences.sandbox
+        )
+    })
+}
+
 fn model_mapping(model: ModelPreference) -> CompatibilityRoute {
     match model {
         ModelPreference::Default => CompatibilityRoute::Native,
@@ -53,7 +80,16 @@ fn model_mapping(model: ModelPreference) -> CompatibilityRoute {
 
 pub(crate) fn translate(preferences: &Preferences) -> PreferenceTranslation {
     let (autonomy_route, autonomy_value) = autonomy_mapping(preferences.autonomy);
-    let (sandbox_route, sandbox_value) = sandbox_mapping(preferences.sandbox);
+    let effective_sandbox = effective_sandbox(preferences);
+    let (sandbox_route, sandbox_value) = sandbox_mapping(effective_sandbox);
+    let override_note = sandbox_override_note(preferences, effective_sandbox);
+    // The override changes what was actually applied versus what the
+    // profile asked for, so it can never report as a plain `Native` match.
+    let sandbox_route = if override_note.is_some() {
+        CompatibilityRoute::Degraded
+    } else {
+        sandbox_route
+    };
     let model_route = model_mapping(preferences.model);
     PreferenceTranslation {
         autonomy: PreferenceMapping {
@@ -62,7 +98,10 @@ pub(crate) fn translate(preferences: &Preferences) -> PreferenceTranslation {
         },
         sandbox: PreferenceMapping {
             route: sandbox_route,
-            native_summary: format!("sandbox_mode = \"{sandbox_value}\""),
+            native_summary: match &override_note {
+                Some(note) => format!("sandbox_mode = \"{sandbox_value}\" ({note})"),
+                None => format!("sandbox_mode = \"{sandbox_value}\""),
+            },
         },
         model: PreferenceMapping {
             route: model_route,
@@ -79,24 +118,35 @@ pub(crate) fn apply(
     preferences: &Preferences,
 ) -> Result<PreferenceApplyOutcome> {
     let (autonomy_route, autonomy_value) = autonomy_mapping(preferences.autonomy);
-    let (sandbox_route, sandbox_value) = sandbox_mapping(preferences.sandbox);
+    let effective_sandbox = effective_sandbox(preferences);
+    let (sandbox_route, sandbox_value) = sandbox_mapping(effective_sandbox);
+    let override_note = sandbox_override_note(preferences, effective_sandbox);
+    // Same reasoning as `translate`: an overridden sandbox is not the exact
+    // preference applied, so it must not summarize as a plain `Native` hit.
+    let sandbox_route = if override_note.is_some() {
+        CompatibilityRoute::Degraded
+    } else {
+        sandbox_route
+    };
     let model_route = model_mapping(preferences.model);
 
     toml_config::merge(config_path, |document| {
         toml_config::set_path(document, &["approval_policy"], autonomy_value)?;
         toml_config::set_path(document, &["sandbox_mode"], sandbox_value)?;
-        if preferences.sandbox == SandboxScope::WorkspaceWrite {
+        if effective_sandbox == SandboxScope::WorkspaceWrite {
             toml_config::set_path(
                 document,
                 &["sandbox_workspace_write", "network_access"],
                 false,
             )?;
+        } else {
+            toml_config::remove_path(document, &["sandbox_workspace_write", "network_access"]);
         }
         Ok(())
     })?;
 
     let mut sandbox_keys = vec!["sandbox_mode".to_owned()];
-    if preferences.sandbox == SandboxScope::WorkspaceWrite {
+    if effective_sandbox == SandboxScope::WorkspaceWrite {
         sandbox_keys.push("sandbox_workspace_write.network_access".to_owned());
     }
 
@@ -109,7 +159,7 @@ pub(crate) fn apply(
         PreferenceApplyDetail {
             route: sandbox_route,
             changed_keys: sandbox_keys,
-            note: None,
+            note: override_note,
         },
         PreferenceApplyDetail {
             route: model_route,
@@ -154,7 +204,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_autonomy_disables_command_approvals_while_preserving_the_sandbox() {
+    fn auto_autonomy_disables_command_approvals() {
         let translation = translate(&Preferences {
             autonomy: Autonomy::Auto,
             ..Preferences::default()
@@ -167,9 +217,10 @@ mod tests {
     }
 
     #[test]
-    fn auto_with_workspace_write_avoids_prompts_without_full_access() {
-        let path = temp_path("auto-workspace-write");
-        apply(
+    fn auto_uses_full_access_even_when_the_profile_sandbox_is_workspace_write() {
+        let path = temp_path("auto-full-access");
+        std::fs::write(&path, "[sandbox_workspace_write]\nnetwork_access = false\n").unwrap();
+        let outcome = apply(
             &path,
             &Preferences {
                 autonomy: Autonomy::Auto,
@@ -181,8 +232,64 @@ mod tests {
 
         let contents = std::fs::read_to_string(&path).unwrap();
         assert!(contents.contains("approval_policy = \"never\""));
-        assert!(contents.contains("sandbox_mode = \"workspace-write\""));
+        assert!(contents.contains("sandbox_mode = \"danger-full-access\""));
+        assert!(
+            !contents.contains("network_access = false"),
+            "Auto must not retain the workspace-only network restriction"
+        );
+        // The override must never be silent: it must surface as an
+        // approximation, not a plain, unremarkable `Applied`.
+        match outcome {
+            PreferenceApplyOutcome::AppliedWithApproximation { notes, .. } => {
+                assert!(
+                    notes
+                        .iter()
+                        .any(|note| note.contains("Auto") && note.contains("WorkspaceWrite")),
+                    "expected a note naming the overridden sandbox, got: {notes:?}"
+                );
+            }
+            other => {
+                panic!("expected AppliedWithApproximation with an override note, got {other:?}")
+            }
+        }
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn auto_translation_reports_the_effective_full_access_sandbox() {
+        let translation = translate(&Preferences {
+            autonomy: Autonomy::Auto,
+            sandbox: SandboxScope::ReadOnly,
+            ..Preferences::default()
+        });
+        assert_eq!(translation.sandbox.route, CompatibilityRoute::Degraded);
+        assert!(
+            translation
+                .sandbox
+                .native_summary
+                .starts_with("sandbox_mode = \"danger-full-access\""),
+        );
+        assert!(
+            translation.sandbox.native_summary.contains("ReadOnly"),
+            "the override must name what it overrode: {}",
+            translation.sandbox.native_summary
+        );
+    }
+
+    #[test]
+    fn auto_with_full_access_already_configured_is_not_reported_as_an_override() {
+        // Auto's effective sandbox equals the configured one here, so there
+        // is nothing to disclose — this must stay a plain `Native` match.
+        let translation = translate(&Preferences {
+            autonomy: Autonomy::Auto,
+            sandbox: SandboxScope::FullAccess,
+            ..Preferences::default()
+        });
+        assert_eq!(translation.sandbox.route, CompatibilityRoute::Native);
+        assert_eq!(
+            translation.sandbox.native_summary,
+            "sandbox_mode = \"danger-full-access\""
+        );
     }
 
     #[test]

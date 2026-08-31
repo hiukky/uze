@@ -416,25 +416,22 @@ pub fn has_content_outside_managed_regions(target_file: &Path) -> bool {
         .any(|(index, line)| !owned.contains(&index) && !line.trim().is_empty())
 }
 
-/// Whether `target_file` currently holds *any* UZE-managed region at all,
-/// regardless of identity. Generic infrastructure-lifecycle check: a caller
-/// that manages a second, resource-independent artifact conditioned on "is
-/// this file still needed by at least one region" uses this rather than
-/// tracking specific identities itself. A missing or unreadable file
-/// conservatively reports `false` — no content means no dependent region.
-pub fn any_region_present(target_file: &Path) -> bool {
-    let Ok(Some((lines, _style))) = read_lines(target_file) else {
-        return false;
-    };
-    lines
-        .iter()
-        .any(|line| line.starts_with("<!-- uze:begin ") && line.ends_with(" -->"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    /// Whether `target_file` currently holds *any* UZE-managed region at
+    /// all, regardless of identity. Exercised only by the tests below; a
+    /// production caller would live this check next to its own manager.
+    fn any_region_present(target_file: &Path) -> bool {
+        let Ok(Some((lines, _style))) = read_lines(target_file) else {
+            return false;
+        };
+        lines
+            .iter()
+            .any(|line| line.starts_with("<!-- uze:begin ") && line.ends_with(" -->"))
+    }
 
     fn temp(label: &str) -> PathBuf {
         let nonce = std::time::SystemTime::now()

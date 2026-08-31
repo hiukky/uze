@@ -45,6 +45,26 @@ pub(crate) fn set_path(
     Ok(())
 }
 
+/// Removes a dot-path when all of its ancestors are tables. A missing path is
+/// already absent; a non-table ancestor is foreign configuration and is left
+/// untouched.
+pub(crate) fn remove_path(document: &mut DocumentMut, path: &[&str]) {
+    let Some((last, ancestors)) = path.split_last() else {
+        return;
+    };
+    let mut table: &mut Table = document.as_table_mut();
+    for key in ancestors {
+        let Some(entry) = table.get_mut(key) else {
+            return;
+        };
+        let Some(child) = entry.as_table_mut() else {
+            return;
+        };
+        table = child;
+    }
+    table.remove(last);
+}
+
 /// Writes `document` back atomically.
 pub(crate) fn write_document(path: &Path, document: &DocumentMut) -> Result<()> {
     write_atomic(path, document.to_string().as_bytes())
@@ -130,6 +150,20 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn remove_path_leaves_foreign_siblings_intact() {
+        let mut document = "[sandbox_workspace_write]\nnetwork_access = false\nextra = true\n"
+            .parse::<DocumentMut>()
+            .unwrap();
+        remove_path(
+            &mut document,
+            &["sandbox_workspace_write", "network_access"],
+        );
+        let rendered = document.to_string();
+        assert!(!rendered.contains("network_access"));
+        assert!(rendered.contains("extra = true"));
     }
 
     #[test]

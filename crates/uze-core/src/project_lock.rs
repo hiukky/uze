@@ -184,14 +184,6 @@ fn parse_lock_str(text: &str, path: &Path) -> Result<ProjectLock> {
     Ok(lock)
 }
 
-pub fn parse_lock_bytes(bytes: &[u8], path: &Path) -> Result<ProjectLock> {
-    let text = std::str::from_utf8(bytes).map_err(|_| UzeError::MalformedLock {
-        path: path.to_path_buf(),
-        reason: "agents.lock is not valid UTF-8".to_owned(),
-    })?;
-    parse_lock_str(text, path)
-}
-
 pub fn save_lock(root: &Path, lock: &ProjectLock) -> Result<()> {
     if lock.version != SUPPORTED_LOCK_VERSION {
         return Err(UzeError::UnsupportedLockVersion {

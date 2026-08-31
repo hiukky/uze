@@ -125,10 +125,7 @@ impl CodexIntegration {
         self.command_home.join(".codex").join("config.toml")
     }
 
-    /// Convenience constructor for the CLI composition root. Unused when
-    /// this module is compiled into a test binary via `#[path]`, where
-    /// tests construct with `new` directly against a temporary home.
-    #[allow(dead_code)]
+    /// Env-based constructor for the CLI composition root (`registry.rs`).
     pub fn from_env(uze_home: UzeHome) -> Result<Self> {
         let home = std::env::var_os("HOME").ok_or(UzeError::MissingHomeDirectory)?;
         Ok(Self::new(PathBuf::from(home).join(".agents"), uze_home))
@@ -375,12 +372,9 @@ impl IntegrationPort for CodexIntegration {
                 ["-c", "curl -fsSL https://chatgpt.com/codex/install.sh | sh"],
             )
             .with_inherited_output(),
-            // Real-CLI dogfood against codex-cli 0.148.0 (the version this
-            // repo's own docs list as last-validated) found `--upgrade` is
-            // not a recognized flag — `codex --help` lists `update` as a
-            // subcommand instead. `research.md`'s original `--upgrade`
-            // finding predates that vendor rename; left as a historical
-            // record, not edited.
+            // Real-CLI dogfood against codex-cli 0.148.0 found `--upgrade` is not
+            // a recognized flag — `codex --help` lists `update` as a
+            // subcommand instead.
             ProcessSpec::new("codex", ["update"]).with_inherited_output(),
             "official-native-installer",
         )
@@ -508,7 +502,11 @@ impl IntegrationPort for CodexIntegration {
                     &self.uze_home,
                     self.id(),
                     config_file,
-                    event.expect("Codex hook entries are event-keyed"),
+                    event.ok_or_else(|| {
+                        UzeError::ExposureUnavailable(
+                            "Codex hook plan has no event to attach".to_owned(),
+                        )
+                    })?,
                     entry_name,
                     expected,
                 )?;
@@ -600,11 +598,17 @@ impl IntegrationPort for CodexIntegration {
                 event,
                 expected,
                 ..
-            } => hook_projection::inspect_event_entry(
-                config_file,
-                event.expect("Codex hook entries are event-keyed"),
-                expected,
-            ),
+            } => {
+                // A ledger entry damaged or predating the event field must
+                // block inspection, never panic doctor/remove.
+                let Some(event) = *event else {
+                    return AttachmentInspection {
+                        state: AttachmentState::Blocked,
+                        reason: "hook receipt has no event; refusing to inspect".to_owned(),
+                    };
+                };
+                hook_projection::inspect_event_entry(config_file, event, expected)
+            }
             ManagedArtifact::IntegrationOwned {
                 kind,
                 selector,
@@ -645,11 +649,13 @@ impl IntegrationPort for CodexIntegration {
                 expected,
                 ..
             } => {
-                return hook_projection::remove_event_entry(
-                    config_file,
-                    event.expect("Codex hook entries are event-keyed"),
-                    expected,
-                );
+                let Some(event) = *event else {
+                    return Ok(AttachmentInspection {
+                        state: AttachmentState::Blocked,
+                        reason: "hook receipt has no event; refusing to detach".to_owned(),
+                    });
+                };
+                return hook_projection::remove_event_entry(config_file, event, expected);
             }
             ManagedArtifact::IntegrationOwned { kind, selector, .. }
                 if kind == "marketplace-plugin" || kind == GENERATED_PLUGIN_KIND =>

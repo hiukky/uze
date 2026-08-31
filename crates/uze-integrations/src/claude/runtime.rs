@@ -12,7 +12,7 @@ use std::{
 use uze_core::harness_runtime::{self, HarnessRuntimeContribution, RuntimeContext};
 
 /// The vendor-documented (but undocumented-in-`--help`, empirically
-/// confirmed — see the Checkpoint report) environment variable that makes
+/// confirmed) environment variable that makes
 /// Claude Code treat a `--add-dir` directory's `CLAUDE.md` as loaded
 /// instructions rather than only granting tool/file access to it.
 pub(super) const RUNTIME_PROJECTION_ENV_VAR: &str = "CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD";
@@ -20,8 +20,7 @@ pub(super) const RUNTIME_PROJECTION_ENV_VAR: &str = "CLAUDE_CODE_ADDITIONAL_DIRE
 /// `EXPERIMENTAL RUNTIME DELIVERY STRATEGY` — see `CONTEXT DELIVERY POLICY`
 /// note on `runtime_contribution` below. This is intentionally not wired
 /// into `exposure_plan`/`attach` (the persistent, project-root `CLAUDE.md`
-/// bridge that `uze context reconcile` still owns, see
-/// `uze-application::application::BRIDGE_INTEGRATIONS` — that remains the
+/// bridge that `uze context reconcile` still owns — that remains the
 /// `LEGACY/PERSISTENT CONTEXT DELIVERY STRATEGY` until an empirical
 /// interactive comparison decides otherwise).
 ///

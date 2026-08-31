@@ -20,8 +20,30 @@ use crate::{
 /// A plugin name is only unique inside a marketplace. The qualified form is
 /// deliberately the state/receipt identity so `git@one` and `git@two` can
 /// coexist without sharing bytes or lifecycle records.
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+///
+/// `Deserialize` is hand-implemented (not derived) so a ledger entry can
+/// never introduce an id the constructors would have rejected: the id is
+/// later joined verbatim into filesystem paths (`plugin_dir`) and passed as
+/// a bare argument to vendor CLIs, so every byte that enters through
+/// `packages.json` must pass the same charset/shape rule as one constructed
+/// from a manifest.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct PackageId(String);
+
+impl<'de> Deserialize<'de> for PackageId {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        if !is_valid_qualified_id(&value) {
+            return Err(serde::de::Error::custom(format!(
+                "package id `{value}` is not a valid `name@marketplace` id"
+            )));
+        }
+        Ok(Self(value))
+    }
+}
 
 impl PackageId {
     pub fn as_str(&self) -> &str {
@@ -93,6 +115,16 @@ fn is_valid_name_component(value: &str) -> bool {
         })
 }
 
+/// Whether `value` is a valid qualified `name@marketplace` package id — the
+/// same rule the constructors and the ledger deserializer enforce. Public so
+/// integrations can re-check an id that arrives from state (a receipt's
+/// `package_id`) before turning it into a filesystem path.
+pub fn is_valid_qualified_id(value: &str) -> bool {
+    value.rsplit_once('@').is_some_and(|(name, marketplace)| {
+        is_valid_name_component(name) && is_valid_name_component(marketplace)
+    })
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StoredPackage {
     pub id: PackageId,
@@ -115,9 +147,19 @@ pub struct UzeStore {
     home: UzeHome,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 struct PackageRegistry {
     packages: BTreeMap<PackageId, Registration>,
+}
+
+/// The on-disk shape of `packages.json`, read with plain `String` keys so
+/// `load_registry` can validate each id independently — see its doc comment
+/// for why deserializing straight into `PackageRegistry` (keyed by the
+/// strict `PackageId`) is the wrong tool here: one bad key would fail the
+/// whole map instead of just that entry.
+#[derive(Deserialize)]
+struct RawPackageRegistry {
+    packages: BTreeMap<String, Registration>,
 }
 
 /// One registry entry.
@@ -349,33 +391,6 @@ impl UzeStore {
         })
     }
 
-    /// Re-points `id`'s local invocation name — the `alias` resolution
-    /// applied after the fact (e.g. freeing up a bare name a since-removed
-    /// package used to hold). `None` clears any alias, reverting to the
-    /// bare plugin name. Does not check for a collision against the new
-    /// name: a caller choosing to repoint an existing registration has
-    /// already made that decision (ingest-time collision checking is what
-    /// protects a *new* install from silently shadowing one already active).
-    pub fn set_active_name(&self, id: &PackageId, name: Option<&str>) -> Result<()> {
-        if let Some(alias) = name
-            && !is_valid_name_component(alias)
-        {
-            return Err(UzeError::InvalidPackageName {
-                path: self.home.plugin_dir(id).join("plugin.json"),
-                name: alias.to_owned(),
-            });
-        }
-        let mut registry = self.load_registry()?;
-        let registration = registry
-            .packages
-            .get_mut(id)
-            .ok_or_else(|| UzeError::UnknownPackage(id.as_str().to_owned()))?;
-        registration.active_name = name
-            .filter(|alias| *alias != id.plugin_name())
-            .map(str::to_owned);
-        self.save_registry(&registry)
-    }
-
     pub fn registration_count(&self) -> Result<usize> {
         Ok(self.load_registry()?.packages.len())
     }
@@ -439,6 +454,16 @@ impl UzeStore {
         self.save_registry(&registry)
     }
 
+    /// `packages.json` is a ledger of independent registrations, so one
+    /// entry whose key fails `PackageId`'s validation (tampered, corrupted,
+    /// or hand-edited) must not make every *other*, still-valid package
+    /// unreachable through `list`/`remove`/`doctor`. Deserializing the whole
+    /// map through `PackageId`'s strict `Deserialize` would do exactly that
+    /// — one bad key fails the entire parse — so this reads keys as plain
+    /// `String` first and validates each independently, dropping only the
+    /// ones that fail. A dropped id can never be looked up or acted on by
+    /// any valid id anyway, so dropping it is equivalent to quarantining it,
+    /// never to trusting it.
     fn load_registry(&self) -> Result<PackageRegistry> {
         let path = self.home.registry_path();
         if !path.exists() {
@@ -450,7 +475,15 @@ impl UzeStore {
             path: path.clone(),
             source,
         })?;
-        serde_json::from_slice(&bytes).map_err(|source| UzeError::Json { path, source })
+        let raw: RawPackageRegistry =
+            serde_json::from_slice(&bytes).map_err(|source| UzeError::Json { path, source })?;
+        let packages = raw
+            .packages
+            .into_iter()
+            .filter(|(key, _)| is_valid_qualified_id(key))
+            .map(|(key, registration)| (PackageId(key), registration))
+            .collect();
+        Ok(PackageRegistry { packages })
     }
 
     fn save_registry(&self, registry: &PackageRegistry) -> Result<()> {
@@ -664,6 +697,111 @@ mod tests {
         home.ensure_layout().unwrap();
         fs::write(home.registry_path(), "bad json").unwrap();
         assert!(store.package_ids().is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn package_id_deserializes_only_valid_qualified_ids() {
+        // The registry's `packages.json` is the one path through which an id
+        // can reach `plugin_dir` and `remove_dir_all` without passing a
+        // constructor, so deserialization must hold the same charset/shape
+        // rule the constructors do.
+        let manifest = PathBuf::from("/tmp/plugin.json");
+        let valid = PackageId::from_marketplace_plugin("local", "flow", &manifest).unwrap();
+        let round_trip: PackageId =
+            serde_json::from_str(&format!("\"{}\"", valid.as_str())).unwrap();
+        assert_eq!(round_trip, valid);
+        assert!(
+            serde_json::from_str::<PackageId>("\"flow\"").is_err(),
+            "unqualified ids are not valid state"
+        );
+        assert!(
+            serde_json::from_str::<PackageId>("\"../escape@local\"").is_err(),
+            "path traversal must never deserialize"
+        );
+        assert!(
+            serde_json::from_str::<PackageId>("\"../../x@local\"").is_err(),
+            "multi-component traversal must never deserialize"
+        );
+        assert!(
+            serde_json::from_str::<PackageId>("\"-force@local\"").is_err(),
+            "a leading dash must never deserialize"
+        );
+        assert!(
+            serde_json::from_str::<PackageId>("\"flow@../market\"").is_err(),
+            "the marketplace component is held to the same rule"
+        );
+    }
+
+    #[test]
+    fn tampered_registry_entry_never_resolves_to_a_removable_package() {
+        // End-to-end guard: even with a hand-edited registry carrying a
+        // traversal id, nothing about that id is ever actionable — it never
+        // loads into a `PackageId` an operation could reach, so it can never
+        // be looked up, listed, or removed.
+        let root = temp("registry-tamper");
+        let home = UzeHome::at(&root);
+        let store = UzeStore::new(home.clone());
+        home.ensure_layout().unwrap();
+        let victim = temp("registry-tamper-victim");
+        fs::create_dir_all(&victim).unwrap();
+        let state = serde_json::json!({
+            "packages": {
+                "../../..": {
+                    "source": "local",
+                    "active_name": ".."
+                }
+            }
+        });
+        fs::write(home.registry_path(), state.to_string()).unwrap();
+        let ids = store
+            .package_ids()
+            .expect("a tampered entry must be quarantined, not fail the whole load");
+        assert!(
+            ids.is_empty(),
+            "the tampered id must never resolve to a usable PackageId"
+        );
+        assert!(victim.exists(), "nothing outside the store may be removed");
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(victim);
+    }
+
+    #[test]
+    fn load_registry_quarantines_a_tampered_entry_without_losing_valid_ones() {
+        // The whole point of the per-entry-tolerant parse: a single
+        // corrupted or hand-edited key must not make every *other*,
+        // still-valid package unreachable through `list`/`remove`/`doctor`.
+        let root = temp("registry-mixed-tamper");
+        let home = UzeHome::at(&root);
+        let store = UzeStore::new(home.clone());
+        home.ensure_layout().unwrap();
+        let state = serde_json::json!({
+            "packages": {
+                "../../escape@local": {
+                    "source": "local",
+                    "active_name": "escape"
+                },
+                "flow@local": {
+                    "source": "local"
+                }
+            }
+        });
+        fs::write(home.registry_path(), state.to_string()).unwrap();
+        let ids = store
+            .package_ids()
+            .expect("one tampered entry must not fail the whole registry load");
+        assert_eq!(
+            ids,
+            vec![
+                PackageId::from_marketplace_plugin(
+                    "local",
+                    "flow",
+                    &PathBuf::from("/tmp/plugin.json")
+                )
+                .unwrap()
+            ],
+            "the valid entry must still load even though its sibling is quarantined"
+        );
         let _ = fs::remove_dir_all(root);
     }
 }

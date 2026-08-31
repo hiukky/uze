@@ -296,13 +296,6 @@ pub fn plugin_marketplace_record(home: &UzeHome, plugin_id: &str, marketplace: &
     save_plugin_marketplace_registry(home, &registry)
 }
 
-pub fn plugin_marketplace_get(home: &UzeHome, plugin_id: &str) -> Result<Option<String>> {
-    Ok(load_plugin_marketplace_registry(home)?
-        .plugins
-        .get(plugin_id)
-        .cloned())
-}
-
 pub fn plugin_marketplace_remove(home: &UzeHome, plugin_id: &str) -> Result<()> {
     let mut registry = load_plugin_marketplace_registry(home)?;
     registry.plugins.remove(plugin_id);

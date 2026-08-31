@@ -346,7 +346,18 @@ fn claude_has_no_shared_skill_root_by_design() {
 }
 
 #[test]
-fn antigravity_has_no_shared_skill_root_by_design() {}
+fn antigravity_has_no_shared_skill_root_by_design() {
+    let root = temp("antigravity-exclusive-root");
+    let integration =
+        AntigravityIntegration::new(root.join("agents-home"), UzeHome::at(root.join("uze")));
+    assert_eq!(
+        integration.shared_agent_skill_root(),
+        None,
+        "Antigravity's skills staging is exclusive, not shared with any peer — this must stay \
+         None, never forced into symmetry with Codex/OpenCode"
+    );
+    let _ = fs::remove_dir_all(root);
+}
 
 // ============================================================================
 // 6. No duplicate capability receipt when a package covers a resource —
@@ -483,4 +494,79 @@ fn no_duplicate_capability_receipt_when_a_package_covers_the_resource() {
 
     let _ = fs::remove_dir_all(root);
     let _ = fs::remove_dir_all(pkg_root);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failing_vendor_cli_propagates_the_error_and_leaves_no_partial_state() {
+    // Every fake in this suite answers exit 0 to anything, so a regression
+    // in vendor-failure propagation (`claude mcp add` rejected, installer
+    // denied) would ship green. The testkit's rule table can fail
+    // explicitly; assert the error surfaces and nothing partial is left.
+    use uze_testkit::fake_harness::{Action, FakeHarness};
+
+    let root = temp("vendor-fails");
+    let uze_home = UzeHome::at(root.join("uze"));
+    let integration = ClaudeIntegration::new(root.join("claude-home"), uze_home.clone());
+
+    let fake_bin = root.join("fake-bin");
+    let claude = FakeHarness::new(&fake_bin, "claude")
+        .version_line("9.9.9 (fake Claude)")
+        .on_prefix(["mcp", "get"], Action::Exit(1))
+        .on_prefix(["mcp", "add"], Action::Exit(7))
+        .build();
+    let mut env_scope = uze_testkit::env::scope();
+    env_scope.set("PATH", uze_testkit::temp::path_prefixed(&fake_bin));
+    state::record(
+        &uze_home,
+        state::IntegrationRecord {
+            harness: integration.id().to_owned(),
+            version: None,
+            strategy: "conformance-fixture".to_owned(),
+            installed: true,
+        },
+    )
+    .unwrap();
+    let (_pkg_root, package) = build_package(
+        "vendor-fails-pkg",
+        "flow",
+        &[(
+            "mcp.json",
+            r#"{"mcpServers":{"mcp-a":{"command":"/bin/echo"}}}"#,
+        )],
+    );
+    let mcp_resource = Resource::from_package_named(
+        package.id.clone(),
+        package.root.clone(),
+        Capability {
+            kind: CapabilityKind::Mcp,
+            representation: Representation::Standard,
+            path: package.root.join("mcp.json"),
+            payload: br#"{"command":"/bin/echo"}"#.to_vec(),
+        },
+        "mcp-a".to_owned(),
+    );
+
+    let result = integration.attach_receipt(&mcp_resource);
+    assert!(
+        result.is_err(),
+        "a vendor `mcp add` rejection must propagate, not pass silently"
+    );
+    let message = result.unwrap_err().to_string();
+    assert!(
+        message.contains("claude mcp add") && message.contains("exited with"),
+        "the error names the failed vendor command and its status, got: {message}"
+    );
+    assert!(
+        claude.was_called_with_prefix(&["mcp", "add"]),
+        "the attach must actually have shelled out to the vendor CLI"
+    );
+    assert!(
+        !uze_home.state_dir().join("attachments.json").exists()
+            || !fs::read_to_string(uze_home.state_dir().join("attachments.json"))
+                .unwrap()
+                .contains("flow"),
+        "no receipt may be recorded for a failed attach"
+    );
+    let _ = fs::remove_dir_all(root);
 }

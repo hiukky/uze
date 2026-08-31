@@ -282,7 +282,6 @@ pub(super) fn inspect_claude_plugin(
     command_home: &Path,
     selector: &str,
     marketplace_root: &Path,
-    package_root: &Path,
 ) -> AttachmentInspection {
     // Verify marketplace still points at expected root.
     let marketplace_list = match claude_json(
@@ -354,11 +353,10 @@ pub(super) fn inspect_claude_plugin(
             reason: "Claude plugin is disabled".to_owned(),
         };
     }
-    // If we can verify package_root via installPath existence, do minimal check:
-    // installPath should exist and be a directory. We don't compare bytes — cache
-    // is Derived Artifact, not source of truth. Existence + enabled + marketplace
-    // is sufficient for Matched. Any marketplace/selector mismatch already handled.
-    let _ = package_root;
+    // Existence of the cached installPath is deliberately not checked: the
+    // cache is a Derived Artifact, not a source of truth. Marketplace root
+    // identity + enabled + selector is sufficient for Matched; any
+    // marketplace/selector mismatch already returned Drifted above.
     AttachmentInspection {
         state: AttachmentState::Matched,
         reason: "Claude native plugin matches receipt".to_owned(),

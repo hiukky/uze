@@ -744,6 +744,7 @@ impl Server {
     /// called on a slow tick (see [`spawn_status_ticker`]), never from the
     /// input/damage hot paths.
     fn refresh_pane_status(&self) {
+        self.restore_finished_agent_panes();
         let probes: Vec<(PaneId, PathBuf, String)> = self
             .panes
             .lock()
@@ -765,6 +766,31 @@ impl Server {
         }
         drop(session);
         if changed {
+            self.broadcast_session();
+        }
+    }
+
+    /// An agent tab starts the agent directly as the PTY child so terminal
+    /// input, including Ctrl+C, reaches it naturally. Once that child exits,
+    /// there is no shell left in the PTY to accept the next command. Replace
+    /// only those finished direct-agent panes with a fresh shell; ordinary
+    /// shell panes intentionally stay closed when their shell exits.
+    fn restore_finished_agent_panes(&self) {
+        let finished: Vec<PaneId> = self
+            .panes
+            .lock()
+            .expect("panes poisoned")
+            .iter()
+            .filter_map(|(&pane, runtime)| runtime.finished_agent().then_some(pane))
+            .collect();
+        let mut restored = false;
+        for pane in finished {
+            if self.spawn_pane(pane, None).is_ok() {
+                restored = true;
+                self.broadcast_pane_damage(pane);
+            }
+        }
+        if restored {
             self.broadcast_session();
         }
     }
@@ -1102,6 +1128,18 @@ impl PaneRuntime {
     }
     fn stop(&self) {
         let _ = self.child.lock().expect("child poisoned").kill();
+    }
+
+    fn finished_agent(&self) -> bool {
+        self.spawn_command.is_some()
+            && self
+                .child
+                .lock()
+                .expect("child poisoned")
+                .try_wait()
+                .ok()
+                .flatten()
+                .is_some()
     }
 
     /// Best-effort `(cwd, process name)` for whatever is currently running
@@ -1741,8 +1779,10 @@ mod tests {
         ));
         let uze_home = scratch.join("home");
         let project = scratch.join("project");
+        let runtime_dir = scratch.join("runtime");
         std::fs::create_dir_all(&project).unwrap();
         std::fs::create_dir_all(&uze_home).unwrap();
+        std::fs::create_dir_all(&runtime_dir).unwrap();
 
         // See `UZE_HOME_ENV_LOCK`: held for the rest of this test so no
         // other test's own `UZE_HOME` scoping can interleave with this
@@ -1751,7 +1791,9 @@ mod tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let previous_uze_home = std::env::var_os("UZE_HOME");
+        let previous_runtime_dir = std::env::var_os("XDG_RUNTIME_DIR");
         unsafe { std::env::set_var("UZE_HOME", &uze_home) };
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", &runtime_dir) };
 
         let endpoint = Endpoint::for_root(&project).unwrap();
         let (first, _damage) = Server::new(project.clone(), endpoint.clone()).unwrap();
@@ -1796,6 +1838,82 @@ mod tests {
         match previous_uze_home {
             Some(value) => unsafe { std::env::set_var("UZE_HOME", value) },
             None => unsafe { std::env::remove_var("UZE_HOME") },
+        }
+        match previous_runtime_dir {
+            Some(value) => unsafe { std::env::set_var("XDG_RUNTIME_DIR", value) },
+            None => unsafe { std::env::remove_var("XDG_RUNTIME_DIR") },
+        }
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_finished_direct_agent_is_replaced_by_a_shell_in_its_pane() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let scratch = std::env::temp_dir().join(format!(
+            "uze-terminal-agent-exit-{}-{nonce}",
+            std::process::id()
+        ));
+        let uze_home = scratch.join("home");
+        let project = scratch.join("project");
+        let runtime_dir = scratch.join("runtime");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&uze_home).unwrap();
+        std::fs::create_dir_all(&runtime_dir).unwrap();
+        let _env_guard = UZE_HOME_ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let previous_uze_home = std::env::var_os("UZE_HOME");
+        let previous_runtime_dir = std::env::var_os("XDG_RUNTIME_DIR");
+        unsafe { std::env::set_var("UZE_HOME", &uze_home) };
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", &runtime_dir) };
+
+        let endpoint = Endpoint::for_root(&project).unwrap();
+        let (server, _damage) = Server::new(project, endpoint).unwrap();
+        let pane =
+            server
+                .session
+                .lock()
+                .expect("session poisoned")
+                .add_space("agent".into(), 80, 24);
+        server
+            .spawn_pane(pane, Some(&["/bin/true".to_owned()]))
+            .unwrap();
+
+        for _ in 0..40 {
+            server.restore_finished_agent_panes();
+            let restored = server
+                .panes
+                .lock()
+                .expect("panes poisoned")
+                .get(&pane)
+                .is_some_and(|runtime| runtime.spawn_command.is_none());
+            if restored {
+                break;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+        assert!(
+            server
+                .panes
+                .lock()
+                .expect("panes poisoned")
+                .get(&pane)
+                .is_some_and(|runtime| runtime.spawn_command.is_none()),
+            "a completed direct agent must leave an interactive shell in its existing pane"
+        );
+        server.stop_panes();
+
+        match previous_uze_home {
+            Some(value) => unsafe { std::env::set_var("UZE_HOME", value) },
+            None => unsafe { std::env::remove_var("UZE_HOME") },
+        }
+        match previous_runtime_dir {
+            Some(value) => unsafe { std::env::set_var("XDG_RUNTIME_DIR", value) },
+            None => unsafe { std::env::remove_var("XDG_RUNTIME_DIR") },
         }
         let _ = std::fs::remove_dir_all(&scratch);
     }

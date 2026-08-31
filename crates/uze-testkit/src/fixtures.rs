@@ -59,31 +59,10 @@ pub fn golden() -> PathBuf {
     root().join("golden")
 }
 
-/// The official marketplace fixture (`tests/_fixtures/golden/marketplace` if
-/// present, else the repository's own `marketplace.json` directory root).
-pub fn marketplace() -> PathBuf {
-    root().join("golden").join("marketplace")
-}
-
 /// The repository's own official plugin (`plugins/uze`) — a canonical
 /// package UZE ships and dogfoods, never copied into `tests/_fixtures`.
 pub fn official_plugin() -> PathBuf {
     workspace_root().join("plugins/uze")
-}
-
-/// Asserts `path` (or one of its ancestors) lives under `tests/_fixtures`,
-/// for tests that copy fixture content around and want to fail loudly on a
-/// stale hard-coded path.
-pub fn assert_in_fixtures(path: &Path) {
-    let fixtures_root = root();
-    let checked = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    assert!(
-        checked.starts_with(&fixtures_root),
-        "expected {} to live under tests/_fixtures ({}); use uze_testkit::fixtures instead \
-         of hard-coded paths",
-        checked.display(),
-        fixtures_root.display()
-    );
 }
 
 #[cfg(test)]

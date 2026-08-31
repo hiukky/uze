@@ -13,8 +13,8 @@
 //! This is `RUNTIME INFRASTRUCTURE`, not `CONTEXT DELIVERY POLICY`: building
 //! this does not by itself decide that runtime projection replaces the
 //! existing project-root `CLAUDE.md` bridge
-//! (`uze-application`'s `BRIDGE_INTEGRATIONS`) — that remains a separate,
-//! later decision pending empirical comparison.
+//! (`uze context reconcile`'s persistent instruction bridge) — that remains
+//! a separate, later decision pending empirical comparison.
 
 use std::{
     ffi::OsString,
@@ -161,13 +161,8 @@ mod tests {
     use super::*;
     use std::{
         fs,
-        sync::Mutex,
         time::{SystemTime, UNIX_EPOCH},
     };
-
-    // `PATH` is process-global; the two tests below mutate it and must not
-    // interleave with each other under the default parallel test runner.
-    static PATH_ENV_GUARD: Mutex<()> = Mutex::new(());
 
     fn scratch_dir(label: &str) -> PathBuf {
         let nonce = SystemTime::now()
@@ -192,7 +187,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn resolves_real_executable_skipping_shims_dir_even_when_it_is_first_on_path() {
-        let _guard = PATH_ENV_GUARD.lock().unwrap();
+        let _guard = crate::test_support::PROCESS_ENV_LOCK.lock().unwrap();
         let root = scratch_dir("resolve");
         let shims_dir = root.join("shims");
         let real_bin_dir = root.join("real-bin");
@@ -219,7 +214,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn no_real_executable_on_path_resolves_to_none_not_the_shim() {
-        let _guard = PATH_ENV_GUARD.lock().unwrap();
+        let _guard = crate::test_support::PROCESS_ENV_LOCK.lock().unwrap();
         let root = scratch_dir("resolve-none");
         let shims_dir = root.join("shims");
         fs::create_dir_all(&shims_dir).unwrap();

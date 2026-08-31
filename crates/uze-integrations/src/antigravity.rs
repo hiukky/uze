@@ -145,7 +145,7 @@ impl AntigravityIntegration {
         }
     }
 
-    #[allow(dead_code)]
+    /// Env-based constructor for the CLI composition root (`registry.rs`).
     pub fn from_env(uze_home: UzeHome) -> Result<Self> {
         let home = std::env::var_os("HOME").ok_or(UzeError::MissingHomeDirectory)?;
         Ok(Self::new(PathBuf::from(home).join(".agents"), uze_home))

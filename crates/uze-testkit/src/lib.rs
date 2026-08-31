@@ -30,7 +30,7 @@ pub mod marketplace;
 pub mod scenario;
 pub mod temp;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// Absolute path of the workspace root: the directory whose `Cargo.toml`
 /// declares `[workspace]`, found by walking up from this crate's own
@@ -54,9 +54,4 @@ pub fn workspace_root() -> PathBuf {
             );
         }
     }
-}
-
-/// Convenience for tests that only need a path inside the workspace.
-pub fn workspace_path(rel: impl AsRef<Path>) -> PathBuf {
-    workspace_root().join(rel)
 }

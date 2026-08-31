@@ -32,6 +32,7 @@ use uze_core::{
         default_exposure_name_candidates, detach_standard_receipt, inspect_standard_receipt,
         qualified_exposure_name_candidates,
     },
+    persistence::write_atomic,
     preference::{PreferenceApplyOutcome, PreferencePort, PreferenceTranslation, Preferences},
     project::Resource,
     provisioning::{ProcessRunner, ProvisioningResult},
@@ -75,7 +76,7 @@ impl OpenCodeIntegration {
             uze_home,
         }
     }
-    #[allow(dead_code)]
+    /// Env-based constructor for the CLI composition root (`registry.rs`).
     pub fn from_env(uze_home: UzeHome) -> Result<Self> {
         let home = PathBuf::from(std::env::var_os("HOME").ok_or(UzeError::MissingHomeDirectory)?);
         let config_root = std::env::var_os("XDG_CONFIG_HOME")
@@ -391,14 +392,10 @@ impl IntegrationPort for OpenCodeIntegration {
             .and_then(serde_json::Value::as_object_mut)
             .expect("matched entry has mcp.servers object")
             .remove(entry_name);
-        fs::write(
-            &self.config_path,
-            serde_json::to_vec_pretty(&config).expect("config serializable"),
-        )
-        .map_err(|source| UzeError::Write {
-            path: self.config_path.clone(),
-            source,
-        })?;
+        // Atomic: a crash mid-write must not corrupt the user's opencode.json.
+        let mut bytes = serde_json::to_vec_pretty(&config).expect("config serializable");
+        bytes.push(b'\n');
+        write_atomic(&self.config_path, &bytes)?;
         Ok(AttachmentInspection {
             state: AttachmentState::Missing,
             reason: "OpenCode managed MCP entry detached".to_owned(),

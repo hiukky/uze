@@ -467,15 +467,22 @@ fn application_never_names_a_vendor_harness() {
 
 /// CLI/TUI presentation consumes registry descriptors and application read
 /// models; a hard-coded vendor list here would drift the moment a harness
-/// joins the registry.
+/// joins the registry. `uze-terminal` and `uze-extensions` are presentation
+/// crates feeding the same UI, so they are held to the identical rule.
 #[test]
 fn cli_and_tui_never_name_a_vendor_harness() {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
-    let violations = vendor_names_in_production(&dir);
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut violations = vendor_names_in_production(&root.join("src"));
+    violations.extend(vendor_names_in_production(
+        &root.join("crates/uze-terminal/src"),
+    ));
+    violations.extend(vendor_names_in_production(
+        &root.join("crates/uze-extensions/src"),
+    ));
     assert!(
         violations.is_empty(),
-        "CLI/TUI production logic must never name a specific harness (descriptors and read \
-         models only):\n{}",
+        "CLI/TUI production logic (including uze-terminal and uze-extensions) must never name \
+         a specific harness (descriptors and read models only):\n{}",
         violations.join("\n")
     );
 }

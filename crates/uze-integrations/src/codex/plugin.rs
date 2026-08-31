@@ -14,8 +14,7 @@ use uze_core::{
 use crate::shared::path::normalize_declared_relative_path;
 use crate::shared::process::run_quiet;
 
-/// Name of the local catalogue this integration publishes. A Codex identity,
-/// held by the Codex integration.
+/// Name of the local catalogue this integration publishes into.
 pub(super) const MARKETPLACE_NAME: &str = "uze-local";
 
 pub(super) fn marketplace_exists(executable: &Path, command_home: &Path, root: &Path) -> bool {

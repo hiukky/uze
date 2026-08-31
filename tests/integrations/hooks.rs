@@ -14,7 +14,7 @@ use uze::{
     engine::package_resources_at,
     home::UzeHome,
     hook::HookEvent,
-    integration::{AttachmentState, IntegrationPort, ManagedArtifact},
+    integration::{AttachmentReceipt, AttachmentState, IntegrationPort, ManagedArtifact},
     project::Resource,
     router::CompatibilityRoute,
     state,
@@ -795,4 +795,48 @@ fn antigravity_plans_hooks_through_the_generated_named_plugin() {
         uze::exposure::ExposureMechanism::Unsupported { .. }
     ));
     let _ = fs::remove_dir_all(_root);
+}
+
+#[test]
+fn a_hook_receipt_without_an_event_blocks_inspection_and_detach() {
+    // `event` is Option in the receipt model; a ledger entry damaged or
+    // predating the field must block doctor/remove, never panic on it.
+    let root = temp("eventless-receipt");
+    let home = UzeHome::at(root.join("uze"));
+    let claude = ClaudeIntegration::new(root.join("claude"), home);
+    let settings = root.join("claude").join("settings.json");
+    fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    fs::write(&settings, r#"{"hooks":{}}"#).unwrap();
+    let receipt = AttachmentReceipt {
+        package_id: "hook-demo@local".to_owned(),
+        resource_identity: None,
+        integration: "claude".to_owned(),
+        strategy: "ManagedHookConfig".to_owned(),
+        artifact: ManagedArtifact::HookConfigEntry {
+            config_file: settings.clone(),
+            entry_name: "hook-demo@local:protect-env".to_owned(),
+            event: None,
+            expected: r#"{"hooks":{"PreToolUse":[]}}"#.to_owned(),
+        },
+    };
+
+    let inspection = claude.inspect_receipt(&receipt);
+    assert_eq!(inspection.state, AttachmentState::Blocked);
+    assert!(
+        inspection.reason.contains("no event"),
+        "inspection names the missing event, got: {}",
+        inspection.reason
+    );
+
+    let detached = claude
+        .detach_receipt(&receipt)
+        .expect("detach of an eventless receipt is a blocked verdict, not an error");
+    assert_eq!(detached.state, AttachmentState::Blocked);
+    assert!(
+        fs::read_to_string(&settings)
+            .unwrap()
+            .contains(r#"{"hooks":{}}"#),
+        "nothing was written or removed on a blocked detach"
+    );
+    let _ = fs::remove_dir_all(root);
 }

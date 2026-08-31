@@ -192,13 +192,11 @@ pub(super) fn inspect_claude_mcp(
     }
 }
 
-/// Removes a UZE-registered MCP entry. Not wired to a CLI verb yet — same
-/// precedent as `ExposureMechanism::detach` for Agent Skills. Unused by the
-/// `uze` binary for the same reason; exercised directly by
-/// `tests/integration_contract.rs`. `command_home` is set explicitly as
-/// `HOME` for the same reason `attach_mcp_entry` does — never relies on the
-/// calling process's own environment.
-#[allow(dead_code)]
+/// Removes a UZE-registered MCP entry. Wired to the remove lifecycle
+/// (`detach_receipt`) and exercised directly by `tests/integrations/
+/// contract.rs`. `command_home` is set explicitly as `HOME` for the same
+/// reason `attach_mcp_entry` does — never relies on the calling process's
+/// own environment.
 pub fn detach_mcp_entry(executable: &Path, command_home: &Path, entry_name: &str) -> Result<()> {
     if !is_cli_safe_token(entry_name) {
         return Err(UzeError::ExposureUnavailable(format!(

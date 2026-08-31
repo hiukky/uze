@@ -6,7 +6,7 @@ use std::{
     path::Path,
     process::{Command, Stdio},
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use serde::{Deserialize, Serialize};
@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     error::{Result, UzeError},
     router::CompatibilityRoute,
+    subprocess::{read_bounded, wait_with_timeout, with_process_group},
 };
 
 pub const HOOKS_FILE_NAME: &str = "hooks.json";
@@ -465,91 +466,6 @@ pub fn dispatch_handlers(
     Ok(outcome)
 }
 
-/// Unix: runs the handler in its own process group so the timeout can kill
-/// the whole tree (the shell AND its descendants), never just the direct
-/// child. No-op on other platforms.
-fn with_process_group(mut command: std::process::Command) -> std::process::Command {
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        command.process_group(0);
-    }
-    command
-}
-
-/// Kills the handler's whole process group — the shell plus any descendant
-/// it started. The `/bin/kill` coreutils binary is resolved absolutely so
-/// this never depends on `PATH` inside the harness's environment.
-///
-/// The negative-PID group signal below is necessary but not sufficient: on
-/// some kernels (observed under WSL2) a descendant that shares the exact
-/// same PGID as the shell can still survive a `kill(2)` targeted at that
-/// process group, even though a direct single-PID SIGKILL to that same
-/// descendant reliably kills it. So this also enumerates `/proc` for every
-/// process still reporting the handler's PGID and kills each one directly,
-/// which is what actually reaches a straggler the group signal missed.
-#[cfg(unix)]
-fn kill_process_group(pid: u32) {
-    let _ = std::process::Command::new("/bin/kill")
-        .arg("-KILL")
-        .arg(format!("-{pid}"))
-        .status();
-    // Fall back to killing just the direct child if the group kill failed
-    // (e.g. the process already exited between the poll and the kill).
-    let _ = std::process::Command::new("/bin/kill")
-        .arg("-KILL")
-        .arg(pid.to_string())
-        .status();
-    for member in process_group_members(pid) {
-        let _ = std::process::Command::new("/bin/kill")
-            .arg("-KILL")
-            .arg(member.to_string())
-            .status();
-    }
-}
-
-/// Reads `/proc` directly (rather than shelling out to `ps --pgid`, whose
-/// group filter has been unreliable in the same environments where the
-/// group-wide signal misses a member) to list every PID currently reporting
-/// `pgid` as its process group.
-#[cfg(unix)]
-fn process_group_members(pgid: u32) -> Vec<u32> {
-    let mut members = Vec::new();
-    let Ok(entries) = std::fs::read_dir("/proc") else {
-        return members;
-    };
-    for entry in entries.flatten() {
-        let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
-            continue;
-        };
-        let Ok(stat) = std::fs::read_to_string(entry.path().join("stat")) else {
-            continue;
-        };
-        // Fields are space-separated, but the second field (comm) is
-        // parenthesized and may itself contain spaces or parens, so split
-        // on the last ')' rather than naively splitting on whitespace.
-        let Some((_, after_comm)) = stat.rsplit_once(')') else {
-            continue;
-        };
-        // After comm: state(0) ppid(1) pgrp(2) ...
-        let pgrp = after_comm
-            .split_whitespace()
-            .nth(2)
-            .and_then(|field| field.parse::<u32>().ok());
-        if pgrp == Some(pgid) {
-            members.push(pid);
-        }
-    }
-    members
-}
-
-#[cfg(not(unix))]
-fn kill_process_group(pid: u32) {
-    let _ = std::process::Command::new("taskkill")
-        .args(["/F", "/T", "/PID", &pid.to_string()])
-        .status();
-}
-
 /// Expands the canonical `${PLUGIN_ROOT}` placeholder to the package root,
 /// so an authored command stays portable while the emitted projection can
 /// pin the concrete store path. The variable is also injected as the
@@ -611,36 +527,13 @@ fn run_handler(
     let stdout_reader = thread::spawn(move || read_bounded(stdout, MAX_HANDLER_STDOUT_BYTES));
     let stderr_reader = thread::spawn(move || read_bounded(stderr, MAX_HANDLER_STDERR_BYTES));
 
-    let pid = child.id();
-    let deadline = Instant::now() + Duration::from_secs(u64::from(handler.timeout));
-    let (status, timed_out) = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break (status, false),
-            Ok(None) if Instant::now() >= deadline => {
-                kill_process_group(pid);
-                let status = child.wait().map_err(|source| UzeError::Process {
-                    program: command.clone(),
-                    source,
-                })?;
-                // A descendant the shell forks to run a scripted handler
-                // (e.g. exec-ing a shebang) can still be alive here even
-                // though kill_process_group already swept /proc once above:
-                // it may have been forked after that sweep ran. The process
-                // group ID survives the shell's death, so sweeping again
-                // after reaping it still reaches any such straggler.
-                kill_process_group(pid);
-                break (status, true);
-            }
-            Ok(None) => thread::sleep(Duration::from_millis(10)),
-            Err(source) => {
-                kill_process_group(pid);
-                return Err(UzeError::Process {
-                    program: command,
-                    source,
-                });
-            }
-        }
-    };
+    let (status, timed_out) =
+        wait_with_timeout(&mut child, Duration::from_secs(u64::from(handler.timeout))).map_err(
+            |source| UzeError::Process {
+                program: command.clone(),
+                source,
+            },
+        )?;
     let (stdout_bytes, stdout_overflow) = if timed_out {
         // The handler was killed past its deadline; a descendant may still
         // hold the pipes open, so joining the readers could hang for the
@@ -731,28 +624,6 @@ fn run_handler(
         input_override,
         failure,
     })
-}
-
-/// Reads a child handle to the end, stopping (and overflowing) past `cap`
-/// bytes so a chatty handler cannot exhaust memory.
-fn read_bounded<R: std::io::Read>(mut handle: R, cap: usize) -> (Vec<u8>, bool) {
-    let mut bytes = Vec::new();
-    let mut overflow = false;
-    let mut buffer = [0u8; 4096];
-    loop {
-        match handle.read(&mut buffer) {
-            Ok(0) => break,
-            Ok(count) => {
-                if bytes.len() + count > cap {
-                    overflow = true;
-                    break;
-                }
-                bytes.extend_from_slice(&buffer[..count]);
-            }
-            Err(_) => break,
-        }
-    }
-    (bytes, overflow)
 }
 
 /// A hook adapter translates one harness's native hook stdin/stdout contract
@@ -898,7 +769,7 @@ mod tests {
 #[cfg(all(test, unix))]
 mod dispatch_tests {
     use super::*;
-    use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf};
+    use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf, time::Instant};
 
     fn temp(label: &str) -> PathBuf {
         let nonce = std::time::SystemTime::now()

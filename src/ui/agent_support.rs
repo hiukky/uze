@@ -23,7 +23,6 @@ pub(super) struct AgentSupport {
     integration: String,
     display_name: String,
     present: bool,
-    version: Option<String>,
     capabilities: HarnessCapabilities,
     agents_md: State,
     agents_md_label: &'static str,
@@ -100,7 +99,6 @@ impl AgentSupport {
             integration: health.integration,
             display_name: health.display_name,
             present: health.detection.present,
-            version: health.detection.version,
             capabilities: health.capabilities,
             agents_md,
             agents_md_label,
@@ -139,11 +137,7 @@ pub(super) fn render(
     lines.push(fact_line(
         harness_state(support),
         "Harness",
-        &format!(
-            "{} {}",
-            support.display_name,
-            support.version.as_deref().unwrap_or("unknown")
-        ),
+        &support.display_name,
         inner_width,
     ));
     lines.push(fact_line(
@@ -268,9 +262,8 @@ fn styled_row(
 }
 
 /// A runtime fact row: label and value both read as plain information, only
-/// the leading icon carries state color — used for things like the detected
-/// harness version or the active profile, never anything the user needs to
-/// act on.
+/// the leading icon carries state color — used for things like the active
+/// profile, never anything the user needs to act on.
 fn fact_line(state: State, label: &str, value: &str, width: usize) -> Line<'static> {
     let plain = Style::default().fg(TEXT_BRIGHT);
     styled_row(state, label, plain, value, plain, width)

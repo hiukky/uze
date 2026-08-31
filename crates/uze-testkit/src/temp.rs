@@ -119,23 +119,6 @@ impl TempDir {
         TempDir { path, keep }
     }
 
-    /// Builds a `TempDir` for a caller-supplied path (still under the system
-    /// temp dir) after running the real-home safety guard.
-    pub fn at(path: impl Into<PathBuf>) -> Self {
-        let path = path.into();
-        assert_not_real_home(&path);
-        std::fs::create_dir_all(&path).unwrap_or_else(|error| {
-            panic!(
-                "TestEnvironment: failed to create scratch dir {}: {error}",
-                path.display()
-            )
-        });
-        TempDir {
-            path,
-            keep: std::env::var_os("UZE_TEST_KEEP").is_some(),
-        }
-    }
-
     /// The root path of this temp directory.
     pub fn path(&self) -> &Path {
         &self.path
@@ -202,7 +185,7 @@ impl HarnessHomes {
 /// nonce generation, creation locking and the real-home guard; prefer
 /// [`TempDir`] (RAII) for new tests.
 pub fn scratch(label: &str) -> PathBuf {
-    TempDir::new(label).path().to_path_buf()
+    TempDir::new(label).keep().path().to_path_buf()
 }
 
 /// `$PATH` with `dir` first and the ambient `PATH` kept as fallback — the
@@ -212,11 +195,15 @@ pub fn scratch(label: &str) -> PathBuf {
 pub fn path_prefixed(dir: impl AsRef<Path>) -> OsString {
     let dir = dir.as_ref();
     let mut parts = vec![dir.to_path_buf()];
-    parts.extend(std::env::split_paths(
-        &std::env::var_os("PATH").unwrap_or_default(),
-    ));
+    parts.extend(ambient_path_without_uze_shims());
     std::env::join_paths(parts)
         .unwrap_or_else(|error| panic!("TestEnvironment: could not join PATH: {error}"))
+}
+
+fn ambient_path_without_uze_shims() -> Vec<PathBuf> {
+    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .filter(|path| !path.ends_with(".uze/shims"))
+        .collect()
 }
 
 /// Joins `dirs` in order (with no ambient fallback) into a `$PATH` value —
@@ -314,27 +301,16 @@ impl TestEnvironment {
 
     /// `$PATH` for child processes: the fake bin first, then the ambient
     /// `PATH`. Never drops the ambient path entirely, so the harness's own
-    /// helper tools remain resolvable; tests that must see *no* real binary
-    /// use [`TestEnvironment::command_no_real_path`] instead.
+    /// helper tools remain resolvable — and note the ambient path can carry
+    /// a real `~/.uze/shims` from a dogfooding developer, which will resolve
+    /// where a test expected an absent or fake vendor binary. Tests that
+    /// must see *no* real binary should construct an exact `PATH` with
+    /// [`join_paths`] instead and pass it per-command.
     pub fn scoped_path(&self) -> OsString {
         let mut parts = vec![self.fake_bin.clone()];
-        parts.extend(std::env::split_paths(
-            &std::env::var_os("PATH").unwrap_or_default(),
-        ));
+        parts.extend(ambient_path_without_uze_shims());
         std::env::join_paths(parts)
             .unwrap_or_else(|error| panic!("TestEnvironment: could not join PATH: {error}"))
-    }
-
-    /// Like [`TestEnvironment::command`] but with `PATH` reduced to the fake
-    /// bin: no real harness binary can be resolved.
-    pub fn command_no_real_path(&self, program: impl AsRef<std::ffi::OsStr>) -> Command {
-        let mut command = Command::new(program);
-        command
-            .env("HOME", &self.home)
-            .env("UZE_HOME", &self.uze_home)
-            .env("PATH", &self.fake_bin)
-            .current_dir(&self.project);
-        command
     }
 
     /// Runs `program` with this environment applied and returns the raw
@@ -376,18 +352,7 @@ impl TestEnvironment {
         scope
             .set("HOME", &self.home)
             .set("UZE_HOME", &self.uze_home)
-            .set("PATH", self.scoped_path())
-            .set_cwd(&self.project);
+            .set("PATH", self.scoped_path());
         scope
-    }
-
-    /// Asserts this environment's roots never overlap protected locations;
-    /// also a convenient re-check point after a test mutated paths.
-    pub fn assert_safe(&self) {
-        assert_not_real_home(self.root());
-        assert_not_real_home(&self.home);
-        assert_not_real_home(&self.uze_home);
-        assert_not_real_home(&self.project);
-        assert_not_real_home(&self.fake_bin);
     }
 }

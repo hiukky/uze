@@ -32,6 +32,12 @@ version = "0.0.0-alpha.15"
 license = "Apache-2.0"
 authors = ["Romullo Sousa (hiukky)"]
 
+# Test binaries do not ship, and full DWARF data materially increases their
+# compile and link time. Keep developer builds debuggable while making the
+# frequently-run test profile lighter.
+[profile.test]
+debug = 0
+
 [dependencies]
 uze-core = { path = "crates/uze-core" }
 uze-integrations = { path = "crates/uze-integrations" }

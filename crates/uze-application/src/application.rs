@@ -77,8 +77,8 @@ pub use uze_core::workspace::WorkspaceKind;
 /// STRATEGY` (`ClaudeIntegration::runtime_contribution`, driven through the
 /// PATH shim rather than through `context reconcile`). Whether runtime
 /// projection ever replaces this bridge for Claude is a separate, later
-/// decision pending an empirical interactive comparison — see the
-/// Checkpoint 2 report. Do not remove or fold this into the experimental
+/// decision pending an empirical interactive comparison. Do not remove
+/// or fold this into the experimental
 /// path without that comparison.
 ///
 /// Fixed, package-independent region identity: the bridge is shared
@@ -529,7 +529,8 @@ impl UzeApplication {
     /// no separate flag.
     ///
     /// `EXPERIMENTAL RUNTIME DELIVERY STRATEGY` (`RUNTIME INFRASTRUCTURE`,
-    /// not a `CONTEXT DELIVERY POLICY` decision; see `BRIDGE_INTEGRATIONS`).
+    /// not a `CONTEXT DELIVERY POLICY` decision; see this module's
+    /// `INSTRUCTION_BRIDGE_IDENTITY` doc for how the two relate).
     pub(crate) fn ensure_runtime_shim(
         &self,
         integration: &dyn IntegrationPort,
@@ -1140,8 +1141,9 @@ pub struct SetupResult {
     /// `Some` when this integration opted into `EXPERIMENTAL RUNTIME
     /// DELIVERY STRATEGY` (`IntegrationPort::supports_runtime_integration`)
     /// and `ensure_runtime_shim` created/refreshed its PATH shim as an
-    /// ordinary part of this `setup` call — see `BRIDGE_INTEGRATIONS`'s
-    /// doc comment for how this relates to the existing, still-default,
+    /// ordinary part of this `setup` call — see this module's
+    /// `INSTRUCTION_BRIDGE_IDENTITY` doc for how this relates to the
+    /// existing, still-default,
     /// persistent `CLAUDE.md` bridge. `None` for every
     /// integration with no runtime-integration story (not an error).
     pub runtime_shim: Option<RuntimeShimSetup>,
@@ -3182,14 +3184,25 @@ mod tests {
             perms.set_mode(0o755);
             fs::set_permissions(&fake_exe, perms).unwrap();
         }
-        let old_path = std::env::var_os("PATH").unwrap_or_default();
-        let new_path = format!("{}:{}", fake_bin.display(), old_path.to_string_lossy());
-        // SAFETY: single-threaded test, restores PATH afterwards.
-        unsafe { std::env::set_var("PATH", &new_path) };
+        let mut env_scope = uze_testkit::env::scope();
+        env_scope.set(
+            "PATH",
+            format!(
+                "{}:{}",
+                fake_bin.display(),
+                std::env::var_os("PATH")
+                    .unwrap_or_default()
+                    .to_string_lossy()
+            ),
+        );
+        // `SHELL` is set on the SAME guard: the setup path must not edit any
+        // real rc file, and a second `env::scope()` here would deadlock on
+        // the process-env lock (Mutex is not reentrant).
+        env_scope.set("SHELL", "uze-test-no-recognized-shell");
 
         let app = UzeApplication::new(home, vec![Box::new(ShimConflictingIntegration {})]);
 
-        let results = setup_without_touching_the_real_shell_rc(&app, None).unwrap();
+        let results = app.setup(None).unwrap();
         let shim_result = results
             .iter()
             .find(|r| r.integration == "shim-test")
@@ -3204,8 +3217,6 @@ mod tests {
             "attach itself should not have failed"
         );
 
-        // Restore PATH.
-        unsafe { std::env::set_var("PATH", old_path) };
         let _ = fs::remove_dir_all(root);
     }
 }

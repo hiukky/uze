@@ -114,10 +114,7 @@ impl ClaudeIntegration {
         self.hooks_config.clone()
     }
 
-    /// Convenience constructor for the CLI composition root. Unused when
-    /// this module is compiled into a test binary via `#[path]`, where
-    /// tests construct with `new` directly against a temporary home.
-    #[allow(dead_code)]
+    /// Env-based constructor for the CLI composition root (`registry.rs`).
     pub fn from_env(uze_home: UzeHome) -> Result<Self> {
         let home = std::env::var_os("HOME").ok_or(UzeError::MissingHomeDirectory)?;
         Ok(Self::new(
@@ -235,14 +232,10 @@ impl IntegrationPort for ClaudeIntegration {
         "claude-code"
     }
 
-    /// `claude` is the name people type; `claude-code` is the stable id the
-    /// receipts and state records carry.
     fn aliases(&self) -> &'static [&'static str] {
         &["claude"]
     }
 
-    /// `claude-code` is the stable id receipts and state carry, `claude`
-    /// the name people type — `Claude Code` is the label people read.
     fn display_name(&self) -> &'static str {
         "Claude Code"
     }
@@ -302,8 +295,8 @@ impl IntegrationPort for ClaudeIntegration {
     /// `CONTEXT DELIVERY POLICY`: this is the `EXPERIMENTAL RUNTIME
     /// DELIVERY STRATEGY` — see `runtime::claude_runtime_projection`'s doc
     /// comment. Building this shim path does not by itself replace the
-    /// existing project-root `CLAUDE.md` bridge; that decision waits on the
-    /// interactive dogfood comparison in the Checkpoint 2 report.
+    /// existing project-root `CLAUDE.md` bridge; that decision waits on an
+    /// empirical interactive comparison.
     fn runtime_contribution(
         &self,
         ctx: &RuntimeContext,
@@ -528,7 +521,11 @@ impl IntegrationPort for ClaudeIntegration {
                     &self.uze_home,
                     self.id(),
                     config_file,
-                    event.expect("Claude hook entries are event-keyed"),
+                    event.ok_or_else(|| {
+                        UzeError::ExposureUnavailable(
+                            "Claude hook plan has no event to attach".to_owned(),
+                        )
+                    })?,
                     entry_name,
                     expected,
                 )?;
@@ -563,11 +560,17 @@ impl IntegrationPort for ClaudeIntegration {
                 event,
                 expected,
                 ..
-            } => hook_projection::inspect_event_entry(
-                config_file,
-                event.expect("Claude hook entries are event-keyed"),
-                expected,
-            ),
+            } => {
+                // A ledger entry damaged or predating the event field must
+                // block inspection, never panic doctor/remove.
+                let Some(event) = *event else {
+                    return AttachmentInspection {
+                        state: AttachmentState::Blocked,
+                        reason: "hook receipt has no event; refusing to inspect".to_owned(),
+                    };
+                };
+                hook_projection::inspect_event_entry(config_file, event, expected)
+            }
             ManagedArtifact::IntegrationOwned {
                 kind,
                 selector,
@@ -576,16 +579,12 @@ impl IntegrationPort for ClaudeIntegration {
                 let Some(marketplace_root) = detail_path(detail, "marketplace_root") else {
                     return plugin::blocked("plugin receipt has no marketplace root".to_owned());
                 };
-                let Some(package_root) = detail_path(detail, "package_root") else {
-                    return plugin::blocked("plugin receipt has no package root".to_owned());
-                };
                 let executable = self.provisioning_executable();
                 inspect_claude_plugin(
                     Path::new(&executable),
                     &self.command_home,
                     selector,
                     &marketplace_root,
-                    &package_root,
                 )
             }
             _ => inspect_standard_receipt(receipt),
@@ -611,11 +610,15 @@ impl IntegrationPort for ClaudeIntegration {
                 event,
                 expected,
                 ..
-            } => hook_projection::remove_event_entry(
-                config_file,
-                event.expect("Claude hook entries are event-keyed"),
-                expected,
-            ),
+            } => {
+                let Some(event) = *event else {
+                    return Ok(AttachmentInspection {
+                        state: AttachmentState::Blocked,
+                        reason: "hook receipt has no event; refusing to detach".to_owned(),
+                    });
+                };
+                hook_projection::remove_event_entry(config_file, event, expected)
+            }
             ManagedArtifact::IntegrationOwned { kind, selector, .. }
                 if kind == "claude-plugin" || kind == GENERATED_PLUGIN_KIND =>
             {

@@ -310,7 +310,6 @@ impl UzeApplication {
             },
         );
 
-        // Persist lock.
         project_lock::save_lock(&canonical, &lock)?;
 
         Ok(report)
@@ -336,7 +335,6 @@ impl UzeApplication {
             });
         }
 
-        // Persist lock.
         project_lock::save_lock(&canonical, &lock)?;
 
         Ok(RemoveProjectPluginReport::Removed {

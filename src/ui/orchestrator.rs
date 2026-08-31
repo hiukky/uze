@@ -51,9 +51,10 @@ const GIT_BADGE_REFRESH: Duration = Duration::from_millis(750);
 const AGENT_ACTIVITY_FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
 const AGENT_ACTIVITY_TICK: Duration = Duration::from_millis(120);
 /// A submitted prompt stays active while its terminal keeps producing
-/// output. This brief quiet window avoids leaving a completed agent marked
-/// busy after it has returned to its input prompt.
-const AGENT_ACTIVITY_IDLE_AFTER: Duration = Duration::from_millis(1500);
+/// output. Agent harnesses can spend several seconds silent while waiting
+/// for a tool or network response, so this grace period favors not hiding
+/// an in-flight operation over immediately clearing a returned prompt.
+const AGENT_ACTIVITY_IDLE_AFTER: Duration = Duration::from_secs(10);
 
 pub(crate) enum WorkspaceExit {
     Management,
@@ -344,7 +345,13 @@ pub(crate) fn attach_workspace(
                             if let Some(menu) = model.context_menu.take()
                                 && let Some(action) = menu.items.get(menu.selected).copied()
                             {
-                                dispatch_menu_action(&mut stream, &mut model, menu.target, action);
+                                dispatch_menu_action(
+                                    &mut stream,
+                                    &mut model,
+                                    &identities,
+                                    menu.target,
+                                    action,
+                                );
                             }
                         }
                         _ => model.context_menu = None,
@@ -564,7 +571,7 @@ pub(crate) fn attach_workspace(
                     // dismissed without acting instead of visibly no-oping.
                     let target = model.context_menu.take().map(|menu| menu.target);
                     if let (Some(target), Some(action)) = (target, action) {
-                        dispatch_menu_action(&mut stream, &mut model, target, action);
+                        dispatch_menu_action(&mut stream, &mut model, &identities, target, action);
                     }
                     model.dirty = true;
                 }
@@ -913,11 +920,10 @@ pub(crate) fn attach_workspace(
                     // right-clicked, which read as the popup ignoring the
                     // mouse entirely.
                     let anchor = Rect::new(mouse.column, mouse.row, 1, 1);
-                    // `rename` is always offered; `close` only joins the
-                    // menu when there's a sibling left to fall back to —
-                    // same guard as before, just no longer gating whether
-                    // the menu opens at all, since renaming a lone space or
-                    // tab is always safe.
+                    // `rename` is always offered. A tab can close with a
+                    // sibling as usual, and a lone agent can close because
+                    // the action replaces it with a plain shell. Renaming a
+                    // lone space or shell remains the only available action.
                     if let Some(WorkspaceHit::SelectSpace(space)) = hit {
                         let mut items = vec![MenuAction::Rename];
                         if model
@@ -936,11 +942,7 @@ pub(crate) fn attach_workspace(
                         model.dirty = true;
                     } else if let Some(WorkspaceHit::SelectTab(tab)) = hit {
                         let mut items = vec![MenuAction::Rename];
-                        if model.session.as_ref().is_some_and(|session| {
-                            session.workspace.spaces.iter().any(|space| {
-                                space.tabs.len() > 1 && space.tabs.iter().any(|t| t.id == tab)
-                            })
-                        }) {
+                        if can_close_tab_from_menu(&model, &identities, tab) {
                             items.push(MenuAction::Close);
                         }
                         model.context_menu = Some(ContextMenu {
@@ -2071,6 +2073,24 @@ fn next_shell_label(model: &WorkspaceModel) -> String {
     format!("shell {}", count + 1)
 }
 
+/// A sidebar action may target an agent in a background space, so its
+/// replacement shell must be numbered from that space rather than the local
+/// selection.
+fn next_shell_label_for_tab(model: &WorkspaceModel, tab: TabId) -> String {
+    let count = model
+        .session
+        .as_ref()
+        .and_then(|session| {
+            session
+                .workspace
+                .spaces
+                .iter()
+                .find(|space| space.tabs.iter().any(|candidate| candidate.id == tab))
+        })
+        .map_or(0, |space| space.tabs.len());
+    format!("shell {}", count + 1)
+}
+
 /// The label a fresh space opens with — same numbering convention as
 /// [`next_shell_label`], off the workspace's current space count.
 fn next_space_label(model: &WorkspaceModel) -> String {
@@ -2087,21 +2107,69 @@ fn next_space_label(model: &WorkspaceModel) -> String {
 fn dispatch_menu_action<W: io::Write>(
     stream: &mut W,
     model: &mut WorkspaceModel,
+    identities: &[AgentIdentity],
     target: MenuTarget,
     action: MenuAction,
 ) {
     match action {
         MenuAction::Rename => begin_rename(model, target),
-        MenuAction::Close => {
-            let _ = send_request(
-                stream,
-                &match target {
-                    MenuTarget::Space(space) => ClientRequest::CloseSpace { space },
-                    MenuTarget::Tab(tab) => ClientRequest::CloseTab { tab },
-                },
-            );
-        }
+        MenuAction::Close => match target {
+            MenuTarget::Space(space) => {
+                let _ = send_request(stream, &ClientRequest::CloseSpace { space });
+            }
+            MenuTarget::Tab(tab) => {
+                if tab_needs_replacement_shell(model, identities, tab) {
+                    // The runtime refuses to leave a space without a focused tab.
+                    // Select the target first: right-clicking a background agent must
+                    // replace it in its own space, not in the currently selected one.
+                    let _ = send_request(stream, &ClientRequest::SelectTab { tab });
+                    let (columns, rows) = model.last_size;
+                    let _ = send_request(
+                        stream,
+                        &ClientRequest::CreateTab {
+                            label: next_shell_label_for_tab(model, tab),
+                            columns,
+                            rows,
+                            cwd: tab_cwd(model, tab),
+                            command: None,
+                        },
+                    );
+                }
+                let _ = send_request(stream, &ClientRequest::CloseTab { tab });
+            }
+        },
     }
+}
+
+/// A normal tab can close when it has a sibling. A lone recognized agent is
+/// also closable from the sidebar menu: it is replaced by a plain shell so
+/// the space remains usable after its process is stopped.
+fn can_close_tab_from_menu(
+    model: &WorkspaceModel,
+    identities: &[AgentIdentity],
+    tab: TabId,
+) -> bool {
+    model.session.as_ref().is_some_and(|session| {
+        session.workspace.spaces.iter().any(|space| {
+            space.tabs.iter().any(|candidate| candidate.id == tab)
+                && (space.tabs.len() > 1 || tab_needs_replacement_shell(model, identities, tab))
+        })
+    })
+}
+
+fn tab_needs_replacement_shell(
+    model: &WorkspaceModel,
+    identities: &[AgentIdentity],
+    tab: TabId,
+) -> bool {
+    model.session.as_ref().is_some_and(|session| {
+        session.workspace.spaces.iter().any(|space| {
+            space.tabs.len() == 1
+                && space.tabs.first().is_some_and(|candidate| {
+                    candidate.id == tab && agent_identity_for_tab(identities, candidate).is_some()
+                })
+        })
+    })
 }
 
 /// Opens the inline rename editor (`WorkspaceModel::renaming`) for `target`,
@@ -2154,6 +2222,17 @@ fn pane_in_layout(layout: &uze_terminal::Layout, wanted: PaneId) -> Option<&uze_
 fn selected_pane_cwd(model: &WorkspaceModel) -> Option<PathBuf> {
     let session = model.session.as_ref()?;
     let tab = session.selected_tab();
+    pane_in_layout(&tab.layout, tab.focus.pane).map(|pane| pane.cwd.clone())
+}
+
+fn tab_cwd(model: &WorkspaceModel, tab: TabId) -> Option<PathBuf> {
+    let tab = model
+        .session
+        .as_ref()?
+        .workspace
+        .spaces
+        .iter()
+        .find_map(|space| space.tabs.iter().find(|candidate| candidate.id == tab))?;
     pane_in_layout(&tab.layout, tab.focus.pane).map(|pane| pane.cwd.clone())
 }
 
@@ -2637,8 +2716,9 @@ fn runtime_error(error: uze_terminal::RuntimeError) -> UzeError {
 #[cfg(test)]
 mod tests {
     use super::{
-        AgentIdentity, WorkspaceModel, agent_identity_for_tab, blank_pane, encode_mouse,
-        forward_paste, pane_relative, selected_pane_cwd, workspace_has_active_agent_operation,
+        AgentIdentity, WorkspaceModel, agent_identity_for_tab, blank_pane, can_close_tab_from_menu,
+        encode_mouse, forward_paste, pane_relative, selected_pane_cwd, tab_needs_replacement_shell,
+        workspace_has_active_agent_operation,
     };
     use crossterm::event::{MouseButton, MouseEventKind};
     use ratatui::layout::Rect;
@@ -2665,7 +2745,10 @@ mod tests {
         model.note_agent_prompt_submission(PaneId(1), &identities);
         assert!(workspace_has_active_agent_operation(&model, &identities));
 
-        assert!(model.expire_agent_activity(Instant::now() + Duration::from_secs(2)));
+        assert!(!model.expire_agent_activity(Instant::now() + Duration::from_secs(2)));
+        assert!(workspace_has_active_agent_operation(&model, &identities));
+
+        assert!(model.expire_agent_activity(Instant::now() + Duration::from_secs(11)));
         assert!(!workspace_has_active_agent_operation(&model, &identities));
     }
 
@@ -2686,7 +2769,7 @@ mod tests {
         };
 
         model.note_agent_prompt_submission(agent_pane, &identities);
-        assert!(model.expire_agent_activity(Instant::now() + Duration::from_secs(2)));
+        assert!(model.expire_agent_activity(Instant::now() + Duration::from_secs(11)));
         assert!(model.completed_agent_panes.contains(&agent_pane));
 
         model.acknowledge_completed_agent_tab(agent_tab);
@@ -2844,6 +2927,33 @@ mod tests {
         // "shell" placeholder.
         let tab = tab_with("Codex", "shell");
         assert_eq!(agent_identity_for_tab(&identities(), &tab), Some("codex"));
+    }
+
+    #[test]
+    fn a_lone_agent_can_close_when_it_is_replaced_by_a_shell() {
+        let mut session = Session::new(WorkspaceId("workspace".into()), "/tmp".into(), 80, 24);
+        session.workspace.spaces[0].tabs[0].label = "Claude Code".into();
+        let tab = session.workspace.spaces[0].selected_tab;
+        let model = WorkspaceModel {
+            session: Some(session),
+            ..WorkspaceModel::default()
+        };
+
+        assert!(tab_needs_replacement_shell(&model, &identities(), tab));
+        assert!(can_close_tab_from_menu(&model, &identities(), tab));
+    }
+
+    #[test]
+    fn a_lone_plain_shell_stays_non_closable() {
+        let session = Session::new(WorkspaceId("workspace".into()), "/tmp".into(), 80, 24);
+        let tab = session.workspace.spaces[0].selected_tab;
+        let model = WorkspaceModel {
+            session: Some(session),
+            ..WorkspaceModel::default()
+        };
+
+        assert!(!tab_needs_replacement_shell(&model, &identities(), tab));
+        assert!(!can_close_tab_from_menu(&model, &identities(), tab));
     }
 
     #[test]

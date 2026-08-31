@@ -106,22 +106,6 @@ impl Resource {
         }
     }
 
-    pub fn from_project_named(
-        root: PathBuf,
-        capability: Capability,
-        resource_name: String,
-    ) -> Self {
-        let skill_policy = derive_skill_policy(&capability);
-        Self {
-            origin: ResourceOrigin::Project { root },
-            capability,
-            resource_name: Some(resource_name),
-            skill_policy,
-            resolved_exposure_name: None,
-            resolved_artifact_target: None,
-        }
-    }
-
     pub fn name(&self) -> String {
         self.resource_name
             .clone()

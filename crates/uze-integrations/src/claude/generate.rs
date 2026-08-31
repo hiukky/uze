@@ -35,7 +35,7 @@ use uze_core::{
     home::UzeHome,
     integration::{AttachmentReceipt, ManagedArtifact},
     project::Resource,
-    store::StoredPackage,
+    store::{StoredPackage, is_valid_qualified_id},
 };
 
 /// The second, UZE-owned marketplace this module publishes into —
@@ -374,6 +374,14 @@ fn materialize_wrapped_skill(
 /// `StoredPackage`) is available. Safe unconditionally: this directory is
 /// never anything but a Derived Artifact (ADR-013 §4).
 pub(super) fn remove_generated_package_by_id(uze_home: &UzeHome, package_id: &str) -> Result<()> {
+    // The id comes from the receipt ledger, not a constructor: refuse one
+    // that could not have been a real package id instead of joining it into
+    // a path and removing whatever the traversal lands on.
+    if !is_valid_qualified_id(package_id) {
+        return Err(UzeError::ExposureUnavailable(format!(
+            "refusing to remove generated envelope for malformed package id `{package_id}`"
+        )));
+    }
     let dir = generated_package_dir_for_id(uze_home, package_id);
     if dir.exists() {
         fs::remove_dir_all(&dir).map_err(|source| UzeError::Write { path: dir, source })?;
@@ -1265,5 +1273,42 @@ mod generated_native_tests {
             }
         }
         out
+    }
+
+    #[test]
+    fn remove_generated_package_by_id_refuses_a_path_traversal_id() {
+        // A receipt's package_id arrives from the ledger, so removal must
+        // re-check it before joining it into a path: a tampered id must fail
+        // without touching anything outside the generated root.
+        let root = temp_root("malicious-receipt");
+        fs::create_dir_all(&root).unwrap();
+        let victim = temp_root("victim-dir");
+        fs::create_dir_all(&victim).unwrap();
+
+        let result =
+            remove_generated_package_by_id(&UzeHome::at(root.join("uze")), "../victim-dir@local");
+        assert!(result.is_err(), "traversal id must be refused");
+        assert!(
+            victim.exists(),
+            "removal must never follow a traversal id outside the generated root"
+        );
+
+        // An id that cannot be parsed as qualified is refused too.
+        let result = remove_generated_package_by_id(&UzeHome::at(root.join("uze")), "unqualified");
+        assert!(result.is_err());
+
+        // A legitimate id removes only its own generated directory.
+        let home = UzeHome::at(root.join("uze"));
+        home.ensure_layout().unwrap();
+        let legit = generated_package_dir_for_id(&home, "flow@local");
+        fs::create_dir_all(&legit).unwrap();
+        let marker = legit.join("marker.txt");
+        fs::write(&marker, "x").unwrap();
+        remove_generated_package_by_id(&home, "flow@local").unwrap();
+        assert!(!legit.exists());
+        assert!(victim.exists(), "the sibling victim dir is untouched");
+
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(victim);
     }
 }

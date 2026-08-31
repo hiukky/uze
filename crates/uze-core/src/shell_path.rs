@@ -273,14 +273,20 @@ mod tests {
 
     #[test]
     fn unrecognized_shell_detects_to_none() {
-        let previous = env::var_os("SHELL");
-        // SAFETY: test-only, restored immediately below.
+        struct ShellEnvGuard(Option<std::ffi::OsString>);
+        impl Drop for ShellEnvGuard {
+            fn drop(&mut self) {
+                // SAFETY: test-only; restores even on panic.
+                match self.0.clone() {
+                    Some(value) => unsafe { env::set_var("SHELL", value) },
+                    None => unsafe { env::remove_var("SHELL") },
+                }
+            }
+        }
+        let _guard = ShellEnvGuard(env::var_os("SHELL"));
+        // SAFETY: test-only; the guard restores the previous value.
         unsafe { env::set_var("SHELL", "/bin/dash") };
         let result = detect_shell_rc(Path::new("/home/x"));
-        match previous {
-            Some(value) => unsafe { env::set_var("SHELL", value) },
-            None => unsafe { env::remove_var("SHELL") },
-        }
         assert_eq!(result, None);
     }
 }
