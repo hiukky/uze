@@ -6,7 +6,6 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 
 use crate::application::ContextPlan;
 
-use super::is_protected_plugin;
 use super::model::{Focus, Overlay, ProfilePanel, ROUTES, Route, TuiModel};
 use super::worker::Intent;
 
@@ -117,7 +116,7 @@ impl TuiModel {
             }
             KeyCode::Char('j') | KeyCode::Down => {
                 self.move_selection(1);
-                if self.route == Route::Marketplace {
+                if self.route == Route::Plugins {
                     self.marketplace_inspect_intent()
                 } else {
                     Intent::None
@@ -125,7 +124,7 @@ impl TuiModel {
             }
             KeyCode::Char('k') | KeyCode::Up => {
                 self.move_selection(-1);
-                if self.route == Route::Marketplace {
+                if self.route == Route::Plugins {
                     self.marketplace_inspect_intent()
                 } else {
                     Intent::None
@@ -142,9 +141,9 @@ impl TuiModel {
                 // Slides the open drawer away — the fetched detail stays
                 // cached, so reopening the same selection is instant.
                 match self.route {
-                    Route::Marketplace => self.marketplace_drawer_open = false,
+                    Route::Plugins => self.marketplace_drawer_open = false,
+                    Route::Extensions => self.extension_drawer_open = false,
                     Route::Harnesses => self.harnesses_drawer_open = false,
-                    Route::Plugins => self.plugin_drawer_open = false,
                     _ => {}
                 }
                 Intent::None
@@ -186,14 +185,16 @@ impl TuiModel {
             }
             KeyCode::Enter => self.open_or_act(),
             KeyCode::Char('r') if self.route == Route::Plugins => {
-                if let Some(plugin) = self.selected_plugin() {
-                    self.overlay = if is_protected_plugin(plugin, &self.marketplace_plugins) {
-                        Overlay::ProtectedPlugin(plugin.id.clone())
+                if let Some(plugin) = self.selected_marketplace_plugin().filter(|p| p.installed) {
+                    let id = self.marketplace_plugin_id(&plugin);
+                    self.overlay = if plugin.marketplace == "uze-official" {
+                        // Anything from the embedded official snapshot is
+                        // protected — remove is blocked with an explanation
+                        // instead of silently offering a destructive (and
+                        // pointless, it re-seeds) operation.
+                        Overlay::ProtectedPlugin(id)
                     } else {
-                        Overlay::ConfirmRemove {
-                            id: plugin.id.clone(),
-                            focus: 1,
-                        }
+                        Overlay::ConfirmRemove { id, focus: 1 }
                     };
                     self.focus = Focus::Overlay;
                 }
@@ -202,15 +203,15 @@ impl TuiModel {
             // Global refresh alias outside Plugins, where `r` already means
             // remove — `g`/F5 keep working everywhere too.
             KeyCode::Char('r') => Intent::Refresh,
-            KeyCode::Char('/') if self.route == Route::Marketplace => {
+            KeyCode::Char('/') if self.route == Route::Plugins => {
                 self.filtering = true;
                 Intent::None
             }
             KeyCode::Char('u') if self.route == Route::Plugins => {
                 if let Some(id) = self
-                    .selected_plugin()
-                    .filter(|plugin| plugin.update_available == Some(true))
-                    .map(|plugin| plugin.id.clone())
+                    .selected_marketplace_plugin()
+                    .filter(|plugin| plugin.installed && plugin.update_available == Some(true))
+                    .map(|plugin| self.marketplace_plugin_id(&plugin))
                 {
                     self.overlay = Overlay::ConfirmUpdate(id);
                     self.focus = Focus::Overlay;
@@ -226,7 +227,7 @@ impl TuiModel {
                     .map(Intent::InstallProjectEnvironment)
                     .unwrap_or(Intent::None)
             }
-            KeyCode::Char('i') if self.route == Route::Marketplace => {
+            KeyCode::Char('i') if self.route == Route::Plugins => {
                 if let Some((name, marketplace)) = self
                     .selected_marketplace_plugin()
                     .filter(|plugin| !plugin.installed)
@@ -267,24 +268,25 @@ impl TuiModel {
         }
     }
 
-    /// Enter's meaning depends on the route: open plugin delivery detail,
-    /// open marketplace plugin detail, or (Harnesses) nothing beyond the
+    /// Enter's meaning depends on the route: open a plugin row's delivery
+    /// detail (installed) or catalog detail (available), open an
+    /// extension's catalog detail, or (Harnesses) nothing beyond the
     /// already-visible detail pane, since there is no deeper read model.
     pub(crate) fn open_or_act(&mut self) -> Intent {
         match self.route {
             Route::Plugins => {
-                let Some(id) = self.selected_plugin().map(|plugin| plugin.id.clone()) else {
-                    return Intent::None;
-                };
-                self.plugin_drawer_open = true;
-                Intent::InspectPlugin(id)
-            }
-            Route::Marketplace => {
                 if self.selected_marketplace_plugin().is_none() {
                     return Intent::None;
                 }
                 self.marketplace_drawer_open = true;
                 self.marketplace_inspect_intent()
+            }
+            Route::Extensions => {
+                if self.selected_extension().is_none() {
+                    return Intent::None;
+                }
+                self.extension_drawer_open = true;
+                Intent::None
             }
             // List: jump straight into editing, the same way Enter opens a
             // drawer elsewhere. Editor: change the highlighted value (same
@@ -332,7 +334,7 @@ impl TuiModel {
             MouseEventKind::ScrollDown if self.overlay == Overlay::None => {
                 self.focus = Focus::Content;
                 self.move_selection(1);
-                if self.route == Route::Marketplace {
+                if self.route == Route::Plugins {
                     self.marketplace_inspect_intent()
                 } else {
                     Intent::None
@@ -341,7 +343,7 @@ impl TuiModel {
             MouseEventKind::ScrollUp if self.overlay == Overlay::None => {
                 self.focus = Focus::Content;
                 self.move_selection(-1);
-                if self.route == Route::Marketplace {
+                if self.route == Route::Plugins {
                     self.marketplace_inspect_intent()
                 } else {
                     Intent::None

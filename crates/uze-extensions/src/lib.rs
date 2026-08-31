@@ -2,11 +2,13 @@
 //! add-ons that live below `src/ui/` in the dependency graph (`src/` uses
 //! this crate, never the reverse), the same relationship `uze-integrations`
 //! has to the harness registry: one crate, one module per extension, one
-//! registry-shaped entry point.
+//! registry entry point ([`registry::ExtensionRegistry`]) naming the set.
 //!
 //! Today there's exactly one extension ([`git_diff`], the Git changes
-//! overlay); the crate is structured so a second one is another module and
-//! another [`ExtensionHit`] variant, not a new crate. [`palette`] and the
+//! overlay); the crate is structured so a second one is another module with
+//! its own `CATALOG` entry (see `git_diff::CATALOG`), one registration in
+//! `ExtensionRegistry::builtin`, and another [`ExtensionHit`] variant, not
+//! a new crate. [`palette`] and the
 //! small text helpers below are duplicated from `src/ui.rs` rather than
 //! imported from it — `src/` depends on this crate, so this crate can't
 //! depend back on `src/` for its own design system without a cycle. Keep
@@ -15,6 +17,7 @@
 
 pub mod git_diff;
 pub mod palette;
+pub mod registry;
 
 use ratatui::{
     style::{Modifier, Style},

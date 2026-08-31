@@ -10,7 +10,6 @@ pub(crate) enum Hit {
     /// The sidebar's "work" mode label — mirrors Ctrl+O, detaching from
     /// management back to the terminal workspace.
     SwitchToWorkspace,
-    PluginRow(usize),
     MarketplaceRow(usize),
     /// A marketplace group's header row — clicking it expands/collapses
     /// that group instead of selecting a plugin.
@@ -19,6 +18,7 @@ pub(crate) enum Hit {
     /// list selection to that marketplace's header, expanding it first if
     /// it's currently collapsed.
     JumpToMarketplace(String),
+    ExtensionRow(usize),
     HarnessRow(usize),
     ProfileRow(usize),
     PreferenceRow(usize),
@@ -63,17 +63,6 @@ impl TuiModel {
                 Intent::None
             }
             Hit::SwitchToWorkspace => Intent::SwitchToWorkspace,
-            Hit::PluginRow(index) => {
-                // Selecting only — same as arrow-key navigation. The
-                // richer async inspect fetch (deliveries/managed state,
-                // the "Inspecting…" status flash) is reserved for an
-                // explicit Enter, so clicking through the list to browse
-                // doesn't fire a fetch — and the noisy status line with
-                // it — on every single click.
-                self.plugins_selected = index;
-                self.focus = Focus::Content;
-                Intent::None
-            }
             Hit::MarketplaceRow(index) => {
                 self.marketplace_selected = index;
                 self.marketplace_drawer_open = true;
@@ -90,14 +79,24 @@ impl TuiModel {
                 if let Some(position) = self
                     .marketplace_visible_indices()
                     .iter()
-                    .position(|&raw| self.marketplace_plugins[raw].marketplace == marketplace)
+                    .position(|&raw| self.marketplace_rows()[raw].marketplace == marketplace)
                 {
                     self.marketplace_selected = position;
                 }
                 self.marketplace_drawer_open = true;
-                self.set_route(Route::Marketplace);
+                self.set_route(Route::Plugins);
                 self.focus = Focus::Content;
                 self.marketplace_inspect_intent()
+            }
+            Hit::ExtensionRow(index) => {
+                // Selection opens the drawer immediately — `move_selection`
+                // does the same for keyboard navigation, so both input
+                // paths agree. No intent: the drawer's content is static
+                // catalog metadata, nothing to fetch.
+                self.extensions_selected = index;
+                self.extension_drawer_open = true;
+                self.focus = Focus::Content;
+                Intent::None
             }
             Hit::HarnessRow(index) => {
                 self.harnesses_selected = index;

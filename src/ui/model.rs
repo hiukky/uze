@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use ratatui::layout::Rect;
 use uze_core::preference::{Autonomy, ModelPreference, SandboxScope};
+use uze_extensions::registry::BuiltinExtension;
 
 use crate::application::{
     ContextPlan, DoctorReport, HarnessHealth, MarketplacePluginDetail, MarketplacePluginSummary,
@@ -20,8 +21,14 @@ use super::view::doctor::{Issue, classify_doctor};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Route {
     Overview,
+    /// The agentic side of the product: skills, agents, MCP — everything
+    /// installable from a marketplace (the embedded `uze-official` snapshot
+    /// included). Browse the catalog, install, update, remove.
     Plugins,
-    Marketplace,
+    /// The tool side: official uze extensions that extend the TUI/CLI
+    /// itself (see `uze_extensions::BUILTIN_EXTENSIONS`) — as opposed to
+    /// plugins, which are packages delivered *to* harnesses.
+    Extensions,
     Harnesses,
     Profiles,
     Doctor,
@@ -29,8 +36,8 @@ pub(crate) enum Route {
 
 pub(crate) const ROUTES: [Route; 6] = [
     Route::Overview,
-    Route::Marketplace,
     Route::Plugins,
+    Route::Extensions,
     Route::Harnesses,
     Route::Profiles,
     Route::Doctor,
@@ -41,7 +48,7 @@ impl Route {
         match self {
             Route::Overview => "Overview",
             Route::Plugins => "Plugins",
-            Route::Marketplace => "Marketplace",
+            Route::Extensions => "Extensions",
             Route::Harnesses => "Integrations",
             Route::Profiles => "Profiles",
             Route::Doctor => "Doctor",
@@ -218,7 +225,6 @@ pub(crate) struct TuiModel {
     pub(crate) maintenance_in_flight: bool,
 
     pub(crate) plugins: Vec<PluginSummary>,
-    pub(crate) plugins_selected: usize,
     pub(crate) plugin_detail: Option<PluginInspection>,
 
     pub(crate) marketplace_count: usize,
@@ -233,17 +239,23 @@ pub(crate) struct TuiModel {
     /// width while it's closed, mirroring the design's slide-in drawer.
     pub(crate) marketplace_drawer_open: bool,
     /// Live substring filter over plugin/marketplace name, typed while
-    /// `filtering` is true (`/` in the Marketplace route).
+    /// `filtering` is true (`/` in the Plugins route).
     pub(crate) marketplace_filter: String,
     pub(crate) filtering: bool,
     /// Marketplace group names currently collapsed in the tree — absence
     /// means expanded, so a freshly registered marketplace starts open.
     pub(crate) collapsed_marketplaces: BTreeSet<String>,
 
+    /// The official uze extensions catalog, from
+    /// `uze_extensions::registry::ExtensionRegistry` — the Extensions
+    /// screen's rows.
+    pub(crate) extensions: Vec<BuiltinExtension>,
+    pub(crate) extensions_selected: usize,
+    /// Whether the Extensions detail drawer is currently slid into view.
+    pub(crate) extension_drawer_open: bool,
+
     pub(crate) harnesses_selected: usize,
     pub(crate) harnesses_drawer_open: bool,
-
-    pub(crate) plugin_drawer_open: bool,
 
     pub(crate) profiles: Vec<ProfileSummary>,
     pub(crate) profiles_selected: usize,
@@ -299,7 +311,6 @@ impl Default for TuiModel {
             status: Status::Idle,
             maintenance_in_flight: false,
             plugins: Vec::new(),
-            plugins_selected: 0,
             plugin_detail: None,
             marketplace_count: 0,
             marketplace_plugins: Vec::new(),
@@ -309,9 +320,13 @@ impl Default for TuiModel {
             marketplace_filter: String::new(),
             filtering: false,
             collapsed_marketplaces: BTreeSet::new(),
+            extensions: uze_extensions::registry::ExtensionRegistry::builtin()
+                .all()
+                .to_vec(),
+            extensions_selected: 0,
+            extension_drawer_open: false,
             harnesses_selected: 0,
             harnesses_drawer_open: false,
-            plugin_drawer_open: false,
             profiles: Vec::new(),
             profiles_selected: 0,
             profile_panel: ProfilePanel::List,
@@ -334,18 +349,65 @@ impl Default for TuiModel {
 }
 
 impl TuiModel {
-    pub(crate) fn selected_plugin(&self) -> Option<&PluginSummary> {
-        self.plugins.get(self.plugins_selected)
+    /// Installed plugins from `plugins` that no catalog entry knows about
+    /// (ad-hoc `uze add`/git/local installs) — the merged Plugins tree's
+    /// "local" group, so a direct install never disappears from the TUI
+    /// when the catalog screen absorbs the old installed list.
+    fn local_marketplace_rows(&self) -> Vec<MarketplacePluginSummary> {
+        self.plugins
+            .iter()
+            .filter(|plugin| {
+                !self
+                    .marketplace_plugins
+                    .iter()
+                    .any(|m| format!("{}@{}", m.name, m.marketplace) == plugin.id)
+            })
+            .map(|plugin| MarketplacePluginSummary {
+                marketplace: "local".to_owned(),
+                name: plugin.active_name.clone(),
+                description: None,
+                keywords: Vec::new(),
+                installed: true,
+                update_available: plugin.update_available,
+                is_default: false,
+            })
+            .collect()
     }
 
-    /// Every `marketplace_plugins` index that currently passes the live
+    /// Every row the Plugins tree renders: the marketplace catalog
+    /// (official snapshot first, then registered marketplaces) followed by
+    /// the "local" group of ad-hoc installed plugins. All tree logic
+    /// (visible indices, selection, rendering) resolves through this one
+    /// list so the local group is a group like any other.
+    pub(crate) fn marketplace_rows(&self) -> Vec<MarketplacePluginSummary> {
+        let mut rows = self.marketplace_plugins.clone();
+        rows.extend(self.local_marketplace_rows());
+        rows
+    }
+
+    /// The qualified remove/inspect id for a merged-tree row: `name@market`
+    /// as usual, except local rows, whose real identity lives on the
+    /// installed `PluginSummary` (a path or Git URL), never a
+    /// marketplace-qualified string.
+    pub(crate) fn marketplace_plugin_id(&self, plugin: &MarketplacePluginSummary) -> String {
+        if plugin.marketplace != "local" {
+            return format!("{}@{}", plugin.name, plugin.marketplace);
+        }
+        self.plugins
+            .iter()
+            .find(|p| p.active_name == plugin.name)
+            .map(|p| p.id.clone())
+            .unwrap_or_else(|| plugin.name.clone())
+    }
+
+    /// Every `marketplace_rows` index that currently passes the live
     /// filter (case-insensitive substring of plugin or marketplace name)
     /// and belongs to a group that isn't collapsed — the single source of
     /// truth both the list renderer and selection/navigation resolve
     /// through, so a hidden row is never selectable and vice versa.
     pub(crate) fn marketplace_visible_indices(&self) -> Vec<usize> {
         let needle = self.marketplace_filter.trim().to_lowercase();
-        self.marketplace_plugins
+        self.marketplace_rows()
             .iter()
             .enumerate()
             .filter(|(_, plugin)| !self.collapsed_marketplaces.contains(&plugin.marketplace))
@@ -359,24 +421,42 @@ impl TuiModel {
     }
 
     /// Resolves `marketplace_selected` (a position in the visible sequence)
-    /// back to the plugin it points at.
-    pub(crate) fn selected_marketplace_plugin(&self) -> Option<&MarketplacePluginSummary> {
+    /// back to the plugin it points at — an owned clone, since the merged
+    /// row list is computed on demand (`marketplace_rows`).
+    pub(crate) fn selected_marketplace_plugin(&self) -> Option<MarketplacePluginSummary> {
         let raw_index = *self
             .marketplace_visible_indices()
             .get(self.marketplace_selected)?;
-        self.marketplace_plugins.get(raw_index)
+        self.marketplace_rows().get(raw_index).cloned()
     }
 
-    /// An `Intent` that fetches the currently selected marketplace plugin's
-    /// detail (the drawer's RESOURCES section), or `Intent::None` if it's
+    pub(crate) fn selected_extension(&self) -> Option<&BuiltinExtension> {
+        self.extensions.get(self.extensions_selected)
+    }
+
+    /// An `Intent` that fetches the currently selected row's detail (the
+    /// drawer's RESOURCES/deliveries sections), or `Intent::None` if it's
     /// already cached — arrow-key navigation and mouse clicks both open the
     /// drawer without going through `open_or_act`'s Enter path, so without
-    /// this they'd leave RESOURCES stuck on "loading…" for any selection
-    /// that was never explicitly Entered.
+    /// this they'd leave the drawer's body stuck on "loading…" for any
+    /// selection that was never explicitly Entered.
     pub(crate) fn marketplace_inspect_intent(&self) -> super::worker::Intent {
         let Some(plugin) = self.selected_marketplace_plugin() else {
             return super::worker::Intent::None;
         };
+        let id = self.marketplace_plugin_id(&plugin);
+        if plugin.installed {
+            // Installed rows read deliveries/managed state — that model
+            // comes from the installed-package inspection, not the catalog.
+            if self
+                .plugin_detail
+                .as_ref()
+                .is_some_and(|detail| detail.plugin.id == id)
+            {
+                return super::worker::Intent::None;
+            }
+            return super::worker::Intent::InspectPlugin(id);
+        }
         if self.marketplace_detail.as_ref().is_some_and(|detail| {
             detail.summary.name == plugin.name && detail.summary.marketplace == plugin.marketplace
         }) {
@@ -505,8 +585,8 @@ impl TuiModel {
 
     pub(crate) fn list_len(&self) -> usize {
         match self.route {
-            Route::Plugins => self.plugins.len(),
-            Route::Marketplace => self.marketplace_visible_indices().len(),
+            Route::Plugins => self.marketplace_visible_indices().len(),
+            Route::Extensions => self.extensions.len(),
             Route::Harnesses => self.doctor.as_ref().map_or(0, |d| d.harnesses.len()),
             _ => 0,
         }
@@ -514,8 +594,8 @@ impl TuiModel {
 
     fn selected_mut(&mut self) -> Option<&mut usize> {
         match self.route {
-            Route::Plugins => Some(&mut self.plugins_selected),
-            Route::Marketplace => Some(&mut self.marketplace_selected),
+            Route::Plugins => Some(&mut self.marketplace_selected),
+            Route::Extensions => Some(&mut self.extensions_selected),
             Route::Harnesses => Some(&mut self.harnesses_selected),
             _ => None,
         }
@@ -532,12 +612,14 @@ impl TuiModel {
             return;
         }
         *selected = (*selected as isize + delta).clamp(0, len as isize - 1) as usize;
-        // Marketplace/Harnesses reveal their drawer as soon as something is
-        // selected — matches the design's click-to-select-and-open — while
-        // Plugins keeps its drawer opt-in via Enter, since opening it there
-        // also kicks off an async inspect fetch.
+        // Plugins/Harnesses reveal their drawer as soon as something is
+        // selected — matches the design's click-to-select-and-open (the
+        // Plugins drawer is bookended by install/update/remove, so a
+        // selection there always has an action in reach). Extensions'
+        // drawer is static catalog detail, opened the same way.
         match route {
-            Route::Marketplace => self.marketplace_drawer_open = true,
+            Route::Plugins => self.marketplace_drawer_open = true,
+            Route::Extensions => self.extension_drawer_open = true,
             Route::Harnesses => self.harnesses_drawer_open = true,
             _ => {}
         }
@@ -545,9 +627,6 @@ impl TuiModel {
 
     pub(crate) fn refreshed(&mut self, data: RefreshData) {
         self.plugins = data.plugins;
-        self.plugins_selected = self
-            .plugins_selected
-            .min(self.plugins.len().saturating_sub(1));
         self.doctor = data.doctor;
         self.harnesses_selected = self.harnesses_selected.min(
             self.doctor
@@ -558,6 +637,9 @@ impl TuiModel {
         self.marketplace_plugins = data.marketplace_plugins;
         self.marketplace_count = data.marketplace_count;
         self.clamp_marketplace_selection();
+        self.extensions_selected = self
+            .extensions_selected
+            .min(self.extensions.len().saturating_sub(1));
         self.profiles = data.profiles;
         self.profiles_selected = self
             .profiles_selected
@@ -616,7 +698,7 @@ impl TuiModel {
     }
 
     pub(crate) fn set_route(&mut self, route: Route) {
-        if route != Route::Marketplace {
+        if route != Route::Plugins {
             self.filtering = false;
         }
         // Harnesses opens straight onto its first entry's detail — the list

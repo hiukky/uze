@@ -214,6 +214,18 @@ pub trait IntegrationPort {
         HarnessRuntimeContribution::passthrough()
     }
 
+    /// Read-only twin of [`Self::runtime_contribution`]: whether a
+    /// shim-mediated launch for `ctx` would project anything, *without
+    /// performing the contribution itself*. Status views (the agent-support
+    /// popup) must use this so rendering a row never mutates state; the
+    /// default mirrors the real contribution, which is correct for
+    /// integrations whose contribution is cheap and side-effect-free, and
+    /// is overridden with a pure predicate by integrations whose
+    /// contribution performs writes.
+    fn runtime_contribution_would_activate(&self, ctx: &RuntimeContext) -> bool {
+        !self.runtime_contribution(ctx).is_passthrough()
+    }
+
     /// Whether `uze setup <harness>` should also create the PATH shim
     /// (`UzeHome::shims_dir`) for this harness, as an ordinary part of that
     /// one command — no separate flag or persisted enabled/disabled state.

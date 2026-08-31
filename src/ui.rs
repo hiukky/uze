@@ -24,7 +24,7 @@
 //!   `TuiModel` (state), key/mouse handling, hit-testing, and the
 //!   intent/worker dispatch that runs product operations off-thread.
 //! - [`view`]: one file per management route (Overview, Plugins,
-//!   Marketplace, Harnesses, Profiles, Doctor).
+//!   Extensions, Harnesses, Profiles, Doctor).
 //! - `overlay`: modal dialogs shared across management routes.
 
 use std::{
@@ -49,7 +49,6 @@ use ratatui::{
 
 use crate::{
     Result, UzeApplication, UzeHome,
-    application::{MarketplacePluginSummary, PluginSummary},
     provisioning::{ProcessOutput, ProcessResult, ProcessRunner, ProcessSpec, SystemProcessRunner},
 };
 
@@ -140,34 +139,6 @@ const SURFACE_OVERLAY: Color = Color::Rgb(32, 34, 35);
 const SURFACE_OVERLAY_BRIGHT: Color = Color::Rgb(44, 46, 47);
 
 const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-
-fn is_protected_plugin(
-    plugin: &PluginSummary,
-    marketplace_plugins: &[MarketplacePluginSummary],
-) -> bool {
-    // Only the verified official origin is protected: any `embedded:` provenance
-    // whose id is listed in the compiled marketplace snapshot. A local or git
-    // package that spoofs the name `uze` without `embedded:` provenance is not
-    // considered official and remains removable.
-    if !plugin.source.starts_with("embedded:") {
-        return false;
-    }
-    if uze_application::bootstrap::DEFAULT_PLUGIN_IDS.contains(&plugin.id.as_str()) {
-        return true;
-    }
-    if marketplace_plugins
-        .iter()
-        .any(|m| m.marketplace == "uze-official" && m.name == plugin.id)
-    {
-        return true;
-    }
-    // Fallback when marketplace hasn't loaded yet (startup): consult the
-    // compiled snapshot directly. Keeps protection deterministic.
-    if let Ok((_, entries)) = uze_application::bootstrap::entries() {
-        return entries.iter().any(|entry| entry.name == plugin.id);
-    }
-    false
-}
 
 /// Runs the TUI. `home` is passed to workers, which construct the same
 /// production application composition root as the CLI.
@@ -491,14 +462,6 @@ pub(crate) fn render_divided_row(
         );
     }
     divider_y + 1
-}
-
-pub(crate) fn health_style(health: &str) -> Style {
-    match health {
-        "ready" => Style::default().fg(SUCCESS),
-        "missing" | "unknown" => Style::default().fg(WARNING),
-        _ => Style::default().fg(DANGER),
-    }
 }
 
 fn route_style(route: &str) -> Style {

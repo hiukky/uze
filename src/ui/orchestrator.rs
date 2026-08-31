@@ -81,9 +81,15 @@ fn spawn_support_refresh(
                 .map(|workspace| workspace.root.as_path())
                 .unwrap_or(&support_root);
             let context = app.context_inspect(context_root).ok();
-            let agents_directory_loaded = workspace
+            // The `.agents` question must be answered at the same root the
+            // AGENTS.md row is — the context inspect's resolved project
+            // root — not at the workspace root (`resolve_workspace` climbs
+            // only for lock/manifest, so they can differ for a project
+            // whose root carries only `AGENTS.md`). Two different roots
+            // made the two rows disagree about the same `.agents/`.
+            let agents_directory_loaded = context
                 .as_ref()
-                .is_some_and(|workspace| workspace.agents_directory_present);
+                .is_some_and(|status| status.canonical.join(".agents").is_dir());
             let profiles = app.list_profiles().unwrap_or_default();
             let active_profile = profiles.iter().find(|profile| profile.active);
             app.doctor()
@@ -393,7 +399,7 @@ pub(crate) fn attach_workspace(
                             label: next_shell_label(&model),
                             columns,
                             rows,
-                            cwd: None,
+                            cwd: selected_pane_cwd(&model),
                             command: None,
                         },
                     );
@@ -739,7 +745,7 @@ pub(crate) fn attach_workspace(
                                     label: next_shell_label(&model),
                                     columns,
                                     rows,
-                                    cwd: None,
+                                    cwd: selected_pane_cwd(&model),
                                     command: None,
                                 },
                             );
@@ -2050,8 +2056,8 @@ fn agent_activity_frame(tick: usize) -> &'static str {
 /// Stamps `bg` onto every span already in the row, then appends a
 /// trailing background-filled run of spaces so the highlight spans the
 /// row's full width instead of stopping at the last glyph — same pattern
-/// `render_plugin_row`/`render_marketplace_row` use for their own
-/// selected-row backgrounds.
+/// the management views' `render_plugin_row`/`header_line` use for their
+/// own selected-row backgrounds.
 fn fill_row_bg<'a>(spans: &mut Vec<Span<'a>>, width: u16, bg: Color) {
     for span in spans.iter_mut() {
         span.style = span.style.bg(bg);
@@ -3010,7 +3016,7 @@ mod tests {
     }
 
     #[test]
-    fn new_agent_uses_the_selected_panes_live_directory() {
+    fn new_tabs_use_the_selected_panes_live_directory() {
         let mut session = Session::new(WorkspaceId("workspace".into()), "/tmp/root".into(), 80, 24);
         assert!(session.update_pane_status(PaneId(1), "/tmp/project/src".into(), "zsh".into()));
         let model = WorkspaceModel {

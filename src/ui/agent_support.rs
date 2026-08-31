@@ -60,8 +60,18 @@ impl AgentSupport {
         });
         let runtime_projection_active =
             harness_context.is_some_and(|item| item.runtime_projection_active);
+        // The single most common "why is this red": the shim exists (or
+        // not) at `~/.uze/shims`, but this process's `PATH` resolves the
+        // harness's name to its real binary first, so a launch here would
+        // bypass UZE entirely. That is an environment fact, not a defect —
+        // say so instead of "unavailable"/"not supported", which read as
+        // the harness being broken. `runtime_shim_active` is only ever
+        // false for an integration that opted into the runtime shim.
+        let shim_not_on_path = health.detection.present && !health.runtime_shim_active;
         let (agents_md, agents_md_label) = if runtime_projection_active {
             (State::Ready, "loaded (shim)")
+        } else if shim_not_on_path {
+            (State::Warning, "shim not on PATH")
         } else {
             match harness_context.map(|item| &item.delivery) {
                 Some(HarnessContextDelivery::Native) => (State::Ready, "loaded"),
@@ -87,7 +97,11 @@ impl AgentSupport {
         let agents_directory_deliverable =
             health.project_agents_directory_native || runtime_projection_active;
         let (agents_directory, agents_directory_label) = if !agents_directory_deliverable {
-            (State::Error, "not supported")
+            if shim_not_on_path {
+                (State::Warning, "shim not on PATH")
+            } else {
+                (State::Error, "not supported")
+            }
         } else if !agents_directory_loaded {
             (State::Warning, "not found")
         } else if health.project_agents_directory_native {
@@ -345,5 +359,72 @@ fn capability_label(kind: CapabilityKind) -> &'static str {
         CapabilityKind::Agent => "Agents",
         CapabilityKind::Hook => "Hooks",
         CapabilityKind::Policy => "Policies",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uze_application::application::HarnessHealth;
+    use uze_core::integration::{HarnessDetection, PublicationStatus};
+
+    fn health(present: bool, shim_active: bool) -> HarnessHealth {
+        HarnessHealth {
+            integration: "claude-code".to_owned(),
+            display_name: "Claude Code".to_owned(),
+            description: String::new(),
+            detection: HarnessDetection {
+                present,
+                version: Some("2.0.0".to_owned()),
+            },
+            setup: "installed".to_owned(),
+            strategy: None,
+            provisioning: None,
+            publication: PublicationStatus::NotApplicable,
+            capabilities: HarnessCapabilities::default(),
+            native_instructions: false,
+            runtime_shim_active: shim_active,
+            project_agents_directory_native: false,
+        }
+    }
+
+    fn support(present: bool, shim_active: bool, agents_directory_loaded: bool) -> AgentSupport {
+        AgentSupport::from_health(
+            health(present, shim_active),
+            None,
+            agents_directory_loaded,
+            None,
+        )
+    }
+
+    #[test]
+    fn shim_not_first_on_path_is_reported_explicitly() {
+        // The most common "why is this red": the harness is present but
+        // this process's PATH resolves its name to the real binary first,
+        // so a launch would bypass UZE. The row must say that, not
+        // "unavailable"/"not supported".
+        let support = support(true, false, false);
+        assert_eq!(support.agents_md_label, "shim not on PATH");
+        assert!(matches!(support.agents_md, State::Warning));
+        assert_eq!(support.agents_directory_label, "shim not on PATH");
+        assert!(matches!(support.agents_directory, State::Warning));
+    }
+
+    #[test]
+    fn absent_harness_stays_unavailable_not_a_path_problem() {
+        let support = support(false, false, false);
+        assert_eq!(support.agents_md_label, "unavailable");
+        assert!(matches!(support.agents_md, State::Error));
+        assert_eq!(support.agents_directory_label, "not supported");
+        assert!(matches!(support.agents_directory, State::Error));
+    }
+
+    #[test]
+    fn active_shim_without_projection_stays_not_supported() {
+        // Shim is first on PATH but nothing is projected (no AGENTS.md in
+        // the project, or a failed write) — the row must not blame PATH.
+        let support = support(true, true, false);
+        assert_eq!(support.agents_directory_label, "not supported");
+        assert!(matches!(support.agents_directory, State::Error));
     }
 }

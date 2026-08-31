@@ -1,4 +1,4 @@
-//! Management client for the TUI (routes: Overview, Plugins, Marketplace,
+//! Management client for the TUI (routes: Overview, Plugins, Extensions,
 //! Harnesses, Profiles, Doctor) — this mode's counterpart to
 //! `super::orchestrator`'s terminal workspace. Presentation deliberately
 //! shares the workspace's palette and layout conventions (menu + main
@@ -175,8 +175,8 @@ pub(crate) fn render(
     match model.route {
         Route::Overview => view::overview::render_overview(frame, layout.content, model),
         Route::Plugins => view::plugins::render_plugins(frame, layout.content, model, hits),
-        Route::Marketplace => {
-            view::marketplace::render_marketplace(frame, layout.content, model, hits)
+        Route::Extensions => {
+            view::extensions::render_extensions(frame, layout.content, model, hits)
         }
         Route::Harnesses => view::harnesses::render_harnesses(frame, layout.content, model, hits),
         Route::Profiles => view::profiles::render_profiles(frame, layout.content, model, hits),
@@ -214,8 +214,8 @@ pub(crate) fn render(
 fn route_subtitle(route: Route) -> &'static str {
     match route {
         Route::Overview => "status & health",
-        Route::Marketplace => "browse & install",
-        Route::Plugins => "installed plugins",
+        Route::Plugins => "skills · agents · MCP",
+        Route::Extensions => "official tool extensions",
         Route::Harnesses => "detected agents",
         Route::Profiles => "preferences",
         Route::Doctor => "diagnostics",
@@ -477,10 +477,10 @@ fn route_hint(model: &TuiModel) -> &'static str {
                 "r refresh · ? help"
             }
         }
-        Route::Plugins => "↑↓ select · enter details · u update · r remove",
-        Route::Marketplace => {
-            "↑↓ select · enter inspect · i install · a add marketplace · / search · esc close"
+        Route::Plugins => {
+            "↑↓ select · enter inspect · i install · u update · r remove · a marketplace · / search"
         }
+        Route::Extensions => "↑↓ select · enter details",
         Route::Harnesses => "↑↓ select · s setup · a analyze · p apply · ? status · esc close",
         Route::Profiles => match model.profile_panel {
             model::ProfilePanel::List => {

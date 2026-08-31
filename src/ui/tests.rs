@@ -190,7 +190,6 @@ fn every_route_renders_without_panicking() {
         let model = TuiModel {
             route,
             plugins: base.plugins.clone(),
-            plugins_selected: base.plugins_selected,
             marketplace_count: base.marketplace_count,
             marketplace_plugins: base.marketplace_plugins.clone(),
             doctor: base.doctor.clone(),
@@ -266,11 +265,11 @@ fn sidebar_keyboard_navigation_cycles_routes() {
     };
     assert_eq!(model.route, Route::Overview);
     model.apply_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-    assert_eq!(model.route, Route::Marketplace);
-    model.apply_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
     assert_eq!(model.route, Route::Plugins);
+    model.apply_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
+    assert_eq!(model.route, Route::Extensions);
     model.apply_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-    assert_eq!(model.route, Route::Marketplace);
+    assert_eq!(model.route, Route::Plugins);
 }
 
 #[test]
@@ -287,7 +286,7 @@ fn tab_toggles_focus_between_sidebar_and_content() {
 fn content_navigation_and_inspect_intent() {
     let mut model = model_with_plugins(&["one", "two"]);
     model.apply_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-    assert_eq!(model.plugins_selected, 1);
+    assert_eq!(model.marketplace_selected, 1);
     assert_eq!(
         model.apply_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
         Intent::InspectPlugin("two".to_owned())
@@ -357,7 +356,7 @@ fn trust_required_overlay_confirm_regrants_with_trust() {
 #[test]
 fn mouse_click_on_sidebar_route_switches_route_and_focus() {
     let mut model = TuiModel {
-        hits: vec![(Rect::new(0, 1, 20, 1), Hit::Route(Route::Marketplace))],
+        hits: vec![(Rect::new(0, 1, 20, 1), Hit::Route(Route::Plugins))],
         ..TuiModel::default()
     };
     let intent = model.apply_mouse(
@@ -370,20 +369,23 @@ fn mouse_click_on_sidebar_route_switches_route_and_focus() {
         100,
     );
     assert_eq!(intent, Intent::None);
-    assert_eq!(model.route, Route::Marketplace);
+    assert_eq!(model.route, Route::Plugins);
     assert_eq!(model.focus, Focus::Content);
 }
 
 #[test]
-fn mouse_click_on_plugin_row_only_selects_no_fetch() {
-    // Clicking a row must behave like arrow-key navigation — select
-    // only, no async inspect fetch (and the "Inspecting…" status flash
-    // that comes with it) on every single click. Enter still fetches
-    // explicitly — see `content_navigation_and_inspect_intent`.
-    let mut model = model_with_plugins(&["one", "two"]);
+fn mouse_click_on_extension_row_selects_and_opens_drawer_without_fetch() {
+    // Clicking an extension row behaves like arrow-key navigation —
+    // selection opens the drawer, but never an async fetch (there is
+    // nothing to fetch: the catalog is static, and no "Inspecting…"
+    // status flash belongs on every click).
+    let mut model = TuiModel {
+        focus: Focus::Content,
+        ..TuiModel::default()
+    };
     model.hits = vec![
-        (Rect::new(0, 0, 20, 1), Hit::PluginRow(0)),
-        (Rect::new(0, 1, 20, 1), Hit::PluginRow(1)),
+        (Rect::new(0, 0, 20, 1), Hit::ExtensionRow(0)),
+        (Rect::new(0, 1, 20, 1), Hit::ExtensionRow(1)),
     ];
     let intent = model.apply_mouse(
         MouseEvent {
@@ -394,7 +396,8 @@ fn mouse_click_on_plugin_row_only_selects_no_fetch() {
         },
         100,
     );
-    assert_eq!(model.plugins_selected, 1);
+    assert_eq!(model.extensions_selected, 1);
+    assert!(model.extension_drawer_open);
     assert_eq!(intent, Intent::None);
 }
 
@@ -410,8 +413,11 @@ fn scroll_moves_selection_without_mutating_anything() {
         },
         100,
     );
-    assert_eq!(intent, Intent::None);
-    assert_eq!(model.plugins_selected, 1);
+    // Scroll on the Plugins tree is read-only navigation: it moves the
+    // selection and fetches the newly selected (installed, local) row's
+    // detail — never a mutation.
+    assert_eq!(intent, Intent::InspectPlugin("two".to_owned()));
+    assert_eq!(model.marketplace_selected, 1);
 }
 
 #[test]
@@ -451,7 +457,7 @@ fn help_overlay_toggle_and_dismiss() {
 #[test]
 fn empty_marketplace_and_no_harness_states_do_not_panic_rendering() {
     let model = TuiModel {
-        route: Route::Marketplace,
+        route: Route::Plugins,
         ..TuiModel::default()
     };
     assert_eq!(model.list_len(), 0);
@@ -466,7 +472,7 @@ fn empty_marketplace_and_no_harness_states_do_not_panic_rendering() {
 #[test]
 fn read_only_navigation_never_produces_a_mutating_intent() {
     let mut model = model_with_plugins(&["one", "two"]);
-    model.set_route(Route::Marketplace);
+    model.set_route(Route::Plugins);
     model.marketplace_plugins = vec![MarketplacePluginSummary {
         marketplace: "uze-official".to_owned(),
         name: "uze".to_owned(),
@@ -483,14 +489,14 @@ fn read_only_navigation_never_produces_a_mutating_intent() {
         KeyCode::Char('k'),
     ] {
         let intent = model.apply_key(KeyEvent::new(key, KeyModifiers::NONE));
-        // Marketplace navigation may dispatch a read-only inspect fetch
-        // (keeps the drawer's RESOURCES section populated as selection
-        // moves) — that's not a mutation, so only reject the intents
-        // that actually write something.
+        // Plugins navigation may dispatch a read-only inspect fetch
+        // (keeps the drawer's RESOURCES/deliveries sections populated as
+        // selection moves) — that's not a mutation, so only reject the
+        // intents that actually write something.
         assert!(
             matches!(
                 intent,
-                Intent::None | Intent::InspectMarketplacePlugin { .. }
+                Intent::None | Intent::InspectMarketplacePlugin { .. } | Intent::InspectPlugin(..)
             ),
             "navigation must never produce a mutating intent, got {intent:?}"
         );
@@ -772,7 +778,7 @@ fn marketplace_plugin(marketplace: &str, name: &str, installed: bool) -> Marketp
 #[test]
 fn marketplace_filter_narrows_visible_selection() {
     let mut model = TuiModel {
-        route: Route::Marketplace,
+        route: Route::Plugins,
         focus: Focus::Content,
         marketplace_plugins: vec![
             marketplace_plugin("ai", "std", false),
@@ -799,7 +805,7 @@ fn marketplace_filter_narrows_visible_selection() {
 #[test]
 fn marketplace_group_collapse_hides_its_plugins() {
     let mut model = TuiModel {
-        route: Route::Marketplace,
+        route: Route::Plugins,
         marketplace_plugins: vec![marketplace_plugin("ai", "std", false)],
         ..TuiModel::default()
     };
@@ -884,7 +890,7 @@ fn entering_doctor_route_uses_the_cached_full_report() {
         ..RefreshData::default()
     });
 
-    // Sidebar order: Overview → Marketplace → Plugins → Harnesses →
+    // Sidebar order: Overview → Plugins → Extensions → Harnesses →
     // Profiles → Doctor. No deep-request intent anywhere.
     let mut last_intent = Intent::None;
     for _ in 0..5 {
@@ -902,10 +908,11 @@ fn entering_doctor_route_uses_the_cached_full_report() {
 fn attachment_health_is_never_unknown_after_a_refresh() {
     use crate::application::{ManagedStateSummary, PackageManagedState};
     // Every refresh carries the full doctor with attachments (served by
-    // the inspection cache), so the Plugins screen derives "ready"
-    // instead of showing the masked "unknown" placeholder.
+    // the inspection cache), so the Plugins drawer's status line derives
+    // real health from it instead of the masked "unknown" placeholder.
     let mut model = model_with_plugins(&["one"]);
     model.route = Route::Plugins;
+    model.marketplace_drawer_open = true;
     model.doctor = Some(DoctorReport {
         uze_home: PathBuf::from("/home"),
         store: crate::application::StoreHealth::Ready,
@@ -935,7 +942,7 @@ fn attachment_health_is_never_unknown_after_a_refresh() {
         .unwrap();
     let rows = buffer_rows(&terminal);
     assert!(
-        rows.iter().any(|row| row.contains("ready")),
+        rows.iter().any(|row| row.to_lowercase().contains("ready")),
         "a refreshed report must render real health, got:\n{rows:#?}"
     );
     assert!(

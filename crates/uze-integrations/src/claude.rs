@@ -304,6 +304,14 @@ impl IntegrationPort for ClaudeIntegration {
         runtime::runtime_contribution(ctx)
     }
 
+    /// Pure check for status views: `claude_runtime_projection` writes its
+    /// files as an idempotent refresh, so the launch path and the status
+    /// path must not share the write — the popup asks this instead of the
+    /// real contribution (see `runtime::projection_would_activate`).
+    fn runtime_contribution_would_activate(&self, ctx: &RuntimeContext) -> bool {
+        runtime::projection_would_activate(ctx)
+    }
+
     fn provision(&self, runner: &dyn ProcessRunner) -> Result<ProvisioningResult> {
         let executable = self.provisioning_executable();
         provision_cli(

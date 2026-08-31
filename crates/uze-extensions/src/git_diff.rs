@@ -42,6 +42,18 @@ pub enum GitViewOutcome {
     Close,
 }
 
+/// This extension's registry entry — registered once in
+/// `ExtensionRegistry::builtin`; the management TUI's Extensions screen
+/// renders it. One `CATALOG` per extension module is the shape the crate
+/// root doc promises every extension follows.
+pub const CATALOG: crate::registry::BuiltinExtension = crate::registry::BuiltinExtension {
+    id: "git-changes",
+    name: "Git Changes",
+    description: "Side-by-side working-tree and diff review inside the workspace client.",
+    surface: "Workspace TUI",
+    usage: "Open with the git button in the workspace tab strip, or Ctrl+G while attached.",
+};
+
 const REFRESH_INTERVAL: Duration = Duration::from_millis(750);
 
 /// A compact summary for the workspace tab strip. It is deliberately

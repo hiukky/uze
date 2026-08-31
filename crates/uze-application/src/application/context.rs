@@ -154,11 +154,12 @@ impl UzeApplication {
     /// PATH shim — would actually project `AGENTS.md` into its session for
     /// `project_root`. Reuses the exact same two questions the shim itself
     /// answers at real launch time (`src/shim.rs`): is the shim actually
-    /// first on `PATH` for this harness, and does the integration's own
+    /// first on `PATH` for this harness, and would the integration's own
     /// `runtime_contribution` produce anything beyond a passthrough for
-    /// this project. Read-only and side-effect-free from this caller's
-    /// perspective beyond what `runtime_contribution` itself already does
-    /// (idempotently refreshing its own out-of-tree projection file).
+    /// this project. Read-only and side-effect-free: it asks the
+    /// integration's pure predicate (`runtime_contribution_would_activate`)
+    /// instead of the real contribution, so a status read never performs
+    /// the projection's writes (and never races a real launch doing them).
     fn runtime_projection_is_active(
         &self,
         integration: &dyn uze_core::integration::IntegrationPort,
@@ -166,12 +167,10 @@ impl UzeApplication {
     ) -> bool {
         integration.supports_runtime_integration()
             && self.runtime_shim_is_active(integration)
-            && !integration
-                .runtime_contribution(&RuntimeContext {
-                    cwd: project_root,
-                    home: &self.home,
-                })
-                .is_passthrough()
+            && integration.runtime_contribution_would_activate(&RuntimeContext {
+                cwd: project_root,
+                home: &self.home,
+            })
     }
 
     pub fn context_plan(&self, project_root: &std::path::Path) -> Result<ContextPlan> {

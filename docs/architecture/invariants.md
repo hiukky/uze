@@ -430,7 +430,7 @@ and set aside for a reason rather than forgotten.
 | persistent trust database | one consent boundary, not a permission system |
 | network-dependent gating test | local bare repositories prove the mechanism; a public repo would test that provider's availability |
 | remote marketplace search | only one marketplace (embedded, official) exists; nothing to search yet |
-| TUI marketplace surface | product UX for browsing plugins is a separate milestone from the data model |
+| installable extensions | the TUI's Extensions screen catalogs bundled, compiled-in extensions (`ExtensionRegistry::builtin`); loading/enablement of user-installed extensions is not built |
 | plugin version resolver | `plugin.json` carries no version field yet; nothing depends on one |
 | marketplace federation | one official marketplace; combining several is unproven need |
 | Git sparse checkout for marketplace sources | the `marketplace.json` contract is shaped to allow acquiring only a resolved plugin's subtree later; not implemented |

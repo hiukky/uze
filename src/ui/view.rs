@@ -12,8 +12,8 @@ use crate::application::PluginCapability;
 use super::{BORDER, MUTED};
 
 pub mod doctor;
+pub mod extensions;
 pub mod harnesses;
-pub mod marketplace;
 pub mod overview;
 pub mod plugins;
 pub mod profiles;

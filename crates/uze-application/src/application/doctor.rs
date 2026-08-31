@@ -206,7 +206,11 @@ impl UzeApplication {
                     .map(|directory| directory.join(integration.shim_name()))
                     .find(|candidate| candidate.is_file())
             })
-            .is_some_and(|resolved| resolved == expected)
+            // Canonicalized comparison: a PATH entry that reaches the shim
+            // through a symlinked directory (or a shim file that is itself
+            // a symlink into the UZE install — the normal `~/.uze/shims`
+            // case) must count as active, not merely byte-equal paths.
+            .is_some_and(|resolved| resolved.canonicalize().ok() == expected.canonicalize().ok())
     }
 
     pub fn harness_list(&self) -> Vec<HarnessHealth> {

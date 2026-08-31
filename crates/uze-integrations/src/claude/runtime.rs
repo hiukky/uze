@@ -7,6 +7,7 @@ use std::{
     ffi::OsString,
     fs,
     path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use uze_core::harness_runtime::{self, HarnessRuntimeContribution, RuntimeContext};
@@ -93,9 +94,15 @@ fn project_resource_projection(
     if !project_source.is_dir() {
         // Nothing to project — remove a stale link left over from a
         // project that used to have `.agents/<resource>/` but no longer
-        // does, so a dangling reference never lingers silently.
+        // does, so a dangling reference never lingers silently. `NotFound`
+        // is tolerated: a concurrent projection may have already removed
+        // it between the `is_symlink` check and this call.
         if projected.is_symlink() {
-            fs::remove_file(&projected).map_err(|error| error.to_string())?;
+            match fs::remove_file(&projected) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.to_string()),
+            }
         }
         return Ok(());
     }
@@ -110,13 +117,28 @@ fn project_resource_projection(
         .ok_or_else(|| format!("projected {resource} path has no parent directory"))?;
     fs::create_dir_all(parent).map_err(|error| error.to_string())?;
 
-    match projected.symlink_metadata() {
-        Ok(_) => fs::remove_file(&projected).map_err(|error| error.to_string())?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error.to_string()),
+    // Link into place through a unique temp name and an atomic `rename`,
+    // never remove-then-symlink: two concurrent projections (a support
+    // refresh racing a real shim launch, or two attached sessions) can both
+    // pass the `already_current` check above and collide on `symlink`
+    // (EEXIST), which degrades the whole contribution to passthrough — the
+    // support popup then reports the harness as unavailable, and a real
+    // launch drops `--add-dir` along with `AGENTS.md`. `rename` replaces
+    // the previous link atomically and both writers converge on the same
+    // target either way. Same nonce pattern `write_atomic` uses.
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock after epoch")
+        .as_nanos();
+    let temporary = parent.join(format!(".{}.{}.{nonce}.tmp", resource, std::process::id()));
+    symlink_dir(&project_source, &temporary).inspect_err(|_| {
+        let _ = fs::remove_file(&temporary);
+    })?;
+    if let Err(error) = fs::rename(&temporary, &projected) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error.to_string());
     }
-
-    symlink_dir(&project_source, &projected)
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -131,6 +153,17 @@ fn symlink_dir(source: &Path, target: &Path) -> std::result::Result<(), String> 
         target.display(),
         source.display()
     ))
+}
+
+/// Pure read-only predicate backing `runtime_contribution_would_activate`:
+/// discovering `AGENTS.md` is the only condition that decides whether
+/// `claude_runtime_projection` produces a contribution — the writes that
+/// follow are idempotent refreshes, not part of the decision. Kept
+/// separate so a status computation (the agent-support popup) never
+/// touches the projection directory, which is exactly where the
+/// launch-path races lived.
+pub(super) fn projection_would_activate(ctx: &RuntimeContext) -> bool {
+    harness_runtime::discover_project_agents_md(ctx.cwd).is_some()
 }
 
 /// Builds the `HarnessRuntimeContribution` from a `claude_runtime_projection`
@@ -177,6 +210,11 @@ mod runtime_projection_tests {
     #[test]
     fn no_agents_md_is_pure_passthrough() {
         let root = scratch_dir("no-agents-md");
+        // A `.git` boundary inside the scratch root: discovery must stop at
+        // the first `.git` it finds walking up, so the test's outcome can
+        // never depend on what else happens to live above the shared temp
+        // dir (e.g. a stray `AGENTS.md` in `/tmp` from unrelated tooling).
+        std::fs::create_dir_all(root.join(".git")).unwrap();
         let home = UzeHome::at(root.join("uze-home"));
         let ctx = RuntimeContext {
             cwd: &root,
@@ -426,6 +464,139 @@ mod runtime_projection_tests {
         assert!(second.note.is_none(), "{:?}", second.note);
         assert!(!projected_skills.exists() && !projected_skills.is_symlink());
         assert!(!projected_agents.exists() && !projected_agents.is_symlink());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn status_projection_predicate_is_read_only_and_agrees() {
+        let root = scratch_dir("status-read-only");
+        let project = root.join("project");
+        let skills_dir = project.join(".agents").join("skills");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        std::fs::write(project.join("AGENTS.md"), "canary\n").unwrap();
+        let home = UzeHome::at(root.join("uze-home"));
+        let ctx = RuntimeContext {
+            cwd: &project,
+            home: &home,
+        };
+        let integration = ClaudeIntegration::new(root.join("claude-home"), home.clone());
+
+        // The status predicate agrees with the real contribution's decision
+        // for a healthy project...
+        assert!(integration.runtime_contribution_would_activate(&ctx));
+
+        // ...but a status *read* performs no writes: no projection
+        // directory, no CLAUDE.md, no links — nothing the popup does may
+        // ever touch the runtime tree (that was the launch-path race
+        // source: status recomputation writing the projection). The
+        // read-only assertion must come before the real contribution,
+        // which is allowed — and expected — to write.
+        let runtime_dir =
+            home.runtime_projection_dir("claude-code", &harness_runtime::project_id_for(&project));
+        assert!(!runtime_dir.exists());
+        assert!(!integration.runtime_contribution(&ctx).is_passthrough());
+
+        // No AGENTS.md discoverable → inactive, matching the real
+        // contribution's passthrough.
+        std::fs::remove_file(project.join("AGENTS.md")).unwrap();
+        assert!(!integration.runtime_contribution_would_activate(&ctx));
+        assert!(integration.runtime_contribution(&ctx).is_passthrough());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn concurrent_projection_calls_never_degrade_to_passthrough() {
+        // The TUI refreshes agent support from a background thread on every
+        // dropdown open and at attach, a real `claude` launch through the
+        // shim projects at the same time, and a second attached session
+        // adds a third concurrent writer — all racing this projection's
+        // first-ever creation for a project. The old remove-then-symlink
+        // sequence made the losers collide on `symlink` with EEXIST and
+        // fall back to passthrough (popup shows "unavailable", launch loses
+        // `--add-dir`). The barrier starts every racer from the raw,
+        // unprojected state, which is exactly that window.
+        let root = scratch_dir("concurrent-projection");
+        let project = root.join("project");
+        let skills_dir = project.join(".agents").join("skills").join("demo-skill");
+        let agents_dir = project.join(".agents").join("agents");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        std::fs::create_dir_all(&agents_dir).unwrap();
+        std::fs::write(skills_dir.join("SKILL.md"), "canary skill\n").unwrap();
+        std::fs::write(agents_dir.join("reviewer.md"), "canary agent\n").unwrap();
+        std::fs::write(project.join("AGENTS.md"), "canary\n").unwrap();
+        let home = UzeHome::at(root.join("uze-home"));
+        let ctx = RuntimeContext {
+            cwd: &project,
+            home: &home,
+        };
+        let integration = ClaudeIntegration::new(root.join("claude-home"), home.clone());
+
+        let racers = 8;
+        let barrier = std::sync::Barrier::new(racers);
+        let contributions: Vec<_> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..racers)
+                .map(|_| {
+                    scope.spawn(|| {
+                        barrier.wait();
+                        integration.runtime_contribution(&ctx)
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().unwrap())
+                .collect()
+        });
+
+        for contribution in &contributions {
+            assert!(
+                !contribution.is_passthrough(),
+                "a racing projection must never degrade to passthrough: {contribution:?}"
+            );
+            assert!(
+                contribution.note.is_none(),
+                "a racing projection must not fail open with a note: {contribution:?}"
+            );
+        }
+
+        // Every racer converged on one consistent projection: both links
+        // intact and pointing at the project, no temp names left behind.
+        let runtime_dir = PathBuf::from(&contributions[0].extra_args[1]);
+        let projected_skills = runtime_dir.join(".claude").join("skills");
+        let projected_agents = runtime_dir.join(".claude").join("agents");
+        let expected_skills = project
+            .join(".agents")
+            .join("skills")
+            .canonicalize()
+            .unwrap();
+        let expected_agents = project
+            .join(".agents")
+            .join("agents")
+            .canonicalize()
+            .unwrap();
+        assert_eq!(
+            std::fs::read_link(&projected_skills).unwrap(),
+            expected_skills
+        );
+        assert_eq!(
+            std::fs::read_link(&projected_agents).unwrap(),
+            expected_agents
+        );
+        let projected_entries: Vec<_> = std::fs::read_dir(runtime_dir.join(".claude"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        let mut projected_entries = projected_entries;
+        projected_entries.sort();
+        assert_eq!(
+            projected_entries,
+            ["agents", "skills"]
+                .into_iter()
+                .map(std::ffi::OsString::from)
+                .collect::<Vec<_>>()
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
