@@ -190,11 +190,12 @@ impl UzeApplication {
                     ContextDelivery::Native { .. }
                 ),
                 runtime_shim_active: self.runtime_shim_is_active(integration.as_ref()),
+                project_agents_directory_native: integration.discovers_project_agents_directory(),
             })
             .collect()
     }
 
-    fn runtime_shim_is_active(&self, integration: &dyn IntegrationPort) -> bool {
+    pub(super) fn runtime_shim_is_active(&self, integration: &dyn IntegrationPort) -> bool {
         if !integration.supports_runtime_integration() {
             return true;
         }

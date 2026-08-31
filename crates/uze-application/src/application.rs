@@ -1234,6 +1234,10 @@ pub struct HarnessHealth {
     /// runtime shim. A configured harness with a shadowed shim is not ready:
     /// its runtime context projection would be bypassed.
     pub runtime_shim_active: bool,
+    /// Mirrors `IntegrationPort::discovers_project_agents_directory` —
+    /// whether this harness's own binary natively reads a project-local
+    /// `.agents/skills/` directory on its own, no UZE involvement needed.
+    pub project_agents_directory_native: bool,
 }
 
 /// One recognized instructions file's observed state — never whether UZE
@@ -1276,6 +1280,16 @@ pub struct HarnessContextStatus {
     /// display only, mirrors `HarnessHealth::display_name`.
     pub display_name: String,
     pub delivery: HarnessContextDelivery,
+    /// Whether launching this harness right now, through UZE's experimental
+    /// runtime PATH shim (`docs/architecture/invariants.md`'s "runtime PATH
+    /// shim" invariant), would actually project `AGENTS.md` into its
+    /// session — independent of `delivery` above, which only observes the
+    /// *persistent* on-disk bridge file. Computed by asking the integration
+    /// itself (`IntegrationPort::runtime_contribution`) whether it would
+    /// produce more than a passthrough for this exact project, the same
+    /// question the shim asks when it actually launches the binary, so this
+    /// can never drift from what really happens next time it runs.
+    pub runtime_projection_active: bool,
 }
 
 /// The smallest classification that separates "context exists at all" from

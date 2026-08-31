@@ -1121,6 +1121,7 @@ impl PaneRuntime {
             cursor: current.cursor,
             alternate_screen: current.alternate_screen,
             mouse: current.mouse,
+            bracketed_paste: current.bracketed_paste,
             changed,
         };
         *last_sent = Some(current);
@@ -1188,6 +1189,7 @@ fn snapshot(pane: PaneId, terminal: &Term<ReplySink>) -> PaneSnapshot {
         },
         alternate_screen: mode.contains(TermMode::ALT_SCREEN),
         mouse: mouse_mode(mode),
+        bracketed_paste: mode.contains(TermMode::BRACKETED_PASTE),
         cells,
     }
 }
@@ -1357,6 +1359,26 @@ mod tests {
 
         parser.advance(&mut terminal, b"\x1b[?1000l\x1b[?1002l\x1b[?1006l");
         assert_eq!(snapshot(PaneId(1), &terminal).mouse, MouseMode::default());
+    }
+
+    #[test]
+    fn bracketed_paste_reflects_what_the_pane_actually_asked_for() {
+        // A readline-style program (Claude Code, Codex) turns this on
+        // during its own startup — the client mirrors it onto the real
+        // terminal so a physical paste (including a terminal's own
+        // clipboard-image-to-text conversion) reaches the pane framed the
+        // way the program expects, instead of arriving as a flood of
+        // individual keystrokes a plain shell would.
+        let (sender, _receiver) = std::sync::mpsc::channel();
+        let mut terminal = Term::new(Config::default(), &TermSize::new(12, 3), ReplySink(sender));
+        let mut parser: Processor = Processor::new();
+        assert!(!snapshot(PaneId(1), &terminal).bracketed_paste);
+
+        parser.advance(&mut terminal, b"\x1b[?2004h");
+        assert!(snapshot(PaneId(1), &terminal).bracketed_paste);
+
+        parser.advance(&mut terminal, b"\x1b[?2004l");
+        assert!(!snapshot(PaneId(1), &terminal).bracketed_paste);
     }
 
     #[test]

@@ -34,7 +34,7 @@ use std::{
 };
 
 use crossterm::{
-    event::{DisableMouseCapture, EnableMouseCapture},
+    event::{DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -53,6 +53,7 @@ use crate::{
     provisioning::{ProcessOutput, ProcessResult, ProcessRunner, ProcessSpec, SystemProcessRunner},
 };
 
+mod agent_support;
 mod hit;
 mod input;
 mod management;
@@ -215,7 +216,8 @@ impl TerminalSession {
             stdout,
             EnterAlternateScreen,
             crossterm::cursor::Hide,
-            EnableMouseCapture
+            EnableMouseCapture,
+            EnableBracketedPaste
         ) {
             let _ = disable_raw_mode();
             return Err(io_error(error));
@@ -241,6 +243,7 @@ impl Drop for TerminalSession {
             self.terminal.backend_mut(),
             LeaveAlternateScreen,
             DisableMouseCapture,
+            DisableBracketedPaste,
             crossterm::cursor::Show
         );
         let _ = self.terminal.show_cursor();

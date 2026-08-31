@@ -118,6 +118,16 @@ impl IntegrationPort for OpenCodeIntegration {
     fn context_delivery(&self) -> ContextDelivery {
         ContextDelivery::Native { files: &[] }
     }
+
+    /// OpenCode's own Skills docs (opencode.ai/docs/skills, 2026) document
+    /// loading `.agents/skills/*/SKILL.md` "along the way" walking up from
+    /// cwd — a project-local convention read directly by the `opencode`
+    /// binary, with no UZE involvement, independent of the UZE-managed
+    /// `$HOME/.agents/skills` symlink this integration writes elsewhere.
+    fn discovers_project_agents_directory(&self) -> bool {
+        true
+    }
+
     fn capabilities(&self) -> HarnessCapabilities {
         HarnessCapabilities {
             direct_standard: [CapabilityKind::AgentSkill, CapabilityKind::Agent].into_iter().collect(),

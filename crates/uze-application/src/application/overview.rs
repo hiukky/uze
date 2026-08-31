@@ -58,6 +58,7 @@ impl UzeApplication {
             cwd: cwd.to_path_buf(),
             root: root.clone(),
             kind: resolved.kind,
+            agents_directory_present: root.join(".agents").is_dir(),
             project: self.project_overview(&root, has_lock),
             marketplace: has_manifest.then(|| Self::marketplace_overview(&root)),
         })
@@ -151,6 +152,10 @@ pub struct OverviewWorkspaceSummary {
     /// anchor exists anywhere on the path.
     pub root: PathBuf,
     pub kind: WorkspaceKind,
+    /// Whether the project carries a `.agents/` directory. This is an
+    /// observation for contextual clients; the Application owns the file
+    /// inspection so presentation never probes project files directly.
+    pub agents_directory_present: bool,
     /// Always present — a directory without `agents.lock` is a legitimate
     /// "not configured" project, not an absence of information.
     pub project: ProjectOverview,

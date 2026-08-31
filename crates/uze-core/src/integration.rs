@@ -254,6 +254,18 @@ pub trait IntegrationPort {
         ContextDelivery::None
     }
 
+    /// Whether this harness's own binary natively discovers Agent Skills
+    /// from a project-local `.agents/skills/` directory, walking up from
+    /// cwd, entirely on its own — a vendor convention some harnesses
+    /// converged on independently, requiring no UZE involvement at all
+    /// (distinct from any UZE-managed global `~/.agents/skills` delivery,
+    /// which is a `CapabilityKind::AgentSkill` route, not this). Default
+    /// `false`: an integration overrides this only against its own vendor's
+    /// documented behavior.
+    fn discovers_project_agents_directory(&self) -> bool {
+        false
+    }
+
     /// The prefix a human types to explicitly invoke an exposed capability
     /// on this harness (e.g. `/` for slash commands, `$` for Codex's
     /// explicit skill invocation, nothing for a bare-name harness).

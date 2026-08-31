@@ -101,6 +101,42 @@ pub(crate) fn attach_workspace(
     // deliberately kept off any per-frame filesystem/env work (see `POLL`
     // above).
     let identities = agent_identities(home);
+    // This is the exact `HarnessHealth` read model used by the Integrations
+    // screen. It loads asynchronously so inspecting support never delays a
+    // live terminal attach or a pane redraw.
+    let (support_sender, support_receiver) = mpsc::channel();
+    let support_home = home.clone();
+    let support_root = root.to_path_buf();
+    thread::spawn(move || {
+        let result = super::tui_application(support_home)
+            .map(|app| {
+                let workspace = app.overview_workspace(&support_root).ok();
+                let context_root = workspace
+                    .as_ref()
+                    .map(|workspace| workspace.root.as_path())
+                    .unwrap_or(&support_root);
+                let context = app.context_inspect(context_root).ok();
+                let agents_directory_loaded = workspace
+                    .as_ref()
+                    .is_some_and(|workspace| workspace.agents_directory_present);
+                let profiles = app.list_profiles().unwrap_or_default();
+                let active_profile = profiles.iter().find(|profile| profile.active);
+                app.doctor()
+                    .harnesses
+                    .into_iter()
+                    .map(|health| {
+                        super::agent_support::AgentSupport::from_health(
+                            health,
+                            context.as_ref(),
+                            agents_directory_loaded,
+                            active_profile,
+                        )
+                    })
+                    .collect()
+            })
+            .map_err(|error| error.to_string());
+        let _ = support_sender.send(result);
+    });
     // The server's session/pane state is persistent — reattaching after a
     // Ctrl+O round trip to management finds the same shells exactly as they
     // were left. But the client's own model always starts empty, so without
@@ -122,6 +158,10 @@ pub(crate) fn attach_workspace(
     loop {
         while let Ok(event) = receiver.try_recv() {
             model.apply(event);
+        }
+        if let Ok(result) = support_receiver.try_recv() {
+            model.agent_support = result.unwrap_or_default();
+            model.dirty = true;
         }
         if let Some(view) = model.git_view.as_mut()
             && view.refresh_due()
@@ -196,6 +236,12 @@ pub(crate) fn attach_workspace(
                     }
                     model.dirty = true;
                 }
+                Event::Paste(text) if model.renaming.is_some() => {
+                    if let Some((_, buffer)) = model.renaming.as_mut() {
+                        buffer.push_str(text.trim_end_matches(['\r', '\n']));
+                    }
+                    model.dirty = true;
+                }
                 Event::Key(key) if model.agent_picker.is_some() => {
                     match key.code {
                         KeyCode::Up => {
@@ -230,6 +276,10 @@ pub(crate) fn attach_workspace(
                         // rather than leaking through to the pane.
                         _ => model.agent_picker = None,
                     }
+                    model.dirty = true;
+                }
+                Event::Key(_) if model.support_dropdown.is_some() => {
+                    model.support_dropdown = None;
                     model.dirty = true;
                 }
                 Event::Key(key) if model.context_menu.is_some() => {
@@ -336,6 +386,9 @@ pub(crate) fn attach_workspace(
                         );
                     }
                 }
+                Event::Paste(text) if model.no_modal_open() => {
+                    forward_paste(&mut stream, &model, &text);
+                }
                 Event::Mouse(mouse)
                     if mouse.kind == MouseEventKind::Down(MouseButton::Left)
                         && model.renaming.is_some() =>
@@ -381,6 +434,15 @@ pub(crate) fn attach_workspace(
                         // same rule `renaming` uses.
                         _ => model.agent_picker = None,
                     }
+                    model.dirty = true;
+                }
+                Event::Mouse(mouse)
+                    if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+                        && model.support_dropdown.is_some() =>
+                {
+                    // Informational dropdown: every click simply dismisses
+                    // it, preventing the click from leaking into the pane.
+                    model.support_dropdown = None;
                     model.dirty = true;
                 }
                 Event::Mouse(mouse)
@@ -638,6 +700,14 @@ pub(crate) fn attach_workspace(
                         WorkspaceHit::OpenGitView => {
                             open_git_view(&mut model);
                         }
+                        WorkspaceHit::OpenAgentSupport(anchor) => {
+                            model.support_dropdown = selected_agent_support(&model, &identities)
+                                .map(|integration| AgentSupportDropdown {
+                                    integration: integration.to_owned(),
+                                    anchor,
+                                });
+                            model.dirty = true;
+                        }
                         WorkspaceHit::Extension(_) => {
                             // Only reachable while the git view is open,
                             // which its own guarded arm below already
@@ -772,6 +842,8 @@ pub(super) enum WorkspaceHit {
     /// extension (`WorkspaceModel::git_view`), scoped to the active tab's
     /// live `cwd`.
     OpenGitView,
+    /// Opens contextual support details for the selected agent tab.
+    OpenAgentSupport(Rect),
     /// A hit the open extension's own render pass produced (a file row, a
     /// worktree header, its tree/diff resize handle, its close button —
     /// see `uze_extensions::ExtensionHit`), wrapped instead of given its
@@ -816,6 +888,14 @@ struct AgentPicker {
     anchor: Rect,
 }
 
+/// Open state for the informational support dropdown in an active agent
+/// session. The integration id keeps it tied to the selected live agent,
+/// rather than to a mutable display label or process name.
+struct AgentSupportDropdown {
+    integration: String,
+    anchor: Rect,
+}
+
 /// What a right-click-opened [`ContextMenu`] would close.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CloseTarget {
@@ -850,6 +930,7 @@ struct AgentIdentity {
     /// shim-launched pane's live process name (see
     /// `uze_terminal::PaneRuntime::foreground_status`) resolves to.
     binary: &'static str,
+    integration: &'static str,
     display_name: &'static str,
 }
 
@@ -872,6 +953,7 @@ fn agent_identities(home: &UzeHome) -> Vec<AgentIdentity> {
                 .first()
                 .copied()
                 .unwrap_or_else(|| integration.id()),
+            integration: integration.id(),
             display_name: integration.display_name(),
         })
         .collect()
@@ -911,6 +993,18 @@ fn agent_identity_for_tab<'a>(identities: &'a [AgentIdentity], tab: &Tab) -> Opt
         .map(|identity| identity.binary)
 }
 
+fn selected_agent_support<'a>(
+    model: &WorkspaceModel,
+    identities: &'a [AgentIdentity],
+) -> Option<&'a str> {
+    let tab = model.session.as_ref()?.selected_tab();
+    let binary = agent_identity_for_tab(identities, tab)?;
+    identities
+        .iter()
+        .find(|identity| identity.binary == binary)
+        .map(|identity| identity.integration)
+}
+
 #[derive(Default)]
 struct WorkspaceModel {
     session: Option<Session>,
@@ -939,6 +1033,11 @@ struct WorkspaceModel {
     /// Open state of the "+ new agent" popup; `None` when closed. Same
     /// "click outside discards" rule as `renaming`.
     agent_picker: Option<AgentPicker>,
+    /// Contextual support information for the active harness tab.
+    support_dropdown: Option<AgentSupportDropdown>,
+    /// Read once asynchronously from the Integrations screen's
+    /// `HarnessHealth` source of truth.
+    agent_support: Vec<super::agent_support::AgentSupport>,
     /// Open state of the right-click close-confirmation popup; `None` when
     /// closed. Same "click outside discards" rule as `renaming`.
     context_menu: Option<ContextMenu>,
@@ -990,6 +1089,8 @@ impl WorkspaceModel {
                 }
                 entry.cursor = damage.cursor;
                 entry.alternate_screen = damage.alternate_screen;
+                entry.mouse = damage.mouse;
+                entry.bracketed_paste = damage.bracketed_paste;
                 for (row, column, cell) in damage.changed {
                     let index =
                         usize::from(row) * usize::from(damage.columns) + usize::from(column);
@@ -1010,6 +1111,7 @@ impl WorkspaceModel {
     fn no_modal_open(&self) -> bool {
         self.renaming.is_none()
             && self.agent_picker.is_none()
+            && self.support_dropdown.is_none()
             && self.context_menu.is_none()
             && self.git_view.is_none()
     }
@@ -1063,6 +1165,7 @@ fn blank_pane(pane: PaneId, columns: u16, rows: u16) -> PaneSnapshot {
         cursor: Cursor { column: 0, row: 0 },
         alternate_screen: false,
         mouse: uze_terminal::MouseMode::default(),
+        bracketed_paste: false,
         cells: vec![blank_cell(); usize::from(columns) * usize::from(rows)],
     }
 }
@@ -1206,6 +1309,14 @@ fn render(
     // modal interrupting the screen.
     if let Some(picker) = &model.agent_picker {
         render_agent_picker(frame, frame.area(), picker.anchor, picker, hits);
+    }
+    if let Some(dropdown) = &model.support_dropdown
+        && let Some(support) = model
+            .agent_support
+            .iter()
+            .find(|support| support.integration() == dropdown.integration)
+    {
+        super::agent_support::render(frame, frame.area(), dropdown.anchor, support);
     }
     if let Some(menu) = &model.context_menu {
         render_context_menu(frame, frame.area(), menu, hits);
@@ -1941,10 +2052,28 @@ fn render_tab_strip(
     // The status badge belongs to the active agent/shell tab's `cwd`, not
     // the workspace root. It is intentionally absent for a clean directory
     // or one outside Git; when it is present, it remains the entry point to
-    // the full changes overlay. The `SURFACE_OVERLAY` chip (1 column of
-    // padding on each side, same shape as an active tab's own chip) reads
-    // as clickable the way plain colored text on the bare backdrop
-    // doesn't.
+    // the full changes overlay. Unlike the "+"/"✦" pair above, this button
+    // is a bare icon with no filled chip behind it — it sits directly on
+    // the plain backdrop.
+    let mut trailing_right = inner.right();
+    if selected_agent_support(model, identities).is_some() {
+        let button = vec![Span::styled(
+            "✦",
+            Style::default()
+                .fg(super::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        )];
+        let button_width = button.iter().map(Span::width).sum::<usize>() as u16;
+        let button_rect = Rect::new(
+            trailing_right.saturating_sub(button_width),
+            inner.y,
+            button_width,
+            1,
+        );
+        frame.render_widget(Paragraph::new(Line::from(button)), button_rect);
+        hits.push((button_rect, WorkspaceHit::OpenAgentSupport(button_rect)));
+        trailing_right = button_rect.x.saturating_sub(1);
+    }
     if let Some(summary) = model.git_badge.as_ref().and_then(|badge| badge.summary) {
         let mut badge = vec![
             Span::raw(" "),
@@ -1962,7 +2091,7 @@ fn render_tab_strip(
         let badge_width = badge.iter().map(Span::width).sum::<usize>() as u16;
         fill_row_bg(&mut badge, badge_width, super::SURFACE_OVERLAY);
         let badge_rect = Rect::new(
-            inner.x + inner.width.saturating_sub(badge_width),
+            trailing_right.saturating_sub(badge_width),
             inner.y,
             badge_width,
             1,
@@ -2075,6 +2204,40 @@ fn forward_mouse<W: io::Write>(
     );
 }
 
+/// Forwards a physical paste into the focused pane's PTY — the counterpart
+/// to `encode_key` for bulk pasted text. Framed with the same
+/// `ESC[200~ … ESC[201~` bracket the pane's own program would have seen
+/// pasting directly into a real terminal only when it actually turned
+/// bracketed-paste mode on (`uze_terminal::PaneSnapshot::bracketed_paste`);
+/// a plain shell that never asked for it would otherwise echo the bracket
+/// markers themselves as literal garbage instead of treating them as
+/// framing. This is also what lets a terminal's own clipboard-image-to-text
+/// conversion (an image copied, then pasted) reach the pane at all — with
+/// no bracketed-paste request mirrored onto the physical terminal in the
+/// first place, most terminal emulators never attempt that conversion, and
+/// pasting an image into an agent's input silently does nothing.
+fn forward_paste<W: io::Write>(stream: &mut W, model: &WorkspaceModel, text: &str) {
+    let Some(snapshot) = model.panes.get(&model.focused_pane()) else {
+        return;
+    };
+    let bytes = if snapshot.bracketed_paste {
+        let mut framed = Vec::with_capacity(text.len() + 12);
+        framed.extend_from_slice(b"\x1b[200~");
+        framed.extend_from_slice(text.as_bytes());
+        framed.extend_from_slice(b"\x1b[201~");
+        framed
+    } else {
+        text.as_bytes().to_vec()
+    };
+    let _ = send_request(
+        stream,
+        &ClientRequest::Input {
+            pane: model.focused_pane(),
+            bytes,
+        },
+    );
+}
+
 /// `mouse`'s position translated into 1-indexed coordinates relative to
 /// `pane`'s own top-left — the coordinate space every mouse-tracking
 /// protocol reports in — or `None` when it falls outside `pane` entirely
@@ -2159,12 +2322,15 @@ fn runtime_error(error: uze_terminal::RuntimeError) -> UzeError {
 #[cfg(test)]
 mod tests {
     use super::{
-        AgentIdentity, WorkspaceModel, agent_identity_for_tab, encode_mouse, pane_relative,
-        selected_pane_cwd,
+        AgentIdentity, WorkspaceModel, agent_identity_for_tab, blank_pane, encode_mouse,
+        forward_paste, pane_relative, selected_pane_cwd,
     };
     use crossterm::event::{MouseButton, MouseEventKind};
     use ratatui::layout::Rect;
-    use uze_terminal::{Focus, Layout, Pane, PaneId, Session, Tab, TabId, WorkspaceId};
+    use uze_terminal::{
+        ClientEvent, ClientRequest, Cursor, Focus, Layout, MouseMode, Pane, PaneDamage, PaneId,
+        Session, Tab, TabId, WorkspaceId,
+    };
 
     #[test]
     fn pane_relative_is_1_indexed_and_excludes_anything_outside_the_pane() {
@@ -2253,10 +2419,12 @@ mod tests {
         vec![
             AgentIdentity {
                 binary: "claude",
+                integration: "claude-code",
                 display_name: "Claude Code",
             },
             AgentIdentity {
                 binary: "codex",
+                integration: "codex",
                 display_name: "Codex",
             },
         ]
@@ -2322,5 +2490,84 @@ mod tests {
         // raw process read alone.
         let tab = tab_with("shell", "2.1.251");
         assert_eq!(agent_identity_for_tab(&identities(), &tab), None);
+    }
+
+    #[test]
+    fn damage_updates_the_tracked_panes_mouse_and_bracketed_paste_mode() {
+        // Regression: `mouse`/`bracketed_paste` ride along on every
+        // `PaneDamage`, not just the initial full `Snapshot` — a pane's own
+        // program typically turns these on shortly after it starts, which
+        // is after the client's one-time first snapshot already fired. A
+        // client that only reads these off `Snapshot` would forward mouse
+        // clicks and pastes into the pane forever as if it never asked.
+        let mut model = WorkspaceModel {
+            panes: [(PaneId(1), blank_pane(PaneId(1), 80, 24))].into(),
+            ..WorkspaceModel::default()
+        };
+        assert!(!model.panes[&PaneId(1)].mouse.reports_clicks);
+        assert!(!model.panes[&PaneId(1)].bracketed_paste);
+
+        model.apply(ClientEvent::Damage(PaneDamage {
+            pane: PaneId(1),
+            columns: 80,
+            rows: 24,
+            cursor: Cursor { column: 0, row: 0 },
+            alternate_screen: false,
+            mouse: MouseMode {
+                reports_clicks: true,
+                reports_drag: false,
+                sgr: true,
+            },
+            bracketed_paste: true,
+            changed: Vec::new(),
+        }));
+
+        assert!(model.panes[&PaneId(1)].mouse.reports_clicks);
+        assert!(model.panes[&PaneId(1)].bracketed_paste);
+    }
+
+    #[test]
+    fn forward_paste_frames_the_bytes_only_when_the_pane_asked_for_bracketed_paste() {
+        let mut plain = blank_pane(PaneId(1), 80, 24);
+        plain.bracketed_paste = false;
+        let plain_model = WorkspaceModel {
+            session: Some(Session::new(
+                WorkspaceId("workspace".into()),
+                "/tmp".into(),
+                80,
+                24,
+            )),
+            panes: [(PaneId(1), plain)].into(),
+            ..WorkspaceModel::default()
+        };
+        let mut stream = Vec::new();
+        forward_paste(&mut stream, &plain_model, "hello");
+        assert_eq!(decode_input_bytes(&stream), b"hello".to_vec());
+
+        let mut bracketed = blank_pane(PaneId(1), 80, 24);
+        bracketed.bracketed_paste = true;
+        let bracketed_model = WorkspaceModel {
+            session: Some(Session::new(
+                WorkspaceId("workspace".into()),
+                "/tmp".into(),
+                80,
+                24,
+            )),
+            panes: [(PaneId(1), bracketed)].into(),
+            ..WorkspaceModel::default()
+        };
+        let mut stream = Vec::new();
+        forward_paste(&mut stream, &bracketed_model, "hello");
+        assert_eq!(
+            decode_input_bytes(&stream),
+            b"\x1b[200~hello\x1b[201~".to_vec()
+        );
+    }
+
+    fn decode_input_bytes(stream: &[u8]) -> Vec<u8> {
+        match serde_json::from_slice(stream).expect("one ClientRequest::Input line") {
+            ClientRequest::Input { bytes, .. } => bytes,
+            other => panic!("expected ClientRequest::Input, got {other:?}"),
+        }
     }
 }

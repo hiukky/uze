@@ -17,7 +17,10 @@ use crate::{PaneId, Session, SpaceId, TabId, WorkspaceId};
 /// an unbumped old server, which silently kills its read thread and never
 /// surfaces as more than a pane stuck on "starting shell…". Any field
 /// added to either struct needs this bumped too, for the same reason.
-pub const PROTOCOL_VERSION: u16 = 4;
+///
+/// Bumped again for `bracketed_paste` on the same two structs, for the
+/// same reason.
+pub const PROTOCOL_VERSION: u16 = 5;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ClientRequest {
@@ -109,6 +112,12 @@ pub struct PaneSnapshot {
     pub cursor: Cursor,
     pub alternate_screen: bool,
     pub mouse: MouseMode,
+    /// Whether the pane's own program has asked the terminal for bracketed
+    /// paste (mode 2004), read straight off the PTY's VT state alongside
+    /// `mouse`. The client uses this to decide how to frame a physical
+    /// paste before forwarding it into the pane — see `bracketed_paste`
+    /// on `PaneDamage`.
+    pub bracketed_paste: bool,
     pub cells: Vec<RenderCell>,
 }
 
@@ -125,6 +134,8 @@ pub struct PaneDamage {
     pub cursor: Cursor,
     pub alternate_screen: bool,
     pub mouse: MouseMode,
+    /// See [`PaneSnapshot::bracketed_paste`].
+    pub bracketed_paste: bool,
     pub changed: Vec<(u16, u16, RenderCell)>,
 }
 

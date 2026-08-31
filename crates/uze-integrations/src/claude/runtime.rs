@@ -1,8 +1,13 @@
 //! `EXPERIMENTAL RUNTIME DELIVERY STRATEGY` for Claude Code — projecting a
-//! project's `AGENTS.md` into the session via `--add-dir`, entirely outside
-//! the project's own working tree. See `ClaudeIntegration::runtime_contribution`.
+//! project's `AGENTS.md`, `.agents/skills/`, and `.agents/agents/` into the
+//! session via `--add-dir`, entirely outside the project's own working
+//! tree. See `ClaudeIntegration::runtime_contribution`.
 
-use std::{ffi::OsString, fs, path::PathBuf};
+use std::{
+    ffi::OsString,
+    fs,
+    path::{Path, PathBuf},
+};
 
 use uze_core::harness_runtime::{self, HarnessRuntimeContribution, RuntimeContext};
 
@@ -58,7 +63,75 @@ pub(super) fn claude_runtime_projection(
         uze_core::persistence::write_atomic(&claude_md, desired.as_bytes())
             .map_err(|error| error.to_string())?;
     }
+
+    project_resource_projection(project_root, &runtime_dir, "skills")?;
+    project_resource_projection(project_root, &runtime_dir, "agents")?;
+
     Ok(Some(runtime_dir))
+}
+
+/// Codex, OpenCode, and Antigravity each read a project's `.agents/skills/`
+/// (and, per the same convention, `.agents/agents/` for subagents) directly,
+/// on their own (see `IntegrationPort::discovers_project_agents_directory`
+/// for the vendor-doc citations); Claude Code has no such convention of its
+/// own. What it does have, confirmed against its current behavior, is
+/// automatic discovery of `.claude/skills/` *and* `.claude/agents/` inside
+/// any `--add-dir` target — the same flag this module already passes for
+/// `CLAUDE.md`, no extra flag or env var needed for either. So this mirrors
+/// the project's `.agents/<resource>/` at `<runtime_dir>/.claude/<resource>`
+/// as a single directory symlink per resource kind, refreshed idempotently:
+/// Claude Code ends up discovering the same Skills and Subagents the other
+/// three harnesses already do, without UZE ever writing into the project
+/// itself.
+fn project_resource_projection(
+    project_root: &Path,
+    runtime_dir: &Path,
+    resource: &str,
+) -> std::result::Result<(), String> {
+    let project_source = project_root.join(".agents").join(resource);
+    let projected = runtime_dir.join(".claude").join(resource);
+
+    if !project_source.is_dir() {
+        // Nothing to project — remove a stale link left over from a
+        // project that used to have `.agents/<resource>/` but no longer
+        // does, so a dangling reference never lingers silently.
+        if projected.is_symlink() {
+            fs::remove_file(&projected).map_err(|error| error.to_string())?;
+        }
+        return Ok(());
+    }
+
+    let already_current = fs::read_link(&projected).is_ok_and(|target| target == project_source);
+    if already_current {
+        return Ok(());
+    }
+
+    let parent = projected
+        .parent()
+        .ok_or_else(|| format!("projected {resource} path has no parent directory"))?;
+    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+
+    match projected.symlink_metadata() {
+        Ok(_) => fs::remove_file(&projected).map_err(|error| error.to_string())?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.to_string()),
+    }
+
+    symlink_dir(&project_source, &projected)
+}
+
+#[cfg(unix)]
+fn symlink_dir(source: &Path, target: &Path) -> std::result::Result<(), String> {
+    std::os::unix::fs::symlink(source, target).map_err(|error| error.to_string())
+}
+
+#[cfg(not(unix))]
+fn symlink_dir(source: &Path, target: &Path) -> std::result::Result<(), String> {
+    Err(format!(
+        "runtime project resource projection has no symlink support on this platform (would link {} -> {})",
+        target.display(),
+        source.display()
+    ))
 }
 
 /// Builds the `HarnessRuntimeContribution` from a `claude_runtime_projection`
@@ -233,6 +306,127 @@ mod runtime_projection_tests {
             .runtime_contribution(&ctx);
         assert!(contribution.is_passthrough());
         assert!(contribution.note.is_some(), "expected a fail-open note");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn project_skills_and_agents_are_symlinked_into_the_runtime_dir() {
+        let root = scratch_dir("skills");
+        let project = root.join("project");
+        let skills_dir = project.join(".agents").join("skills").join("demo-skill");
+        let agents_dir = project.join(".agents").join("agents");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        std::fs::create_dir_all(&agents_dir).unwrap();
+        std::fs::write(skills_dir.join("SKILL.md"), "canary skill\n").unwrap();
+        std::fs::write(agents_dir.join("reviewer.md"), "canary agent\n").unwrap();
+        std::fs::write(project.join("AGENTS.md"), "canary\n").unwrap();
+        let home = UzeHome::at(root.join("uze-home"));
+        let ctx = RuntimeContext {
+            cwd: &project,
+            home: &home,
+        };
+
+        let contribution = ClaudeIntegration::new(root.join("claude-home"), home.clone())
+            .runtime_contribution(&ctx);
+        assert!(contribution.note.is_none(), "{:?}", contribution.note);
+        let runtime_dir = PathBuf::from(&contribution.extra_args[1]);
+
+        let projected_skills = runtime_dir.join(".claude").join("skills");
+        assert!(projected_skills.is_symlink());
+        assert_eq!(
+            std::fs::read_link(&projected_skills).unwrap(),
+            project
+                .join(".agents")
+                .join("skills")
+                .canonicalize()
+                .unwrap()
+        );
+        let skill_body =
+            std::fs::read_to_string(projected_skills.join("demo-skill").join("SKILL.md")).unwrap();
+        assert_eq!(skill_body, "canary skill\n");
+
+        let projected_agents = runtime_dir.join(".claude").join("agents");
+        assert!(projected_agents.is_symlink());
+        assert_eq!(
+            std::fs::read_link(&projected_agents).unwrap(),
+            project
+                .join(".agents")
+                .join("agents")
+                .canonicalize()
+                .unwrap()
+        );
+        let agent_body = std::fs::read_to_string(projected_agents.join("reviewer.md")).unwrap();
+        assert_eq!(agent_body, "canary agent\n");
+
+        // The project's own working tree must never gain a file from this.
+        let project_entries = std::fs::read_dir(&project)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            project_entries,
+            [".agents", "AGENTS.md"]
+                .into_iter()
+                .map(std::ffi::OsString::from)
+                .collect::<std::collections::BTreeSet<_>>()
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn no_project_agents_directory_projects_no_symlinks() {
+        let root = scratch_dir("no-agents-dir");
+        let project = root.join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join("AGENTS.md"), "canary\n").unwrap();
+        let home = UzeHome::at(root.join("uze-home"));
+        let ctx = RuntimeContext {
+            cwd: &project,
+            home: &home,
+        };
+
+        let contribution = ClaudeIntegration::new(root.join("claude-home"), home.clone())
+            .runtime_contribution(&ctx);
+        assert!(contribution.note.is_none(), "{:?}", contribution.note);
+        let runtime_dir = PathBuf::from(&contribution.extra_args[1]);
+        assert!(!runtime_dir.join(".claude").join("skills").exists());
+        assert!(!runtime_dir.join(".claude").join("agents").exists());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_removed_project_agents_directory_drops_stale_symlinks() {
+        let root = scratch_dir("removed-agents-dir");
+        let project = root.join("project");
+        let skills_dir = project.join(".agents").join("skills").join("demo-skill");
+        let agents_dir = project.join(".agents").join("agents");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        std::fs::create_dir_all(&agents_dir).unwrap();
+        std::fs::write(skills_dir.join("SKILL.md"), "canary skill\n").unwrap();
+        std::fs::write(agents_dir.join("reviewer.md"), "canary agent\n").unwrap();
+        std::fs::write(project.join("AGENTS.md"), "canary\n").unwrap();
+        let home = UzeHome::at(root.join("uze-home"));
+        let ctx = RuntimeContext {
+            cwd: &project,
+            home: &home,
+        };
+        let integration = ClaudeIntegration::new(root.join("claude-home"), home.clone());
+
+        let first = integration.runtime_contribution(&ctx);
+        let runtime_dir = PathBuf::from(&first.extra_args[1]);
+        let projected_skills = runtime_dir.join(".claude").join("skills");
+        let projected_agents = runtime_dir.join(".claude").join("agents");
+        assert!(projected_skills.is_symlink());
+        assert!(projected_agents.is_symlink());
+
+        std::fs::remove_dir_all(project.join(".agents")).unwrap();
+        let second = integration.runtime_contribution(&ctx);
+        assert!(second.note.is_none(), "{:?}", second.note);
+        assert!(!projected_skills.exists() && !projected_skills.is_symlink());
+        assert!(!projected_agents.exists() && !projected_agents.is_symlink());
 
         let _ = std::fs::remove_dir_all(&root);
     }

@@ -525,6 +525,7 @@ mod tests {
             capabilities: HarnessCapabilities::default(),
             native_instructions: false,
             runtime_shim_active,
+            project_agents_directory_native: false,
         }
     }
 

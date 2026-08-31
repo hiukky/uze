@@ -82,6 +82,7 @@ fn model_with_data() -> TuiModel {
                 capabilities: HarnessCapabilities::default(),
                 native_instructions: false,
                 runtime_shim_active: true,
+                project_agents_directory_native: false,
             },
             HarnessHealth {
                 integration: "codex".to_owned(),
@@ -98,6 +99,7 @@ fn model_with_data() -> TuiModel {
                 capabilities: HarnessCapabilities::default(),
                 native_instructions: true,
                 runtime_shim_active: true,
+                project_agents_directory_native: true,
             },
         ],
         attachments: vec![PackageManagedState {
@@ -138,11 +140,13 @@ fn model_with_data() -> TuiModel {
                     needed: false,
                     state: AttachmentState::Matched,
                 },
+                runtime_projection_active: false,
             },
             HarnessContextStatus {
                 integration: "codex".to_owned(),
                 display_name: "Codex".to_owned(),
                 delivery: HarnessContextDelivery::Native,
+                runtime_projection_active: false,
             },
         ],
         portability: Portability::Portable,
@@ -1156,6 +1160,7 @@ fn consumer_workspace(
         cwd: root.to_path_buf(),
         root: root.to_path_buf(),
         kind: WorkspaceKind::Consumer,
+        agents_directory_present: true,
         project: ProjectOverview {
             environment: state,
             memory: MemoryState::Ready,
@@ -1172,6 +1177,7 @@ fn marketplace_workspace(root: &std::path::Path) -> OverviewWorkspaceSummary {
         cwd: root.to_path_buf(),
         root: root.to_path_buf(),
         kind: WorkspaceKind::Marketplace,
+        agents_directory_present: false,
         project: ProjectOverview {
             environment: ProjectEnvironmentState::NotConfigured,
             memory: MemoryState::None,
@@ -1580,6 +1586,7 @@ fn no_workspace_render_creates_nothing() {
             cwd: root.clone(),
             root: root.clone(),
             kind: WorkspaceKind::NoWorkspace,
+            agents_directory_present: false,
             project: ProjectOverview {
                 environment: ProjectEnvironmentState::NotConfigured,
                 memory: MemoryState::None,

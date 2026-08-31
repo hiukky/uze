@@ -62,7 +62,9 @@ it become authoritative.
 - Subagents (`agents/` — vendor format is JSON `agent.json`) and hooks
   (`hooks.json`) are supported by the native plugin
   format but are future UZE surfaces, exactly as with every other harness.
-- Workspace-level discovery (`.agents/plugins/`, `.agents/skills/`,
-  `.agents/mcp_config.json`) is a project-scope concern outside UZE's
-  machine-scope integration; workspace MCP config was not observable
-  headlessly (`agy mcp list` shows global only).
+- Workspace-level `.agents/mcp_config.json` discovery is a project-scope
+  concern outside UZE's machine-scope integration; it was not observable
+  headlessly (`agy mcp list` shows global only). `.agents/skills/` is a
+  separate case: official docs (antigravity.google/docs/cli/plugins, 2026)
+  now confirm `agy` reads it directly per-workspace, no UZE involvement
+  needed — see `AntigravityIntegration::discovers_project_agents_directory`.

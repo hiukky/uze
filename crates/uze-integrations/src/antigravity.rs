@@ -215,6 +215,17 @@ impl IntegrationPort for AntigravityIntegration {
         }
     }
 
+    /// Antigravity's own docs (antigravity.google/docs/cli/plugins, 2026)
+    /// state Agent Skills are available "globally
+    /// (~/.gemini/antigravity-cli/skills/) and per-workspace
+    /// (.agents/skills/)" — the latter read directly by `agy` from the
+    /// project, with no UZE involvement (superseding this crate's own
+    /// earlier "not yet implemented/unverified" note, written before that
+    /// documentation existed).
+    fn discovers_project_agents_directory(&self) -> bool {
+        true
+    }
+
     fn capabilities(&self) -> HarnessCapabilities {
         HarnessCapabilities {
             // Agent Skills and MCP servers are delivered natively through

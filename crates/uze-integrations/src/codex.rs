@@ -323,6 +323,16 @@ impl IntegrationPort for CodexIntegration {
         ContextDelivery::Native { files: &[] }
     }
 
+    /// Codex's own Skills docs (developers.openai.com/codex/skills, 2026)
+    /// document discovery from multiple scopes checked in order, including
+    /// `./.agents/skills/`, `../.agents/skills/`, and `$REPO_ROOT/.agents/skills/`
+    /// — a project-local convention read directly by the `codex` binary,
+    /// with no UZE involvement, independent of the UZE-managed
+    /// `$HOME/.agents/skills` symlink this integration writes elsewhere.
+    fn discovers_project_agents_directory(&self) -> bool {
+        true
+    }
+
     fn capabilities(&self) -> HarnessCapabilities {
         HarnessCapabilities {
             native: [
