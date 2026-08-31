@@ -4,7 +4,7 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Block, Borders, Clear, Padding, Paragraph},
 };
 use uze_core::{
     capability::CapabilityKind, integration::AttachmentState, router::HarnessCapabilities,
@@ -123,10 +123,17 @@ pub(super) fn render(
     anchor: Rect,
     support: &AgentSupport,
 ) {
-    let width = 40.min(area.width).max(1);
-    let inner_width = width.saturating_sub(2) as usize;
+    // Interior padding beyond the border itself — this used to sit flush
+    // against the frame, which read as cramped once the horizontal rules
+    // below were removed and had nothing to separate the sections but
+    // whitespace.
+    const H_PAD: u16 = 2;
+    const V_PAD: u16 = 1;
 
-    let mut lines = vec![title_row(inner_width), divider(inner_width)];
+    let width = 40.min(area.width).max(1);
+    let inner_width = width.saturating_sub(2 + 2 * H_PAD) as usize;
+
+    let mut lines = vec![title_row(inner_width), Line::default()];
 
     lines.push(section_header("RUNTIME"));
     lines.push(fact_line(
@@ -158,7 +165,7 @@ pub(super) fn render(
         inner_width,
     ));
 
-    lines.push(divider(inner_width));
+    lines.push(Line::default());
     lines.push(section_header("CAPABILITIES"));
 
     // Policy is a known `CapabilityKind` but no integration populates it yet
@@ -182,7 +189,7 @@ pub(super) fn render(
         }
     }
 
-    let height = (lines.len() as u16 + 2).min(area.height).max(1);
+    let height = (lines.len() as u16 + 2 + 2 * V_PAD).min(area.height).max(1);
     let popup = Rect::new(
         anchor
             .x
@@ -196,7 +203,8 @@ pub(super) fn render(
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(BORDER))
-        .style(Style::default().bg(BASE));
+        .style(Style::default().bg(BASE))
+        .padding(Padding::new(H_PAD, H_PAD, V_PAD, V_PAD));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
@@ -225,10 +233,6 @@ fn title_row(width: usize) -> Line<'static> {
         Span::raw(" ".repeat(gap)),
         Span::styled(right, Style::default().fg(MUTED)),
     ])
-}
-
-fn divider(width: usize) -> Line<'static> {
-    Line::from(Span::styled("─".repeat(width), Style::default().fg(BORDER)))
 }
 
 fn section_header(label: &'static str) -> Line<'static> {

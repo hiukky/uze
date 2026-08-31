@@ -9,6 +9,7 @@ use crate::{Result, UzeError, UzeHome};
 use crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
+use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -16,7 +17,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Padding, Paragraph},
 };
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     io::{self, BufReader},
     path::{Path, PathBuf},
     sync::mpsc,
@@ -44,9 +45,61 @@ const POLL: Duration = Duration::from_millis(16);
 /// cost to every PTY damage redraw.
 const GIT_BADGE_REFRESH: Duration = Duration::from_millis(750);
 
+/// The same frames configure the hidden `indicatif` spinner that schedules
+/// this animation. Ratatui owns the alternate screen, so it paints the frame
+/// instead of letting indicatif write to stderr.
+const AGENT_ACTIVITY_FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
+const AGENT_ACTIVITY_TICK: Duration = Duration::from_millis(120);
+/// A submitted prompt stays active while its terminal keeps producing
+/// output. This brief quiet window avoids leaving a completed agent marked
+/// busy after it has returned to its input prompt.
+const AGENT_ACTIVITY_IDLE_AFTER: Duration = Duration::from_millis(1500);
+
 pub(crate) enum WorkspaceExit {
     Management,
     Quit,
+}
+
+/// Computes the harness-support read model in a background thread and
+/// delivers it through `sender` — the same async path `attach_workspace`
+/// uses at attach time, reused wherever the model needs a fresh read
+/// instead of trusting a possibly stale earlier one (see the
+/// `OpenAgentSupport` handler below).
+fn spawn_support_refresh(
+    home: &UzeHome,
+    root: &Path,
+    sender: mpsc::Sender<Result<Vec<super::agent_support::AgentSupport>>>,
+) {
+    let support_home = home.clone();
+    let support_root = root.to_path_buf();
+    thread::spawn(move || {
+        let result = super::tui_application(support_home).map(|app| {
+            let workspace = app.overview_workspace(&support_root).ok();
+            let context_root = workspace
+                .as_ref()
+                .map(|workspace| workspace.root.as_path())
+                .unwrap_or(&support_root);
+            let context = app.context_inspect(context_root).ok();
+            let agents_directory_loaded = workspace
+                .as_ref()
+                .is_some_and(|workspace| workspace.agents_directory_present);
+            let profiles = app.list_profiles().unwrap_or_default();
+            let active_profile = profiles.iter().find(|profile| profile.active);
+            app.doctor()
+                .harnesses
+                .into_iter()
+                .map(|health| {
+                    super::agent_support::AgentSupport::from_health(
+                        health,
+                        context.as_ref(),
+                        agents_directory_loaded,
+                        active_profile,
+                    )
+                })
+                .collect()
+        });
+        let _ = sender.send(result);
+    });
 }
 
 pub(crate) fn attach_workspace(
@@ -96,47 +149,24 @@ pub(crate) fn attach_workspace(
         sidebar_width: *sidebar_width,
         ..WorkspaceModel::default()
     };
-    // Built once per attach, not per frame — a registered harness set
-    // doesn't change mid-session, and this loop's own redraw cadence is
-    // deliberately kept off any per-frame filesystem/env work (see `POLL`
-    // above).
+    // A registered harness set doesn't change mid-session, so this is built
+    // once per attach.
     let identities = agent_identities(home);
     // This is the exact `HarnessHealth` read model used by the Integrations
     // screen. It loads asynchronously so inspecting support never delays a
-    // live terminal attach or a pane redraw.
+    // live terminal attach or a pane redraw. Unlike `identities` above, this
+    // one *does* go stale — `AGENTS.md`/the runtime projection can change
+    // underneath an open workspace (another session writing it, a race in
+    // `claude_runtime_projection` resolving) — so `OpenAgentSupport` below
+    // fires a fresh one on every open rather than trusting this attach-time
+    // snapshot for the rest of the session.
     let (support_sender, support_receiver) = mpsc::channel();
-    let support_home = home.clone();
-    let support_root = root.to_path_buf();
-    thread::spawn(move || {
-        let result = super::tui_application(support_home)
-            .map(|app| {
-                let workspace = app.overview_workspace(&support_root).ok();
-                let context_root = workspace
-                    .as_ref()
-                    .map(|workspace| workspace.root.as_path())
-                    .unwrap_or(&support_root);
-                let context = app.context_inspect(context_root).ok();
-                let agents_directory_loaded = workspace
-                    .as_ref()
-                    .is_some_and(|workspace| workspace.agents_directory_present);
-                let profiles = app.list_profiles().unwrap_or_default();
-                let active_profile = profiles.iter().find(|profile| profile.active);
-                app.doctor()
-                    .harnesses
-                    .into_iter()
-                    .map(|health| {
-                        super::agent_support::AgentSupport::from_health(
-                            health,
-                            context.as_ref(),
-                            agents_directory_loaded,
-                            active_profile,
-                        )
-                    })
-                    .collect()
-            })
-            .map_err(|error| error.to_string());
-        let _ = support_sender.send(result);
-    });
+    spawn_support_refresh(home, root, support_sender.clone());
+    let activity_spinner = ProgressBar::new_spinner();
+    activity_spinner.set_draw_target(ProgressDrawTarget::hidden());
+    activity_spinner
+        .set_style(ProgressStyle::default_spinner().tick_strings(&AGENT_ACTIVITY_FRAMES));
+    let mut next_activity_tick = Instant::now();
     // The server's session/pane state is persistent — reattaching after a
     // Ctrl+O round trip to management finds the same shells exactly as they
     // were left. But the client's own model always starts empty, so without
@@ -169,6 +199,18 @@ pub(crate) fn attach_workspace(
             view.refresh();
             model.dirty = true;
         }
+        if model.expire_agent_activity(Instant::now()) {
+            model.dirty = true;
+        }
+        if workspace_has_active_agent_operation(&model, &identities) {
+            let now = Instant::now();
+            if now >= next_activity_tick {
+                activity_spinner.inc(1);
+                model.tick = activity_spinner.position() as usize;
+                next_activity_tick = now + AGENT_ACTIVITY_TICK;
+                model.dirty = true;
+            }
+        }
         let size = terminal.size()?;
         let layout = compute_layout(
             Rect::new(0, 0, size.width, size.height),
@@ -189,7 +231,6 @@ pub(crate) fn attach_workspace(
         }
         if model.dirty {
             model.refresh_git_badge();
-            model.tick = model.tick.wrapping_add(1);
             let mut hits = Vec::new();
             terminal.draw(|frame| render(frame, &model, &identities, &mut hits))?;
             model.hits = hits;
@@ -283,16 +324,30 @@ pub(crate) fn attach_workspace(
                     model.dirty = true;
                 }
                 Event::Key(key) if model.context_menu.is_some() => {
-                    // Enter confirms the menu's one "close" row; anything
-                    // else (Esc included) dismisses without acting — same
-                    // "only reacts to its own actions" rule the agent
-                    // picker above uses.
-                    if key.code == KeyCode::Enter
-                        && let Some(menu) = model.context_menu.take()
-                    {
-                        send_close_request(&mut stream, menu.target);
-                    } else {
-                        model.context_menu = None;
+                    // Up/Down move the selection; Enter confirms whichever
+                    // row is selected; anything else (Esc included)
+                    // dismisses without acting — same "only reacts to its
+                    // own actions" rule the agent picker above uses.
+                    match key.code {
+                        KeyCode::Up => {
+                            if let Some(menu) = model.context_menu.as_mut() {
+                                menu.selected = menu.selected.saturating_sub(1);
+                            }
+                        }
+                        KeyCode::Down => {
+                            if let Some(menu) = model.context_menu.as_mut() {
+                                menu.selected =
+                                    (menu.selected + 1).min(menu.items.len().saturating_sub(1));
+                            }
+                        }
+                        KeyCode::Enter => {
+                            if let Some(menu) = model.context_menu.take()
+                                && let Some(action) = menu.items.get(menu.selected).copied()
+                            {
+                                dispatch_menu_action(&mut stream, &mut model, menu.target, action);
+                            }
+                        }
+                        _ => model.context_menu = None,
                     }
                     model.dirty = true;
                 }
@@ -362,28 +417,29 @@ pub(crate) fn attach_workspace(
                         .session
                         .as_ref()
                         .and_then(|session| session.selected_space().tabs.get(index))
+                        .map(|tab| tab.id)
                     {
-                        let _ =
-                            send_request(&mut stream, &ClientRequest::SelectTab { tab: tab.id });
-                        let _ = send_request(
-                            &mut stream,
-                            &ClientRequest::Resize {
-                                pane: tab.focus.pane,
-                                columns,
-                                rows,
-                            },
-                        );
+                        model.acknowledge_completed_agent_tab(tab);
+                        let _ = send_request(&mut stream, &ClientRequest::SelectTab { tab });
+                        if let Some(pane) = model.pane_for_tab(tab) {
+                            let _ = send_request(
+                                &mut stream,
+                                &ClientRequest::Resize {
+                                    pane,
+                                    columns,
+                                    rows,
+                                },
+                            );
+                        }
                     }
                 }
                 Event::Key(key) => {
                     if let Some(bytes) = encode_key(key) {
-                        let _ = send_request(
-                            &mut stream,
-                            &ClientRequest::Input {
-                                pane: model.focused_pane(),
-                                bytes,
-                            },
-                        );
+                        let pane = model.focused_pane();
+                        if bytes.contains(&b'\r') || bytes.contains(&b'\n') {
+                            model.note_agent_prompt_submission(pane, &identities);
+                        }
+                        let _ = send_request(&mut stream, &ClientRequest::Input { pane, bytes });
                     }
                 }
                 Event::Paste(text) if model.no_modal_open() => {
@@ -437,6 +493,31 @@ pub(crate) fn attach_workspace(
                     model.dirty = true;
                 }
                 Event::Mouse(mouse)
+                    if mouse.kind == MouseEventKind::Moved && model.agent_picker.is_some() =>
+                {
+                    // Keep this dropdown's pointer behavior aligned with the
+                    // sidebar context menu: the highlighted option follows
+                    // the cursor, while keyboard navigation remains intact.
+                    let hit = model
+                        .hits
+                        .iter()
+                        .rev()
+                        .find(|(rect, _)| {
+                            rect.x <= mouse.column
+                                && mouse.column < rect.x + rect.width
+                                && rect.y <= mouse.row
+                                && mouse.row < rect.y + rect.height
+                        })
+                        .map(|(_, hit)| *hit);
+                    if let Some(WorkspaceHit::PickAgent(index)) = hit
+                        && let Some(picker) = model.agent_picker.as_mut()
+                        && picker.selected != index
+                    {
+                        picker.selected = index;
+                        model.dirty = true;
+                    }
+                }
+                Event::Mouse(mouse)
                     if mouse.kind == MouseEventKind::Down(MouseButton::Left)
                         && model.support_dropdown.is_some() =>
                 {
@@ -449,9 +530,18 @@ pub(crate) fn attach_workspace(
                     if mouse.kind == MouseEventKind::Down(MouseButton::Left)
                         && model.context_menu.is_some() =>
                 {
+                    // `.rev()`: the popup renders last, so its own rows sit
+                    // at the tail of `hits` — searching forward could match
+                    // an older, now visually-covered sidebar row underneath
+                    // it instead (the tight, gapless sidebar packing meant
+                    // this landed on a covered row far more often than not,
+                    // which is what made the popup's own click feel
+                    // intermittent — it depended on which row was
+                    // right-clicked, not on timing).
                     let hit = model
                         .hits
                         .iter()
+                        .rev()
                         .find(|(rect, _)| {
                             rect.x <= mouse.column
                                 && mouse.column < rect.x + rect.width
@@ -459,20 +549,52 @@ pub(crate) fn attach_workspace(
                                 && mouse.row < rect.y + rect.height
                         })
                         .map(|(_, hit)| *hit);
-                    // The popup's own row is the only place left that still
-                    // raises `CloseSpace`/`CloseTab` — every ordinary row
-                    // stopped pushing those hits once closing moved behind
-                    // this confirmation, so finding one here means the
-                    // click landed on the popup, not "outside" it.
-                    if let Some(menu) = model.context_menu.take()
-                        && matches!(
-                            hit,
-                            Some(WorkspaceHit::CloseSpace(_) | WorkspaceHit::CloseTab(_))
-                        )
-                    {
-                        send_close_request(&mut stream, menu.target);
+                    let action = match hit {
+                        Some(WorkspaceHit::ContextMenuAction(index)) => model
+                            .context_menu
+                            .as_ref()
+                            .and_then(|menu| menu.items.get(index).copied()),
+                        _ => None,
+                    };
+                    // Dismiss unconditionally (any click, on the popup or
+                    // outside it, closes the menu) but only dispatch when
+                    // the click actually resolved to one of its own rows —
+                    // the two used to be one `if let` that discarded the
+                    // menu before checking the hit, so a miss silently
+                    // dismissed without acting instead of visibly no-oping.
+                    let target = model.context_menu.take().map(|menu| menu.target);
+                    if let (Some(target), Some(action)) = (target, action) {
+                        dispatch_menu_action(&mut stream, &mut model, target, action);
                     }
                     model.dirty = true;
+                }
+                Event::Mouse(mouse)
+                    if mouse.kind == MouseEventKind::Moved && model.context_menu.is_some() =>
+                {
+                    // Hovering a row selects it, same as Up/Down — so the
+                    // popup reads as a real menu (highlight follows the
+                    // cursor) instead of only reacting to a click. Only
+                    // marks the frame dirty when the hover actually moved
+                    // onto a different row, so waving the mouse across the
+                    // rest of the screen doesn't force a redraw every tick.
+                    let hit = model
+                        .hits
+                        .iter()
+                        .rev()
+                        .find(|(rect, _)| {
+                            rect.x <= mouse.column
+                                && mouse.column < rect.x + rect.width
+                                && rect.y <= mouse.row
+                                && mouse.row < rect.y + rect.height
+                        })
+                        .map(|(_, hit)| *hit);
+                    if let Some(WorkspaceHit::ContextMenuAction(index)) = hit
+                        && let Some(menu) = model.context_menu.as_mut()
+                        && menu.selected != index
+                    {
+                        menu.selected = index;
+                        model.dirty = true;
+                    }
                 }
                 Event::Mouse(mouse)
                     if mouse.kind == MouseEventKind::Down(MouseButton::Left)
@@ -574,32 +696,11 @@ pub(crate) fn attach_workspace(
                         model.last_click = None;
                         match hit {
                             WorkspaceHit::SelectTab(tab) => {
-                                let label = model
-                                    .session
-                                    .as_ref()
-                                    .and_then(|session| {
-                                        session
-                                            .workspace
-                                            .spaces
-                                            .iter()
-                                            .flat_map(|space| &space.tabs)
-                                            .find(|t| t.id == tab)
-                                    })
-                                    .map(|t| t.label.clone())
-                                    .unwrap_or_default();
-                                model.renaming = Some((RenameTarget::Tab(tab), label));
+                                begin_rename(&mut model, MenuTarget::Tab(tab));
                                 model.dirty = true;
                             }
                             WorkspaceHit::SelectSpace(space) => {
-                                let label = model
-                                    .session
-                                    .as_ref()
-                                    .and_then(|session| {
-                                        session.workspace.spaces.iter().find(|s| s.id == space)
-                                    })
-                                    .map(|s| s.label.clone())
-                                    .unwrap_or_default();
-                                model.renaming = Some((RenameTarget::Space(space), label));
+                                begin_rename(&mut model, MenuTarget::Space(space));
                                 model.dirty = true;
                             }
                             _ => {}
@@ -608,6 +709,7 @@ pub(crate) fn attach_workspace(
                     }
                     match hit {
                         WorkspaceHit::SelectTab(tab) => {
+                            model.acknowledge_completed_agent_tab(tab);
                             let _ = send_request(&mut stream, &ClientRequest::SelectTab { tab });
                             if let Some(pane) = model.pane_for_tab(tab) {
                                 let _ = send_request(
@@ -656,6 +758,16 @@ pub(crate) fn attach_workspace(
                             // no-op.
                         }
                         WorkspaceHit::SelectSpace(space) => {
+                            if let Some(tab) = model.session.as_ref().and_then(|session| {
+                                session
+                                    .workspace
+                                    .spaces
+                                    .iter()
+                                    .find(|candidate| candidate.id == space)
+                                    .map(|candidate| candidate.selected_tab)
+                            }) {
+                                model.acknowledge_completed_agent_tab(tab);
+                            }
                             let _ =
                                 send_request(&mut stream, &ClientRequest::SelectSpace { space });
                             // Resize the pane the same way `SelectTab` does
@@ -681,7 +793,7 @@ pub(crate) fn attach_workspace(
                                 );
                             }
                         }
-                        WorkspaceHit::CloseSpace(_) => {
+                        WorkspaceHit::ContextMenuAction(_) => {
                             // Only reachable while the context menu is
                             // open, which the guarded arm above already
                             // handles — same as `PickAgent` above for the
@@ -706,6 +818,13 @@ pub(crate) fn attach_workspace(
                                     integration: integration.to_owned(),
                                     anchor,
                                 });
+                            // Refreshes `model.agent_support` in the
+                            // background so a dropdown left open across a
+                            // slow first read still catches up, and the
+                            // next open past this one starts from live
+                            // state instead of whatever was true at attach
+                            // time.
+                            spawn_support_refresh(home, root, support_sender.clone());
                             model.dirty = true;
                         }
                         WorkspaceHit::Extension(_) => {
@@ -765,13 +884,18 @@ pub(crate) fn attach_workspace(
                 Event::Mouse(mouse)
                     if mouse.kind == MouseEventKind::Down(MouseButton::Right)
                         && model.renaming.is_none()
-                        && model.agent_picker.is_none() =>
+                        && model.agent_picker.is_none()
+                        && model.context_menu.is_none() =>
                 {
                     // The only way to close a space or an agent tab: right-
                     // click it, then confirm in the popup this opens (see
                     // `ContextMenu`) — never a direct click, so a stray
                     // click can't kill a running agent or a whole space's
-                    // worth of them by accident.
+                    // worth of them by accident. Guarded on `context_menu`
+                    // being closed too (like the left-click/Enter handlers
+                    // already are) so right-clicking a different row while
+                    // a menu is open can't silently swap its target instead
+                    // of requiring the open menu be dismissed first.
                     let hit = model
                         .hits
                         .iter()
@@ -781,27 +905,48 @@ pub(crate) fn attach_workspace(
                                 && rect.y <= mouse.row
                                 && mouse.row < rect.y + rect.height
                         })
-                        .map(|(rect, hit)| (*rect, *hit));
-                    if let Some((anchor, WorkspaceHit::SelectSpace(space))) = hit
-                        && model
+                        .map(|(_, hit)| *hit);
+                    // Anchored to the cursor itself, not the clicked row's
+                    // rect — a row spans the sidebar's full width, so
+                    // anchoring to `rect.x` always opened the menu at the
+                    // row's left edge regardless of where along it you
+                    // right-clicked, which read as the popup ignoring the
+                    // mouse entirely.
+                    let anchor = Rect::new(mouse.column, mouse.row, 1, 1);
+                    // `rename` is always offered; `close` only joins the
+                    // menu when there's a sibling left to fall back to —
+                    // same guard as before, just no longer gating whether
+                    // the menu opens at all, since renaming a lone space or
+                    // tab is always safe.
+                    if let Some(WorkspaceHit::SelectSpace(space)) = hit {
+                        let mut items = vec![MenuAction::Rename];
+                        if model
                             .session
                             .as_ref()
                             .is_some_and(|session| session.workspace.spaces.len() > 1)
-                    {
+                        {
+                            items.push(MenuAction::Close);
+                        }
                         model.context_menu = Some(ContextMenu {
-                            target: CloseTarget::Space(space),
+                            target: MenuTarget::Space(space),
+                            items,
+                            selected: 0,
                             anchor,
                         });
                         model.dirty = true;
-                    } else if let Some((anchor, WorkspaceHit::SelectTab(tab))) = hit
-                        && model.session.as_ref().is_some_and(|session| {
+                    } else if let Some(WorkspaceHit::SelectTab(tab)) = hit {
+                        let mut items = vec![MenuAction::Rename];
+                        if model.session.as_ref().is_some_and(|session| {
                             session.workspace.spaces.iter().any(|space| {
                                 space.tabs.len() > 1 && space.tabs.iter().any(|t| t.id == tab)
                             })
-                        })
-                    {
+                        }) {
+                            items.push(MenuAction::Close);
+                        }
                         model.context_menu = Some(ContextMenu {
-                            target: CloseTarget::Tab(tab),
+                            target: MenuTarget::Tab(tab),
+                            items,
+                            selected: 0,
                             anchor,
                         });
                         model.dirty = true;
@@ -834,7 +979,10 @@ pub(super) enum WorkspaceHit {
     /// A space's header row in the sidebar — click selects it (switching
     /// which space's tabs the tab strip and pane show).
     SelectSpace(SpaceId),
-    CloseSpace(SpaceId),
+    /// One row of the open [`ContextMenu`], by index into its `items` —
+    /// generic over whatever action that row is, same pattern
+    /// [`WorkspaceHit::PickAgent`] uses for the agent picker.
+    ContextMenuAction(usize),
     /// The sidebar's "+ new" row — creates a new space directly (no
     /// picker; unlike an agent tab, a space has no "kind" to choose).
     NewSpace,
@@ -896,21 +1044,47 @@ struct AgentSupportDropdown {
     anchor: Rect,
 }
 
-/// What a right-click-opened [`ContextMenu`] would close.
+/// What a right-click-opened [`ContextMenu`] targets — the space or tab its
+/// [`MenuAction`]s act on.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum CloseTarget {
+enum MenuTarget {
     Space(SpaceId),
     Tab(TabId),
 }
 
-/// Open state of the close-confirmation popup a right-click on a space
-/// header or agent tab raises. A space/tab is never closable from a plain
-/// left click any more — right-click, then this menu's own "close" row —
-/// deliberately two steps, so an accidental click can't kill a running
-/// agent or an entire space's worth of them. Built fresh on each
-/// right-click, never persisted.
+/// One row a [`ContextMenu`] can offer — the menu itself (items, selection,
+/// rendering) is generic over this enum, so adding a third action is adding
+/// a variant plus a match arm here and in [`dispatch_menu_action`], not
+/// restructuring the popup.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MenuAction {
+    Rename,
+    Close,
+}
+
+impl MenuAction {
+    fn label(self) -> &'static str {
+        match self {
+            MenuAction::Rename => "rename",
+            MenuAction::Close => "close",
+        }
+    }
+}
+
+/// Open state of the right-click action menu a space header or agent tab
+/// raises. Closing a space/tab is never one click any more — right-click,
+/// then confirm the menu's own "close" row — deliberately two steps, so an
+/// accidental click can't kill a running agent or an entire space's worth
+/// of them; other, non-destructive actions this menu grows (like `rename`)
+/// don't need that same two-step guard, but share the same
+/// open/navigate/confirm mechanics.
+/// Built fresh on each right-click, never persisted.
 struct ContextMenu {
-    target: CloseTarget,
+    target: MenuTarget,
+    items: Vec<MenuAction>,
+    /// Index into `items` the keyboard's Up/Down currently highlights —
+    /// same role [`AgentPicker::selected`] plays.
+    selected: usize,
     /// The right-clicked row's own rect — the popup anchors just under it,
     /// same placement rule [`AgentPicker::anchor`] uses.
     anchor: Rect,
@@ -993,6 +1167,23 @@ fn agent_identity_for_tab<'a>(identities: &'a [AgentIdentity], tab: &Tab) -> Opt
         .map(|identity| identity.binary)
 }
 
+fn workspace_has_active_agent_operation(
+    model: &WorkspaceModel,
+    identities: &[AgentIdentity],
+) -> bool {
+    model.session.as_ref().is_some_and(|session| {
+        session
+            .workspace
+            .spaces
+            .iter()
+            .flat_map(|space| &space.tabs)
+            .any(|tab| {
+                agent_identity_for_tab(identities, tab).is_some()
+                    && model.agent_activity.contains_key(&tab.focus.pane)
+            })
+    })
+}
+
 fn selected_agent_support<'a>(
     model: &WorkspaceModel,
     identities: &'a [AgentIdentity],
@@ -1012,6 +1203,15 @@ struct WorkspaceModel {
     last_size: (u16, u16),
     error: Option<String>,
     tick: usize,
+    /// Agent panes with a user prompt currently in flight. A pane only
+    /// enters this map when the user submits a line; PTY output extends the
+    /// entry, and a quiet terminal removes it again. Merely having an agent
+    /// process open is deliberately not activity.
+    agent_activity: BTreeMap<PaneId, Instant>,
+    /// Agent panes that finished while their tab was not selected. The
+    /// sidebar keeps their green check visible until the user opens the tab,
+    /// making completion discoverable without leaving a stale busy spinner.
+    completed_agent_panes: BTreeSet<PaneId>,
     hits: Vec<(Rect, WorkspaceHit)>,
     /// Set whenever applying an event (or a resize) changes what should be
     /// on screen; the input loop only redraws when this is true. Redrawing
@@ -1080,6 +1280,9 @@ impl WorkspaceModel {
                 self.session = Some(session);
             }
             ClientEvent::Damage(damage) => {
+                if let Some(last_output) = self.agent_activity.get_mut(&damage.pane) {
+                    *last_output = Instant::now();
+                }
                 let entry = self
                     .panes
                     .entry(damage.pane)
@@ -1136,6 +1339,46 @@ impl WorkspaceModel {
                 .find(|candidate| candidate.id == tab)
                 .map(|candidate| candidate.focus.pane)
         })
+    }
+    fn note_agent_prompt_submission(&mut self, pane: PaneId, identities: &[AgentIdentity]) {
+        let is_agent = self.session.as_ref().is_some_and(|session| {
+            session
+                .workspace
+                .spaces
+                .iter()
+                .flat_map(|space| &space.tabs)
+                .any(|tab| {
+                    tab.focus.pane == pane && agent_identity_for_tab(identities, tab).is_some()
+                })
+        });
+        if is_agent {
+            self.agent_activity.insert(pane, Instant::now());
+            self.completed_agent_panes.remove(&pane);
+            self.dirty = true;
+        }
+    }
+    fn expire_agent_activity(&mut self, now: Instant) -> bool {
+        let expired: Vec<PaneId> = self
+            .agent_activity
+            .iter()
+            .filter_map(|(pane, last_output)| {
+                (now.duration_since(*last_output) >= AGENT_ACTIVITY_IDLE_AFTER).then_some(*pane)
+            })
+            .collect();
+        for pane in &expired {
+            self.agent_activity.remove(pane);
+            if *pane != self.focused_pane() {
+                self.completed_agent_panes.insert(*pane);
+            }
+        }
+        !expired.is_empty()
+    }
+    fn acknowledge_completed_agent_tab(&mut self, tab: TabId) {
+        if let Some(pane) = self.pane_for_tab(tab)
+            && self.completed_agent_panes.remove(&pane)
+        {
+            self.dirty = true;
+        }
     }
     fn refresh_git_badge(&mut self) {
         let cwd = self.session.as_ref().and_then(|session| {
@@ -1405,24 +1648,32 @@ fn render_agent_picker(
     }
 }
 
-/// The right-click close-confirmation popup — one "close" row, styled in
-/// `DANGER` to read as destructive, closing whatever [`ContextMenu::target`]
-/// names. Same anchoring mechanics as [`render_agent_picker`] (anchored
-/// just under the right-clicked row); see [`ContextMenu`]'s own doc comment
-/// for why this exists instead of a direct click.
+/// The right-click action menu — one row per [`MenuAction`] in
+/// `menu.items`, keyboard-navigable (Up/Down + Enter) and mouse-clickable,
+/// same mechanics and neutral styling as [`render_agent_picker`] (anchored
+/// just under the right-clicked row, selected row filled instead of just
+/// bold — no action gets a special color of its own, `close` included, so
+/// the menu reads as one consistent list rather than singling a row out).
+/// See [`ContextMenu`]'s own doc comment for why closing specifically still
+/// requires this menu instead of a direct click.
 fn render_context_menu(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
     menu: &ContextMenu,
     hits: &mut Vec<(Rect, WorkspaceHit)>,
 ) {
-    let (title, hit) = match menu.target {
-        CloseTarget::Space(space) => (" close space ", WorkspaceHit::CloseSpace(space)),
-        CloseTarget::Tab(tab) => (" close agent ", WorkspaceHit::CloseTab(tab)),
-    };
-    let label = "close";
-    let width = (title.len().max(label.len() + 2) as u16 + 2).min(area.width);
-    let height = 3.min(area.height);
+    const H_PAD: u16 = 2;
+    const MIN_WIDTH: u16 = 14;
+    let content_width = menu
+        .items
+        .iter()
+        .map(|action| action.label().len())
+        .max()
+        .unwrap_or(0) as u16;
+    let width = (content_width + 2 * H_PAD + 2)
+        .max(MIN_WIDTH)
+        .min(area.width);
+    let height = (menu.items.len() as u16 + 2).min(area.height);
     let popup = Rect::new(
         menu.anchor
             .x
@@ -1433,27 +1684,34 @@ fn render_context_menu(
     );
     frame.render_widget(Clear, popup);
     let block = Block::default()
-        .title(title)
-        .title_style(
-            Style::default()
-                .fg(super::DANGER)
-                .add_modifier(Modifier::BOLD),
-        )
         .borders(Borders::ALL)
         .border_style(Style::default().fg(super::BORDER))
         .style(Style::default().bg(super::BASE));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
-    let row = Rect::new(inner.x, inner.y, inner.width, 1);
-    frame.render_widget(
-        Paragraph::new(Span::styled(
-            format!(" {label}"),
-            Style::default().fg(super::DANGER),
-        )),
-        row,
-    );
-    hits.push((row, hit));
+    for (index, action) in menu.items.iter().enumerate() {
+        if index as u16 >= inner.height {
+            break;
+        }
+        let row = Rect::new(inner.x, inner.y + index as u16, inner.width, 1);
+        let selected = index == menu.selected;
+        // A filled bar for the selected row, same affordance
+        // `render_agent_picker` uses — always in `ACCENT`, never a red
+        // fill; every row shares the same neutral color otherwise.
+        let style = if selected {
+            Style::default()
+                .bg(super::ACCENT)
+                .fg(super::BASE)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(super::NAV_INACTIVE)
+        };
+        let label = format!("{:pad$}{}", "", action.label(), pad = H_PAD as usize);
+        let text = format!("{label:<width$}", width = inner.width as usize);
+        frame.render_widget(Paragraph::new(Span::styled(text, style)), row);
+        hits.push((row, WorkspaceHit::ContextMenuAction(index)));
+    }
 }
 
 /// A two-level tree, one block per space the user has created (blank-line
@@ -1621,12 +1879,23 @@ fn render_sidebar(
             let Some(label_rect) = row(1) else { break };
 
             let selected = tab.id == space.selected_tab;
+            let active = model.agent_activity.contains_key(&tab.focus.pane);
+            let completed = model.completed_agent_panes.contains(&tab.focus.pane);
             let renaming_this = model
                 .renaming
                 .as_ref()
                 .filter(|(target, _)| *target == RenameTarget::Tab(tab.id))
                 .map(|(_, buffer)| buffer.as_str());
-            let dot_fg = if selected {
+            let indicator = if active {
+                format!("{} ", agent_activity_frame(model.tick))
+            } else if completed {
+                "✓ ".to_owned()
+            } else if selected {
+                "● ".to_owned()
+            } else {
+                "○ ".to_owned()
+            };
+            let indicator_fg = if active || completed || selected {
                 super::ACCENT
             } else {
                 super::TEXT_FAINT
@@ -1653,10 +1922,7 @@ fn render_sidebar(
             };
             let mut spans = vec![
                 connector_span,
-                Span::styled(
-                    if selected { "● " } else { "○ " },
-                    Style::default().fg(dot_fg),
-                ),
+                Span::styled(indicator, Style::default().fg(indicator_fg)),
                 label,
             ];
             if is_active_space {
@@ -1775,6 +2041,10 @@ fn render_space_header(
     hits.push((rect, WorkspaceHit::SelectSpace(space.id)));
 }
 
+fn agent_activity_frame(tick: usize) -> &'static str {
+    AGENT_ACTIVITY_FRAMES[tick % AGENT_ACTIVITY_FRAMES.len()]
+}
+
 /// Stamps `bg` onto every span already in the row, then appends a
 /// trailing background-filled run of spaces so the highlight spans the
 /// row's full width instead of stopping at the last glyph — same pattern
@@ -1811,17 +2081,62 @@ fn next_space_label(model: &WorkspaceModel) -> String {
     format!("space {}", count + 1)
 }
 
-/// The one action a [`ContextMenu`] ever confirms — sent from both the
-/// popup's own click zone and its keyboard Enter shortcut, so the request
-/// this actually builds only needs writing once.
-fn send_close_request<W: io::Write>(stream: &mut W, target: CloseTarget) {
-    let _ = send_request(
-        stream,
-        &match target {
-            CloseTarget::Space(space) => ClientRequest::CloseSpace { space },
-            CloseTarget::Tab(tab) => ClientRequest::CloseTab { tab },
-        },
-    );
+/// Confirms one [`ContextMenu`] row against its `target` — sent from both
+/// the popup's own click zone and its keyboard Enter shortcut, so each
+/// [`MenuAction`] only needs writing once here as the menu grows.
+fn dispatch_menu_action<W: io::Write>(
+    stream: &mut W,
+    model: &mut WorkspaceModel,
+    target: MenuTarget,
+    action: MenuAction,
+) {
+    match action {
+        MenuAction::Rename => begin_rename(model, target),
+        MenuAction::Close => {
+            let _ = send_request(
+                stream,
+                &match target {
+                    MenuTarget::Space(space) => ClientRequest::CloseSpace { space },
+                    MenuTarget::Tab(tab) => ClientRequest::CloseTab { tab },
+                },
+            );
+        }
+    }
+}
+
+/// Opens the inline rename editor (`WorkspaceModel::renaming`) for `target`,
+/// seeded with its current label — shared by the tab-strip/sidebar
+/// double-click gesture and the context menu's `rename` row so the lookup
+/// only lives once.
+fn begin_rename(model: &mut WorkspaceModel, target: MenuTarget) {
+    let (rename_target, label) = match target {
+        MenuTarget::Tab(tab) => {
+            let label = model
+                .session
+                .as_ref()
+                .and_then(|session| {
+                    session
+                        .workspace
+                        .spaces
+                        .iter()
+                        .flat_map(|space| &space.tabs)
+                        .find(|t| t.id == tab)
+                })
+                .map(|t| t.label.clone())
+                .unwrap_or_default();
+            (RenameTarget::Tab(tab), label)
+        }
+        MenuTarget::Space(space) => {
+            let label = model
+                .session
+                .as_ref()
+                .and_then(|session| session.workspace.spaces.iter().find(|s| s.id == space))
+                .map(|s| s.label.clone())
+                .unwrap_or_default();
+            (RenameTarget::Space(space), label)
+        }
+    };
+    model.renaming = Some((rename_target, label));
 }
 
 fn pane_in_layout(layout: &uze_terminal::Layout, wanted: PaneId) -> Option<&uze_terminal::Pane> {
@@ -2323,14 +2638,81 @@ fn runtime_error(error: uze_terminal::RuntimeError) -> UzeError {
 mod tests {
     use super::{
         AgentIdentity, WorkspaceModel, agent_identity_for_tab, blank_pane, encode_mouse,
-        forward_paste, pane_relative, selected_pane_cwd,
+        forward_paste, pane_relative, selected_pane_cwd, workspace_has_active_agent_operation,
     };
     use crossterm::event::{MouseButton, MouseEventKind};
     use ratatui::layout::Rect;
+    use std::time::{Duration, Instant};
     use uze_terminal::{
         ClientEvent, ClientRequest, Cursor, Focus, Layout, MouseMode, Pane, PaneDamage, PaneId,
         Session, Tab, TabId, WorkspaceId,
     };
+
+    #[test]
+    fn only_submitted_agent_prompts_receive_activity_status() {
+        let identities = [AgentIdentity {
+            binary: "agent",
+            integration: "agent",
+            display_name: "Agent",
+        }];
+        let mut session = Session::new(WorkspaceId("workspace".into()), "/tmp".into(), 80, 24);
+        session.workspace.spaces[0].tabs[0].label = "Agent".into();
+        let mut model = WorkspaceModel {
+            session: Some(session),
+            ..WorkspaceModel::default()
+        };
+
+        model.note_agent_prompt_submission(PaneId(1), &identities);
+        assert!(workspace_has_active_agent_operation(&model, &identities));
+
+        assert!(model.expire_agent_activity(Instant::now() + Duration::from_secs(2)));
+        assert!(!workspace_has_active_agent_operation(&model, &identities));
+    }
+
+    #[test]
+    fn completed_background_agent_keeps_a_check_until_its_tab_is_opened() {
+        let identities = [AgentIdentity {
+            binary: "agent",
+            integration: "agent",
+            display_name: "Agent",
+        }];
+        let mut session = Session::new(WorkspaceId("workspace".into()), "/tmp".into(), 80, 24);
+        let agent_pane = session.add_tab("Agent".into(), 80, 24, "/tmp".into());
+        let agent_tab = session.workspace.spaces[0].selected_tab;
+        session.workspace.spaces[0].selected_tab = TabId(1);
+        let mut model = WorkspaceModel {
+            session: Some(session),
+            ..WorkspaceModel::default()
+        };
+
+        model.note_agent_prompt_submission(agent_pane, &identities);
+        assert!(model.expire_agent_activity(Instant::now() + Duration::from_secs(2)));
+        assert!(model.completed_agent_panes.contains(&agent_pane));
+
+        model.acknowledge_completed_agent_tab(agent_tab);
+        assert!(!model.completed_agent_panes.contains(&agent_pane));
+    }
+
+    #[test]
+    fn submitted_shell_commands_do_not_receive_agent_activity_status() {
+        let mut model = WorkspaceModel {
+            session: Some(Session::new(
+                WorkspaceId("workspace".into()),
+                "/tmp".into(),
+                80,
+                24,
+            )),
+            ..WorkspaceModel::default()
+        };
+        let identities = [AgentIdentity {
+            binary: "agent",
+            integration: "agent",
+            display_name: "Agent",
+        }];
+
+        model.note_agent_prompt_submission(PaneId(1), &identities);
+        assert!(model.agent_activity.is_empty());
+    }
 
     #[test]
     fn pane_relative_is_1_indexed_and_excludes_anything_outside_the_pane() {
