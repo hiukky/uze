@@ -101,7 +101,7 @@ fn the_official_package_installs_through_the_unmodified_pipeline() {
 }
 
 #[test]
-fn the_official_package_contributes_exactly_one_agent_skill_resource() {
+fn the_official_package_contributes_its_agent_skill_resources() {
     let root = temp("resources");
     let application = app(&root);
     application
@@ -111,11 +111,19 @@ fn the_official_package_contributes_exactly_one_agent_skill_resource() {
         )
         .unwrap();
     let inspection = application.inspect_plugin("uze").unwrap();
-    assert_eq!(inspection.capabilities.len(), 1);
-    assert_eq!(inspection.capabilities[0].kind, CapabilityKind::AgentSkill);
-    // The skill's own logical name (its directory, `skills/init`), not the
-    // generic `SKILL.md` file name — a display-only read-model improvement.
-    assert_eq!(inspection.capabilities[0].name, "init");
+    assert_eq!(inspection.capabilities.len(), 2);
+    assert!(
+        inspection
+            .capabilities
+            .iter()
+            .all(|capability| capability.kind == CapabilityKind::AgentSkill)
+    );
+    let names = inspection
+        .capabilities
+        .iter()
+        .map(|capability| capability.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["init", "worktree"]);
     fs::remove_dir_all(root).unwrap();
 }
 

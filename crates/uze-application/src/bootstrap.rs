@@ -185,6 +185,12 @@ mod tests {
         let materialized = materialize("uze").unwrap();
         assert!(materialized.root().join("plugin.json").is_file());
         assert!(materialized.root().join("skills/init/SKILL.md").is_file());
+        assert!(
+            materialized
+                .root()
+                .join("skills/worktree/SKILL.md")
+                .is_file()
+        );
     }
 
     #[test]

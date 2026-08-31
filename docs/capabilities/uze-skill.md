@@ -1,27 +1,19 @@
-# The `/uze:init` Skill — agentic context orchestrator
+# UZE's agentic Skills
 
-Status: **first vertical slice, implemented, 2026-08-21.** Companion to
-[context-manager.md](context-manager.md), which this Skill sits entirely on
-top of and never bypasses.
+`/uze:init` is the original implemented vertical slice (2026-08-21) and is a
+companion to [context-manager.md](context-manager.md), which it sits entirely
+on top of and never bypasses.
 
-```
-              /uze:init (this Skill — plugins/uze/skills/init/SKILL.md)
-                 reasoning / orchestration
-        ┌────────────────┼────────────────┐
-        ▼                ▼                ▼
-     analyze          propose          confirm
-        │                                  │
-        └────────────────┬─────────────────┘
-                          ▼
-                  Context Manager
-                deterministic layer (unmodified)
-        ┌────────────────┼────────────────┐
-        ▼                ▼                ▼
-     inspect            plan          reconcile
-```
+`/uze:init` reasons about portable project context and delegates all managed
+context mutations to the deterministic Context Manager (`inspect`, `plan`,
+`reconcile`). `/uze:worktree` reasons about Git workspace ownership: when
+to isolate concurrent writes, how to hand off a branch, and when it is safe
+to integrate into the primary branch. It always observes the primary
+worktree's `agents.lock` `worktrees_dir` before creating an agent worktree.
+It uses Git directly and has no Context Manager mutation authority.
 
-The Skill reasons. `uze` mutates. That boundary is enforced by the Skill's
-own instructions (`plugins/uze/skills/init/SKILL.md`'s "Hard boundaries"
+For `/uze:init`, the Skill reasons and `uze` mutates. That boundary is
+enforced by the Skill's own instructions (`plugins/uze/skills/init/SKILL.md`'s "Hard boundaries"
 section), not by anything in `uze-core` — the Core has no idea this Skill
 exists, and never will (see the vendor-neutrality/no-hardcoding proof
 below).
@@ -61,7 +53,7 @@ questions in ordinary conversation (OpenCode additionally has a dedicated
 ## Fase 2 — dogfooding proof: no special treatment anywhere
 
 `plugins/uze/` is an ordinary Agent Plugins 1.0 package: `plugin.json` +
-`skills/init/SKILL.md`. It was installed with the exact same `uze add`
+its `skills/` directory. It was installed with the exact same `uze add`
 command as any other package, in a fully isolated `$HOME`/`$UZE_HOME`, and
 delivered identically to Claude Code, Codex, OpenCode, and Antigravity CLI's
 existing Skill delivery mechanisms — the same `ManagedUserScopeReference`

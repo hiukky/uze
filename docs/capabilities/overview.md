@@ -18,7 +18,7 @@ view in `crates/uze-integrations/README.md`.
 | MCP | **Implemented** — all four |
 | Instructions / context | **Implemented** — Context Manager (see [context-manager.md](context-manager.md)) |
 | Skill invocation policy | **Implemented** — native per harness where the vendor has the mechanism; ADAPTED on Antigravity (see [skill-invocation-policy.md](skill-invocation-policy.md)) |
-| `/uze:init` Skill | **Implemented** — the official agentic orchestrator (see [uze-skill.md](uze-skill.md)) |
+| Official UZE Skills | **Implemented** — `/uze:init` for project context and `/uze:worktree` for concurrent-worktree coordination (see [uze-skill.md](uze-skill.md)) |
 | Hooks | **Implemented** — portable command hooks (ADR-033); see [portable-hooks.md](portable-hooks.md) |
 | Agents / Subagents | **Implemented** — native pass-through per harness (ADR-031) |
 | Memory | Future — would land inside the Context Manager boundary (see [context-manager.md](context-manager.md)) |
