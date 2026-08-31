@@ -676,7 +676,7 @@ pub(crate) fn attach_workspace(
                         MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
                     ) && model.no_modal_open() =>
                 {
-                    forward_mouse(&mut stream, &model, layout.pane, mouse);
+                    forward_scroll(&mut stream, &model, layout.pane, mouse);
                 }
                 Event::Mouse(mouse) if mouse.kind == MouseEventKind::Down(MouseButton::Left) => {
                     let Some((hit_rect, hit)) = model
@@ -2598,6 +2598,41 @@ fn forward_mouse<W: io::Write>(
     );
 }
 
+/// Forwards the wheel into a pane. Programs that requested xterm mouse
+/// reports receive a real mouse sequence; an alternate-screen program that
+/// did not request them gets the terminal's conventional alternate-scroll
+/// fallback (arrow keys). The latter is what lets terminal UIs such as Codex
+/// scroll when embedded in UZE's own mouse-capturing alternate screen.
+fn forward_scroll<W: io::Write>(
+    stream: &mut W,
+    model: &WorkspaceModel,
+    pane: Rect,
+    mouse: MouseEvent,
+) {
+    let Some(snapshot) = model.panes.get(&model.focused_pane()) else {
+        return;
+    };
+    if snapshot.mouse.reports_clicks {
+        forward_mouse(stream, model, pane, mouse);
+        return;
+    }
+    if !snapshot.alternate_screen {
+        return;
+    }
+    let bytes = match mouse.kind {
+        MouseEventKind::ScrollUp => b"\x1b[A".to_vec(),
+        MouseEventKind::ScrollDown => b"\x1b[B".to_vec(),
+        _ => return,
+    };
+    let _ = send_request(
+        stream,
+        &ClientRequest::Input {
+            pane: model.focused_pane(),
+            bytes,
+        },
+    );
+}
+
 /// Forwards a physical paste into the focused pane's PTY — the counterpart
 /// to `encode_key` for bulk pasted text. Framed with the same
 /// `ESC[200~ … ESC[201~` bracket the pane's own program would have seen
@@ -2717,8 +2752,8 @@ fn runtime_error(error: uze_terminal::RuntimeError) -> UzeError {
 mod tests {
     use super::{
         AgentIdentity, WorkspaceModel, agent_identity_for_tab, blank_pane, can_close_tab_from_menu,
-        encode_mouse, forward_paste, pane_relative, selected_pane_cwd, tab_needs_replacement_shell,
-        workspace_has_active_agent_operation,
+        encode_mouse, forward_paste, forward_scroll, pane_relative, selected_pane_cwd,
+        tab_needs_replacement_shell, workspace_has_active_agent_operation,
     };
     use crossterm::event::{MouseButton, MouseEventKind};
     use ratatui::layout::Rect;
@@ -3054,6 +3089,52 @@ mod tests {
             decode_input_bytes(&stream),
             b"\x1b[200~hello\x1b[201~".to_vec()
         );
+    }
+
+    #[test]
+    fn scroll_uses_arrow_keys_for_an_alternate_screen_without_mouse_reporting() {
+        let mut pane = blank_pane(PaneId(1), 80, 24);
+        pane.alternate_screen = true;
+        let model = WorkspaceModel {
+            session: Some(Session::new(
+                WorkspaceId("workspace".into()),
+                "/tmp".into(),
+                80,
+                24,
+            )),
+            panes: [(PaneId(1), pane)].into(),
+            ..WorkspaceModel::default()
+        };
+        let mut stream = Vec::new();
+        forward_scroll(
+            &mut stream,
+            &model,
+            Rect::new(0, 0, 80, 24),
+            mouse_at(4, 5, MouseEventKind::ScrollUp),
+        );
+        assert_eq!(decode_input_bytes(&stream), b"\x1b[A".to_vec());
+    }
+
+    #[test]
+    fn scroll_does_not_inject_arrow_keys_into_a_plain_shell() {
+        let model = WorkspaceModel {
+            session: Some(Session::new(
+                WorkspaceId("workspace".into()),
+                "/tmp".into(),
+                80,
+                24,
+            )),
+            panes: [(PaneId(1), blank_pane(PaneId(1), 80, 24))].into(),
+            ..WorkspaceModel::default()
+        };
+        let mut stream = Vec::new();
+        forward_scroll(
+            &mut stream,
+            &model,
+            Rect::new(0, 0, 80, 24),
+            mouse_at(4, 5, MouseEventKind::ScrollDown),
+        );
+        assert!(stream.is_empty());
     }
 
     /// Mirrors `uze_terminal::runtime`'s length-prefixed bincode framing
