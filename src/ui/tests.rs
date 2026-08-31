@@ -850,6 +850,44 @@ fn marketplace_filter_narrows_visible_selection() {
 }
 
 #[test]
+fn extension_filter_narrows_visible_selection() {
+    use uze_extensions::registry::BuiltinExtension;
+
+    let mut model = TuiModel {
+        route: Route::Extensions,
+        focus: Focus::Content,
+        extensions: vec![
+            BuiltinExtension {
+                id: "git-changes",
+                name: "Git Changes",
+                description: "Review the working tree",
+                surface: "Workspace TUI",
+                usage: "Open from the tab strip",
+            },
+            BuiltinExtension {
+                id: "task-list",
+                name: "Task List",
+                description: "Track workspace tasks",
+                surface: "Management TUI",
+                usage: "Open from the sidebar",
+            },
+        ],
+        ..TuiModel::default()
+    };
+
+    model.apply_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+    for c in "task".chars() {
+        model.apply_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    assert_eq!(model.extension_visible_indices(), vec![1]);
+    assert_eq!(model.selected_extension().unwrap().name, "Task List");
+
+    model.apply_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(model.extension_filter.is_empty());
+    assert_eq!(model.extension_visible_indices(), vec![0, 1]);
+}
+
+#[test]
 fn marketplace_group_collapse_hides_its_plugins() {
     let mut model = TuiModel {
         route: Route::Plugins,

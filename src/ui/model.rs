@@ -256,9 +256,13 @@ pub(crate) struct TuiModel {
     pub(crate) collapsed_marketplaces: BTreeSet<String>,
 
     /// The official uze extensions catalog, from
-    /// `uze_extensions::registry::ExtensionRegistry` — the Extensions
-    /// screen's rows.
+    /// `uze_extensions::registry::ExtensionRegistry`.
     pub(crate) extensions: Vec<BuiltinExtension>,
+    /// Live substring filter over extension metadata, typed with `/` while
+    /// the Extensions route is focused.
+    pub(crate) extension_filter: String,
+    /// Position within `extension_visible_indices`, rather than a raw catalog
+    /// index, so filtered cards and keyboard navigation always agree.
     pub(crate) extensions_selected: usize,
     /// Whether the Extensions detail drawer is currently slid into view.
     pub(crate) extension_drawer_open: bool,
@@ -338,6 +342,7 @@ impl Default for TuiModel {
             extensions: uze_extensions::registry::ExtensionRegistry::builtin()
                 .all()
                 .to_vec(),
+            extension_filter: String::new(),
             extensions_selected: 0,
             extension_drawer_open: false,
             harnesses_selected: 0,
@@ -460,7 +465,27 @@ impl TuiModel {
     }
 
     pub(crate) fn selected_extension(&self) -> Option<&BuiltinExtension> {
-        self.extensions.get(self.extensions_selected)
+        self.extensions.get(
+            *self
+                .extension_visible_indices()
+                .get(self.extensions_selected)?,
+        )
+    }
+
+    pub(crate) fn extension_visible_indices(&self) -> Vec<usize> {
+        let needle = self.extension_filter.trim().to_lowercase();
+        self.extensions
+            .iter()
+            .enumerate()
+            .filter(|(_, extension)| {
+                needle.is_empty()
+                    || extension.id.to_lowercase().contains(&needle)
+                    || extension.name.to_lowercase().contains(&needle)
+                    || extension.description.to_lowercase().contains(&needle)
+                    || extension.surface.to_lowercase().contains(&needle)
+            })
+            .map(|(index, _)| index)
+            .collect()
     }
 
     /// An `Intent` that fetches the currently selected row's detail (the
@@ -511,8 +536,14 @@ impl TuiModel {
         self.marketplace_selected = self.marketplace_selected.min(visible.saturating_sub(1));
     }
 
+    fn clamp_extension_selection(&mut self) {
+        self.extensions_selected = self
+            .extensions_selected
+            .min(self.extension_visible_indices().len().saturating_sub(1));
+    }
+
     /// Consumes one key while `filtering` is true — every printable
-    /// character is appended to `marketplace_filter` rather than
+    /// character is appended to the active route's filter rather than
     /// interpreted as a shortcut. `Enter` keeps the filter and returns to
     /// normal navigation; `Esc` clears it too.
     pub(crate) fn filter_key(&mut self, key: crossterm::event::KeyEvent) -> super::worker::Intent {
@@ -521,17 +552,40 @@ impl TuiModel {
             KeyCode::Enter => self.filtering = false,
             KeyCode::Esc => {
                 self.filtering = false;
-                self.marketplace_filter.clear();
-                self.clamp_marketplace_selection();
+                match self.route {
+                    Route::Plugins => {
+                        self.marketplace_filter.clear();
+                        self.clamp_marketplace_selection();
+                    }
+                    Route::Extensions => {
+                        self.extension_filter.clear();
+                        self.clamp_extension_selection();
+                    }
+                    _ => {}
+                }
             }
-            KeyCode::Backspace => {
-                self.marketplace_filter.pop();
-                self.clamp_marketplace_selection();
-            }
-            KeyCode::Char(c) => {
-                self.marketplace_filter.push(c);
-                self.clamp_marketplace_selection();
-            }
+            KeyCode::Backspace => match self.route {
+                Route::Plugins => {
+                    self.marketplace_filter.pop();
+                    self.clamp_marketplace_selection();
+                }
+                Route::Extensions => {
+                    self.extension_filter.pop();
+                    self.clamp_extension_selection();
+                }
+                _ => {}
+            },
+            KeyCode::Char(c) => match self.route {
+                Route::Plugins => {
+                    self.marketplace_filter.push(c);
+                    self.clamp_marketplace_selection();
+                }
+                Route::Extensions => {
+                    self.extension_filter.push(c);
+                    self.clamp_extension_selection();
+                }
+                _ => {}
+            },
             _ => {}
         }
         super::worker::Intent::None
@@ -615,7 +669,7 @@ impl TuiModel {
     pub(crate) fn list_len(&self) -> usize {
         match self.route {
             Route::Plugins => self.marketplace_visible_indices().len(),
-            Route::Extensions => self.extensions.len(),
+            Route::Extensions => self.extension_visible_indices().len(),
             Route::Harnesses => self.doctor.as_ref().map_or(0, |d| d.harnesses.len()),
             _ => 0,
         }
@@ -666,9 +720,7 @@ impl TuiModel {
         self.marketplace_plugins = data.marketplace_plugins;
         self.marketplace_count = data.marketplace_count;
         self.clamp_marketplace_selection();
-        self.extensions_selected = self
-            .extensions_selected
-            .min(self.extensions.len().saturating_sub(1));
+        self.clamp_extension_selection();
         self.profiles = data.profiles;
         self.profiles_selected = self
             .profiles_selected
@@ -727,9 +779,7 @@ impl TuiModel {
     }
 
     pub(crate) fn set_route(&mut self, route: Route) {
-        if route != Route::Plugins {
-            self.filtering = false;
-        }
+        self.filtering = false;
         // Harnesses opens straight onto its first entry's detail — the list
         // is short and every row *is* the point of the screen, unlike
         // Marketplace/Plugins, which need typing/browsing before a

@@ -21,8 +21,8 @@ use crate::{
 use super::super::hit::Hit;
 use super::super::model::{ResizablePanel, TuiModel};
 use super::super::{
-    ACCENT, BASE, BORDER, DANGER, MUTED, TEXT_BRIGHT, TEXT_DIM, TEXT_SECONDARY, TEXT_TERTIARY,
-    WARNING,
+    ACCENT, BORDER, DANGER, MUTED, SURFACE_OVERLAY, TEXT_BRIGHT, TEXT_DIM, TEXT_SECONDARY,
+    TEXT_TERTIARY, WARNING,
 };
 use super::super::{content_area, render_divided_row, render_screen_header};
 use super::overview::{portability_label, portability_style};
@@ -329,7 +329,7 @@ fn render_harness_drawer(
                     BORDER
                 },
             ))
-            .style(Style::default().bg(BASE)),
+            .style(Style::default().bg(SURFACE_OVERLAY)),
         drawer,
     );
     hits.insert(

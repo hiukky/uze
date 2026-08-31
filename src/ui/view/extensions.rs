@@ -6,10 +6,9 @@
 //! from `uze_extensions::registry::ExtensionRegistry::builtin`, the one
 //! composition root that knows the extension set, so nothing here is
 //! hand-maintained. Today every entry is bundled with the binary (there is
-//! no loading/enablement surface yet); a flat two-line-per-row list
-//! (name + surface on the first line, description on the second), and the
-//! detail drawer opens on selection the same way Plugins/Harnesses do —
-//! its content is static catalog metadata, so there is nothing to fetch.
+//! no loading/enablement surface yet); a responsive catalog of compact cards,
+//! and the detail drawer opens on selection the same way Plugins/Harnesses
+//! do — its content is static catalog metadata, so there is nothing to fetch.
 
 use ratatui::{
     layout::Rect,
@@ -21,7 +20,8 @@ use ratatui::{
 use super::super::hit::Hit;
 use super::super::model::{ResizablePanel, TuiModel};
 use super::super::{
-    ACCENT, BASE, BORDER, MUTED, SELECTED_BG, TEXT_BRIGHT, TEXT_PRIMARY, TEXT_SECONDARY,
+    ACCENT, BASE, BLUE, BORDER, MUTED, SELECTED_BG, SURFACE_OVERLAY, TEXT_BRIGHT, TEXT_PRIMARY,
+    TEXT_SECONDARY,
 };
 use super::super::{content_area, render_screen_header};
 use super::render_status_line;
@@ -43,6 +43,23 @@ pub(crate) fn render_extensions(
             Style::default().fg(MUTED),
         )),
     );
+    let drawer_area = area_for_drawer(area);
+    let drawer_open = model.extension_drawer_open && model.selected_extension().is_some();
+    let drawer_width = drawer_open.then(|| {
+        model
+            .extension_drawer_width
+            .unwrap_or(52)
+            .clamp(24, drawer_area.width.saturating_sub(24).max(24))
+    });
+    let catalog_width = content.width.saturating_sub(drawer_width.unwrap_or(0));
+    let filter_area = Rect::new(content.x, content.y, catalog_width, 2);
+    render_filter_box(frame, filter_area, model);
+    let catalog_area = Rect::new(
+        content.x,
+        content.y.saturating_add(3),
+        catalog_width,
+        content.height.saturating_sub(3),
+    );
 
     if model.extensions.is_empty() {
         frame.render_widget(
@@ -50,33 +67,62 @@ pub(crate) fn render_extensions(
                 "No extensions available.",
                 Style::default().fg(MUTED),
             )),
-            content,
+            catalog_area,
         );
     } else {
-        let mut y = content.y;
-        for (index, extension) in model.extensions.iter().enumerate() {
-            if y + 1 >= content.y + content.height {
+        let visible = model.extension_visible_indices();
+        if visible.is_empty() {
+            frame.render_widget(
+                Paragraph::new(Span::styled(
+                    format!("No extensions match \"{}\".", model.extension_filter.trim()),
+                    Style::default().fg(MUTED),
+                )),
+                catalog_area,
+            );
+        }
+        let columns = if catalog_area.width >= 110 {
+            3
+        } else if catalog_area.width >= 72 {
+            2
+        } else {
+            1
+        };
+        let gap = 1;
+        let card_width = (catalog_area.width.saturating_sub(gap * (columns - 1))) / columns;
+        let card_height = 7;
+        for (position, extension_index) in visible.iter().enumerate() {
+            let column = position as u16 % columns;
+            let row = position as u16 / columns;
+            let rect = Rect::new(
+                catalog_area.x + column * (card_width + gap),
+                catalog_area.y + row * (card_height + gap),
+                card_width,
+                card_height,
+            );
+            if rect.y + rect.height > catalog_area.y + catalog_area.height {
                 break;
             }
-            let selected = index == model.extensions_selected;
-            let rect = Rect::new(content.x, y, content.width, 2);
-            render_extension_row(frame, rect, extension, selected, hits, index);
-            // A blank row between blocks — otherwise one extension's
-            // description sits directly against the next extension's name
-            // with no breathing room at all.
-            y += 3;
+            let selected = position == model.extensions_selected;
+            render_extension_card(
+                frame,
+                rect,
+                &model.extensions[*extension_index],
+                selected,
+                hits,
+                position,
+            );
         }
     }
 
-    if model.extension_drawer_open
-        && let Some(extension) = model.selected_extension()
-    {
-        let drawer_area = area_for_drawer(area);
-        let drawer_width = model
-            .extension_drawer_width
-            .unwrap_or(52)
-            .clamp(24, drawer_area.width.saturating_sub(24).max(24));
-        render_extension_drawer(frame, drawer_area, drawer_width, model, extension, hits);
+    if drawer_open && let Some(extension) = model.selected_extension() {
+        render_extension_drawer(
+            frame,
+            drawer_area,
+            drawer_width.unwrap_or_default(),
+            model,
+            extension,
+            hits,
+        );
     }
 }
 
@@ -88,7 +134,31 @@ fn area_for_drawer(area: Rect) -> Rect {
     content_area(area)
 }
 
-fn render_extension_row(
+fn render_filter_box(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
+    let block = Block::default()
+        .borders(Borders::BOTTOM)
+        .border_style(Style::default().fg(if model.filtering { ACCENT } else { BORDER }));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let text = if model.extension_filter.is_empty() {
+        Line::from(Span::styled(
+            "Filter extensions…",
+            Style::default().fg(MUTED),
+        ))
+    } else {
+        let mut spans = vec![Span::styled(
+            model.extension_filter.clone(),
+            Style::default().fg(TEXT_PRIMARY),
+        )];
+        if model.filtering {
+            spans.push(Span::styled("▏", Style::default().fg(ACCENT)));
+        }
+        Line::from(spans)
+    };
+    frame.render_widget(Paragraph::new(text), inner);
+}
+
+fn render_extension_card(
     frame: &mut ratatui::Frame<'_>,
     rect: Rect,
     extension: &uze_extensions::registry::BuiltinExtension,
@@ -96,45 +166,52 @@ fn render_extension_row(
     hits: &mut Vec<(Rect, Hit)>,
     index: usize,
 ) {
-    let name_fg = if selected {
-        TEXT_BRIGHT
-    } else {
-        TEXT_SECONDARY
-    };
-    let left = vec![Span::styled(extension.name, Style::default().fg(name_fg))];
-    let right = vec![Span::styled(
-        format!("{} · bundled", extension.surface),
-        Style::default().fg(ACCENT),
-    )];
-    let used: usize = left.iter().chain(right.iter()).map(Span::width).sum();
-    let gap = (rect.width as usize).saturating_sub(used);
-    let mut name_spans = left;
-    name_spans.push(Span::raw(" ".repeat(gap.max(2))));
-    name_spans.extend(right);
-
-    let mut desc_spans = vec![Span::styled(
-        extension.description,
-        Style::default().fg(MUTED),
-    )];
-
-    if selected {
-        for span in name_spans.iter_mut().chain(desc_spans.iter_mut()) {
-            span.style = span.style.bg(SELECTED_BG);
-        }
-        for spans in [&mut name_spans, &mut desc_spans] {
-            let used: usize = spans.iter().map(Span::width).sum();
-            let gap = (rect.width as usize).saturating_sub(used);
-            spans.push(Span::styled(
-                " ".repeat(gap),
-                Style::default().bg(SELECTED_BG),
-            ));
-        }
-    }
-
-    let top = Rect::new(rect.x, rect.y, rect.width, 1);
-    let bottom = Rect::new(rect.x, rect.y + 1, rect.width, 1);
-    frame.render_widget(Paragraph::new(Line::from(name_spans)), top);
-    frame.render_widget(Paragraph::new(Line::from(desc_spans)), bottom);
+    let background = if selected { SELECTED_BG } else { BASE };
+    frame.render_widget(
+        Paragraph::new("").style(Style::default().bg(background)),
+        rect,
+    );
+    let inner = Rect::new(
+        rect.x.saturating_add(2),
+        rect.y.saturating_add(1),
+        rect.width.saturating_sub(4),
+        rect.height.saturating_sub(2),
+    );
+    let name = Span::styled(
+        extension.name,
+        Style::default()
+            .fg(if selected { TEXT_BRIGHT } else { TEXT_PRIMARY })
+            .add_modifier(Modifier::BOLD),
+    );
+    let badge = Span::styled("✓ Official", Style::default().fg(BLUE));
+    let gap = inner
+        .width
+        .saturating_sub((name.width() + badge.width()) as u16);
+    let header = Line::from(vec![name, Span::raw(" ".repeat(gap as usize)), badge]);
+    frame.render_widget(
+        Paragraph::new(header),
+        Rect::new(inner.x, inner.y, inner.width, 1),
+    );
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            extension.description,
+            Style::default().fg(TEXT_SECONDARY),
+        ))
+        .wrap(Wrap { trim: true }),
+        Rect::new(inner.x, inner.y + 1, inner.width, 2),
+    );
+    let tags = Line::from(vec![
+        Span::styled(
+            format!(" {} ", extension.surface),
+            Style::default().fg(MUTED),
+        ),
+        Span::raw(" "),
+        Span::styled(" Built-in ", Style::default().fg(MUTED)),
+    ]);
+    frame.render_widget(
+        Paragraph::new(tags),
+        Rect::new(inner.x, inner.y + 4, inner.width, 1),
+    );
     hits.push((rect, Hit::ExtensionRow(index)));
 }
 
@@ -164,7 +241,7 @@ fn render_extension_drawer(
                     BORDER
                 },
             ))
-            .style(Style::default().bg(BASE)),
+            .style(Style::default().bg(SURFACE_OVERLAY)),
         drawer,
     );
     hits.insert(
