@@ -14,7 +14,7 @@ use super::model::{
     Focus, Overlay, PREFERENCE_ROW_COUNT, ProfilePanel, ROUTES, RefreshData, Route, TrustedRetry,
     TuiModel,
 };
-use super::view::doctor::{Severity, classify_doctor};
+use super::view::health::{Severity, actionable_alerts};
 use super::worker::{Intent, TrustGrant};
 use super::{ACCENT, MUTED, hint_spans};
 
@@ -618,6 +618,48 @@ fn n_opens_new_profile_overlay_and_submitting_creates_it() {
 }
 
 #[test]
+fn clicking_new_profile_opens_the_profile_overlay() {
+    let mut model = model_with_data();
+    model.hits = vec![(Rect::new(10, 4, 5, 1), Hit::NewProfile)];
+
+    assert_eq!(model.click(12, 4), Intent::None);
+    assert_eq!(model.overlay, Overlay::NewProfile(String::new()));
+    assert_eq!(model.focus, Focus::Overlay);
+}
+
+#[test]
+fn clicking_remove_profile_opens_the_delete_confirmation() {
+    let mut model = model_with_data();
+    let id = model.profiles[0].id.clone();
+    model.hits = vec![(Rect::new(10, 4, 8, 1), Hit::DeleteSelectedProfile)];
+
+    assert_eq!(model.click(12, 4), Intent::None);
+    assert!(matches!(
+        &model.overlay,
+        Overlay::ConfirmDeleteProfile { id: confirmed_id, .. } if *confirmed_id == id
+    ));
+    assert_eq!(model.focus, Focus::Overlay);
+}
+
+#[test]
+fn clicking_apply_on_an_inactive_profile_targets_checked_harnesses() {
+    let mut model = model_with_data();
+    model.profiles[0].active = false;
+    let id = model.profiles[0].id.clone();
+    model.hits = vec![(Rect::new(18, 4, 3, 1), Hit::ApplySelectedProfile)];
+
+    let Intent::ApplyProfile {
+        id: applied_id,
+        harness_ids,
+    } = model.click(19, 4)
+    else {
+        panic!("expected ApplyProfile");
+    };
+    assert_eq!(applied_id, id);
+    assert_eq!(harness_ids.len(), model.profile_harness_selection.len());
+}
+
+#[test]
 fn new_profile_overlay_esc_cancels_without_intent() {
     let mut model = model_with_data();
     model.set_route(Route::Profiles);
@@ -690,22 +732,13 @@ fn s_on_the_list_panel_sets_the_selected_profile_active() {
 }
 
 #[test]
-fn a_applies_the_selected_profile_to_every_checked_harness() {
+fn a_is_inert_on_the_profiles_screen() {
     let mut model = model_with_data();
     model.set_route(Route::Profiles);
     model.focus = Focus::Content;
     model.profiles_selected = 0;
-    let id = model.profiles[0].id.clone();
     let intent = model.apply_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
-    let Intent::ApplyProfile {
-        id: applied_id,
-        harness_ids,
-    } = intent
-    else {
-        panic!("expected ApplyProfile, got a different intent");
-    };
-    assert_eq!(applied_id, id);
-    assert_eq!(harness_ids.len(), model.profile_harness_selection.len());
+    assert_eq!(intent, Intent::None);
 }
 
 #[test]
@@ -734,33 +767,47 @@ fn editor_selection_clamps_to_the_preference_row_count() {
 }
 
 #[test]
-fn doctor_classifies_conflicts_as_high_and_missing_as_low() {
+fn overview_alerts_classify_conflicts_as_high_and_missing_as_low() {
     use crate::application::{ManagedStateSummary, PackageManagedState};
     let doctor = DoctorReport {
         uze_home: PathBuf::from("/home"),
         store: crate::application::StoreHealth::Ready,
         plugins: Vec::new(),
         harnesses: Vec::new(),
-        attachments: vec![PackageManagedState {
-            hooks: Vec::new(),
-            plugin: "acme".to_owned(),
-            state: ManagedStateSummary {
-                matched: 0,
-                missing: 1,
-                drifted: 0,
-                conflicts: 1,
-                blocked: 0,
-                ledger_error: None,
+        attachments: vec![
+            PackageManagedState {
+                hooks: Vec::new(),
+                plugin: "acme".to_owned(),
+                state: ManagedStateSummary {
+                    matched: 0,
+                    missing: 1,
+                    drifted: 0,
+                    conflicts: 1,
+                    blocked: 0,
+                    ledger_error: None,
+                },
             },
-        }],
+            PackageManagedState {
+                hooks: Vec::new(),
+                plugin: "example".to_owned(),
+                state: ManagedStateSummary {
+                    matched: 0,
+                    missing: 1,
+                    drifted: 0,
+                    conflicts: 0,
+                    blocked: 0,
+                    ledger_error: None,
+                },
+            },
+        ],
         ledger_error: None,
         integration_state_error: None,
         provisioning_state_error: None,
         maintenance: MaintenanceReport::default(),
     };
-    let issues = classify_doctor(Some(&doctor));
-    assert_eq!(issues[0].severity, Severity::High);
-    assert!(issues.iter().any(|i| i.severity == Severity::Low));
+    let alerts = actionable_alerts(Some(&doctor));
+    assert_eq!(alerts[0].severity, Severity::High);
+    assert!(alerts.iter().any(|alert| alert.severity == Severity::Low));
 }
 
 fn marketplace_plugin(marketplace: &str, name: &str, installed: bool) -> MarketplacePluginSummary {
@@ -863,45 +910,6 @@ fn r_refreshes_outside_plugins_but_still_removes_within_plugins() {
     let intent = plugins_model.apply_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
     assert!(matches!(plugins_model.overlay, Overlay::ConfirmRemove { ref id, .. } if id == "one"));
     assert_eq!(intent, Intent::None);
-}
-
-#[test]
-fn entering_doctor_route_uses_the_cached_full_report() {
-    // Every refresh carries the full doctor (attachments included, via
-    // the inspection cache) — navigating to Doctor never needs a
-    // special "deep" request, and no screen ever shows a masked
-    // "unknown" placeholder for attachment health.
-    let mut model = TuiModel {
-        focus: Focus::Sidebar,
-        ..TuiModel::default()
-    };
-    model.refreshed(RefreshData {
-        doctor: Some(DoctorReport {
-            uze_home: PathBuf::from("/home"),
-            store: crate::application::StoreHealth::Ready,
-            plugins: Vec::new(),
-            harnesses: Vec::new(),
-            attachments: Vec::new(),
-            ledger_error: None,
-            integration_state_error: None,
-            provisioning_state_error: None,
-            maintenance: MaintenanceReport::default(),
-        }),
-        ..RefreshData::default()
-    });
-
-    // Sidebar order: Overview → Plugins → Extensions → Harnesses →
-    // Profiles → Doctor. No deep-request intent anywhere.
-    let mut last_intent = Intent::None;
-    for _ in 0..5 {
-        last_intent = model.apply_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-    }
-    assert_eq!(model.route, Route::Doctor);
-    assert_eq!(
-        last_intent,
-        Intent::None,
-        "entering Doctor must not spawn a second, separate deep reload"
-    );
 }
 
 #[test]

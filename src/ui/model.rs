@@ -1,7 +1,7 @@
 //! TUI — navigation, selection, and overlay state.
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Instant};
 
 use ratatui::layout::Rect;
 use uze_core::preference::{Autonomy, ModelPreference, SandboxScope};
@@ -14,7 +14,7 @@ use crate::application::{
 };
 
 use super::hit::Hit;
-use super::view::doctor::{Issue, classify_doctor};
+use super::view::health::{Alert, actionable_alerts};
 
 // --- Routes -----------------------------------------------------------------
 
@@ -31,16 +31,14 @@ pub(crate) enum Route {
     Extensions,
     Harnesses,
     Profiles,
-    Doctor,
 }
 
-pub(crate) const ROUTES: [Route; 6] = [
+pub(crate) const ROUTES: [Route; 5] = [
     Route::Overview,
     Route::Plugins,
     Route::Extensions,
     Route::Harnesses,
     Route::Profiles,
-    Route::Doctor,
 ];
 
 impl Route {
@@ -51,7 +49,6 @@ impl Route {
             Route::Extensions => "Extensions",
             Route::Harnesses => "Integrations",
             Route::Profiles => "Profiles",
-            Route::Doctor => "Doctor",
         }
     }
 
@@ -219,6 +216,7 @@ pub(crate) struct TuiModel {
     pub(crate) focus: Focus,
     pub(crate) overlay: Overlay,
     pub(crate) status: Status,
+    pub(crate) status_expires_at: Option<Instant>,
     /// At most one health/maintenance worker is allowed at a time. Refresh
     /// intents while it runs are deliberately coalesced rather than spawning
     /// competing inspections against the same receipt ledger.
@@ -309,6 +307,7 @@ impl Default for TuiModel {
             focus: Focus::Sidebar,
             overlay: Overlay::None,
             status: Status::Idle,
+            status_expires_at: None,
             maintenance_in_flight: false,
             plugins: Vec::new(),
             plugin_detail: None,
@@ -349,6 +348,15 @@ impl Default for TuiModel {
 }
 
 impl TuiModel {
+    pub(crate) fn expire_status(&mut self) {
+        if self
+            .status_expires_at
+            .is_some_and(|expires| Instant::now() >= expires)
+        {
+            self.status = Status::Idle;
+            self.status_expires_at = None;
+        }
+    }
     /// Installed plugins from `plugins` that no catalog entry knows about
     /// (ad-hoc `uze add`/git/local installs) — the merged Plugins tree's
     /// "local" group, so a direct install never disappears from the TUI
@@ -693,8 +701,8 @@ impl TuiModel {
         }
     }
 
-    pub(crate) fn issues(&self) -> Vec<Issue> {
-        classify_doctor(self.doctor.as_ref())
+    pub(crate) fn alerts(&self) -> Vec<Alert> {
+        actionable_alerts(self.doctor.as_ref())
     }
 
     pub(crate) fn set_route(&mut self, route: Route) {

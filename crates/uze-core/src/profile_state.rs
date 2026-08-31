@@ -28,6 +28,28 @@ struct ProfileStore {
     active: Option<String>,
 }
 
+pub const DEFAULT_PROFILE_ID: &str = "default";
+
+/// Initializes the baseline profile once, so a new installation always has
+/// one usable, active profile before the operator creates custom ones.
+pub fn ensure_default(home: &UzeHome) -> Result<()> {
+    let mut store = load_store(home)?;
+    if !store.profiles.is_empty() {
+        return Ok(());
+    }
+    home.ensure_layout()?;
+    store.profiles.insert(
+        DEFAULT_PROFILE_ID.to_owned(),
+        ProfileRecord {
+            id: DEFAULT_PROFILE_ID.to_owned(),
+            description: None,
+            preferences: Preferences::default(),
+        },
+    );
+    store.active = Some(DEFAULT_PROFILE_ID.to_owned());
+    save_store(home, &store)
+}
+
 /// All persisted profiles, keyed by id.
 pub fn load(home: &UzeHome) -> Result<BTreeMap<String, ProfileRecord>> {
     Ok(load_store(home)?.profiles)
@@ -94,11 +116,15 @@ pub fn update_preferences(home: &UzeHome, id: &str, preferences: Preferences) ->
 
 pub fn delete(home: &UzeHome, id: &str) -> Result<()> {
     let mut store = load_store(home)?;
-    if store.profiles.remove(id).is_none() {
+    if !store.profiles.contains_key(id) {
         return Err(UzeError::UnknownProfile(id.to_owned()));
     }
+    if store.profiles.len() == 1 {
+        return Err(UzeError::CannotDeleteOnlyProfile);
+    }
+    store.profiles.remove(id);
     if store.active.as_deref() == Some(id) {
-        store.active = None;
+        store.active = store.profiles.keys().next().cloned();
     }
     save_store(home, &store)
 }
@@ -213,14 +239,36 @@ mod tests {
     }
 
     #[test]
-    fn deleting_the_active_profile_clears_active() {
+    fn deleting_the_only_profile_is_rejected() {
         let home = temp_home("delete-active");
         create(&home, "default", None, Preferences::default()).unwrap();
         set_active(&home, "default").unwrap();
         assert_eq!(active(&home).unwrap().as_deref(), Some("default"));
+        assert!(matches!(
+            delete(&home, "default"),
+            Err(UzeError::CannotDeleteOnlyProfile)
+        ));
+        assert_eq!(active(&home).unwrap().as_deref(), Some("default"));
+        fs::remove_dir_all(home.root()).unwrap();
+    }
+
+    #[test]
+    fn default_profile_is_created_active_on_initialization() {
+        let home = temp_home("default-profile");
+        ensure_default(&home).unwrap();
+        assert!(get(&home, DEFAULT_PROFILE_ID).unwrap().is_some());
+        assert_eq!(active(&home).unwrap().as_deref(), Some(DEFAULT_PROFILE_ID));
+        fs::remove_dir_all(home.root()).unwrap();
+    }
+
+    #[test]
+    fn deleting_an_active_profile_promotes_a_remaining_profile() {
+        let home = temp_home("promote-active");
+        create(&home, "default", None, Preferences::default()).unwrap();
+        create(&home, "coding", None, Preferences::default()).unwrap();
+        set_active(&home, "default").unwrap();
         delete(&home, "default").unwrap();
-        assert_eq!(active(&home).unwrap(), None);
-        assert!(get(&home, "default").unwrap().is_none());
+        assert_eq!(active(&home).unwrap().as_deref(), Some("coding"));
         fs::remove_dir_all(home.root()).unwrap();
     }
 

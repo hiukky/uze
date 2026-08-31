@@ -33,6 +33,8 @@ pub struct ProfileApplyResult {
 
 impl UzeApplication {
     pub fn list_profiles(&self) -> Result<Vec<ProfileSummary>> {
+        let _mutation = uze_core::persistence::MutationLock::acquire(&self.home)?;
+        profile_state::ensure_default(&self.home)?;
         let active = profile_state::active(&self.home)?;
         Ok(profile_state::load(&self.home)?
             .into_values()
@@ -56,7 +58,14 @@ impl UzeApplication {
         preferences: Preferences,
     ) -> Result<()> {
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.home)?;
-        profile_state::create(&self.home, id, description, preferences)
+        if id != profile_state::DEFAULT_PROFILE_ID {
+            profile_state::ensure_default(&self.home)?;
+        }
+        profile_state::create(&self.home, id, description, preferences)?;
+        if profile_state::active(&self.home)?.is_none() {
+            profile_state::set_active(&self.home, id)?;
+        }
+        Ok(())
     }
 
     pub fn update_profile_preferences(&self, id: &str, preferences: Preferences) -> Result<()> {
@@ -66,6 +75,7 @@ impl UzeApplication {
 
     pub fn delete_profile(&self, id: &str) -> Result<()> {
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.home)?;
+        profile_state::ensure_default(&self.home)?;
         profile_state::delete(&self.home, id)
     }
 
@@ -199,16 +209,20 @@ mod tests {
     }
 
     #[test]
-    fn create_list_and_delete_round_trip() {
+    fn create_list_and_delete_round_trip_preserves_one_active_profile() {
         let home = temp_home("crud");
         let app = UzeApplication::new(home.clone(), Vec::new());
         app.create_profile("default", None, Preferences::default())
             .unwrap();
         assert_eq!(app.list_profiles().unwrap().len(), 1);
-        app.set_active_profile("default").unwrap();
         assert!(app.list_profiles().unwrap()[0].active);
+        app.create_profile("coding", None, Preferences::default())
+            .unwrap();
         app.delete_profile("default").unwrap();
-        assert!(app.list_profiles().unwrap().is_empty());
+        let profiles = app.list_profiles().unwrap();
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].id, "coding");
+        assert!(profiles[0].active);
         let _ = std::fs::remove_dir_all(home.root());
     }
 

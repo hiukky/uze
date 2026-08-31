@@ -163,6 +163,8 @@ pub enum UzeError {
     UnknownProfile(String),
     #[error("profile `{0}` already exists")]
     ProfileAlreadyExists(String),
+    #[error("cannot remove the only profile")]
+    CannotDeleteOnlyProfile,
     #[error("invalid profile id `{0}`: use lowercase letters, digits, `-`, or `_`")]
     InvalidProfileId(String),
     #[error("failed to run `{program}`: {source}")]

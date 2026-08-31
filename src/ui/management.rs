@@ -1,5 +1,5 @@
 //! Management client for the TUI (routes: Overview, Plugins, Extensions,
-//! Harnesses, Profiles, Doctor) — this mode's counterpart to
+//! Harnesses and Profiles) — this mode's counterpart to
 //! `super::orchestrator`'s terminal workspace. Presentation deliberately
 //! shares the workspace's palette and layout conventions (menu + main
 //! container, the Work/Manage toggle, hairline dividers, sidebar
@@ -41,6 +41,7 @@ pub(crate) fn run_management(
     spawn_startup(home.clone(), sender.clone(), model.context_root.clone());
     loop {
         model.tick = model.tick.wrapping_add(1);
+        model.expire_status();
         let mut hits = Vec::new();
         terminal.draw(|frame| render(frame, &model, &mut hits))?;
         model.hits = hits;
@@ -180,7 +181,6 @@ pub(crate) fn render(
         }
         Route::Harnesses => view::harnesses::render_harnesses(frame, layout.content, model, hits),
         Route::Profiles => view::profiles::render_profiles(frame, layout.content, model, hits),
-        Route::Doctor => view::doctor::render_doctor(frame, layout.content, model),
     }
 
     render_footer(frame, layout.footer, model);
@@ -218,7 +218,6 @@ fn route_subtitle(route: Route) -> &'static str {
         Route::Extensions => "official tool extensions",
         Route::Harnesses => "detected agents",
         Route::Profiles => "preferences",
-        Route::Doctor => "diagnostics",
     }
 }
 
@@ -482,17 +481,6 @@ fn route_hint(model: &TuiModel) -> &'static str {
         }
         Route::Extensions => "↑↓ select · enter details",
         Route::Harnesses => "↑↓ select · s setup · a analyze · p apply · ? status · esc close",
-        Route::Profiles => match model.profile_panel {
-            model::ProfilePanel::List => {
-                "↑↓ select · enter edit · n new · d delete · s switch · a apply · tab panel · esc back"
-            }
-            model::ProfilePanel::Editor => {
-                "↑↓ select · ←→/enter change · tab panel · a apply · esc back"
-            }
-            model::ProfilePanel::Harnesses => {
-                "↑↓ select · space toggle · a apply · tab panel · esc back"
-            }
-        },
-        Route::Doctor => "r refresh · ? help",
+        Route::Profiles => "↑↓ navigate · enter expand/edit · space toggle",
     }
 }

@@ -2,7 +2,12 @@
 //! against a short-lived application facade, then reports back over the
 //! channel so the render loop never blocks.
 
-use std::{path::PathBuf, sync::mpsc::Sender, thread};
+use std::{
+    path::PathBuf,
+    sync::mpsc::Sender,
+    thread,
+    time::{Duration, Instant},
+};
 
 use uze_core::preference::Preferences;
 
@@ -79,7 +84,7 @@ pub(crate) enum WorkerResult {
     },
     ContextAnalyzed(std::result::Result<(ProjectContextStatus, ContextPlan), String>),
     ContextApplied(std::result::Result<(String, ContextReconciliationReport), String>),
-    ProfileApplied(std::result::Result<(String, Vec<ProfileApplyResult>), String>),
+    ProfileApplied(std::result::Result<(String, Vec<ProfileApplyResult>, RefreshData), String>),
 }
 
 pub(crate) fn dispatch(
@@ -88,6 +93,9 @@ pub(crate) fn dispatch(
     sender: &Sender<WorkerResult>,
     model: &mut TuiModel,
 ) {
+    if intent != Intent::None {
+        model.status_expires_at = None;
+    }
     match intent {
         Intent::None | Intent::Quit | Intent::SwitchToWorkspace => {}
         Intent::Refresh => {
@@ -298,13 +306,18 @@ pub(crate) fn dispatch(
         }
         Intent::ApplyProfile { id, harness_ids } => {
             model.status = Status::Working(format!("Applying \"{id}\"…"));
-            let (home, sender) = (home.clone(), sender.clone());
+            let (home, sender, context_root) =
+                (home.clone(), sender.clone(), model.context_root.clone());
             thread::spawn(move || {
-                let result = tui_application(home)
-                    .and_then(|app| app.apply_profile(&id, &harness_ids))
-                    .map(|results| {
-                        let message = apply_message(&id, &results);
-                        (message, results)
+                let result = tui_application(home.clone())
+                    .and_then(|app| {
+                        app.set_active_profile(&id)?;
+                        let results = app.apply_profile(&id, &harness_ids)?;
+                        let data = load_refresh_data(home, &context_root)?;
+                        Ok({
+                            let message = apply_message(&id, &results);
+                            (message, results, data)
+                        })
                     })
                     .map_err(|error| error.to_string());
                 let _ = sender.send(WorkerResult::ProfileApplied(result));
@@ -501,9 +514,12 @@ pub(crate) fn drain_worker_results(
                 model.status = Status::Success(message);
                 let _ = report;
             }
-            WorkerResult::ProfileApplied(Ok((message, results))) => {
+            WorkerResult::ProfileApplied(Ok((message, results, data))) => {
+                model.refreshed(data);
                 model.profile_apply_results = results;
-                model.status = Status::Success(message);
+                let _ = message;
+                model.status = Status::Success("Profile applied".to_owned());
+                model.status_expires_at = Some(Instant::now() + Duration::from_secs(3));
             }
             WorkerResult::Refreshed(Err(error)) => {
                 model.maintenance_in_flight = false;

@@ -14,8 +14,9 @@ use ratatui::{
 use crate::application::{Portability, ProjectContextStatus};
 
 use super::super::model::TuiModel;
-use super::super::{BORDER_FAINT, MUTED, SUCCESS, TEXT_BRIGHT, WARNING};
+use super::super::{ACCENT, BORDER_FAINT, DANGER, MUTED, SUCCESS, TEXT_BRIGHT, WARNING};
 use super::super::{content_area, render_screen_header};
+use super::health::Severity;
 
 pub(crate) fn render_overview(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
     let area = content_area(area);
@@ -25,23 +26,23 @@ pub(crate) fn render_overview(frame: &mut ratatui::Frame<'_>, area: Rect, model:
     let harness_detected = model.doctor.as_ref().map_or(0, |d| {
         d.harnesses.iter().filter(|h| h.detection.present).count()
     });
-    let issues = model.issues().len();
+    let alerts = model.alerts();
     let mut y = content.y;
 
     // Status line: dot + headline + detail, matching the design's single
     // "All systems healthy — N harnesses detected, ..." summary row.
-    let (color, headline) = if issues == 0 {
+    let (color, headline) = if alerts.is_empty() {
         (SUCCESS, "All systems healthy")
     } else {
         (WARNING, "Attention needed")
     };
-    let detail = if issues == 0 {
+    let detail = if alerts.is_empty() {
         format!(
             "— {harness_detected} harness{} detected",
             if harness_detected == 1 { "" } else { "es" }
         )
     } else {
-        format!("— {issues} issue(s), see Doctor")
+        format!("— {} item(s) need attention", alerts.len())
     };
     frame.render_widget(
         Paragraph::new(Line::from(vec![
@@ -63,9 +64,22 @@ pub(crate) fn render_overview(frame: &mut ratatui::Frame<'_>, area: Rect, model:
         (
             "Harnesses detected",
             format!("{harness_detected}/{harness_total}"),
+            TEXT_BRIGHT,
         ),
-        ("Plugins installed", model.plugins.len().to_string()),
-        ("Marketplace sources", model.marketplace_count.to_string()),
+        (
+            "Plugins installed",
+            model.plugins.len().to_string(),
+            TEXT_BRIGHT,
+        ),
+        (
+            "Active profile",
+            model
+                .profiles
+                .iter()
+                .find(|profile| profile.active)
+                .map_or_else(|| "none".to_owned(), |profile| profile.id.clone()),
+            SUCCESS,
+        ),
     ];
     if y + 1 < content.y + content.height {
         let columns = Layout::default()
@@ -76,7 +90,7 @@ pub(crate) fn render_overview(frame: &mut ratatui::Frame<'_>, area: Rect, model:
                 Constraint::Percentage(34),
             ])
             .split(Rect::new(content.x, y, content.width, 2));
-        for (cell, (label, value)) in columns.iter().zip(stats) {
+        for (cell, (label, value, color)) in columns.iter().zip(stats) {
             let block = Block::default()
                 .borders(Borders::LEFT)
                 .border_style(Style::default().fg(BORDER_FAINT));
@@ -96,13 +110,53 @@ pub(crate) fn render_overview(frame: &mut ratatui::Frame<'_>, area: Rect, model:
             frame.render_widget(
                 Paragraph::new(Span::styled(
                     format!(" {value}"),
-                    Style::default()
-                        .fg(TEXT_BRIGHT)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
                 )),
                 rows[1],
             );
         }
+    }
+    y += 3;
+
+    if y < content.y + content.height {
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                if alerts.is_empty() {
+                    "Current activity"
+                } else {
+                    "Needs attention"
+                },
+                Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
+            )),
+            Rect::new(content.x, y, content.width, 1),
+        );
+        y += 1;
+    }
+    if alerts.is_empty() {
+        frame.render_widget(
+            Paragraph::new(Span::styled("No action needed", Style::default().fg(MUTED))),
+            Rect::new(content.x, y, content.width, 1),
+        );
+        return;
+    }
+    for alert in alerts
+        .iter()
+        .take((content.y + content.height).saturating_sub(y) as usize)
+    {
+        let (glyph, color) = match alert.severity {
+            Severity::High => ("✕", DANGER),
+            Severity::Medium => ("!", WARNING),
+            Severity::Low => ("•", ACCENT),
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(format!("{glyph} "), Style::default().fg(color)),
+                Span::styled(alert.label.clone(), Style::default().fg(TEXT_BRIGHT)),
+                Span::styled(format!(" — {}", alert.detail), Style::default().fg(MUTED)),
+            ])),
+            Rect::new(content.x, y, content.width, 1),
+        );
+        y += 1;
     }
 }
 

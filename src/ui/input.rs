@@ -172,17 +172,7 @@ impl TuiModel {
                     .map(|profile| Intent::SetActiveProfile(profile.id.clone()))
                     .unwrap_or(Intent::None)
             }
-            KeyCode::Char('a') if self.route == Route::Profiles => {
-                let harness_ids: Vec<String> =
-                    self.profile_harness_selection.iter().cloned().collect();
-                self.selected_profile()
-                    .filter(|_| !harness_ids.is_empty())
-                    .map(|profile| Intent::ApplyProfile {
-                        id: profile.id.clone(),
-                        harness_ids: harness_ids.clone(),
-                    })
-                    .unwrap_or(Intent::None)
-            }
+            KeyCode::Char('a' | 'A') if self.route == Route::Profiles => Intent::None,
             KeyCode::Enter => self.open_or_act(),
             KeyCode::Char('r') if self.route == Route::Plugins => {
                 if let Some(plugin) = self.selected_marketplace_plugin().filter(|p| p.installed) {

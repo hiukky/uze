@@ -20,6 +20,9 @@ pub(crate) enum Hit {
     JumpToMarketplace(String),
     ExtensionRow(usize),
     HarnessRow(usize),
+    NewProfile,
+    DeleteSelectedProfile,
+    ApplySelectedProfile,
     ProfileRow(usize),
     PreferenceRow(usize),
     /// Clicking a harness checkbox toggles it immediately — the click's
@@ -103,6 +106,32 @@ impl TuiModel {
                 self.harnesses_drawer_open = true;
                 self.focus = Focus::Content;
                 Intent::None
+            }
+            Hit::NewProfile => {
+                self.overlay = Overlay::NewProfile(String::new());
+                self.focus = Focus::Overlay;
+                Intent::None
+            }
+            Hit::DeleteSelectedProfile => {
+                if let Some(profile) = self.selected_profile() {
+                    self.overlay = Overlay::ConfirmDeleteProfile {
+                        id: profile.id.clone(),
+                        focus: 1,
+                    };
+                    self.focus = Focus::Overlay;
+                }
+                Intent::None
+            }
+            Hit::ApplySelectedProfile => {
+                let harness_ids: Vec<String> =
+                    self.profile_harness_selection.iter().cloned().collect();
+                self.selected_profile()
+                    .filter(|_| !harness_ids.is_empty())
+                    .map(|profile| Intent::ApplyProfile {
+                        id: profile.id.clone(),
+                        harness_ids,
+                    })
+                    .unwrap_or(Intent::None)
             }
             Hit::ProfileRow(index) => {
                 self.profiles_selected = index;

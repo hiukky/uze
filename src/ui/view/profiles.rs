@@ -1,29 +1,23 @@
 //! TUI view — Profiles route.
 //!
-//! Three permanent columns (profile list / preference editor / harness
-//! picker) — the one layout shape not used anywhere else in this TUI, which
-//! otherwise sticks to a single list plus an optional slide-in drawer. A
-//! profile is small, and the three panels different enough in kind, that a
-//! permanent split reads clearer here than a drawer would. Scales to
-//! however many harnesses are registered: the right panel iterates
-//! `doctor.harnesses` (the same read model the Harnesses route uses), never
-//! a hardcoded set.
+//! Profiles keeps the selected profile's preferences directly beneath its
+//! name. The screen therefore reads as one compact tree beside the harness
+//! checklist, instead of making people scan three independent columns.
 
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Padding, Paragraph},
+    widgets::{Block, Borders, Paragraph},
 };
-
 use uze_core::preference::{Autonomy, ModelPreference, PreferenceApplyOutcome, SandboxScope};
 
+use super::super::content_area;
 use super::super::hit::Hit;
 use super::super::model::{ProfilePanel, TuiModel};
 use super::super::{
     ACCENT, BLUE, BORDER, DANGER, MUTED, TEXT_BRIGHT, TEXT_SECONDARY, TEXT_TERTIARY, WARNING,
 };
-use super::super::{content_area, render_screen_header};
 
 pub(crate) fn render_profiles(
     frame: &mut ratatui::Frame<'_>,
@@ -31,106 +25,26 @@ pub(crate) fn render_profiles(
     model: &TuiModel,
     hits: &mut Vec<(Rect, Hit)>,
 ) {
-    let area = content_area(area);
     let columns = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(22),
-            Constraint::Percentage(45),
-            Constraint::Percentage(33),
-        ])
-        .split(area);
-
-    render_list(frame, columns[0], model, hits);
-    render_editor(frame, columns[1], model, hits);
-    render_harnesses(frame, columns[2], model, hits);
+        .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
+        .split(content_area(area));
+    render_profile_tree(frame, columns[0], model, hits);
+    render_harnesses(frame, columns[1], model, hits);
 }
 
-/// Left/right breathing room inside each panel — text must never sit flush
-/// against a column divider or the screen edge (the dividers themselves stay
-/// the same dim hairline as everywhere else in this TUI; focus is shown
-/// through the header trailer/row styling instead of a loud full-height
-/// colored border).
-fn panel_padding() -> Padding {
-    Padding::new(2, 2, 0, 0)
-}
-
-fn bordered_panel() -> Block<'static> {
+fn panel(right_border: bool) -> Block<'static> {
     Block::default()
-        .borders(Borders::RIGHT)
+        .borders(if right_border {
+            Borders::RIGHT
+        } else {
+            Borders::NONE
+        })
         .border_style(Style::default().fg(BORDER))
-        .padding(panel_padding())
-}
-
-fn unbordered_panel() -> Block<'static> {
-    Block::default().padding(panel_padding())
 }
 
 fn focus_color(focused: bool) -> Color {
     if focused { ACCENT } else { MUTED }
-}
-
-fn render_list(
-    frame: &mut ratatui::Frame<'_>,
-    area: Rect,
-    model: &TuiModel,
-    hits: &mut Vec<(Rect, Hit)>,
-) {
-    let focused = model.profile_panel == ProfilePanel::List;
-    let block = bordered_panel();
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    let content = render_screen_header(
-        frame,
-        inner,
-        "Profiles",
-        "select or create",
-        Some(Span::styled(
-            "+ new",
-            Style::default().fg(focus_color(focused)),
-        )),
-    );
-
-    let bottom = content.y + content.height;
-    if model.profiles.is_empty() {
-        frame.render_widget(
-            Paragraph::new(Span::styled(
-                "No profiles yet — press n",
-                Style::default().fg(MUTED),
-            )),
-            Rect::new(content.x, content.y, content.width, 1),
-        );
-        return;
-    }
-    for (y, (index, profile)) in (content.y..bottom).zip(model.profiles.iter().enumerate()) {
-        let cursor = index == model.profiles_selected;
-        let border = if cursor {
-            Span::styled("│", Style::default().fg(ACCENT))
-        } else {
-            Span::raw(" ")
-        };
-        let name_fg = if cursor { TEXT_BRIGHT } else { TEXT_TERTIARY };
-        let mut name_style = Style::default().fg(name_fg);
-        if cursor {
-            name_style = name_style.add_modifier(Modifier::BOLD);
-        }
-        let mut spans = vec![
-            border,
-            Span::raw(" "),
-            Span::styled(
-                if profile.active { "● " } else { "  " },
-                Style::default().fg(ACCENT),
-            ),
-            Span::styled(profile.id.clone(), name_style),
-        ];
-        if profile.active {
-            spans.push(Span::styled("  (active)", Style::default().fg(ACCENT)));
-        }
-        let rect = Rect::new(content.x, y, content.width, 1);
-        frame.render_widget(Paragraph::new(Line::from(spans)), rect);
-        hits.push((rect, Hit::ProfileRow(index)));
-    }
 }
 
 fn autonomy_label(value: Autonomy) -> &'static str {
@@ -172,84 +86,178 @@ fn model_label(value: ModelPreference) -> &'static str {
     }
 }
 
-fn render_editor(
+fn render_profile_tree(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
     model: &TuiModel,
     hits: &mut Vec<(Rect, Hit)>,
 ) {
-    let focused = model.profile_panel == ProfilePanel::Editor;
-    let block = bordered_panel();
+    let block = panel(true);
     let inner = block.inner(area);
     frame.render_widget(block, area);
-
-    let Some(profile) = model.selected_profile() else {
-        let content = render_screen_header(frame, inner, "Preferences", "", None);
-        frame.render_widget(
-            Paragraph::new(Span::styled(
-                "Select or create a profile",
-                Style::default().fg(MUTED),
-            )),
-            Rect::new(content.x, content.y, content.width, 1),
-        );
-        return;
-    };
-
-    let subtitle = profile
-        .description
-        .as_deref()
-        .unwrap_or("select a preference to change it");
-    let content = render_screen_header(
-        frame,
-        inner,
-        &format!("Preferences — {}", profile.id),
-        subtitle,
-        None,
+    let header = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Min(1), Constraint::Length(5)])
+        .split(Rect::new(inner.x, inner.y, inner.width, 1));
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            "Profiles",
+            Style::default()
+                .fg(TEXT_BRIGHT)
+                .add_modifier(Modifier::BOLD),
+        )),
+        header[0],
+    );
+    frame.render_widget(
+        Paragraph::new(Span::styled("+ new", Style::default().fg(ACCENT)))
+            .alignment(Alignment::Right),
+        header[1],
+    );
+    hits.push((header[1], Hit::NewProfile));
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            "Configure preferences and apply them across harnesses",
+            Style::default().fg(MUTED),
+        )),
+        Rect::new(inner.x, inner.y.saturating_add(1), inner.width, 1),
     );
 
-    let rows: [(&str, String, Color); 3] = [
-        (
-            "autonomy",
-            autonomy_label(profile.preferences.autonomy).to_owned(),
-            autonomy_color(profile.preferences.autonomy),
-        ),
-        (
-            "sandbox",
-            sandbox_label(profile.preferences.sandbox).to_owned(),
-            sandbox_color(profile.preferences.sandbox),
-        ),
-        (
-            "model preference",
-            model_label(profile.preferences.model).to_owned(),
-            BLUE,
-        ),
-    ];
+    if model.profiles.is_empty() {
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                "No profiles yet — press n",
+                Style::default().fg(MUTED),
+            )),
+            Rect::new(inner.x, inner.y.saturating_add(3), inner.width, 1),
+        );
+        return;
+    }
 
-    let bottom = content.y + content.height;
-    for (y, (index, (label, value, color))) in (content.y..bottom).zip(rows.into_iter().enumerate())
-    {
-        let cursor = focused && index == model.profile_editor_selected;
-        let border = if cursor {
-            Span::styled("│", Style::default().fg(ACCENT))
+    let mut y = inner.y.saturating_add(3);
+    let bottom = inner.y + inner.height.saturating_sub(1);
+    for (index, profile) in model.profiles.iter().enumerate() {
+        if y >= bottom {
+            break;
+        }
+        let selected = index == model.profiles_selected;
+        let mut name_style = Style::default().fg(if profile.active {
+            ACCENT
+        } else if selected {
+            TEXT_BRIGHT
         } else {
-            Span::raw(" ")
-        };
-        let mut value_style = Style::default().fg(color);
-        if cursor {
-            value_style = value_style.add_modifier(Modifier::BOLD);
+            TEXT_TERTIARY
+        });
+        if selected || profile.active {
+            name_style = name_style.add_modifier(Modifier::BOLD);
         }
         let mut spans = vec![
-            border,
+            Span::styled(
+                if selected { "▾" } else { "▸" },
+                Style::default().fg(focus_color(
+                    selected && model.profile_panel == ProfilePanel::List,
+                )),
+            ),
             Span::raw(" "),
-            Span::styled(format!("{label:<18}"), Style::default().fg(TEXT_SECONDARY)),
-            Span::styled(value, value_style),
         ];
-        if cursor {
-            spans.push(Span::styled("  ⇅", Style::default().fg(MUTED)));
+        spans.push(Span::styled(profile.id.clone(), name_style));
+        if profile.active {
+            spans.push(Span::styled(
+                " (✓ active)",
+                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            ));
         }
-        let rect = Rect::new(content.x, y, content.width, 1);
-        frame.render_widget(Paragraph::new(Line::from(spans)), rect);
-        hits.push((rect, Hit::PreferenceRow(index)));
+        let row = Rect::new(inner.x, y, inner.width, 1);
+        let controls = if selected && model.profiles.len() > 1 && inner.width >= 20 {
+            Some(
+                Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([
+                        Constraint::Min(1),
+                        Constraint::Length(8),
+                        Constraint::Length(3),
+                        Constraint::Length(8),
+                    ])
+                    .split(row),
+            )
+        } else {
+            None
+        };
+        let profile_rect = controls.as_ref().map_or(row, |parts| parts[0]);
+        frame.render_widget(Paragraph::new(Line::from(spans)), profile_rect);
+        if let Some(parts) = controls {
+            frame.render_widget(
+                Paragraph::new(Span::styled("remove", Style::default().fg(DANGER)))
+                    .alignment(Alignment::Right),
+                parts[1],
+            );
+            frame.render_widget(
+                Paragraph::new(Span::styled(" │ ", Style::default().fg(BORDER)))
+                    .alignment(Alignment::Center),
+                parts[2],
+            );
+            hits.push((parts[1], Hit::DeleteSelectedProfile));
+            if profile.active {
+                frame.render_widget(
+                    Paragraph::new(Span::styled(
+                        "active",
+                        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                    ))
+                    .alignment(Alignment::Left),
+                    parts[3],
+                );
+            } else {
+                frame.render_widget(
+                    Paragraph::new(Span::styled("apply", Style::default().fg(ACCENT)))
+                        .alignment(Alignment::Left),
+                    parts[3],
+                );
+                hits.push((parts[3], Hit::ApplySelectedProfile));
+            }
+        }
+        hits.push((profile_rect, Hit::ProfileRow(index)));
+        y += 1;
+
+        if selected {
+            let preferences = [
+                (
+                    "autonomy",
+                    autonomy_label(profile.preferences.autonomy),
+                    autonomy_color(profile.preferences.autonomy),
+                ),
+                (
+                    "sandbox",
+                    sandbox_label(profile.preferences.sandbox),
+                    sandbox_color(profile.preferences.sandbox),
+                ),
+                ("model", model_label(profile.preferences.model), BLUE),
+            ];
+            for (preference_index, (label, value, color)) in preferences.into_iter().enumerate() {
+                if y >= bottom {
+                    break;
+                }
+                let editing = model.profile_panel == ProfilePanel::Editor
+                    && preference_index == model.profile_editor_selected;
+                let mut value_style = Style::default().fg(color);
+                if editing {
+                    value_style = value_style.add_modifier(Modifier::BOLD);
+                }
+                let rect = Rect::new(inner.x, y, inner.width, 1);
+                frame.render_widget(
+                    Paragraph::new(Line::from(vec![
+                        Span::styled(
+                            if editing { "  › " } else { "    " },
+                            Style::default().fg(ACCENT),
+                        ),
+                        Span::styled(format!("{label:<20}"), Style::default().fg(TEXT_SECONDARY)),
+                        Span::styled(value, value_style),
+                    ])),
+                    rect,
+                );
+                hits.push((rect, Hit::PreferenceRow(preference_index)));
+                y += 1;
+            }
+        }
+        y = y.saturating_add(1);
     }
 }
 
@@ -277,72 +285,94 @@ fn render_harnesses(
                 .harnesses
                 .iter()
                 .filter(|harness| harness.detection.present)
-                .collect::<Vec<_>>()
+                .collect()
         })
         .unwrap_or_default();
-
-    let block = unbordered_panel();
+    let block = panel(false);
     let inner = block.inner(area);
     frame.render_widget(block, area);
-
-    let content = render_screen_header(
-        frame,
-        inner,
-        "Apply to harnesses",
-        "",
-        Some(Span::styled(
-            format!("{} selected", model.profile_harness_selection.len()),
-            Style::default().fg(focus_color(focused)),
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            "Harnesses",
+            Style::default()
+                .fg(TEXT_BRIGHT)
+                .add_modifier(Modifier::BOLD),
         )),
+        Rect::new(inner.x, inner.y, inner.width, 1),
     );
-
     if harnesses.is_empty() {
         frame.render_widget(
             Paragraph::new(Span::styled(
                 "No harnesses detected",
                 Style::default().fg(MUTED),
             )),
-            Rect::new(content.x, content.y, content.width, 1),
+            Rect::new(inner.x, inner.y.saturating_add(2), inner.width, 1),
         );
         return;
     }
 
-    let bottom = content.y + content.height;
-    for (y, (index, harness)) in (content.y..bottom).zip(harnesses.iter().enumerate()) {
+    let mut y = inner.y.saturating_add(2);
+    let bottom = inner.y + inner.height.saturating_sub(1);
+    for (index, harness) in harnesses.iter().enumerate() {
+        if y >= bottom {
+            break;
+        }
         let cursor = focused && index == model.profile_harness_selected;
         let checked = model
             .profile_harness_selection
             .contains(&harness.integration);
-        let border = if cursor {
-            Span::styled("│", Style::default().fg(ACCENT))
-        } else {
-            Span::raw(" ")
-        };
-        let checkbox = Span::styled(
-            if checked { "[x] " } else { "[ ] " },
-            Style::default().fg(if checked { ACCENT } else { MUTED }),
-        );
-        let name_fg = if cursor { TEXT_BRIGHT } else { TEXT_TERTIARY };
-        let mut name_style = Style::default().fg(name_fg);
+        let mut name_style = Style::default().fg(if cursor { TEXT_BRIGHT } else { TEXT_TERTIARY });
         if cursor {
             name_style = name_style.add_modifier(Modifier::BOLD);
         }
-        let name = Span::styled(harness.display_name.clone(), name_style);
-        let badge = model
+        let mut spans = vec![
+            Span::styled(
+                if cursor { "› " } else { "  " },
+                Style::default().fg(ACCENT),
+            ),
+            Span::styled(
+                if checked { "[x] " } else { "[ ] " },
+                Style::default().fg(if checked { ACCENT } else { MUTED }),
+            ),
+            Span::styled(harness.display_name.clone(), name_style),
+        ];
+        if let Some((label, color)) = model
             .profile_apply_results
             .iter()
             .find(|result| result.integration == harness.integration)
-            .map(|result| outcome_badge(&result.outcome));
-
-        let mut spans = vec![border, Span::raw(" "), checkbox, name];
-        if let Some((label, color)) = badge {
+            .map(|result| outcome_badge(&result.outcome))
+        {
             let used: usize = spans.iter().map(|span| span.width()).sum();
-            let gap = (content.width as usize).saturating_sub(used + label.len() + 2);
-            spans.push(Span::raw(" ".repeat(gap)));
+            spans.push(Span::raw(
+                " ".repeat((inner.width as usize).saturating_sub(used + label.len())),
+            ));
             spans.push(Span::styled(label, Style::default().fg(color)));
         }
-        let rect = Rect::new(content.x, y, content.width, 1);
+        let rect = Rect::new(inner.x, y, inner.width, 1);
         frame.render_widget(Paragraph::new(Line::from(spans)), rect);
         hits.push((rect, Hit::ProfileHarnessRow(index)));
+        y += 1;
     }
+
+    let selected = harnesses
+        .iter()
+        .filter(|harness| {
+            model
+                .profile_harness_selection
+                .contains(&harness.integration)
+        })
+        .count();
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            format!("{selected}/{} selected", harnesses.len()),
+            Style::default().fg(focus_color(focused)),
+        ))
+        .alignment(Alignment::Right),
+        Rect::new(
+            inner.x,
+            inner.y + inner.height.saturating_sub(1),
+            inner.width,
+            1,
+        ),
+    );
 }
