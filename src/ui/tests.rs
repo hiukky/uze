@@ -1309,80 +1309,8 @@ fn buffer_rows(terminal: &Terminal<TestBackend>) -> Vec<String> {
         .collect()
 }
 
-fn overview_model(root: &std::path::Path) -> TuiModel {
-    // Hybrid workspace: both columns exist, so layout tests can assert
-    // on PROJECT vs MARKETPLACE placement.
-    let mut workspace = consumer_workspace(
-        ProjectEnvironmentState::InstallRequired,
-        4,
-        3,
-        &["flow"],
-        root,
-    );
-    workspace.kind = WorkspaceKind::Hybrid;
-    workspace.marketplace = Some(OverviewMarketplace {
-        name: Some("acme".to_owned()),
-        package_count: 2,
-        invalid_packages: 0,
-        state: MarketplaceState::Valid,
-    });
-    TuiModel {
-        route: Route::Overview,
-        focus: Focus::Content,
-        workspace: Some(workspace),
-        ..TuiModel::default()
-    }
-}
-
 #[test]
-fn wide_terminal_stacks_workspace_rows() {
-    let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
-    let model = overview_model(std::path::Path::new("/tmp/project"));
-    let mut hits = Vec::new();
-    terminal
-        .draw(|frame| render(frame, &model, &mut hits))
-        .unwrap();
-    let rows = buffer_rows(&terminal);
-    let project_row = rows
-        .iter()
-        .position(|row| row.contains("PROJECT"))
-        .expect("PROJECT heading");
-    let marketplace_row = rows
-        .iter()
-        .position(|row| row.contains("MARKETPLACE"))
-        .expect("MARKETPLACE heading");
-    assert!(
-        project_row < marketplace_row,
-        "workspace blocks always stack: PROJECT above MARKETPLACE, on wide terminals too"
-    );
-}
-
-#[test]
-fn narrow_terminal_stacks_workspace_rows() {
-    let mut terminal = Terminal::new(TestBackend::new(60, 40)).unwrap();
-    let model = overview_model(std::path::Path::new("/tmp/project"));
-    let mut hits = Vec::new();
-    terminal
-        .draw(|frame| render(frame, &model, &mut hits))
-        .unwrap();
-    let rows = buffer_rows(&terminal);
-    let project_row = rows
-        .iter()
-        .position(|row| row.contains("PROJECT"))
-        .expect("PROJECT heading");
-    let marketplace_row = rows
-        .iter()
-        .position(|row| row.contains("MARKETPLACE"))
-        .expect("MARKETPLACE heading");
-    assert!(
-        project_row < marketplace_row,
-        "narrow layout stacks PROJECT above MARKETPLACE"
-    );
-}
-
-#[test]
-fn install_action_only_rendered_when_dependencies_are_missing() {
-    let root = std::path::Path::new("/tmp/project");
+fn overview_does_not_render_project_context() {
     let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
     let model = TuiModel {
         route: Route::Overview,
@@ -1392,7 +1320,7 @@ fn install_action_only_rendered_when_dependencies_are_missing() {
             4,
             3,
             &["flow"],
-            root,
+            std::path::Path::new("/tmp/project"),
         )),
         ..TuiModel::default()
     };
@@ -1401,119 +1329,19 @@ fn install_action_only_rendered_when_dependencies_are_missing() {
         .draw(|frame| render(frame, &model, &mut hits))
         .unwrap();
     let rows = buffer_rows(&terminal);
-    assert!(rows.iter().any(|row| row.contains("i install")));
-    assert!(rows.iter().any(|row| row.contains("! install required")));
-    assert!(rows.iter().any(|row| row.contains("! 3/4 installed")));
-
-    let model = TuiModel {
-        route: Route::Overview,
-        focus: Focus::Content,
-        workspace: Some(consumer_workspace(
-            ProjectEnvironmentState::Ready,
-            4,
-            4,
-            &[],
-            root,
-        )),
-        ..TuiModel::default()
-    };
-    let mut hits = Vec::new();
-    terminal
-        .draw(|frame| render(frame, &model, &mut hits))
-        .unwrap();
-    let rows = buffer_rows(&terminal);
-    assert!(
-        !rows.iter().any(|row| row.contains("i install")),
-        "a ready environment must not offer a useless install action"
-    );
-    assert!(rows.iter().any(|row| row.contains("✓ ready")));
-    assert!(rows.iter().any(|row| row.contains("4 installed")));
-}
-
-#[test]
-fn overview_renders_application_verdicts_verbatim() {
-    let root = std::path::Path::new("/tmp/project");
-    let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
-
-    // Invalid lock: the Application says Invalid, the view renders it —
-    // and there is no install action for a state the system cannot read.
-    let model = TuiModel {
-        route: Route::Overview,
-        focus: Focus::Content,
-        workspace: Some(consumer_workspace(
-            ProjectEnvironmentState::Invalid,
-            0,
-            0,
-            &[],
-            root,
-        )),
-        ..TuiModel::default()
-    };
-    let mut hits = Vec::new();
-    terminal
-        .draw(|frame| render(frame, &model, &mut hits))
-        .unwrap();
-    let rows = buffer_rows(&terminal);
-    assert!(rows.iter().any(|row| row.contains("× invalid")));
-    assert!(rows.iter().any(|row| row.contains("— unknown")));
-    assert!(!rows.iter().any(|row| row.contains("i install")));
-
-    // Marketplace with an invalid manifest: state rendered verbatim.
-    let mut bad_market = marketplace_workspace(root);
-    bad_market.marketplace = Some(OverviewMarketplace {
-        name: None,
-        package_count: 0,
-        invalid_packages: 0,
-        state: MarketplaceState::InvalidManifest,
-    });
-    let model = TuiModel {
-        route: Route::Overview,
-        focus: Focus::Content,
-        workspace: Some(bad_market),
-        ..TuiModel::default()
-    };
-    let mut hits = Vec::new();
-    terminal
-        .draw(|frame| render(frame, &model, &mut hits))
-        .unwrap();
-    let rows = buffer_rows(&terminal);
-    assert!(rows.iter().any(|row| row.contains("× invalid manifest")));
-    assert!(
-        rows.iter().any(|row| row.contains("— unknown")),
-        "an unparseable manifest cannot name itself"
-    );
-    assert!(
-        !rows.iter().any(|row| row.contains("PROJECT")),
-        "a pure marketplace workspace must not show a PROJECT column"
-    );
-}
-
-#[test]
-fn consumer_only_workspace_hides_marketplace_column() {
-    let root = std::path::Path::new("/tmp/project");
-    let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
-    let model = TuiModel {
-        route: Route::Overview,
-        focus: Focus::Content,
-        workspace: Some(consumer_workspace(
-            ProjectEnvironmentState::Ready,
-            2,
-            2,
-            &[],
-            root,
-        )),
-        ..TuiModel::default()
-    };
-    let mut hits = Vec::new();
-    terminal
-        .draw(|frame| render(frame, &model, &mut hits))
-        .unwrap();
-    let rows = buffer_rows(&terminal);
-    assert!(rows.iter().any(|row| row.contains("PROJECT")));
-    assert!(
-        !rows.iter().any(|row| row.contains("MARKETPLACE")),
-        "no marketplace.json → no MARKETPLACE column, even in a consumer"
-    );
+    for forbidden in [
+        "PROJECT",
+        "MARKETPLACE",
+        "Environment",
+        "Memory",
+        "Context bridges",
+        "context bridges verified",
+    ] {
+        assert!(
+            !rows.iter().any(|row| row.contains(forbidden)),
+            "Overview must not render project context: {forbidden}"
+        );
+    }
 }
 
 #[test]
@@ -1564,10 +1392,9 @@ fn overview_render_does_not_mutate_project_state() {
         manifest_bytes
     );
     assert_eq!(std::fs::read(root.join("AGENTS.md")).unwrap(), agents_md);
-    // And the semantic rows actually rendered (sanity, not just no-op).
-    assert!(rows.iter().any(|row| row.contains("Environment")));
-    assert!(rows.iter().any(|row| row.contains("Memory")));
-    assert!(rows.iter().any(|row| row.contains("Plugins")));
+    // The machine dashboard still renders while leaving the project untouched.
+    assert!(rows.iter().any(|row| row.contains("Overview")));
+    assert!(rows.iter().any(|row| row.contains("Harnesses detected")));
     std::fs::remove_dir_all(&base).ok();
 }
 
@@ -1611,12 +1438,9 @@ fn no_workspace_render_creates_nothing() {
         .draw(|frame| render(frame, &model, &mut hits))
         .unwrap();
     let rows = buffer_rows(&terminal);
-    assert!(rows.iter().any(|row| row.contains("— not configured")));
-    assert!(rows.iter().any(|row| row.contains("PROJECT")));
-    assert!(
-        !rows.iter().any(|row| row.contains("MARKETPLACE")),
-        "no marketplace.json in a plain directory → no MARKETPLACE column"
-    );
+    assert!(rows.iter().any(|row| row.contains("Overview")));
+    assert!(!rows.iter().any(|row| row.contains("PROJECT")));
+    assert!(!rows.iter().any(|row| row.contains("MARKETPLACE")));
 
     assert!(
         !root.join("agents.lock").exists(),
