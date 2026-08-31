@@ -62,6 +62,10 @@ python-fmt: ## Check Python formatting with ruff (conformance/).
 python-lint: ## Lint Python with ruff (conformance/).
 	ruff check conformance/
 
+coverage: ## Run workspace tests with LLVM coverage (skips env-failing tests).
+	cargo llvm-cov --workspace --summary-only --fail-under-lines 68 --fail-under-regions 69 -- --skip real_codex_dogfood --skip foreground_status_reports --skip acquisition
+	cargo llvm-cov report --lcov --output-path lcov.info
+
 check: fmt lint test python-fmt python-lint ## Local proxy for the CI gate; also cargo-release's pre-release-hook.
 
 

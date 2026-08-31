@@ -28,7 +28,7 @@ resolver = "3"
 [workspace.package]
 # UZE v0 is released as SemVer pre-releases. Increment this value before
 # producing any distributable binary; every workspace crate inherits it.
-version = "0.0.0-alpha.15"
+version = "0.0.0-alpha.0"
 license = "Apache-2.0"
 authors = ["Romullo Sousa (hiukky)"]
 

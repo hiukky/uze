@@ -1,14 +1,9 @@
-# `cargo test`'s default thread count is one per logical CPU. This
-# workspace's suite spawns a large number of *real* OS processes across its
-# tests (subprocess timeouts, process-group kills, real `git`/vendor-CLI
-# invocations) — under WSL2 specifically, a burst of concurrent fork/exec and
-# process-group signal delivery at that default parallelism has been
-# observed to crash the WSL VM itself (not just OOM-kill a process), forcing
-# a full VM restart mid-suite.
+# The workspace builds and tests a large number of real subprocesses. On
+# WSL2, Cargo's default of one `rustc` per logical CPU combines badly with the
+# test harness's own concurrency and can restart the VM. Keep compilation
+# bounded by default; CI can opt into a different value per job.
 #
-# Capping the test harness's own thread count keeps the number of processes
-# in flight at once far lower without serializing the suite outright. Raise
-# or override with `--test-threads=N` (or `RUST_TEST_THREADS=N`) for a
-# specific run if a host is known to tolerate more.
-[env]
-RUST_TEST_THREADS = "4"
+# Test threads default to num_cpus::get(). Override with
+# `RUST_TEST_THREADS=N` on hosts that need to cap it (e.g. memory-constrained WSL).
+[build]
+jobs = 2

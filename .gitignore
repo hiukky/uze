@@ -4,3 +4,4 @@
 
 # Playwright MCP debug output (screenshots, snapshots, console logs)
 /.playwright-mcp/
+lcov.info
