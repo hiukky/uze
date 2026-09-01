@@ -2484,10 +2484,12 @@ dependencies = [
 name = "uze-core"
 version = "0.0.0-alpha.0"
 dependencies = [
+ "libc",
  "noyalib",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
+ "uze-testkit",
 ]
 
 [[package]]
@@ -2508,6 +2510,7 @@ dependencies = [
  "serde_json",
  "toml_edit",
  "uze-core",
+ "uze-testkit",
 ]
 
 [[package]]

@@ -1,7 +1,8 @@
-# The workspace builds and tests a large number of real subprocesses. On
-# WSL2, Cargo's default of one `rustc` per logical CPU combines badly with the
-# test harness's own concurrency and can restart the VM. Keep compilation
-# bounded by default; CI can opt into a different value per job.
+# The workspace builds and tests a large number of real subprocesses. Keep
+# compilation bounded by default on small VMs (WSL2 with 4 vCPUs); CI can opt
+# into a different value per job. (The "tests restart the VM" symptom seen on
+# WSL was a `/bin/kill -<pid>` parsing bug, fixed in uze-core's subprocess.rs,
+# not build parallelism.)
 #
 # Test threads default to num_cpus::get(). Override with
 # `RUST_TEST_THREADS=N` on hosts that need to cap it (e.g. memory-constrained WSL).

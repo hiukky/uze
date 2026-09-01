@@ -39,33 +39,24 @@ etc. — run `make help` for the full list). `ci.yml` is the source of truth
 for what actually gates a merge; treat `make check` as a close local proxy,
 not a guarantee of parity.
 
-### Test execution on constrained hosts (WSL)
+### Test execution on WSL (history of the "session dies mid-test" bug)
 
-A full `cargo test`/`cargo clippy`/`llvm-cov` run compiles the entire
-workspace with one `rustc` per core. On a WSL VM the transient peak exceeds
-the memory budget and the whole session gets OOM-killed — the agent process
-itself dies mid-command. Until a host proves it can take the full parallel
-run, obey these rules for every inline command:
+Until 2026-09-01, running any suite that exercised a child-process timeout
+killed the whole WSL login session (`[process exited with code 9]`, the
+agent included). It was **not** OOM and not cargo parallelism:
+`kill_process_group` in `crates/uze-core/src/subprocess.rs` shelled out to
+`/bin/kill -KILL -<pid>`, and procps-ng `kill` parses a negative pid by its
+first digit only (`pid = '0' - optopt`), so any child pid starting with `1`
+(1000-1999, 10000-19999, ...) became `kill(-1, SIGKILL)`: every process the
+user owns. The helper now issues `kill(2)` directly. Never reintroduce a
+shell-out to `kill` for negative pids anywhere in the workspace; use
+`libc::kill` (or `kill -- -<pid>` if a shell script truly needs it).
 
-- Never run two cargo processes at once: do not chain (`&&`) or background a
-  second `cargo`/`make`/`llvm-cov` while another is still compiling or
-  running, and never queue a new one before the previous finished.
-- Cap build parallelism with `CARGO_BUILD_JOBS=2` (rustc is the memory hog;
-  two concurrent compiles keep peak RAM far below the limit). `make` targets
-  inherit it from the environment.
-- Cap test-harness threads with `RUST_TEST_THREADS=4` on every `cargo test`
-  invocation (applies to every test binary the run builds).
-- Prefer targeted runs during iteration — `cargo test -p <crate> <name>` or
-  `cargo test --test <file>` — and reserve the full
-  `cargo test --no-fail-fast`/`make check`/`llvm-cov` gates for when a merge
-  actually needs them; run those alone, and expect them to take minutes.
-- If the session still dies mid-run (server restart, OOM in `dmesg`),
-  halve the numbers next time (`CARGO_BUILD_JOBS=1`, `RUST_TEST_THREADS=2`)
-  instead of retrying the same command unchanged.
-
-Persistent host-side equivalents: `[build] jobs = 2` in
-`~/.cargo/config.toml` and `export RUST_TEST_THREADS=4` in the shell
-profile. `ci.yml` runs the same suite unconstrained and is unaffected.
+`CARGO_BUILD_JOBS=2` / `RUST_TEST_THREADS=4` (also `[build] jobs = 2` in
+`.cargo/config.toml`) remain as a courtesy to a 4-vCPU VM, not as a
+crash-avoidance measure. If a session still dies mid-run, look for a kill
+by signal in `journalctl` (`user@1000.service: ... status=9/KILL` at the
+same second as `Session N logged out`) before assuming memory pressure.
 
 Run the CLI itself with `cargo run --bin uze -- <args>` or `./target/debug/uze <args>` after a build; `uze` with no args launches the terminal UI.
 

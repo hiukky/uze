@@ -12,3 +12,6 @@ publish = false
 uze-core = { path = "../uze-core" }
 serde_json = "1"
 toml_edit = "0.25.13"
+
+[dev-dependencies]
+uze-testkit = { path = "../uze-testkit" }

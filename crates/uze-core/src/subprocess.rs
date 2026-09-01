@@ -56,33 +56,44 @@ pub fn wait_with_timeout(child: &mut Child, timeout: Duration) -> io::Result<(Ex
 }
 
 /// Kills a whole process group — the process plus any descendant it started.
-/// The `/bin/kill` coreutils binary is resolved absolutely so this never
-/// depends on `PATH` inside a sanitized or harness environment.
 ///
-/// The negative-PID group signal below is necessary but not sufficient: on
-/// some kernels (observed under WSL2) a descendant that shares the exact
-/// same PGID as the shell can still survive a `kill(2)` targeted at that
-/// process group, even though a direct single-PID SIGKILL to that same
-/// descendant reliably kills it. So this also enumerates `/proc` for every
-/// process still reporting the handler's PGID and kills each one directly,
-/// which is what actually reaches a straggler the group signal missed.
+/// This issues the `kill(2)` syscalls directly and must never shell out to
+/// `/bin/kill`. procps-ng's `kill` parses a negative pid by its *first digit
+/// only* (`case '?'`: `pid = '0' - optopt`, then exits), so `kill -KILL -1234`
+/// or `-KILL -10000` becomes `kill(-1, SIGKILL)` — every process the user
+/// owns, including the login shell, `systemd --user`, and the agent that ran
+/// the tests — while `-KILL -2345` becomes a silent no-op against group 2.
+/// The latter is the "group signal misses a member under WSL2" quirk this
+/// helper used to work around with a `/proc` sweep; the former is what took
+/// the whole WSL session down whenever a timed-out child's pid started with
+/// `1`. The sweep is kept as a belt-and-braces pass for a descendant that
+/// left the group (`setsid`) between the two signals.
 #[cfg(unix)]
 pub fn kill_process_group(pid: u32) {
-    let _ = Command::new("/bin/kill")
-        .arg("-KILL")
-        .arg(format!("-{pid}"))
-        .status();
-    // Fall back to killing just the direct child if the group kill failed
-    // (e.g. the process already exited between the poll and the kill).
-    let _ = Command::new("/bin/kill")
-        .arg("-KILL")
-        .arg(pid.to_string())
-        .status();
+    // `kill(0)` / `kill(-1)` would target our own group / every process we
+    // own. No child ever has such a pid; refuse rather than risk it.
+    let Ok(pgid) = libc::pid_t::try_from(pid) else {
+        return;
+    };
+    if pgid <= 1 {
+        return;
+    }
+    // SAFETY: plain `kill(2)` calls on a pid we spawned; no memory involved.
+    unsafe {
+        libc::kill(-pgid, libc::SIGKILL);
+        // Also signal the direct child by pid, in case it changed its own
+        // process group before the group signal landed.
+        libc::kill(pgid, libc::SIGKILL);
+    }
     for member in process_group_members(pid) {
-        let _ = Command::new("/bin/kill")
-            .arg("-KILL")
-            .arg(member.to_string())
-            .status();
+        if let Ok(member) = libc::pid_t::try_from(member)
+            && member > 1
+        {
+            // SAFETY: as above.
+            unsafe {
+                libc::kill(member, libc::SIGKILL);
+            }
+        }
     }
 }
 
@@ -93,10 +104,8 @@ pub fn kill_process_group(pid: u32) {
         .status();
 }
 
-/// Reads `/proc` directly (rather than shelling out to `ps --pgid`, whose
-/// group filter has been unreliable in the same environments where the
-/// group-wide signal misses a member) to list every PID currently reporting
-/// `pgid` as its process group.
+/// Reads `/proc` directly (rather than shelling out to `ps --pgid`) to list
+/// every PID currently reporting `pgid` as its process group.
 #[cfg(unix)]
 fn process_group_members(pgid: u32) -> Vec<u32> {
     let mut members = Vec::new();
