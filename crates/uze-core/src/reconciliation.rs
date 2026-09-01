@@ -150,14 +150,7 @@ mod tests {
     }
 
     fn home(label: &str) -> UzeHome {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        UzeHome::at(std::env::temp_dir().join(format!(
-            "uze-reconcile-{label}-{}-{nonce}",
-            std::process::id()
-        )))
+        UzeHome::at(uze_testkit::temp::scratch(label))
     }
 
     #[cfg(unix)]

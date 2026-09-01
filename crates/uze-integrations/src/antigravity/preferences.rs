@@ -152,14 +152,7 @@ mod tests {
     use super::*;
 
     fn temp_path(label: &str) -> std::path::PathBuf {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "uze-antigravity-preferences-{label}-{}-{nonce}.json",
-            std::process::id()
-        ))
+        uze_testkit::temp::scratch(label).join("antigravity-preferences.json")
     }
 
     #[test]

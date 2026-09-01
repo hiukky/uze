@@ -137,7 +137,7 @@ fn unsupported_invalid_policy(resource: &Resource) -> ExposurePlan {
 /// (default model+user policy — byte-preserving) or a UZE-generated file
 /// carrying the canonical name/description/body plus Claude's own
 /// invocation markers (non-default policy — the canonical bytes stay in
-/// the Store; this wrapper is a Derived Artifact, ADR-013 §4).
+/// the Store; this wrapper is a Derived Artifact, ADR-013 §5).
 pub(super) fn materialize_shim(
     shim_root: &Path,
     canonical_skill_dir: &Path,

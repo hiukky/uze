@@ -72,7 +72,7 @@ pub(super) fn generated_skill_dir(uze_home: &UzeHome, resource: &Resource) -> Pa
 /// this directory lives in the shared `~/.agents/skills` root Codex reads
 /// too (`model=false` must stay hidden there; ADR-030 §25). Idempotent and
 /// rebuilt wholesale — the
-/// directory is entirely UZE-owned and non-authoritative (ADR-013 §4).
+/// directory is entirely UZE-owned and non-authoritative (ADR-013 §5).
 pub(super) fn materialize_generated_skill(
     uze_home: &UzeHome,
     resource: &Resource,

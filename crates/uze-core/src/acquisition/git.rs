@@ -426,14 +426,6 @@ mod tests {
         }
     }
 
-    fn temp(label: &str) -> PathBuf {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!("uze-git-{label}-{}-{nonce}", std::process::id()))
-    }
-
     #[test]
     fn run_drains_output_larger_than_the_pipe_buffer_instead_of_deadlocking() {
         // Regression test: `wait_with_timeout`'s poll loop does not itself
@@ -449,8 +441,8 @@ mod tests {
         // temporarily narrow process-global `PATH` — otherwise this can
         // race into a spurious `NotFound` with no connection visible from
         // either test's own code.
-        let _guard = crate::test_support::PROCESS_ENV_LOCK.lock().unwrap();
-        let root = temp("large-output");
+        let _env = uze_testkit::env::scope();
+        let root = uze_testkit::temp::scratch("large-output");
         fs::create_dir_all(&root).unwrap();
         assert!(
             Command::new("git")

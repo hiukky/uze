@@ -341,7 +341,7 @@ impl IntegrationPort for CodexIntegration {
                 .into_iter()
                 .collect(),
             verification: VerificationStatus::Unverified,
-            evidence: "Codex consumes UZE's derived marketplaces: a package shipping .codex-plugin/plugin.json is added as a native plugin covering its declared skills/mcpServers (`codex plugin add <sel>@uze-local`); one without gets a deterministically synthesized envelope published through the generated-only `uze-store` marketplace (ADR-021) — both confirmed against real Codex 0.148.0 dogfood (`codex plugin list --json`). Canonical Agents are generated as Codex's documented standalone TOML files under ~/.codex/agents/, with name, description, and developer_instructions derived from the portable Markdown definition. Invocation policy is translated into Codex's own agents/openai.yaml → policy.allow_implicit_invocation: false for a canonical user-only Skill (Codex Build skills documentation; empirically honored by codex-cli 0.149.0 via `codex debug prompt-input`); the user=false combination is honestly Degraded since Codex has no documented way to disable explicit `$skill` invocation. Per ADR-025/ADR-030, Native means an officially supported primitive that preserves the canonical capability semantics — not an identical vendor file format. Portable Hooks are projected into Codex's own `~/.codex/hooks.json` command form through a hook-exec wrapper carrying the portable ABI (ADR-033; deterministic emission, real-binary verification pending in the conformance lab). Capability-level fallbacks (USER-scope `~/.agents/skills` reference, `codex mcp add`) remain only for resources outside the envelope's coverage."
+            evidence: "Codex consumes UZE's derived marketplaces: a package shipping .codex-plugin/plugin.json is added as a native plugin covering its declared skills/mcpServers (`codex plugin add <sel>@uze-local`); one without gets a deterministically synthesized envelope published through the generated-only `uze-store` marketplace (ADR-013) — both confirmed against real Codex 0.148.0 dogfood (`codex plugin list --json`). Canonical Agents are generated as Codex's documented standalone TOML files under ~/.codex/agents/, with name, description, and developer_instructions derived from the portable Markdown definition. Invocation policy is translated into Codex's own agents/openai.yaml → policy.allow_implicit_invocation: false for a canonical user-only Skill (Codex Build skills documentation; empirically honored by codex-cli 0.149.0 via `codex debug prompt-input`); the user=false combination is honestly Degraded since Codex has no documented way to disable explicit `$skill` invocation. Per ADR-030, Native means an officially supported primitive that preserves the canonical capability semantics — not an identical vendor file format. Portable Hooks are projected into Codex's own `~/.codex/hooks.json` command form through a hook-exec wrapper carrying the portable ABI (ADR-033; deterministic emission, real-binary verification pending in the conformance lab). Capability-level fallbacks (USER-scope `~/.agents/skills` reference, `codex mcp add`) remain only for resources outside the envelope's coverage."
                 .to_owned(),
             ..HarnessCapabilities::default()
         }
@@ -443,7 +443,7 @@ impl IntegrationPort for CodexIntegration {
             });
         }
         // No author-provided envelope. Check whether UZE can safely
-        // synthesize one (ADR-020/ADR-021, refining ADR-013 §2: Explicit
+        // synthesize one (ADR-013 §3: Explicit
         // Native Package > Generated Native Package > Native Capability >
         // Safe Adaptation > Unsupported). Stays read-only either way.
         if !generatable(package) {
@@ -664,7 +664,7 @@ impl IntegrationPort for CodexIntegration {
                 remove_plugin(Path::new(&executable), &self.command_home, selector)?;
                 if kind == GENERATED_PLUGIN_KIND {
                     // The generated envelope directory is a Derived Artifact
-                    // (ADR-013 §4): non-authoritative, rebuildable, and
+                    // (ADR-013 §5): non-authoritative, rebuildable, and
                     // never the canonical Store — safe to remove outright
                     // now that Codex no longer references it.
                     remove_generated_package_by_id(&self.uze_home, &receipt.package_id)?;

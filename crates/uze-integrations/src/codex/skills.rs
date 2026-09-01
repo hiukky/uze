@@ -90,7 +90,7 @@ pub(super) fn generated_skill_dir(uze_home: &UzeHome, resource: &Resource) -> Pa
 /// because this directory lives in the shared `~/.agents/skills` root —
 /// Codex ignores those fields, and OpenCode needs them when it reuses the
 /// same physical entry (ADR-030 §25). Idempotent and rebuilt wholesale —
-/// the directory is entirely UZE-owned and non-authoritative (ADR-013 §4).
+/// the directory is entirely UZE-owned and non-authoritative (ADR-013 §5).
 pub(super) fn materialize_generated_skill(
     uze_home: &UzeHome,
     resource: &Resource,
@@ -273,7 +273,7 @@ mod tests {
 
     #[test]
     fn user_only_skill_wrapper_is_superset_and_preserves_body() {
-        let root = std::env::temp_dir().join(format!("uze-codex-skill-{}", std::process::id()));
+        let root = uze_testkit::temp::scratch("codex-skill");
         let home = UzeHome::at(root.join("uze"));
         let resource = skill_resource(
             "flow",
@@ -307,7 +307,7 @@ mod tests {
 
     #[test]
     fn default_skill_wrapper_has_no_policy_sidecar() {
-        let root = std::env::temp_dir().join(format!("uze-codex-skill-def-{}", std::process::id()));
+        let root = uze_testkit::temp::scratch("codex-skill-def");
         let home = UzeHome::at(root.join("uze"));
         let resource = skill_resource(
             "flow",
@@ -324,7 +324,7 @@ mod tests {
 
     #[test]
     fn adaptation_is_deterministic_across_rebuilds() {
-        let root = std::env::temp_dir().join(format!("uze-codex-skill-det-{}", std::process::id()));
+        let root = uze_testkit::temp::scratch("codex-skill-det");
         let home = UzeHome::at(root.join("uze"));
         let resource = skill_resource(
             "flow",

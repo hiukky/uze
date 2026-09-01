@@ -38,7 +38,6 @@ use std::{
     collections::BTreeSet,
     fs,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 // `PATH` is process-global; every test below that mutates it must not
@@ -67,14 +66,7 @@ use uze::integrations::{
 // ============================================================================
 
 fn temp(label: &str) -> PathBuf {
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    std::env::temp_dir().join(format!(
-        "uze-conformance-{label}-{}-{nonce}",
-        std::process::id()
-    ))
+    uze_testkit::temp::scratch(label)
 }
 
 /// Writes a canonical `plugin.json` plus every `(relative_path, content)`
@@ -182,7 +174,7 @@ fn mark_setup(home: &UzeHome, integration: &dyn IntegrationPort) {
 // individual `exposure_plan` — never silently dropped.
 //
 // These fixtures ship no vendor envelope beyond the canonical manifest, so
-// for Claude/Codex this exercises the GENERATED route (ADR-020/ADR-021)
+// for Claude/Codex this exercises the GENERATED route (ADR-013)
 // while for Antigravity the canonical plugin.json IS the vendor manifest
 // (generation only kicks in for canonical-MCP translation) — the same
 // coverage invariant applies either way, and proving it is what item 4
@@ -902,7 +894,7 @@ fn computing_a_package_exposure_plan_never_mutates_store_bytes_on_any_harness() 
 // technique for the shim-boundary invariant.
 //
 // This invariant was strengthened by the Path Safety + Foreign Importer
-// Cleanup milestone (ADR-022): `crates/uze-core/src/importers/
+// Cleanup milestone (ADR-005): `crates/uze-core/src/importers/
 // claude_plugin.rs` used to be the one real, production exception (a
 // vendor-named foreign-format importer, confirmed dead — never reached by
 // `Store::ingest` or any other production path — and removed). With it

@@ -1,6 +1,6 @@
 //! Capability compatibility routing without named harness rules.
 //!
-//! # What "Native" means (ADR-025, refined by ADR-030)
+//! # What "Native" means (ADR-030)
 //!
 //! A route is **Native** when the harness provides a first-class,
 //! officially supported mechanism that preserves the *canonical semantics*
@@ -32,7 +32,7 @@ pub enum CompatibilityRoute {
     /// The harness offers a first-class, officially supported mechanism that
     /// preserves the canonical capability semantics — regardless of whether
     /// the vendor calls it by the same name or uses the same file format as
-    /// another harness (ADR-025).
+    /// another harness (ADR-030).
     Native,
     /// UZE must emulate or degrade semantics through a mechanism the
     /// harness does not intend for this capability.

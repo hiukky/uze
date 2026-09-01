@@ -1330,7 +1330,7 @@ mod tests {
 
     #[test]
     fn merge_inspect_detach_preserve_foreign_entries_and_order() {
-        let root = std::env::temp_dir().join(format!("uze-hooks-merge-{}", std::process::id()));
+        let root = uze_testkit::temp::scratch("hooks-merge");
         fs::create_dir_all(&root).unwrap();
         let config = root.join("settings.json");
         fs::write(
@@ -1392,7 +1392,7 @@ mod tests {
 
     #[test]
     fn merging_replaces_the_previous_version_of_the_same_group() {
-        let root = std::env::temp_dir().join(format!("uze-hooks-replace-{}", std::process::id()));
+        let root = uze_testkit::temp::scratch("hooks-replace");
         fs::create_dir_all(&root).unwrap();
         let config = root.join("hooks.json");
         let mut old = hook();
@@ -1422,7 +1422,7 @@ mod tests {
 
     #[test]
     fn drift_blocks_removal_and_an_empty_file_is_removed() {
-        let root = std::env::temp_dir().join(format!("uze-hooks-drift-{}", std::process::id()));
+        let root = uze_testkit::temp::scratch("hooks-drift");
         fs::create_dir_all(&root).unwrap();
         let config = root.join("hooks.json");
         let entry = group_entry("codex", &hook(), &executable(), "codex", Path::new("/pkg"));
@@ -1649,7 +1649,7 @@ mod tests {
 
     #[test]
     fn bridge_path_lives_in_the_auto_discovered_global_plugin_directory() {
-        let root = std::env::temp_dir().join(format!("uze-hooks-path-{}", std::process::id()));
+        let root = uze_testkit::temp::scratch("hooks-path");
         let bridge = opencode_bridge_path(&root, "demo");
         assert_eq!(
             bridge,
@@ -1665,7 +1665,7 @@ mod tests {
 
     #[test]
     fn bridge_file_cleanup_removes_only_uzes_files() {
-        let root = std::env::temp_dir().join(format!("uze-hooks-cleanup-{}", std::process::id()));
+        let root = uze_testkit::temp::scratch("hooks-cleanup");
         let bridge = root.join("plugins/uze-hooks-demo.ts");
         fs::create_dir_all(bridge.parent().unwrap()).unwrap();
         fs::write(&bridge, "// generated").unwrap();

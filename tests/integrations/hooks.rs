@@ -22,14 +22,7 @@ use uze::{
 };
 
 fn temp(label: &str) -> PathBuf {
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    std::env::temp_dir().join(format!(
-        "uze-hooks-integration-{label}-{}-{nonce}",
-        std::process::id()
-    ))
+    uze_testkit::temp::scratch(label)
 }
 
 /// Builds a real package directory (plugin.json + hooks.json) and discovers

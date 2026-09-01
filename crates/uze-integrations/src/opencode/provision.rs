@@ -118,7 +118,7 @@ pub(super) fn provision_opencode(
 
 #[cfg(test)]
 mod provision_tests {
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
 
     use uze_core::home::UzeHome;
     use uze_core::integration::IntegrationPort;
@@ -126,17 +126,6 @@ mod provision_tests {
 
     use super::super::OpenCodeIntegration;
     use super::resolve_opencode_binary;
-
-    fn temp(label: &str) -> PathBuf {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "uze-opencode-{label}-{}-{nonce}",
-            std::process::id()
-        ))
-    }
 
     struct RecordingRunner {
         commands: std::sync::Mutex<Vec<ProcessSpec>>,
@@ -171,7 +160,7 @@ mod provision_tests {
         // installed) that real resolution fails and `Verified` is
         // unreachable no matter what the mock records; skip rather than
         // assert a status this test has no way to produce here.
-        let root = temp("provision");
+        let root = uze_testkit::temp::scratch("provision");
         let uze_home = UzeHome::at(root.join("uze"));
         if resolve_opencode_binary(&uze_home.shims_dir()).is_none() {
             return;

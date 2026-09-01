@@ -349,13 +349,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn temp_home(label: &str) -> UzeHome {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        UzeHome::at(
-            std::env::temp_dir().join(format!("uze-state-{label}-{}-{nonce}", std::process::id())),
-        )
+        UzeHome::at(uze_testkit::temp::scratch(label))
     }
 
     fn record_of(harness: &str, version: &str) -> IntegrationRecord {

@@ -24,7 +24,7 @@
 //!
 //! Naming/collision tests run against `OpenCodeIntegration` (see
 //! `app_with_opencode`), not Claude: since Generated Native Package
-//! (ADR-020) made every skill/MCP fixture in this file eligible for
+//! (ADR-013) made every skill/MCP fixture in this file eligible for
 //! whole-package native Claude delivery, only an integration with no
 //! package-level native concept at all — OpenCode's
 //! `package_exposure_plan` stays unconditionally `None` — still exercises
@@ -176,7 +176,7 @@ impl<T: IntegrationPort> IntegrationPort for AlwaysPresent<T> {
 
 /// Capability-level naming/collision tests moved to OpenCode (see the
 /// individual test comments below): under Generated Native Package
-/// (ADR-020), any Claude-bound package with a conventional `skills/`
+/// (ADR-013), any Claude-bound package with a conventional `skills/`
 /// directory or `mcp.json` — which every fixture in this file has — now
 /// qualifies for whole-package native delivery rather than per-Skill
 /// decomposition, so it can no longer exercise

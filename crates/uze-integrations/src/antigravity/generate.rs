@@ -7,7 +7,7 @@
 //! plugin instead of decomposing into per-capability shims.
 //!
 //! Generated Native Plugin sits between Explicit Native Plugin and Native
-//! Capability (ADR-020/ADR-021, refining ADR-013 §2), mirroring the other
+//! Capability (ADR-013 §3), mirroring the other
 //! integrations' generated-envelope discipline.
 //! Simpler than either in one way (no catalogue — `plugin install` points
 //! straight at the directory) and costlier in another (the vendor stages a
@@ -194,7 +194,7 @@ fn translated_mcp_config(package: &StoredPackage) -> serde_json::Value {
 /// Materializes (or refreshes) one package's generated plugin directory.
 /// Idempotent and deterministic: recreated wholesale from the Store package
 /// on every call — the directory is entirely UZE-owned and
-/// non-authoritative (ADR-013 §4). Default-policy `skills/` are symlinked
+/// non-authoritative (ADR-013 §5). Default-policy `skills/` are symlinked
 /// to the Store's own bytes, never copied (the vendor's install verb
 /// dereferences them when it stages its copy); canonical MCP servers are
 /// translated into the vendor `mcp_config.json`. `commands/` is no longer a
@@ -260,7 +260,7 @@ pub(super) fn materialize_generated_plugin(
 /// Removes one package's generated plugin directory by id alone — used at
 /// detach time, when only the receipt's `package_id` (not a full
 /// `StoredPackage`) is available. Safe unconditionally: this directory is
-/// never anything but a Derived Artifact (ADR-013 §4).
+/// never anything but a Derived Artifact (ADR-013 §5).
 pub(super) fn remove_generated_plugin_by_id(uze_home: &UzeHome, package_id: &str) -> Result<()> {
     // The id comes from the receipt ledger, not a constructor: refuse one
     // that could not have been a real package id instead of joining it into
@@ -305,14 +305,7 @@ mod generated_native_tests {
     use super::*;
 
     fn temp_root(label: &str) -> PathBuf {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "uze-antigravity-generated-{label}-{nonce}-{}",
-            std::process::id()
-        ))
+        uze_testkit::temp::scratch(label)
     }
 
     fn make_package_with_mcp(label: &str) -> (PathBuf, StoredPackage) {

@@ -8,7 +8,7 @@
 //! `plugin.json` of its own — existed here previously, structurally
 //! separate from `ClaudeIntegration` per this module's own original design
 //! intent (delivery-time vendor knowledge and acquisition-time
-//! foreign-format knowledge were deliberately kept apart — see ADR-022).
+//! foreign-format knowledge were deliberately kept apart — see ADR-005).
 //! It was removed by that same ADR: `Store::ingest` (the only real
 //! acquisition path) never called it, nothing in the CLI or
 //! `uze-application` reached it, and dead vendor-specific code sitting in
@@ -161,7 +161,7 @@ mod tests {
 
     /// Still-valid canonical invariant, now proven directly against the
     /// live `AgentPluginImporter` — this used to go through the dead
-    /// multi-importer `import_bundle()` dispatcher (removed by ADR-022),
+    /// multi-importer `import_bundle()` dispatcher (removed by ADR-005),
     /// which added no coverage of its own beyond what calling the one
     /// real importer directly already proves.
     #[test]
@@ -201,10 +201,6 @@ mod tests {
     }
 
     fn temp_bundle(label: &str) -> PathBuf {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!("uze-{label}-{}-{nonce}", std::process::id()))
+        uze_testkit::temp::scratch(label)
     }
 }

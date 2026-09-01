@@ -437,22 +437,6 @@ impl FakeHarness {
         }
     }
 
-    /// How many times the fake was invoked at all.
-    pub fn call_count(&self) -> usize {
-        self.invocations().len()
-    }
-
-    /// True when some invocation matches `argv` exactly.
-    pub fn was_called_with(&self, argv: &[&str]) -> bool {
-        self.invocations().iter().any(|call| {
-            call.len() == argv.len()
-                && call
-                    .iter()
-                    .zip(argv.iter())
-                    .all(|(actual, expected)| actual == expected)
-        })
-    }
-
     /// True when some invocation starts with `argv`.
     pub fn was_called_with_prefix(&self, argv: &[&str]) -> bool {
         self.invocations().iter().any(|call| {

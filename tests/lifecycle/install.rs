@@ -1,5 +1,5 @@
 //! One external plugin -> one store installation -> one effective environment
-//! -> peer and adversarial delivery plans. See ADR-008.
+//! -> peer and adversarial delivery plans. See ADR-013.
 
 use std::{fs, path::PathBuf};
 
@@ -118,7 +118,7 @@ fn one_plugin_install_is_planned_once_for_native_and_decomposed_harnesses() {
     );
 
     // Claude has no envelope of its own (only Codex's `.codex-plugin/
-    // plugin.json` is present), but ADR-020 (refining ADR-013 §2) makes
+    // plugin.json` is present), but ADR-013 §3 makes
     // envelope-less packages eligible for a UZE-GENERATED native envelope
     // rather than falling straight to capability decomposition: the
     // package's Skill lives under a conventional `skills/` directory and

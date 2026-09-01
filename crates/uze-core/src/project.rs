@@ -569,7 +569,7 @@ mod tests {
 
     #[test]
     fn a_project_hook_manifest_is_discovered_without_rewriting_its_bytes() {
-        let root = std::env::temp_dir().join(format!("uze-project-hook-{}", std::process::id()));
+        let root = uze_testkit::temp::scratch("project-hook");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let bytes = br#"{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"scripts/check"}]}]}}"#;

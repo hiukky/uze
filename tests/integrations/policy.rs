@@ -6,8 +6,6 @@
 //! antigravity}.rs` (migrated verbatim from the former
 //! `tests/skill_invocation_conformance.rs`).
 
-use std::time::{SystemTime, UNIX_EPOCH};
-
 pub(crate) use std::fs;
 pub(crate) use std::path::PathBuf;
 
@@ -24,14 +22,7 @@ pub(crate) use uze::{
     store::StoredPackage,
 };
 pub(crate) fn temp(label: &str) -> PathBuf {
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    std::env::temp_dir().join(format!(
-        "uze-invocation-conformance-{label}-{}-{nonce}",
-        std::process::id()
-    ))
+    uze_testkit::temp::scratch(label)
 }
 
 pub(crate) fn workflow_fixture() -> PathBuf {

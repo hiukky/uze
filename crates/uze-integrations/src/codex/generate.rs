@@ -5,8 +5,8 @@
 //! Codex plugin instead of decomposing into per-capability shims.
 //!
 //! Generated Native Package sits between Explicit Native Package and Native
-//! Capability in the delivery hierarchy (ADR-020/ADR-021, refining ADR-013
-//! §2), exactly as it does for Claude
+//! Capability in the delivery hierarchy (ADR-013 §3), exactly as it does
+//! for Claude
 //! (`crate::claude::generate`) — this module mirrors that one's shape and
 //! discipline, adapted to Codex's own manifest format: `skills` names one
 //! directory (not an inline list), and `mcpServers` names one external file
@@ -188,7 +188,7 @@ fn read_name_fields(package: &StoredPackage) -> (String, String) {
 /// Materializes (or refreshes) one package's generated envelope directory.
 /// Idempotent and deterministic: recreated wholesale from the Store package
 /// on every call, never incrementally patched — the directory is entirely
-/// UZE-owned and non-authoritative (ADR-013 §4). `skills/` and `.mcp.json`
+/// UZE-owned and non-authoritative (ADR-013 §5). `skills/` and `.mcp.json`
 /// are symlinked to the Store's own bytes, never copied, so they can never
 /// drift from the Store and a `.mcp.json` never duplicates content.
 pub(super) fn materialize_generated_package(
@@ -389,7 +389,7 @@ fn materialize_user_only_skill_dir(
 /// Removes one package's generated envelope directory by id alone — used at
 /// detach time, when only the receipt's `package_id` (not a full
 /// `StoredPackage`) is available. Safe unconditionally: this directory is
-/// never anything but a Derived Artifact (ADR-013 §4).
+/// never anything but a Derived Artifact (ADR-013 §5).
 pub(super) fn remove_generated_package_by_id(uze_home: &UzeHome, package_id: &str) -> Result<()> {
     // The id comes from the receipt ledger, not a constructor: refuse one
     // that could not have been a real package id instead of joining it into
@@ -547,14 +547,7 @@ mod generated_native_tests {
     use super::*;
 
     fn temp_root(label: &str) -> PathBuf {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "uze-codex-generated-{label}-{nonce}-{}",
-            std::process::id()
-        ))
+        uze_testkit::temp::scratch(label)
     }
 
     /// Builds a canonical package with NO vendor envelope of any kind —

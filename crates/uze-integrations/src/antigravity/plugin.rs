@@ -7,7 +7,7 @@
 //! Unlike link-based installers, there is no link route: `plugin
 //! install` stages a **byte copy** at `~/.gemini/config/plugins/<name>/`
 //! (symlinks are dereferenced — verified against 1.1.19), so the staged
-//! tree is deliberately treated as a Derived Artifact (ADR-013 §4): UZE
+//! tree is deliberately treated as a Derived Artifact (ADR-013 §5): UZE
 //! rebuilds it from the Store on attach, records a content fingerprint as
 //! its ownership proof, and removes it through `agy plugin uninstall` on
 //! detach. No Store bytes are ever read from the staged copy.
@@ -451,14 +451,7 @@ mod plugin_tests {
     use super::*;
 
     fn temp_root(label: &str) -> PathBuf {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "uze-antigravity-plugin-{label}-{nonce}-{}",
-            std::process::id()
-        ))
+        uze_testkit::temp::scratch(label)
     }
 
     fn make_package(label: &str, manifest: &str) -> (PathBuf, StoredPackage) {

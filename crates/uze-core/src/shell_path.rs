@@ -135,24 +135,10 @@ pub fn ensure_path_line(target: &ShellRcTarget, shims_dir: &Path) -> Result<bool
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    fn scratch_dir(label: &str) -> PathBuf {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "uze-shell-path-{label}-{}-{nonce}",
-            std::process::id()
-        ));
-        fs::create_dir_all(&path).unwrap();
-        path
-    }
 
     #[test]
     fn writes_a_fresh_marked_block_into_an_empty_or_missing_rc_file() {
-        let root = scratch_dir("fresh");
+        let root = uze_testkit::temp::scratch("fresh");
         let target = ShellRcTarget {
             kind: ShellKind::Zsh,
             rc_file: root.join(".zshrc"),
@@ -168,7 +154,7 @@ mod tests {
 
     #[test]
     fn preserves_existing_content_around_the_block() {
-        let root = scratch_dir("preserve");
+        let root = uze_testkit::temp::scratch("preserve");
         let rc_file = root.join(".bashrc");
         fs::write(&rc_file, "alias ll='ls -la'\n").unwrap();
         let target = ShellRcTarget {
@@ -184,7 +170,7 @@ mod tests {
 
     #[test]
     fn a_second_call_with_the_same_shims_dir_is_a_no_op() {
-        let root = scratch_dir("idempotent");
+        let root = uze_testkit::temp::scratch("idempotent");
         let target = ShellRcTarget {
             kind: ShellKind::Bash,
             rc_file: root.join(".bashrc"),
@@ -196,7 +182,7 @@ mod tests {
 
     #[test]
     fn moves_the_owned_block_after_later_path_exports() {
-        let root = scratch_dir("moves-to-end");
+        let root = uze_testkit::temp::scratch("moves-to-end");
         let rc_file = root.join(".zshrc");
         let target = ShellRcTarget {
             kind: ShellKind::Zsh,
@@ -225,7 +211,7 @@ mod tests {
 
     #[test]
     fn a_changed_shims_dir_rewrites_only_the_marked_line() {
-        let root = scratch_dir("rewrite");
+        let root = uze_testkit::temp::scratch("rewrite");
         let target = ShellRcTarget {
             kind: ShellKind::Bash,
             rc_file: root.join(".bashrc"),
@@ -243,7 +229,7 @@ mod tests {
 
     #[test]
     fn a_malformed_single_marker_is_left_untouched() {
-        let root = scratch_dir("malformed");
+        let root = uze_testkit::temp::scratch("malformed");
         let rc_file = root.join(".bashrc");
         fs::write(&rc_file, format!("{BEGIN}\nsomething odd\n")).unwrap();
         let target = ShellRcTarget {
@@ -259,7 +245,7 @@ mod tests {
 
     #[test]
     fn fish_gets_fish_add_path_not_export() {
-        let root = scratch_dir("fish");
+        let root = uze_testkit::temp::scratch("fish");
         let target = ShellRcTarget {
             kind: ShellKind::Fish,
             rc_file: root.join("config.fish"),

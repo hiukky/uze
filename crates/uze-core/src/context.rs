@@ -326,18 +326,7 @@ pub fn plan_agents_md(agents_md: &Path, contributions: &[InstructionContribution
 mod tests {
     use super::*;
     use crate::integration::AttachmentState;
-    use std::{fs, path::PathBuf};
-
-    fn temp(label: &str) -> PathBuf {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "uze-context-{label}-{}-{nonce}",
-            std::process::id()
-        ))
-    }
+    use std::fs;
 
     fn package_id(name: &str) -> PackageId {
         PackageId::from_plugin_name(name, std::path::Path::new("plugin.json")).unwrap()
@@ -345,7 +334,7 @@ mod tests {
 
     #[test]
     fn a_single_package_creates_one_matched_region_leaving_user_content_alone() {
-        let root = temp("single");
+        let root = uze_testkit::temp::scratch("single");
         fs::create_dir_all(&root).unwrap();
         let agents_md = root.join("AGENTS.md");
         fs::write(&agents_md, "# My Project\n\nSome user notes.\n").unwrap();
@@ -368,7 +357,7 @@ mod tests {
 
     #[test]
     fn two_packages_coexist_as_independent_regions() {
-        let root = temp("two-packages");
+        let root = uze_testkit::temp::scratch("two-packages");
         let agents_md = root.join("AGENTS.md");
         let report = reconcile_agents_md(
             &agents_md,
@@ -395,7 +384,7 @@ mod tests {
 
     #[test]
     fn removing_a_package_from_the_desired_set_removes_its_orphaned_region() {
-        let root = temp("orphan-removal");
+        let root = uze_testkit::temp::scratch("orphan-removal");
         let agents_md = root.join("AGENTS.md");
         reconcile_agents_md(
             &agents_md,
@@ -434,7 +423,7 @@ mod tests {
 
     #[test]
     fn removing_every_package_leaves_no_matched_contribution() {
-        let root = temp("all-removed");
+        let root = uze_testkit::temp::scratch("all-removed");
         let agents_md = root.join("AGENTS.md");
         fs::create_dir_all(&root).unwrap();
         fs::write(&agents_md, "user content survives\n").unwrap();
@@ -457,7 +446,7 @@ mod tests {
 
     #[test]
     fn a_user_edited_contribution_is_reported_drifted_never_overwritten() {
-        let root = temp("drift");
+        let root = uze_testkit::temp::scratch("drift");
         let agents_md = root.join("AGENTS.md");
         reconcile_agents_md(
             &agents_md,
@@ -488,7 +477,7 @@ mod tests {
     /// file could be in — absent, matched, drifted, orphaned, malformed.
     #[test]
     fn inspect_agents_md_never_writes_in_any_state() {
-        let root = temp("inspect-never-writes");
+        let root = uze_testkit::temp::scratch("inspect-never-writes");
         fs::create_dir_all(&root).unwrap();
         let agents_md = root.join("AGENTS.md");
 
@@ -578,7 +567,7 @@ mod tests {
     /// marker occurrence, not one per unique identity.
     #[test]
     fn a_malformed_duplicated_marker_is_reported_exactly_once_not_once_per_marker_line() {
-        let root = temp("dedup-malformed");
+        let root = uze_testkit::temp::scratch("dedup-malformed");
         fs::create_dir_all(&root).unwrap();
         let agents_md = root.join("AGENTS.md");
         fs::write(
@@ -600,7 +589,7 @@ mod tests {
 
     #[test]
     fn plan_agents_md_never_writes_and_maps_every_state_correctly() {
-        let root = temp("plan-mapping");
+        let root = uze_testkit::temp::scratch("plan-mapping");
         let agents_md = root.join("AGENTS.md");
 
         // Missing package region -> Attach.
@@ -675,7 +664,7 @@ mod tests {
 
     #[test]
     fn reconcile_is_idempotent_across_repeated_calls() {
-        let root = temp("idempotent");
+        let root = uze_testkit::temp::scratch("idempotent");
         let agents_md = root.join("AGENTS.md");
         let contributions = vec![InstructionContribution {
             package_id: package_id("pkg-a"),

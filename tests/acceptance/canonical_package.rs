@@ -7,8 +7,8 @@
 //!   A plugin author should not need to know every harness format.
 //!   UZE owns porting and delivery.
 //!
-//! Claude was the first proven tracer bullet (ADR-020, Generated Native
-//! Package) and Codex and Antigravity now close the same gap (ADR-021,
+//! Claude was the first proven tracer bullet (ADR-013, Generated Native
+//! Package) and Codex and Antigravity now close the same gap (ADR-013,
 //! Generated Native Package/Plugin): the fixture's single Skill, with no
 //! vendor envelope of its own, becomes one native Claude plugin, one native
 //! Codex plugin, and one native Antigravity plugin (its canonical

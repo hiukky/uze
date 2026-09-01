@@ -510,17 +510,6 @@ fn create_symlink(_source: &Path, target: &Path) -> Result<()> {
 mod tests {
     use super::*;
 
-    fn temp_dir(label: &str) -> PathBuf {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "uze-exposure-{label}-{}-{nonce}",
-            std::process::id()
-        ))
-    }
-
     fn managed_reference(discovery_root: &Path, source: &Path) -> ExposureMechanism {
         ExposureMechanism::ManagedUserScopeReference {
             discovery_root: discovery_root.to_path_buf(),
@@ -531,7 +520,7 @@ mod tests {
 
     #[test]
     fn attach_creates_a_symlink_and_is_idempotent() {
-        let root = temp_dir("attach");
+        let root = uze_testkit::temp::scratch("attach");
         let discovery_root = root.join("skills");
         let source = root.join("store-entry");
         fs::create_dir_all(&source).unwrap();
@@ -551,7 +540,7 @@ mod tests {
 
     #[test]
     fn attach_never_overwrites_an_entry_it_does_not_own() {
-        let root = temp_dir("conflict");
+        let root = uze_testkit::temp::scratch("conflict");
         let discovery_root = root.join("skills");
         fs::create_dir_all(&discovery_root).unwrap();
         fs::create_dir_all(discovery_root.join("uze-example")).unwrap();
@@ -567,7 +556,7 @@ mod tests {
 
     #[test]
     fn detach_removes_only_the_reference_it_owns() {
-        let root = temp_dir("detach");
+        let root = uze_testkit::temp::scratch("detach");
         let discovery_root = root.join("skills");
         let source = root.join("store-entry");
         fs::create_dir_all(&source).unwrap();
@@ -591,7 +580,7 @@ mod tests {
 
     #[test]
     fn detach_does_not_remove_an_entry_repointed_elsewhere() {
-        let root = temp_dir("repointed");
+        let root = uze_testkit::temp::scratch("repointed");
         let discovery_root = root.join("skills");
         let source = root.join("store-entry");
         let other = root.join("unrelated-entry");

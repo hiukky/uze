@@ -419,7 +419,6 @@ pub fn has_content_outside_managed_regions(target_file: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     /// Whether `target_file` currently holds *any* UZE-managed region at
     /// all, regardless of identity. Exercised only by the tests below; a
@@ -433,22 +432,11 @@ mod tests {
             .any(|line| line.starts_with("<!-- uze:begin ") && line.ends_with(" -->"))
     }
 
-    fn temp(label: &str) -> PathBuf {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "uze-text-region-{label}-{}-{nonce}",
-            std::process::id()
-        ))
-    }
-
     // --- attach --------------------------------------------------------
 
     #[test]
     fn attach_creates_the_file_when_it_does_not_exist() {
-        let root = temp("create");
+        let root = uze_testkit::temp::scratch("create");
         let file = root.join("NOTES.md");
         attach(&file, "pkg-a/instructions", "hello\nworld").unwrap();
         let content = fs::read_to_string(&file).unwrap();
@@ -461,7 +449,7 @@ mod tests {
 
     #[test]
     fn attach_preserves_existing_user_content_and_appends() {
-        let root = temp("preserve");
+        let root = uze_testkit::temp::scratch("preserve");
         fs::create_dir_all(&root).unwrap();
         let file = root.join("NOTES.md");
         fs::write(&file, "user text A\nuser text B\n").unwrap();
@@ -476,7 +464,7 @@ mod tests {
 
     #[test]
     fn attach_is_idempotent_when_already_matched() {
-        let root = temp("idempotent");
+        let root = uze_testkit::temp::scratch("idempotent");
         let file = root.join("project-context.md");
         attach(&file, "id", "content").unwrap();
         let before = fs::read_to_string(&file).unwrap();
@@ -488,7 +476,7 @@ mod tests {
 
     #[test]
     fn attach_refuses_to_overwrite_drifted_content() {
-        let root = temp("drift-refuse");
+        let root = uze_testkit::temp::scratch("drift-refuse");
         let file = root.join("NOTES.md");
         attach(&file, "id", "original").unwrap();
         let path = file.clone();
@@ -505,7 +493,7 @@ mod tests {
 
     #[test]
     fn inspect_scopes_to_the_declared_region_only() {
-        let root = temp("scoped-inspect");
+        let root = uze_testkit::temp::scratch("scoped-inspect");
         let file = root.join("NOTES.md");
         attach(&file, "id", "managed").unwrap();
 
@@ -530,7 +518,7 @@ mod tests {
 
     #[test]
     fn inspect_reports_missing_for_absent_file_and_absent_region() {
-        let root = temp("missing");
+        let root = uze_testkit::temp::scratch("missing");
         let file = root.join("NOTES.md");
         assert_eq!(
             inspect(&file, "id", "x").state,
@@ -549,7 +537,7 @@ mod tests {
 
     #[test]
     fn duplicate_or_malformed_markers_are_blocked_never_guessed() {
-        let root = temp("malformed");
+        let root = uze_testkit::temp::scratch("malformed");
         fs::create_dir_all(&root).unwrap();
         let file = root.join("NOTES.md");
 
@@ -576,7 +564,7 @@ mod tests {
 
     #[test]
     fn a_literal_marker_line_inside_user_content_for_the_same_identity_is_blocked_not_guessed() {
-        let root = temp("literal-marker");
+        let root = uze_testkit::temp::scratch("literal-marker");
         fs::create_dir_all(&root).unwrap();
         let file = root.join("NOTES.md");
         // Two begin markers for "id": one real, one that just happens to be
@@ -595,7 +583,7 @@ mod tests {
 
     #[test]
     fn detach_removes_only_the_region_between_two_pieces_of_user_content() {
-        let root = temp("detach-between");
+        let root = uze_testkit::temp::scratch("detach-between");
         let file = root.join("NOTES.md");
         fs::create_dir_all(&root).unwrap();
         fs::write(&file, "user text A\n").unwrap();
@@ -615,7 +603,7 @@ mod tests {
 
     #[test]
     fn detach_on_missing_region_is_a_safe_no_op() {
-        let root = temp("detach-missing");
+        let root = uze_testkit::temp::scratch("detach-missing");
         fs::create_dir_all(&root).unwrap();
         let file = root.join("NOTES.md");
         fs::write(&file, "just user content\n").unwrap();
@@ -627,7 +615,7 @@ mod tests {
 
     #[test]
     fn drifted_region_blocks_destructive_detach_per_adr_009() {
-        let root = temp("detach-drifted");
+        let root = uze_testkit::temp::scratch("detach-drifted");
         let file = root.join("NOTES.md");
         attach(&file, "id", "original").unwrap();
         let tampered = fs::read_to_string(&file)
@@ -647,7 +635,7 @@ mod tests {
 
     #[test]
     fn detach_leaves_an_empty_file_rather_than_deleting_a_preexisting_file() {
-        let root = temp("detach-empty");
+        let root = uze_testkit::temp::scratch("detach-empty");
         fs::create_dir_all(&root).unwrap();
         let file = root.join("NOTES.md");
         fs::write(&file, "").unwrap(); // pre-existing, empty, user-owned file
@@ -663,7 +651,7 @@ mod tests {
 
     #[test]
     fn multiple_regions_from_different_identities_coexist_and_detach_independently() {
-        let root = temp("multi-region");
+        let root = uze_testkit::temp::scratch("multi-region");
         let file = root.join("NOTES.md");
         attach(&file, "pkg-a/instructions", "content A").unwrap();
         attach(&file, "pkg-b/instructions", "content B").unwrap();
@@ -691,7 +679,7 @@ mod tests {
 
     #[test]
     fn crlf_files_are_preserved_through_attach_and_detach() {
-        let root = temp("crlf");
+        let root = uze_testkit::temp::scratch("crlf");
         fs::create_dir_all(&root).unwrap();
         let file = root.join("NOTES.md");
         fs::write(&file, "user text A\r\nuser text B\r\n").unwrap();
@@ -709,7 +697,7 @@ mod tests {
 
     #[test]
     fn a_file_missing_a_trailing_newline_is_normalized_on_attach() {
-        let root = temp("no-trailing-newline");
+        let root = uze_testkit::temp::scratch("no-trailing-newline");
         fs::create_dir_all(&root).unwrap();
         let file = root.join("NOTES.md");
         fs::write(&file, "user text with no trailing newline").unwrap();
@@ -721,7 +709,7 @@ mod tests {
 
     #[test]
     fn unicode_content_round_trips_untouched() {
-        let root = temp("unicode");
+        let root = uze_testkit::temp::scratch("unicode");
         let file = root.join("NOTES.md");
         attach(&file, "id", "café — 日本語 — emoji 🎉").unwrap();
         assert_eq!(
@@ -735,7 +723,7 @@ mod tests {
 
     #[test]
     fn region_shape_previews_remove_unconditionally_without_writing() {
-        let root = temp("shape-preview");
+        let root = uze_testkit::temp::scratch("shape-preview");
         fs::create_dir_all(&root).unwrap();
         let file = root.join("NOTES.md");
         assert_eq!(region_shape(&file, "id"), RegionShape::Absent);
@@ -757,7 +745,7 @@ mod tests {
 
     #[test]
     fn has_content_outside_managed_regions_distinguishes_user_content_from_pure_regions() {
-        let root = temp("outside-content");
+        let root = uze_testkit::temp::scratch("outside-content");
         let file = root.join("NOTES.md");
         assert!(
             !has_content_outside_managed_regions(&file),
@@ -787,7 +775,7 @@ mod tests {
 
     #[test]
     fn any_region_present_detects_regardless_of_identity() {
-        let root = temp("any-present");
+        let root = uze_testkit::temp::scratch("any-present");
         let file = root.join("NOTES.md");
         assert!(!any_region_present(&file), "missing file has no regions");
         attach(&file, "id", "content").unwrap();
@@ -799,7 +787,7 @@ mod tests {
 
     #[test]
     fn reconcile_creates_when_wanted_and_removes_when_not() {
-        let root = temp("reconcile");
+        let root = uze_testkit::temp::scratch("reconcile");
         let file = root.join("NOTES.md");
         assert_eq!(
             reconcile(&file, "id", "content", true).state,
@@ -824,7 +812,7 @@ mod tests {
 
     #[test]
     fn reconcile_refuses_to_remove_a_drifted_but_unwanted_region() {
-        let root = temp("reconcile-drift");
+        let root = uze_testkit::temp::scratch("reconcile-drift");
         let file = root.join("NOTES.md");
         attach(&file, "id", "original").unwrap();
         let tampered = fs::read_to_string(&file)
@@ -839,7 +827,7 @@ mod tests {
 
     #[test]
     fn region_identities_present_lists_every_well_formed_region() {
-        let root = temp("identities");
+        let root = uze_testkit::temp::scratch("identities");
         let file = root.join("NOTES.md");
         assert!(region_identities_present(&file).is_empty());
         attach(&file, "package:a:instructions", "A").unwrap();
@@ -856,7 +844,7 @@ mod tests {
 
     #[test]
     fn remove_unconditionally_removes_a_well_formed_orphaned_region_but_refuses_malformed_ones() {
-        let root = temp("orphan");
+        let root = uze_testkit::temp::scratch("orphan");
         let file = root.join("NOTES.md");
         fs::create_dir_all(&root).unwrap();
         fs::write(&file, "user text A\n").unwrap();
@@ -887,7 +875,7 @@ mod tests {
 
     #[test]
     fn invalid_region_identity_is_rejected_not_sanitized() {
-        let root = temp("invalid-id");
+        let root = uze_testkit::temp::scratch("invalid-id");
         let file = root.join("NOTES.md");
         assert!(attach(&file, "has spaces", "x").is_err());
         assert!(attach(&file, "has\nnewline", "x").is_err());

@@ -769,18 +769,7 @@ mod tests {
 #[cfg(all(test, unix))]
 mod dispatch_tests {
     use super::*;
-    use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf, time::Instant};
-
-    fn temp(label: &str) -> PathBuf {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .subsec_nanos();
-        std::env::temp_dir().join(format!(
-            "uze-hook-dispatch-{label}-{}-{nonce}",
-            std::process::id()
-        ))
-    }
+    use std::{fs, os::unix::fs::PermissionsExt, time::Instant};
 
     fn script(root: &Path, name: &str, body: &str) -> String {
         fs::create_dir_all(root).unwrap();
@@ -830,7 +819,7 @@ mod dispatch_tests {
 
     #[test]
     fn empty_stdout_is_an_observation() {
-        let root = temp("observe");
+        let root = uze_testkit::temp::scratch("observe");
         let script = script(&root, "observe.sh", ":");
         let outcome =
             dispatch_handlers(&hook(vec![&script], HookEffect::Observe), &input(), &root).unwrap();
@@ -841,7 +830,7 @@ mod dispatch_tests {
 
     #[test]
     fn allow_deny_and_transform_decisions_are_parsed_from_stdout() {
-        let root = temp("decisions");
+        let root = uze_testkit::temp::scratch("decisions");
         let allow = script(
             &root,
             "allow.sh",
@@ -882,7 +871,7 @@ mod dispatch_tests {
 
     #[test]
     fn native_payload_round_trips_through_abi_stdin() {
-        let root = temp("abi");
+        let root = uze_testkit::temp::scratch("abi");
         let probe = script(
             &root,
             "probe.sh",
@@ -903,7 +892,7 @@ mod dispatch_tests {
 
     #[test]
     fn canonical_deny_exit_is_a_decision_not_a_failure() {
-        let root = temp("deny-exit");
+        let root = uze_testkit::temp::scratch("deny-exit");
         let script = script(&root, "deny.sh", "read -r _; exit 3");
         let outcome =
             dispatch_handlers(&hook(vec![&script], HookEffect::Deny), &input(), &root).unwrap();
@@ -914,7 +903,7 @@ mod dispatch_tests {
 
     #[test]
     fn handlers_run_in_order_and_the_first_deny_stops_later_ones() {
-        let root = temp("order");
+        let root = uze_testkit::temp::scratch("order");
         let order_file = root.join("order.txt");
         let first = script(
             &root,
@@ -963,7 +952,7 @@ mod dispatch_tests {
 
     #[test]
     fn observation_fails_open_but_a_declared_deny_effect_fails_closed() {
-        let root = temp("fail");
+        let root = uze_testkit::temp::scratch("fail");
         let script = script(&root, "fail.sh", "read -r _; exit 7");
         let observed =
             dispatch_handlers(&hook(vec![&script], HookEffect::Observe), &input(), &root).unwrap();
@@ -984,7 +973,7 @@ mod dispatch_tests {
 
     #[test]
     fn malformed_stdout_is_a_failure_not_a_decision() {
-        let root = temp("bad-json");
+        let root = uze_testkit::temp::scratch("bad-json");
         let script = script(&root, "bad.sh", "read -r _; printf 'not json'");
         let outcome =
             dispatch_handlers(&hook(vec![&script], HookEffect::Deny), &input(), &root).unwrap();
@@ -995,7 +984,7 @@ mod dispatch_tests {
 
     #[test]
     fn timeout_terminates_a_hung_handler_and_fails_closed_for_deny() {
-        let root = temp("timeout");
+        let root = uze_testkit::temp::scratch("timeout");
         let script = script(&root, "spin.sh", "while :; do :; done");
         let hook = PortableHook {
             handlers: vec![CommandHook {
@@ -1018,7 +1007,7 @@ mod dispatch_tests {
 
     #[test]
     fn oversized_stdout_is_capped_and_treated_as_a_failure() {
-        let root = temp("oversize");
+        let root = uze_testkit::temp::scratch("oversize");
         let script = script(
             &root,
             "big.sh",
@@ -1033,7 +1022,7 @@ mod dispatch_tests {
 
     #[test]
     fn plugin_root_is_injected_as_env_and_as_a_command_placeholder() {
-        let root = temp("root");
+        let root = uze_testkit::temp::scratch("root");
         fs::create_dir_all(&root).unwrap();
         let probe = root.join("probe.sh");
         fs::write(

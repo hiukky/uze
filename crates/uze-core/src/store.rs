@@ -652,15 +652,6 @@ fn copy_symlink(source: &Path, _destination: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use crate::UzeHome;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    fn temp(label: &str) -> PathBuf {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!("uze-store-{label}-{}-{nonce}", std::process::id()))
-    }
 
     #[test]
     fn package_id_rejects_invalid_names() {
@@ -688,7 +679,7 @@ mod tests {
 
     #[test]
     fn load_registry_returns_empty_when_missing_and_survives_corrupt_json() {
-        let root = temp("registry-missing");
+        let root = uze_testkit::temp::scratch("registry-missing");
         let home = UzeHome::at(&root);
         let store = UzeStore::new(home.clone());
         // No registry yet — should be empty, not error.
@@ -739,11 +730,11 @@ mod tests {
         // traversal id, nothing about that id is ever actionable — it never
         // loads into a `PackageId` an operation could reach, so it can never
         // be looked up, listed, or removed.
-        let root = temp("registry-tamper");
+        let root = uze_testkit::temp::scratch("registry-tamper");
         let home = UzeHome::at(&root);
         let store = UzeStore::new(home.clone());
         home.ensure_layout().unwrap();
-        let victim = temp("registry-tamper-victim");
+        let victim = uze_testkit::temp::scratch("registry-tamper-victim");
         fs::create_dir_all(&victim).unwrap();
         let state = serde_json::json!({
             "packages": {
@@ -771,7 +762,7 @@ mod tests {
         // The whole point of the per-entry-tolerant parse: a single
         // corrupted or hand-edited key must not make every *other*,
         // still-valid package unreachable through `list`/`remove`/`doctor`.
-        let root = temp("registry-mixed-tamper");
+        let root = uze_testkit::temp::scratch("registry-mixed-tamper");
         let home = UzeHome::at(&root);
         let store = UzeStore::new(home.clone());
         home.ensure_layout().unwrap();

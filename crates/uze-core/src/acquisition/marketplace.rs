@@ -104,17 +104,6 @@ mod tests {
     use super::*;
     use std::fs;
 
-    fn temp(label: &str) -> PathBuf {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "uze-marketplace-{label}-{}-{nonce}",
-            std::process::id()
-        ))
-    }
-
     fn write_manifest(root: &Path, plugins_json: &str) {
         fs::write(
             root.join("marketplace.json"),
@@ -163,7 +152,7 @@ mod tests {
 
     #[test]
     fn resolves_relative_source_to_an_absolute_canonical_path() {
-        let root = temp("resolve");
+        let root = uze_testkit::temp::scratch("resolve");
         fs::create_dir_all(&root).unwrap();
         let dir = plugin_dir(&root, "plugins/uze");
         write_manifest(&root, r#"{"name":"uze","source":"./plugins/uze"}"#);
@@ -176,7 +165,7 @@ mod tests {
 
     #[test]
     fn two_distinct_plugins_resolve_independently_with_no_special_casing() {
-        let root = temp("two-plugins");
+        let root = uze_testkit::temp::scratch("two-plugins");
         fs::create_dir_all(&root).unwrap();
         let first = plugin_dir(&root, "plugins/uze");
         let second = plugin_dir(&root, "plugins/rust-guidelines");
@@ -199,7 +188,7 @@ mod tests {
 
     #[test]
     fn an_unknown_plugin_name_is_rejected() {
-        let root = temp("unknown");
+        let root = uze_testkit::temp::scratch("unknown");
         fs::create_dir_all(&root).unwrap();
         plugin_dir(&root, "plugins/uze");
         write_manifest(&root, r#"{"name":"uze","source":"./plugins/uze"}"#);
@@ -214,7 +203,7 @@ mod tests {
 
     #[test]
     fn a_missing_source_directory_is_rejected() {
-        let root = temp("missing-source");
+        let root = uze_testkit::temp::scratch("missing-source");
         fs::create_dir_all(&root).unwrap();
         write_manifest(&root, r#"{"name":"uze","source":"./plugins/uze"}"#);
         let manifest = parse_manifest(&fs::read(root.join("marketplace.json")).unwrap()).unwrap();
@@ -228,7 +217,7 @@ mod tests {
 
     #[test]
     fn a_source_escaping_the_marketplace_root_is_rejected() {
-        let root = temp("escape");
+        let root = uze_testkit::temp::scratch("escape");
         fs::create_dir_all(root.join("marketplace")).unwrap();
         plugin_dir(&root, "outside");
         write_manifest(

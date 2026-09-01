@@ -22,14 +22,14 @@
 use std::{
     cell::RefCell,
     collections::HashMap,
-    env, fs,
+    fs,
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use serde::{Deserialize, Serialize};
 
-use crate::{home::UzeHome, integration::HarnessDetection};
+use crate::{harness_runtime::is_executable_file, home::UzeHome, integration::HarnessDetection};
 
 /// Backstop for fingerprint blind spots — see the module doc and ADR 018.
 const MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
@@ -38,6 +38,13 @@ const MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 /// that finds either half changed treats the entry as stale. Absent for a
 /// harness that resolved to nothing, which is itself a meaningful,
 /// checkable fingerprint state (distinct from "never probed").
+///
+/// The path resolved here is the *real* harness binary, never UZE's own
+/// shim for it. Resolving with a plain `PATH` walk meant every harness
+/// fingerprinted `~/.uze/shims/<name>` — one file, the `uze` binary — so a
+/// vendor update did not invalidate anything (the entry stayed stale until
+/// the TTL) while rebuilding `uze` needlessly invalidated all of them at
+/// once.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 struct Fingerprint {
     resolved_path: Option<PathBuf>,
@@ -45,14 +52,13 @@ struct Fingerprint {
 }
 
 impl Fingerprint {
-    /// Resolves the first of `candidates` found on `PATH` (or, for a
-    /// candidate that is itself already a path, checked directly — the
-    /// route every test in this module uses to avoid mutating the
-    /// process-wide `PATH` environment variable) and stats its mtime. No
-    /// subprocess spawned; this is the entire reason a fingerprint check
-    /// is cheap enough to run on every cache read.
-    fn resolve(candidates: &[&str]) -> Self {
-        let resolved_path = candidates.iter().find_map(|name| resolve_on_path(name));
+    /// Resolves the first of `candidates` to a real harness binary and stats
+    /// its mtime. No subprocess spawned; this is the entire reason a
+    /// fingerprint check is cheap enough to run on every cache read.
+    fn resolve(candidates: &[&str], shims_dir: &Path) -> Self {
+        let resolved_path = candidates
+            .iter()
+            .find_map(|name| resolve_candidate(name, shims_dir));
         let modified_unix_nanos = resolved_path.as_deref().and_then(mtime_unix_nanos);
         Self {
             resolved_path,
@@ -61,26 +67,17 @@ impl Fingerprint {
     }
 }
 
-fn resolve_on_path(program: &str) -> Option<PathBuf> {
+/// A candidate that is already a path is checked directly — the route every
+/// test in this module uses to avoid mutating the process-wide `PATH`.
+/// Everything else resolves through the same walk the runtime shim itself
+/// uses, which skips `shims_dir`: fingerprinting the shim would track the
+/// `uze` binary's mtime instead of the harness's.
+fn resolve_candidate(program: &str, shims_dir: &Path) -> Option<PathBuf> {
     if program.contains(std::path::MAIN_SEPARATOR) {
         let path = PathBuf::from(program);
         return is_executable_file(&path).then_some(path);
     }
-    let path_var = env::var_os("PATH")?;
-    env::split_paths(&path_var)
-        .map(|dir| dir.join(program))
-        .find(|candidate| is_executable_file(candidate))
-}
-
-#[cfg(unix)]
-fn is_executable_file(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
-}
-
-#[cfg(not(unix))]
-fn is_executable_file(path: &Path) -> bool {
-    path.is_file()
+    crate::harness_runtime::resolve_real_executable(&[program], shims_dir)
 }
 
 fn mtime_unix_nanos(path: &Path) -> Option<u128> {
@@ -138,6 +135,8 @@ impl OnDiskCache {
 /// in-process tier naturally scopes to "one logical command" that way.
 pub struct DetectionCache {
     path: PathBuf,
+    /// Captured so every fingerprint can skip it — see `resolve_candidate`.
+    shims_dir: PathBuf,
     memo: RefCell<HashMap<&'static str, HarnessDetection>>,
 }
 
@@ -145,6 +144,7 @@ impl DetectionCache {
     pub fn new(home: &UzeHome) -> Self {
         Self {
             path: home.harness_detection_cache_path(),
+            shims_dir: home.shims_dir(),
             memo: RefCell::new(HashMap::new()),
         }
     }
@@ -153,6 +153,9 @@ impl DetectionCache {
     fn at(path: PathBuf) -> Self {
         Self {
             path,
+            // Tests resolve candidates by explicit path, never through
+            // `PATH`, so no shim directory can be in the way.
+            shims_dir: PathBuf::from("/nonexistent-shims"),
             memo: RefCell::new(HashMap::new()),
         }
     }
@@ -176,7 +179,7 @@ impl DetectionCache {
         if age_nanos >= MAX_AGE.as_nanos() {
             return None;
         }
-        if entry.fingerprint != Fingerprint::resolve(program_candidates) {
+        if entry.fingerprint != Fingerprint::resolve(program_candidates, &self.shims_dir) {
             return None;
         }
         self.memo
@@ -201,7 +204,7 @@ impl DetectionCache {
             integration_id.to_owned(),
             CachedEntry {
                 detection,
-                fingerprint: Fingerprint::resolve(program_candidates),
+                fingerprint: Fingerprint::resolve(program_candidates, &self.shims_dir),
                 cached_at_unix_nanos: now_unix_nanos(),
             },
         );
@@ -218,21 +221,14 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        std::env::temp_dir().join(format!(
-            "uze-detection-cache-{label}-{}-{nonce}.json",
-            std::process::id()
-        ))
+        uze_testkit::temp::scratch(label).join("detection-cache.json")
     }
 
     /// A directory unique to this call, not just this process — tests run
     /// concurrently in threads that share one process id, so a directory
     /// name derived only from `std::process::id()` collides across tests.
     fn unique_temp_dir(label: &str) -> PathBuf {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!("uze-dc-bin-{label}-{}-{nonce}", std::process::id()))
+        uze_testkit::temp::scratch(label)
     }
 
     fn fake_executable(dir: &Path, name: &str) -> PathBuf {
@@ -322,13 +318,43 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// The bug this resolution exists to prevent: with a plain `PATH` walk
+    /// every harness fingerprinted `~/.uze/shims/<name>` — all four are the
+    /// same `uze` binary — so a real vendor update changed nothing the cache
+    /// could see, and rebuilding `uze` invalidated every entry at once.
+    #[test]
+    fn a_shim_ahead_of_the_real_binary_is_never_what_gets_fingerprinted() {
+        let mut env = uze_testkit::env::scope();
+        let dir = unique_temp_dir("shim-skip");
+        let shims_dir = dir.join("shims");
+        let real_dir = dir.join("real-bin");
+        fs::create_dir_all(&shims_dir).unwrap();
+        fs::create_dir_all(&real_dir).unwrap();
+        let shim = fake_executable(&shims_dir, "codex");
+        let real = fake_executable(&real_dir, "codex");
+
+        env.set(
+            "PATH",
+            std::env::join_paths([&shims_dir, &real_dir]).unwrap(),
+        );
+        let fingerprint = Fingerprint::resolve(&["codex"], &shims_dir);
+
+        assert_eq!(
+            fingerprint.resolved_path,
+            Some(real.canonicalize().unwrap()),
+            "the shim sits first on PATH but the fingerprint must track the real binary"
+        );
+        assert_ne!(fingerprint.resolved_path, Some(shim));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn expired_ttl_invalidates_the_entry_even_with_a_matching_fingerprint() {
         let dir = unique_temp_dir("ttl");
         let bin = fake_executable(&dir, "fake-harness-d");
         let path_str = bin.to_str().unwrap();
         let cache_path = temp_cache_path("ttl");
-        let fingerprint = Fingerprint::resolve(&[path_str]);
+        let fingerprint = Fingerprint::resolve(&[path_str], Path::new("/nonexistent-shims"));
         let mut on_disk = OnDiskCache::default();
         on_disk.entries.insert(
             "opencode".to_owned(),

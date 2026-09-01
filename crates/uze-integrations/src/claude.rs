@@ -272,7 +272,7 @@ impl IntegrationPort for ClaudeIntegration {
                 .into_iter()
                 .collect(),
             verification: VerificationStatus::Unverified,
-            evidence: "Claude Code consumes UZE's derived marketplaces: a package shipping .claude-plugin/plugin.json is installed as a native plugin covering its declared skills/mcpServers (`claude plugin install <sel>@uze-local`, empirically confirmed via `claude plugin validate`/`plugin list`); one without gets a deterministically synthesized envelope published through the generated-only `uze-store` marketplace (ADR-020). Invocation policy is translated into Claude's own SKILL.md frontmatter (disable-model-invocation / user-invocable — both verified against the current Claude Code skill docs); an explicit-envelope Skill is only claimed as covered when its canonical policy is actually preserved by the vendor content it ships. Capability-level shims (`<claude_home>/skills` reference, `claude mcp add`) remain only as fallback for resources outside the envelope's coverage. Portable Hooks are projected into the `hooks` key of the user settings file through a hook-exec wrapper carrying the portable ABI (ADR-033; deterministic emission, real-binary verification pending in the conformance lab). Behavioral (prompted) verification remains a separate opt-in conformance probe."
+            evidence: "Claude Code consumes UZE's derived marketplaces: a package shipping .claude-plugin/plugin.json is installed as a native plugin covering its declared skills/mcpServers (`claude plugin install <sel>@uze-local`, empirically confirmed via `claude plugin validate`/`plugin list`); one without gets a deterministically synthesized envelope published through the generated-only `uze-store` marketplace (ADR-013). Invocation policy is translated into Claude's own SKILL.md frontmatter (disable-model-invocation / user-invocable — both verified against the current Claude Code skill docs); an explicit-envelope Skill is only claimed as covered when its canonical policy is actually preserved by the vendor content it ships. Capability-level shims (`<claude_home>/skills` reference, `claude mcp add`) remain only as fallback for resources outside the envelope's coverage. Portable Hooks are projected into the `hooks` key of the user settings file through a hook-exec wrapper carrying the portable ABI (ADR-033; deterministic emission, real-binary verification pending in the conformance lab). Behavioral (prompted) verification remains a separate opt-in conformance probe."
                 .to_owned(),
             ..HarnessCapabilities::default()
         }
@@ -401,7 +401,7 @@ impl IntegrationPort for ClaudeIntegration {
         }
         // No author-provided envelope. Rather than falling straight to
         // capability decomposition, check whether UZE can safely synthesize
-        // one (ADR-020, refining ADR-013 §2: Explicit Native Package >
+        // one (ADR-013 §3: Explicit Native Package >
         // Generated Native Package > Native Capability > Safe Adaptation >
         // Unsupported). This method stays read-only either way — it
         // computes what *would* be covered, never materializes anything.
@@ -634,7 +634,7 @@ impl IntegrationPort for ClaudeIntegration {
                 remove_claude_plugin(Path::new(&executable), &self.command_home, selector)?;
                 if kind == GENERATED_PLUGIN_KIND {
                     // The generated envelope directory is a Derived Artifact
-                    // (ADR-013 §4): non-authoritative, rebuildable, and
+                    // (ADR-013 §5): non-authoritative, rebuildable, and
                     // never the canonical Store — safe to remove outright
                     // now that Claude no longer references it.
                     remove_generated_package_by_id(&self.uze_home, &receipt.package_id)?;
@@ -805,12 +805,7 @@ mod lifecycle_tests {
         }
     }
     fn check(value: &str) -> AttachmentState {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let root =
-            std::env::temp_dir().join(format!("uze-claude-config-{}-{nonce}", std::process::id()));
+        let root = uze_testkit::temp::scratch("claude-config");
         fs::create_dir_all(&root).unwrap();
         let path = root.join(".claude.json");
         fs::write(&path, value).unwrap();
@@ -863,7 +858,7 @@ mod lifecycle_tests {
     fn detaching_a_skill_reference_cleans_an_unreferenced_owned_shim() {
         use std::os::unix::fs::symlink;
 
-        let root = std::env::temp_dir().join(format!("uze-claude-shim-{}", std::process::id()));
+        let root = uze_testkit::temp::scratch("claude-shim");
         let uze_home = UzeHome::at(root.join("uze"));
         let integration = ClaudeIntegration::new(root.join("claude"), uze_home.clone());
         fs::create_dir_all(&integration.skills_dir).unwrap();

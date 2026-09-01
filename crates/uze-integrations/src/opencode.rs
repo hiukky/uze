@@ -689,17 +689,6 @@ mod lifecycle_tests {
 
     use super::*;
 
-    fn temp(label: &str) -> PathBuf {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "uze-opencode-{label}-{}-{nonce}",
-            std::process::id()
-        ))
-    }
-
     fn receipt() -> AttachmentReceipt {
         AttachmentReceipt {
             package_id: "plugin".to_owned(),
@@ -728,7 +717,7 @@ mod lifecycle_tests {
 
     #[test]
     fn mcp_inspection_tolerates_unrelated_fields_and_detaches_only_owned_entry() {
-        let root = temp("mcp");
+        let root = uze_testkit::temp::scratch("mcp");
         fs::create_dir_all(root.join("config")).unwrap();
         let integration = integration(&root);
         let receipt = receipt();
@@ -760,7 +749,7 @@ mod lifecycle_tests {
 
     #[test]
     fn mcp_drift_and_invalid_config_are_preserved() {
-        let root = temp("drift");
+        let root = uze_testkit::temp::scratch("drift");
         fs::create_dir_all(root.join("config")).unwrap();
         let integration = integration(&root);
         let receipt = receipt();

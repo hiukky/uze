@@ -108,7 +108,7 @@ mod tests {
 
     #[test]
     fn lock_blocks_a_concurrent_mutation_attempt() {
-        let root = std::env::temp_dir().join(format!("uze-lock-{}", std::process::id()));
+        let root = uze_testkit::temp::scratch("lock");
         let home = UzeHome::at(&root);
         let first = MutationLock::acquire(&home).unwrap();
         assert!(matches!(
@@ -122,14 +122,7 @@ mod tests {
 
     #[test]
     fn write_atomic_creates_parent_and_is_idempotent() {
-        let root = std::env::temp_dir().join(format!(
-            "uze-write-atomic-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let root = uze_testkit::temp::scratch("write-atomic");
         let path = root.join("a/b/state.json");
         write_atomic(&path, b"first").unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"first");
@@ -149,14 +142,7 @@ mod tests {
 
     #[test]
     fn mutation_lock_is_released_on_drop_and_allows_reacquire() {
-        let root = std::env::temp_dir().join(format!(
-            "uze-lock-drop-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let root = uze_testkit::temp::scratch("lock-drop");
         let home = UzeHome::at(&root);
         {
             let _guard = MutationLock::acquire(&home).unwrap();

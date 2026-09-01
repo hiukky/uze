@@ -370,8 +370,7 @@ mod mcp_tests {
     fn native_mcp_command_runs_in_the_managed_config_directory() {
         use std::os::unix::fs::PermissionsExt;
 
-        let root =
-            std::env::temp_dir().join(format!("uze-opencode-mcp-cwd-{}", std::process::id()));
+        let root = uze_testkit::temp::scratch("opencode-mcp-cwd");
         let _ = fs::remove_dir_all(&root);
         let config_path = root.join("config/opencode.json");
         let cwd_capture = root.join("cwd.txt");

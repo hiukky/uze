@@ -427,14 +427,7 @@ mod claude_native_coverage_tests {
     use super::claude_exact_coverage;
 
     fn temp_root(label: &str) -> PathBuf {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "uze-claude-coverage-{label}-{nonce}-{}",
-            std::process::id()
-        ))
+        uze_testkit::temp::scratch(label)
     }
 
     fn make_package_with_plugin(

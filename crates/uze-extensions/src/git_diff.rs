@@ -1572,12 +1572,7 @@ mod tests {
     #[test]
     fn open_reads_a_real_repositorys_staged_unstaged_and_untracked_changes() {
         let _environment = uze_testkit::env::scope();
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let root =
-            std::env::temp_dir().join(format!("uze-git-diff-test-{}-{nonce}", std::process::id()));
+        let root = uze_testkit::temp::scratch("git-diff-test");
         std::fs::create_dir_all(&root).unwrap();
         let git = |args: &[&str]| {
             let status = Command::new("git")
@@ -1646,12 +1641,7 @@ mod tests {
     #[test]
     fn discovers_main_and_configured_linked_worktrees() {
         let _environment = uze_testkit::env::scope();
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let parent =
-            std::env::temp_dir().join(format!("uze-worktree-test-{}-{nonce}", std::process::id()));
+        let parent = uze_testkit::temp::scratch("worktree-test");
         let root = parent.join("project");
         let worktrees = parent.join("worktrees");
         let feature = worktrees.join("feature");

@@ -1441,10 +1441,7 @@ mod tests {
     /// treats this the same as a version that actively mismatches.
     #[test]
     fn server_protocol_version_is_unknown_without_a_recorded_version() {
-        let scratch = std::env::temp_dir().join(format!(
-            "uze-terminal-protocol-version-{}",
-            std::process::id()
-        ));
+        let scratch = uze_testkit::temp::scratch("terminal-protocol-version");
         std::fs::create_dir_all(&scratch).unwrap();
         let pid_path = scratch.join("test.pid");
 
@@ -1466,10 +1463,7 @@ mod tests {
     /// server instead of the one it just gave up on.
     #[test]
     fn replace_incompatible_server_kills_the_old_owner_and_clears_its_files() {
-        let scratch = std::env::temp_dir().join(format!(
-            "uze-terminal-replace-incompatible-{}",
-            std::process::id()
-        ));
+        let scratch = uze_testkit::temp::scratch("terminal-replace-incompatible");
         std::fs::create_dir_all(&scratch).unwrap();
         let socket = scratch.join("test.sock");
         let pid_path = scratch.join("test.pid");
@@ -1727,9 +1721,19 @@ mod tests {
             .unwrap_or("sh")
             .to_owned();
 
+        // Poll until the *spawned shell* owns the PTY's foreground group,
+        // identified by its cwd. Before it does, `process_group_leader`
+        // transiently reports this test binary's own group — and reading
+        // that process's `/proc/<pid>/environ` still yields the
+        // `UZE_SHIM_NAME` of the session running the suite, because
+        // `/proc/environ` exposes the environment block captured at `exec`
+        // and is unaffected by a later `unsetenv`. Accepting the first
+        // `Some` therefore made this assert against the developer's own
+        // session at random.
+        let pane_cwd = PathBuf::from("/tmp");
         let mut status = None;
         for _ in 0..50 {
-            status = pane.foreground_status();
+            status = pane.foreground_status().filter(|(cwd, _)| *cwd == pane_cwd);
             if status.is_some() {
                 break;
             }
@@ -1737,8 +1741,8 @@ mod tests {
         }
         pane.stop();
 
-        let (cwd, process) = status.expect("foreground process must be observable on Linux");
-        assert_eq!(cwd, PathBuf::from("/tmp"));
+        let (cwd, process) = status.expect("the spawned shell must own the PTY foreground group");
+        assert_eq!(cwd, pane_cwd);
         assert_eq!(process, expected_name);
     }
 
@@ -1754,14 +1758,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn foreground_status_prefers_the_shim_identity_over_a_version_named_comm() {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let bin_dir = std::env::temp_dir().join(format!(
-            "uze-shim-identity-test-{}-{nonce}",
-            std::process::id()
-        ));
+        let bin_dir = uze_testkit::temp::scratch("shim-identity-test");
         std::fs::create_dir_all(&bin_dir).unwrap();
         let versioned_binary = bin_dir.join("2.1.251");
         std::fs::copy("/bin/sleep", &versioned_binary).unwrap();
@@ -1811,14 +1808,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn a_restarted_server_relaunches_the_same_spaces_tabs_and_agent_commands() {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let scratch = std::env::temp_dir().join(format!(
-            "uze-terminal-persist-{}-{nonce}",
-            std::process::id()
-        ));
+        let scratch = uze_testkit::temp::scratch("terminal-persist");
         let uze_home = scratch.join("home");
         let project = scratch.join("project");
         let runtime_dir = scratch.join("runtime");
@@ -1879,14 +1869,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn a_finished_direct_agent_is_replaced_by_a_shell_in_its_pane() {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let scratch = std::env::temp_dir().join(format!(
-            "uze-terminal-agent-exit-{}-{nonce}",
-            std::process::id()
-        ));
+        let scratch = uze_testkit::temp::scratch("terminal-agent-exit");
         let uze_home = scratch.join("home");
         let project = scratch.join("project");
         let runtime_dir = scratch.join("runtime");
@@ -1956,14 +1939,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn a_plain_shell_tab_running_a_recognized_process_relaunches_as_that_process() {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let scratch = std::env::temp_dir().join(format!(
-            "uze-terminal-persist-typed-{}-{nonce}",
-            std::process::id()
-        ));
+        let scratch = uze_testkit::temp::scratch("terminal-persist-typed");
         let uze_home = scratch.join("home");
         let project = scratch.join("project");
         std::fs::create_dir_all(&project).unwrap();
@@ -2014,14 +1990,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn a_persisted_command_that_no_longer_resolves_falls_back_to_a_plain_shell() {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let scratch = std::env::temp_dir().join(format!(
-            "uze-terminal-persist-stale-{}-{nonce}",
-            std::process::id()
-        ));
+        let scratch = uze_testkit::temp::scratch("terminal-persist-stale");
         let uze_home = scratch.join("home");
         let project = scratch.join("project");
         std::fs::create_dir_all(&project).unwrap();

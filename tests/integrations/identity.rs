@@ -37,7 +37,6 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 // `PATH` is process-global; every test below that mutates it must not
@@ -65,14 +64,7 @@ use uze::integrations::{
 // ============================================================================
 
 fn temp(label: &str) -> PathBuf {
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    std::env::temp_dir().join(format!(
-        "uze-conformance-{label}-{}-{nonce}",
-        std::process::id()
-    ))
+    uze_testkit::temp::scratch(label)
 }
 
 /// Writes a canonical `plugin.json` plus every `(relative_path, content)`
@@ -175,7 +167,7 @@ fn assert_basic_identity_contract(integration: &dyn IntegrationPort) {
 
 /// Claude, Codex, and Antigravity deliver Skills and MCP as their own
 /// native package/plugin — explicit or generated envelope, ADR-013 §2 /
-/// ADR-020 / ADR-021 — so both kinds must be declared `native`, never
+/// ADR-013 / ADR-013 — so both kinds must be declared `native`, never
 /// `adaptable`.
 /// The capability-level shims (skills-dir reference, `mcp add`) are the
 /// fallback for resources outside the envelope's coverage, not the primary

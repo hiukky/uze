@@ -92,24 +92,13 @@ mod tests {
     use super::*;
     use std::fs;
 
-    fn temp(label: &str) -> PathBuf {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "uze-workspace-{label}-{}-{nonce}",
-            std::process::id()
-        ))
-    }
-
     fn mkdir(path: &Path) {
         fs::create_dir_all(path).unwrap();
     }
 
     #[test]
     fn no_workspace_when_no_anchors() {
-        let root = temp("none");
+        let root = uze_testkit::temp::scratch("none");
         mkdir(&root);
         let resolved = resolve_workspace(&root).unwrap();
         assert_eq!(resolved.kind, WorkspaceKind::NoWorkspace);
@@ -119,7 +108,7 @@ mod tests {
 
     #[test]
     fn consumer_at_cwd() {
-        let root = temp("consumer-root");
+        let root = uze_testkit::temp::scratch("consumer-root");
         mkdir(&root);
         fs::write(root.join("agents.lock"), "version: 1\n").unwrap();
         let resolved = resolve_workspace(&root).unwrap();
@@ -130,7 +119,7 @@ mod tests {
 
     #[test]
     fn consumer_from_subdir_finds_nearest_ancestor() {
-        let root = temp("consumer-subdir");
+        let root = uze_testkit::temp::scratch("consumer-subdir");
         mkdir(&root);
         fs::write(root.join("agents.lock"), "version: 1\n").unwrap();
         let sub = root.join("src/foo");
@@ -143,7 +132,7 @@ mod tests {
 
     #[test]
     fn marketplace_manifest_is_an_anchor() {
-        let root = temp("marketplace");
+        let root = uze_testkit::temp::scratch("marketplace");
         mkdir(&root);
         fs::write(
             root.join("marketplace.json"),
@@ -158,7 +147,7 @@ mod tests {
 
     #[test]
     fn agents_json_alone_is_not_a_marketplace_anchor() {
-        let root = temp("agents-json-only");
+        let root = uze_testkit::temp::scratch("agents-json-only");
         mkdir(&root);
         fs::write(root.join("agents.json"), r#"{"name":"m","plugins":[]}"#).unwrap();
         let resolved = resolve_workspace(&root).unwrap();
@@ -168,7 +157,7 @@ mod tests {
 
     #[test]
     fn both_anchors_are_hybrid() {
-        let root = temp("hybrid");
+        let root = uze_testkit::temp::scratch("hybrid");
         mkdir(&root);
         fs::write(root.join("agents.lock"), "version: 1\n").unwrap();
         fs::write(
@@ -183,7 +172,7 @@ mod tests {
 
     #[test]
     fn nested_workspace_nearest_wins() {
-        let outer = temp("nested-outer");
+        let outer = uze_testkit::temp::scratch("nested-outer");
         let inner = outer.join("packages/foo");
         mkdir(&inner);
         fs::write(outer.join("agents.lock"), "version: 1\n").unwrap();
@@ -200,7 +189,7 @@ mod tests {
     fn nearest_anchor_wins_across_kinds() {
         // A marketplace at the outer level, a consumer nested inside it:
         // running inside the nested consumer must see the consumer.
-        let outer = temp("cross-kind");
+        let outer = uze_testkit::temp::scratch("cross-kind");
         let inner = outer.join("plugins/flow");
         mkdir(&inner);
         fs::write(
@@ -221,7 +210,7 @@ mod tests {
 
     #[test]
     fn agents_md_alone_is_not_a_workspace() {
-        let root = temp("agents-md-only");
+        let root = uze_testkit::temp::scratch("agents-md-only");
         mkdir(&root);
         fs::write(root.join("AGENTS.md"), "# hi\n").unwrap();
         let resolved = resolve_workspace(&root).unwrap();
@@ -235,7 +224,7 @@ mod tests {
 
     #[test]
     fn vendors_without_anchors_are_no_workspace() {
-        let root = temp("vendors-only");
+        let root = uze_testkit::temp::scratch("vendors-only");
         mkdir(&root);
         fs::write(root.join("CLAUDE.md"), "# vendor\n").unwrap();
         fs::create_dir_all(root.join(".claude")).unwrap();

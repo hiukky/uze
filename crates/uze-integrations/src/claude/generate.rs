@@ -5,7 +5,7 @@
 //! Claude plugin instead of decomposing into per-capability shims.
 //!
 //! Generated Native Package sits between Explicit Native Package and Native
-//! Capability in the delivery hierarchy (ADR-020, refining ADR-013 §2): a
+//! Capability in the delivery hierarchy (ADR-013 §3): a
 //! source package's absence of a vendor envelope no longer forces
 //! capability-level decomposition by itself — only the absence of anything
 //! UZE can safely represent does.
@@ -18,13 +18,13 @@
 //! already declared in the package's own canonical `plugin.json`.
 //!
 //! A Skill whose canonical `invoke:` policy is not the default is the one
-//! deliberate exception (ADR-030, absorbing ADR-028's technique): Claude
+//! deliberate exception (ADR-030): Claude
 //! has no vendor-neutral `invoke:` concept, but it does honor its own
 //! frontmatter fields (`disable-model-invocation: true` → user-only;
 //! `user-invocable: false` → model-only), so the generated envelope
 //! materializes one real SKILL.md per non-default Skill carrying those
 //! markers — never a symlink — while preserving the canonical
-//! name/description/body. Still a Derived Artifact (ADR-013 §4) under
+//! name/description/body. Still a Derived Artifact (ADR-013 §5) under
 //! `$UZE_HOME`, never the Store: only the physical representation of the
 //! Skill changed, not its ownership.
 
@@ -194,7 +194,7 @@ fn read_name_fields(package: &StoredPackage) -> (String, String) {
 /// Materializes (or refreshes) one package's generated envelope directory.
 /// Idempotent and deterministic: recreated wholesale from the Store package
 /// on every call, never incrementally patched, because the directory is
-/// entirely UZE-owned and non-authoritative (ADR-013 §4) — there is nothing
+/// entirely UZE-owned and non-authoritative (ADR-013 §5) — there is nothing
 /// here a partial rebuild could safely preserve that a full rebuild would
 /// lose.
 pub(super) fn materialize_generated_package(
@@ -372,7 +372,7 @@ fn materialize_wrapped_skill(
 /// Removes one package's generated envelope directory by id alone — used at
 /// detach time, when only the receipt's `package_id` (not a full
 /// `StoredPackage`) is available. Safe unconditionally: this directory is
-/// never anything but a Derived Artifact (ADR-013 §4).
+/// never anything but a Derived Artifact (ADR-013 §5).
 pub(super) fn remove_generated_package_by_id(uze_home: &UzeHome, package_id: &str) -> Result<()> {
     // The id comes from the receipt ledger, not a constructor: refuse one
     // that could not have been a real package id instead of joining it into
@@ -518,14 +518,7 @@ mod generated_native_tests {
     use super::*;
 
     fn temp_root(label: &str) -> PathBuf {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "uze-claude-generated-{label}-{nonce}-{}",
-            std::process::id()
-        ))
+        uze_testkit::temp::scratch(label)
     }
 
     /// Builds a canonical package with NO vendor envelope of any kind —
@@ -835,7 +828,7 @@ mod generated_native_tests {
     // --- Generation-eligibility matrix ---------------------------------
     //
     // A package's eligibility for Generated Native Package is
-    // capability-based, not resource-count-based (ADR-020): a single Skill
+    // capability-based, not resource-count-based (ADR-013): a single Skill
     // or a single MCP server, alone, already qualifies. These tests make
     // that matrix explicit rather than leaving it implied by the tests
     // above.

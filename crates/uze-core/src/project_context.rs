@@ -92,26 +92,13 @@ mod tests {
     use super::*;
     use std::fs;
 
-    fn temp(label: &str) -> PathBuf {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "uze-project-context-{label}-{}-{nonce}",
-            std::process::id()
-        ));
-        fs::create_dir_all(&path).unwrap();
-        path
-    }
-
     #[test]
     fn agents_directory_alone_is_still_project_context() {
         // The regression this module exists for: the runtime projection
         // used to abort before looking at `.agents/` whenever `AGENTS.md`
         // was absent, so a project delivering only Skills delivered
         // nothing and the UI reported the harness as "not supported".
-        let root = temp("agents-dir-only");
+        let root = uze_testkit::temp::scratch("agents-dir-only");
         fs::create_dir_all(root.join(".git")).unwrap();
         fs::create_dir_all(root.join(".agents/skills")).unwrap();
         let context = resolve(&root);
@@ -131,7 +118,7 @@ mod tests {
 
     #[test]
     fn a_nested_directory_resolves_to_the_project_root_not_itself() {
-        let root = temp("nested");
+        let root = uze_testkit::temp::scratch("nested");
         fs::write(root.join("AGENTS.md"), "x\n").unwrap();
         let nested = root.join("crates/deep");
         fs::create_dir_all(&nested).unwrap();
@@ -143,7 +130,7 @@ mod tests {
 
     #[test]
     fn a_git_repository_without_portable_context_has_none() {
-        let root = temp("bare-git");
+        let root = uze_testkit::temp::scratch("bare-git");
         fs::create_dir_all(root.join(".git")).unwrap();
         let context = resolve(&root);
         assert_eq!(context.root, root.canonicalize().unwrap());
@@ -153,7 +140,7 @@ mod tests {
 
     #[test]
     fn a_nonexistent_directory_resolves_to_itself_with_no_context() {
-        let root = temp("absent");
+        let root = uze_testkit::temp::scratch("absent");
         let missing = root.join("nowhere");
         let context = resolve(&missing);
         assert!(!context.has_any());
@@ -163,7 +150,7 @@ mod tests {
 
     #[test]
     fn a_subdirectory_of_a_repository_resolves_to_the_repository() {
-        let root = temp("repo-subdir");
+        let root = uze_testkit::temp::scratch("repo-subdir");
         fs::create_dir_all(root.join(".git")).unwrap();
         fs::write(root.join("AGENTS.md"), "x\n").unwrap();
         fs::create_dir_all(root.join(".agents/skills")).unwrap();
@@ -182,7 +169,7 @@ mod tests {
         // resolve to itself and see none of the outer repository's context,
         // otherwise the same vendored tree carries different instructions
         // depending on where it happens to be nested.
-        let outer = temp("nested-repo");
+        let outer = uze_testkit::temp::scratch("nested-repo");
         fs::create_dir_all(outer.join(".git")).unwrap();
         fs::write(outer.join("AGENTS.md"), "# outer\n").unwrap();
         let inner = outer.join("vendor");

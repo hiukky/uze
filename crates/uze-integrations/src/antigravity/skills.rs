@@ -92,7 +92,7 @@ pub(super) fn antigravity_skill_exposure_name_candidates(
 /// slash-invocable name is `flow:review`, never a bare alias or a
 /// collision-prone `review` (the vendor derives the identity from front
 /// matter). Idempotent and rebuilt wholesale — the directory is entirely
-/// UZE-owned and non-authoritative (ADR-013 §4).
+/// UZE-owned and non-authoritative (ADR-013 §5).
 pub(super) fn materialize_generated_skill(
     uze_home: &UzeHome,
     resource: &Resource,
@@ -255,8 +255,7 @@ mod tests {
 
     #[test]
     fn generated_skill_preserves_body_and_carries_the_stable_label() {
-        let root =
-            std::env::temp_dir().join(format!("uze-antigravity-skill-{}", std::process::id()));
+        let root = uze_testkit::temp::scratch("antigravity-skill");
         let home = UzeHome::at(root.join("uze"));
         let resource = skill_resource(
             "flow",
@@ -276,8 +275,7 @@ mod tests {
 
     #[test]
     fn adaptation_is_deterministic_across_rebuilds() {
-        let root =
-            std::env::temp_dir().join(format!("uze-antigravity-skill-det-{}", std::process::id()));
+        let root = uze_testkit::temp::scratch("antigravity-skill-det");
         let home = UzeHome::at(root.join("uze"));
         let resource = skill_resource(
             "flow",

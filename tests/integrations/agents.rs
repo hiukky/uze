@@ -30,7 +30,7 @@ fn agent(root: &std::path::Path) -> Resource {
 
 #[test]
 fn canonical_agent_routes_natively_for_every_harness() {
-    let root = std::env::temp_dir().join(format!("uze-agent-routes-{}", std::process::id()));
+    let root = uze_testkit::temp::scratch("agent-routes");
     let home = UzeHome::at(root.join("uze"));
     let resource = agent(&root);
     let claude = ClaudeIntegration::new(root.join("claude"), home.clone());
@@ -62,7 +62,7 @@ fn canonical_agent_routes_natively_for_every_harness() {
 
 #[test]
 fn codex_generates_the_documented_custom_agent_toml_before_exposure() {
-    let root = std::env::temp_dir().join(format!("uze-codex-agent-{}", std::process::id()));
+    let root = uze_testkit::temp::scratch("codex-agent");
     let home = UzeHome::at(root.join("uze"));
     let codex = CodexIntegration::new(root.join("home/.agents"), home);
     let resource = agent(&root);
@@ -85,7 +85,7 @@ fn codex_generates_the_documented_custom_agent_toml_before_exposure() {
 
 #[test]
 fn claude_attaches_an_agent_without_treating_its_markdown_as_a_skill_plugin() {
-    let root = std::env::temp_dir().join(format!("uze-claude-agent-{}", std::process::id()));
+    let root = uze_testkit::temp::scratch("claude-agent");
     let home = UzeHome::at(root.join("uze"));
     let claude = ClaudeIntegration::new(root.join("home/.claude"), home);
     let resource = agent(&root);

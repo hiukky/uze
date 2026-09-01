@@ -103,15 +103,17 @@ pub fn resolve_real_executable(names: &[&str], shims_dir: &Path) -> Option<PathB
     None
 }
 
+/// Shared by the PATH walks in this module and in `detection_cache` — the
+/// same question, asked for the same reason, so it has one answer.
 #[cfg(unix)]
-fn is_executable_file(path: &Path) -> bool {
+pub(crate) fn is_executable_file(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     std::fs::metadata(path)
         .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
 }
 
 #[cfg(not(unix))]
-fn is_executable_file(path: &Path) -> bool {
+pub(crate) fn is_executable_file(path: &Path) -> bool {
     path.is_file()
 }
 
@@ -142,23 +144,7 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{
-        fs,
-        time::{SystemTime, UNIX_EPOCH},
-    };
-
-    fn scratch_dir(label: &str) -> PathBuf {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "uze-harness-runtime-{label}-{}-{nonce}",
-            std::process::id()
-        ));
-        fs::create_dir_all(&path).unwrap();
-        path
-    }
+    use std::fs;
 
     #[cfg(unix)]
     fn make_executable(path: &Path) {
@@ -170,8 +156,8 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn resolves_real_executable_skipping_shims_dir_even_when_it_is_first_on_path() {
-        let _guard = crate::test_support::PROCESS_ENV_LOCK.lock().unwrap();
-        let root = scratch_dir("resolve");
+        let mut env = uze_testkit::env::scope();
+        let root = uze_testkit::temp::scratch("resolve");
         let shims_dir = root.join("shims");
         let real_bin_dir = root.join("real-bin");
         fs::create_dir_all(&shims_dir).unwrap();
@@ -183,9 +169,10 @@ mod tests {
         make_executable(&shims_dir.join("claude"));
         make_executable(&real_bin_dir.join("claude"));
 
-        let path_var = std::env::join_paths([&shims_dir, &real_bin_dir]).unwrap();
-        // SAFETY: test-only, single-threaded within this process's test.
-        unsafe { std::env::set_var("PATH", &path_var) };
+        env.set(
+            "PATH",
+            std::env::join_paths([&shims_dir, &real_bin_dir]).unwrap(),
+        );
 
         let resolved = resolve_real_executable(&["claude"], &shims_dir).expect("resolved");
         assert_eq!(
@@ -197,14 +184,13 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn no_real_executable_on_path_resolves_to_none_not_the_shim() {
-        let _guard = crate::test_support::PROCESS_ENV_LOCK.lock().unwrap();
-        let root = scratch_dir("resolve-none");
+        let mut env = uze_testkit::env::scope();
+        let root = uze_testkit::temp::scratch("resolve-none");
         let shims_dir = root.join("shims");
         fs::create_dir_all(&shims_dir).unwrap();
         make_executable(&shims_dir.join("claude"));
 
-        let path_var = std::env::join_paths([&shims_dir]).unwrap();
-        unsafe { std::env::set_var("PATH", &path_var) };
+        env.set("PATH", std::env::join_paths([&shims_dir]).unwrap());
 
         assert_eq!(resolve_real_executable(&["claude"], &shims_dir), None);
     }

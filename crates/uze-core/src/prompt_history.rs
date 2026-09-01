@@ -282,15 +282,8 @@ mod tests {
 
     impl TempHome {
         fn new(label: &str) -> Self {
-            let nonce = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
             Self {
-                home: UzeHome::at(std::env::temp_dir().join(format!(
-                    "uze-prompt-history-{label}-{}-{nonce}",
-                    std::process::id()
-                ))),
+                home: UzeHome::at(uze_testkit::temp::scratch(label)),
             }
         }
     }

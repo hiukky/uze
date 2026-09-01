@@ -387,14 +387,7 @@ mod codex_native_coverage_tests {
     use super::codex_exact_coverage;
 
     fn temp_root(label: &str) -> PathBuf {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "uze-codex-coverage-{label}-{nonce}-{}",
-            std::process::id()
-        ))
+        uze_testkit::temp::scratch(label)
     }
 
     /// `skills_field` and `mcp_field` are written into `.codex-plugin/plugin.json`

@@ -931,23 +931,12 @@ mod lifecycle_tests {
         }
     }
 
-    fn temp(label: &str) -> PathBuf {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "uze-receipt-{label}-{}-{nonce}",
-            std::process::id()
-        ))
-    }
-
     #[cfg(unix)]
     #[test]
     fn symlink_receipt_is_safe_only_when_ownership_still_matches() {
         use std::os::unix::fs::symlink;
 
-        let root = temp("symlink");
+        let root = uze_testkit::temp::scratch("symlink");
         fs::create_dir_all(&root).unwrap();
         let expected = root.join("expected");
         let other = root.join("other");
@@ -1001,7 +990,7 @@ mod lifecycle_tests {
     fn unreadable_symlink_state_is_blocked() {
         use std::os::unix::fs::PermissionsExt;
 
-        let root = temp("unreadable");
+        let root = uze_testkit::temp::scratch("unreadable");
         let locked = root.join("locked");
         fs::create_dir_all(&locked).unwrap();
         let receipt = receipt(locked.join("managed"), root.join("expected"));
@@ -1054,7 +1043,7 @@ pub fn assess_environment(
 
 /// A cheap, vendor-neutral fingerprint of the filesystem surface an
 /// attachment lives on — the freshness half of the inspection cache
-/// (ADR 024), mirroring the detection cache's own fingerprint rule
+/// (ADR 018), mirroring the detection cache's own fingerprint rule
 /// (ADR 018).
 ///
 /// Only artifacts with a directly stat-able presence produce one:

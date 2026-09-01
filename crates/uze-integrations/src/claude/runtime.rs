@@ -224,22 +224,9 @@ mod runtime_projection_tests {
     use super::super::ClaudeIntegration;
     use super::RUNTIME_PROJECTION_ENV_VAR;
 
-    fn scratch_dir(label: &str) -> PathBuf {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "uze-claude-runtime-{label}-{}-{nonce}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&path).unwrap();
-        path
-    }
-
     #[test]
     fn no_agents_md_is_pure_passthrough() {
-        let root = scratch_dir("no-agents-md");
+        let root = uze_testkit::temp::scratch("no-agents-md");
         // A `.git` boundary inside the scratch root: discovery must stop at
         // the first `.git` it finds walking up, so the test's outcome can
         // never depend on what else happens to live above the shared temp
@@ -259,7 +246,7 @@ mod runtime_projection_tests {
 
     #[test]
     fn agents_md_projects_an_import_and_the_project_working_tree_stays_untouched() {
-        let root = scratch_dir("with-agents-md");
+        let root = uze_testkit::temp::scratch("with-agents-md");
         let project = root.join("project");
         std::fs::create_dir_all(&project).unwrap();
         std::fs::write(project.join("AGENTS.md"), "canary content\n").unwrap();
@@ -302,7 +289,7 @@ mod runtime_projection_tests {
 
     #[test]
     fn repeated_projection_for_the_same_project_is_idempotent() {
-        let root = scratch_dir("idempotent");
+        let root = uze_testkit::temp::scratch("idempotent");
         let project = root.join("project");
         std::fs::create_dir_all(&project).unwrap();
         std::fs::write(project.join("AGENTS.md"), "v1\n").unwrap();
@@ -328,7 +315,7 @@ mod runtime_projection_tests {
 
     #[test]
     fn project_path_containing_spaces_is_handled_safely() {
-        let root = scratch_dir("spaces");
+        let root = uze_testkit::temp::scratch("spaces");
         let project = root.join("a project with spaces");
         std::fs::create_dir_all(&project).unwrap();
         std::fs::write(project.join("AGENTS.md"), "canary\n").unwrap();
@@ -350,7 +337,7 @@ mod runtime_projection_tests {
 
     #[test]
     fn unwritable_runtime_dir_falls_open_to_passthrough_with_a_note() {
-        let root = scratch_dir("unwritable");
+        let root = uze_testkit::temp::scratch("unwritable");
         let project = root.join("project");
         std::fs::create_dir_all(&project).unwrap();
         std::fs::write(project.join("AGENTS.md"), "canary\n").unwrap();
@@ -379,7 +366,7 @@ mod runtime_projection_tests {
 
     #[test]
     fn project_skills_and_agents_are_symlinked_into_the_runtime_dir() {
-        let root = scratch_dir("skills");
+        let root = uze_testkit::temp::scratch("skills");
         let project = root.join("project");
         let skills_dir = project.join(".agents").join("skills").join("demo-skill");
         let agents_dir = project.join(".agents").join("agents");
@@ -444,7 +431,7 @@ mod runtime_projection_tests {
 
     #[test]
     fn no_project_agents_directory_projects_no_symlinks() {
-        let root = scratch_dir("no-agents-dir");
+        let root = uze_testkit::temp::scratch("no-agents-dir");
         let project = root.join("project");
         std::fs::create_dir_all(&project).unwrap();
         std::fs::write(project.join("AGENTS.md"), "canary\n").unwrap();
@@ -466,7 +453,7 @@ mod runtime_projection_tests {
 
     #[test]
     fn a_removed_project_agents_directory_drops_stale_symlinks() {
-        let root = scratch_dir("removed-agents-dir");
+        let root = uze_testkit::temp::scratch("removed-agents-dir");
         let project = root.join("project");
         let skills_dir = project.join(".agents").join("skills").join("demo-skill");
         let agents_dir = project.join(".agents").join("agents");
@@ -500,7 +487,7 @@ mod runtime_projection_tests {
 
     #[test]
     fn status_projection_predicate_is_read_only_and_agrees() {
-        let root = scratch_dir("status-read-only");
+        let root = uze_testkit::temp::scratch("status-read-only");
         let project = root.join("project");
         let skills_dir = project.join(".agents").join("skills");
         std::fs::create_dir_all(&skills_dir).unwrap();
@@ -562,7 +549,7 @@ mod runtime_projection_tests {
         // fall back to passthrough (popup shows "unavailable", launch loses
         // `--add-dir`). The barrier starts every racer from the raw,
         // unprojected state, which is exactly that window.
-        let root = scratch_dir("concurrent-projection");
+        let root = uze_testkit::temp::scratch("concurrent-projection");
         let project = root.join("project");
         let skills_dir = project.join(".agents").join("skills").join("demo-skill");
         let agents_dir = project.join(".agents").join("agents");

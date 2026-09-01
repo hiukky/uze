@@ -134,18 +134,6 @@ impl IntegrationRegistry {
             .find(|adapter| adapter.adapter_id() == id)
     }
 
-    /// The preference translation/apply adapter for a harness id.
-    pub fn preference_adapter(&self, id: &str) -> Option<&dyn PreferencePort> {
-        self.preference_adapters
-            .iter()
-            .map(Box::as_ref)
-            .find(|adapter| adapter.preference_id() == id)
-    }
-
-    pub fn preference_adapters(&self) -> impl Iterator<Item = &dyn PreferencePort> {
-        self.preference_adapters.iter().map(Box::as_ref)
-    }
-
     /// Resolves a requested harness name against the registered set: an id
     /// or any alias the integration itself declares.
     pub fn resolve(&self, requested: &str) -> Option<&dyn IntegrationPort> {
@@ -185,12 +173,7 @@ mod tests {
     use super::{IntegrationPort, IntegrationRegistry};
 
     fn registry() -> (UzeHome, IntegrationRegistry) {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let root =
-            std::env::temp_dir().join(format!("uze-registry-{}-{nonce}", std::process::id()));
+        let root = uze_testkit::temp::scratch("registry");
         std::fs::create_dir_all(&root).unwrap();
         let home = UzeHome::at(root.join("uze"));
         let registry = IntegrationRegistry::isolated(&root, &home);

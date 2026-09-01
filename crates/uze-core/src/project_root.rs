@@ -69,20 +69,9 @@ mod tests {
     use super::*;
     use std::fs;
 
-    fn temp(label: &str) -> PathBuf {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "uze-projroot-{label}-{}-{nonce}",
-            std::process::id()
-        ))
-    }
-
     #[test]
     fn cwd_with_lock_is_root() {
-        let root = temp("lock-root");
+        let root = uze_testkit::temp::scratch("lock-root");
         fs::create_dir_all(&root).unwrap();
         fs::write(root.join("agents.lock"), "version: 1\n").unwrap();
         let sub = root.join("sub");
@@ -95,7 +84,7 @@ mod tests {
 
     #[test]
     fn fallback_is_cwd_when_no_markers() {
-        let root = temp("fallback");
+        let root = uze_testkit::temp::scratch("fallback");
         fs::create_dir_all(&root).unwrap();
         let resolved = resolve_project_root(&root).unwrap();
         assert_eq!(resolved, root.canonicalize().unwrap());
@@ -108,7 +97,7 @@ mod tests {
         // even when an ancestor directory carries an AGENTS.md — otherwise
         // the same project resolves differently depending on where it was
         // cloned.
-        let outer = temp("git-boundary");
+        let outer = uze_testkit::temp::scratch("git-boundary");
         let repo = outer.join("repo");
         fs::create_dir_all(repo.join(".git")).unwrap();
         fs::write(outer.join("AGENTS.md"), "# not this one\n").unwrap();
@@ -121,7 +110,7 @@ mod tests {
 
     #[test]
     fn prefers_agents_md_over_git() {
-        let root = temp("agents-vs-git");
+        let root = uze_testkit::temp::scratch("agents-vs-git");
         fs::create_dir_all(&root).unwrap();
         fs::create_dir_all(root.join(".git")).unwrap();
         fs::write(root.join("AGENTS.md"), "# hi\n").unwrap();

@@ -180,7 +180,7 @@ fn is_utf8(bytes: &[u8]) -> Option<&str> {
 /// bytes are never rewritten; anything else in the canonical skill
 /// directory stays referenced, not copied. Idempotent and rebuilt
 /// wholesale — the directory is entirely UZE-owned and non-authoritative
-/// (ADR-013 §4).
+/// (ADR-013 §5).
 pub fn write_superset_skill_wrapper(
     dir: &Path,
     canonical_dir: &Path,

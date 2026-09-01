@@ -36,7 +36,6 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 // `PATH` is process-global; every test below that mutates it must not
@@ -64,14 +63,7 @@ use uze::integrations::{
 // ============================================================================
 
 fn temp(label: &str) -> PathBuf {
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    std::env::temp_dir().join(format!(
-        "uze-conformance-{label}-{}-{nonce}",
-        std::process::id()
-    ))
+    uze_testkit::temp::scratch(label)
 }
 
 /// Writes a canonical `plugin.json` plus every `(relative_path, content)`

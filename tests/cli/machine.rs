@@ -517,7 +517,7 @@ fn setup_then_add_attaches_transparently_without_a_separate_sync_step() {
     // command.
     //
     // Both the default `uze` package and this single-skill fixture qualify
-    // for Generated Native Package (ADR-020: no explicit `.claude-plugin/
+    // for Generated Native Package (ADR-013: no explicit `.claude-plugin/
     // plugin.json`, but a conventional `skills/` directory UZE can safely
     // represent) — so Claude receives package-level delivery, not a
     // per-resource `.claude/skills` symlink. Codex has no envelope for
@@ -660,7 +660,7 @@ fn setup_then_add_attaches_the_mcp_fixture_idempotently_and_removal_works() {
     run(&["setup"]);
     // This fixture (`agent-plugin-mcp`) has only `mcp.json`, no `skills/`
     // and no `.claude-plugin/plugin.json`/`.codex-plugin/plugin.json` —
-    // under Generated Native Package (ADR-020/ADR-021) an MCP-only package
+    // under Generated Native Package (ADR-013) an MCP-only package
     // is just as eligible as a Skill-only one, so BOTH Claude and Codex now
     // receive package-level delivery covering the one MCP resource — no
     // resource-level `mcp add` for either. Opencode has no package envelope

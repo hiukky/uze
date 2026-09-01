@@ -14,7 +14,7 @@
 //!   Google config area) and registers it in
 //!   `~/.gemini/config/import_manifest.json`; it dereferences symlinks, so
 //!   there is no link-preserving install route at all. The staged tree is
-//!   therefore always a Derived Artifact (ADR-013 §4): integration-owned,
+//!   therefore always a Derived Artifact (ADR-013 §5): integration-owned,
 //!   rebuildable from the Store, never authoritative.
 //! - `agy plugin list` prints machine-readable JSON on stdout
 //!   (`{"imports":[{name,source,importedAt,components}]}`) — inspection
@@ -363,7 +363,7 @@ impl IntegrationPort for AntigravityIntegration {
     /// `mcp_config.json`, not canonical `mcp.json`, so a package whose
     /// canonical MCP surface is discovered gets a deterministically
     /// synthesized plugin carrying the translated server declarations
-    /// (ADR-020/ADR-021 discipline).
+    /// (ADR-013 discipline).
     fn package_exposure_plan(
         &self,
         package: &StoredPackage,

@@ -230,24 +230,13 @@ mod discovery_tests {
     use std::fs;
     use std::path::Path;
 
-    fn temp(label: &str) -> std::path::PathBuf {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "uze-discovery-{label}-{}-{nonce}",
-            std::process::id()
-        ))
-    }
-
     #[test]
     fn a_commands_directory_is_not_a_canonical_surface_anymore() {
         // The physical directory may still exist inside a package (a
         // vendor-authored explicit envelope delivers it natively), but
         // canonical discovery never reads it: there is exactly one
         // Skill family, and its semantics come from invocation policy.
-        let root = temp("commands-ignored");
+        let root = uze_testkit::temp::scratch("commands-ignored");
         let pkg = root.join("pkg");
         fs::create_dir_all(pkg.join("commands")).unwrap();
         fs::create_dir_all(pkg.join("skills/review")).unwrap();
@@ -267,7 +256,7 @@ mod discovery_tests {
 
     #[test]
     fn skill_policy_is_exposed_by_discovery() {
-        let root = temp("policy");
+        let root = uze_testkit::temp::scratch("policy");
         let pkg = root.join("pkg");
         fs::create_dir_all(pkg.join("skills/review")).unwrap();
         fs::write(
@@ -287,7 +276,7 @@ mod discovery_tests {
 
     #[test]
     fn agents_are_discovered_as_independent_byte_preserving_resources() {
-        let root = temp("agents");
+        let root = uze_testkit::temp::scratch("agents");
         let pkg = root.join("pkg");
         fs::create_dir_all(pkg.join("agents/review")).unwrap();
         let bytes = b"---\ndescription: Review changes\n---\nInspect the diff.\n";
@@ -306,7 +295,7 @@ mod discovery_tests {
 
     #[test]
     fn hooks_are_discovered_as_stable_named_resources() {
-        let root = temp("hooks");
+        let root = uze_testkit::temp::scratch("hooks");
         let pkg = root.join("pkg");
         fs::create_dir_all(&pkg).unwrap();
         fs::write(pkg.join("hooks.json"), br#"{"hooks":{"PreToolUse":[{"id":"protect-env","matcher":"shell","hooks":[{"type":"command","command":"scripts/check"}]}],"PostToolUse":[{"hooks":[{"type":"command","command":"scripts/log","timeout":5}]}]}}"#).unwrap();
