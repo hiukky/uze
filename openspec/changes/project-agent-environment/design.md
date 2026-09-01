@@ -210,4 +210,4 @@ This change adds a new component (`agents.lock` as project-scoped artifact) and 
 
 This change produces two ADRs:
 - `docs/adr/016-project-agent-environment.md` — Project Agent Environment (global vs project separation)
-- `docs/adr/017-reproducible-agent-dependency-lock.md` — Reproducible Agent Dependency Lock (schema, reproducibility, trust)
+- `docs/adr/016-project-agent-environment.md` — the `agents.lock` schema, reproducibility, and trust

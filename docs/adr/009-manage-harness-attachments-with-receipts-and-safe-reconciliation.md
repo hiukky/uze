@@ -4,7 +4,7 @@ Status: Accepted
 
 ## Context
 
-ADR-008 established that a package can be delivered as one native plugin or
+ADR-013 established that a package can be delivered as one native plugin or
 decomposed into capability attachments. Those delivery paths create external
 state owned by a harness: discovery symlinks, MCP configuration entries, and
 Codex native-plugin installations. Store provenance alone cannot establish

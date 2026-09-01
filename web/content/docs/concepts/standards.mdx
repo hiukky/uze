@@ -47,9 +47,11 @@ standard addresses memory at all, and native memory support is wildly inconsiste
 harnesses.
 
 That confirmed, twice-independently-sourced gap — not a wishlist — is where uze's own capability
-model lives (ADR-002): **Action, Subagent, Hook, and Policy**, plus Memory as a fifth,
-explicitly-degraded category. Everything else (Skills, MCP, Agents once a harness exposes them,
-project instructions) is represented by reference to its standard form, never remodeled.
+model lives. The rule (ADR-001) is a bar, not a fixed list: a capability kind earns a place only
+when it is genuinely uncovered by AGENTS.md, Agent Skills, MCP, or Agent Plugins as they exist
+today. Everything else (Skills, MCP, project instructions) is represented by reference to its
+standard form, never remodeled — and the model has already shrunk under that bar, retiring
+`Command` once invocation policy turned out to be the portable semantic (ADR-030).
 
 Two capabilities in that gap are canonical enough to ship today:
 
@@ -72,18 +74,18 @@ machinery, and never claim a route is native without a passing real-harness scen
 
 Three uze-defined files exist, and each earns its place the same way: something no standard covers.
 
-- **`agents.lock`** (ADR-017) — no standard addresses reproducible agent-dependency resolution.
+- **`agents.lock`** (ADR-016) — no standard addresses reproducible agent-dependency resolution.
   Small, deterministic YAML; reproducible identity is `source.url + resolved.revision`, never a
   branch alias. `git clone && uze install` reconstructs the environment from the lock alone,
   the same shape as any other ecosystem's dependency lock.
 - **`marketplace.json`** (ADR-032) — the uze marketplace registry manifest, distinct from
   vendor-owned catalogues like `.claude-plugin/marketplace.json` that integrations still generate
-  untouched. It was briefly renamed `agents.json` (ADR-023) to match the `AGENTS.md`/`agents.lock`
+  untouched. It was briefly renamed `agents.json` to match the `AGENTS.md`/`agents.lock`
   naming family, then reverted: distribution discovery and project agent-environment files have
   different owners and lifecycles, and `marketplace.json` is what the active marketplace
   specification and the harnesses uze targets already call this file — a case of the "adopt the
   standard's own convention" instinct correcting itself, not an exception to it.
-- **The canonical package envelope** — uze is **Plugin First, Capability Aware** (ADR-008): a
+- **The canonical package envelope** — uze is **Plugin First, Capability Aware** (ADR-013): a
   preserved external package is the distribution unit, a capability is the compatibility unit.
   The Store never invents a UZE plugin format — it preserves whatever vendor envelope a package
   ships (`.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`) verbatim, and decomposes into

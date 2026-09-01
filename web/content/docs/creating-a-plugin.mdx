@@ -5,7 +5,7 @@ description: The canonical package layout — skills, MCP, agents, hooks — and
 
 # Creating a plugin
 
-uze is **Plugin First, Capability Aware** (ADR-008): the package you author is the distribution
+uze is **Plugin First, Capability Aware** (ADR-013): the package you author is the distribution
 unit, and each capability inside it is the compatibility unit. You write one canonical layout;
 uze delivers it through each harness's own native surface — see
 [Standards, not another format](/docs/concepts/standards) for why the layout looks the way it
@@ -206,7 +206,7 @@ $ uze market add https://github.com/you/my-marketplace
 $ uze my-plugin@my-marketplace
 ```
 
-`marketplace.json` was briefly named `agents.json` (ADR-023) and reverted (ADR-032) — if you see
+`marketplace.json` was briefly named `agents.json` and reverted (ADR-032) — if you see
 that name in older material, it's the same manifest under its current, correct filename.
 
 <Cards>

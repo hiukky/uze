@@ -2,7 +2,7 @@
 
 Status: Accepted
 
-Refines: [ADR-025 (Commands as a First-Class Capability)](025-commands-as-first-class-capability.md),
+Refines: [ADR-030 (Skill + Invocation Policy)](030-skill-plus-invocation-policy.md),
 [ADR-013 (Native Projection Principle)](013-adopt-native-projection-principle.md).
 
 ## Context
@@ -73,7 +73,7 @@ behavior and, where possible, the real CLI):
 | OpenCode V2 | `flow:review` | `~/.config/opencode/commands/flow:review.md`; `~/.agents/skills/flow:review/` | No — UZE encodes; command names and skill IDs are path-derived verbatim, no name regex enforced | official docs |
 | Gemini CLI | `flow:review` | `~/.gemini/commands/flow/review.toml` (nested path) | Yes — Gemini converts the path separator to a colon (`/git:commit`) | official custom-commands docs |
 
-The Codex explicit-only Command delivery (ADR-025) is preserved exactly:
+The Codex explicit-only Skill delivery (ADR-030) is preserved exactly:
 namespace never affects the invocation policy — a namespaced Command keeps
 `agents/openai.yaml` → `policy.allow_implicit_invocation: false`, and a
 namespaced normal Skill stays model-discoverable (no policy file).

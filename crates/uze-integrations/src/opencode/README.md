@@ -73,7 +73,7 @@ rather than shelling out to an official CLI verb the way Claude
 do. `attach_mcp_config` refuses to overwrite a same-named entry it doesn't
 already own (`Some(_) => Err(...)` when the existing value differs from
 what UZE would write), which is OpenCode's own collision safety net for
-this direct-write approach — confirmed by ADR-008's stated consequence
+this direct-write approach — confirmed by ADR-013's stated consequence
 ("OpenCode configuration conflicts fail rather than overwrite unrelated
 user entries").
 
@@ -82,7 +82,7 @@ harness's own CLI/API, with direct file editing "permitted only inside its
 integration when no sufficient structured API exists." No ADR in this
 repository states outright that OpenCode lacks a `mcp add`-equivalent CLI
 verb — the direct-write choice is DOCUMENTED as deliberate and
-collision-safe (ADR-008), but the specific justification "no CLI exists"
+collision-safe (ADR-013), but the specific justification "no CLI exists"
 is not itself sourced anywhere. Treat this as an unverified assumption
 carried by the implementation, not a disproven one.
 

@@ -36,7 +36,7 @@ foreign, vendor-authored artifact imported *into* canonical form — and
 that is a deliberately separate concern (`uze-core::importers`), not this
 crate's job even in principle. It is currently unimplemented in
 production: the one foreign importer this codebase ever had
-(`ClaudePluginImporter`) was confirmed dead and removed (ADR-022). Only
+(`ClaudePluginImporter`) was confirmed dead and removed (ADR-005). Only
 the canonical `plugin.json` importer (`AgentPluginImporter`) is live.
 
 Per-harness detail lives in each integration's own README:
@@ -163,7 +163,7 @@ Mutation goes through each harness's own CLI except OpenCode, which writes
 overwrite a differently-configured existing entry) because no ADR in this
 repository confirms OpenCode lacks an equivalent CLI verb; the "no
 structured API exists" premise behind that choice is DOCUMENTED as
-deliberate (ADR-008) but not itself sourced. No cross-integration coupling
+deliberate (ADR-013) but not itself sourced. No cross-integration coupling
 exists anywhere (`grep` for cross-module imports between the four found
 none beyond each integration's own submodules referencing its own root
 struct).

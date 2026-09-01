@@ -1,9 +1,9 @@
 ## 1. Confirm architecture decisions
 
 - [x] 1.1 Confirm `docs/adr/001-adopt-open-standards-over-competing-formats.md`
-      remains accepted and `docs/adr/002-scope-capability-model-to-standards-gap.md`
-      is marked superseded by ADR 003.
-- [x] 1.2 Confirm `docs/adr/003-compose-effective-agent-environments-and-use-acp-at-the-client-agent-boundary.md`
+      remains accepted and the capability-model scope decision
+      is folded into ADR-001.
+- [x] 1.2 Confirm the effective-agent-environment decision
       exists and matches the draft in this change.
 - [x] 1.3 Confirm `docs/adr/004-implement-the-uze-core-in-rust.md` exists
       and records Rust as the core implementation language without making ACP

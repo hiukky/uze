@@ -16,7 +16,7 @@ its installed registry uses `plugin@marketplace` and its cache is partitioned
 by marketplace, plugin, and version. UZE needs the equivalent invariant in
 its canonical Store, not merely in a harness projection.
 
-This supersedes the statement in ADR-015 that the Store remains unaware of
+This supersedes the statement in ADR-032 §2 that the Store remains unaware of
 marketplace identity. That separation prevents a correct installed identity.
 
 **Amendment.** The first cut of this decision also qualified every

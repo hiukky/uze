@@ -52,7 +52,7 @@ migration audit record).
 5. **Commands are `Adapted`, deliberately.** Antigravity has no
    custom-command primitive: its official migration path converts commands
    to Skills, and Skills are model-discoverable with no observable
-   explicit-only mechanism. Per ADR-025, Native requires preserved canonical
+   explicit-only mechanism. Per ADR-030, Native requires preserved canonical
    semantics, and the explicit-only property degrades; user invocation stays
    native (slash command), body/description/identity are preserved, and the
    degradation is declared in `capabilities()` — never hidden.

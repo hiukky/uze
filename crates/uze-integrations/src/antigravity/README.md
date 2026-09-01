@@ -26,7 +26,7 @@ Store canonical package (plugin.json + skills/ [+ mcp.json])
                                           translation) → agy plugin install   [Generated]
 ```
 
-The staged tree is a **Derived Artifact** (ADR-013 §4): the Store stays the
+The staged tree is a **Derived Artifact** (ADR-013 §5): the Store stays the
 single source of truth, the staged copy is rebuilt from the Store on
 attach, its content fingerprint is the ownership proof, and it is removed
 through the official `agy plugin uninstall` verb. There is no link verb in

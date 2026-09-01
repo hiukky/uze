@@ -77,7 +77,7 @@ pre-1.0 per project convention; an optional short-lived hidden-alias-with-warnin
 design.md if a softer landing is wanted later, without changing this decision).
 
 This decision does not touch `uze-core`, `uze-integrations`, the Store, ADR-009's receipt/drift lifecycle,
-or the `agents.lock` schema (ADR-017) — it is scoped entirely to the CLI presentation layer and the two
+or the `agents.lock` schema (ADR-016) — it is scoped entirely to the CLI presentation layer and the two
 small read-model additions (`market_inspect`, `harness_list`/`harness_inspect`) needed to serve it.
 
 Status note: this ADR partially supersedes ADR-016 (`docs/adr/016-project-agent-environment.md`), narrowly

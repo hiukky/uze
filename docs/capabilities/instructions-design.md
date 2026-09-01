@@ -309,7 +309,7 @@ explicitly out of scope for this tracer bullet (Fase 2).
 
 ## Fase 11 — Plugin-first
 
-Unchanged from the existing rule (ADR-008): a package with a native envelope
+Unchanged from the existing rule (ADR-013): a package with a native envelope
 a harness consumes as a whole plugin is delivered natively, and UZE never
 separately attaches a resource that native delivery already covers.
 

@@ -1,119 +1,106 @@
-# Restore `marketplace.json` as the Marketplace Manifest
+# Marketplaces: manifest, discovery registry, and the embedded official marketplace
 
 Status: Accepted
+Consolidates: ADR-012 (marketplace contract for the embedded default
+plugin), ADR-015 (marketplace as discovery registry, plugin as installable
+unit), ADR-023 (marketplace manifest is `agents.json`, since reverted) —
+see the "Consolidated records" section of `README.md`.
 
 ## Context
 
-ADR-023 renamed UZE's marketplace-root registry manifest from
-`marketplace.json` to `agents.json`, while preserving the manifest schema and
-leaving vendor-owned catalogues alone. That decision made the distribution
-registry look related to `AGENTS.md`, `agents.lock`, and `.agents/`, even
-though those are project instruction, dependency, and vendor-configuration
-artifacts with different owners and lifecycles.
+UZE needed a way to distribute plugins that mirrors what users already know
+from harness plugin marketplaces, without becoming a second Store or a
+remote service. Three questions had to be settled together: what the
+manifest file is called, how a user-added marketplace is registered and
+resolved, and how UZE ships its own official plugin on a fresh machine.
 
-The active marketplace specification and the conventions of the harnesses UZE
-integrates with use `marketplace.json` for a marketplace catalogue. UZE is
-pre-production and has one operator, so retaining an alias or migration path
-would add permanent ambiguity without protecting deployed users.
-
-This decision supersedes [ADR-023](023-marketplace-manifest-is-agents-json.md).
-It restores only the marketplace-root filename clauses of
-[ADR-012](012-model-a-marketplace-contract-for-the-embedded-default-plugin.md)
-and [ADR-015](015-marketplace-as-discovery-registry.md); their remaining
-decisions stay accepted.
+The filename question was answered twice. A prior decision (ADR-023) renamed
+the manifest to `agents.json` for family consistency with `AGENTS.md` and
+`agents.lock`. That was wrong: it conflated distribution discovery with the
+project agent-environment files, and contradicted the marketplace
+specification's own terminology. It was reverted before any production
+consumer existed.
 
 ## Decision
 
-UZE's marketplace-root registry manifest is exactly `marketplace.json`. Its
-schema remains `{name, plugins: [{name, source, description, keywords}]}`
-with optional `owner`, and the existing marketplace parse and resolution
-primitives remain the authority for it.
+### 1. The manifest is exactly `marketplace.json`
 
-1. Every UZE-owned marketplace root, including the repository root, embedded
-   official marketplace, local/Git acquisition inputs, workspace detection,
-   fixtures, and conformance seed, uses `marketplace.json`.
-2. `agents.json` is not accepted as an alias. A root that contains only that
-   file is not a marketplace and must receive the normal missing-manifest
-   failure that names `marketplace.json`. UZE does not rename it, warn about
-   it, or persist a compatibility setting.
-3. This decision does not rename vendor-owned catalogue files such as
-   `.claude-plugin/marketplace.json` and `.agents/plugins/marketplace.json`,
-   nor UZE state such as `~/.uze/state/marketplaces.json`. It also does not
-   change `AGENTS.md`, `agents.lock`, package manifests, or the marketplace
-   domain vocabulary.
-4. ADR-023 is marked superseded by this record. ADR-012 and ADR-015 retain
-   their historical text; this record is the current filename authority.
+Schema: `{name, plugins: [{name, source, description, keywords}]}` with
+optional `owner`.
 
-## Options considered
+Every UZE-owned marketplace root uses it — the repository root, the embedded
+official marketplace, local and Git acquisition inputs, workspace detection,
+fixtures, and conformance seeds. **`agents.json` is not accepted as an
+alias.** A root containing only that file is not a marketplace and receives
+the normal missing-manifest failure naming `marketplace.json`. UZE does not
+rename it, warn about it, or persist a compatibility setting. Accepting both
+filenames was rejected: it makes discovery precedence, diagnostics,
+fixtures, and documentation permanently less deterministic, for a transition
+nobody needs.
 
-### Restore `marketplace.json` with no compatibility path (chosen)
+This does not rename vendor-owned catalogue files
+(`.claude-plugin/marketplace.json`, `.agents/plugins/marketplace.json`) or
+UZE state (`~/.uze/state/marketplaces.json`), and does not touch
+`AGENTS.md`, `agents.lock`, or package manifests.
 
-This matches the marketplace specification and familiar harness catalogue
-terminology, while clearly separating distribution discovery from project
-agent-environment files. It requires a deliberate one-file rename for any
-external pre-production marketplace, but the known deployment has one
-operator and no production consumers.
+### 2. Marketplace is discovery; plugin is the installable unit
 
-### Keep `agents.json`
+User-added marketplaces are a registry in `~/.uze/state/marketplaces.json`
+(`name → Git | Local`), validated against `marketplace.json` at
+registration time. `plugin install <name>@<marketplace>` resolves the
+registry entry's source plus the manifest's plugin `source` into a
+`PackageSource` (Git with `subdirectory`, or Local) and then reuses the
+existing acquisition → Store → native projection pipeline.
 
-This avoids another source rename, but preserves the misleading naming family
-and contradicts the current marketplace specification.
+A marketplace copies no bytes until a plugin is installed, so it never
+becomes a second source of truth. Acquisition stays generic (`Git`, not
+`GitHub`). `uze market remove` is blocked while plugins from that
+marketplace are installed. Registry drift is validated at install time.
 
-### Accept both filenames
+`uze-core::acquisition::marketplace` is a pure, deterministic primitive —
+`parse_manifest` + `resolve_plugin_source` — that answers "which plugins
+exist, and where" for any local directory holding that shape, with no
+opinion on how the directory got there and no knowledge of any specific
+plugin name.
 
-This would ease a hypothetical transition, but makes discovery precedence,
-diagnostics, fixtures, and documentation permanently less deterministic. It
-is rejected because there is no deployed compatibility requirement.
+### 3. This repository is the official marketplace, embedded in the binary
+
+The repo root is itself a marketplace: `marketplace.json` plus `plugins/**`.
+`PackageSource::Embedded { id }` resolves against a build-time snapshot of
+those files — a `build.rs`-emitted table of `include_bytes!` keyed by
+relative path, with no per-file or per-plugin code — narrowing the
+materialized package's root to the resolved subdirectory exactly as Git's
+`subdirectory` already does. It is pre-registered as `uze-official`.
+
+`bootstrap::DEFAULT_PLUGIN_IDS` is a separate, small list of plugin *names*:
+product policy over what installs on a fresh `UZE_HOME`, independent of what
+the marketplace happens to offer.
+
+### 4. Bootstrap and update are distinct operations
+
+`ensure_default_plugins`, run before every CLI dispatch, installs a default
+plugin **only when it is completely absent**. It never touches an installed
+plugin's content, however it compares to the embedded snapshot. A plugin's
+`update_available` — a directory-tree comparison against a fresh scratch
+extraction, then discarded — is surfaced as a read-only fact for an explicit
+`update_plugin` to act on. Nothing is ever applied automatically.
 
 ## Consequences
 
-- The source tree and all UZE-facing diagnostics must change atomically so
-  there is one canonical root-manifest contract.
-- Tests must prove both the positive `marketplace.json` path and that an
-  `agents.json`-only root is rejected. A repository scan must distinguish
-  allowed historical ADR/OpenSpec references and vendor-owned paths from
-  accidental active UZE references.
-- Vendor integration paths and persisted marketplace state retain their names
-  and bytes; broad filename replacement is explicitly unsafe.
-- Pre-production marketplace authors must rename their root file before using
-  it with this revision. There is intentionally no runtime migration.
+Easier: adding a second official plugin means adding files under `plugins/`
+and one entry in `marketplace.json` — no Rust changes anywhere, proven by a
+test resolving two marketplace fixtures with the same primitive and no
+special-casing. Store, Engine, Router, and every `IntegrationPort` stay
+provably marketplace-neutral (a scan test forbids the marketplace type names
+outside `uze-core::acquisition` and `uze-application::bootstrap`).
+Observational commands (`doctor`, `list`, `inspect`, `status`,
+`context inspect`) never mutate installed plugin content as a side effect.
 
-## Implementation plan
+Harder: there is one more state file to manage, and the first
+`plugin install` from a Git marketplace pays a clone. A default plugin that
+would introduce a new executable capability is not installed silently even
+non-interactively — it reports `TRUST_REQUIRED` like any other package.
 
-1. Rename the repository root manifest and update
-   `crates/uze-core/src/workspace.rs` plus
-   `crates/uze-core/src/acquisition/marketplace.rs` to expose and consume
-   `marketplace.json`.
-2. Update the embedded manifest pipeline in `crates/uze-application/build.rs`
-   and `crates/uze-application/src/bootstrap.rs`, then update marketplace
-   registration and overview consumers in
-   `crates/uze-application/src/application.rs` and
-   `crates/uze-application/src/application/overview.rs`.
-3. Update the UI model and UI tests in `src/ui/model.rs` and `src/ui.rs`, plus
-   testkit marketplace/scenario writers in `crates/uze-testkit/src/`.
-4. Rename test fixtures and update deterministic suites under `tests/`, then
-   update the synthetic marketplace materialization in
-   `conformance/shared/common.py` without touching per-harness vendor
-   catalogues.
-5. Update `README.md`, `AGENTS.md`, architecture invariants, the ADR index,
-   and the archived-decision status. Do not add a filename fallback anywhere.
-
-## Verification
-
-- [ ] `uze market add` and installation resolve a local root containing only
-  `marketplace.json`.
-- [ ] A local root containing only `agents.json` is rejected with a diagnostic
-  naming the missing `marketplace.json`.
-- [ ] Workspace overview distinguishes `agents.lock` from a
-  `marketplace.json` marketplace and recognizes their hybrid state.
-- [ ] The embedded official marketplace is built and bootstrapped from
-  `marketplace.json`.
-- [ ] Deterministic Rust tests pass: `cargo test --no-fail-fast`.
-- [ ] All four real-harness conformance verticals pass through
-  `python3 conformance/lab.py --harness <harness>`.
-- [ ] `openspec validate --all --strict` passes.
-- [ ] A final active-source reference scan finds no UZE-owned
-  `agents.json` marketplace input outside historical decision records or
-  explicitly vendor-owned paths.
-
-Source change: openspec/changes/restore-marketplace-manifest.
+Deliberately out of scope: a remote registry, marketplace search, a plugin
+version resolver, and sparse Git checkout (the manifest contract is shaped
+to allow one later without touching Store, Engine, or integrations).

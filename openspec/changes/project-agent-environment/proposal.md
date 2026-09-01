@@ -47,4 +47,4 @@ Result: **Same project. Same agent environment. Any supported harness.**
 - **TUI** — future `Installed/Used` toggle reads `project_environment()` API (same use case as CLI)
 - **Store/Engine/Integration** — unchanged (vendor neutrality preserved)
 - **Dependencies** — `noyalib` (YAML serialization, replacing deprecated `serde_yaml`)
-- **Docs** — ADR-016 (Project Agent Environment), ADR-017 (Reproducible Agent Dependency Lock)
+- **Docs** — ADR-016 (Project Agent Environment, including the `agents.lock` schema)

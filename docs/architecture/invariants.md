@@ -55,7 +55,7 @@ harnesses untouched, and the failure observable through `doctor`.
 
 No line of `uze-core`'s production code (outside its own test fixtures)
 names Claude, Codex, OpenCode, or Antigravity — as an identifier or
-a string literal. Strengthened by ADR-022: a foreign-format importer that
+a string literal. Strengthened by ADR-005: a foreign-format importer that
 once named Claude here (`ClaudePluginImporter`, acquisition-time, never
 delivery-time) was confirmed dead — unreachable from `Store::ingest` or
 any other production path — and removed; the invariant now holds with no
@@ -100,7 +100,7 @@ Application's, shared by every bridge-needing harness.
 > `tests/memory/inspection.rs` scenarios A–F (stub harness declares its
 > bridge exactly like a real integration)
 
-### Native means preserved semantics, not identical primitives (ADR-025, refined by ADR-030)
+### Native means preserved semantics, not identical primitives (ADR-030)
 
 A route is **Native** when a harness offers a first-class, officially
 supported mechanism that preserves the canonical semantics of the
@@ -329,7 +329,7 @@ another's entries, the file and its directory are `0600`/`0700`, and
 
 ---
 
-## Official marketplace (M3, ADR-012)
+## Official marketplace (M3, ADR-032)
 
 ### The repository is the official marketplace
 
@@ -459,4 +459,4 @@ and set aside for a reason rather than forgotten.
 | plugin version resolver | `plugin.json` carries no version field yet; nothing depends on one |
 | marketplace federation | one official marketplace; combining several is unproven need |
 | Git sparse checkout for marketplace sources | the `marketplace.json` contract is shaped to allow acquiring only a resolved plugin's subtree later; not implemented |
-| reverse/foreign harness-format import | the acquisition contract is canonical `plugin.json` only (M2); a foreign-format importer (`ClaudePluginImporter`) existed as dead, unreachable code and was removed (ADR-022) — foreign import staying structurally separate from harness delivery is still the intended shape if it returns, but nothing is retained in production speculatively |
+| reverse/foreign harness-format import | the acquisition contract is canonical `plugin.json` only (M2); a foreign-format importer (`ClaudePluginImporter`) existed as dead, unreachable code and was removed (ADR-005) — foreign import staying structurally separate from harness delivery is still the intended shape if it returns, but nothing is retained in production speculatively |

@@ -3,7 +3,7 @@
 Status: Accepted
 
 Refines: [ADR-013 (Native Projection Principle)](../../../../docs/adr/013-adopt-native-projection-principle.md),
-[ADR-020 (Generated Native Package Projection)](../../../../docs/adr/020-generated-native-package-projection.md),
+[ADR-013 §3 (Generated Native Package)](../../../../docs/adr/013-adopt-native-projection-principle.md),
 and [ADR-030 (Skill + Invocation Policy)](../../../../docs/adr/030-skill-plus-invocation-policy.md).
 
 ## Context
@@ -68,7 +68,7 @@ honest now.
   `tests/_fixtures/`, and `conformance/harnesses/{claude,codex,opencode,antigravity}/`.
 - **Pattern:** follow AgentSkill/MCP's capability-level `ExposurePlan`,
   `AttachmentReceipt`, inspect, and detach flow. Follow ADR-029 for shared
-  discovery-root naming and ADR-020 for derived artifact ownership.
+  discovery-root naming and ADR-013 §5 for derived artifact ownership.
 - **Avoid:** vendor names or schemas in `uze-core`/`uze-application`; Store
   writes; universal permission/model translation; native claims without a
   passing real-harness scenario.

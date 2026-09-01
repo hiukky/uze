@@ -28,7 +28,7 @@ model {
 
     core = container 'UZE Core' {
       description 'Harness-agnostic Store-backed environment composer, package/capability planner, and safe managed-lifecycle core.'
-      technology 'Rust crate: uze-core (ADR 011)'
+      technology 'Rust crate: uze-core (ADR 004)'
 
       standardDiscovery = component 'Standards Discoverer' {
         description 'Discovers standard resources while retaining their original representations; installed package resources are primary product inputs.'

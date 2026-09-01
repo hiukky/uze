@@ -7,14 +7,14 @@ plugin path — either the package's own explicit `.codex-plugin/plugin.json`
 via a UZE-generated local marketplace catalogue
 (`~/.agents/plugins/marketplace.json` under the Store, referenced by
 `codex plugin marketplace add`), or, absent one, a UZE-synthesized envelope
-in a second, UZE-owned marketplace (Generated Native Package, ADR-021).
+in a second, UZE-owned marketplace (Generated Native Package, ADR-013).
 
 ## Support
 
 | Surface | Status | Delivery | Evidence |
 |---|---|---|---|
 | Native Package (explicit) | Supported, exact coverage | `.codex-plugin/plugin.json` → generated catalogue → `codex plugin add` | CODE_FACT + TESTED (11 tests) + EMPIRICAL (config/install only) |
-| Native Package (generated) | Supported, exact coverage | Second `uze-store` catalogue (own root, path-containment-safe) → `codex plugin add` (ADR-021) | CODE_FACT + TESTED (15 tests) + EMPIRICAL — real-binary dogfood (Codex 0.148.0): attach → inspect (Matched) → detach (Missing) → reinstall (Matched) |
+| Native Package (generated) | Supported, exact coverage | Second `uze-store` catalogue (own root, path-containment-safe) → `codex plugin add` (ADR-013) | CODE_FACT + TESTED (15 tests) + EMPIRICAL — real-binary dogfood (Codex 0.148.0): attach → inspect (Matched) → detach (Missing) → reinstall (Matched) |
 | Skills | Supported | Persistent symlink, `~/.agents/skills/<name>` | EMPIRICAL (behavioral, ADR-006) |
 | Skill invocation policy | Supported (model=false) / Degraded (user=false) | Generated wrapper + `agents/openai.yaml` → `policy.allow_implicit_invocation: false`; no way to hide a skill from explicit `$skill` invocation — stated honestly (ADR-030) | DOCUMENTED (Codex Build skills docs) + EMPIRICAL (verified against codex-cli 0.149.0 via `codex debug prompt-input`) |
 | MCP | Supported (config), unproven behaviorally | `codex mcp add` → `~/.codex/config.toml` | EMPIRICAL (configuration), UNKNOWN (discovery), gap (behavioral) |
@@ -48,7 +48,7 @@ provided = discovered ∩ declared (skills dir, mcpServers file) — see Native 
 ```
 
 ```
-Store package (no explicit envelope, but skills/ dir and/or root mcp.json present)  [Generated, ADR-021]
+Store package (no explicit envelope, but skills/ dir and/or root mcp.json present)  [Generated, ADR-013]
         │
         ▼
 $UZE_HOME/state/attachments/codex/generated/<id>/.codex-plugin/plugin.json
@@ -69,7 +69,7 @@ one IntegrationOwned{kind:"marketplace-plugin-generated", detail.origin:"generat
    (detail.package_root = the GENERATED dir, not the Store root — Codex
     reports the generated dir back as the installed source; recording the
     Store root here would read as permanent drift. A real defect this
-    milestone's dogfood caught before it shipped — see ADR-021.)
+    milestone's dogfood caught before it shipped — see ADR-013.)
 ```
 
 Without either kind of envelope, Skills and MCP decompose individually
@@ -95,7 +95,7 @@ dropped. `attach_package` then ensures the derived catalogue is registered as
 a Codex marketplace and runs `codex plugin add <id>@uze-local`, idempotent
 via a pre-check against `codex plugin list --json`.
 
-**Generated Native Package** (`codex/generate.rs`, ADR-021): mirrors
+**Generated Native Package** (`codex/generate.rs`, ADR-013): mirrors
 Claude's `claude/generate.rs` structurally, adapted to Codex's own manifest
 shape — `skills` as a single directory string (not an inline list),
 `mcpServers` as an external-file reference rather than embedding servers
@@ -159,11 +159,11 @@ MCP inspection is fully structured (`--json`), unlike Claude's raw-file read
   -native lifecycle (attach → inspect Matched → detach Missing → reinstall
   Matched) was run against the real binary and caught a genuine receipt
   defect (`package_root` recorded as the Store path instead of the
-  installed generated directory — see ADR-021) before it shipped; the
+  installed generated directory — see ADR-013) before it shipped; the
   explicit-native path's install/attach was separately confirmed live via
   `tests/shared_agent_skill_root_naming.rs`'s original (now-faked-for-CI)
   real-binary run.
-- Sources: ADR-005, ADR-006, ADR-007, ADR-008, ADR-009, ADR-013, ADR-021,
+- Sources: ADR-005, ADR-006, ADR-007, ADR-009, ADR-013,
   `docs/capabilities/overview.md`.
 
 ## Next

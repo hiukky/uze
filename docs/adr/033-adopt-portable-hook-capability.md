@@ -18,8 +18,8 @@ format; asking authors for an OpenCode plugin would make the common path
 imperative and require a TypeScript toolchain.
 
 The durable choice is how a package expresses portable automation and where
-vendor normalization belongs. It refines ADR-013 (native projection), ADR-020
-(generated projection), ADR-029 (projection conflicts), and ADR-031
+vendor normalization belongs. It refines ADR-013 (native projection,
+explicit and generated), ADR-029 (projection conflicts), and ADR-031
 (canonical Agent capability).
 
 ## Decision

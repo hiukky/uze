@@ -37,7 +37,7 @@
 ## 5. ADRs and OpenSpec
 
 - [x] 5.1 `docs/adr/016-project-agent-environment.md` exists.
-- [x] 5.2 `docs/adr/017-reproducible-agent-dependency-lock.md` exists.
+- [x] 5.2 The `agents.lock` schema is recorded (now `docs/adr/016-project-agent-environment.md`).
 - [x] 5.3 `openspec/changes/project-agent-environment/` exists with `.openspec.yaml`, `proposal.md`, `design.md`, `tasks.md`.
 - [x] 5.4 `specs/project-agent-environment/spec.md` — **rewritten during review**: the original used a non-conforming `REQ-PAE-NNN`/`**MUST**` format with no delta headers, and `openspec validate --strict` failed on it (`No delta sections found`). Converted to proper `## ADDED Requirements` / `### Requirement:` / `#### Scenario:` (WHEN/THEN) format, same substance, with one scenario (attach failure still persisting the lock) dropped because it no longer matches actual behavior (any `install_materialized` failure, not just an ingest failure, now leaves the lock untouched — see §2.1/2.2).
 - [x] 5.5 `specs/agents-lock/spec.md` — same conversion. One requirement (`REQ-LOCK-008`, a `NonReproducibleMarketplace` warning in `plan_project_environment` for `path`-sourced marketplaces) was dropped rather than ported: it was never implemented, and porting it into proper delta format would have asserted it as current behavior. Tracked as a real gap in §6 below instead of a spec claim nothing backs.
@@ -62,7 +62,7 @@
 
 - [x] 7.1 `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --workspace --no-fail-fast` all pass (re-verified 2026-08-22 after the review's changes).
 - [x] 7.2 `openspec validate project-agent-environment --strict` passes (it did not, before §5.4/5.5's rewrite).
-- [x] 7.3 `docs/adr/016-project-agent-environment.md` and `docs/adr/017-reproducible-agent-dependency-lock.md` exist.
+- [x] 7.3 `docs/adr/016-project-agent-environment.md` exists.
 - [ ] 7.4 Dogfood exactly as described (`git add agents.lock` → `git commit` → fresh clone → `uze install`) was not run as a literal end-to-end git-clone scenario; the equivalent was verified without git (two separate `UzeHome`s sharing the same `agents.lock` on disk, both in the automated test and manually via the real CLI binary — see §2.1). The literal clone-based dogfood remains undone.
 
 ## 8. Known gaps (honest as of this review, not aspirational)

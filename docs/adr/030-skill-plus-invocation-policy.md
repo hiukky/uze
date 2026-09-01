@@ -2,9 +2,10 @@
 
 Status: Accepted
 
-Supersedes: [ADR-025 (Commands as a First-Class Capability)](025-commands-as-first-class-capability.md),
-ADR-028 (Claude Command explicit invocation via generated frontmatter).
-Refines: [ADR-013 (Native Projection Principle)](013-adopt-native-projection-principle.md) §2,
+Consolidates: ADR-025 (Commands as a First-Class Capability), ADR-028
+(Claude Command explicit invocation via generated frontmatter) — see the
+"Consolidated records" section of `README.md`.
+Refines: [ADR-013 (Native Projection)](013-adopt-native-projection-principle.md) §2-3,
 [ADR-026 (Stable Namespaced Invocation Labels)](026-stable-namespaced-invocation-labels.md).
 Related: [ADR-029 (Projection Conflicts at Naming Time)](029-projection-conflicts-at-naming-time.md)
 (kept, narrowed to its residual cases).
@@ -122,7 +123,6 @@ per-integration "Command vs Skill" special-casing everywhere.
   became unreachable dead code (ADR-030's reachability rule). The generic
   receipt machinery, `ManagedTextRegion` and `ManagedUserScopeReference`
   stay — they are harness-agnostic primitives with live consumers.
-- ADR-025/ADR-028 are superseded as decisions; kept as history.
 
 ## Proof
 

@@ -1,10 +1,9 @@
 # Skill Invocation Policy — capability spec
 
-Implements
-[ADR-030](../adr/030-skill-plus-invocation-policy.md), which supersedes the
-Command-as-capability model of
-[ADR-025](../adr/025-commands-as-first-class-capability.md) (retained as
-history). See [overview.md](overview.md) for the capability map.
+Implements [ADR-030](../adr/030-skill-plus-invocation-policy.md), which
+replaced the earlier Command-as-capability model (ADR-025/ADR-028,
+consolidated into it). See [overview.md](overview.md) for the capability
+map.
 
 ## Model
 
