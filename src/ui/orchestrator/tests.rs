@@ -8,66 +8,368 @@ use super::*;
 
 mod workspace_tests {
     use super::{
-        AgentIdentity, WorkspaceModel, agent_identity_for_tab, blank_pane, can_close_tab_from_menu,
-        encode_mouse, forward_paste, forward_scroll, next_agent_label, pane_relative,
+        AGENT_BUSY_REPAINTS, AGENT_ECHO_GRACE, AGENT_PASTE_GRACE, AgentIdentity, AgentTabStatus,
+        WorkspaceModel, agent_identity_for_tab, blank_pane, can_close_tab_from_menu, encode_mouse,
+        forward_paste, forward_scroll, next_agent_label, pane_relative, render::render_sidebar,
         selected_pane_cwd, tab_needs_replacement_shell, workspace_has_active_agent_operation,
     };
     use crossterm::event::{MouseButton, MouseEventKind};
     use ratatui::layout::Rect;
+    use ratatui::{Terminal, backend::TestBackend};
     use std::time::{Duration, Instant};
     use uze_terminal::{
-        ClientEvent, ClientRequest, Cursor, Focus, Layout, MouseMode, Pane, PaneDamage, PaneId,
-        Session, Tab, TabId, WorkspaceId,
+        CellAttributes, ClientEvent, ClientRequest, Cursor, Focus, Layout, MouseMode, Pane,
+        PaneDamage, PaneId, RenderCell, Session, Tab, TabId, TerminalColor, WorkspaceId,
     };
 
-    #[test]
-    fn only_submitted_agent_prompts_receive_activity_status() {
-        let identities = [AgentIdentity {
-            binary: "agent",
-            integration: "agent",
-            display_name: "Agent",
-        }];
+    const IDENTITIES: [AgentIdentity; 1] = [AgentIdentity {
+        binary: "agent",
+        integration: "agent",
+        display_name: "Agent",
+    }];
+
+    /// A one-tab session whose only tab `agent_identity_for_tab` resolves
+    /// to [`IDENTITIES`], matched on the tab label the way a tab created
+    /// before generic agent labels is.
+    fn agent_session() -> WorkspaceModel {
         let mut session = Session::new(WorkspaceId("workspace".into()), "/tmp".into(), 80, 24);
         session.workspace.spaces[0].tabs[0].label = "Agent".into();
-        let mut model = WorkspaceModel {
+        WorkspaceModel {
             session: Some(session),
             ..WorkspaceModel::default()
+        }
+    }
+
+    /// Damage carrying one changed cell — the smallest thing that still
+    /// counts as a pane having painted something.
+    fn painted(pane: PaneId) -> ClientEvent {
+        ClientEvent::Damage(PaneDamage {
+            pane,
+            columns: 80,
+            rows: 24,
+            cursor: Cursor { column: 0, row: 0 },
+            alternate_screen: false,
+            mouse: MouseMode {
+                reports_clicks: false,
+                reports_drag: false,
+                sgr: false,
+            },
+            bracketed_paste: false,
+            changed: vec![(
+                0,
+                0,
+                RenderCell {
+                    character: 'x',
+                    foreground: TerminalColor::DefaultForeground,
+                    background: TerminalColor::DefaultBackground,
+                    attributes: CellAttributes::default(),
+                },
+            )],
+        })
+    }
+
+    /// Damage redescribing every cell — what the server sends a client
+    /// that has no comparable baseline to diff against (an attach) or
+    /// after a resize.
+    fn repainted_whole_grid(pane: PaneId) -> ClientEvent {
+        let ClientEvent::Damage(mut damage) = painted(pane) else {
+            unreachable!("painted builds damage")
         };
-        model.note_agent_prompt_submission(PaneId(1), &identities, Some("hello"));
-        assert!(workspace_has_active_agent_operation(&model, &identities));
+        let cell = damage.changed[0].2.clone();
+        damage.changed = (0..damage.rows)
+            .flat_map(|row| (0..damage.columns).map(move |column| (row, column)))
+            .map(|(row, column)| (row, column, cell.clone()))
+            .collect();
+        ClientEvent::Damage(damage)
+    }
 
-        assert!(!model.expire_agent_activity(Instant::now() + Duration::from_secs(2)));
-        assert!(workspace_has_active_agent_operation(&model, &identities));
-
-        assert!(model.expire_agent_activity(Instant::now() + Duration::from_secs(11)));
-        assert!(!workspace_has_active_agent_operation(&model, &identities));
+    /// Paints `pane` the way a harness animating a running turn does:
+    /// several frames, spread over enough time to be animation rather than
+    /// one repaint whose bytes reached the client in pieces.
+    fn animate(model: &mut WorkspaceModel, pane: PaneId, start: Instant) {
+        for step in 0..=AGENT_BUSY_REPAINTS as u64 {
+            model.note_agent_output(pane, &IDENTITIES, start + Duration::from_millis(120 * step));
+        }
     }
 
     #[test]
-    fn completed_background_agent_keeps_a_check_until_its_tab_is_opened() {
-        let identities = [AgentIdentity {
-            binary: "agent",
-            integration: "agent",
-            display_name: "Agent",
-        }];
+    fn only_the_active_spaces_agent_carries_the_selected_dot() {
+        // A background space keeps a `selected_tab` of its own — where it
+        // would resume, not where the user is. Drawing the dot from that
+        // alone gave the sidebar one "this is the agent you are talking to"
+        // per open space.
         let mut session = Session::new(WorkspaceId("workspace".into()), "/tmp".into(), 80, 24);
-        let agent_pane = session.add_tab("Agent".into(), 80, 24, "/tmp".into());
-        let agent_tab = session.workspace.spaces[0].selected_tab;
-        session.workspace.spaces[0].selected_tab = TabId(1);
-        let mut model = WorkspaceModel {
+        session.workspace.spaces[0].tabs[0].label = "Agent".into();
+        session.add_space("second".into(), 80, 24);
+        session.workspace.spaces[1].tabs[0].label = "Agent".into();
+        let model = WorkspaceModel {
             session: Some(session),
             ..WorkspaceModel::default()
         };
-        model.note_agent_prompt_submission(agent_pane, &identities, Some("hello"));
-        assert!(model.expire_agent_activity(Instant::now() + Duration::from_secs(11)));
-        assert!(model.completed_agent_panes.contains(&agent_pane));
 
-        model.acknowledge_completed_agent_tab(agent_tab);
-        assert!(!model.completed_agent_panes.contains(&agent_pane));
+        let mut terminal = Terminal::new(TestBackend::new(40, 24)).unwrap();
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| render_sidebar(frame, frame.area(), &model, &IDENTITIES, &mut hits))
+            .unwrap();
+        let glyphs = |needle: &str| {
+            terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .filter(|cell| cell.symbol() == needle)
+                .count()
+        };
+        assert_eq!(glyphs("\u{25cf}"), 1, "one selected agent, sidebar-wide");
+        assert_eq!(glyphs("\u{25cb}"), 1, "the other space's agent reads idle");
     }
 
     #[test]
-    fn submitted_shell_commands_do_not_receive_agent_activity_status() {
+    fn the_four_sidebar_states_are_decided_by_one_precedence() {
+        // Selection is the only thing the glyph borrows from the cursor,
+        // and it is the weakest claim: both states that describe the agent
+        // itself outrank it, so the tab you are sitting on still shows you
+        // a running turn or an unseen result rather than a plain dot.
+        let mut model = agent_session();
+        assert_eq!(
+            model.agent_tab_status(PaneId(1), false),
+            AgentTabStatus::Idle
+        );
+        assert_eq!(
+            model.agent_tab_status(PaneId(1), true),
+            AgentTabStatus::Selected
+        );
+
+        model.note_agent_prompt_submission(PaneId(1), &IDENTITIES, Some("hello"));
+        assert_eq!(
+            model.agent_tab_status(PaneId(1), true),
+            AgentTabStatus::Working
+        );
+
+        model.agent_activity.remove(&PaneId(1));
+        model.completed_agent_panes.insert(PaneId(1));
+        assert_eq!(
+            model.agent_tab_status(PaneId(1), true),
+            AgentTabStatus::Completed
+        );
+    }
+
+    #[test]
+    fn each_sidebar_state_draws_its_own_glyph() {
+        // Four states, four distinct indicators: the hollow dot, the green
+        // dot, the spinner and the check must never collide, or the column
+        // stops answering the question it exists for.
+        let glyphs = [
+            AgentTabStatus::Idle.glyph(0),
+            AgentTabStatus::Selected.glyph(0),
+            AgentTabStatus::Working.glyph(0),
+            AgentTabStatus::Completed.glyph(0),
+        ];
+        for (index, glyph) in glyphs.iter().enumerate() {
+            assert!(!glyphs[index + 1..].contains(glyph), "duplicate {glyph}");
+        }
+        assert_eq!(AgentTabStatus::Idle.color(), crate::ui::TEXT_FAINT);
+        assert_eq!(AgentTabStatus::Selected.color(), crate::ui::ACCENT);
+    }
+
+    #[test]
+    fn a_submitted_agent_prompt_works_until_its_pane_goes_quiet() {
+        let mut model = agent_session();
+        model.note_agent_prompt_submission(PaneId(1), &IDENTITIES, Some("hello"));
+        assert_eq!(
+            model.agent_tab_status(PaneId(1), false),
+            AgentTabStatus::Working
+        );
+        assert!(workspace_has_active_agent_operation(&model, &IDENTITIES));
+
+        assert!(!model.expire_agent_activity(Instant::now() + Duration::from_secs(1)));
+        assert_eq!(
+            model.agent_tab_status(PaneId(1), false),
+            AgentTabStatus::Working
+        );
+
+        assert!(model.expire_agent_activity(Instant::now() + Duration::from_secs(4)));
+        assert!(!workspace_has_active_agent_operation(&model, &IDENTITIES));
+    }
+
+    #[test]
+    fn an_agent_that_starts_painting_on_its_own_reads_as_working() {
+        // The regression that made the sidebar unreliable: activity used to
+        // begin only at a literal Enter in the pane, so a turn the user did
+        // not type — a hook, a queued follow-up, a subagent reporting back,
+        // anything resumed after a reattach — ran to completion showing the
+        // idle glyph.
+        let mut model = agent_session();
+        assert_eq!(
+            model.agent_tab_status(PaneId(1), false),
+            AgentTabStatus::Idle
+        );
+
+        model.apply(painted(PaneId(1)), &IDENTITIES);
+        assert_eq!(
+            model.agent_tab_status(PaneId(1), false),
+            AgentTabStatus::Idle,
+            "one repaint is a blink, not a turn"
+        );
+
+        animate(&mut model, PaneId(1), Instant::now());
+        assert_eq!(
+            model.agent_tab_status(PaneId(1), false),
+            AgentTabStatus::Working
+        );
+    }
+
+    #[test]
+    fn one_repaint_arriving_in_pieces_is_not_an_animating_agent() {
+        // A single harness redraw reaches the client as however many
+        // damage events its bytes were chunked into, milliseconds apart.
+        // Frame count alone would read that burst as a running turn.
+        let mut model = agent_session();
+        let start = Instant::now();
+        for step in 0..4 * AGENT_BUSY_REPAINTS as u64 {
+            model.note_agent_output(
+                PaneId(1),
+                &IDENTITIES,
+                start + Duration::from_millis(10 * step),
+            );
+        }
+        assert_eq!(
+            model.agent_tab_status(PaneId(1), false),
+            AgentTabStatus::Idle
+        );
+    }
+
+    #[test]
+    fn a_pane_that_only_blinks_is_never_working() {
+        // The bug this rule exists for: an open agent sitting at its prompt
+        // still repaints — a status line, a rotating hint — and treating
+        // each one as work left idle agents spinning for as long as they
+        // stayed open.
+        let mut model = agent_session();
+        let start = Instant::now();
+        for step in 0..10 {
+            model.note_agent_output(
+                PaneId(1),
+                &IDENTITIES,
+                start + Duration::from_secs(2 * step),
+            );
+            assert_ne!(
+                model.agent_tab_status(PaneId(1), false),
+                AgentTabStatus::Working
+            );
+        }
+    }
+
+    #[test]
+    fn reattaching_to_an_open_agent_does_not_read_as_a_running_turn() {
+        // Every pane's first damage after an attach (and every damage after
+        // a resize) redescribes the whole grid, because the server has no
+        // comparable baseline to diff against. Counting those made every
+        // open agent spin for a few seconds each time the workspace opened.
+        let mut model = agent_session();
+        for _ in 0..AGENT_BUSY_REPAINTS {
+            model.apply(repainted_whole_grid(PaneId(1)), &IDENTITIES);
+        }
+        assert_eq!(
+            model.agent_tab_status(PaneId(1), false),
+            AgentTabStatus::Idle
+        );
+    }
+
+    #[test]
+    fn output_resuming_after_a_quiet_stretch_returns_the_pane_to_working() {
+        // The other half of the same regression: a pane silent long enough
+        // to expire could never get back to `Working`, because only Enter
+        // could put it there. A long tool call therefore left the rest of
+        // the turn showing as finished.
+        let mut model = agent_session();
+        model.note_agent_prompt_submission(PaneId(1), &IDENTITIES, Some("hello"));
+        assert!(model.expire_agent_activity(Instant::now() + Duration::from_secs(4)));
+        assert_ne!(
+            model.agent_tab_status(PaneId(1), false),
+            AgentTabStatus::Working
+        );
+
+        animate(&mut model, PaneId(1), Instant::now());
+        assert_eq!(
+            model.agent_tab_status(PaneId(1), false),
+            AgentTabStatus::Working
+        );
+    }
+
+    #[test]
+    fn the_echo_of_a_prompt_being_typed_is_not_the_agent_working() {
+        // Every keystroke opens its own grace window, so a prompt typed
+        // steadily paints as many frames, as spread out, as a running turn.
+        let mut model = agent_session();
+        let start = Instant::now();
+        for step in 0..4 * AGENT_BUSY_REPAINTS as u64 {
+            let typed = start + Duration::from_millis(120 * step);
+            model.open_echo_window(PaneId(1), typed, AGENT_ECHO_GRACE);
+            model.note_agent_output(PaneId(1), &IDENTITIES, typed + Duration::from_millis(10));
+        }
+        assert_eq!(
+            model.agent_tab_status(PaneId(1), false),
+            AgentTabStatus::Idle
+        );
+    }
+
+    #[test]
+    fn a_paste_the_harness_lays_out_is_not_the_agent_working() {
+        // Dropping an image into a prompt makes the harness reflow its
+        // whole box — a burst of repaints as sustained as any animation,
+        // arriving well after the pasted bytes did.
+        let mut model = agent_session();
+        let start = Instant::now();
+        model.open_echo_window(PaneId(1), start, AGENT_PASTE_GRACE);
+        animate(&mut model, PaneId(1), start);
+        assert_eq!(
+            model.agent_tab_status(PaneId(1), false),
+            AgentTabStatus::Idle
+        );
+    }
+
+    #[test]
+    fn typing_over_a_running_turn_cannot_extend_it() {
+        // Echo suppression holds whether or not a turn is running: the
+        // user's own keystrokes are never evidence the agent is still
+        // working, so the turn still ends on its own quiet window.
+        let mut model = agent_session();
+        let start = Instant::now();
+        model.note_agent_prompt_submission(PaneId(1), &IDENTITIES, Some("hello"));
+        for step in 0..4 * AGENT_BUSY_REPAINTS as u64 {
+            let typed = start + Duration::from_millis(120 * step);
+            model.open_echo_window(PaneId(1), typed, AGENT_ECHO_GRACE);
+            model.note_agent_output(PaneId(1), &IDENTITIES, typed + Duration::from_millis(10));
+        }
+
+        assert!(model.expire_agent_activity(start + Duration::from_secs(4)));
+        assert_ne!(
+            model.agent_tab_status(PaneId(1), false),
+            AgentTabStatus::Working
+        );
+    }
+
+    #[test]
+    fn output_during_a_turn_carries_it_past_the_quiet_window() {
+        // The other direction: an agent still animating two seconds in is
+        // still working, and must not be declared done on the strength of
+        // when its prompt was submitted.
+        let mut model = agent_session();
+        model.note_agent_prompt_submission(PaneId(1), &IDENTITIES, Some("hello"));
+
+        let later = Instant::now() + Duration::from_secs(2);
+        animate(&mut model, PaneId(1), later);
+        assert!(!model.expire_agent_activity(later + Duration::from_secs(2)));
+        assert_eq!(
+            model.agent_tab_status(PaneId(1), false),
+            AgentTabStatus::Working
+        );
+    }
+
+    #[test]
+    fn a_shell_pane_never_receives_agent_activity() {
         let mut model = WorkspaceModel {
             session: Some(Session::new(
                 WorkspaceId("workspace".into()),
@@ -77,13 +379,86 @@ mod workspace_tests {
             )),
             ..WorkspaceModel::default()
         };
-        let identities = [AgentIdentity {
-            binary: "agent",
-            integration: "agent",
-            display_name: "Agent",
-        }];
-        model.note_agent_prompt_submission(PaneId(1), &identities, Some("hello"));
+        model.note_agent_prompt_submission(PaneId(1), &IDENTITIES, Some("hello"));
+        animate(&mut model, PaneId(1), Instant::now());
         assert!(model.agent_activity.is_empty());
+    }
+
+    #[test]
+    fn completed_background_agent_keeps_a_check_until_its_tab_is_opened() {
+        let mut session = Session::new(WorkspaceId("workspace".into()), "/tmp".into(), 80, 24);
+        let agent_pane = session.add_tab("Agent".into(), 80, 24, "/tmp".into());
+        let agent_tab = session.workspace.spaces[0].selected_tab;
+        session.workspace.spaces[0].selected_tab = TabId(1);
+        let mut model = WorkspaceModel {
+            session: Some(session),
+            ..WorkspaceModel::default()
+        };
+        model.note_agent_prompt_submission(agent_pane, &IDENTITIES, Some("hello"));
+        assert!(model.expire_agent_activity(Instant::now() + Duration::from_secs(4)));
+        assert_eq!(
+            model.agent_tab_status(agent_pane, false),
+            AgentTabStatus::Completed
+        );
+
+        model.acknowledge_completed_agent_tab(agent_tab);
+        assert_eq!(
+            model.agent_tab_status(agent_pane, false),
+            AgentTabStatus::Idle
+        );
+    }
+
+    #[test]
+    fn a_check_clears_as_soon_as_its_pane_is_the_one_on_screen() {
+        // Whichever way the user reached the tab — a click, Alt+n, a space
+        // switch, a restored selection — the check has to go once they are
+        // looking at it. Clearing it only at the call sites that happened to
+        // know about it is what made "done" survive on a tab already open.
+        let mut session = Session::new(WorkspaceId("workspace".into()), "/tmp".into(), 80, 24);
+        let agent_pane = session.add_tab("Agent".into(), 80, 24, "/tmp".into());
+        let agent_tab = session.workspace.spaces[0].selected_tab;
+        session.workspace.spaces[0].selected_tab = TabId(1);
+        let mut model = WorkspaceModel {
+            session: Some(session),
+            ..WorkspaceModel::default()
+        };
+        model.note_agent_prompt_submission(agent_pane, &IDENTITIES, Some("hello"));
+        assert!(model.expire_agent_activity(Instant::now() + Duration::from_secs(4)));
+        assert_eq!(
+            model.agent_tab_status(agent_pane, false),
+            AgentTabStatus::Completed
+        );
+
+        if let Some(session) = model.session.as_mut() {
+            session.workspace.spaces[0].selected_tab = agent_tab;
+        }
+        assert!(model.expire_agent_activity(Instant::now() + Duration::from_secs(4)));
+        assert_eq!(
+            model.agent_tab_status(agent_pane, false),
+            AgentTabStatus::Idle
+        );
+    }
+
+    #[test]
+    fn a_closed_tab_leaves_no_status_behind_for_the_next_pane() {
+        let mut session = Session::new(WorkspaceId("workspace".into()), "/tmp".into(), 80, 24);
+        let agent_pane = session.add_tab("Agent".into(), 80, 24, "/tmp".into());
+        let agent_tab = session.workspace.spaces[0].selected_tab;
+        session.workspace.spaces[0].selected_tab = TabId(1);
+        let mut model = WorkspaceModel {
+            session: Some(session),
+            ..WorkspaceModel::default()
+        };
+        model.note_agent_prompt_submission(agent_pane, &IDENTITIES, Some("hello"));
+        model.note_pane_input(agent_pane);
+
+        if let Some(session) = model.session.as_mut() {
+            session.remove_tab(agent_tab);
+        }
+        model.expire_agent_activity(Instant::now());
+        assert!(model.agent_activity.is_empty());
+        assert!(model.completed_agent_panes.is_empty());
+        assert!(model.input_echo_until.is_empty());
     }
 
     #[test]
@@ -296,20 +671,23 @@ mod workspace_tests {
         assert!(!model.panes[&PaneId(1)].mouse.reports_clicks);
         assert!(!model.panes[&PaneId(1)].bracketed_paste);
 
-        model.apply(ClientEvent::Damage(PaneDamage {
-            pane: PaneId(1),
-            columns: 80,
-            rows: 24,
-            cursor: Cursor { column: 0, row: 0 },
-            alternate_screen: false,
-            mouse: MouseMode {
-                reports_clicks: true,
-                reports_drag: false,
-                sgr: true,
-            },
-            bracketed_paste: true,
-            changed: Vec::new(),
-        }));
+        model.apply(
+            ClientEvent::Damage(PaneDamage {
+                pane: PaneId(1),
+                columns: 80,
+                rows: 24,
+                cursor: Cursor { column: 0, row: 0 },
+                alternate_screen: false,
+                mouse: MouseMode {
+                    reports_clicks: true,
+                    reports_drag: false,
+                    sgr: true,
+                },
+                bracketed_paste: true,
+                changed: Vec::new(),
+            }),
+            &[],
+        );
 
         assert!(model.panes[&PaneId(1)].mouse.reports_clicks);
         assert!(model.panes[&PaneId(1)].bracketed_paste);

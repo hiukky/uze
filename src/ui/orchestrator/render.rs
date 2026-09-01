@@ -494,7 +494,11 @@ pub(super) fn render_sidebar(
             let Some(label_rect) = row(1) else { break };
 
             let selected = tab.id == space.selected_tab;
-            let status = model.agent_tab_status(tab.focus.pane, selected);
+            // Every space names a `selected_tab`, including the ones the
+            // user is not in — so `selected` alone put a `●` on one agent
+            // per open space, each claiming to be the one receiving
+            // keystrokes. Only the active space's selection is that agent.
+            let status = model.agent_tab_status(tab.focus.pane, is_active_space && selected);
             let renaming_this = model
                 .renaming
                 .as_ref()

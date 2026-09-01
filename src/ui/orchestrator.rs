@@ -17,7 +17,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Padding, Paragraph},
 };
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     io::{self, BufReader},
     path::{Path, PathBuf},
     sync::mpsc,
@@ -28,9 +28,9 @@ use uze_core::prompt_history;
 use uze_extensions::{ExtensionHit, git_diff};
 use uze_integrations::registry::IntegrationRegistry;
 use uze_terminal::{
-    CellAttributes, ClientEvent, ClientRequest, Cursor, PROTOCOL_VERSION, PaneId, PaneSnapshot,
-    RenderCell, Session, Space, SpaceId, Tab, TabId, TerminalColor, attach, read_event,
-    send_request,
+    CellAttributes, ClientEvent, ClientRequest, Cursor, PROTOCOL_VERSION, PaneDamage, PaneId,
+    PaneSnapshot, RenderCell, Session, Space, SpaceId, Tab, TabId, TerminalColor, attach,
+    read_event, send_request,
 };
 
 /// Input/redraw cadence. Unlike the pane content itself — which the server
@@ -51,17 +51,51 @@ const GIT_BADGE_REFRESH: Duration = Duration::from_millis(750);
 /// instead of letting indicatif write to stderr.
 const AGENT_ACTIVITY_FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
 const AGENT_ACTIVITY_TICK: Duration = Duration::from_millis(120);
-/// PTY damage arriving this soon after we forwarded the user's own
-/// keystrokes into a pane is that pane echoing them back, not the agent
-/// working. Without this window every character typed into an agent tab
-/// would re-arm its busy spinner.
-const LOCAL_ECHO_WINDOW: Duration = Duration::from_millis(250);
+/// How long an agent pane must stay quiet before its work reads as
+/// finished. Agent harnesses animate while they work — a spinner, an
+/// elapsed-token counter — so a pane that is genuinely busy keeps emitting
+/// damage well inside this window even across a slow tool call, and a pane
+/// that stops emitting has stopped working. Long enough to ride out a
+/// harness that redraws less eagerly, short enough that "done" arrives
+/// while the user still cares; unlike the previous 10s window, guessing
+/// low is no longer terminal because renewed output re-enters `Working`
+/// on its own (see [`WorkspaceModel::note_agent_output`]).
+const AGENT_QUIET_AFTER: Duration = Duration::from_secs(3);
 
-/// A submitted prompt stays active while its terminal keeps producing
-/// output. Agent harnesses can spend several seconds silent while waiting
-/// for a tool or network response, so this grace period favors not hiding
-/// an in-flight operation over immediately clearing a returned prompt.
-const AGENT_ACTIVITY_IDLE_AFTER: Duration = Duration::from_secs(10);
+/// How much repainting a pane must do before it reads as an agent at
+/// work. A harness running a turn *animates* — a spinner, an elapsed
+/// counter — so it repaints many times a second; an idle one still
+/// repaints, just sporadically: a status line, a rotating hint, a pasted
+/// image being laid out, the full redraw a reattach provokes. Counting
+/// frames inside one short window is what separates the two without
+/// reading vendor-specific pixels. Treating any single repaint as work
+/// is what left merely-open agents spinning forever.
+///
+/// The frames must also be *spread* across [`AGENT_BUSY_SPAN`], not just
+/// numerous: one repaint whose bytes reach the client in several chunks
+/// arrives as several damage events a few milliseconds apart, and counting
+/// that as animation would put every reattach, resize and pasted image
+/// straight back on the spinner.
+const AGENT_BUSY_WINDOW: Duration = Duration::from_millis(1000);
+const AGENT_BUSY_SPAN: Duration = Duration::from_millis(300);
+const AGENT_BUSY_REPAINTS: usize = 5;
+
+/// A pane echoes what the user types or pastes, and that echo is damage
+/// like any other. Damage inside the window that input opens is treated
+/// as that echo, not as the agent working — otherwise composing a prompt,
+/// or dropping an image into one, would light the sidebar up as busy.
+/// Enter is exempt: it marks the pane busy explicitly. A paste gets the
+/// longer window because the harness reflows its whole prompt box around
+/// the pasted content, well after the bytes themselves landed.
+const AGENT_ECHO_GRACE: Duration = Duration::from_millis(150);
+const AGENT_PASTE_GRACE: Duration = Duration::from_millis(750);
+
+/// A pane the client just resized — on attach, on a tab switch, on a
+/// terminal resize — redraws because we asked it to, and that redraw is
+/// not the agent working either. Long enough for a harness to repaint a
+/// full screen, short enough that a turn genuinely running through the
+/// resize is only briefly understated.
+const AGENT_REDRAW_GRACE: Duration = Duration::from_millis(1000);
 
 mod input;
 mod render;
@@ -225,10 +259,15 @@ pub(crate) fn attach_workspace(
     // blocks inside a continuously open uze, not a flash back to the shell.
     while model.session.is_none() || model.panes.is_empty() {
         match receiver.recv_timeout(Duration::from_millis(500)) {
-            Ok(event) => model.apply(event),
+            Ok(event) => model.apply(event, &identities),
             Err(_) => break,
         }
     }
+    // Attaching makes the whole workspace repaint: the client has no
+    // baseline to diff against, and the panes it inherits are mid-screen.
+    // None of that is an agent starting a turn, which is what made every
+    // open agent spin for a few seconds each time uze was reopened.
+    model.note_attach_redraw();
     // `select_tab` moves the selected space too when the tab lives in
     // another one, so the space needs no separate request. A tab closed
     // since its prompt was logged simply selects nothing.
@@ -238,19 +277,12 @@ pub(crate) fn attach_workspace(
         // the manual SelectTab handler does, so the PTY size matches the
         // visible rect immediately.
         if let Some(pane) = model.pane_for_tab(tab) {
-            let _ = send_request(
-                &mut stream,
-                &ClientRequest::Resize {
-                    pane,
-                    columns,
-                    rows,
-                },
-            );
+            resize_pane(&mut stream, &mut model, pane, columns, rows);
         }
     }
     loop {
         while let Ok(event) = receiver.try_recv() {
-            model.apply(event);
+            model.apply(event, &identities);
         }
         while let Ok(resolution) = support_receiver.try_recv() {
             if model.agent_support_pending.as_ref() == Some(&resolution.key) {
@@ -301,14 +333,8 @@ pub(crate) fn attach_workspace(
         if (columns, rows) != model.last_size {
             model.last_size = (columns, rows);
             model.dirty = true;
-            let _ = send_request(
-                &mut stream,
-                &ClientRequest::Resize {
-                    pane: model.focused_pane(),
-                    columns,
-                    rows,
-                },
-            );
+            let focused = model.focused_pane();
+            resize_pane(&mut stream, &mut model, focused, columns, rows);
         }
         if model.dirty {
             model.refresh_git_badge();
@@ -510,14 +536,7 @@ pub(crate) fn attach_workspace(
                         model.acknowledge_completed_agent_tab(tab);
                         let _ = send_request(&mut stream, &ClientRequest::SelectTab { tab });
                         if let Some(pane) = model.pane_for_tab(tab) {
-                            let _ = send_request(
-                                &mut stream,
-                                &ClientRequest::Resize {
-                                    pane,
-                                    columns,
-                                    rows,
-                                },
-                            );
+                            resize_pane(&mut stream, &mut model, pane, columns, rows);
                         }
                     }
                 }
@@ -543,7 +562,7 @@ pub(crate) fn attach_workspace(
                         // Forwarded before anything is recorded: the pane's
                         // own responsiveness must never wait on history.
                         let _ = send_request(&mut stream, &ClientRequest::Input { pane, bytes });
-                        model.note_local_input(pane);
+                        model.note_pane_input(pane);
                         if submitted {
                             model.note_agent_prompt_submission(
                                 pane,
@@ -557,7 +576,7 @@ pub(crate) fn attach_workspace(
                     let pane = model.focused_pane();
                     model.prompt_buffers.entry(pane).or_default().paste(&text);
                     forward_paste(&mut stream, &model, &text);
-                    model.note_local_input(pane);
+                    model.note_pane_paste(pane);
                 }
                 Event::Mouse(mouse)
                     if mouse.kind == MouseEventKind::Down(MouseButton::Left)
@@ -827,14 +846,7 @@ pub(crate) fn attach_workspace(
                             model.acknowledge_completed_agent_tab(tab);
                             let _ = send_request(&mut stream, &ClientRequest::SelectTab { tab });
                             if let Some(pane) = model.pane_for_tab(tab) {
-                                let _ = send_request(
-                                    &mut stream,
-                                    &ClientRequest::Resize {
-                                        pane,
-                                        columns,
-                                        rows,
-                                    },
-                                );
+                                resize_pane(&mut stream, &mut model, pane, columns, rows);
                             }
                         }
                         WorkspaceHit::CloseTab(tab) => {
@@ -898,14 +910,7 @@ pub(crate) fn attach_workspace(
                                     .map(|s| s.selected_tab)
                                     .and_then(|tab| model.pane_for_tab(tab))
                             }) {
-                                let _ = send_request(
-                                    &mut stream,
-                                    &ClientRequest::Resize {
-                                        pane,
-                                        columns,
-                                        rows,
-                                    },
-                                );
+                                resize_pane(&mut stream, &mut model, pane, columns, rows);
                             }
                         }
                         WorkspaceHit::ContextMenuAction(_) => {
@@ -1280,40 +1285,6 @@ fn agent_identity_for_tab<'a>(identities: &'a [AgentIdentity], tab: &Tab) -> Opt
         .map(|identity| identity.binary)
 }
 
-fn workspace_has_active_agent_operation(
-    model: &WorkspaceModel,
-    identities: &[AgentIdentity],
-) -> bool {
-    model.session.as_ref().is_some_and(|session| {
-        session
-            .workspace
-            .spaces
-            .iter()
-            .flat_map(|space| &space.tabs)
-            .any(|tab| {
-                agent_identity_for_tab(identities, tab).is_some()
-                    && model.agent_activity.contains_key(&tab.focus.pane)
-            })
-    })
-}
-
-/// The selected tab's agent, paired with that tab's focused pane's own
-/// working directory — `None` for a tab that is not running a recognized
-/// agent, which is also what hides the "✦" badge.
-fn selected_agent_context(
-    model: &WorkspaceModel,
-    identities: &[AgentIdentity],
-) -> Option<SupportKey> {
-    let tab = model.session.as_ref()?.selected_tab();
-    let binary = agent_identity_for_tab(identities, tab)?;
-    let integration = identities
-        .iter()
-        .find(|identity| identity.binary == binary)
-        .map(|identity| identity.integration)?;
-    let cwd = pane_in_layout(&tab.layout, tab.focus.pane)?.cwd.clone();
-    Some((integration.to_owned(), cwd))
-}
-
 /// What the sidebar shows beside one agent tab. These four states are the
 /// whole vocabulary, and they are mutually exclusive by the precedence
 /// encoded in [`WorkspaceModel::agent_tab_status`] — the single place that
@@ -1354,6 +1325,123 @@ impl AgentTabStatus {
     }
 }
 
+/// One agent pane's recent repaints and the deadline its busy state runs
+/// to. Both halves are load-bearing: the repaints are the evidence that
+/// the pane is animating rather than blinking once, and the deadline is
+/// what carries "working" across the gaps in that animation.
+#[derive(Debug, Default)]
+struct AgentActivity {
+    repaints: VecDeque<Instant>,
+    working_until: Option<Instant>,
+}
+
+impl AgentActivity {
+    fn is_working(&self) -> bool {
+        self.working_until.is_some()
+    }
+
+    /// Records one repaint and reports whether the pane has now painted
+    /// often enough, recently enough, to read as an animating agent.
+    fn note_repaint(&mut self, now: Instant) -> bool {
+        self.forget_repaints_before(now);
+        self.repaints.push_back(now);
+        let spread = match self.repaints.front() {
+            Some(oldest) => now.duration_since(*oldest),
+            None => Duration::ZERO,
+        };
+        self.repaints.len() >= AGENT_BUSY_REPAINTS && spread >= AGENT_BUSY_SPAN
+    }
+
+    /// Drops the deadline once it has passed, reporting whether this call
+    /// is the one that ended the pane's turn, and forgets repaints too old
+    /// to still be evidence of animation.
+    fn expire(&mut self, now: Instant) -> bool {
+        let ended = self.working_until.is_some_and(|deadline| now >= deadline);
+        if ended {
+            self.working_until = None;
+        }
+        self.forget_repaints_before(now);
+        ended
+    }
+
+    fn forget_repaints_before(&mut self, now: Instant) {
+        while self
+            .repaints
+            .front()
+            .is_some_and(|at| now.duration_since(*at) >= AGENT_BUSY_WINDOW)
+        {
+            self.repaints.pop_front();
+        }
+    }
+}
+
+/// Resizes one pane and records that whatever it repaints next is the
+/// harness reacting to us. Every resize path goes through here: a pane
+/// redrawing on our command is the client's own doing, and counting it as
+/// activity is what made every open agent spin for a moment whenever the
+/// workspace was opened, a tab selected, or the terminal resized.
+fn resize_pane<W: io::Write>(
+    stream: &mut W,
+    model: &mut WorkspaceModel,
+    pane: PaneId,
+    columns: u16,
+    rows: u16,
+) {
+    let _ = send_request(
+        stream,
+        &ClientRequest::Resize {
+            pane,
+            columns,
+            rows,
+        },
+    );
+    model.note_pane_redraw(pane);
+}
+
+/// Whether this damage describes an agent painting a frame at all. Damage
+/// that redescribes the entire grid is the server having no comparable
+/// baseline to diff against — the first push after an attach, or a resize —
+/// and counting those is what lit every open agent up as busy for a few
+/// seconds whenever the workspace was reopened.
+fn is_incremental_repaint(damage: &PaneDamage) -> bool {
+    let grid = usize::from(damage.columns) * usize::from(damage.rows);
+    !damage.changed.is_empty() && damage.changed.len() < grid
+}
+
+fn workspace_has_active_agent_operation(
+    model: &WorkspaceModel,
+    identities: &[AgentIdentity],
+) -> bool {
+    model.session.as_ref().is_some_and(|session| {
+        session
+            .workspace
+            .spaces
+            .iter()
+            .flat_map(|space| &space.tabs)
+            .any(|tab| {
+                agent_identity_for_tab(identities, tab).is_some()
+                    && model.agent_is_working(tab.focus.pane)
+            })
+    })
+}
+
+/// The selected tab's agent, paired with that tab's focused pane's own
+/// working directory — `None` for a tab that is not running a recognized
+/// agent, which is also what hides the "✦" badge.
+fn selected_agent_context(
+    model: &WorkspaceModel,
+    identities: &[AgentIdentity],
+) -> Option<SupportKey> {
+    let tab = model.session.as_ref()?.selected_tab();
+    let binary = agent_identity_for_tab(identities, tab)?;
+    let integration = identities
+        .iter()
+        .find(|identity| identity.binary == binary)
+        .map(|identity| identity.integration)?;
+    let cwd = pane_in_layout(&tab.layout, tab.focus.pane)?.cwd.clone();
+    Some((integration.to_owned(), cwd))
+}
+
 #[derive(Default)]
 struct WorkspaceModel {
     session: Option<Session>,
@@ -1361,23 +1449,24 @@ struct WorkspaceModel {
     last_size: (u16, u16),
     error: Option<String>,
     tick: usize,
-    /// Agent panes with a user prompt currently in flight. A pane only
-    /// enters this map when the user submits a line; PTY output extends the
-    /// entry, and a quiet terminal removes it again. Merely having an agent
-    /// process open is deliberately not activity.
-    agent_activity: BTreeMap<PaneId, Instant>,
-    /// Agent panes that finished while their tab was not selected. The
-    /// sidebar keeps their green check visible until the user opens the tab,
-    /// making completion discoverable without leaving a stale busy spinner.
+    /// Per-agent-pane repaint evidence and busy deadline. A pane starts
+    /// working either because the user submitted a line into it or because
+    /// it started animating on its own — an agent that resumes work with
+    /// nothing typed (a hook, a queued turn, a subagent reporting back) is
+    /// working just as much as one answering a prompt. Sustained repainting
+    /// extends the deadline; a pane that only blinks does not, which is why
+    /// merely having an agent process open — or reattaching to one — is
+    /// deliberately not activity.
+    agent_activity: BTreeMap<PaneId, AgentActivity>,
+    /// Agent panes that stopped working while the user was looking
+    /// somewhere else. The sidebar keeps their check visible until the tab
+    /// is actually on screen, making completion discoverable without
+    /// leaving a stale busy spinner.
     completed_agent_panes: BTreeSet<PaneId>,
-    /// Panes known to be running a recognized agent, recorded the first
-    /// time the user submits a prompt into one. `apply` has no identity
-    /// table of its own, so this is what lets a *later* burst of PTY output
-    /// re-arm activity for a pane whose quiet stretch already expired.
-    agent_panes: BTreeSet<PaneId>,
-    /// When input was last forwarded into a pane, so the echo of the user's
-    /// own typing is not mistaken for agent output ([`LOCAL_ECHO_WINDOW`]).
-    local_input_at: BTreeMap<PaneId, Instant>,
+    /// Until when each pane's own repaints are the echo of input we
+    /// forwarded to it, rather than the agent working (see
+    /// [`AGENT_ECHO_GRACE`] and [`AGENT_PASTE_GRACE`]).
+    input_echo_until: BTreeMap<PaneId, Instant>,
     hits: Vec<(Rect, WorkspaceHit)>,
     /// Set whenever applying an event (or a resize) changes what should be
     /// on screen; the input loop only redraws when this is true. Redrawing
@@ -1522,7 +1611,7 @@ struct GitBadge {
     checked_at: Instant,
 }
 impl WorkspaceModel {
-    fn apply(&mut self, event: ClientEvent) {
+    fn apply(&mut self, event: ClientEvent, identities: &[AgentIdentity]) {
         if !matches!(event, ClientEvent::Error { .. }) {
             self.error = None;
         }
@@ -1537,7 +1626,9 @@ impl WorkspaceModel {
                 self.session = Some(session);
             }
             ClientEvent::Damage(damage) => {
-                self.note_agent_output(damage.pane, !damage.changed.is_empty(), Instant::now());
+                if is_incremental_repaint(&damage) {
+                    self.note_agent_output(damage.pane, identities, Instant::now());
+                }
                 let entry = self
                     .panes
                     .entry(damage.pane)
@@ -1625,8 +1716,8 @@ impl WorkspaceModel {
         let Some(origin) = origin else {
             return;
         };
-        self.agent_panes.insert(pane);
-        self.agent_activity.insert(pane, Instant::now());
+        self.agent_activity.entry(pane).or_default().working_until =
+            Some(Instant::now() + AGENT_QUIET_AFTER);
         self.completed_agent_panes.remove(&pane);
         self.dirty = true;
 
@@ -1635,13 +1726,147 @@ impl WorkspaceModel {
         }
     }
 
+    /// Notes that `pane` painted something. Repainting both *starts* and
+    /// extends an agent's busy state — the asymmetry where only Enter could
+    /// start it left every self-driven turn, and every turn that resumed
+    /// after a quiet stretch, showing as idle — but only once there is
+    /// enough of it to be animation rather than a blink (see
+    /// [`AGENT_BUSY_REPAINTS`]). Damage that is really the echo of the
+    /// user's own typing or pasting is ignored, as is damage in a shell
+    /// pane.
+    fn note_agent_output(&mut self, pane: PaneId, identities: &[AgentIdentity], now: Instant) {
+        if !self.is_agent_pane(pane, identities) || self.is_echoing_input(pane, now) {
+            return;
+        }
+        let activity = self.agent_activity.entry(pane).or_default();
+        if activity.note_repaint(now) {
+            activity.working_until = Some(now + AGENT_QUIET_AFTER);
+            self.completed_agent_panes.remove(&pane);
+        }
+    }
+
+    fn agent_is_working(&self, pane: PaneId) -> bool {
+        self.agent_activity
+            .get(&pane)
+            .is_some_and(AgentActivity::is_working)
+    }
+
+    fn is_echoing_input(&self, pane: PaneId, now: Instant) -> bool {
+        self.input_echo_until
+            .get(&pane)
+            .is_some_and(|until| now < *until)
+    }
+
+    /// Opens the window in which `pane`'s own repaints read as the echo of
+    /// a keystroke we just forwarded there.
+    fn note_pane_input(&mut self, pane: PaneId) {
+        self.open_echo_window(pane, Instant::now(), AGENT_ECHO_GRACE);
+    }
+
+    /// Same, for a paste: the harness re-lays out its prompt box around the
+    /// pasted content — an image especially — long after the bytes landed.
+    fn note_pane_paste(&mut self, pane: PaneId) {
+        self.open_echo_window(pane, Instant::now(), AGENT_PASTE_GRACE);
+    }
+
+    /// Same, for a redraw this client provoked by resizing the pane.
+    fn note_pane_redraw(&mut self, pane: PaneId) {
+        self.open_echo_window(pane, Instant::now(), AGENT_REDRAW_GRACE);
+    }
+
+    /// Same, for the repaint an attach provokes across every open pane at
+    /// once rather than in the one pane being resized.
+    fn note_attach_redraw(&mut self) {
+        let now = Instant::now();
+        let panes: Vec<PaneId> = self.panes.keys().copied().collect();
+        for pane in panes {
+            self.open_echo_window(pane, now, AGENT_REDRAW_GRACE);
+        }
+    }
+
+    fn open_echo_window(&mut self, pane: PaneId, now: Instant, grace: Duration) {
+        self.input_echo_until.insert(pane, now + grace);
+    }
+
+    fn is_agent_pane(&self, pane: PaneId, identities: &[AgentIdentity]) -> bool {
+        self.session.as_ref().is_some_and(|session| {
+            session
+                .workspace
+                .spaces
+                .iter()
+                .flat_map(|space| &space.tabs)
+                .any(|tab| {
+                    tab.focus.pane == pane && agent_identity_for_tab(identities, tab).is_some()
+                })
+        })
+    }
+
+    /// Advances every agent pane's phase for the current instant: a pane
+    /// quiet for [`AGENT_QUIET_AFTER`] stops working, and one that stopped
+    /// out of sight keeps a check until its tab is actually on screen.
+    /// Clearing that check here — rather than only at the handful of call
+    /// sites that switch tabs — is what makes "done" disappear exactly when
+    /// the user looks at it, whichever way they got there.
+    fn expire_agent_activity(&mut self, now: Instant) -> bool {
+        let focused = self.focused_pane();
+        let mut expired = Vec::new();
+        for (pane, activity) in &mut self.agent_activity {
+            if activity.expire(now) {
+                expired.push(*pane);
+            }
+        }
+        for pane in &expired {
+            if *pane != focused {
+                self.completed_agent_panes.insert(*pane);
+            }
+        }
+        // A closed echo window, and a pane holding neither a deadline nor
+        // recent repaints, have nothing left to say about themselves —
+        // dropping them keeps this tick's early exit reachable.
+        self.input_echo_until.retain(|_, until| now < *until);
+        self.agent_activity
+            .retain(|_, activity| activity.is_working() || !activity.repaints.is_empty());
+        let acknowledged = self.completed_agent_panes.remove(&focused);
+        // A pane whose tab is gone can never be looked at again, and its id
+        // is free to be handed to a future pane — leaving its check behind
+        // would eventually surface on something unrelated.
+        self.forget_closed_agent_panes();
+        !expired.is_empty() || acknowledged
+    }
+
+    fn forget_closed_agent_panes(&mut self) {
+        // Runs on every input tick, so it earns the early exit: with no
+        // per-pane state held there is nothing to reconcile, and walking
+        // the tab tree to build a live-pane set would be pure overhead.
+        if self.agent_activity.is_empty()
+            && self.completed_agent_panes.is_empty()
+            && self.input_echo_until.is_empty()
+        {
+            return;
+        }
+        let Some(session) = self.session.as_ref() else {
+            return;
+        };
+        let live: BTreeSet<PaneId> = session
+            .workspace
+            .spaces
+            .iter()
+            .flat_map(|space| &space.tabs)
+            .map(|tab| tab.focus.pane)
+            .collect();
+        self.agent_activity.retain(|pane, _| live.contains(pane));
+        self.completed_agent_panes
+            .retain(|pane| live.contains(pane));
+        self.input_echo_until.retain(|pane, _| live.contains(pane));
+    }
+
     /// The one place the four sidebar states are decided. Working outranks
     /// Completed (fresh output means the run the check would announce is
     /// not over), and both outrank Selected — a spinner or a check on the
     /// tab you are already on still carries information the plain dot does
     /// not.
     fn agent_tab_status(&self, pane: PaneId, selected: bool) -> AgentTabStatus {
-        if self.agent_activity.contains_key(&pane) {
+        if self.agent_is_working(pane) {
             AgentTabStatus::Working
         } else if self.completed_agent_panes.contains(&pane) {
             AgentTabStatus::Completed
@@ -1652,50 +1877,6 @@ impl WorkspaceModel {
         }
     }
 
-    /// Records that input was forwarded into `pane`, arming
-    /// [`LOCAL_ECHO_WINDOW`] so the echo that comes straight back does not
-    /// read as agent output.
-    fn note_local_input(&mut self, pane: PaneId) {
-        self.local_input_at.insert(pane, Instant::now());
-    }
-
-    /// Output from a known agent pane keeps — or puts — that pane in the
-    /// working state. Re-arming matters as much as extending: an agent that
-    /// sits silent past [`AGENT_ACTIVITY_IDLE_AFTER`] waiting on a tool or a
-    /// network call has already been dropped from `agent_activity`, and
-    /// without this the rest of its run would render as finished (or as
-    /// nothing at all) while it was still working.
-    fn note_agent_output(&mut self, pane: PaneId, changed_cells: bool, now: Instant) {
-        if !changed_cells || !self.agent_panes.contains(&pane) {
-            return;
-        }
-        if self
-            .local_input_at
-            .get(&pane)
-            .is_some_and(|at| now.duration_since(*at) < LOCAL_ECHO_WINDOW)
-        {
-            return;
-        }
-        self.agent_activity.insert(pane, now);
-        self.completed_agent_panes.remove(&pane);
-    }
-
-    fn expire_agent_activity(&mut self, now: Instant) -> bool {
-        let expired: Vec<PaneId> = self
-            .agent_activity
-            .iter()
-            .filter_map(|(pane, last_output)| {
-                (now.duration_since(*last_output) >= AGENT_ACTIVITY_IDLE_AFTER).then_some(*pane)
-            })
-            .collect();
-        for pane in &expired {
-            self.agent_activity.remove(pane);
-            if *pane != self.focused_pane() {
-                self.completed_agent_panes.insert(*pane);
-            }
-        }
-        !expired.is_empty()
-    }
     fn acknowledge_completed_agent_tab(&mut self, tab: TabId) {
         if let Some(pane) = self.pane_for_tab(tab)
             && self.completed_agent_panes.remove(&pane)
