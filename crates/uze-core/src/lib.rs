@@ -23,6 +23,7 @@ pub mod profile_state;
 pub mod project;
 pub mod project_lock;
 pub mod project_root;
+pub mod prompt_history;
 pub mod provisioning;
 pub mod reconciliation;
 pub mod router;

@@ -225,6 +225,7 @@ fn every_overlay_renders_without_panicking() {
             marketplace: "uze-official".to_owned(),
         },
         Overlay::ConfirmContextApply,
+        Overlay::ConfirmClearPromptHistory,
         Overlay::ProtectedPlugin("one".to_owned()),
         Overlay::AddMarketplace("/home/user/marketplace".to_owned()),
         Overlay::NewProfile("dev-autonomous".to_owned()),
@@ -1633,4 +1634,188 @@ fn overview_install_intent_reaches_install_project_environment() {
     }
 
     std::fs::remove_dir_all(&base).ok();
+}
+
+// --- Prompt history -----------------------------------------------------
+
+fn prompt(tab_id: u64, preview: &str) -> uze_core::prompt_history::PromptEntry {
+    uze_core::prompt_history::PromptEntry {
+        space_label: "space 1".to_owned(),
+        tab_id,
+        tab_label: format!("tab {tab_id}"),
+        agent_binary: "agent".to_owned(),
+        preview: preview.to_owned(),
+        timestamp_secs: 0,
+    }
+}
+
+fn overview_with_prompts(count: u64) -> TuiModel {
+    TuiModel {
+        route: Route::Overview,
+        focus: Focus::Content,
+        prompt_history: (0..count)
+            .map(|index| prompt(index + 1, &format!("prompt {index}")))
+            .collect(),
+        ..TuiModel::default()
+    }
+}
+
+#[test]
+fn overview_arrows_move_the_prompt_selection_within_bounds() {
+    let mut model = overview_with_prompts(3);
+
+    for _ in 0..5 {
+        model.apply_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    }
+    assert_eq!(model.overview_prompt_selected, 2);
+
+    for _ in 0..5 {
+        model.apply_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    }
+    assert_eq!(model.overview_prompt_selected, 0);
+}
+
+#[test]
+fn overview_arrows_still_navigate_routes_from_the_sidebar() {
+    let mut model = TuiModel {
+        route: Route::Overview,
+        focus: Focus::Sidebar,
+        prompt_history: vec![prompt(1, "prompt")],
+        ..TuiModel::default()
+    };
+
+    model.apply_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+
+    assert_eq!(model.route, Route::Plugins);
+    assert_eq!(model.overview_prompt_selected, 0);
+}
+
+#[test]
+fn activating_a_prompt_returns_to_its_tab() {
+    let mut model = overview_with_prompts(3);
+    model.overview_prompt_selected = 2;
+
+    let intent = model.apply_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_eq!(intent, Intent::SwitchToWorkspaceTab(3));
+}
+
+#[test]
+fn an_empty_history_leaves_enter_to_the_routes_own_action() {
+    let mut model = TuiModel {
+        route: Route::Overview,
+        focus: Focus::Content,
+        ..TuiModel::default()
+    };
+
+    assert_ne!(
+        model.apply_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        Intent::SwitchToWorkspaceTab(0)
+    );
+}
+
+#[test]
+fn clearing_the_history_is_confirmed_before_it_happens() {
+    let mut model = overview_with_prompts(2);
+
+    let intent = model.apply_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+    assert_eq!(intent, Intent::None);
+    assert_eq!(model.overlay, Overlay::ConfirmClearPromptHistory);
+
+    let intent = model.apply_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+    assert_eq!(intent, Intent::ClearPromptHistory);
+    assert_eq!(model.overlay, Overlay::None);
+}
+
+#[test]
+fn declining_the_clear_confirmation_does_nothing() {
+    let mut model = overview_with_prompts(2);
+    model.apply_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+
+    let intent = model.apply_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    assert_eq!(intent, Intent::None);
+    assert_eq!(model.overlay, Overlay::None);
+    assert_eq!(model.prompt_history.len(), 2);
+}
+
+#[test]
+fn a_prompt_row_is_clickable_and_hoverable_at_the_same_rect() {
+    let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+    let mut model = overview_with_prompts(3);
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| render(frame, &model, &mut hits))
+        .unwrap();
+    model.hits = hits;
+
+    let (rect, _) = model
+        .hits
+        .iter()
+        .find(|(_, hit)| matches!(hit, Hit::PromptHistory(1)))
+        .expect("the second prompt row registers a hit");
+    let (column, row) = (rect.x + 1, rect.y);
+
+    model.apply_mouse(
+        MouseEvent {
+            kind: MouseEventKind::Moved,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        },
+        100,
+    );
+    assert_eq!(model.overview_prompt_hovered, Some(1));
+
+    assert_eq!(model.click(column, row), Intent::SwitchToWorkspaceTab(2));
+    assert_eq!(model.overview_prompt_selected, 1);
+}
+
+#[test]
+fn moving_off_every_row_drops_the_hover() {
+    let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+    let mut model = overview_with_prompts(2);
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| render(frame, &model, &mut hits))
+        .unwrap();
+    model.hits = hits;
+    model.overview_prompt_hovered = Some(0);
+
+    model.apply_mouse(
+        MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: 99,
+            row: 39,
+            modifiers: KeyModifiers::NONE,
+        },
+        100,
+    );
+
+    assert_eq!(model.overview_prompt_hovered, None);
+}
+
+#[test]
+fn a_refresh_that_shrinks_the_history_clamps_selection_and_hover() {
+    let mut model = overview_with_prompts(5);
+    model.overview_prompt_selected = 4;
+    model.overview_prompt_hovered = Some(4);
+
+    model.refreshed(RefreshData {
+        prompt_history: vec![prompt(1, "only one")],
+        ..RefreshData::default()
+    });
+
+    assert_eq!(model.overview_prompt_selected, 0);
+    assert_eq!(model.overview_prompt_hovered, None);
+}
+
+#[test]
+fn an_overview_with_no_room_for_the_history_still_renders() {
+    let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+    let model = overview_with_prompts(40);
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| render(frame, &model, &mut hits))
+        .unwrap();
 }

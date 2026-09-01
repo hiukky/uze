@@ -183,6 +183,9 @@ pub(crate) enum Overlay {
         id: String,
         focus: usize,
     },
+    /// Deleting the workspace's recorded prompts. Destructive and not
+    /// undoable, so it is confirmed like any other removal.
+    ConfirmClearPromptHistory,
     /// A mutation needs consent it wasn't given non-interactively. Confirming
     /// re-runs the *same* action with explicit trust — never a silent
     /// bypass; the operator sees exactly what would newly execute.
@@ -220,6 +223,7 @@ pub(crate) struct RefreshData {
     /// The Overview's workspace-aware read model — present from the very
     /// first refresh onward (there is always a kind, even `NoWorkspace`).
     pub(crate) workspace: Option<OverviewWorkspaceSummary>,
+    pub(crate) prompt_history: Vec<uze_core::prompt_history::PromptEntry>,
 }
 
 pub(crate) struct TuiModel {
@@ -300,6 +304,12 @@ pub(crate) struct TuiModel {
     /// the first refresh. `None` only before the startup worker returns.
     pub(crate) workspace: Option<OverviewWorkspaceSummary>,
 
+    /// Recent prompts for the detected workspace, newest first. Read-only
+    /// here: the workspace client owns writing them.
+    pub(crate) prompt_history: Vec<uze_core::prompt_history::PromptEntry>,
+    pub(crate) overview_prompt_selected: usize,
+    pub(crate) overview_prompt_hovered: Option<usize>,
+
     /// Frame counter for spinner animation while background work is pending.
     pub(crate) tick: usize,
 
@@ -362,6 +372,9 @@ impl Default for TuiModel {
             context_status: None,
             context_plan: None,
             workspace: None,
+            prompt_history: Vec::new(),
+            overview_prompt_selected: 0,
+            overview_prompt_hovered: None,
             tick: 0,
             hits: Vec::new(),
             sidebar_width: None,
@@ -748,6 +761,32 @@ impl TuiModel {
         }
     }
 
+    fn clamp_prompt_selection(&mut self) {
+        self.overview_prompt_selected = self
+            .overview_prompt_selected
+            .min(self.prompt_history.len().saturating_sub(1));
+        self.overview_prompt_hovered = self
+            .overview_prompt_hovered
+            .filter(|index| *index < self.prompt_history.len());
+    }
+
+    pub(crate) fn move_prompt_selection(&mut self, delta: isize) {
+        let len = self.prompt_history.len();
+        if len == 0 {
+            return;
+        }
+        self.overview_prompt_selected =
+            (self.overview_prompt_selected as isize + delta).clamp(0, len as isize - 1) as usize;
+    }
+
+    /// Leaves management for the tab the selected prompt was typed into.
+    pub(crate) fn activate_selected_prompt(&mut self) -> super::worker::Intent {
+        self.prompt_history
+            .get(self.overview_prompt_selected)
+            .map(|entry| super::worker::Intent::SwitchToWorkspaceTab(entry.tab_id))
+            .unwrap_or(super::worker::Intent::None)
+    }
+
     pub(crate) fn refreshed(&mut self, data: RefreshData) {
         self.plugins = data.plugins;
         self.doctor = data.doctor;
@@ -783,6 +822,8 @@ impl TuiModel {
         if data.workspace.is_some() {
             self.workspace = data.workspace;
         }
+        self.prompt_history = data.prompt_history;
+        self.clamp_prompt_selection();
         self.status = Status::Idle;
     }
 
@@ -825,6 +866,9 @@ impl TuiModel {
         }
         if route == Route::Profiles {
             self.profile_panel = ProfilePanel::List;
+        }
+        if route != Route::Overview {
+            self.overview_prompt_hovered = None;
         }
         self.route = route;
     }

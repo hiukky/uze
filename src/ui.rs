@@ -154,16 +154,26 @@ pub fn run(home: UzeHome) -> Result<()> {
     // width — when Ctrl+O switches to the other, not reset back to the
     // responsive default every round trip.
     let mut sidebar_width: Option<u16> = None;
+    // Set when management asks to return to a specific tab (activating a
+    // prompt-history row); consumed by the next attach.
+    let mut pending_tab: Option<uze_terminal::TabId> = None;
     loop {
         let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        match orchestrator::attach_workspace(&mut terminal, &root, &mut sidebar_width, &home)? {
+        match orchestrator::attach_workspace(
+            &mut terminal,
+            &root,
+            &mut sidebar_width,
+            &home,
+            pending_tab.take(),
+        )? {
             orchestrator::WorkspaceExit::Quit => return Ok(()),
             orchestrator::WorkspaceExit::Management => {
-                if matches!(
-                    management::run_management(&mut terminal, home.clone(), &mut sidebar_width)?,
-                    management::ManagementExit::Quit
-                ) {
-                    return Ok(());
+                match management::run_management(&mut terminal, home.clone(), &mut sidebar_width)? {
+                    management::ManagementExit::Quit => return Ok(()),
+                    management::ManagementExit::Workspace => {}
+                    management::ManagementExit::WorkspaceTab(tab) => {
+                        pending_tab = Some(uze_terminal::TabId(tab));
+                    }
                 }
             }
         }

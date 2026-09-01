@@ -38,18 +38,16 @@ pub(crate) enum Hit {
     ResizeSidebar,
     /// A route-local divider between two content panels.
     ResizePanel(ResizablePanel),
+    /// A row of the Overview's prompt history, by index into
+    /// `TuiModel::prompt_history`.
+    PromptHistory(usize),
 }
 
 impl TuiModel {
-    pub(crate) fn click(&mut self, column: u16, row: u16) -> Intent {
-        if self.overlay != Overlay::None {
-            // Any click dismisses/declines an overlay — a click outside a
-            // dialog's actionable area should never silently confirm.
-            self.close_overlay();
-            return Intent::None;
-        }
-        let Some(hit) = self
-            .hits
+    /// The hit under the pointer. Hover and click must resolve the same
+    /// rect for the same pixel, so both go through here.
+    pub(crate) fn hit_at(&self, column: u16, row: u16) -> Option<&Hit> {
+        self.hits
             .iter()
             .find(|(rect, _)| {
                 rect.x <= column
@@ -57,8 +55,17 @@ impl TuiModel {
                     && rect.y <= row
                     && row < rect.y + rect.height
             })
-            .map(|(_, hit)| hit.clone())
-        else {
+            .map(|(_, hit)| hit)
+    }
+
+    pub(crate) fn click(&mut self, column: u16, row: u16) -> Intent {
+        if self.overlay != Overlay::None {
+            // Any click dismisses/declines an overlay — a click outside a
+            // dialog's actionable area should never silently confirm.
+            self.close_overlay();
+            return Intent::None;
+        }
+        let Some(hit) = self.hit_at(column, row).cloned() else {
             return Intent::None;
         };
         match hit {
@@ -161,6 +168,11 @@ impl TuiModel {
             Hit::ResizePanel(panel) => {
                 self.dragging_panel = Some(panel);
                 Intent::None
+            }
+            Hit::PromptHistory(index) => {
+                self.focus = Focus::Content;
+                self.overview_prompt_selected = index;
+                self.activate_selected_prompt()
             }
         }
     }

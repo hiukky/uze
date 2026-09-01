@@ -82,6 +82,14 @@ impl TuiModel {
                 Intent::None
             }
             (Overlay::ConfirmDeleteProfile { .. }, _) => Intent::None,
+            (Overlay::ConfirmClearPromptHistory, KeyCode::Char('y' | 'Y') | KeyCode::Enter) => {
+                self.close_overlay();
+                Intent::ClearPromptHistory
+            }
+            (Overlay::ConfirmClearPromptHistory, _) => {
+                self.close_overlay();
+                Intent::None
+            }
             (Overlay::ConfirmUpdate(id), KeyCode::Char('y') | KeyCode::Enter) => {
                 let id = id.clone();
                 self.close_overlay();
@@ -496,6 +504,24 @@ pub(crate) fn render_confirm_update(frame: &mut ratatui::Frame<'_>, area: Rect, 
             )),
         ],
         WARNING,
+    );
+}
+
+pub(crate) fn render_confirm_clear_prompt_history(frame: &mut ratatui::Frame<'_>, area: Rect) {
+    render_modal(
+        frame,
+        area,
+        "Clear prompt history?",
+        vec![
+            Line::from(Span::raw(
+                "Delete every recorded prompt for this workspace. This cannot be undone.",
+            )),
+            Line::from(Span::styled(
+                "enter/y clear · esc/n cancel",
+                Style::default().fg(MUTED),
+            )),
+        ],
+        DANGER,
     );
 }
 

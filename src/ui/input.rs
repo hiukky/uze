@@ -6,6 +6,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 
 use crate::application::ContextPlan;
 
+use super::hit::Hit;
 use super::model::{Focus, Overlay, ProfilePanel, ROUTES, ResizablePanel, Route, TuiModel};
 use super::worker::Intent;
 
@@ -114,6 +115,20 @@ impl TuiModel {
                 self.move_profile_selection(-1);
                 Intent::None
             }
+            // The Overview's only navigable list is its prompt history, so
+            // j/k drive that instead of the generic row selection.
+            KeyCode::Char('j') | KeyCode::Down
+                if self.route == Route::Overview && !self.prompt_history.is_empty() =>
+            {
+                self.move_prompt_selection(1);
+                Intent::None
+            }
+            KeyCode::Char('k') | KeyCode::Up
+                if self.route == Route::Overview && !self.prompt_history.is_empty() =>
+            {
+                self.move_prompt_selection(-1);
+                Intent::None
+            }
             KeyCode::Char('j') | KeyCode::Down => {
                 self.move_selection(1);
                 if self.route == Route::Plugins {
@@ -173,6 +188,16 @@ impl TuiModel {
                     .unwrap_or(Intent::None)
             }
             KeyCode::Char('a' | 'A') if self.route == Route::Profiles => Intent::None,
+            KeyCode::Enter if self.route == Route::Overview && !self.prompt_history.is_empty() => {
+                self.activate_selected_prompt()
+            }
+            KeyCode::Char('x' | 'X')
+                if self.route == Route::Overview && !self.prompt_history.is_empty() =>
+            {
+                self.overlay = Overlay::ConfirmClearPromptHistory;
+                self.focus = Focus::Overlay;
+                Intent::None
+            }
             KeyCode::Enter => self.open_or_act(),
             KeyCode::Char('r') if self.route == Route::Plugins => {
                 if let Some(plugin) = self.selected_marketplace_plugin().filter(|p| p.installed) {
@@ -365,6 +390,24 @@ impl TuiModel {
                 self.dragging_panel = None;
                 Intent::None
             }
+            MouseEventKind::ScrollDown
+                if self.overlay == Overlay::None
+                    && self.route == Route::Overview
+                    && !self.prompt_history.is_empty() =>
+            {
+                self.focus = Focus::Content;
+                self.move_prompt_selection(1);
+                Intent::None
+            }
+            MouseEventKind::ScrollUp
+                if self.overlay == Overlay::None
+                    && self.route == Route::Overview
+                    && !self.prompt_history.is_empty() =>
+            {
+                self.focus = Focus::Content;
+                self.move_prompt_selection(-1);
+                Intent::None
+            }
             MouseEventKind::ScrollDown if self.overlay == Overlay::None => {
                 self.focus = Focus::Content;
                 self.move_selection(1);
@@ -382,6 +425,15 @@ impl TuiModel {
                 } else {
                     Intent::None
                 }
+            }
+            MouseEventKind::Moved
+                if self.overlay == Overlay::None && self.route == Route::Overview =>
+            {
+                self.overview_prompt_hovered = match self.hit_at(event.column, event.row) {
+                    Some(Hit::PromptHistory(index)) => Some(*index),
+                    _ => None,
+                };
+                Intent::None
             }
             _ => Intent::None,
         }

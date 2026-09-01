@@ -24,6 +24,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+use uze_core::prompt_history;
 use uze_extensions::{ExtensionHit, git_diff};
 use uze_integrations::registry::IntegrationRegistry;
 use uze_terminal::{
@@ -114,6 +115,7 @@ pub(crate) fn attach_workspace(
     root: &Path,
     sidebar_width: &mut Option<u16>,
     home: &UzeHome,
+    pending_tab: Option<TabId>,
 ) -> Result<WorkspaceExit> {
     // The handshake below must ship the real terminal size: it sizes the PTY
     // used for the session's *already-selected* pane (e.g. a tab restored
@@ -150,10 +152,30 @@ pub(crate) fn attach_workspace(
             }
         }
     });
+    // Prompt history is keyed by the *resolved* workspace root, the same
+    // one the management Overview reads against — `root` here is the raw
+    // cwd, which differs whenever uze is launched from a subdirectory of
+    // the workspace. Writes run on their own thread so a keystroke never
+    // waits on the filesystem, and the thread ends when `model` drops its
+    // sender at the end of this attach.
+    let history_root = uze_core::workspace::resolve_workspace(root)
+        .map(|workspace| workspace.root)
+        .unwrap_or_else(|_| root.to_path_buf());
+    let (prompt_recorder, recorded_prompts) =
+        mpsc::channel::<(prompt_history::PromptOrigin, String)>();
+    thread::spawn({
+        let home = home.clone();
+        move || {
+            while let Ok((origin, prompt)) = recorded_prompts.recv() {
+                let _ = prompt_history::record(&home, &history_root, &origin, &prompt);
+            }
+        }
+    });
     let mut model = WorkspaceModel {
         dirty: true,
         last_size: (columns, rows),
         sidebar_width: *sidebar_width,
+        prompt_recorder: Some(prompt_recorder),
         ..WorkspaceModel::default()
     };
     // A registered harness set doesn't change mid-session, so this is built
@@ -190,6 +212,25 @@ pub(crate) fn attach_workspace(
         match receiver.recv_timeout(Duration::from_millis(500)) {
             Ok(event) => model.apply(event),
             Err(_) => break,
+        }
+    }
+    // `select_tab` moves the selected space too when the tab lives in
+    // another one, so the space needs no separate request. A tab closed
+    // since its prompt was logged simply selects nothing.
+    if let Some(tab) = pending_tab {
+        let _ = send_request(&mut stream, &ClientRequest::SelectTab { tab });
+        // Resize the newly selected pane to the current layout size, same as
+        // the manual SelectTab handler does, so the PTY size matches the
+        // visible rect immediately.
+        if let Some(pane) = model.pane_for_tab(tab) {
+            let _ = send_request(
+                &mut stream,
+                &ClientRequest::Resize {
+                    pane,
+                    columns,
+                    rows,
+                },
+            );
         }
     }
     loop {
@@ -449,13 +490,37 @@ pub(crate) fn attach_workspace(
                 Event::Key(key) => {
                     if let Some(bytes) = encode_key(key) {
                         let pane = model.focused_pane();
-                        if bytes.contains(&b'\r') || bytes.contains(&b'\n') {
-                            model.note_agent_prompt_submission(pane, &identities);
-                        }
+                        // `encode_key` emits a bare CR for Enter and 0x03
+                        // for Ctrl+C, so these are exact byte comparisons
+                        // rather than a substring scan that a pasted or
+                        // multi-byte sequence could trip.
+                        let submitted = bytes.as_slice() == *b"\r";
+                        let cancelled = bytes.as_slice() == [3u8];
+                        let prompt = if submitted {
+                            model.prompt_buffers.entry(pane).or_default().submit()
+                        } else {
+                            if cancelled {
+                                model.prompt_buffers.remove(&pane);
+                            } else {
+                                model.prompt_buffers.entry(pane).or_default().apply(key);
+                            }
+                            None
+                        };
+                        // Forwarded before anything is recorded: the pane's
+                        // own responsiveness must never wait on history.
                         let _ = send_request(&mut stream, &ClientRequest::Input { pane, bytes });
+                        if submitted {
+                            model.note_agent_prompt_submission(
+                                pane,
+                                &identities,
+                                prompt.as_deref(),
+                            );
+                        }
                     }
                 }
                 Event::Paste(text) if model.no_modal_open() => {
+                    let pane = model.focused_pane();
+                    model.prompt_buffers.entry(pane).or_default().paste(&text);
                     forward_paste(&mut stream, &model, &text);
                 }
                 Event::Mouse(mouse)
@@ -1264,6 +1329,93 @@ struct WorkspaceModel {
     /// Stored client-side because it is display chrome, not terminal session
     /// state that belongs in `uze-terminal`.
     git_badge: Option<GitBadge>,
+    /// Per-pane reconstruction of the line being typed, flushed on Enter.
+    prompt_buffers: BTreeMap<PaneId, PromptBuffer>,
+    /// Sink for recorded prompts. `None` leaves the history untouched —
+    /// the default, so tests exercise the submission path without writing
+    /// to a real UZE home.
+    prompt_recorder: Option<mpsc::Sender<(prompt_history::PromptOrigin, String)>>,
+}
+
+/// Client-side reconstruction of what the user typed into a pane before
+/// Enter.
+///
+/// UZE forwards keystrokes to a PTY whose line editor it cannot observe, so
+/// this models only an ordinary single-line edit: printable characters,
+/// backspace/delete, and horizontal cursor movement. Anything that could
+/// rewrite the line invisibly — history recall, completion, a kill ring, a
+/// control chord this does not encode — marks the buffer untrusted, and an
+/// untrusted buffer is discarded at Enter. Recording nothing is always
+/// preferable to recording a prompt the user never typed.
+struct PromptBuffer {
+    characters: Vec<char>,
+    cursor: usize,
+    trusted: bool,
+}
+
+impl Default for PromptBuffer {
+    fn default() -> Self {
+        Self {
+            characters: Vec::new(),
+            cursor: 0,
+            trusted: true,
+        }
+    }
+}
+
+impl PromptBuffer {
+    fn apply(&mut self, key: KeyEvent) {
+        if key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        {
+            self.trusted = false;
+            return;
+        }
+        match key.code {
+            KeyCode::Char(character) => {
+                self.characters.insert(self.cursor, character);
+                self.cursor += 1;
+            }
+            KeyCode::Backspace => {
+                if self.cursor > 0 {
+                    self.cursor -= 1;
+                    self.characters.remove(self.cursor);
+                }
+            }
+            KeyCode::Delete => {
+                if self.cursor < self.characters.len() {
+                    self.characters.remove(self.cursor);
+                }
+            }
+            KeyCode::Left => self.cursor = self.cursor.saturating_sub(1),
+            KeyCode::Right => self.cursor = (self.cursor + 1).min(self.characters.len()),
+            KeyCode::Home => self.cursor = 0,
+            KeyCode::End => self.cursor = self.characters.len(),
+            _ => self.trusted = false,
+        }
+    }
+
+    fn paste(&mut self, text: &str) {
+        for character in text.chars().map(|c| if c == '\r' { '\n' } else { c }) {
+            self.characters.insert(self.cursor, character);
+            self.cursor += 1;
+        }
+    }
+
+    /// The text to record, or `None` when there is nothing trustworthy to
+    /// record — including the line-continuation case, where the Enter
+    /// inserts a newline instead of submitting and the buffer must survive.
+    fn submit(&mut self) -> Option<String> {
+        if self.trusted && self.cursor > 0 && self.characters[self.cursor - 1] == '\\' {
+            self.characters[self.cursor - 1] = '\n';
+            return None;
+        }
+        let flushed = std::mem::take(self);
+        flushed
+            .trusted
+            .then(|| flushed.characters.into_iter().collect())
+    }
 }
 
 struct GitBadge {
@@ -1347,23 +1499,45 @@ impl WorkspaceModel {
                 .map(|candidate| candidate.focus.pane)
         })
     }
-    fn note_agent_prompt_submission(&mut self, pane: PaneId, identities: &[AgentIdentity]) {
-        let is_agent = self.session.as_ref().is_some_and(|session| {
-            session
-                .workspace
-                .spaces
-                .iter()
-                .flat_map(|space| &space.tabs)
-                .any(|tab| {
-                    tab.focus.pane == pane && agent_identity_for_tab(identities, tab).is_some()
+    /// Marks the pane as busy and, when the submission was reconstructed
+    /// with confidence, records it. Activity is noted for every Enter in an
+    /// agent pane — that signal predates the history and does not depend on
+    /// knowing what was typed.
+    fn note_agent_prompt_submission(
+        &mut self,
+        pane: PaneId,
+        identities: &[AgentIdentity],
+        prompt: Option<&str>,
+    ) {
+        let origin = self.session.as_ref().and_then(|session| {
+            session.workspace.spaces.iter().find_map(|space| {
+                space.tabs.iter().find_map(|tab| {
+                    if tab.focus.pane != pane {
+                        return None;
+                    }
+                    agent_identity_for_tab(identities, tab).map(|binary| {
+                        prompt_history::PromptOrigin {
+                            space_label: space.label.clone(),
+                            tab_id: tab.id.0,
+                            tab_label: tab.label.clone(),
+                            agent_binary: binary.to_owned(),
+                        }
+                    })
                 })
+            })
         });
-        if is_agent {
-            self.agent_activity.insert(pane, Instant::now());
-            self.completed_agent_panes.remove(&pane);
-            self.dirty = true;
+        let Some(origin) = origin else {
+            return;
+        };
+        self.agent_activity.insert(pane, Instant::now());
+        self.completed_agent_panes.remove(&pane);
+        self.dirty = true;
+
+        if let (Some(prompt), Some(recorder)) = (prompt, self.prompt_recorder.as_ref()) {
+            let _ = recorder.send((origin, prompt.to_owned()));
         }
     }
+
     fn expire_agent_activity(&mut self, now: Instant) -> bool {
         let expired: Vec<PaneId> = self
             .agent_activity
@@ -2821,8 +2995,7 @@ mod tests {
             session: Some(session),
             ..WorkspaceModel::default()
         };
-
-        model.note_agent_prompt_submission(PaneId(1), &identities);
+        model.note_agent_prompt_submission(PaneId(1), &identities, Some("hello"));
         assert!(workspace_has_active_agent_operation(&model, &identities));
 
         assert!(!model.expire_agent_activity(Instant::now() + Duration::from_secs(2)));
@@ -2847,8 +3020,7 @@ mod tests {
             session: Some(session),
             ..WorkspaceModel::default()
         };
-
-        model.note_agent_prompt_submission(agent_pane, &identities);
+        model.note_agent_prompt_submission(agent_pane, &identities, Some("hello"));
         assert!(model.expire_agent_activity(Instant::now() + Duration::from_secs(11)));
         assert!(model.completed_agent_panes.contains(&agent_pane));
 
@@ -2872,8 +3044,7 @@ mod tests {
             integration: "agent",
             display_name: "Agent",
         }];
-
-        model.note_agent_prompt_submission(PaneId(1), &identities);
+        model.note_agent_prompt_submission(PaneId(1), &identities, Some("hello"));
         assert!(model.agent_activity.is_empty());
     }
 
@@ -3212,5 +3383,139 @@ mod tests {
         let len = u32::from_le_bytes(len_bytes.try_into().unwrap()) as usize;
         assert_eq!(payload.len(), len, "one ClientRequest frame");
         bincode::deserialize(payload).expect("one ClientRequest frame")
+    }
+}
+
+#[cfg(test)]
+mod prompt_buffer_tests {
+    use super::PromptBuffer;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn typed(buffer: &mut PromptBuffer, text: &str) {
+        for character in text.chars() {
+            buffer.apply(key(KeyCode::Char(character)));
+        }
+    }
+
+    #[test]
+    fn plain_typing_round_trips() {
+        let mut buffer = PromptBuffer::default();
+        typed(&mut buffer, "hello world");
+        assert_eq!(buffer.submit().as_deref(), Some("hello world"));
+    }
+
+    #[test]
+    fn the_buffer_is_empty_again_after_submitting() {
+        let mut buffer = PromptBuffer::default();
+        typed(&mut buffer, "first");
+        buffer.submit();
+        typed(&mut buffer, "second");
+        assert_eq!(buffer.submit().as_deref(), Some("second"));
+    }
+
+    #[test]
+    fn editing_mid_line_reconstructs_the_real_text() {
+        let mut buffer = PromptBuffer::default();
+        typed(&mut buffer, "helo");
+        buffer.apply(key(KeyCode::Left));
+        typed(&mut buffer, "l");
+        buffer.apply(key(KeyCode::Home));
+        typed(&mut buffer, "> ");
+        buffer.apply(key(KeyCode::End));
+        typed(&mut buffer, "!");
+        assert_eq!(buffer.submit().as_deref(), Some("> hello!"));
+    }
+
+    #[test]
+    fn backspace_and_delete_remove_around_the_cursor() {
+        let mut buffer = PromptBuffer::default();
+        typed(&mut buffer, "abcd");
+        buffer.apply(key(KeyCode::Backspace));
+        buffer.apply(key(KeyCode::Left));
+        buffer.apply(key(KeyCode::Delete));
+        assert_eq!(buffer.submit().as_deref(), Some("ab"));
+    }
+
+    #[test]
+    fn deleting_past_either_edge_is_a_no_op() {
+        let mut buffer = PromptBuffer::default();
+        buffer.apply(key(KeyCode::Backspace));
+        buffer.apply(key(KeyCode::Delete));
+        typed(&mut buffer, "x");
+        buffer.apply(key(KeyCode::Right));
+        buffer.apply(key(KeyCode::Delete));
+        assert_eq!(buffer.submit().as_deref(), Some("x"));
+    }
+
+    // The agent's own line editor owns these keys, and what it does with
+    // them is invisible from here — so nothing is recorded at all rather
+    // than a prompt the user never typed.
+    #[test]
+    fn history_recall_discards_the_reconstruction() {
+        for code in [KeyCode::Up, KeyCode::Down] {
+            let mut buffer = PromptBuffer::default();
+            typed(&mut buffer, "typed");
+            buffer.apply(key(code));
+            assert_eq!(buffer.submit(), None, "{code:?} must not be recorded");
+        }
+    }
+
+    #[test]
+    fn completion_and_escape_discard_the_reconstruction() {
+        for code in [KeyCode::Tab, KeyCode::Esc] {
+            let mut buffer = PromptBuffer::default();
+            typed(&mut buffer, "typed");
+            buffer.apply(key(code));
+            assert_eq!(buffer.submit(), None, "{code:?} must not be recorded");
+        }
+    }
+
+    #[test]
+    fn a_control_or_alt_chord_discards_the_reconstruction() {
+        for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT] {
+            let mut buffer = PromptBuffer::default();
+            typed(&mut buffer, "typed");
+            buffer.apply(KeyEvent::new(KeyCode::Char('u'), modifiers));
+            typed(&mut buffer, " more");
+            assert_eq!(buffer.submit(), None, "{modifiers:?} must not be recorded");
+        }
+    }
+
+    #[test]
+    fn distrust_does_not_outlive_the_line_it_applied_to() {
+        let mut buffer = PromptBuffer::default();
+        buffer.apply(key(KeyCode::Tab));
+        assert_eq!(buffer.submit(), None);
+        typed(&mut buffer, "clean line");
+        assert_eq!(buffer.submit().as_deref(), Some("clean line"));
+    }
+
+    #[test]
+    fn a_trailing_backslash_continues_the_line_instead_of_submitting() {
+        let mut buffer = PromptBuffer::default();
+        typed(&mut buffer, "first\\");
+        assert_eq!(buffer.submit(), None);
+        typed(&mut buffer, "second");
+        assert_eq!(buffer.submit().as_deref(), Some("first\nsecond"));
+    }
+
+    #[test]
+    fn a_paste_lands_at_the_cursor() {
+        let mut buffer = PromptBuffer::default();
+        typed(&mut buffer, "ab");
+        buffer.apply(key(KeyCode::Left));
+        buffer.paste("XY");
+        assert_eq!(buffer.submit().as_deref(), Some("aXYb"));
+    }
+
+    #[test]
+    fn a_pasted_carriage_return_becomes_a_newline_rather_than_a_submit() {
+        let mut buffer = PromptBuffer::default();
+        buffer.paste("one\r\ntwo");
+        assert_eq!(buffer.submit().as_deref(), Some("one\n\ntwo"));
     }
 }

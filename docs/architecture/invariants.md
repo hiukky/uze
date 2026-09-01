@@ -304,6 +304,31 @@ a rejected package and a refused consent all mutate nothing.
 
 ---
 
+## Prompt history (ADR-038 companion)
+
+### A prompt is recorded only when its reconstruction is trustworthy
+
+UZE forwards keystrokes to a PTY whose line editor it cannot observe, so the
+submitted text is reconstructed client-side. Anything that could rewrite the
+line invisibly — history recall, completion, an escape, a control chord —
+discards the reconstruction instead of persisting a prompt the user never
+typed. The history is a navigation aid, never a record of a session.
+
+> `src/ui/orchestrator.rs::prompt_buffer_tests::history_recall_discards_the_reconstruction`
+> `src/ui/orchestrator.rs::prompt_buffer_tests::a_control_or_alt_chord_discards_the_reconstruction`
+
+### Prompt text is owner-only, workspace-scoped, and deletable
+
+Each workspace keeps its own append-only file; one workspace can never evict
+another's entries, the file and its directory are `0600`/`0700`, and
+`prompt_history::clear` deletes a workspace's history outright.
+
+> `crates/uze-core/src/prompt_history.rs::tests::history_is_owner_only`
+> `crates/uze-core/src/prompt_history.rs::tests::each_workspace_keeps_its_own_history`
+> `crates/uze-core/src/prompt_history.rs::tests::clear_removes_only_the_named_workspace_and_tolerates_absence`
+
+---
+
 ## Official marketplace (M3, ADR-012)
 
 ### The repository is the official marketplace

@@ -60,6 +60,9 @@ pub(crate) fn run_management(
                     if intent == Intent::Quit {
                         return Ok(ManagementExit::Quit);
                     }
+                    if let Some(exit) = leaving_management(&intent) {
+                        return Ok(exit);
+                    }
                     dispatch(intent, &home, &sender, &mut model);
                 }
                 Event::Mouse(mouse) => {
@@ -75,8 +78,8 @@ pub(crate) fn run_management(
                     // workspace picks up this width immediately, instead of
                     // only on the next drag.
                     *sidebar_width = model.sidebar_width;
-                    if intent == Intent::SwitchToWorkspace {
-                        return Ok(ManagementExit::Workspace);
+                    if let Some(exit) = leaving_management(&intent) {
+                        return Ok(exit);
                     }
                     dispatch(intent, &home, &sender, &mut model);
                 }
@@ -89,7 +92,18 @@ pub(crate) fn run_management(
 
 pub(crate) enum ManagementExit {
     Workspace,
+    /// Back to the workspace with this tab selected.
+    WorkspaceTab(u64),
     Quit,
+}
+
+/// The intents that end this mode rather than being dispatched in it.
+fn leaving_management(intent: &Intent) -> Option<ManagementExit> {
+    match intent {
+        Intent::SwitchToWorkspace => Some(ManagementExit::Workspace),
+        Intent::SwitchToWorkspaceTab(tab) => Some(ManagementExit::WorkspaceTab(*tab)),
+        _ => None,
+    }
 }
 
 // --- Layout ------------------------------------------------------------
@@ -174,7 +188,7 @@ pub(crate) fn render(
     ));
 
     match model.route {
-        Route::Overview => view::overview::render_overview(frame, layout.content, model),
+        Route::Overview => view::overview::render_overview(frame, layout.content, model, hits),
         Route::Plugins => view::plugins::render_plugins(frame, layout.content, model, hits),
         Route::Extensions => {
             view::extensions::render_extensions(frame, layout.content, model, hits)
@@ -197,6 +211,9 @@ pub(crate) fn render(
             overlay::render_confirm_install(frame, frame.area(), name, marketplace)
         }
         Overlay::ConfirmContextApply => overlay::render_confirm_context_apply(frame, frame.area()),
+        Overlay::ConfirmClearPromptHistory => {
+            overlay::render_confirm_clear_prompt_history(frame, frame.area())
+        }
         Overlay::ProtectedPlugin(id) => overlay::render_protected_plugin(frame, frame.area(), id),
         Overlay::AddMarketplace(input) => {
             overlay::render_add_marketplace(frame, frame.area(), input)
@@ -616,10 +633,14 @@ fn footer(model: &TuiModel) -> Text<'static> {
 fn route_hint(model: &TuiModel) -> &'static str {
     match model.route {
         Route::Overview => {
-            if model.overview_install_path().is_some() {
-                "i install · r refresh · ? help"
-            } else {
-                "r refresh · ? help"
+            match (
+                !model.prompt_history.is_empty(),
+                model.overview_install_path().is_some(),
+            ) {
+                (true, true) => "↑↓ prompt · enter jump · x clear · i install · r refresh · ? help",
+                (true, false) => "↑↓ prompt · enter jump · x clear · r refresh · ? help",
+                (false, true) => "i install · r refresh · ? help",
+                (false, false) => "r refresh · ? help",
             }
         }
         Route::Plugins => {

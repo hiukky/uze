@@ -11,12 +11,21 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 
-use super::super::model::TuiModel;
-use super::super::{ACCENT, BORDER_FAINT, DANGER, MUTED, SUCCESS, TEXT_BRIGHT, WARNING};
+use super::super::hit::Hit;
+use super::super::model::{Focus, Route, TuiModel};
+use super::super::{
+    ACCENT, BORDER_FAINT, DANGER, MUTED, SELECTED_BG, SUCCESS, SURFACE_OVERLAY, TEXT_BRIGHT,
+    TEXT_DIM, WARNING,
+};
 use super::super::{content_area, render_screen_header};
 use super::health::Severity;
 
-pub(crate) fn render_overview(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
+pub(crate) fn render_overview(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    model: &TuiModel,
+    hits: &mut Vec<(Rect, Hit)>,
+) {
     let area = content_area(area);
     let content = render_screen_header(frame, area, "Overview", "status & health", None);
 
@@ -116,6 +125,132 @@ pub(crate) fn render_overview(frame: &mut ratatui::Frame<'_>, area: Rect, model:
     }
     // Keep the activity stream visually separate from the compact stat cards.
     y += 5;
+
+    // Recent prompts — the workspace-aware mini history. Always rendered
+    // after the stat grid so it stays discoverable even when alerts exist;
+    // alerts are pushed below it rather than replacing it.
+    let bottom = content.y + content.height;
+    if y < bottom {
+        let header = format!(
+            "Recent prompts — {}",
+            if model.prompt_history.is_empty() {
+                "no history yet".to_owned()
+            } else {
+                format!("{} recorded", model.prompt_history.len())
+            }
+        );
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                header,
+                Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
+            )),
+            Rect::new(content.x, y, content.width, 1),
+        );
+        // Breathing room between title and listing, matching the gap the
+        // stat grid leaves above.
+        y += 2;
+
+        if model.prompt_history.is_empty() {
+            if y < bottom {
+                frame.render_widget(
+                    Paragraph::new(Span::styled(
+                        "Prompts submitted to an agent tab appear here. Click one to jump back to its tab.",
+                        Style::default().fg(TEXT_DIM),
+                    )),
+                    Rect::new(content.x, y, content.width, 1),
+                );
+                y += 1;
+            }
+        } else {
+            // Each entry is two rows plus a hairline divider between
+            // neighbours, so n entries occupy 3n-1 rows. Two rows are held
+            // back for the alerts section when there is one.
+            let available = bottom.saturating_sub(y) as usize;
+            let budget = if alerts.is_empty() {
+                available
+            } else {
+                available.saturating_sub(2)
+            };
+            let entry_budget = ((budget + 1) / 3).max(1);
+
+            for (index, entry) in model.prompt_history.iter().take(entry_budget).enumerate() {
+                let rect = Rect::new(content.x, y, content.width, 2);
+                if rect.y + rect.height > bottom {
+                    break;
+                }
+                let selected = index == model.overview_prompt_selected
+                    && model.focus == Focus::Content
+                    && model.route == Route::Overview;
+                let background = if selected {
+                    Some(SELECTED_BG)
+                } else if model.overview_prompt_hovered == Some(index) {
+                    Some(SURFACE_OVERLAY)
+                } else {
+                    None
+                };
+                // One paint covers both rows edge to edge; the paragraphs
+                // below carry no background of their own and compose over
+                // it, so the row never has to be padded to the right edge.
+                if let Some(background) = background {
+                    frame.render_widget(
+                        Block::default().style(Style::default().bg(background)),
+                        rect,
+                    );
+                }
+
+                let mut meta = Line::from(vec![
+                    Span::styled("● ", Style::default().fg(ACCENT)),
+                    Span::styled(entry.agent_binary.clone(), Style::default().fg(TEXT_BRIGHT)),
+                    Span::styled(
+                        format!(" · {}", entry.relative_time()),
+                        Style::default().fg(TEXT_DIM),
+                    ),
+                    Span::styled(
+                        format!(" · {}/{}", entry.space_label, entry.tab_label),
+                        Style::default().fg(TEXT_DIM),
+                    ),
+                ]);
+                let mut prompt = Line::from(Span::styled(
+                    format!("  {}", entry.preview),
+                    Style::default().fg(MUTED),
+                ));
+                let max = rect.width as usize;
+                if meta.width() > max {
+                    super::super::management::clip_line(&mut meta, max);
+                }
+                if prompt.width() > max {
+                    super::super::management::clip_line(&mut prompt, max);
+                }
+                frame.render_widget(
+                    Paragraph::new(meta),
+                    Rect::new(rect.x, rect.y, rect.width, 1),
+                );
+                frame.render_widget(
+                    Paragraph::new(prompt),
+                    Rect::new(rect.x, rect.y + 1, rect.width, 1),
+                );
+                hits.push((rect, Hit::PromptHistory(index)));
+                y += 2;
+
+                // Hairline divider between entries — the same weight the
+                // sidebar uses, separating without drawing a box.
+                let last = index + 1 >= entry_budget.min(model.prompt_history.len());
+                if !last && y < bottom {
+                    frame.render_widget(
+                        Paragraph::new(Span::styled(
+                            "─".repeat(content.width as usize),
+                            Style::default().fg(BORDER_FAINT),
+                        )),
+                        Rect::new(content.x, y, content.width, 1),
+                    );
+                    y += 1;
+                }
+            }
+            if !alerts.is_empty() && y < bottom {
+                y += 1;
+            }
+        }
+    }
 
     if alerts.is_empty() {
         return;

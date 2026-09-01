@@ -35,6 +35,12 @@ pub(crate) enum Intent {
     /// Mirrors the Ctrl+O keybinding — clicking the sidebar's "work" mode
     /// label detaches from management the same way pressing the key does.
     SwitchToWorkspace,
+    /// Leave management and re-select this tab in the workspace. Carries
+    /// no space id: `Session::select_tab` moves the selected space along
+    /// with the tab when they differ.
+    SwitchToWorkspaceTab(u64),
+    /// Delete the current workspace's recorded prompts.
+    ClearPromptHistory,
     Refresh,
     InspectPlugin(String),
     InspectMarketplacePlugin {
@@ -97,7 +103,22 @@ pub(crate) fn dispatch(
         model.status_expires_at = None;
     }
     match intent {
-        Intent::None | Intent::Quit | Intent::SwitchToWorkspace => {}
+        Intent::None
+        | Intent::Quit
+        | Intent::SwitchToWorkspace
+        | Intent::SwitchToWorkspaceTab(_) => {}
+        Intent::ClearPromptHistory => {
+            let root = model.workspace_root();
+            match uze_core::prompt_history::clear(home, &root) {
+                Ok(()) => {
+                    model.prompt_history.clear();
+                    model.overview_prompt_selected = 0;
+                    model.overview_prompt_hovered = None;
+                    model.status = Status::Success("Prompt history cleared".to_owned());
+                }
+                Err(error) => model.status = Status::Error(error.to_string()),
+            }
+        }
         Intent::Refresh => {
             if model.maintenance_in_flight {
                 return;
@@ -355,6 +376,7 @@ pub(crate) fn spawn_startup(home: UzeHome, sender: Sender<WorkerResult>, context
 }
 
 fn load_refresh_data(home: UzeHome, context_root: &std::path::Path) -> Result<RefreshData> {
+    let prompt_home = home.clone();
     let app = tui_application(home)?;
     let mut plugins = app.list_plugins()?;
     // Official plugins always lead the list — a stable sort keeps every
@@ -378,6 +400,10 @@ fn load_refresh_data(home: UzeHome, context_root: &std::path::Path) -> Result<Re
         .map(|workspace| workspace.root.as_path())
         .unwrap_or(context_root);
     let context_status = app.context_inspect(status_root).ok();
+    // Same root the workspace client records against, so a uze launched
+    // from a subdirectory still reads back its own history.
+    let prompt_history =
+        uze_core::prompt_history::list_for_workspace(&prompt_home, status_root, 20);
     Ok(RefreshData {
         plugins,
         doctor: Some(doctor),
@@ -386,6 +412,7 @@ fn load_refresh_data(home: UzeHome, context_root: &std::path::Path) -> Result<Re
         profiles,
         context_status,
         workspace,
+        prompt_history,
     })
 }
 
