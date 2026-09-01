@@ -9,7 +9,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(crate) use std::fs;
-pub(crate) use std::path::{Path, PathBuf};
+pub(crate) use std::path::PathBuf;
 
 use uze::capability::CapabilityKind;
 pub(crate) use uze::integrations::{

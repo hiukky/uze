@@ -1419,18 +1419,9 @@ mod tests {
     };
     use std::{
         path::{Path, PathBuf},
-        sync::Mutex,
         thread,
         time::Duration,
     };
-
-    /// `UZE_HOME` is process-global; cargo runs this crate's tests in
-    /// parallel threads by default, so any two of the persistence tests
-    /// below setting it concurrently would race and read/write each
-    /// other's scratch directory. Every test that touches `UZE_HOME` locks
-    /// this for its entire body (guard held via the returned lock's scope)
-    /// so at most one of them is ever in flight at a time.
-    static UZE_HOME_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn endpoint_identity_is_project_specific() {
@@ -1715,6 +1706,17 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn foreground_status_reports_the_spawned_shell_and_its_cwd() {
+        // This is the *fallback* identity path: no shim identity present,
+        // so the kernel's `comm` for the spawned shell is what gets
+        // reported. The spawned child inherits this process's environment,
+        // and on a dogfooding machine that environment carries the
+        // `UZE_SHIM_NAME` of the session running the test suite itself —
+        // which `foreground_status` rightly prefers (see the sibling test),
+        // making this assertion read the developer's own session instead of
+        // the shell it just spawned. Clearing it under the shared env lock
+        // is what makes the fallback the thing actually under test.
+        let mut env = uze_testkit::env::scope();
+        env.remove("UZE_SHIM_NAME");
         let (damage, _damage_events) = std::sync::mpsc::channel();
         let pane =
             PaneRuntime::spawn(PaneId(11), PathBuf::from("/tmp"), 80, 24, damage, None).unwrap();
@@ -1824,16 +1826,12 @@ mod tests {
         std::fs::create_dir_all(&uze_home).unwrap();
         std::fs::create_dir_all(&runtime_dir).unwrap();
 
-        // See `UZE_HOME_ENV_LOCK`: held for the rest of this test so no
+        // See `uze_testkit::env::scope`: held for the rest of this test so no
         // other test's own `UZE_HOME` scoping can interleave with this
         // one's. Restored exactly, not just cleared, on the way out.
-        let _env_guard = UZE_HOME_ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let previous_uze_home = std::env::var_os("UZE_HOME");
-        let previous_runtime_dir = std::env::var_os("XDG_RUNTIME_DIR");
-        unsafe { std::env::set_var("UZE_HOME", &uze_home) };
-        unsafe { std::env::set_var("XDG_RUNTIME_DIR", &runtime_dir) };
+        let mut env = uze_testkit::env::scope();
+        env.set("UZE_HOME", &uze_home)
+            .set("XDG_RUNTIME_DIR", &runtime_dir);
 
         let endpoint = Endpoint::for_root(&project).unwrap();
         let (first, _damage) = Server::new(project.clone(), endpoint.clone()).unwrap();
@@ -1875,14 +1873,6 @@ mod tests {
         }
         second.stop_panes();
 
-        match previous_uze_home {
-            Some(value) => unsafe { std::env::set_var("UZE_HOME", value) },
-            None => unsafe { std::env::remove_var("UZE_HOME") },
-        }
-        match previous_runtime_dir {
-            Some(value) => unsafe { std::env::set_var("XDG_RUNTIME_DIR", value) },
-            None => unsafe { std::env::remove_var("XDG_RUNTIME_DIR") },
-        }
         let _ = std::fs::remove_dir_all(&scratch);
     }
 
@@ -1903,13 +1893,9 @@ mod tests {
         std::fs::create_dir_all(&project).unwrap();
         std::fs::create_dir_all(&uze_home).unwrap();
         std::fs::create_dir_all(&runtime_dir).unwrap();
-        let _env_guard = UZE_HOME_ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let previous_uze_home = std::env::var_os("UZE_HOME");
-        let previous_runtime_dir = std::env::var_os("XDG_RUNTIME_DIR");
-        unsafe { std::env::set_var("UZE_HOME", &uze_home) };
-        unsafe { std::env::set_var("XDG_RUNTIME_DIR", &runtime_dir) };
+        let mut env = uze_testkit::env::scope();
+        env.set("UZE_HOME", &uze_home)
+            .set("XDG_RUNTIME_DIR", &runtime_dir);
 
         let endpoint = Endpoint::for_root(&project).unwrap();
         let (server, _damage) = Server::new(project, endpoint).unwrap();
@@ -1947,14 +1933,6 @@ mod tests {
         );
         server.stop_panes();
 
-        match previous_uze_home {
-            Some(value) => unsafe { std::env::set_var("UZE_HOME", value) },
-            None => unsafe { std::env::remove_var("UZE_HOME") },
-        }
-        match previous_runtime_dir {
-            Some(value) => unsafe { std::env::set_var("XDG_RUNTIME_DIR", value) },
-            None => unsafe { std::env::remove_var("XDG_RUNTIME_DIR") },
-        }
         let _ = std::fs::remove_dir_all(&scratch);
     }
 
@@ -1990,11 +1968,8 @@ mod tests {
         let project = scratch.join("project");
         std::fs::create_dir_all(&project).unwrap();
         std::fs::create_dir_all(&uze_home).unwrap();
-        let _env_guard = UZE_HOME_ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let previous_uze_home = std::env::var_os("UZE_HOME");
-        unsafe { std::env::set_var("UZE_HOME", &uze_home) };
+        let mut env = uze_testkit::env::scope();
+        env.set("UZE_HOME", &uze_home);
 
         let endpoint = Endpoint::for_root(&project).unwrap();
         let (first, _damage) = Server::new(project.clone(), endpoint.clone()).unwrap();
@@ -2029,10 +2004,6 @@ mod tests {
         }
         second.stop_panes();
 
-        match previous_uze_home {
-            Some(value) => unsafe { std::env::set_var("UZE_HOME", value) },
-            None => unsafe { std::env::remove_var("UZE_HOME") },
-        }
         let _ = std::fs::remove_dir_all(&scratch);
     }
 
@@ -2055,11 +2026,8 @@ mod tests {
         let project = scratch.join("project");
         std::fs::create_dir_all(&project).unwrap();
         std::fs::create_dir_all(&uze_home).unwrap();
-        let _env_guard = UZE_HOME_ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let previous_uze_home = std::env::var_os("UZE_HOME");
-        unsafe { std::env::set_var("UZE_HOME", &uze_home) };
+        let mut env = uze_testkit::env::scope();
+        env.set("UZE_HOME", &uze_home);
 
         let path = persisted_state_path(&project).expect("resolvable under a scoped UZE_HOME");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -2089,10 +2057,6 @@ mod tests {
         drop(session);
         server.stop_panes();
 
-        match previous_uze_home {
-            Some(value) => unsafe { std::env::set_var("UZE_HOME", value) },
-            None => unsafe { std::env::remove_var("UZE_HOME") },
-        }
         let _ = std::fs::remove_dir_all(&scratch);
     }
 }

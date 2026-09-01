@@ -14,6 +14,11 @@ MCP config does not reach the /mcp inventory.
 
 Phase B (CLI/state): `codex plugin list` reports the UZE plugins installed +
 enabled (secondary; the /plugins TUI surface is the primary assertion).
+
+Phase C (invocation policy, ADR-030): `codex debug prompt-input` renders the
+model-visible catalog with zero model calls; a user-only Skill must be absent
+from it and a default one present, with a sidecar-removal control proving the
+exclusion is caused by Codex reading UZE's policy sidecar.
 """
 import os
 import sys
@@ -429,11 +434,81 @@ def phase_hooks(cfg, prov_ip, kind):
     child.close(force=True)
 
 
+def phase_skill_invocation_policy(cfg, prov_ip):
+    """Invocation policy (ADR-030) as the REAL Codex binary renders it.
+
+    This is the real-harness half of what `tests/integrations/harness/codex.rs`
+    proves deterministically. It used to live there too, spawning `codex` from
+    the developer's own PATH — which is UZE's runtime shim on any dogfooding
+    machine, so it measured the host rather than Codex. Here the binary, the
+    HOME, and the network are the container's.
+
+    `codex debug prompt-input` renders exactly what the model would receive,
+    with zero model calls. The `flow` fixture carries both shapes: `commit`
+    (default: model-visible) and `review` (`invoke: {model: false, user:
+    true}`: user-only). Expected: `commit` is offered, `review` is not.
+
+    The control matters as much as the assertion. Deleting the
+    `agents/openai.yaml` policy sidecar must bring `review` back — proving the
+    exclusion is caused by Codex genuinely reading the sidecar UZE wrote, not
+    by the Skill being absent, misnamed, or undelivered for some unrelated
+    reason.
+    """
+    final = """
+echo '===== attached skills ====='
+find /work/home/.agents -name openai.yaml 2>/dev/null
+echo '===== prompt-input (policy present) ====='
+codex debug prompt-input 2>&1
+echo '===== prompt-input (policy removed: control) ====='
+find /work/home/.agents -name openai.yaml -delete 2>/dev/null
+codex debug prompt-input 2>&1
+"""
+    setup = codex_setup(cfg, prov_ip, final, plugins="flow")
+    cmd = docker_base(cfg, prov_ip, setup, tty=False)
+    ca_crt, _, _ = generate_certs(cfg)
+    i = cmd.index(common.HARNESS_IMAGE)
+    cmd = (
+        cmd[:i]
+        + ["-v", f"{ca_crt}:/app/ca.crt:ro", "-e", "CODEX_HOME=/work/home/.codex"]
+        + cmd[i:]
+    )
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    out = proc.stdout + proc.stderr
+    with open(f"{cfg.outdir}/06_skill_invocation_policy.txt", "w") as f:
+        f.write(out)
+
+    marker = "===== prompt-input (policy removed: control) ====="
+    with_policy, _, without_policy = out.partition(marker)
+
+    check(
+        "policy-sidecar-delivered",
+        "openai.yaml" in with_policy,
+        "UZE writes the Codex invocation-policy sidecar for the attached Skill",
+    )
+    check(
+        "default-skill-offered",
+        "commit" in with_policy,
+        "a default Skill stays discoverable by the model",
+    )
+    check(
+        "user-only-skill-hidden",
+        "review" not in with_policy,
+        "a user-only Skill is never offered to the model",
+    )
+    check(
+        "control-sidecar-drives-the-exclusion",
+        "review" in without_policy,
+        "removing the sidecar restores the listing, proving Codex reads it",
+    )
+
+
 def run(cfg, prov_ip):
     with describe("tui"):
         phase_tui(cfg, prov_ip)
     with describe("cli.state"):
         phase_plugin_cli(cfg, prov_ip)
+    with describe("skill-invocation-policy"):
+        phase_skill_invocation_policy(cfg, prov_ip)
     with describe("hooks"):
         for kind in ("deny", "allow", "order"):
             with describe(kind):

@@ -13,6 +13,11 @@
 //! of through the resolved `provisioning_executable()`/
 //! `resolve_real_executable` pattern every integration in this crate uses.
 //!
+//! The same scan is applied to `tests/` itself
+//! (`no_deterministic_test_spawns_a_bare_vendor_executable`): a test that
+//! spawns a vendor by bare name measures the developer's `PATH`, not the
+//! vendor.
+//!
 //! Deliberately source-level, not behavioral: a behavioral test would need
 //! a real or faked shim on `PATH` to prove recursion, which is exactly the
 //! kind of environment-dependent setup this invariant must hold regardless
@@ -33,6 +38,10 @@ const VENDOR_NAMES: [&str; 4] = ["claude", "codex", "opencode", "agy"];
 
 fn integrations_src_dir() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("crates/uze-integrations/src")
+}
+
+fn deterministic_tests_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests")
 }
 
 fn rust_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
@@ -183,4 +192,56 @@ fn upstream_executable_resolution_never_recurses_through_the_runtime_shim() {
     );
 
     let _ = fs::remove_dir_all(root);
+}
+
+/// The same literal-call-shape scan, applied to the deterministic suite
+/// itself.
+///
+/// A test that spawns `codex`/`claude`/… by bare name does not test the
+/// vendor: on any machine where `uze setup` has run, that name resolves to
+/// UZE's own shim, so the test measures whatever the developer's `PATH`
+/// happens to hold. That is exactly how the real-Codex dogfood pair in
+/// `harness/codex.rs` came to run `uze` instead of Codex and fail — while
+/// passing in CI, where no shim exists. Skipping when the binary is absent
+/// does not save it either: the guard reads "present on PATH" as "the real
+/// harness", which is the false premise.
+///
+/// Everything under `tests/` therefore builds its world through
+/// `uze-testkit` and asserts through UZE's own ports. Real-harness evidence
+/// belongs to the Harness Conformance Lab (`conformance/`), where the
+/// binary, HOME, and network are the container's — see
+/// `docs/architecture/invariants.md` and `tests/README.md`.
+#[test]
+fn no_deterministic_test_spawns_a_bare_vendor_executable() {
+    let mut files = Vec::new();
+    rust_files(&deterministic_tests_dir(), &mut files);
+    assert!(!files.is_empty(), "expected to find .rs files under tests/");
+
+    let mut violations = Vec::new();
+    for path in &files {
+        let Ok(contents) = fs::read_to_string(path) else {
+            continue;
+        };
+        for (line_number, line) in contents.lines().enumerate() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("//") {
+                continue;
+            }
+            for vendor in VENDOR_NAMES {
+                let needle = format!("Command::new(\"{vendor}\")");
+                if line.contains(&needle) {
+                    violations.push(format!("{}:{}: {needle}", path.display(), line_number + 1));
+                }
+            }
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "found deterministic test(s) spawning a vendor binary from the ambient PATH, which is \
+         UZE's own shim on any machine that has run `uze setup`. Build the world with \
+         `uze-testkit` and assert through UZE's ports; put real-harness evidence in \
+         `conformance/`:\n{}",
+        violations.join("\n")
+    );
 }
