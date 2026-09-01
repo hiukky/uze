@@ -494,27 +494,14 @@ pub(super) fn render_sidebar(
             let Some(label_rect) = row(1) else { break };
 
             let selected = tab.id == space.selected_tab;
-            let active = model.agent_activity.contains_key(&tab.focus.pane);
-            let completed = model.completed_agent_panes.contains(&tab.focus.pane);
+            let status = model.agent_tab_status(tab.focus.pane, selected);
             let renaming_this = model
                 .renaming
                 .as_ref()
                 .filter(|(target, _)| *target == RenameTarget::Tab(tab.id))
                 .map(|(_, buffer)| buffer.as_str());
-            let indicator = if active {
-                format!("{} ", agent_activity_frame(model.tick))
-            } else if completed {
-                "✓ ".to_owned()
-            } else if selected {
-                "● ".to_owned()
-            } else {
-                "○ ".to_owned()
-            };
-            let indicator_fg = if active || completed || selected {
-                crate::ui::ACCENT
-            } else {
-                crate::ui::TEXT_FAINT
-            };
+            let indicator = status.glyph(model.tick);
+            let indicator_fg = status.color();
             // Bright but not bold — bold is the space header's own marker
             // for "this is the active space" (see `render_space_header`);
             // an agent tab nested under it competing for the same weight

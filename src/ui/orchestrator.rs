@@ -51,6 +51,12 @@ const GIT_BADGE_REFRESH: Duration = Duration::from_millis(750);
 /// instead of letting indicatif write to stderr.
 const AGENT_ACTIVITY_FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
 const AGENT_ACTIVITY_TICK: Duration = Duration::from_millis(120);
+/// PTY damage arriving this soon after we forwarded the user's own
+/// keystrokes into a pane is that pane echoing them back, not the agent
+/// working. Without this window every character typed into an agent tab
+/// would re-arm its busy spinner.
+const LOCAL_ECHO_WINDOW: Duration = Duration::from_millis(250);
+
 /// A submitted prompt stays active while its terminal keeps producing
 /// output. Agent harnesses can spend several seconds silent while waiting
 /// for a tool or network response, so this grace period favors not hiding
@@ -533,6 +539,7 @@ pub(crate) fn attach_workspace(
                         // Forwarded before anything is recorded: the pane's
                         // own responsiveness must never wait on history.
                         let _ = send_request(&mut stream, &ClientRequest::Input { pane, bytes });
+                        model.note_local_input(pane);
                         if submitted {
                             model.note_agent_prompt_submission(
                                 pane,
@@ -546,6 +553,7 @@ pub(crate) fn attach_workspace(
                     let pane = model.focused_pane();
                     model.prompt_buffers.entry(pane).or_default().paste(&text);
                     forward_paste(&mut stream, &model, &text);
+                    model.note_local_input(pane);
                 }
                 Event::Mouse(mouse)
                     if mouse.kind == MouseEventKind::Down(MouseButton::Left)
@@ -1301,6 +1309,46 @@ fn selected_agent_context(
     Some((integration.to_owned(), cwd))
 }
 
+/// What the sidebar shows beside one agent tab. These four states are the
+/// whole vocabulary, and they are mutually exclusive by the precedence
+/// encoded in [`WorkspaceModel::agent_tab_status`] — the single place that
+/// decides, so the glyph can never disagree with the model that produced
+/// it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum AgentTabStatus {
+    /// The agent is producing output right now.
+    Working,
+    /// The agent finished while the user was looking somewhere else, and
+    /// the user has not opened the tab since.
+    Completed,
+    /// The tab the user is on, with nothing in flight.
+    Selected,
+    /// A quiet agent tab the user is not on.
+    Idle,
+}
+
+impl AgentTabStatus {
+    /// The indicator column, including its trailing space. `tick` only
+    /// matters for [`AgentTabStatus::Working`], whose glyph animates.
+    pub(super) fn glyph(self, tick: usize) -> String {
+        match self {
+            AgentTabStatus::Working => format!("{} ", agent_activity_frame(tick)),
+            AgentTabStatus::Completed => "\u{2713} ".to_owned(),
+            AgentTabStatus::Selected => "\u{25cf} ".to_owned(),
+            AgentTabStatus::Idle => "\u{25cb} ".to_owned(),
+        }
+    }
+
+    /// Idle is the only state drawn faint: the other three all report
+    /// something the user asked for or needs to notice.
+    pub(super) fn color(self) -> Color {
+        match self {
+            AgentTabStatus::Idle => crate::ui::TEXT_FAINT,
+            _ => crate::ui::ACCENT,
+        }
+    }
+}
+
 #[derive(Default)]
 struct WorkspaceModel {
     session: Option<Session>,
@@ -1317,6 +1365,14 @@ struct WorkspaceModel {
     /// sidebar keeps their green check visible until the user opens the tab,
     /// making completion discoverable without leaving a stale busy spinner.
     completed_agent_panes: BTreeSet<PaneId>,
+    /// Panes known to be running a recognized agent, recorded the first
+    /// time the user submits a prompt into one. `apply` has no identity
+    /// table of its own, so this is what lets a *later* burst of PTY output
+    /// re-arm activity for a pane whose quiet stretch already expired.
+    agent_panes: BTreeSet<PaneId>,
+    /// When input was last forwarded into a pane, so the echo of the user's
+    /// own typing is not mistaken for agent output ([`LOCAL_ECHO_WINDOW`]).
+    local_input_at: BTreeMap<PaneId, Instant>,
     hits: Vec<(Rect, WorkspaceHit)>,
     /// Set whenever applying an event (or a resize) changes what should be
     /// on screen; the input loop only redraws when this is true. Redrawing
@@ -1476,9 +1532,7 @@ impl WorkspaceModel {
                 self.session = Some(session);
             }
             ClientEvent::Damage(damage) => {
-                if let Some(last_output) = self.agent_activity.get_mut(&damage.pane) {
-                    *last_output = Instant::now();
-                }
+                self.note_agent_output(damage.pane, !damage.changed.is_empty(), Instant::now());
                 let entry = self
                     .panes
                     .entry(damage.pane)
@@ -1566,6 +1620,7 @@ impl WorkspaceModel {
         let Some(origin) = origin else {
             return;
         };
+        self.agent_panes.insert(pane);
         self.agent_activity.insert(pane, Instant::now());
         self.completed_agent_panes.remove(&pane);
         self.dirty = true;
@@ -1573,6 +1628,51 @@ impl WorkspaceModel {
         if let (Some(prompt), Some(recorder)) = (prompt, self.prompt_recorder.as_ref()) {
             let _ = recorder.send((origin, prompt.to_owned()));
         }
+    }
+
+    /// The one place the four sidebar states are decided. Working outranks
+    /// Completed (fresh output means the run the check would announce is
+    /// not over), and both outrank Selected — a spinner or a check on the
+    /// tab you are already on still carries information the plain dot does
+    /// not.
+    fn agent_tab_status(&self, pane: PaneId, selected: bool) -> AgentTabStatus {
+        if self.agent_activity.contains_key(&pane) {
+            AgentTabStatus::Working
+        } else if self.completed_agent_panes.contains(&pane) {
+            AgentTabStatus::Completed
+        } else if selected {
+            AgentTabStatus::Selected
+        } else {
+            AgentTabStatus::Idle
+        }
+    }
+
+    /// Records that input was forwarded into `pane`, arming
+    /// [`LOCAL_ECHO_WINDOW`] so the echo that comes straight back does not
+    /// read as agent output.
+    fn note_local_input(&mut self, pane: PaneId) {
+        self.local_input_at.insert(pane, Instant::now());
+    }
+
+    /// Output from a known agent pane keeps — or puts — that pane in the
+    /// working state. Re-arming matters as much as extending: an agent that
+    /// sits silent past [`AGENT_ACTIVITY_IDLE_AFTER`] waiting on a tool or a
+    /// network call has already been dropped from `agent_activity`, and
+    /// without this the rest of its run would render as finished (or as
+    /// nothing at all) while it was still working.
+    fn note_agent_output(&mut self, pane: PaneId, changed_cells: bool, now: Instant) {
+        if !changed_cells || !self.agent_panes.contains(&pane) {
+            return;
+        }
+        if self
+            .local_input_at
+            .get(&pane)
+            .is_some_and(|at| now.duration_since(*at) < LOCAL_ECHO_WINDOW)
+        {
+            return;
+        }
+        self.agent_activity.insert(pane, now);
+        self.completed_agent_panes.remove(&pane);
     }
 
     fn expire_agent_activity(&mut self, now: Instant) -> bool {
