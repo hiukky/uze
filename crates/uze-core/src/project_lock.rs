@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     Result, UzeError,
     acquisition::{PackageSource, ResolvedSource},
+    worktree::WorktreePolicy,
 };
 
 pub const SUPPORTED_LOCK_VERSION: u32 = 1;
@@ -25,11 +26,11 @@ pub const LOCK_FILE_NAME: &str = "agents.lock";
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ProjectLock {
     pub version: u32,
-    /// Directory containing this project's linked Git worktrees. Kept
-    /// relative to the project root so the lock remains portable across
-    /// clones and machines.
+    /// What this project does with an isolated agent's finished work. The
+    /// layout of isolated checkouts is fixed infrastructure, not declared
+    /// here — see `crate::worktree`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub worktrees_dir: Option<PathBuf>,
+    pub worktrees: Option<WorktreePolicy>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub marketplaces: BTreeMap<String, LockedMarketplace>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -40,7 +41,7 @@ impl Default for ProjectLock {
     fn default() -> Self {
         Self {
             version: SUPPORTED_LOCK_VERSION,
-            worktrees_dir: None,
+            worktrees: None,
             marketplaces: BTreeMap::new(),
             plugins: BTreeMap::new(),
         }
@@ -161,8 +162,32 @@ pub fn load_lock(root: &Path) -> Result<Option<ProjectLock>> {
     parse_lock_str(&text, &path).map(Some)
 }
 
+/// The superseded spelling of the isolation policy: a bare directory, with
+/// no trigger, naming, base-ref, or integration semantics, and no projection
+/// to any harness. Rejected loudly rather than ignored — `ProjectLock` does
+/// not deny unknown fields, so silently dropping it would turn a declared
+/// policy into no policy at all with nothing said.
+const REPLACED_DIRECTORY_KEY: &str = "worktrees_dir";
+
 fn parse_lock_str(text: &str, path: &Path) -> Result<ProjectLock> {
-    let lock: ProjectLock = serde_yaml::from_str(text).map_err(|e| UzeError::MalformedLock {
+    let raw: serde_yaml::Value =
+        serde_yaml::from_str(text).map_err(|e| UzeError::MalformedLock {
+            path: path.to_path_buf(),
+            reason: e.to_string(),
+        })?;
+    if raw
+        .as_mapping()
+        .is_some_and(|mapping| mapping.contains_key(REPLACED_DIRECTORY_KEY))
+    {
+        return Err(UzeError::MalformedLock {
+            path: path.to_path_buf(),
+            reason: format!(
+                "`{REPLACED_DIRECTORY_KEY}` was replaced by the `worktrees` policy block;                  write `worktrees:` with a `directory:` entry instead"
+            ),
+        });
+    }
+
+    let lock: ProjectLock = serde_yaml::from_value(raw).map_err(|e| UzeError::MalformedLock {
         path: path.to_path_buf(),
         reason: e.to_string(),
     })?;
@@ -170,15 +195,6 @@ fn parse_lock_str(text: &str, path: &Path) -> Result<ProjectLock> {
         return Err(UzeError::UnsupportedLockVersion {
             found: lock.version,
             expected: SUPPORTED_LOCK_VERSION,
-        });
-    }
-    if let Some(directory) = &lock.worktrees_dir
-        && (directory.as_os_str().is_empty() || directory.is_absolute())
-    {
-        return Err(UzeError::MalformedLock {
-            path: path.to_path_buf(),
-            reason: "worktrees_dir must be a non-empty path relative to the project root"
-                .to_owned(),
         });
     }
     Ok(lock)
@@ -359,10 +375,36 @@ mod tests {
     }
 
     #[test]
-    fn worktrees_dir_is_portable_and_must_be_relative() {
-        let path = PathBuf::from("agents.lock");
-        let lock = parse_lock_str("version: 1\nworktrees_dir: ../.worktrees\n", &path).unwrap();
-        assert_eq!(lock.worktrees_dir, Some(PathBuf::from("../.worktrees")));
-        assert!(parse_lock_str("version: 1\nworktrees_dir: /tmp/worktrees\n", &path).is_err());
+    fn a_policy_block_defaults_every_axis_it_does_not_state() {
+        let lock =
+            parse_lock_str("version: 1\nworktrees: {}\n", &PathBuf::from("agents.lock")).unwrap();
+        let policy = lock.worktrees.expect("an empty block is still a policy");
+        assert_eq!(policy, crate::worktree::WorktreePolicy::default());
+    }
+
+    #[test]
+    fn the_declared_completion_behavior_round_trips() {
+        let lock = parse_lock_str(
+            "version: 1\nworktrees:\n  completion: merge\n",
+            &PathBuf::from("agents.lock"),
+        )
+        .unwrap();
+        assert_eq!(
+            lock.worktrees.unwrap().completion,
+            crate::worktree::CompletionBehavior::Merge
+        );
+    }
+
+    #[test]
+    fn the_replaced_directory_key_is_rejected_rather_than_silently_dropped() {
+        let err = parse_lock_str(
+            "version: 1\nworktrees_dir: ./.worktrees\n",
+            &PathBuf::from("agents.lock"),
+        )
+        .unwrap_err();
+        let UzeError::MalformedLock { reason, .. } = err else {
+            panic!("a replaced key must be reported as a malformed lock");
+        };
+        assert!(reason.contains("worktrees"), "{reason}");
     }
 }

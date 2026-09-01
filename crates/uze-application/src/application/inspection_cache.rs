@@ -196,10 +196,6 @@ mod tests {
     use uze_core::UzeHome;
 
     fn temp_cache(label: &str) -> PathBuf {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
         uze_testkit::temp::scratch(label).join("inspection-cache.json")
     }
 

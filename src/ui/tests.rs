@@ -122,6 +122,7 @@ fn model_with_data() -> TuiModel {
         contributions: Vec::new(),
         orphaned_regions: Vec::new(),
         malformed_regions: Vec::new(),
+        worktrees: None,
         harnesses: vec![
             // Claude Code only ever reads context through a `CLAUDE.md`
             // bridge (never natively) — `needed: false` here means
@@ -1511,7 +1512,7 @@ fn overview_install_intent_reaches_install_project_environment() {
     std::fs::write(market.join("flow/skills/uze-test/SKILL.md"), "# s\n").unwrap();
     let lock = uze_core::project_lock::ProjectLock {
         version: 1,
-        worktrees_dir: None,
+        worktrees: None,
         marketplaces: std::iter::once((
             "test".to_owned(),
             uze_core::project_lock::LockedMarketplace {

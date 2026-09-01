@@ -1,6 +1,6 @@
 ---
 name: worktree
-description: Coordinates isolated Git worktrees for concurrent agent work, deciding when to create one and safely validating and integrating completed changes. Use when work involves parallel agents, an existing worktree, a risky or long-lived change, merge conflicts, or bringing isolated implementation back to the primary branch.
+description: Runs concurrent agent work in isolated Git worktrees — assigning one writer per branch, collecting handoffs, and integrating finished branches back into the primary checkout. Use when coordinating more than one writing agent, when resuming work in an existing worktree, when integrating or merging an agent branch, or when a conflict or an unknown worktree owner needs resolving.
 slash: true
 metadata:
   opencode/autoinvoke: "true"
@@ -8,13 +8,17 @@ metadata:
 
 # UZE — concurrent worktree coordinator
 
-Use Git worktrees to isolate concurrent *writes*, not as ceremony for every
-request. The outcome is a stable primary checkout, one owner per isolated
-branch, and an integration that is reviewed, tested, and reversible.
+You do not decide whether to work in isolation, and you do not create your
+own top-level worktree. UZE places every agent it launches: the first agent
+in a repository works in the primary checkout, and every additional live
+agent is started inside an isolated checkout of its own. Read the
+"Concurrent work isolation" section of `AGENTS.md` — it states the layout and
+what to do with finished work.
 
-## Decide before editing
+This skill is what no harness does for you: coordinating several writers and
+integrating their branches back.
 
-Start with read-only discovery from the repository root:
+## Know where you are
 
 ```bash
 git rev-parse --show-toplevel
@@ -23,70 +27,37 @@ git status --short
 git worktree list --porcelain
 ```
 
-Always inspect the `agents.lock` at the **primary worktree** before choosing a
-worktree location. `git worktree list --porcelain` identifies that checkout;
-read its lock, rather than assuming that the linked worktree's relative path
-has the same meaning. The lock's optional `worktrees_dir` is the project's
-portable directory policy. When it is configured, resolve it relative to the
-primary worktree and use that directory for every newly created agent
-worktree. Do not substitute a convenient sibling path, and never edit
-`agents.lock` as a side effect of this workflow.
+If your working directory is inside `.worktrees/`, you are already isolated —
+work here, and do not create another worktree or switch branches. If you are
+in the primary checkout, you are the only agent there; treat the operator's
+uncommitted work as theirs, and never stash, reset, clean, or move it.
 
-If `agents.lock` is absent or has no `worktrees_dir`, say so before using a
-user-supplied or conventional sibling directory. If the lock is malformed,
-the configured path is unsafe, or an existing worktree sits outside the
-configured directory, stop and ask for direction; do not silently bypass the
-project policy.
+## Give parallel subagents their own checkout
 
-Create or reuse an isolated worktree before making changes when any of these
-are true:
+UZE cannot see subagents you spawn inside your own session, so isolating them
+is yours to do. Before two of them write files, give each one its own
+checkout, resolved against the *primary* so one worktree never nests inside
+another:
 
-- another agent or developer can write in the current checkout;
-- the task is a feature, refactor, investigation likely to produce edits, or
-  otherwise more than a tiny, self-contained change;
-- the primary checkout has uncommitted work that must be preserved;
-- the requested work needs an independent test/build cycle or a clean review
-  boundary.
+```bash
+git worktree add -b agent/<topic> \
+  "$(git rev-parse --path-format=absolute --git-common-dir)/../.worktrees/<topic>" HEAD
+```
 
-A read-only task, a user-directed edit in an already-owned worktree, or one
-small urgent fix may stay in the current checkout. Say which choice you made
-and why. If the primary checkout is dirty, never stash, reset, clean, or move
-its changes to make room for an agent. Create a separate worktree instead.
+One checkout has exactly one writer. Split the work by file or component
+boundary and state each owner's paths before they start. If their changes
+cannot be made disjoint, sequence them rather than hoping Git can merge them
+later.
 
-## Prepare an isolated workspace
-
-One worktree has exactly one writer. Do not assign two agents to the same
-path or branch; do not have a worker edit the primary checkout.
-
-1. Choose a concise, unique topic branch, such as `agent/<topic>`.
-2. Confirm the intended base branch and its current commit. Do not assume
-   `main` is the primary branch.
-3. Inspect existing worktrees and branches first. Reuse a worktree only when
-   it is clean, its branch is the intended one, and its prior owner has
-   explicitly handed it off. Otherwise create a topic directory beneath the
-   `agents.lock` `worktrees_dir` (when configured), with a path that makes the
-   topic identifiable:
-
-   ```bash
-   git worktree add -b agent/<topic> <configured-worktrees-dir>/<topic> <base-branch>
-   ```
-
-   With no configured directory, agree on the location first. If the branch
-   already exists, omit `-b` only after confirming that it is the intended
-   branch and no other worktree owns it.
-4. Work, build, and test exclusively from that new path. Report the path,
-   branch, and base commit in the handoff.
-
-Do not create a worktree inside another worktree, share generated artifacts
-between worktrees, or use destructive Git commands to resolve ownership.
-Repository-level Git metadata is shared, so avoid rebasing, force-pushing, or
-deleting branches while workers are active.
+Repository-level Git metadata is shared across worktrees, so do not rebase,
+force-push, or delete branches while other writers are active.
 
 ## Coordinate the implementation
 
-Split parallel work by file or component boundaries. Before two workers begin,
-state their owned paths and the integration order. If their changes cannot be
-made disjoint, sequence them rather than hoping Git can merge them later.
+Split parallel work by file or component boundaries. Before two workers
+begin, state their owned paths and the integration order. If their changes
+cannot be made disjoint, sequence them rather than hoping Git can merge them
+later.
 
 Each worker must leave a handoff with:
 
@@ -96,9 +67,9 @@ Each worker must leave a handoff with:
 - a clean working tree, with intentional uncommitted work called out instead
   of hidden.
 
-Workers may commit their own focused changes. They must not merge into,
-rebase, reset, or otherwise advance the primary branch unless the user has
-explicitly asked them to perform integration.
+Workers may commit their own focused changes. What happens to finished work
+is the project's declared completion behavior — honor what `AGENTS.md` states
+rather than deciding case by case.
 
 ## Integrate deliberately
 
@@ -112,10 +83,11 @@ Present the integration order, commit SHAs, and checks to run. Get explicit
 approval before changing the primary branch unless the user has already
 clearly authorized integration in this request.
 
-Integrate one worker branch at a time into a clean, up-to-date primary branch.
-Prefer a fast-forward when it preserves the intended history; use a merge
-commit when it preserves a meaningful independent branch. Do not squash,
-rebase, or force-push somebody else's work without explicit direction.
+Integrate one worker branch at a time into a clean, up-to-date primary
+branch. Prefer a fast-forward when it preserves the intended history; use a
+merge commit when it preserves a meaningful independent branch. Do not
+squash, rebase, or force-push somebody else's work without explicit
+direction.
 
 If a conflict occurs:
 
@@ -129,11 +101,11 @@ Report the resulting primary-branch commit and any checks not run.
 
 ## Retire worktrees safely
 
-After successful integration and confirmation that no follow-up work remains,
-inspect each worker worktree. Remove only a clean, merged, non-current
-worktree. Preserve its branch by default; delete it only when the user asks
-or the repository's documented policy permits it. Never use force removal to
-discard uncommitted work.
+Isolated checkouts are kept by default — an agent's tab closing does not
+remove one, and the operator may come back to it tomorrow. Remove one only
+when the user asks, and only when it is clean *and* carries no commits the
+primary branch does not already have: a clean working tree is not proof that
+there is nothing to lose. Never force removal to discard uncommitted work.
 
 Finish with a compact ledger: primary commit, integrated branches, retained
 worktrees, removed worktrees, and any remaining risks. This makes the next

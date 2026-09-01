@@ -139,7 +139,14 @@ pub(crate) fn attach_workspace(
     let layout = compute_layout(Rect::new(0, 0, size.width, size.height), *sidebar_width);
     let (columns, rows) = (layout.pane.width, layout.pane.height);
 
-    let mut stream = attach(root, columns, rows).map_err(runtime_error)?;
+    // The terminal server — and therefore the whole set of agent panes — is
+    // keyed on the directory handed to `attach`. Resolving the workspace
+    // root *before* attaching is what makes one repository mean one server:
+    // with the raw cwd, launching UZE from the repository and from a
+    // subdirectory of it produced two servers over the same checkout, each
+    // believing it was alone. Prompt history keys on the same answer below.
+    let workspace_root = uze_core::workspace::workspace_root_or_self(root);
+    let mut stream = attach(&workspace_root, columns, rows).map_err(runtime_error)?;
     let read_stream = stream.try_clone().map_err(io_error)?;
     send_request(
         &mut stream,
@@ -160,15 +167,11 @@ pub(crate) fn attach_workspace(
             }
         }
     });
-    // Prompt history is keyed by the *resolved* workspace root, the same
-    // one the management Overview reads against — `root` here is the raw
-    // cwd, which differs whenever uze is launched from a subdirectory of
-    // the workspace. Writes run on their own thread so a keystroke never
-    // waits on the filesystem, and the thread ends when `model` drops its
-    // sender at the end of this attach.
-    let history_root = uze_core::workspace::resolve_workspace(root)
-        .map(|workspace| workspace.root)
-        .unwrap_or_else(|_| root.to_path_buf());
+    // The same resolved root the server is keyed on, and the one the
+    // management Overview reads against. Writes run on their own thread so
+    // a keystroke never waits on the filesystem, and the thread ends when
+    // `model` drops its sender at the end of this attach.
+    let history_root = workspace_root.clone();
     let (prompt_recorder, recorded_prompts) =
         mpsc::channel::<(prompt_history::PromptOrigin, String)>();
     thread::spawn({
@@ -378,13 +381,14 @@ pub(crate) fn attach_workspace(
                             if let Some(picker) = model.agent_picker.take()
                                 && let Some(option) = picker.options.get(picker.selected)
                             {
+                                let label = next_agent_label(&model);
                                 let _ = send_request(
                                     &mut stream,
                                     &ClientRequest::CreateTab {
-                                        label: next_agent_label(&model),
+                                        cwd: agent_launch_cwd(&model, &label),
+                                        label,
                                         columns,
                                         rows,
-                                        cwd: selected_pane_cwd(&model),
                                         command: Some(option.command.clone()),
                                     },
                                 );
@@ -584,13 +588,14 @@ pub(crate) fn attach_workspace(
                             if let Some(picker) = model.agent_picker.take()
                                 && let Some(option) = picker.options.get(index)
                             {
+                                let label = next_agent_label(&model);
                                 let _ = send_request(
                                     &mut stream,
                                     &ClientRequest::CreateTab {
-                                        label: next_agent_label(&model),
+                                        cwd: agent_launch_cwd(&model, &label),
+                                        label,
                                         columns,
                                         rows,
-                                        cwd: selected_pane_cwd(&model),
                                         command: Some(option.command.clone()),
                                     },
                                 );
@@ -1900,6 +1905,89 @@ fn pane_in_layout(layout: &uze_terminal::Layout, wanted: PaneId) -> Option<&uze_
     }
 }
 
+/// Where a newly created agent starts.
+///
+/// The seat rule: the primary checkout holds one agent at a time. The first
+/// agent in a repository starts there and sees the operator's uncommitted
+/// work, exactly as before this existed. Every additional live agent starts
+/// in an isolated checkout of its own, so two agents can never write to the
+/// same files — a guarantee that holds structurally, without any harness
+/// cooperating and without anyone being asked a question.
+///
+/// Falls back to the seat whenever isolation is impossible (not a Git
+/// repository, no commit to branch from, Git absent): launching an agent
+/// unisolated is worse than not launching it at all only if something else
+/// is already writing there, and that is the rare case against a certain
+/// failure to start.
+fn agent_launch_cwd(model: &WorkspaceModel, label: &str) -> Option<PathBuf> {
+    let pane_cwd = selected_pane_cwd(model)?;
+    let Some(primary) = uze_core::worktree::primary_checkout(&pane_cwd) else {
+        return Some(pane_cwd);
+    };
+    if !seat_is_taken(model.session.as_ref(), &primary) {
+        return Some(primary);
+    }
+    Some(
+        uze_core::worktree::isolate(&primary, &agent_slug(label))
+            .unwrap_or_else(|_| primary.clone()),
+    )
+}
+
+/// Whether a live agent tab already sits in the primary checkout.
+///
+/// Only agent tabs count: a shell is the operator's own, and the conflict
+/// this prevents is between agents. Occupancy is judged by the checkout a
+/// pane is in rather than by an exact path, so an agent that moves within
+/// the primary keeps its seat, and one working in an isolated checkout is
+/// never mistaken for holding it.
+fn seat_is_taken(session: Option<&uze_terminal::Session>, primary: &Path) -> bool {
+    let Some(session) = session else {
+        return false;
+    };
+    session
+        .workspace
+        .spaces
+        .iter()
+        .flat_map(|space| space.tabs.iter())
+        .filter(|tab| is_generated_agent_label(&tab.label))
+        .any(|tab| {
+            layout_panes(&tab.layout)
+                .any(|pane| uze_core::worktree::is_in_primary(primary, &pane.cwd))
+        })
+}
+
+fn layout_panes(
+    layout: &uze_terminal::Layout,
+) -> Box<dyn Iterator<Item = &uze_terminal::Pane> + '_> {
+    match layout {
+        uze_terminal::Layout::Pane(pane) => Box::new(std::iter::once(pane)),
+        uze_terminal::Layout::Split { first, second, .. } => {
+            Box::new(layout_panes(first).chain(layout_panes(second)))
+        }
+    }
+}
+
+/// One name for the tab, its checkout, and its branch, so the tab strip is
+/// the map of what exists on disk.
+fn agent_slug(label: &str) -> String {
+    let slug: String = label
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let slug = slug.trim_matches('-').to_owned();
+    if slug.is_empty() {
+        "agent".to_owned()
+    } else {
+        slug
+    }
+}
+
 /// The new-agent picker inherits the selected pane's live directory. The
 /// runtime's workspace root is only a fallback for callers that omit it.
 fn selected_pane_cwd(model: &WorkspaceModel) -> Option<PathBuf> {
@@ -1948,3 +2036,85 @@ fn runtime_error(error: uze_terminal::RuntimeError) -> UzeError {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod seat_tests {
+    use super::{agent_slug, seat_is_taken};
+    use std::path::{Path, PathBuf};
+    use uze_terminal::{Layout, Pane, PaneId, Session, Tab, WorkspaceId};
+
+    fn session_with(tabs: &[(&str, PathBuf)]) -> Session {
+        let mut session = Session::new(WorkspaceId("test".into()), PathBuf::from("/repo"), 80, 24);
+        let space = session
+            .workspace
+            .spaces
+            .first_mut()
+            .expect("a new session has one space");
+        space.tabs.clear();
+        for (index, (label, cwd)) in tabs.iter().enumerate() {
+            let mut tab = Tab {
+                id: uze_terminal::TabId(index as u64 + 1),
+                label: (*label).to_owned(),
+                layout: Layout::Pane(Pane {
+                    id: PaneId(index as u64 + 1),
+                    cwd: cwd.clone(),
+                    columns: 80,
+                    rows: 24,
+                    process: String::new(),
+                }),
+                focus: uze_terminal::Focus {
+                    pane: PaneId(index as u64 + 1),
+                },
+            };
+            tab.focus.pane = PaneId(index as u64 + 1);
+            space.tabs.push(tab);
+        }
+        session
+    }
+
+    #[test]
+    fn an_empty_workspace_leaves_the_seat_free() {
+        assert!(!seat_is_taken(None, Path::new("/repo")));
+    }
+
+    #[test]
+    fn one_agent_in_the_primary_takes_the_seat() {
+        let session = session_with(&[("agent 1", PathBuf::from("/repo"))]);
+        assert!(seat_is_taken(Some(&session), Path::new("/repo")));
+    }
+
+    /// A shell is the operator's own. The conflict this prevents is between
+    /// agents, so a terminal tab must never push an agent out of the seat.
+    #[test]
+    fn a_shell_tab_does_not_take_the_seat() {
+        let session = session_with(&[("shell 1", PathBuf::from("/repo"))]);
+        assert!(!seat_is_taken(Some(&session), Path::new("/repo")));
+    }
+
+    #[test]
+    fn an_agent_in_an_isolated_checkout_leaves_the_seat_free() {
+        let session = session_with(&[("agent 1", PathBuf::from("/repo/.worktrees/agent-1"))]);
+        assert!(!seat_is_taken(Some(&session), Path::new("/repo")));
+    }
+
+    /// The pane's directory is probed live, so an agent that moves inside
+    /// the repository must keep its seat rather than appear to have left.
+    #[test]
+    fn an_agent_that_moves_within_the_primary_keeps_the_seat() {
+        let session = session_with(&[("agent 1", PathBuf::from("/repo/crates/core"))]);
+        assert!(seat_is_taken(Some(&session), Path::new("/repo")));
+    }
+
+    #[test]
+    fn an_agent_in_another_repository_does_not_take_this_seat() {
+        let session = session_with(&[("agent 1", PathBuf::from("/other"))]);
+        assert!(!seat_is_taken(Some(&session), Path::new("/repo")));
+    }
+
+    #[test]
+    fn the_slug_is_one_name_for_the_tab_its_checkout_and_its_branch() {
+        assert_eq!(agent_slug("agent 2"), "agent-2");
+        assert_eq!(agent_slug("Agent 10"), "agent-10");
+        assert_eq!(agent_slug("  "), "agent");
+    }
+}

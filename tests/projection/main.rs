@@ -5,3 +5,4 @@
 mod invocation;
 mod naming;
 mod shared_roots;
+mod worktree_policy;

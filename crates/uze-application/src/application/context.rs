@@ -9,6 +9,7 @@ use uze_core::{
     context::{self as instruction_context, InstructionContribution},
     integration::{AttachmentState, ContextDelivery},
     text_region,
+    worktree::{self, WorktreePolicy},
 };
 
 use super::*;
@@ -120,6 +121,10 @@ impl UzeApplication {
             }
         }
 
+        let worktrees = self
+            .worktree_policy(&canonical)?
+            .map(|policy| self.worktree_policy_status(&canonical, &agents_md_path, &policy));
+
         let portability = derive_portability(agents_md_exists, &sources, &harnesses);
         let warnings = derive_warnings(agents_md_exists, &sources);
 
@@ -139,6 +144,7 @@ impl UzeApplication {
             orphaned_regions: observation.orphaned_regions,
             malformed_regions: observation.malformed_regions,
             harnesses,
+            worktrees,
             portability,
             warnings,
         })
@@ -185,14 +191,29 @@ impl UzeApplication {
                 Some(BridgePlan {
                     integration: integration.id().to_owned(),
                     file: bridge_file,
-                    action: plan_action_for_bridge(would_have_contribution, state),
+                    action: plan_action_for_region(would_have_contribution, state, "bridge"),
                 })
             })
             .collect();
 
+        let worktree_region = self.worktree_policy(&canonical)?.map(|policy| {
+            let state = text_region::inspect(
+                &agents_md,
+                &policy.region_identity(),
+                &policy.instructions(),
+            )
+            .state;
+            WorktreeRegionPlan {
+                file: agents_md.clone(),
+                action: plan_action_for_region(true, state, "worktree policy"),
+                superseded: superseded_policy_regions(&agents_md, &policy),
+            }
+        });
+
         Ok(ContextPlan {
             agents_md,
             agents_md_plan,
+            worktree_region,
             bridges,
         })
     }
@@ -208,6 +229,43 @@ impl UzeApplication {
         let agents_md = canonical.join("AGENTS.md");
         let contributions = self.instruction_contributions()?;
         let agents_md_report = instruction_context::reconcile_agents_md(&agents_md, &contributions);
+
+        // The policy region is reconciled against the shared file before the
+        // bridges are, for the same reason package contributions are: a
+        // bridge's own desired-state question is answered by what `AGENTS.md`
+        // ends up carrying, not by what it carried on entry.
+        let declared_policy = self.worktree_policy(&canonical)?;
+        let worktree_region = declared_policy.as_ref().map(|policy| {
+            // A superseded region goes before the current one is written, so
+            // the file never briefly carries two statements of the same
+            // policy. Removal is structural (`remove_unconditionally`): the
+            // region's content was UZE's to render, and the authored source
+            // it came from is the lock, not the file.
+            let mut removed = Vec::new();
+            let mut blocked = Vec::new();
+            for identity in superseded_policy_regions(&agents_md, policy) {
+                match text_region::remove_unconditionally(&agents_md, &identity) {
+                    Ok(inspection) if inspection.state == AttachmentState::Missing => {
+                        removed.push(identity);
+                    }
+                    Ok(inspection) => blocked.push((identity, inspection.reason)),
+                    Err(error) => blocked.push((identity, error.to_string())),
+                }
+            }
+            let inspection = text_region::reconcile(
+                &agents_md,
+                &policy.region_identity(),
+                &policy.instructions(),
+                true,
+            );
+            WorktreeRegionStatus {
+                file: agents_md.clone(),
+                state: inspection.state,
+                reason: inspection.reason,
+                removed_superseded: removed,
+                blocked_superseded: blocked,
+            }
+        });
 
         let bridges = self
             .integrations
@@ -248,8 +306,37 @@ impl UzeApplication {
                 .collect(),
             removed_orphans: agents_md_report.removed_orphans,
             blocked_orphans: agents_md_report.blocked_orphans,
+            worktree_region,
             bridges,
         })
+    }
+
+    /// This project's declared isolation policy, or `None` when `agents.lock`
+    /// declares none. A malformed lock is an error here rather than a silent
+    /// "no policy": dropping a declared policy without saying so is exactly
+    /// the failure that left `worktrees_dir` unprojected for so long.
+    fn worktree_policy(&self, canonical: &std::path::Path) -> Result<Option<WorktreePolicy>> {
+        Ok(uze_core::project_lock::load_lock(canonical)?.and_then(|lock| lock.worktrees))
+    }
+
+    /// Composes the policy's current standing: its managed region in the
+    /// shared file, each harness's honest route, and the checkouts on disk
+    /// the policy does not account for.
+    fn worktree_policy_status(
+        &self,
+        canonical: &std::path::Path,
+        agents_md: &std::path::Path,
+        policy: &WorktreePolicy,
+    ) -> WorktreePolicyStatus {
+        let inspection =
+            text_region::inspect(agents_md, &policy.region_identity(), &policy.instructions());
+        WorktreePolicyStatus {
+            directory: canonical.join(worktree::WORKTREES_DIRECTORY),
+            completion: policy.completion,
+            state: inspection.state,
+            reason: inspection.reason,
+            superseded_regions: superseded_policy_regions(agents_md, policy),
+        }
     }
 
     fn instruction_contributions(&self) -> Result<Vec<InstructionContribution>> {
@@ -346,9 +433,30 @@ fn derive_warnings(
     warnings
 }
 
-fn plan_action_for_bridge(
+/// Regions in `agents_md` that this module's own naming shape claims but
+/// that the current policy does not — what a previous policy left behind.
+/// Structural, exactly like `uze_core::context`'s orphan detection: an
+/// identity is claimed by shape, never by comparing rendered content.
+fn superseded_policy_regions(agents_md: &std::path::Path, policy: &WorktreePolicy) -> Vec<String> {
+    let current = policy.region_identity();
+    let mut stale: Vec<String> = text_region::region_identities_present(agents_md)
+        .into_iter()
+        .filter(|identity| WorktreePolicy::owns_region(identity) && *identity != current)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    stale.sort();
+    stale
+}
+
+/// The action a managed region needs to reach its desired presence. Shared
+/// by every region this module owns — a bridge's import line and the
+/// worktree policy alike — because the safety rules are `text_region`'s, not
+/// each caller's; `subject` only names the region in a blocked explanation.
+fn plan_action_for_region(
     needed: bool,
     state: AttachmentState,
+    subject: &str,
 ) -> instruction_context::PlannedAction {
     use instruction_context::PlannedAction;
     match (needed, state) {
@@ -357,14 +465,14 @@ fn plan_action_for_bridge(
         }
         (true, AttachmentState::Missing) => PlannedAction::Attach,
         (false, AttachmentState::Matched) => PlannedAction::Remove,
-        (_, AttachmentState::Drifted) => PlannedAction::Blocked(
-            "bridge content differs from the expected import line".to_owned(),
-        ),
+        (_, AttachmentState::Drifted) => PlannedAction::Blocked(format!(
+            "{subject} content differs from what UZE would write"
+        )),
         (_, AttachmentState::Blocked) => {
-            PlannedAction::Blocked("bridge region markers are malformed".to_owned())
+            PlannedAction::Blocked(format!("{subject} region markers are malformed"))
         }
         (_, AttachmentState::Conflict) => {
-            PlannedAction::Blocked("bridge region ownership is ambiguous".to_owned())
+            PlannedAction::Blocked(format!("{subject} region ownership is ambiguous"))
         }
     }
 }

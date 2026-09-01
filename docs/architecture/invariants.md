@@ -436,6 +436,85 @@ a non-blocking error there.
 > `crates/uze-core/src/hook.rs::timeout_terminates_a_hung_handler_and_fails_closed_for_deny`
 > `crates/uze-integrations/src/hooks.rs::adapters_render_native_decisions_and_block_exit_codes`
 
+## Concurrent work isolation (`add-portable-worktree-policy`)
+
+### Two agents never share a checkout
+
+The primary checkout seats one agent. The first agent in a repository starts
+there; every additional live agent starts in an isolated checkout of its own.
+The guarantee is structural — it needs no harness to cooperate and no model
+to agree — and it degrades to seating the agent rather than refusing to
+launch it when isolation is impossible.
+
+> `src/ui/orchestrator.rs::seat_tests::one_agent_in_the_primary_takes_the_seat`
+> `src/ui/orchestrator.rs::seat_tests::an_agent_in_an_isolated_checkout_leaves_the_seat_free`
+> `src/ui/orchestrator.rs::seat_tests::a_shell_tab_does_not_take_the_seat`
+> `crates/uze-core/src/worktree.rs::an_isolated_checkout_does_not_occupy_the_seat`
+
+### A pane that moves inside the repository keeps its seat
+
+Pane directories are probed live, so occupancy is judged by which checkout a
+pane is in, never by an exact path. Otherwise an agent that `cd`s one level
+down would free the seat and let a second agent in beside it.
+
+> `src/ui/orchestrator.rs::seat_tests::an_agent_that_moves_within_the_primary_keeps_the_seat`
+
+### One repository is one terminal server
+
+The server — and therefore the whole set of agent panes and their seat — is
+keyed on the resolved workspace root, not the launch directory. Keyed on the
+raw cwd, launching UZE from a repository and from a subdirectory of it
+produced two servers over one checkout, each believing its seat was free.
+
+> `crates/uze-core/src/workspace.rs::a_subdirectory_and_its_workspace_root_resolve_to_one_answer`
+
+### Isolation never destroys and never silently reuses
+
+A name already taken by a directory or a branch is suffixed, never reused;
+a stale registry entry is pruned before creation; a repository with no commit
+to branch from fails cleanly instead of half-creating.
+
+> `crates/uze-core/src/worktree.rs::a_taken_name_is_suffixed_rather_than_reused_or_refused`
+> `crates/uze-core/src/worktree.rs::isolation_fails_cleanly_on_a_repository_with_no_commits`
+
+### An isolated checkout is invisible to the seat's own commits
+
+Creating one ignores the isolation directory, idempotently and without
+touching foreign entries. Unignored, `git add -A` in the primary stages
+another agent's whole working tree as an embedded repository.
+
+> `crates/uze-core/src/worktree.rs::isolation_creates_a_checkout_on_its_own_branch_and_ignores_the_directory`
+> `crates/uze-core/src/worktree.rs::ignoring_the_directory_is_idempotent_and_preserves_existing_entries`
+
+### The projection never triggers a harness's own isolation
+
+The text projected into the shared baseline states where the reader already
+is and how to isolate a subagent; it never asks for a top-level worktree. A
+harness with its own worktree primitive activates on exactly that
+instruction, and would isolate a second time on top of the checkout UZE
+already placed the agent in.
+
+> `tests/projection/worktree_policy.rs::the_projection_never_triggers_a_harnesss_own_isolation`
+> `crates/uze-core/src/worktree.rs::the_projected_text_never_asks_for_a_top_level_worktree`
+
+### A declaration stays editable
+
+The region's identity carries the rendered content's digest, so changing the
+lock reads as one region going stale and another appearing — never as drift
+inside the region that already exists. Exactly one policy region exists at a
+time, and a hand edit still drifts and is refused.
+
+> `tests/projection/worktree_policy.rs::editing_the_declaration_replaces_its_region_rather_than_drifting`
+> `tests/projection/worktree_policy.rs::an_edited_region_is_blocked_not_overwritten`
+
+### A replaced lock field is rejected, never silently dropped
+
+`ProjectLock` does not deny unknown fields, so the superseded
+worktree-directory key is refused by name — a declared policy can never
+become no policy in silence.
+
+> `crates/uze-core/src/project_lock.rs::the_replaced_directory_key_is_rejected_rather_than_silently_dropped`
+
 ---
 
 ## Decisions deliberately *not* taken

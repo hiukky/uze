@@ -382,12 +382,53 @@ pub struct ProjectContextStatus {
     pub orphaned_regions: Vec<String>,
     pub malformed_regions: Vec<String>,
     pub harnesses: Vec<HarnessContextStatus>,
+    /// The project's worktree policy, when `agents.lock` declares one.
+    /// `None` means no policy is declared — not that isolation is forbidden.
+    pub worktrees: Option<WorktreePolicyStatus>,
     pub portability: Portability,
     /// Human-readable notices for a state worth surfacing but that is not
     /// itself a gap or an error — e.g. a harness carrying legitimate
     /// vendor-specific content alongside its bridge. Never a suggestion to
     /// consolidate or an automatic action.
     pub warnings: Vec<String>,
+}
+
+/// The project's isolation declaration as it currently stands in the shared
+/// instruction file. There is no per-harness row: UZE performs the isolation
+/// itself, at launch, identically everywhere, so there is nothing left for a
+/// harness to preserve or lose.
+#[derive(Clone, Debug, Serialize)]
+pub struct WorktreePolicyStatus {
+    /// Where isolated checkouts live for this project. Fixed layout,
+    /// resolved against the project root — reported, never configured.
+    pub directory: PathBuf,
+    pub completion: uze_core::worktree::CompletionBehavior,
+    pub state: AttachmentState,
+    pub reason: String,
+    /// Regions left by a previous declaration, still present in the file.
+    pub superseded_regions: Vec<String>,
+}
+
+/// The planned or performed change to the worktree policy's managed region.
+#[derive(Clone, Debug, Serialize)]
+pub struct WorktreeRegionPlan {
+    pub file: PathBuf,
+    pub action: instruction_context::PlannedAction,
+    /// Regions a previous policy owned, which this pass would remove. A
+    /// policy edit reads as one region going stale and another appearing,
+    /// never as drift inside the region that already exists.
+    pub superseded: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct WorktreeRegionStatus {
+    pub file: PathBuf,
+    pub state: AttachmentState,
+    pub reason: String,
+    pub removed_superseded: Vec<String>,
+    /// A superseded region whose markers were malformed, so ownership could
+    /// not be proven and nothing was removed.
+    pub blocked_superseded: Vec<(String, String)>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -401,20 +442,35 @@ pub struct BridgePlan {
 pub struct ContextPlan {
     pub agents_md: PathBuf,
     pub agents_md_plan: instruction_context::AgentsMdPlan,
+    /// Present whenever the shared file would gain, keep, lose, or is
+    /// blocked from changing the worktree policy region.
+    pub worktree_region: Option<WorktreeRegionPlan>,
     pub bridges: Vec<BridgePlan>,
 }
 
 impl ContextPlan {
     pub fn has_changes(&self) -> bool {
         self.agents_md_plan.has_changes()
-            || self.bridges.iter().any(|bridge| {
-                matches!(
-                    bridge.action,
-                    instruction_context::PlannedAction::Attach
-                        | instruction_context::PlannedAction::Remove
-                )
-            })
+            || self
+                .worktree_region
+                .as_ref()
+                .is_some_and(|region| is_mutating(&region.action) || !region.superseded.is_empty())
+            || self
+                .bridges
+                .iter()
+                .any(|bridge| is_mutating(&bridge.action))
     }
+}
+
+/// Whether a planned region action would actually write. `Blocked` is not
+/// mutating: it is a reason nothing can be applied, and reporting it as a
+/// pending change would make `context plan` claim work that `reconcile`
+/// will refuse to do.
+fn is_mutating(action: &instruction_context::PlannedAction) -> bool {
+    matches!(
+        action,
+        instruction_context::PlannedAction::Attach | instruction_context::PlannedAction::Remove
+    )
 }
 
 /// A project-scoped health summary. See `UzeApplication::status` for why
@@ -461,6 +517,7 @@ pub struct ContextReconciliationReport {
     /// An orphaned-looking region this pass found but refused to touch —
     /// its markers were malformed, so ownership could not be proven.
     pub blocked_orphans: Vec<(String, String)>,
+    pub worktree_region: Option<WorktreeRegionStatus>,
     pub bridges: Vec<BridgeStatus>,
 }
 

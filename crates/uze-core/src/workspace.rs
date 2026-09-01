@@ -47,6 +47,21 @@ pub struct ResolvedWorkspace {
 /// containing `agents.lock` and/or `marketplace.json`. Nearest ancestor wins —
 /// a nested consumer inside a marketplace (or vice versa) is detected as
 /// its own workspace, never as the outer one.
+/// The workspace root `cwd` belongs to, falling back to `cwd` itself when
+/// nothing marks one.
+///
+/// Every runtime-scoped identity keyed on "which workspace is this" must go
+/// through here rather than through the raw launch directory. The terminal
+/// runtime keys a server — and therefore a whole set of agent panes — on
+/// this answer: resolving it differently in two places means launching UZE
+/// from a repository and from a subdirectory of it produces two independent
+/// servers over one repository, each believing it is alone.
+pub fn workspace_root_or_self(cwd: &Path) -> PathBuf {
+    resolve_workspace(cwd)
+        .map(|workspace| workspace.root)
+        .unwrap_or_else(|_| cwd.to_path_buf())
+}
+
 pub fn resolve_workspace(cwd: &Path) -> Result<ResolvedWorkspace> {
     let canonical = if cwd.is_dir() {
         cwd.canonicalize()
@@ -86,6 +101,35 @@ pub fn resolve_workspace(cwd: &Path) -> Result<ResolvedWorkspace> {
 // Count of a project's own local agent resources is deliberately NOT here:
 // `.agents/` contents are resources *inside* a detected workspace, not
 // workspace facts, and the Overview now surfaces only semantic states.
+
+#[cfg(test)]
+mod workspace_root_tests {
+    use super::*;
+
+    #[test]
+    fn a_subdirectory_and_its_workspace_root_resolve_to_one_answer() {
+        let root = uze_testkit::temp::scratch("workspace-root");
+        let nested = root.join("crates").join("inner");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(root.join(LOCK_FILE_NAME), "version: 1\n").unwrap();
+
+        // The property the terminal server is keyed on: launching from the
+        // root and from a subdirectory must not produce two identities.
+        assert_eq!(
+            workspace_root_or_self(&nested),
+            workspace_root_or_self(&root)
+        );
+    }
+
+    #[test]
+    fn a_directory_marking_no_workspace_answers_itself() {
+        let root = uze_testkit::temp::scratch("workspace-none");
+        assert_eq!(
+            workspace_root_or_self(&root),
+            root.canonicalize().unwrap_or(root)
+        );
+    }
+}
 
 #[cfg(test)]
 mod tests {

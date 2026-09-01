@@ -166,8 +166,6 @@ impl IntegrationRegistry {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
     use uze_core::home::UzeHome;
 
     use super::{IntegrationPort, IntegrationRegistry};

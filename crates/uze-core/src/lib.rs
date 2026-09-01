@@ -7,6 +7,7 @@ pub mod bundle;
 pub mod capability;
 pub mod context;
 pub mod detection_cache;
+pub mod digest;
 pub mod engine;
 pub mod error;
 pub mod exposure;
@@ -36,6 +37,7 @@ pub mod subprocess;
 pub mod text_region;
 pub mod trust;
 pub mod workspace;
+pub mod worktree;
 
 pub use acquisition::{MaterializedPackage, PackageSource, Provenance, ResolvedSource};
 pub use engine::UzeEngine;

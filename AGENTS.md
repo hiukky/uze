@@ -222,3 +222,17 @@ trait proven by conformance tests across all four harnesses, rather than
 split into per-capability traits (`PackageDelivery`, `SkillDelivery`, …) —
 that fragmentation has been considered and rejected absent a concrete
 implementation problem forcing it.
+<!-- uze:begin project:worktree-policy/222da37836952335 -->
+## Concurrent work isolation
+
+- Isolated checkouts live in `.worktrees/<name>` under the primary checkout, one writer each, on branch `agent/<name>`.
+- If your working directory is already inside `.worktrees/`, you are already isolated. Do not create another worktree, and do not switch branches.
+- Before spawning parallel subagents that write files, give each its own checkout so they cannot collide:
+
+```bash
+git worktree add -b agent/<topic> "$(git rev-parse --path-format=absolute --git-common-dir)/../.worktrees/<topic>" HEAD
+```
+
+- The path above is resolved against the *primary* checkout on purpose — a path relative to your own would nest one worktree inside another.
+- When work is done: leave your branch and its commits for review — never merge, rebase, or reset the primary branch.
+<!-- uze:end project:worktree-policy/222da37836952335 -->

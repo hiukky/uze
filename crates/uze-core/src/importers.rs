@@ -154,10 +154,7 @@ fn validate_reference(reference: &str, manifest: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{
-        fs,
-        time::{SystemTime, UNIX_EPOCH},
-    };
+    use std::fs;
 
     /// Still-valid canonical invariant, now proven directly against the
     /// live `AgentPluginImporter` — this used to go through the dead

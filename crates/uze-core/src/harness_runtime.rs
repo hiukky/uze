@@ -121,24 +121,11 @@ pub(crate) fn is_executable_file(path: &Path) -> bool {
 /// canonical path used directly as a directory name risks length limits,
 /// `/`, spaces, and non-UTF-8 segments, so the id is a short hash instead.
 ///
-/// FNV-1a rather than a cryptographic hash on purpose: this identifies a
-/// project for cache-directory naming, it authenticates nothing, and FNV-1a
-/// needs no new dependency and is stable forever — unlike `std`'s
-/// `DefaultHasher`, whose algorithm the standard library explicitly does
-/// not promise to keep across versions.
+/// The digest is the workspace's shared, deliberately non-cryptographic one
+/// (`crate::digest`): this identifies a project for cache-directory naming
+/// and authenticates nothing.
 pub fn project_id_for(canonical_project_root: &Path) -> String {
-    format!(
-        "{:016x}",
-        fnv1a64(canonical_project_root.to_string_lossy().as_bytes())
-    )
-}
-
-fn fnv1a64(bytes: &[u8]) -> u64 {
-    const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
-    const PRIME: u64 = 0x0000_0100_0000_01b3;
-    bytes.iter().fold(OFFSET_BASIS, |hash, &byte| {
-        (hash ^ u64::from(byte)).wrapping_mul(PRIME)
-    })
+    crate::digest::short_hex(canonical_project_root.to_string_lossy().as_bytes())
 }
 
 #[cfg(test)]

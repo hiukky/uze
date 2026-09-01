@@ -475,8 +475,11 @@ fn configured_worktrees_dir(main_root: &Path) -> Option<PathBuf> {
     let lock = uze_core::project_lock::load_lock(main_root)
         .ok()
         .flatten()?;
-    let directory = lock.worktrees_dir?;
-    main_root.join(directory).canonicalize().ok()
+    lock.worktrees?;
+    main_root
+        .join(uze_core::worktree::WORKTREES_DIRECTORY)
+        .canonicalize()
+        .ok()
 }
 
 /// Runs `git -C <root> <args>`, treating exit `0` *or* `1` as success —
@@ -1643,7 +1646,9 @@ mod tests {
         let _environment = uze_testkit::env::scope();
         let parent = uze_testkit::temp::scratch("worktree-test");
         let root = parent.join("project");
-        let worktrees = parent.join("worktrees");
+        // The isolation directory is fixed layout, under the primary
+        // checkout — the same place UZE creates agent checkouts in.
+        let worktrees = root.join(uze_core::worktree::WORKTREES_DIRECTORY);
         let feature = worktrees.join("feature");
         std::fs::create_dir_all(&root).unwrap();
         let git = |directory: &Path, args: &[&str]| {
@@ -1674,11 +1679,7 @@ mod tests {
                 feature.to_str().unwrap(),
             ],
         );
-        std::fs::write(
-            root.join("agents.lock"),
-            "version: 1\nworktrees_dir: ../worktrees\n",
-        )
-        .unwrap();
+        std::fs::write(root.join("agents.lock"), "version: 1\nworktrees: {}\n").unwrap();
 
         let discovered = discover_worktrees(&feature).unwrap();
         assert_eq!(discovered.len(), 2);

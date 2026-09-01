@@ -560,8 +560,13 @@ fn run(cli: Cli) -> Result<()> {
         })?;
         return match action {
             TerminalAction::Attach => uze::ui::run(home),
-            TerminalAction::Stop => uze_terminal::stop(&root)
-                .map_err(|error| uze::UzeError::AcquisitionFailed(error.to_string())),
+            // Resolved the same way `ui::orchestrator` resolves it before
+            // attaching — `stop` must target the server that `attach`
+            // actually started, not one keyed on the raw cwd.
+            TerminalAction::Stop => {
+                uze_terminal::stop(&uze::workspace::workspace_root_or_self(&root))
+                    .map_err(|error| uze::UzeError::AcquisitionFailed(error.to_string()))
+            }
             TerminalAction::Serve { root } => uze_terminal::serve(root)
                 .map_err(|error| uze::UzeError::AcquisitionFailed(error.to_string())),
         };
@@ -2220,6 +2225,22 @@ fn render_context_status(status: &ProjectContextStatus) -> String {
         };
         text.push_str(&format!("  {}  {delivery}\n", harness.display_name));
     }
+    if let Some(worktrees) = &status.worktrees {
+        text.push('\n');
+        text.push_str(&progress::report_section("Worktree policy"));
+        text.push_str(&format!(
+            "  {}  region {:?}\n",
+            worktrees.directory.display(),
+            worktrees.state
+        ));
+        text.push_str(&format!(
+            "  completion: {}\n",
+            worktrees.completion.abi_name()
+        ));
+        for identity in &worktrees.superseded_regions {
+            text.push_str(&format!("  {identity}  SUPERSEDED (a previous policy)\n"));
+        }
+    }
     text.push_str(&format!(
         "\nPortability: {}\n",
         render_portability(&status.portability)
@@ -2292,6 +2313,17 @@ fn render_context_plan(plan: &ContextPlan, app: &UzeApplication) -> String {
             ));
         }
     }
+    if let Some(region) = &plan.worktree_region {
+        text.push_str("\nWorktree policy\n");
+        text.push_str(&format!(
+            "  {}  {}\n",
+            region.file.display(),
+            render_action(&region.action)
+        ));
+        for identity in &region.superseded {
+            text.push_str(&format!("  {identity}  REMOVE (superseded)\n"));
+        }
+    }
     if plan.has_changes() {
         text.push_str("\nRun `uze context reconcile` to apply.\n");
     } else {
@@ -2318,6 +2350,20 @@ fn render_context_reconciliation(
     }
     for (orphan, reason) in &report.blocked_orphans {
         text.push_str(&format!("  {orphan}  BLOCKED: {reason}\n"));
+    }
+    if let Some(region) = &report.worktree_region {
+        text.push_str("\nWorktree policy\n");
+        text.push_str(&format!(
+            "  {}  {:?}\n",
+            region.file.display(),
+            region.state
+        ));
+        for identity in &region.removed_superseded {
+            text.push_str(&format!("  {identity}  REMOVED (superseded)\n"));
+        }
+        for (identity, reason) in &region.blocked_superseded {
+            text.push_str(&format!("  {identity}  BLOCKED: {reason}\n"));
+        }
     }
     if !report.bridges.is_empty() {
         text.push_str("\nBridges\n");
