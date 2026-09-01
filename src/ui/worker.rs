@@ -400,6 +400,11 @@ fn load_refresh_data(home: UzeHome, context_root: &std::path::Path) -> Result<Re
         .map(|workspace| workspace.root.as_path())
         .unwrap_or(context_root);
     let context_status = app.context_inspect(status_root).ok();
+    // Resolved from the raw `context_root`, deliberately not `status_root`:
+    // `agent_context` applies the one project-root rule itself, and going
+    // through a second, differently-resolved root is exactly how the two
+    // screens used to end up describing different projects.
+    let agent_context = app.agent_context(context_root);
     // Same root the workspace client records against, so a uze launched
     // from a subdirectory still reads back its own history.
     let prompt_history =
@@ -411,6 +416,7 @@ fn load_refresh_data(home: UzeHome, context_root: &std::path::Path) -> Result<Re
         marketplace_count,
         profiles,
         context_status,
+        agent_context,
         workspace,
         prompt_history,
     })

@@ -21,6 +21,7 @@ pub mod persistence;
 pub mod preference;
 pub mod profile_state;
 pub mod project;
+pub mod project_context;
 pub mod project_lock;
 pub mod project_root;
 pub mod prompt_history;

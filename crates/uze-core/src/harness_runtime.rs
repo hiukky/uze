@@ -6,9 +6,10 @@
 //! `IntegrationPort::runtime_contribution` (see `integration.rs`). This
 //! module answers three harness-agnostic questions instead: which real
 //! executable does a shim-invoked name resolve to (skipping UZE's own shim
-//! directory, so the shim can never recurse into itself); does the current
-//! working directory belong to a project with an `AGENTS.md`; and what
-//! stable, filesystem-safe id identifies that project across repeat runs.
+//! directory, so the shim can never recurse into itself), and what stable,
+//! filesystem-safe id identifies a project across repeat runs. Which
+//! project a directory belongs to, and what portable context it carries, is
+//! `crate::project_context`'s single answer — not this module's.
 //!
 //! This is `RUNTIME INFRASTRUCTURE`, not `CONTEXT DELIVERY POLICY`: building
 //! this does not by itself decide that runtime projection replaces the
@@ -23,7 +24,7 @@ use std::{
 
 /// What a shim-mediated launch needs to decide, read-only. `cwd` is the
 /// directory the user invoked the harness from, not necessarily the project
-/// root — see `discover_project_agents_md`.
+/// root — see `crate::project_context::resolve`.
 pub struct RuntimeContext<'a> {
     pub cwd: &'a Path,
     pub home: &'a crate::home::UzeHome,
@@ -112,24 +113,6 @@ fn is_executable_file(path: &Path) -> bool {
 #[cfg(not(unix))]
 fn is_executable_file(path: &Path) -> bool {
     path.is_file()
-}
-
-/// Walks upward from `start` looking for a project's `AGENTS.md`, stopping
-/// at the first one found or at a `.git` boundary. Deliberately no
-/// registry, no configuration: "is there an `AGENTS.md` above me" is the
-/// entire question.
-pub fn discover_project_agents_md(start: &Path) -> Option<PathBuf> {
-    let mut dir = start.canonicalize().unwrap_or_else(|_| start.to_path_buf());
-    loop {
-        let candidate = dir.join("AGENTS.md");
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-        if dir.join(".git").exists() {
-            return None;
-        }
-        dir = dir.parent()?.to_path_buf();
-    }
 }
 
 /// Deterministic, filesystem-safe id for a project root. A project's
@@ -224,34 +207,6 @@ mod tests {
         unsafe { std::env::set_var("PATH", &path_var) };
 
         assert_eq!(resolve_real_executable(&["claude"], &shims_dir), None);
-    }
-
-    #[test]
-    fn discovers_agents_md_in_an_ancestor_directory() {
-        let root = scratch_dir("discover");
-        fs::write(root.join("AGENTS.md"), b"# test\n").unwrap();
-        let nested = root.join("a/b/c");
-        fs::create_dir_all(&nested).unwrap();
-
-        let found = discover_project_agents_md(&nested).expect("found");
-        assert_eq!(found, root.join("AGENTS.md").canonicalize().unwrap());
-    }
-
-    #[test]
-    fn stops_at_a_git_boundary_without_an_agents_md() {
-        let root = scratch_dir("boundary");
-        fs::create_dir_all(root.join(".git")).unwrap();
-        let nested = root.join("a/b");
-        fs::create_dir_all(&nested).unwrap();
-        // No AGENTS.md anywhere; an ancestor further up (the temp root)
-        // must never be considered even if it happened to have one.
-        assert_eq!(discover_project_agents_md(&nested), None);
-    }
-
-    #[test]
-    fn no_agents_md_anywhere_is_none() {
-        let root = scratch_dir("absent");
-        assert_eq!(discover_project_agents_md(&root.join("nowhere")), None);
     }
 
     #[test]

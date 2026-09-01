@@ -13,7 +13,7 @@ use ratatui::{
 
 use crate::integration::AttachmentState;
 use crate::{
-    application::{HarnessContextDelivery, HarnessHealth, ProjectContextStatus},
+    application::{AgentContextStatus, HarnessHealth, ResourceDelivery, UndeliveredReason},
     capability::CapabilityKind,
     router::HarnessCapabilities,
 };
@@ -89,40 +89,40 @@ impl HarnessStatus {
     }
 }
 
-/// Looks up the one `HarnessContextStatus` (from the same `context_status`
-/// the old standalone Context screen read) matching a harness's stable
-/// `integration` id — `HarnessHealth` and `HarnessContextStatus` are two
-/// separate read models keyed on the same id, not one shared struct.
-fn context_delivery_for<'a>(
-    status: Option<&'a ProjectContextStatus>,
+/// Looks up the one `AgentContextStatus` matching a harness's stable
+/// `integration` id — `HarnessHealth` (machine-scoped) and
+/// `AgentContextStatus` (this project's delivery) are two separate read
+/// models keyed on the same id, not one shared struct.
+fn agent_context_for<'a>(
+    context: &'a [AgentContextStatus],
     integration: &str,
-) -> Option<&'a HarnessContextDelivery> {
-    status?
-        .harnesses
+) -> Option<&'a AgentContextStatus> {
+    context
         .iter()
         .find(|harness| harness.integration == integration)
-        .map(|harness| &harness.delivery)
 }
 
-/// A list row only earns a bridge-health glyph when the AGENTS.md bridge is
-/// both needed and not currently `Matched` — an unneeded-but-missing bridge
-/// isn't a problem, and a healthy one has nothing to flag. Kept separate
-/// from `agents_md_row` (the drawer's fuller label): the list only has room
-/// for a glyph, not the label that goes with it.
-fn bridge_flag(delivery: Option<&HarnessContextDelivery>) -> Option<(&'static str, Color)> {
-    match delivery {
-        Some(HarnessContextDelivery::Bridge {
-            needed: true,
-            state,
-        }) if *state != AttachmentState::Matched => {
-            let color = match state {
-                AttachmentState::Conflict | AttachmentState::Blocked => DANGER,
-                _ => WARNING,
-            };
-            Some(("⚠", color))
-        }
-        _ => None,
-    }
+/// A list row earns a glyph only for a real gap: the project carries a
+/// portable resource this harness is not receiving. A project that simply
+/// has no `AGENTS.md` (or no `.agents/`) is not a gap and never flags —
+/// that conflation is what made every Claude Code row read as a problem,
+/// or as "not needed", regardless of what was actually being delivered.
+/// Kept separate from `context_rows` (the drawer's fuller labels): the list
+/// only has room for a glyph, not the label that goes with it.
+fn context_gap_flag(context: Option<&AgentContextStatus>) -> Option<(&'static str, Color)> {
+    let context = context?;
+    let worst = [&context.instructions, &context.agents_directory]
+        .into_iter()
+        .find(|delivery| delivery.is_gap())?;
+    let color = match worst {
+        ResourceDelivery::Undelivered(UndeliveredReason::Bridge(
+            AttachmentState::Conflict | AttachmentState::Blocked,
+        ))
+        | ResourceDelivery::Undelivered(UndeliveredReason::Unsupported)
+        | ResourceDelivery::Undelivered(UndeliveredReason::HarnessAbsent) => DANGER,
+        _ => WARNING,
+    };
+    Some(("⚠", color))
 }
 
 /// Width of the drawer's label column, shared by the key/value rows (
@@ -253,10 +253,9 @@ pub(crate) fn render_harnesses(
                     }
                     let selected = position == model.harnesses_selected;
                     let status = HarnessStatus::from(harness);
-                    let delivery =
-                        context_delivery_for(model.context_status.as_ref(), &harness.integration);
+                    let context = agent_context_for(&model.agent_context, &harness.integration);
                     render_harness_card(
-                        frame, rect, harness, status, delivery, selected, hits, position,
+                        frame, rect, harness, status, context, selected, hits, position,
                     );
                 }
 
@@ -286,8 +285,8 @@ pub(crate) fn render_harnesses(
     }
 
     if drawer_open && let Some(harness) = model.selected_harness() {
-        let delivery = context_delivery_for(model.context_status.as_ref(), &harness.integration);
-        render_harness_drawer(frame, area, drawer_width, model, harness, delivery, hits);
+        let context = agent_context_for(&model.agent_context, &harness.integration);
+        render_harness_drawer(frame, area, drawer_width, model, harness, context, hits);
     }
 }
 
@@ -297,7 +296,7 @@ fn render_harness_card(
     rect: Rect,
     harness: &HarnessHealth,
     status: HarnessStatus,
-    delivery: Option<&HarnessContextDelivery>,
+    context: Option<&AgentContextStatus>,
     selected: bool,
     hits: &mut Vec<(Rect, Hit)>,
     index: usize,
@@ -354,10 +353,10 @@ fn render_harness_card(
         harness.integration.clone(),
         Style::default().fg(MUTED),
     )];
-    if let Some((glyph, color)) = bridge_flag(delivery) {
+    if let Some((glyph, color)) = context_gap_flag(context) {
         tags.push(Span::raw("  "));
         tags.push(Span::styled(
-            format!("{glyph} AGENTS.md"),
+            format!("{glyph} context"),
             Style::default().fg(color),
         ));
     }
@@ -374,7 +373,7 @@ fn render_harness_drawer(
     width: u16,
     model: &TuiModel,
     harness: &HarnessHealth,
-    delivery: Option<&HarnessContextDelivery>,
+    context: Option<&AgentContextStatus>,
     hits: &mut Vec<(Rect, Hit)>,
 ) {
     let status = HarnessStatus::from(harness);
@@ -471,7 +470,7 @@ fn render_harness_drawer(
         "COMPATIBILITY",
         Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
     )));
-    for (label, status, style) in compatibility_rows(harness, delivery) {
+    for (label, status, style) in compatibility_rows(harness, context) {
         lines.push(Line::from(vec![
             label_span(label, Style::default().fg(TEXT_SECONDARY)),
             Span::styled(status, style),
@@ -503,20 +502,17 @@ fn friendly_delivery(strategy: &str) -> &str {
 
 /// One row per capability UZE knows about, in the order a reader would care
 /// about them: what a harness actually delivers today first, what remains
-/// unimplemented anywhere last. `AGENTS.md` is listed separately from the
-/// `capabilities()`-derived rows below it: instructions are not a
-/// `CapabilityKind::Instruction` resource routed through the same
-/// `HarnessCapabilities` sets — mixing it into the same lookup would
-/// silently mislabel it "not supported" on every harness, since none of
-/// them ever populate that capability kind. Hooks are `CapabilityKind::Hook`
-/// and route through the same sets (declared native/adaptable per harness);
-/// the hardcoded "Not implemented" stub for them was removed with ADR-033
-/// delivery.
+/// unimplemented anywhere last. The two portable *project* resources
+/// (`AGENTS.md` and `.agents/`) are listed separately from the
+/// `capabilities()`-derived rows below them, and read from a different
+/// model: they are not `CapabilityKind` resources routed through
+/// `HarnessCapabilities` — mixing them into the same lookup would silently
+/// mislabel them "not supported" on every harness, since none of them ever
+/// populate `CapabilityKind::Instruction`.
 fn compatibility_rows(
     harness: &HarnessHealth,
-    delivery: Option<&HarnessContextDelivery>,
+    context: Option<&AgentContextStatus>,
 ) -> Vec<(&'static str, &'static str, Style)> {
-    let instructions = agents_md_row(delivery);
     let routed = [
         ("Skills", CapabilityKind::AgentSkill),
         ("MCP", CapabilityKind::Mcp),
@@ -528,55 +524,61 @@ fn compatibility_rows(
         let (status, style) = capability_status(&harness.capabilities, kind);
         (label, status, style)
     });
-    std::iter::once(instructions).chain(routed).collect()
+    context_rows(context).into_iter().chain(routed).collect()
 }
 
-/// The drawer's AGENTS.md compatibility row — the merged replacement for
-/// what used to be the standalone Context screen's whole reason to exist.
-/// Reads the same `HarnessContextDelivery` that screen read, so a
-/// Missing/Drifted/Conflict/Blocked bridge shows up here with the same
-/// fidelity it always had, instead of collapsing to a plain "Bridged".
-///
-/// `state` decides the label first, `needed` only softens it — mirroring
-/// the old Context screen exactly. A `Matched` bridge always reads
-/// "Bridged", even when `needed` is currently false: `needed` is about
-/// whether AGENTS.md *right now* has a matched contribution worth bridging,
-/// not whether the on-disk bridge file itself is working — a healthy
-/// bridge must never be hidden behind "not needed" just because nothing
-/// currently requires writing to it.
-fn agents_md_row(delivery: Option<&HarnessContextDelivery>) -> (&'static str, &'static str, Style) {
+/// The drawer's project-context rows. Each names the mechanism actually
+/// carrying that resource into this harness, so a harness receiving
+/// `AGENTS.md` through the runtime shim reads as delivered instead of the
+/// old "— Not needed" (which meant only that no installed package had
+/// contributed a managed region — a fact about plugins, never about
+/// whether the harness could see the project's own instructions).
+fn context_rows(context: Option<&AgentContextStatus>) -> Vec<(&'static str, &'static str, Style)> {
+    let Some(context) = context else {
+        let unknown = ("— Unknown", Style::default().fg(MUTED));
+        return vec![
+            ("AGENTS.md", unknown.0, unknown.1),
+            (".agents", unknown.0, unknown.1),
+        ];
+    };
+    let (instructions, instructions_style) = context_row(&context.instructions);
+    let (agents_directory, agents_directory_style) = context_row(&context.agents_directory);
+    vec![
+        ("AGENTS.md", instructions, instructions_style),
+        (".agents", agents_directory, agents_directory_style),
+    ]
+}
+
+fn context_row(delivery: &ResourceDelivery) -> (&'static str, Style) {
     match delivery {
-        None => ("AGENTS.md", "— Unknown", Style::default().fg(MUTED)),
-        Some(HarnessContextDelivery::Native) => {
-            ("AGENTS.md", "√ Native", Style::default().fg(ACCENT))
-        }
-        Some(HarnessContextDelivery::NotDetected) => {
-            ("AGENTS.md", "— Not detected", Style::default().fg(MUTED))
-        }
-        Some(HarnessContextDelivery::Bridge { needed, state }) => {
-            // Label always names the bridge's real `state` — `needed` never
-            // overrides it, only softens a non-Matched state's color, since
-            // an unneeded-but-present problem is still real, just lower
-            // priority. `Missing` is the one state that reads as "Not
-            // needed" rather than a naked "⚠ Missing" when unneeded: a
-            // bridge that doesn't exist and isn't required is the
-            // no-op case, not a gap.
-            let label = match state {
-                AttachmentState::Matched => "√ Bridged",
-                AttachmentState::Missing if !needed => "— Not needed",
-                AttachmentState::Missing => "⚠ Missing",
-                AttachmentState::Drifted => "⚠ Drifted",
-                AttachmentState::Conflict => "✕ Conflict",
-                AttachmentState::Blocked => "✕ Blocked",
-            };
-            let color = match state {
-                AttachmentState::Matched => ACCENT,
-                _ if !needed => TEXT_DIM,
-                AttachmentState::Missing | AttachmentState::Drifted => WARNING,
-                AttachmentState::Conflict | AttachmentState::Blocked => DANGER,
-            };
-            ("AGENTS.md", label, Style::default().fg(color))
-        }
+        ResourceDelivery::Native => ("√ Native", Style::default().fg(ACCENT)),
+        ResourceDelivery::Projected => ("√ Runtime shim", Style::default().fg(ACCENT)),
+        ResourceDelivery::Bridged => ("√ Bridged", Style::default().fg(ACCENT)),
+        // Not a gap and not a success: the project carries nothing to
+        // deliver. Dimmed so it never competes with a row that needs
+        // attention.
+        ResourceDelivery::AbsentFromProject => ("— None in project", Style::default().fg(TEXT_DIM)),
+        ResourceDelivery::Undelivered(reason) => match reason {
+            UndeliveredReason::HarnessAbsent => ("— Not detected", Style::default().fg(MUTED)),
+            UndeliveredReason::ShimShadowed => ("⚠ PATH shadowed", Style::default().fg(WARNING)),
+            UndeliveredReason::Bridge(AttachmentState::Missing) => {
+                ("⚠ Missing", Style::default().fg(WARNING))
+            }
+            UndeliveredReason::Bridge(AttachmentState::Drifted) => {
+                ("⚠ Drifted", Style::default().fg(WARNING))
+            }
+            UndeliveredReason::Bridge(AttachmentState::Conflict) => {
+                ("✕ Conflict", Style::default().fg(DANGER))
+            }
+            UndeliveredReason::Bridge(AttachmentState::Blocked) => {
+                ("✕ Blocked", Style::default().fg(DANGER))
+            }
+            // `Matched` is `Bridged` above, never a reason for a gap.
+            UndeliveredReason::Bridge(AttachmentState::Matched) => {
+                ("√ Bridged", Style::default().fg(ACCENT))
+            }
+            UndeliveredReason::Unsupported => ("✕ Not supported", Style::default().fg(DANGER)),
+        },
     }
 }
 
@@ -627,73 +629,94 @@ mod tests {
         assert_eq!(status.color(), WARNING);
     }
 
-    // A `Matched` bridge must always read "Bridged", regardless of
-    // `needed` — `needed` describes whether AGENTS.md currently has
-    // something worth bridging, not whether the bridge file itself is
-    // working. Claude Code (the only `Bridge`-type integration) hits
-    // `needed: false` any time no installed package's instructions are
-    // currently matched in AGENTS.md, which does not make its already
-    // -matched `CLAUDE.md` bridge stop existing.
+    fn context(
+        instructions: ResourceDelivery,
+        agents_directory: ResourceDelivery,
+    ) -> AgentContextStatus {
+        AgentContextStatus {
+            integration: "claude-code".to_owned(),
+            display_name: "Claude Code".to_owned(),
+            present: true,
+            root: std::path::PathBuf::from("/project"),
+            instructions,
+            agents_directory,
+        }
+    }
+
+    // The reported regression: Claude Code's AGENTS.md row read
+    // "— Not needed" in every project, because the old model asked whether
+    // an installed *package* had contributed a managed region rather than
+    // whether the harness was receiving the project's instructions at all.
     #[test]
-    fn matched_bridge_reads_bridged_even_when_not_currently_needed() {
-        let delivery = HarnessContextDelivery::Bridge {
-            needed: false,
-            state: AttachmentState::Matched,
-        };
-        let (label, text, _) = agents_md_row(Some(&delivery));
-        assert_eq!(label, "AGENTS.md");
-        assert_eq!(text, "√ Bridged");
+    fn a_runtime_projection_reads_as_delivered_not_as_not_needed() {
+        let context = context(ResourceDelivery::Projected, ResourceDelivery::Projected);
+        let rows = context_rows(Some(&context));
+        assert_eq!(rows[0].0, "AGENTS.md");
+        assert_eq!(rows[0].1, "√ Runtime shim");
+        assert_eq!(rows[0].2.fg, Some(ACCENT));
+        assert_eq!(rows[1].0, ".agents");
+        assert_eq!(rows[1].1, "√ Runtime shim");
+        assert!(context_gap_flag(Some(&context)).is_none());
     }
 
     #[test]
-    fn missing_and_unneeded_bridge_reads_not_needed() {
-        let delivery = HarnessContextDelivery::Bridge {
-            needed: false,
-            state: AttachmentState::Missing,
-        };
-        let (_, text, _) = agents_md_row(Some(&delivery));
-        assert_eq!(text, "— Not needed");
+    fn a_project_carrying_nothing_is_dimmed_and_never_flagged() {
+        let context = context(
+            ResourceDelivery::AbsentFromProject,
+            ResourceDelivery::AbsentFromProject,
+        );
+        let rows = context_rows(Some(&context));
+        assert_eq!(rows[0].1, "— None in project");
+        assert_eq!(rows[0].2.fg, Some(TEXT_DIM));
+        assert!(context_gap_flag(Some(&context)).is_none());
     }
 
     #[test]
-    fn missing_and_needed_bridge_is_a_warning() {
-        let delivery = HarnessContextDelivery::Bridge {
-            needed: true,
-            state: AttachmentState::Missing,
-        };
-        let (_, text, style) = agents_md_row(Some(&delivery));
-        assert_eq!(text, "⚠ Missing");
-        assert_eq!(style.fg, Some(WARNING));
+    fn each_resource_is_answered_independently() {
+        // A project with only `.agents/` still shows its Skills delivered
+        // — the old model gated the whole projection on AGENTS.md, so this
+        // rendered as "not supported".
+        let context = context(
+            ResourceDelivery::AbsentFromProject,
+            ResourceDelivery::Projected,
+        );
+        let rows = context_rows(Some(&context));
+        assert_eq!(rows[0].1, "— None in project");
+        assert_eq!(rows[1].1, "√ Runtime shim");
+        assert!(context_gap_flag(Some(&context)).is_none());
     }
 
     #[test]
-    fn conflict_while_needed_is_flagged_dangerous_in_list_and_drawer() {
-        let delivery = HarnessContextDelivery::Bridge {
-            needed: true,
-            state: AttachmentState::Conflict,
-        };
-        let (_, text, style) = agents_md_row(Some(&delivery));
-        assert_eq!(text, "✕ Conflict");
-        assert_eq!(style.fg, Some(DANGER));
+    fn a_matched_bridge_still_reads_as_delivered() {
+        let context = context(ResourceDelivery::Bridged, ResourceDelivery::Native);
+        let rows = context_rows(Some(&context));
+        assert_eq!(rows[0].1, "√ Bridged");
+        assert_eq!(rows[1].1, "√ Native");
+    }
 
-        let (glyph, color) = bridge_flag(Some(&delivery)).expect("needed conflict must flag");
+    #[test]
+    fn a_real_gap_is_named_and_flagged_in_the_list() {
+        let context = context(
+            ResourceDelivery::Undelivered(UndeliveredReason::Bridge(AttachmentState::Conflict)),
+            ResourceDelivery::Native,
+        );
+        let rows = context_rows(Some(&context));
+        assert_eq!(rows[0].1, "✕ Conflict");
+        assert_eq!(rows[0].2.fg, Some(DANGER));
+        let (glyph, color) = context_gap_flag(Some(&context)).expect("a conflict must flag");
         assert_eq!(glyph, "⚠");
         assert_eq!(color, DANGER);
     }
 
     #[test]
-    fn conflict_while_unneeded_is_named_but_deemphasized() {
-        let delivery = HarnessContextDelivery::Bridge {
-            needed: false,
-            state: AttachmentState::Conflict,
-        };
-        let (_, text, style) = agents_md_row(Some(&delivery));
-        assert_eq!(text, "✕ Conflict");
-        assert_eq!(style.fg, Some(TEXT_DIM));
-
-        // An unneeded bridge never earns the list's glyph, no matter how
-        // bad its state — the glyph exists to flag bridges the project
-        // actually depends on right now.
-        assert!(bridge_flag(Some(&delivery)).is_none());
+    fn a_shadowed_shim_flags_as_an_environment_warning() {
+        let context = context(
+            ResourceDelivery::Undelivered(UndeliveredReason::ShimShadowed),
+            ResourceDelivery::Undelivered(UndeliveredReason::ShimShadowed),
+        );
+        let rows = context_rows(Some(&context));
+        assert_eq!(rows[0].1, "⚠ PATH shadowed");
+        let (_, color) = context_gap_flag(Some(&context)).expect("a shadowed shim must flag");
+        assert_eq!(color, WARNING);
     }
 }

@@ -37,6 +37,7 @@ use uze_integrations::registry::IntegrationRegistry;
 
 use crate::bootstrap;
 
+mod agent_context;
 mod context;
 mod doctor;
 mod inspection_cache;
@@ -48,6 +49,7 @@ mod profile;
 mod project_environment;
 mod read_models;
 
+pub use agent_context::{AgentContextStatus, ResourceDelivery, UndeliveredReason};
 pub use profile::{ProfileApplyResult, ProfileSummary};
 
 // Re-export project environment types for CLI access.

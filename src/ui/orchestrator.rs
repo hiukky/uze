@@ -62,51 +62,48 @@ pub(crate) enum WorkspaceExit {
     Quit,
 }
 
-/// Computes the harness-support read model in a background thread and
-/// delivers it through `sender` — the same async path `attach_workspace`
-/// uses at attach time, reused wherever the model needs a fresh read
-/// instead of trusting a possibly stale earlier one (see the
-/// `OpenAgentSupport` handler below).
-fn spawn_support_refresh(
-    home: &UzeHome,
-    root: &Path,
-    sender: mpsc::Sender<Result<Vec<super::agent_support::AgentSupport>>>,
-) {
+/// Which harness, resolved against which directory. Both halves are the
+/// identity of one support resolution: the same agent open in two panes
+/// sitting in two different projects has two different answers, and a
+/// resolution computed for one must never be shown for the other. This is
+/// the whole reason the old session-wide "resolve once at the attach root"
+/// read was wrong.
+type SupportKey = (String, PathBuf);
+
+/// A finished resolution, tagged with the key it answers. `support` is
+/// `None` when the read failed outright — kept as a resolved-but-empty
+/// answer rather than dropped, so a failing read cannot spin the refresh
+/// loop by looking forever unresolved.
+struct SupportResolution {
+    key: SupportKey,
+    support: Option<super::agent_support::AgentSupport>,
+}
+
+/// Computes one agent's support read model in a background thread and
+/// delivers it through `sender`.
+///
+/// Everything about the answer comes from `key`: the harness the pane is
+/// actually running, and that pane's own working directory. The
+/// application resolves the project from there
+/// (`UzeApplication::agent_context_for`), the same way the runtime shim
+/// resolves it when it execs the harness from that directory — so the
+/// popup reports the delivery a launch here would really perform, not the
+/// one that would have happened wherever `uze` itself was started.
+fn spawn_support_refresh(home: &UzeHome, key: SupportKey, sender: mpsc::Sender<SupportResolution>) {
     let support_home = home.clone();
-    let support_root = root.to_path_buf();
     thread::spawn(move || {
-        let result = super::tui_application(support_home).map(|app| {
-            let workspace = app.overview_workspace(&support_root).ok();
-            let context_root = workspace
-                .as_ref()
-                .map(|workspace| workspace.root.as_path())
-                .unwrap_or(&support_root);
-            let context = app.context_inspect(context_root).ok();
-            // The `.agents` question must be answered at the same root the
-            // AGENTS.md row is — the context inspect's resolved project
-            // root — not at the workspace root (`resolve_workspace` climbs
-            // only for lock/manifest, so they can differ for a project
-            // whose root carries only `AGENTS.md`). Two different roots
-            // made the two rows disagree about the same `.agents/`.
-            let agents_directory_loaded = context
-                .as_ref()
-                .is_some_and(|status| status.canonical.join(".agents").is_dir());
+        let support = super::tui_application(support_home).ok().and_then(|app| {
+            let context = app.agent_context_for(&key.0, &key.1).ok()?;
+            let health = app.harness_inspect(&key.0).ok()?;
             let profiles = app.list_profiles().unwrap_or_default();
             let active_profile = profiles.iter().find(|profile| profile.active);
-            app.doctor()
-                .harnesses
-                .into_iter()
-                .map(|health| {
-                    super::agent_support::AgentSupport::from_health(
-                        health,
-                        context.as_ref(),
-                        agents_directory_loaded,
-                        active_profile,
-                    )
-                })
-                .collect()
+            Some(super::agent_support::AgentSupport::resolve(
+                health,
+                &context,
+                active_profile,
+            ))
         });
-        let _ = sender.send(result);
+        let _ = sender.send(SupportResolution { key, support });
     });
 }
 
@@ -189,8 +186,12 @@ pub(crate) fn attach_workspace(
     // `claude_runtime_projection` resolving) — so `OpenAgentSupport` below
     // fires a fresh one on every open rather than trusting this attach-time
     // snapshot for the rest of the session.
-    let (support_sender, support_receiver) = mpsc::channel();
-    spawn_support_refresh(home, root, support_sender.clone());
+    // No attach-time prefetch: there is nothing to resolve until a tab is
+    // recognized as running an agent, and what to resolve then depends on
+    // that pane's own directory. The loop below kicks a refresh the moment
+    // the selection names an agent whose answer is not already in hand —
+    // the same moment the "✦" badge appears.
+    let (support_sender, support_receiver) = mpsc::channel::<SupportResolution>();
     let activity_spinner = ProgressBar::new_spinner();
     activity_spinner.set_draw_target(ProgressDrawTarget::hidden());
     activity_spinner
@@ -237,9 +238,27 @@ pub(crate) fn attach_workspace(
         while let Ok(event) = receiver.try_recv() {
             model.apply(event);
         }
-        if let Ok(result) = support_receiver.try_recv() {
-            model.agent_support = result.unwrap_or_default();
+        while let Ok(resolution) = support_receiver.try_recv() {
+            if model.agent_support_pending.as_ref() == Some(&resolution.key) {
+                model.agent_support_pending = None;
+            }
+            model.agent_support = Some(resolution);
             model.dirty = true;
+        }
+        // Contextual resolution: whatever the selection currently is, that
+        // is what must be resolved. Keyed on `(harness, cwd)`, so this
+        // fires exactly when the answer could have changed — a different
+        // agent tab selected, or the server's live probe reporting the
+        // pane moved — and never repeats for an answer already held.
+        if let Some(key) = selected_agent_context(&model, &identities)
+            && model.agent_support_pending.as_ref() != Some(&key)
+            && model
+                .agent_support
+                .as_ref()
+                .is_none_or(|resolution| resolution.key != key)
+        {
+            model.agent_support_pending = Some(key.clone());
+            spawn_support_refresh(home, key, support_sender.clone());
         }
         if let Some(view) = model.git_view.as_mut()
             && view.refresh_due()
@@ -891,18 +910,21 @@ pub(crate) fn attach_workspace(
                             open_git_view(&mut model);
                         }
                         WorkspaceHit::OpenAgentSupport(anchor) => {
-                            model.support_dropdown = selected_agent_support(&model, &identities)
-                                .map(|integration| AgentSupportDropdown {
-                                    integration: integration.to_owned(),
-                                    anchor,
-                                });
-                            // Refreshes `model.agent_support` in the
-                            // background so a dropdown left open across a
-                            // slow first read still catches up, and the
-                            // next open past this one starts from live
-                            // state instead of whatever was true at attach
-                            // time.
-                            spawn_support_refresh(home, root, support_sender.clone());
+                            model.support_dropdown = selected_agent_context(&model, &identities)
+                                .map(|key| AgentSupportDropdown { key, anchor });
+                            // Opening always re-reads, even when an answer
+                            // for this key is already held: `AGENTS.md` and
+                            // `.agents/` can change under an open workspace,
+                            // and this is the one moment the user is
+                            // actually looking at the answer.
+                            if let Some(dropdown) = &model.support_dropdown {
+                                model.agent_support_pending = Some(dropdown.key.clone());
+                                spawn_support_refresh(
+                                    home,
+                                    dropdown.key.clone(),
+                                    support_sender.clone(),
+                                );
+                            }
                             model.dirty = true;
                         }
                         WorkspaceHit::Extension(_) => {
@@ -1110,10 +1132,11 @@ struct AgentPicker {
 }
 
 /// Open state for the informational support dropdown in an active agent
-/// session. The integration id keeps it tied to the selected live agent,
-/// rather than to a mutable display label or process name.
+/// session. The `(harness, cwd)` key keeps it tied to the exact live agent
+/// it was opened over, rather than to a mutable display label or process
+/// name — and makes a resolution for some other pane unrenderable here.
 struct AgentSupportDropdown {
-    integration: String,
+    key: SupportKey,
     anchor: Rect,
 }
 
@@ -1256,16 +1279,21 @@ fn workspace_has_active_agent_operation(
     })
 }
 
-fn selected_agent_support<'a>(
+/// The selected tab's agent, paired with that tab's focused pane's own
+/// working directory — `None` for a tab that is not running a recognized
+/// agent, which is also what hides the "✦" badge.
+fn selected_agent_context(
     model: &WorkspaceModel,
-    identities: &'a [AgentIdentity],
-) -> Option<&'a str> {
+    identities: &[AgentIdentity],
+) -> Option<SupportKey> {
     let tab = model.session.as_ref()?.selected_tab();
     let binary = agent_identity_for_tab(identities, tab)?;
-    identities
+    let integration = identities
         .iter()
         .find(|identity| identity.binary == binary)
-        .map(|identity| identity.integration)
+        .map(|identity| identity.integration)?;
+    let cwd = pane_in_layout(&tab.layout, tab.focus.pane)?.cwd.clone();
+    Some((integration.to_owned(), cwd))
 }
 
 #[derive(Default)]
@@ -1307,9 +1335,13 @@ struct WorkspaceModel {
     agent_picker: Option<AgentPicker>,
     /// Contextual support information for the active harness tab.
     support_dropdown: Option<AgentSupportDropdown>,
-    /// Read once asynchronously from the Integrations screen's
-    /// `HarnessHealth` source of truth.
-    agent_support: Vec<super::agent_support::AgentSupport>,
+    /// The most recently resolved agent support answer, tagged with the
+    /// `(harness, cwd)` it answers — never assumed to apply to a different
+    /// selection.
+    agent_support: Option<SupportResolution>,
+    /// The key a background resolution is currently in flight for, so the
+    /// per-frame check cannot queue the same read repeatedly.
+    agent_support_pending: Option<SupportKey>,
     /// Open state of the right-click close-confirmation popup; `None` when
     /// closed. Same "click outside discards" rule as `renaming`.
     context_menu: Option<ContextMenu>,
@@ -1735,10 +1767,9 @@ fn render(
         render_agent_picker(frame, frame.area(), picker.anchor, picker, hits);
     }
     if let Some(dropdown) = &model.support_dropdown
-        && let Some(support) = model
-            .agent_support
-            .iter()
-            .find(|support| support.integration() == dropdown.integration)
+        && let Some(resolution) = &model.agent_support
+        && resolution.key == dropdown.key
+        && let Some(support) = &resolution.support
     {
         super::agent_support::render(frame, frame.area(), dropdown.anchor, support);
     }
@@ -2657,7 +2688,7 @@ fn render_tab_strip(
     // is a bare icon with no filled chip behind it — it sits directly on
     // the plain backdrop.
     let mut trailing_right = inner.right();
-    if selected_agent_support(model, identities).is_some() {
+    if selected_agent_context(model, identities).is_some() {
         let button = vec![Span::styled(
             "✦",
             Style::default()

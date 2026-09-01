@@ -27,6 +27,15 @@ pub fn resolve_project_root(cwd: &Path) -> Result<PathBuf> {
 
     // Walk upward (starting at cwd itself) looking for agents.lock,
     // AGENTS.md, or .git (priority in that order per directory).
+    //
+    // The first `.git` met also *ends* the walk, after that directory has
+    // been examined: a repository is a project boundary, so a repo without
+    // its own AGENTS.md must resolve to the repo — never inherit an
+    // AGENTS.md from some directory above it that happens to be a parent on
+    // this machine (a dotfiles repo in `$HOME`, a checkout under another
+    // checkout). Without the boundary the answer depended on where the tree
+    // happened to be cloned, which is exactly the kind of environment
+    // sensitivity this resolution exists to remove.
     let mut current = Some(cwd.as_path());
     let mut best_agents: Option<PathBuf> = None;
     let mut best_git: Option<PathBuf> = None;
@@ -37,8 +46,9 @@ pub fn resolve_project_root(cwd: &Path) -> Result<PathBuf> {
         if best_agents.is_none() && dir.join("AGENTS.md").is_file() {
             best_agents = Some(dir.to_path_buf());
         }
-        if best_git.is_none() && dir.join(".git").exists() {
+        if dir.join(".git").exists() {
             best_git = Some(dir.to_path_buf());
+            break;
         }
         current = dir.parent();
     }
@@ -90,6 +100,23 @@ mod tests {
         let resolved = resolve_project_root(&root).unwrap();
         assert_eq!(resolved, root.canonicalize().unwrap());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_repository_never_inherits_an_agents_md_from_above_it() {
+        // A repo with no portable context of its own resolves to itself,
+        // even when an ancestor directory carries an AGENTS.md — otherwise
+        // the same project resolves differently depending on where it was
+        // cloned.
+        let outer = temp("git-boundary");
+        let repo = outer.join("repo");
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        fs::write(outer.join("AGENTS.md"), "# not this one\n").unwrap();
+        let sub = repo.join("src");
+        fs::create_dir_all(&sub).unwrap();
+        let resolved = resolve_project_root(&sub).unwrap();
+        assert_eq!(resolved, repo.canonicalize().unwrap());
+        fs::remove_dir_all(outer).unwrap();
     }
 
     #[test]

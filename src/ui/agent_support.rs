@@ -6,26 +6,26 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Padding, Paragraph},
 };
-use uze_core::{
-    capability::CapabilityKind, integration::AttachmentState, router::HarnessCapabilities,
-};
+use uze_core::{capability::CapabilityKind, router::HarnessCapabilities};
 
 use crate::application::{
-    HarnessContextDelivery, HarnessHealth, ProfileSummary, ProjectContextStatus,
+    AgentContextStatus, HarnessHealth, ProfileSummary, ResourceDelivery, UndeliveredReason,
 };
 
 use super::{ACCENT, BASE, BORDER, MUTED, TEXT_BRIGHT, WARNING};
 
-/// The small, immutable slice of the integrations read model needed by a
-/// workspace agent tab. It deliberately comes from `HarnessHealth`, the same
-/// application read model the Integrations screen renders.
+/// The small, immutable slice of the read model one workspace agent tab
+/// needs. Capabilities come from `HarnessHealth` (machine-scoped, the same
+/// model the Harnesses screen renders); context delivery comes from
+/// `AgentContextStatus`, resolved against *this agent pane's own working
+/// directory* rather than the session's attach root — see
+/// `uze_application::application::agent_context`.
 pub(super) struct AgentSupport {
-    integration: String,
     display_name: String,
     present: bool,
     capabilities: HarnessCapabilities,
-    agents_md: State,
-    agents_md_label: &'static str,
+    instructions: State,
+    instructions_label: &'static str,
     agents_directory: State,
     agents_directory_label: &'static str,
     profile: String,
@@ -34,88 +34,32 @@ pub(super) struct AgentSupport {
 #[derive(Clone, Copy)]
 enum State {
     Ready,
+    /// Nothing to deliver and nothing wrong — the project simply does not
+    /// carry this resource. Kept distinct from every other state because
+    /// collapsing it into an error is precisely how an empty project came
+    /// to read as a broken harness.
+    Neutral,
     Warning,
     Error,
 }
 
 impl AgentSupport {
-    pub(super) fn from_health(
+    pub(super) fn resolve(
         health: HarnessHealth,
-        context: Option<&ProjectContextStatus>,
-        agents_directory_loaded: bool,
+        context: &AgentContextStatus,
         profile: Option<&ProfileSummary>,
     ) -> Self {
-        // `delivery` only observes the *persistent* on-disk bridge file —
-        // it says nothing about UZE's experimental runtime PATH shim, which
-        // can project `AGENTS.md` into a session without ever writing into
-        // the project. `runtime_projection_active` is the real, live answer
-        // to "would this harness actually receive it right now", computed
-        // by asking the integration the same question the shim itself asks
-        // at launch (see `HarnessContextStatus::runtime_projection_active`).
-        let harness_context = context.and_then(|status| {
-            status
-                .harnesses
-                .iter()
-                .find(|item| item.integration == health.integration)
-        });
-        let runtime_projection_active =
-            harness_context.is_some_and(|item| item.runtime_projection_active);
-        // The single most common "why is this red": the shim exists (or
-        // not) at `~/.uze/shims`, but this process's `PATH` resolves the
-        // harness's name to its real binary first, so a launch here would
-        // bypass UZE entirely. That is an environment fact, not a defect —
-        // say so instead of "unavailable"/"not supported", which read as
-        // the harness being broken. `runtime_shim_active` is only ever
-        // false for an integration that opted into the runtime shim.
-        let shim_not_on_path = health.detection.present && !health.runtime_shim_active;
-        let (agents_md, agents_md_label) = if runtime_projection_active {
-            (State::Ready, "loaded (shim)")
-        } else if shim_not_on_path {
-            (State::Warning, "shim not on PATH")
-        } else {
-            match harness_context.map(|item| &item.delivery) {
-                Some(HarnessContextDelivery::Native) => (State::Ready, "loaded"),
-                Some(HarnessContextDelivery::Bridge {
-                    state: AttachmentState::Matched,
-                    ..
-                }) => (State::Ready, "loaded"),
-                Some(HarnessContextDelivery::Bridge { .. }) => (State::Warning, "not loaded"),
-                Some(HarnessContextDelivery::NotDetected) | None => (State::Error, "unavailable"),
-            }
-        };
-        // A project's `.agents/{skills,agents}/` reaches this harness one
-        // of two ways: natively, on its own — Codex and OpenCode walk cwd
-        // up to it, Antigravity reads it per-workspace, all confirmed
-        // against each vendor's own docs (see `IntegrationPort::
-        // discovers_project_agents_directory`) — or, for Claude Code
-        // specifically, through the same runtime-shim projection already
-        // checked above for AGENTS.md: `claude/runtime.rs` mirrors
-        // `.agents/skills`/`.agents/agents` into `.claude/skills`/
-        // `.claude/agents` inside the `--add-dir` target it already passes,
-        // which Claude Code auto-discovers with no extra flag. Either path
-        // needs the directory to actually be there to deliver anything.
-        let agents_directory_deliverable =
-            health.project_agents_directory_native || runtime_projection_active;
-        let (agents_directory, agents_directory_label) = if !agents_directory_deliverable {
-            if shim_not_on_path {
-                (State::Warning, "shim not on PATH")
-            } else {
-                (State::Error, "not supported")
-            }
-        } else if !agents_directory_loaded {
-            (State::Warning, "not found")
-        } else if health.project_agents_directory_native {
-            (State::Ready, "loaded")
-        } else {
-            (State::Ready, "loaded (shim)")
-        };
+        let (instructions, instructions_label) = describe(&context.instructions);
+        let (agents_directory, agents_directory_label) = describe(&context.agents_directory);
         Self {
-            integration: health.integration,
-            display_name: health.display_name,
-            present: health.detection.present,
+            // Identity and presence come from the resolution itself, not
+            // from `health`, so the popup can never label one harness's
+            // rows with another's name.
+            display_name: context.display_name.clone(),
+            present: context.present,
             capabilities: health.capabilities,
-            agents_md,
-            agents_md_label,
+            instructions,
+            instructions_label,
             agents_directory,
             agents_directory_label,
             profile: profile
@@ -123,9 +67,25 @@ impl AgentSupport {
                 .unwrap_or_else(|| "default".to_owned()),
         }
     }
+}
 
-    pub(super) fn integration(&self) -> &str {
-        &self.integration
+/// One `ResourceDelivery` as a reader sees it. Every label names the
+/// mechanism or the specific reason there is none — never a bare
+/// "unavailable", which read as the harness being broken when the real
+/// answer was "this project has no AGENTS.md" or "your PATH resolves
+/// `claude` to the real binary before UZE's shim".
+fn describe(delivery: &ResourceDelivery) -> (State, &'static str) {
+    match delivery {
+        ResourceDelivery::Native => (State::Ready, "native"),
+        ResourceDelivery::Projected => (State::Ready, "loaded (shim)"),
+        ResourceDelivery::Bridged => (State::Ready, "loaded (bridge)"),
+        ResourceDelivery::AbsentFromProject => (State::Neutral, "none in project"),
+        ResourceDelivery::Undelivered(reason) => match reason {
+            UndeliveredReason::HarnessAbsent => (State::Error, "harness not installed"),
+            UndeliveredReason::ShimShadowed => (State::Warning, "shim not on PATH"),
+            UndeliveredReason::Bridge(_) => (State::Warning, "not loaded"),
+            UndeliveredReason::Unsupported => (State::Error, "not supported"),
+        },
     }
 }
 
@@ -155,9 +115,9 @@ pub(super) fn render(
         inner_width,
     ));
     lines.push(fact_line(
-        support.agents_md,
+        support.instructions,
         "AGENTS.md",
-        support.agents_md_label,
+        support.instructions_label,
         inner_width,
     ));
     lines.push(fact_line(
@@ -187,12 +147,12 @@ pub(super) fn render(
     ] {
         let state = capability_state(support, capability);
         lines.push(capability_line(
-            state,
+            state.row_state(),
             capability_label(capability),
-            capability_status_label(state),
+            state.label(),
             inner_width,
         ));
-        if matches!(state, State::Error) {
+        if matches!(state, CapabilityState::Unavailable) {
             lines.push(reason_line(support, capability, inner_width));
         }
     }
@@ -295,7 +255,7 @@ fn capability_line(state: State, label: &str, value: &str, width: usize) -> Line
         _ => Style::default().fg(TEXT_BRIGHT),
     };
     let value_style = match state {
-        State::Ready | State::Warning => Style::default().fg(MUTED),
+        State::Ready | State::Neutral | State::Warning => Style::default().fg(MUTED),
         State::Error => Style::default()
             .fg(super::DANGER)
             .add_modifier(Modifier::BOLD),
@@ -318,27 +278,49 @@ fn reason_line(support: &AgentSupport, capability: CapabilityKind, width: usize)
 fn icon_for(state: State) -> (&'static str, ratatui::style::Color) {
     match state {
         State::Ready => ("✓", ACCENT),
+        State::Neutral => ("·", MUTED),
         State::Warning => ("!", WARNING),
         State::Error => ("✕", super::DANGER),
     }
 }
 
-fn capability_state(support: &AgentSupport, kind: CapabilityKind) -> State {
-    let capabilities = &support.capabilities;
-    if capabilities.direct_standard.contains(&kind) || capabilities.native.contains(&kind) {
-        State::Ready
-    } else if capabilities.adaptable.contains(&kind) || capabilities.degraded.contains(&kind) {
-        State::Warning
-    } else {
-        State::Error
+/// A harness capability's support level. Deliberately its own enum rather
+/// than a reuse of [`State`]: a capability is a property of the harness
+/// alone, so `State::Neutral` — "this project doesn't carry the resource" —
+/// has no meaning here and must not be representable.
+#[derive(Clone, Copy)]
+enum CapabilityState {
+    Supported,
+    Limited,
+    Unavailable,
+}
+
+impl CapabilityState {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Supported => "supported",
+            Self::Limited => "limited",
+            Self::Unavailable => "unavailable",
+        }
+    }
+
+    fn row_state(self) -> State {
+        match self {
+            Self::Supported => State::Ready,
+            Self::Limited => State::Warning,
+            Self::Unavailable => State::Error,
+        }
     }
 }
 
-fn capability_status_label(state: State) -> &'static str {
-    match state {
-        State::Ready => "supported",
-        State::Warning => "limited",
-        State::Error => "unavailable",
+fn capability_state(support: &AgentSupport, kind: CapabilityKind) -> CapabilityState {
+    let capabilities = &support.capabilities;
+    if capabilities.direct_standard.contains(&kind) || capabilities.native.contains(&kind) {
+        CapabilityState::Supported
+    } else if capabilities.adaptable.contains(&kind) || capabilities.degraded.contains(&kind) {
+        CapabilityState::Limited
+    } else {
+        CapabilityState::Unavailable
     }
 }
 
@@ -365,10 +347,10 @@ fn capability_label(kind: CapabilityKind) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use uze_application::application::HarnessHealth;
-    use uze_core::integration::{HarnessDetection, PublicationStatus};
+    use uze_application::application::{AgentContextStatus, HarnessHealth};
+    use uze_core::integration::{AttachmentState, HarnessDetection, PublicationStatus};
 
-    fn health(present: bool, shim_active: bool) -> HarnessHealth {
+    fn health(present: bool) -> HarnessHealth {
         HarnessHealth {
             integration: "claude-code".to_owned(),
             display_name: "Claude Code".to_owned(),
@@ -383,48 +365,110 @@ mod tests {
             publication: PublicationStatus::NotApplicable,
             capabilities: HarnessCapabilities::default(),
             native_instructions: false,
-            runtime_shim_active: shim_active,
+            runtime_shim_active: true,
             project_agents_directory_native: false,
         }
     }
 
-    fn support(present: bool, shim_active: bool, agents_directory_loaded: bool) -> AgentSupport {
-        AgentSupport::from_health(
-            health(present, shim_active),
-            None,
-            agents_directory_loaded,
-            None,
-        )
+    fn support(
+        present: bool,
+        instructions: ResourceDelivery,
+        agents_directory: ResourceDelivery,
+    ) -> AgentSupport {
+        let context = AgentContextStatus {
+            integration: "claude-code".to_owned(),
+            display_name: "Claude Code".to_owned(),
+            present,
+            root: std::path::PathBuf::from("/project"),
+            instructions,
+            agents_directory,
+        };
+        AgentSupport::resolve(health(present), &context, None)
     }
 
     #[test]
-    fn shim_not_first_on_path_is_reported_explicitly() {
-        // The most common "why is this red": the harness is present but
+    fn a_shim_projection_reads_as_loaded_for_both_resources() {
+        let support = support(
+            true,
+            ResourceDelivery::Projected,
+            ResourceDelivery::Projected,
+        );
+        assert_eq!(support.instructions_label, "loaded (shim)");
+        assert!(matches!(support.instructions, State::Ready));
+        assert_eq!(support.agents_directory_label, "loaded (shim)");
+        assert!(matches!(support.agents_directory, State::Ready));
+    }
+
+    #[test]
+    fn a_project_without_the_resource_is_neutral_not_an_error() {
+        // The regression this popup was reported for: a project with no
+        // AGENTS.md rendered a red "not supported" row, which reads as the
+        // harness being broken rather than the project simply not carrying
+        // one. Each resource is answered on its own, so a project with only
+        // `.agents/` still shows that half as delivered.
+        let support = support(
+            true,
+            ResourceDelivery::AbsentFromProject,
+            ResourceDelivery::Projected,
+        );
+        assert_eq!(support.instructions_label, "none in project");
+        assert!(matches!(support.instructions, State::Neutral));
+        assert_eq!(support.agents_directory_label, "loaded (shim)");
+        assert!(matches!(support.agents_directory, State::Ready));
+    }
+
+    #[test]
+    fn a_shadowed_shim_is_reported_as_a_path_problem() {
+        // The most common "why is this amber": the harness is present but
         // this process's PATH resolves its name to the real binary first,
         // so a launch would bypass UZE. The row must say that, not
         // "unavailable"/"not supported".
-        let support = support(true, false, false);
-        assert_eq!(support.agents_md_label, "shim not on PATH");
-        assert!(matches!(support.agents_md, State::Warning));
+        let support = support(
+            true,
+            ResourceDelivery::Undelivered(UndeliveredReason::ShimShadowed),
+            ResourceDelivery::Undelivered(UndeliveredReason::ShimShadowed),
+        );
+        assert_eq!(support.instructions_label, "shim not on PATH");
+        assert!(matches!(support.instructions, State::Warning));
         assert_eq!(support.agents_directory_label, "shim not on PATH");
         assert!(matches!(support.agents_directory, State::Warning));
     }
 
     #[test]
-    fn absent_harness_stays_unavailable_not_a_path_problem() {
-        let support = support(false, false, false);
-        assert_eq!(support.agents_md_label, "unavailable");
-        assert!(matches!(support.agents_md, State::Error));
-        assert_eq!(support.agents_directory_label, "not supported");
-        assert!(matches!(support.agents_directory, State::Error));
+    fn an_absent_harness_names_itself_rather_than_the_project() {
+        let support = support(
+            false,
+            ResourceDelivery::Undelivered(UndeliveredReason::HarnessAbsent),
+            ResourceDelivery::Undelivered(UndeliveredReason::HarnessAbsent),
+        );
+        assert_eq!(support.instructions_label, "harness not installed");
+        assert!(matches!(support.instructions, State::Error));
     }
 
     #[test]
-    fn active_shim_without_projection_stays_not_supported() {
-        // Shim is first on PATH but nothing is projected (no AGENTS.md in
-        // the project, or a failed write) — the row must not blame PATH.
-        let support = support(true, true, false);
-        assert_eq!(support.agents_directory_label, "not supported");
-        assert!(matches!(support.agents_directory, State::Error));
+    fn a_native_reader_and_a_matched_bridge_both_read_as_delivered() {
+        let native = support(true, ResourceDelivery::Native, ResourceDelivery::Native);
+        assert_eq!(native.instructions_label, "native");
+        assert!(matches!(native.instructions, State::Ready));
+
+        let bridged = support(
+            true,
+            ResourceDelivery::Bridged,
+            ResourceDelivery::Undelivered(UndeliveredReason::Unsupported),
+        );
+        assert_eq!(bridged.instructions_label, "loaded (bridge)");
+        assert!(matches!(bridged.instructions, State::Ready));
+        assert_eq!(bridged.agents_directory_label, "not supported");
+    }
+
+    #[test]
+    fn a_broken_bridge_is_a_warning_naming_the_missing_delivery() {
+        let support = support(
+            true,
+            ResourceDelivery::Undelivered(UndeliveredReason::Bridge(AttachmentState::Missing)),
+            ResourceDelivery::AbsentFromProject,
+        );
+        assert_eq!(support.instructions_label, "not loaded");
+        assert!(matches!(support.instructions, State::Warning));
     }
 }
