@@ -507,6 +507,16 @@ time, and a hand edit still drifts and is refused.
 > `tests/projection/worktree_policy.rs::editing_the_declaration_replaces_its_region_rather_than_drifting`
 > `tests/projection/worktree_policy.rs::an_edited_region_is_blocked_not_overwritten`
 
+### A change view shows one checkout, never the repository
+
+The Git changes extension is scoped to the checkout the active tab is in, and
+resolves every `git` call against it. `git worktree list` answers
+repository-wide from anywhere inside the repository, so listing linked
+worktrees put the seat's diff and every sibling agent's — including checkouts
+whose agent is long gone — inside a tab that owns exactly one of them.
+
+> `crates/uze-extensions/src/git_diff.rs::a_view_is_scoped_to_the_checkout_it_was_opened_in`
+
 ### A replaced lock field is rejected, never silently dropped
 
 `ProjectLock` does not deny unknown fields, so the superseded

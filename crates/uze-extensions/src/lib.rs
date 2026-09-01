@@ -34,7 +34,6 @@ use ratatui::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExtensionHit {
     SelectFile(usize),
-    SelectWorktree(usize),
     ResizeTree,
     Close,
 }

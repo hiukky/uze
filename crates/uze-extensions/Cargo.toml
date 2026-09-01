@@ -9,7 +9,6 @@ authors.workspace = true
 publish = false
 
 [dependencies]
-uze-core = { path = "../uze-core" }
 ratatui = "0.30"
 crossterm = "0.29"
 syntect = "5"

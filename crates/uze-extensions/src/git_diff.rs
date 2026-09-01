@@ -1,6 +1,15 @@
 //! The workspace TUI's Git changes extension — a read-only "quick peek" at
 //! `git status`/`git diff` for whichever tab is active, so seeing what
 //! changed never requires leaving the terminal for an external editor.
+//!
+//! Scoped to the checkout the active tab is *in*, and nothing else. An
+//! agent UZE isolated works in `.worktrees/<name>`, and `git worktree list`
+//! answers repository-wide from anywhere inside it — so listing linked
+//! worktrees here put every other agent's diff, plus every checkout nobody
+//! ever cleaned up, inside a tab that owns exactly one of them. One tab,
+//! one checkout, one diff: the scope the tab strip's badge
+//! ([`change_summary`]) always had, and the `Workspace > Space >
+//! Agent/Shell > Git` hierarchy the overlay is opened under.
 //! `uze-extensions`' first extension (see the crate root doc comment for
 //! the shape every extension after this one follows).
 //!
@@ -14,7 +23,7 @@
 //! else in the client does.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     io,
     path::{Path, PathBuf},
     process::Command,
@@ -140,19 +149,12 @@ impl FileStatus {
 
 struct ChangedFile {
     status: FileStatus,
-    worktree: usize,
     /// Absolute — resolved against the repository root (`GitView::root`),
     /// never the tab's `cwd` directly. `git status` reports paths relative
     /// to the repository root regardless of `-C`, which may differ from a
     /// tab whose `cwd` is a subdirectory; resolving to an absolute path
     /// once here means nothing downstream has to re-derive that.
     path: PathBuf,
-}
-
-struct GitWorktree {
-    root: PathBuf,
-    branch: String,
-    main: bool,
 }
 
 #[derive(Default)]
@@ -162,15 +164,6 @@ struct FileTreeNode {
 }
 
 enum FileTreeItem {
-    LinkedWorktrees,
-    Spacer,
-    Worktree {
-        index: usize,
-        name: String,
-        selected: bool,
-        expanded: bool,
-        changes: usize,
-    },
     Directory {
         name: String,
         depth: usize,
@@ -213,14 +206,15 @@ struct DiffRow {
 /// Built when raised and refreshed at a bounded cadence while it stays open,
 /// so collaborators and commands in another pane show up without reopening.
 pub struct GitView {
-    /// The repository root the view is scoped to, resolved once at open
-    /// time from the active tab's live `cwd` — see `open`'s doc comment.
+    /// The checkout the view is scoped to, resolved once at open time from
+    /// the active tab's live `cwd` — see `open`'s doc comment. Inside a
+    /// linked worktree this is that worktree, not the primary it hangs off.
     root: PathBuf,
-    worktrees: Vec<GitWorktree>,
+    /// The branch `root` is on, for the overlay's title — the one place a
+    /// scoped view still has to say *which* checkout you are looking at.
+    branch: String,
     files: Vec<ChangedFile>,
     selected: usize,
-    selected_worktree: usize,
-    collapsed_worktrees: BTreeSet<PathBuf>,
     diff: Vec<DiffRow>,
     /// Set instead of populating `files`/`diff` when the active tab's
     /// `cwd` isn't inside a git repository, `git` isn't on `PATH`, or a
@@ -235,64 +229,46 @@ pub struct GitView {
 impl GitView {
     /// `cwd` is the active tab's live working directory at the moment the
     /// view opens (see `orchestrator::open_git_view`) — this resolves the
-    /// enclosing repository root from it once, up front, and every
-    /// subsequent `git` call in this view uses that root, not `cwd` again.
+    /// enclosing checkout from it once, up front, and every subsequent
+    /// `git` call in this view uses that root, not `cwd` again.
+    ///
+    /// Inside a linked worktree `rev-parse --show-toplevel` answers with
+    /// that worktree's own root, which is exactly the scope wanted here:
+    /// the tab's checkout, never the primary it hangs off and never a
+    /// sibling agent's.
     pub fn open(cwd: PathBuf) -> Self {
-        match repository_root(&cwd) {
-            Ok(root) => match discover_worktrees(&root) {
-                Ok(worktrees) => {
-                    let mut files = Vec::new();
-                    for (worktree, entry) in worktrees.iter().enumerate() {
-                        let Ok(output) = run_git(
-                            &entry.root,
-                            &["status", "--porcelain=v1", "--untracked-files=all"],
-                        ) else {
-                            continue;
-                        };
-                        let mut changed = parse_porcelain_status(&output, &entry.root);
-                        for file in &mut changed {
-                            file.worktree = worktree;
-                        }
-                        files.extend(changed);
-                    }
-                    let selected = files
-                        .iter()
-                        .position(|file| worktrees[file.worktree].root == root)
-                        .unwrap_or(0);
-                    let selected_worktree = worktrees
-                        .iter()
-                        .position(|worktree| worktree.root == root)
-                        .unwrap_or(0);
-                    let mut view = Self {
-                        root,
-                        worktrees,
-                        files,
-                        selected,
-                        selected_worktree,
-                        collapsed_worktrees: BTreeSet::new(),
-                        diff: Vec::new(),
-                        error: None,
-                        scroll: 0,
-                        focus: GitViewFocus::Files,
-                        refreshed_at: Instant::now(),
-                    };
-                    view.load_selected_diff();
-                    view
-                }
-                Err(message) => Self::with_error(root, message),
-            },
-            Err(message) => Self::with_error(cwd, message),
-        }
+        let root = match repository_root(&cwd) {
+            Ok(root) => root,
+            Err(message) => return Self::with_error(cwd, message),
+        };
+        let status = match run_git(
+            &root,
+            &["status", "--porcelain=v1", "--untracked-files=all"],
+        ) {
+            Ok(output) => output,
+            Err(message) => return Self::with_error(root, message),
+        };
+        let mut view = Self {
+            branch: current_branch(&root),
+            files: parse_porcelain_status(&status, &root),
+            root,
+            selected: 0,
+            diff: Vec::new(),
+            error: None,
+            scroll: 0,
+            focus: GitViewFocus::Files,
+            refreshed_at: Instant::now(),
+        };
+        view.load_selected_diff();
+        view
     }
 
     fn with_error(root: PathBuf, message: String) -> Self {
         Self {
             root,
-            worktrees: Vec::new(),
+            branch: String::new(),
             files: Vec::new(),
             selected: 0,
-            selected_worktree: 0,
-            collapsed_worktrees: BTreeSet::new(),
             diff: Vec::new(),
             error: Some(message),
             scroll: 0,
@@ -309,34 +285,8 @@ impl GitView {
             return;
         }
         self.selected = index.min(self.files.len() - 1);
-        self.selected_worktree = self.files[self.selected].worktree;
         self.scroll = 0;
         self.load_selected_diff();
-    }
-
-    fn select_worktree(&mut self, index: usize) {
-        if index >= self.worktrees.len() {
-            return;
-        }
-        self.selected_worktree = index;
-        self.scroll = 0;
-        if let Some(file) = self.files.iter().position(|file| file.worktree == index) {
-            self.selected = file;
-            self.load_selected_diff();
-        } else {
-            self.diff.clear();
-        }
-    }
-
-    fn set_worktree_expanded(&mut self, index: usize, expanded: bool) {
-        let Some(worktree) = self.worktrees.get(index) else {
-            return;
-        };
-        if expanded {
-            self.collapsed_worktrees.remove(&worktree.root);
-        } else {
-            self.collapsed_worktrees.insert(worktree.root.clone());
-        }
     }
 
     pub fn refresh_due(&self) -> bool {
@@ -344,33 +294,17 @@ impl GitView {
     }
 
     pub fn refresh(&mut self) {
-        let selected_root = self
-            .worktrees
-            .get(self.selected_worktree)
-            .map(|worktree| worktree.root.clone());
         let selected_path = self.files.get(self.selected).map(|file| file.path.clone());
         let focus = self.focus;
         let scroll = self.scroll;
-        let collapsed_worktrees = self.collapsed_worktrees.clone();
         let mut refreshed = Self::open(self.root.clone());
         refreshed.focus = focus;
         refreshed.scroll = scroll;
-        refreshed.collapsed_worktrees = collapsed_worktrees;
-        if let Some(root) = selected_root
-            && let Some(worktree) = refreshed
-                .worktrees
-                .iter()
-                .position(|worktree| worktree.root == root)
+        if let Some(path) = selected_path
+            && let Some(file) = refreshed.files.iter().position(|file| file.path == path)
         {
-            refreshed.selected_worktree = worktree;
-            if let Some(path) = selected_path
-                && let Some(file) = refreshed.files.iter().position(|file| file.path == path)
-            {
-                refreshed.selected = file;
-                refreshed.load_selected_diff();
-            } else {
-                refreshed.select_worktree(worktree);
-            }
+            refreshed.selected = file;
+            refreshed.load_selected_diff();
         }
         refreshed.refreshed_at = Instant::now();
         *self = refreshed;
@@ -383,7 +317,7 @@ impl GitView {
         };
         let path = file.path.clone();
         let status = file.status;
-        let root = self.worktrees[file.worktree].root.clone();
+        let root = self.root.clone();
         let raw = if status == FileStatus::Untracked {
             run_git(
                 &root,
@@ -427,59 +361,14 @@ fn repository_root(cwd: &Path) -> Result<PathBuf, String> {
     }
 }
 
-/// Lists the primary checkout plus linked worktrees configured by this
-/// project's portable `agents.lock`. Git's porcelain output is authoritative
-/// for branch/path pairing; the lock merely scopes which linked checkouts the
-/// viewer should surface.
-fn discover_worktrees(active_root: &Path) -> Result<Vec<GitWorktree>, String> {
-    let output = run_git(active_root, &["worktree", "list", "--porcelain"])?;
-    let mut listed = Vec::new();
-    for (index, record) in output
-        .split("\n\n")
-        .filter(|record| !record.is_empty())
-        .enumerate()
-    {
-        let mut root = None;
-        let mut branch = None;
-        for line in record.lines() {
-            if let Some(path) = line.strip_prefix("worktree ") {
-                root = Some(PathBuf::from(path));
-            } else if let Some(name) = line.strip_prefix("branch refs/heads/") {
-                branch = Some(name.to_owned());
-            }
-        }
-        if let Some(root) = root {
-            listed.push(GitWorktree {
-                root,
-                branch: branch.unwrap_or_else(|| "detached HEAD".to_owned()),
-                main: index == 0,
-            });
-        }
+/// The branch [`GitView::root`] is on, for the overlay's title. Answers
+/// `detached HEAD` for a checkout with no branch, the same wording
+/// `git worktree list` used to supply here.
+fn current_branch(root: &Path) -> String {
+    match run_git(root, &["rev-parse", "--abbrev-ref", "HEAD"]) {
+        Ok(name) if !name.trim().is_empty() && name.trim() != "HEAD" => name.trim().to_owned(),
+        _ => "detached HEAD".to_owned(),
     }
-    let Some(main) = listed.first() else {
-        return Err("git did not report a primary worktree".to_owned());
-    };
-    let configured = configured_worktrees_dir(&main.root);
-    Ok(listed
-        .into_iter()
-        .filter(|worktree| {
-            worktree.main
-                || configured
-                    .as_ref()
-                    .is_some_and(|directory| worktree.root.starts_with(directory))
-        })
-        .collect())
-}
-
-fn configured_worktrees_dir(main_root: &Path) -> Option<PathBuf> {
-    let lock = uze_core::project_lock::load_lock(main_root)
-        .ok()
-        .flatten()?;
-    lock.worktrees?;
-    main_root
-        .join(uze_core::worktree::WORKTREES_DIRECTORY)
-        .canonicalize()
-        .ok()
 }
 
 /// Runs `git -C <root> <args>`, treating exit `0` *or* `1` as success —
@@ -572,7 +461,6 @@ fn parse_porcelain_status(output: &str, root: &Path) -> Vec<ChangedFile> {
             };
             Some(ChangedFile {
                 status,
-                worktree: 0,
                 path: root.join(relative),
             })
         })
@@ -788,12 +676,6 @@ pub fn handle_key(view: &mut GitView, key: KeyEvent) -> GitViewOutcome {
             GitViewFocus::Files => view.select(view.selected + 1),
             GitViewFocus::Diff => view.scroll = view.scroll.saturating_add(1),
         },
-        KeyCode::Left if view.focus == GitViewFocus::Files => {
-            view.set_worktree_expanded(view.selected_worktree, false);
-        }
-        KeyCode::Right if view.focus == GitViewFocus::Files => {
-            view.set_worktree_expanded(view.selected_worktree, true);
-        }
         KeyCode::Enter if view.focus == GitViewFocus::Files => {
             if !view.files.is_empty() {
                 view.focus = GitViewFocus::Diff;
@@ -809,7 +691,6 @@ pub fn handle_key(view: &mut GitView, key: KeyEvent) -> GitViewOutcome {
 pub fn handle_mouse(view: &mut GitView, hit: Option<ExtensionHit>) -> GitViewOutcome {
     match hit {
         Some(ExtensionHit::SelectFile(index)) => view.select(index),
-        Some(ExtensionHit::SelectWorktree(index)) => view.select_worktree(index),
         Some(ExtensionHit::Close) => return GitViewOutcome::Close,
         _ => {}
     }
@@ -868,8 +749,13 @@ pub fn render(
     frame.render_widget(Clear, area);
     let block = Block::default()
         .title(format!(
-            " git changes — {} ",
-            display_project_path(&view.root)
+            " git changes — {}{} ",
+            display_project_path(&view.root),
+            if view.branch.is_empty() {
+                String::new()
+            } else {
+                format!(" · {}", view.branch)
+            }
         ))
         .title_style(Style::default().fg(ACCENT).add_modifier(Modifier::BOLD))
         .borders(Borders::ALL)
@@ -975,48 +861,21 @@ pub fn content_columns(frame_area: Rect, tree_width_override: Option<u16>) -> (R
 /// The model retains a flat `files` vec because diff loading and selection
 /// are file-oriented; this projection is strictly presentation state.
 fn file_tree_items(view: &GitView) -> Vec<FileTreeItem> {
-    let mut items = Vec::new();
-    for (worktree_index, worktree) in view.worktrees.iter().enumerate() {
-        if worktree_index == 1 {
-            items.push(FileTreeItem::Spacer);
-            items.push(FileTreeItem::LinkedWorktrees);
-        } else if worktree_index > 1 {
-            items.push(FileTreeItem::Spacer);
+    let mut tree = FileTreeNode::default();
+    for (index, file) in view.files.iter().enumerate() {
+        let relative = file.path.strip_prefix(&view.root).unwrap_or(&file.path);
+        let components: Vec<String> = relative
+            .components()
+            .filter_map(|component| component.as_os_str().to_str().map(str::to_owned))
+            .collect();
+        let mut node = &mut tree;
+        for component in &components {
+            node = node.children.entry(component.clone()).or_default();
         }
-        let changes = view
-            .files
-            .iter()
-            .filter(|file| file.worktree == worktree_index)
-            .count();
-        let expanded = !view.collapsed_worktrees.contains(&worktree.root);
-        items.push(FileTreeItem::Worktree {
-            index: worktree_index,
-            name: worktree.branch.clone(),
-            selected: worktree_index == view.selected_worktree,
-            expanded,
-            changes,
-        });
-        if !expanded {
-            continue;
-        }
-        let mut root = FileTreeNode::default();
-        for (index, file) in view.files.iter().enumerate() {
-            if file.worktree != worktree_index {
-                continue;
-            }
-            let relative = file.path.strip_prefix(&worktree.root).unwrap_or(&file.path);
-            let components: Vec<String> = relative
-                .components()
-                .filter_map(|component| component.as_os_str().to_str().map(str::to_owned))
-                .collect();
-            let mut node = &mut root;
-            for component in &components {
-                node = node.children.entry(component.clone()).or_default();
-            }
-            node.file_index = Some(index);
-        }
-        collect_tree_items(&root, 1, &mut items);
+        node.file_index = Some(index);
     }
+    let mut items = Vec::new();
+    collect_tree_items(&tree, 0, &mut items);
     items
 }
 
@@ -1093,66 +952,6 @@ fn render_file_list(
     for (offset, item) in items.iter().skip(first).take(visible).enumerate() {
         let row = Rect::new(list.x, list.y + offset as u16, list.width, 1);
         match item {
-            FileTreeItem::LinkedWorktrees => {
-                // A hairline-rule-with-label, not plain text on a blank
-                // line — a bare "linked worktrees" string one shade of
-                // muted below "CHANGES" read as just another row, not a
-                // section boundary between the main worktree's tree above
-                // and the linked ones below it. Deliberately quiet
-                // (`TEXT_FAINT`, no bold, just "WORKTREES") — a rule this
-                // secondary shouldn't compete with "CHANGES" for the eye.
-                let label = " WORKTREES ";
-                let rule_width = row.width.saturating_sub(label.len() as u16);
-                let left_rule = rule_width / 2;
-                let right_rule = rule_width - left_rule;
-                let rule_style = Style::default().fg(BORDER_FAINT);
-                let spans = vec![
-                    Span::styled("─".repeat(left_rule as usize), rule_style),
-                    Span::styled(label, Style::default().fg(TEXT_FAINT)),
-                    Span::styled("─".repeat(right_rule as usize), rule_style),
-                ];
-                frame.render_widget(Paragraph::new(Line::from(spans)), row);
-            }
-            FileTreeItem::Spacer => {}
-            FileTreeItem::Worktree {
-                index,
-                name,
-                selected,
-                expanded,
-                changes,
-            } => {
-                let style = if *selected {
-                    Style::default()
-                        .fg(TEXT_BRIGHT)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(TEXT_SECONDARY)
-                };
-                // Selection, not "is this the main worktree" — `●`/`○`
-                // means "this is the one you're on" everywhere else in the
-                // TUI (the sidebar's spaces and agent tabs); using it here
-                // for `main` instead meant it never moved when you
-                // actually selected a different worktree, and duplicated
-                // what the "WORKTREES" rule above already says about which
-                // entries are linked.
-                let mut spans = vec![
-                    Span::styled(
-                        if *selected { "● " } else { "○ " },
-                        Style::default().fg(if *selected { ACCENT } else { TEXT_FAINT }),
-                    ),
-                    Span::styled(
-                        if *expanded { "▾ " } else { "▸ " },
-                        Style::default().fg(MUTED),
-                    ),
-                    Span::styled(
-                        truncate_label(name, row.width.saturating_sub(8) as usize),
-                        style,
-                    ),
-                ];
-                push_right_aligned(&mut spans, changes.to_string(), row.width, MUTED);
-                frame.render_widget(Paragraph::new(Line::from(spans)), row);
-                hits.push((row, ExtensionHit::SelectWorktree(*index)));
-            }
             FileTreeItem::Directory { name, depth } => {
                 let spans = vec![
                     Span::styled("  ".repeat(*depth), Style::default()),
@@ -1191,18 +990,9 @@ fn render_file_list(
 }
 
 fn selected_tree_row(items: &[FileTreeItem], view: &GitView) -> Option<usize> {
-    let selected_root = view.worktrees.get(view.selected_worktree)?.root.clone();
-    let expanded = !view.collapsed_worktrees.contains(&selected_root);
-    if expanded
-        && let Some(row) = items.iter().position(
-            |item| matches!(item, FileTreeItem::File { index, .. } if *index == view.selected),
-        )
-    {
-        return Some(row);
-    }
-    items.iter().position(|item| {
-        matches!(item, FileTreeItem::Worktree { index, .. } if *index == view.selected_worktree)
-    })
+    items.iter().position(
+        |item| matches!(item, FileTreeItem::File { index, .. } if *index == view.selected),
+    )
 }
 
 fn push_right_aligned(spans: &mut Vec<Span<'static>>, value: String, width: u16, color: Color) {
@@ -1213,22 +1003,6 @@ fn push_right_aligned(spans: &mut Vec<Span<'static>>, value: String, width: u16,
         spans.push(Span::raw(" ".repeat(gap)));
         spans.push(Span::styled(value, Style::default().fg(color)));
     }
-}
-
-fn truncate_label(value: &str, width: usize) -> String {
-    if value.chars().count() <= width {
-        return value.to_owned();
-    }
-    let mut truncated = String::new();
-    let limit = width.saturating_sub(1);
-    for character in value.chars() {
-        if truncated.chars().count() + 1 > limit {
-            break;
-        }
-        truncated.push(character);
-    }
-    truncated.push('…');
-    truncated
 }
 
 fn fill_row_bg<'a>(spans: &mut Vec<Span<'a>>, width: u16, bg: Color) {
@@ -1254,26 +1028,11 @@ const DIFF_ADDED_BG: Color = Color::Rgb(18, 32, 23);
 /// before/after split, which halved the useful code width again, while the
 /// tree remains available alongside it.
 fn render_diff(frame: &mut ratatui::Frame<'_>, area: Rect, view: &GitView) {
-    let selected_file = view
-        .files
-        .get(view.selected)
-        .filter(|file| file.worktree == view.selected_worktree);
-    let selected_name = view
-        .files
-        .get(view.selected)
-        .filter(|file| file.worktree == view.selected_worktree)
-        .and_then(|file| {
-            view.worktrees
-                .get(file.worktree)
-                .and_then(|worktree| file.path.strip_prefix(&worktree.root).ok())
-        })
+    let selected_file = view.files.get(view.selected);
+    let selected_name = selected_file
+        .and_then(|file| file.path.strip_prefix(&view.root).ok())
         .map(|path| path.display().to_string())
-        .unwrap_or_else(|| {
-            view.worktrees
-                .get(view.selected_worktree)
-                .map(|worktree| worktree.branch.clone())
-                .unwrap_or_else(|| view.root.display().to_string())
-        });
+        .unwrap_or_else(|| display_project_path(&view.root));
     frame.render_widget(
         Paragraph::new(Span::styled(
             format!("DIFF · {selected_name}"),
@@ -1290,7 +1049,7 @@ fn render_diff(frame: &mut ratatui::Frame<'_>, area: Rect, view: &GitView) {
     if selected_file.is_none() {
         frame.render_widget(
             Paragraph::new(Span::styled(
-                "no changes in this worktree",
+                "no changes in this checkout",
                 Style::default().fg(MUTED),
             )),
             content,
@@ -1398,7 +1157,7 @@ fn render_footer(frame: &mut ratatui::Frame<'_>, area: Rect) {
     frame.render_widget(block, area);
     frame.render_widget(
         Paragraph::new(Line::from(hint_spans(
-            "↑↓ navigate · ←→ collapse/expand · ↵ diff · tab focus · esc close",
+            "↑↓ navigate · ↵ diff · tab focus · esc close",
         ))),
         inner,
     );
@@ -1432,35 +1191,26 @@ mod tests {
     }
 
     #[test]
-    fn projects_changed_paths_as_a_compact_worktree_navigator() {
+    fn projects_changed_paths_as_a_compact_navigator() {
         let root = PathBuf::from("/repo");
         let view = GitView {
             root: root.clone(),
-            worktrees: vec![GitWorktree {
-                root: root.clone(),
-                branch: "main".to_owned(),
-                main: true,
-            }],
+            branch: "main".to_owned(),
             files: vec![
                 ChangedFile {
                     status: FileStatus::Modified,
-                    worktree: 0,
                     path: root.join("src/ui/git_diff.rs"),
                 },
                 ChangedFile {
                     status: FileStatus::Added,
-                    worktree: 0,
                     path: root.join("src/ui.rs"),
                 },
                 ChangedFile {
                     status: FileStatus::Untracked,
-                    worktree: 0,
                     path: root.join("README.md"),
                 },
             ],
             selected: 0,
-            selected_worktree: 0,
-            collapsed_worktrees: BTreeSet::new(),
             diff: Vec::new(),
             error: None,
             scroll: 0,
@@ -1469,58 +1219,20 @@ mod tests {
         };
         let items = file_tree_items(&view);
         assert!(
-            matches!(items[0], FileTreeItem::Worktree { ref name, selected: true, expanded: true, changes: 3, .. } if name == "main")
+            matches!(items[0], FileTreeItem::Directory { ref name, depth: 0 } if name == "src")
+        );
+        assert!(matches!(items[1], FileTreeItem::Directory { ref name, depth: 1 } if name == "ui"));
+        assert!(
+            matches!(items[2], FileTreeItem::File { ref name, depth: 2, .. } if name == "git_diff.rs")
         );
         assert!(
-            matches!(items[1], FileTreeItem::Directory { ref name, depth: 1 } if name == "src")
-        );
-        assert!(matches!(items[2], FileTreeItem::Directory { ref name, depth: 2 } if name == "ui"));
-        assert!(
-            matches!(items[3], FileTreeItem::File { ref name, depth: 3, .. } if name == "git_diff.rs")
+            matches!(items[3], FileTreeItem::File { ref name, depth: 1, .. } if name == "ui.rs")
         );
         assert!(
-            matches!(items[4], FileTreeItem::File { ref name, depth: 2, .. } if name == "ui.rs")
+            matches!(items[4], FileTreeItem::File { ref name, depth: 0, .. } if name == "README.md")
         );
-        assert!(
-            matches!(items[5], FileTreeItem::File { ref name, depth: 1, .. } if name == "README.md")
-        );
-    }
-
-    #[test]
-    fn hides_changed_files_for_a_collapsed_worktree() {
-        let root = PathBuf::from("/repo");
-        let mut view = GitView {
-            root: root.clone(),
-            worktrees: vec![GitWorktree {
-                root: root.clone(),
-                branch: "main".to_owned(),
-                main: true,
-            }],
-            files: vec![ChangedFile {
-                status: FileStatus::Modified,
-                worktree: 0,
-                path: root.join("src/lib.rs"),
-            }],
-            selected: 0,
-            selected_worktree: 0,
-            collapsed_worktrees: BTreeSet::new(),
-            diff: Vec::new(),
-            error: None,
-            scroll: 0,
-            focus: GitViewFocus::Files,
-            refreshed_at: Instant::now(),
-        };
-        view.set_worktree_expanded(0, false);
-        let items = file_tree_items(&view);
-        assert!(matches!(
-            items.as_slice(),
-            [FileTreeItem::Worktree {
-                expanded: false,
-                changes: 1,
-                ..
-            }]
-        ));
-        assert_eq!(selected_tree_row(&items, &view), Some(0));
+        assert_eq!(items.len(), 5, "no worktree header rows above the tree");
+        assert_eq!(selected_tree_row(&items, &view), Some(2));
     }
 
     #[test]
@@ -1641,15 +1353,20 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// The scoping rule this view is built on. `git worktree list` answers
+    /// repository-wide from anywhere inside the repository, so a view opened
+    /// in an agent's isolated checkout would otherwise show the primary's
+    /// changes and every sibling agent's alongside its own — including
+    /// checkouts whose agent is long gone. Scoping is by checkout, not by
+    /// the isolation layout, so it holds for any worktree, however created.
     #[test]
-    fn discovers_main_and_configured_linked_worktrees() {
+    fn a_view_is_scoped_to_the_checkout_it_was_opened_in() {
         let _environment = uze_testkit::env::scope();
-        let parent = uze_testkit::temp::scratch("worktree-test");
+        let parent = uze_testkit::temp::scratch("git-diff-scope");
         let root = parent.join("project");
-        // The isolation directory is fixed layout, under the primary
-        // checkout — the same place UZE creates agent checkouts in.
-        let worktrees = root.join(uze_core::worktree::WORKTREES_DIRECTORY);
-        let feature = worktrees.join("feature");
+        // Where UZE isolates agents, mirrored here so the fixture matches
+        // what the overlay actually meets in a running workspace.
+        let linked = root.join(".worktrees").join("feature");
         std::fs::create_dir_all(&root).unwrap();
         let git = |directory: &Path, args: &[&str]| {
             let status = Command::new("git")
@@ -1665,9 +1382,9 @@ mod tests {
         git(&root, &["config", "user.name", "Test"]);
         git(&root, &["config", "commit.gpgsign", "false"]);
         std::fs::write(root.join("README.md"), "# test\n").unwrap();
+        std::fs::write(root.join(".gitignore"), ".worktrees/\n").unwrap();
         git(&root, &["add", "."]);
         git(&root, &["commit", "--quiet", "-m", "initial"]);
-        std::fs::create_dir_all(&worktrees).unwrap();
         git(
             &root,
             &[
@@ -1676,17 +1393,37 @@ mod tests {
                 "--quiet",
                 "-b",
                 "feature",
-                feature.to_str().unwrap(),
+                linked.to_str().unwrap(),
             ],
         );
-        std::fs::write(root.join("agents.lock"), "version: 1\nworktrees: {}\n").unwrap();
 
-        let discovered = discover_worktrees(&feature).unwrap();
-        assert_eq!(discovered.len(), 2);
-        assert!(discovered[0].main);
-        assert!(!discovered[0].branch.is_empty());
-        assert_eq!(discovered[1].branch, "feature");
-        assert_eq!(discovered[1].root, feature);
+        std::fs::write(root.join("primary-only.rs"), "fn primary() {}\n").unwrap();
+        std::fs::write(linked.join("agent-only.rs"), "fn agent() {}\n").unwrap();
+
+        let from_agent = GitView::open(linked.clone());
+        assert!(from_agent.error.is_none(), "{:?}", from_agent.error);
+        assert_eq!(from_agent.branch, "feature");
+        assert_eq!(
+            from_agent
+                .files
+                .iter()
+                .map(|file| file.path.clone())
+                .collect::<Vec<_>>(),
+            vec![linked.join("agent-only.rs")],
+            "an isolated agent sees its own checkout and nothing else"
+        );
+
+        let from_primary = GitView::open(root.clone());
+        assert!(from_primary.error.is_none(), "{:?}", from_primary.error);
+        assert_eq!(
+            from_primary
+                .files
+                .iter()
+                .map(|file| file.path.clone())
+                .collect::<Vec<_>>(),
+            vec![root.join("primary-only.rs")],
+            "and the seat sees the seat, not the agents hanging off it"
+        );
 
         let _ = std::fs::remove_dir_all(parent);
     }

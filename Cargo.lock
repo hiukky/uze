@@ -2499,7 +2499,6 @@ dependencies = [
  "crossterm",
  "ratatui",
  "syntect",
- "uze-core",
  "uze-testkit",
 ]
 
