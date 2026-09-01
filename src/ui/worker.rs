@@ -684,7 +684,7 @@ mod tests {
     #[test]
     fn refresh_is_coalesced_while_maintenance_is_in_flight() {
         let (sender, receiver) = mpsc::channel();
-        let home = UzeHome::at(std::env::temp_dir().join("uze-worker-coalesce"));
+        let home = UzeHome::at(uze_testkit::temp::scratch("worker-coalesce"));
         let mut model = TuiModel {
             maintenance_in_flight: true,
             ..TuiModel::default()
