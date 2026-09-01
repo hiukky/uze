@@ -1,5 +1,5 @@
 //! Cache for per-receipt attachment inspection on READ paths — the
-//! mechanism behind ADR 024.
+//! mechanism behind ADR 018.
 //!
 //! The expensive half of `doctor()` is per-receipt
 //! `IntegrationPort::inspect_receipt`: several integrations verify their
@@ -200,21 +200,11 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        std::env::temp_dir().join(format!(
-            "uze-inspection-cache-{label}-{}-{nonce}.json",
-            std::process::id()
-        ))
+        uze_testkit::temp::scratch(label).join("inspection-cache.json")
     }
 
     fn home_at(label: &str) -> UzeHome {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        UzeHome::at(std::env::temp_dir().join(format!(
-            "uze-inspection-home-{label}-{}-{nonce}",
-            std::process::id()
-        )))
+        UzeHome::at(uze_testkit::temp::scratch(label))
     }
 
     fn matched(reason: &str) -> AttachmentInspection {

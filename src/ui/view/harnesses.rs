@@ -615,9 +615,7 @@ mod tests {
             provisioning: None,
             publication: uze_core::integration::PublicationStatus::NotApplicable,
             capabilities: HarnessCapabilities::default(),
-            native_instructions: false,
             runtime_shim_active,
-            project_agents_directory_native: false,
         }
     }
 

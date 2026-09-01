@@ -80,9 +80,7 @@ fn model_with_data() -> TuiModel {
                 provisioning: None,
                 publication: PublicationStatus::Published,
                 capabilities: HarnessCapabilities::default(),
-                native_instructions: false,
                 runtime_shim_active: true,
-                project_agents_directory_native: false,
             },
             HarnessHealth {
                 integration: "codex".to_owned(),
@@ -97,9 +95,7 @@ fn model_with_data() -> TuiModel {
                 provisioning: None,
                 publication: PublicationStatus::NotApplicable,
                 capabilities: HarnessCapabilities::default(),
-                native_instructions: true,
                 runtime_shim_active: true,
-                project_agents_directory_native: true,
             },
         ],
         attachments: vec![PackageManagedState {
@@ -140,13 +136,11 @@ fn model_with_data() -> TuiModel {
                     needed: false,
                     state: AttachmentState::Matched,
                 },
-                runtime_projection_active: false,
             },
             HarnessContextStatus {
                 integration: "codex".to_owned(),
                 display_name: "Codex".to_owned(),
                 delivery: HarnessContextDelivery::Native,
-                runtime_projection_active: false,
             },
         ],
         portability: Portability::Portable,
@@ -1395,14 +1389,7 @@ fn overview_does_not_render_project_context() {
 fn overview_render_does_not_mutate_project_state() {
     use ratatui::{Terminal, backend::TestBackend};
 
-    let base = std::env::temp_dir().join(format!(
-        "uze-ui-overview-immutable-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let base = uze_testkit::temp::scratch("ui-overview-immutable");
     let root = base.join("project");
     std::fs::create_dir_all(&root).unwrap();
     let lock_path = root.join("agents.lock");
@@ -1449,14 +1436,7 @@ fn overview_render_does_not_mutate_project_state() {
 fn no_workspace_render_creates_nothing() {
     use ratatui::{Terminal, backend::TestBackend};
 
-    let base = std::env::temp_dir().join(format!(
-        "uze-ui-noworkspace-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let base = uze_testkit::temp::scratch("ui-noworkspace");
     let root = base.join("random");
     std::fs::create_dir_all(&root).unwrap();
 
@@ -1516,14 +1496,7 @@ fn overview_install_intent_reaches_install_project_environment() {
     // tests which need a real executable on PATH cannot observe this setup.
     let mut environment = uze_testkit::env::scope();
 
-    let base = std::env::temp_dir().join(format!(
-        "uze-ui-install-dispatch-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let base = uze_testkit::temp::scratch("ui-install-dispatch");
     let home = base.join("home");
     let project = base.join("project");
     let market = base.join("market");

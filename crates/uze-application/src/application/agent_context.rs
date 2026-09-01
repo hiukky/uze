@@ -68,13 +68,6 @@ pub enum UndeliveredReason {
 }
 
 impl ResourceDelivery {
-    /// Whether the resource reaches the harness by some mechanism. An
-    /// absent resource is not delivered *and* not a problem, so this is
-    /// deliberately not the negation of "is there something wrong".
-    pub fn is_delivered(&self) -> bool {
-        matches!(self, Self::Native | Self::Projected | Self::Bridged)
-    }
-
     /// Whether this is a real gap a reader should act on — the project has
     /// something the harness is not getting.
     pub fn is_gap(&self) -> bool {

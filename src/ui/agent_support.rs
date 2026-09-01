@@ -364,9 +364,7 @@ mod tests {
             provisioning: None,
             publication: PublicationStatus::NotApplicable,
             capabilities: HarnessCapabilities::default(),
-            native_instructions: false,
             runtime_shim_active: true,
-            project_agents_directory_native: false,
         }
     }
 

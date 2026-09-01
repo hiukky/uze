@@ -105,7 +105,7 @@ impl UzeApplication {
         name_authority: &dyn NameCollisionAuthority,
     ) -> Result<AddPluginReport> {
         // Any installation changes vendor-visible state; cached inspection
-        // verdicts must not outlive it (ADR 024).
+        // verdicts must not outlive it (ADR 018).
         self.inspection_cache.invalidate();
         // Deliberately does NOT run `reconcile_orphaned_receipts` here.
         // Attach's own conflict detection needs the first look at whatever

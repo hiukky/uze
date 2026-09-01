@@ -206,14 +206,7 @@ mod tests {
 
     #[test]
     fn a_stored_copy_with_different_content_reports_an_update() {
-        let root = std::env::temp_dir().join(format!(
-            "uze-bootstrap-drift-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let root = uze_testkit::temp::scratch("bootstrap-drift");
         let materialized = materialize("uze").unwrap();
         copy_tree(materialized.root(), &root);
         fs::write(root.join("plugin.json"), "{}").unwrap();

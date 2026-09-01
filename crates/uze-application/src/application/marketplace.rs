@@ -9,15 +9,6 @@ use crate::bootstrap;
 use super::*;
 
 impl UzeApplication {
-    pub fn list_marketplaces(&self) -> Result<Vec<MarketplaceSummary>> {
-        let (name, entries) = bootstrap::entries()?;
-        Ok(vec![MarketplaceSummary {
-            name,
-            source: "embedded:uze-official".to_owned(),
-            plugin_count: entries.len(),
-        }])
-    }
-
     /// `Ok(true)` when the marketplace was newly registered, `Ok(false)`
     /// when it was already registered from the exact same source
     /// (idempotent no-op — see `state::marketplace_add`). A different

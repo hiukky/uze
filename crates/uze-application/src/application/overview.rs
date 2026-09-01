@@ -16,7 +16,7 @@
 //! No Store writes, no acquisition, no network, no vendor CLI: every
 //! field is computable from the cwd + the current Store index in
 //! milliseconds (full per-receipt vendor inspection stays on the Doctor
-//! report, where it is served by the inspection cache — see ADR 024).
+//! report, where it is served by the inspection cache — see ADR 018).
 
 #![allow(clippy::empty_line_after_doc_comments)]
 
@@ -249,25 +249,11 @@ fn derive_memory(agents_md: bool, portability: Option<&Portability>) -> MemorySt
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        fs,
-        time::{SystemTime, UNIX_EPOCH},
-    };
+    use std::fs;
 
     use uze_core::{PackageSource, UzeHome, trust::AlwaysTrust};
 
     use super::*;
-
-    fn temp(label: &str) -> PathBuf {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "uze-overview-{label}-{}-{nonce}",
-            std::process::id()
-        ))
-    }
 
     fn write_plugin(root: &Path, plugin_name: &str) {
         let dir = root.join(plugin_name);
@@ -324,7 +310,7 @@ mod tests {
 
     impl Fixture {
         fn new(label: &str) -> Self {
-            let base = temp(label);
+            let base = uze_testkit::temp::scratch(label);
             let home = base.join("home");
             let app = UzeApplication::new(UzeHome::at(&home), Vec::new());
             Self {

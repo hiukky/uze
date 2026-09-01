@@ -137,14 +137,7 @@ mod tests {
     use super::*;
 
     fn temp_home(label: &str) -> UzeHome {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        UzeHome::at(std::env::temp_dir().join(format!(
-            "uze-app-profile-{label}-{}-{nonce}",
-            std::process::id()
-        )))
+        UzeHome::at(uze_testkit::temp::scratch(label))
     }
 
     struct FakeAdapter {
@@ -317,12 +310,7 @@ mod tests {
     /// pre-existing foreign content in each harness's config survived.
     #[test]
     fn create_configure_select_apply_writes_expected_native_keys_and_preserves_foreign_content() {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let root =
-            std::env::temp_dir().join(format!("uze-profile-e2e-{}-{nonce}", std::process::id()));
+        let root = uze_testkit::temp::scratch("profile-e2e");
         let home = UzeHome::at(root.join("uze"));
 
         // Pre-existing, foreign (non-UZE) content in each harness's shared

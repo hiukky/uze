@@ -2,11 +2,7 @@
 
 #![allow(clippy::empty_line_after_doc_comments)]
 
-use uze_core::{
-    Result,
-    integration::{AttachmentState, ContextDelivery},
-    state,
-};
+use uze_core::{Result, integration::AttachmentState, state};
 
 use super::*;
 
@@ -16,7 +12,7 @@ impl UzeApplication {
     /// inspection half is backed by:
     ///
     /// - the in-process + on-disk inspection cache for `Matched` verdicts
-    ///   (ADR 024): steady-state runs are milliseconds;
+    ///   (ADR 018): steady-state runs are milliseconds;
     /// - always-live re-inspection for anomalies, so a warning is never
     ///   stale;
     /// - cache invalidation on every mutation, so a verdict never outlives
@@ -185,12 +181,7 @@ impl UzeApplication {
                 // exactly the state this field exists to surface.
                 publication: integration.publication(&installed),
                 capabilities: integration.capabilities(),
-                native_instructions: matches!(
-                    integration.context_delivery(),
-                    ContextDelivery::Native { .. }
-                ),
                 runtime_shim_active: self.runtime_shim_is_active(integration.as_ref()),
-                project_agents_directory_native: integration.discovers_project_agents_directory(),
             })
             .collect()
     }
@@ -300,12 +291,11 @@ mod tests {
     use std::{
         collections::BTreeMap,
         fs,
-        path::{Path, PathBuf},
+        path::Path,
         sync::{
             Arc,
             atomic::{AtomicUsize, Ordering},
         },
-        time::{SystemTime, UNIX_EPOCH},
     };
 
     use uze_core::{
@@ -325,7 +315,7 @@ mod tests {
 
     /// An integration that counts every `inspect_receipt` call and reports
     /// a configurable verdict. The matcher-vs-anomaly distinction is what
-    /// the inspection cache depends on (ADR 024): Matched is cached,
+    /// the inspection cache depends on (ADR 018): Matched is cached,
     /// anomalies are always re-inspected.
     struct CountingInspection {
         inspected: Arc<AtomicUsize>,
@@ -374,14 +364,6 @@ mod tests {
         }
     }
 
-    fn temp(label: &str) -> PathBuf {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!("uze-doctor-{label}-{}-{nonce}", std::process::id()))
-    }
-
     fn write_plugin(root: &Path, name: &str) {
         let dir = root.join(name);
         fs::create_dir_all(dir.join("skills/uze-test")).unwrap();
@@ -408,7 +390,7 @@ mod tests {
 
     #[test]
     fn matched_inspection_is_cached_across_instances() {
-        let base = temp("fast-vs-deep");
+        let base = uze_testkit::temp::scratch("fast-vs-deep");
         let home = UzeHome::at(base.join("home"));
         let inspected = Arc::new(AtomicUsize::new(0));
         let app = UzeApplication::new(
@@ -468,7 +450,7 @@ mod tests {
 
     #[test]
     fn anomalies_are_never_cached_and_reinspected_every_time() {
-        let base = temp("anomaly");
+        let base = uze_testkit::temp::scratch("anomaly");
         let home = UzeHome::at(base.join("home"));
         let (integration, inspected) = CountingInspection::counting(AttachmentState::Drifted);
         let app = UzeApplication::new(home.clone(), vec![Box::new(integration)]);
@@ -518,7 +500,7 @@ mod tests {
 
     #[test]
     fn installation_invalidates_the_inspection_cache() {
-        let base = temp("invalidate-on-install");
+        let base = uze_testkit::temp::scratch("invalidate-on-install");
         let home = UzeHome::at(base.join("home"));
         let (integration, inspected) = CountingInspection::counting(AttachmentState::Matched);
         let app = UzeApplication::new(home.clone(), vec![Box::new(integration)]);

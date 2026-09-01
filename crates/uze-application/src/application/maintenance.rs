@@ -343,13 +343,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn restores_a_missing_receipt_owned_symlink_without_touching_plugin_bytes() {
-        let root = std::env::temp_dir().join(format!(
-            "uze-maintenance-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let root = uze_testkit::temp::scratch("maintenance");
         let home = UzeHome::at(&root);
         let target = root.join("store-target");
         let link = root.join("harness/skill");
@@ -390,13 +384,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn preserves_a_drifted_receipt_owned_symlink() {
-        let root = std::env::temp_dir().join(format!(
-            "uze-maintenance-drift-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let root = uze_testkit::temp::scratch("maintenance-drift");
         let home = UzeHome::at(&root);
         let expected = root.join("expected");
         let foreign = root.join("foreign");
@@ -450,13 +438,7 @@ mod tests {
         // leaves behind: an old receipt still recorded under a package id
         // nothing installs under any more, still physically occupying a
         // shared slot a live install now needs.
-        let root = std::env::temp_dir().join(format!(
-            "uze-maintenance-orphan-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let root = uze_testkit::temp::scratch("maintenance-orphan");
         let home = UzeHome::at(&root);
         let target = root.join("store-target");
         let link = root.join("harness/skill");
