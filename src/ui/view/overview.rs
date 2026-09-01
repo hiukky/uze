@@ -11,8 +11,6 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 
-use crate::application::{Portability, ProjectContextStatus};
-
 use super::super::model::TuiModel;
 use super::super::{ACCENT, BORDER_FAINT, DANGER, MUTED, SUCCESS, TEXT_BRIGHT, WARNING};
 use super::super::{content_area, render_screen_header};
@@ -150,22 +148,5 @@ pub(crate) fn render_overview(frame: &mut ratatui::Frame<'_>, area: Rect, model:
             Rect::new(content.x, y, content.width, 1),
         );
         y += 1;
-    }
-}
-
-pub(crate) fn portability_label(portability: &Portability) -> &'static str {
-    match portability {
-        Portability::NoContext => "no context",
-        Portability::Portable => "portable",
-        Portability::PartiallyPortable { .. } => "partially portable",
-        Portability::VendorLocked { .. } => "vendor-locked",
-    }
-}
-
-pub(crate) fn portability_style(status: Option<&ProjectContextStatus>) -> Style {
-    match status.map(|s| &s.portability) {
-        Some(Portability::Portable) => Style::default().fg(SUCCESS),
-        None | Some(Portability::NoContext) => Style::default().fg(MUTED),
-        Some(_) => Style::default().fg(WARNING),
     }
 }

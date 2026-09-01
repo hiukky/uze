@@ -269,6 +269,7 @@ pub(crate) struct TuiModel {
 
     pub(crate) harnesses_selected: usize,
     pub(crate) harnesses_drawer_open: bool,
+    pub(crate) harnesses_filter: String,
 
     pub(crate) profiles: Vec<ProfileSummary>,
     pub(crate) profiles_selected: usize,
@@ -335,7 +336,7 @@ impl Default for TuiModel {
             marketplace_plugins: Vec::new(),
             marketplace_selected: 0,
             marketplace_detail: None,
-            marketplace_drawer_open: false,
+            marketplace_drawer_open: true,
             marketplace_filter: String::new(),
             filtering: false,
             collapsed_marketplaces: BTreeSet::new(),
@@ -344,9 +345,10 @@ impl Default for TuiModel {
                 .to_vec(),
             extension_filter: String::new(),
             extensions_selected: 0,
-            extension_drawer_open: false,
+            extension_drawer_open: true,
             harnesses_selected: 0,
-            harnesses_drawer_open: false,
+            harnesses_drawer_open: true,
+            harnesses_filter: String::new(),
             profiles: Vec::new(),
             profiles_selected: 0,
             profile_panel: ProfilePanel::List,
@@ -542,6 +544,31 @@ impl TuiModel {
             .min(self.extension_visible_indices().len().saturating_sub(1));
     }
 
+    fn clamp_harness_selection(&mut self) {
+        self.harnesses_selected = self
+            .harnesses_selected
+            .min(self.harness_visible_indices().len().saturating_sub(1));
+    }
+
+    pub(crate) fn harness_visible_indices(&self) -> Vec<usize> {
+        let needle = self.harnesses_filter.trim().to_lowercase();
+        let Some(doctor) = &self.doctor else {
+            return Vec::new();
+        };
+        doctor
+            .harnesses
+            .iter()
+            .enumerate()
+            .filter(|(_, harness)| {
+                needle.is_empty()
+                    || harness.display_name.to_lowercase().contains(&needle)
+                    || harness.integration.to_lowercase().contains(&needle)
+                    || harness.description.to_lowercase().contains(&needle)
+            })
+            .map(|(index, _)| index)
+            .collect()
+    }
+
     /// Consumes one key while `filtering` is true — every printable
     /// character is appended to the active route's filter rather than
     /// interpreted as a shortcut. `Enter` keeps the filter and returns to
@@ -561,6 +588,10 @@ impl TuiModel {
                         self.extension_filter.clear();
                         self.clamp_extension_selection();
                     }
+                    Route::Harnesses => {
+                        self.harnesses_filter.clear();
+                        self.clamp_harness_selection();
+                    }
                     _ => {}
                 }
             }
@@ -573,6 +604,10 @@ impl TuiModel {
                     self.extension_filter.pop();
                     self.clamp_extension_selection();
                 }
+                Route::Harnesses => {
+                    self.harnesses_filter.pop();
+                    self.clamp_harness_selection();
+                }
                 _ => {}
             },
             KeyCode::Char(c) => match self.route {
@@ -584,6 +619,10 @@ impl TuiModel {
                     self.extension_filter.push(c);
                     self.clamp_extension_selection();
                 }
+                Route::Harnesses => {
+                    self.harnesses_filter.push(c);
+                    self.clamp_harness_selection();
+                }
                 _ => {}
             },
             _ => {}
@@ -592,9 +631,10 @@ impl TuiModel {
     }
 
     pub(crate) fn selected_harness(&self) -> Option<&HarnessHealth> {
-        self.doctor
-            .as_ref()
-            .and_then(|doctor| doctor.harnesses.get(self.harnesses_selected))
+        let index = *self
+            .harness_visible_indices()
+            .get(self.harnesses_selected)?;
+        self.doctor.as_ref()?.harnesses.get(index)
     }
 
     pub(crate) fn selected_profile(&self) -> Option<&ProfileSummary> {
@@ -670,7 +710,7 @@ impl TuiModel {
         match self.route {
             Route::Plugins => self.marketplace_visible_indices().len(),
             Route::Extensions => self.extension_visible_indices().len(),
-            Route::Harnesses => self.doctor.as_ref().map_or(0, |d| d.harnesses.len()),
+            Route::Harnesses => self.harness_visible_indices().len(),
             _ => 0,
         }
     }
@@ -711,12 +751,7 @@ impl TuiModel {
     pub(crate) fn refreshed(&mut self, data: RefreshData) {
         self.plugins = data.plugins;
         self.doctor = data.doctor;
-        self.harnesses_selected = self.harnesses_selected.min(
-            self.doctor
-                .as_ref()
-                .map_or(0, |d| d.harnesses.len())
-                .saturating_sub(1),
-        );
+        self.clamp_harness_selection();
         self.marketplace_plugins = data.marketplace_plugins;
         self.marketplace_count = data.marketplace_count;
         self.clamp_marketplace_selection();

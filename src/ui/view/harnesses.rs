@@ -1,14 +1,14 @@
 //! TUI view — Harnesses route.
 //!
-//! List on the left; a detail drawer slides in from the right once a
-//! harness is selected (`TuiModel::harnesses_drawer_open`), with a draggable
-//! left edge to balance the detail against the list.
+//! A responsive integration catalog on the left; a detail drawer slides in
+//! from the right once a harness is selected (`TuiModel::harnesses_drawer_open`),
+//! with a draggable left edge to balance the detail against the cards.
 
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Clear, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
 use crate::integration::AttachmentState;
@@ -19,13 +19,12 @@ use crate::{
 };
 
 use super::super::hit::Hit;
-use super::super::model::{ResizablePanel, TuiModel};
+use super::super::model::{ResizablePanel, Route, TuiModel};
 use super::super::{
-    ACCENT, BORDER, DANGER, MUTED, SURFACE_OVERLAY, TEXT_BRIGHT, TEXT_DIM, TEXT_SECONDARY,
-    TEXT_TERTIARY, WARNING,
+    ACCENT, BORDER, DANGER, MUTED, SELECTED_BG, SURFACE_SUBTLE, TEXT_BRIGHT, TEXT_DIM,
+    TEXT_PRIMARY, TEXT_SECONDARY, TEXT_TERTIARY, WARNING,
 };
-use super::super::{content_area, render_divided_row, render_screen_header};
-use super::overview::{portability_label, portability_style};
+use super::super::{content_area, render_screen_header};
 
 /// A harness's state collapses onto exactly one of three buckets for this
 /// list — `HarnessHealth` itself tracks a finer distinction (whether the
@@ -90,11 +89,6 @@ impl HarnessStatus {
     }
 }
 
-/// A row's status text stops this many columns short of the row's right
-/// edge — otherwise, with the drawer open, it lands flush against the
-/// drawer's own border with no breathing room.
-const ROW_RIGHT_PAD: usize = 2;
-
 /// Looks up the one `HarnessContextStatus` (from the same `context_status`
 /// the old standalone Context screen read) matching a harness's stable
 /// `integration` id — `HarnessHealth` and `HarnessContextStatus` are two
@@ -156,16 +150,17 @@ pub(crate) fn render_harnesses(
     let drawer_width = if drawer_open {
         model
             .harness_drawer_width
-            .unwrap_or(area.width / 2)
+            .unwrap_or(super::DRAWER_DEFAULT_WIDTH)
             .clamp(24, area.width.saturating_sub(24).max(24))
-            .min(area.width)
     } else {
         0
     };
     let list_area = Rect::new(
         area.x,
         area.y,
-        area.width.saturating_sub(drawer_width),
+        area.width
+            .saturating_sub(drawer_width)
+            .saturating_sub(if drawer_open { 1 } else { 0 }),
         area.height,
     );
     let content = render_screen_header(
@@ -181,101 +176,93 @@ pub(crate) fn render_harnesses(
 
     let mut y = content.y;
     let bottom = content.y + content.height;
-    // Portability comes from the same `context_status` the drawer's own
-    // AGENTS.md row reads (see `context_delivery_for`) — one glance at the
-    // top of the list before ever selecting a harness.
-    if let Some(status) = &model.context_status
-        && y < bottom
-    {
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled("Portability  ", Style::default().fg(MUTED)),
-                Span::styled(
-                    portability_label(&status.portability),
-                    portability_style(Some(status)),
-                ),
-            ])),
-            Rect::new(content.x, y, content.width, 1),
-        );
-        y += 2;
+
+    if y + 2 <= bottom {
+        let filter_area = Rect::new(content.x, y, content.width, 2);
+        let block = Block::default()
+            .borders(Borders::BOTTOM)
+            .border_style(Style::default().fg(
+                if model.filtering && model.route == Route::Harnesses {
+                    ACCENT
+                } else {
+                    BORDER
+                },
+            ));
+        let inner = block.inner(filter_area);
+        frame.render_widget(block, filter_area);
+        let text = if model.harnesses_filter.is_empty() {
+            Line::from(Span::styled(
+                "Filter integrations…",
+                Style::default().fg(MUTED),
+            ))
+        } else {
+            let mut spans = vec![Span::styled(
+                model.harnesses_filter.clone(),
+                Style::default().fg(TEXT_PRIMARY),
+            )];
+            if model.filtering && model.route == Route::Harnesses {
+                spans.push(Span::styled("▏", Style::default().fg(ACCENT)));
+            }
+            Line::from(spans)
+        };
+        frame.render_widget(Paragraph::new(text), inner);
+        y += 3;
     }
 
     match &model.doctor {
         None => {
-            frame.render_widget(
-                Paragraph::new(Span::styled("Loading…", Style::default().fg(MUTED))),
-                Rect::new(content.x, y, content.width, content.height),
-            );
+            if y < bottom {
+                frame.render_widget(
+                    Paragraph::new(Span::styled("Loading…", Style::default().fg(MUTED))),
+                    Rect::new(content.x, y, content.width, bottom.saturating_sub(y)),
+                );
+            }
         }
         Some(doctor) => {
-            // Two lines per harness — title (name + bridge flag + status,
-            // right-aligned) then a muted one-line description — mirroring
-            // the sidebar's own selected-row treatment: a left accent bar
-            // and a bolder title on selection, never a filled background.
-            for (index, harness) in doctor.harnesses.iter().enumerate() {
-                if y >= bottom {
-                    break;
+            let visible = model.harness_visible_indices();
+            if visible.is_empty() {
+                if y < bottom {
+                    frame.render_widget(
+                        Paragraph::new(Span::styled(
+                            format!(
+                                "No integrations match \"{}\".",
+                                model.harnesses_filter.trim()
+                            ),
+                            Style::default().fg(MUTED),
+                        )),
+                        Rect::new(content.x, y, content.width, 1),
+                    );
                 }
-                let selected = index == model.harnesses_selected;
-                let status = HarnessStatus::from(harness);
-                let delivery =
-                    context_delivery_for(model.context_status.as_ref(), &harness.integration);
-
-                let border = if selected {
-                    Span::styled("│", Style::default().fg(ACCENT))
-                } else {
-                    Span::raw(" ")
-                };
-                let name_fg = if selected { TEXT_BRIGHT } else { TEXT_TERTIARY };
-                let mut name_style = Style::default().fg(name_fg);
-                if selected {
-                    name_style = name_style.add_modifier(Modifier::BOLD);
-                }
-                let name = Span::styled(harness.display_name.clone(), name_style);
-                let bridge_span = match bridge_flag(delivery) {
-                    Some((glyph, color)) => {
-                        Span::styled(format!("{glyph:<2}"), Style::default().fg(color))
+            } else {
+                let columns = if content.width >= 110 { 3 } else { 2 };
+                let gap = 1;
+                let card_width = (content.width.saturating_sub(gap * (columns - 1))) / columns;
+                let card_height = 7;
+                for (position, &raw_index) in visible.iter().enumerate() {
+                    let harness = &doctor.harnesses[raw_index];
+                    let column = position as u16 % columns;
+                    let row = position as u16 / columns;
+                    let rect = Rect::new(
+                        content.x + column * (card_width + gap),
+                        y + row * (card_height + gap),
+                        card_width,
+                        card_height,
+                    );
+                    if rect.y + rect.height > bottom {
+                        break;
                     }
-                    None => Span::raw("  "),
-                };
-                let status_span = Span::styled(
-                    format!("{} {}", status.glyph(), status.label()),
-                    Style::default().fg(status.color()),
-                );
-                let used = border.width()
-                    + 1
-                    + name.width()
-                    + bridge_span.width()
-                    + status_span.width()
-                    + ROW_RIGHT_PAD;
-                let gap = (content.width as usize).saturating_sub(used);
-                let title_line = Line::from(vec![
-                    border,
-                    Span::raw(" "),
-                    name,
-                    Span::raw(" ".repeat(gap)),
-                    bridge_span,
-                    status_span,
-                    Span::raw(" ".repeat(ROW_RIGHT_PAD)),
-                ]);
-
-                let title_rect = Rect::new(content.x, y, content.width, 1);
-                frame.render_widget(Paragraph::new(title_line), title_rect);
-                hits.push((title_rect, Hit::HarnessRow(index)));
-                y += 1;
-                if y >= bottom {
-                    break;
+                    let selected = position == model.harnesses_selected;
+                    let status = HarnessStatus::from(harness);
+                    let delivery =
+                        context_delivery_for(model.context_status.as_ref(), &harness.integration);
+                    render_harness_card(
+                        frame, rect, harness, status, delivery, selected, hits, position,
+                    );
                 }
 
-                let description_line = Line::from(vec![
-                    Span::raw("  "),
-                    Span::styled(harness.description.as_str(), Style::default().fg(TEXT_DIM)),
-                ]);
-                let description_rect = Rect::new(content.x, y, content.width, 1);
-                hits.push((description_rect, Hit::HarnessRow(index)));
-                y = render_divided_row(frame, content, y, description_line);
+                let rows = (visible.len() as u16).div_ceil(columns);
+                y += rows * (card_height + gap);
             }
-
             if let Some(status) = &model.context_status
                 && !status.warnings.is_empty()
                 && y < bottom
@@ -304,6 +291,83 @@ pub(crate) fn render_harnesses(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn render_harness_card(
+    frame: &mut ratatui::Frame<'_>,
+    rect: Rect,
+    harness: &HarnessHealth,
+    status: HarnessStatus,
+    delivery: Option<&HarnessContextDelivery>,
+    selected: bool,
+    hits: &mut Vec<(Rect, Hit)>,
+    index: usize,
+) {
+    let background = if selected {
+        SELECTED_BG
+    } else {
+        SURFACE_SUBTLE
+    };
+    frame.render_widget(
+        Paragraph::new("").style(Style::default().bg(background)),
+        rect,
+    );
+    let inner = Rect::new(
+        rect.x.saturating_add(2),
+        rect.y.saturating_add(1),
+        rect.width.saturating_sub(4),
+        rect.height.saturating_sub(2),
+    );
+    let name = Span::styled(
+        harness.display_name.clone(),
+        Style::default()
+            .fg(if selected {
+                TEXT_BRIGHT
+            } else {
+                TEXT_SECONDARY
+            })
+            .add_modifier(Modifier::BOLD),
+    );
+    let status_badge = Span::styled(
+        format!("{} {}", status.glyph(), status.label()),
+        Style::default().fg(status.color()),
+    );
+    let title_gap = inner
+        .width
+        .saturating_sub((name.width() + status_badge.width()) as u16);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            name,
+            Span::raw(" ".repeat(title_gap as usize)),
+            status_badge,
+        ])),
+        Rect::new(inner.x, inner.y, inner.width, 1),
+    );
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            harness.description.clone(),
+            Style::default().fg(TEXT_DIM),
+        ))
+        .wrap(Wrap { trim: true }),
+        Rect::new(inner.x, inner.y + 1, inner.width, 2),
+    );
+    let mut tags = vec![Span::styled(
+        harness.integration.clone(),
+        Style::default().fg(MUTED),
+    )];
+    if let Some((glyph, color)) = bridge_flag(delivery) {
+        tags.push(Span::raw("  "));
+        tags.push(Span::styled(
+            format!("{glyph} AGENTS.md"),
+            Style::default().fg(color),
+        ));
+    }
+    frame.render_widget(
+        Paragraph::new(Line::from(tags)),
+        Rect::new(inner.x, inner.y + 4, inner.width, 1),
+    );
+    hits.push((rect, Hit::HarnessRow(index)));
+}
+
 fn render_harness_drawer(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
@@ -317,7 +381,12 @@ fn render_harness_drawer(
     // Receives the exact width already used by `render_harnesses`, so the
     // list and drawer always agree about the draggable boundary.
     let width = width.min(area.width);
-    let drawer = Rect::new(area.x + area.width - width, area.y, width, area.height);
+    let drawer = Rect::new(
+        area.x + area.width - width,
+        area.y - 1,
+        width,
+        area.height + 1,
+    );
     frame.render_widget(Clear, drawer);
     frame.render_widget(
         Block::default()
@@ -326,10 +395,10 @@ fn render_harness_drawer(
                 if model.dragging_panel == Some(ResizablePanel::HarnessDrawer) {
                     ACCENT
                 } else {
-                    BORDER
+                    SURFACE_SUBTLE
                 },
             ))
-            .style(Style::default().bg(SURFACE_OVERLAY)),
+            .style(Style::default().bg(SURFACE_SUBTLE)),
         drawer,
     );
     hits.insert(
@@ -343,7 +412,7 @@ fn render_harness_drawer(
         drawer.x + 2,
         drawer.y + 1,
         drawer.width - 3,
-        drawer.height - 1,
+        drawer.height - 2,
     );
 
     let mut lines = vec![

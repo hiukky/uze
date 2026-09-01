@@ -128,6 +128,11 @@ const SELECTED_BG: Color = Color::Rgb(22, 30, 26);
 /// workspace space's envelope) — not every raised surface should read as
 /// "on-brand selected", just "raised above the background".
 const SURFACE_OVERLAY: Color = Color::Rgb(32, 34, 35);
+/// A subtler, darker surface — `rgba(255,255,255,0.025)` pre-blended over
+/// `BASE`. Used for unselected cards and detail drawers so `SELECTED_BG`
+/// pops with higher contrast while unselected surfaces stay distinct from
+/// the backdrop but visually recessed.
+const SURFACE_SUBTLE: Color = Color::Rgb(16, 18, 19);
 /// A brighter variant of `SURFACE_OVERLAY` — `rgba(255,255,255,0.14)`
 /// instead of `0.09`, pre-blended the same way — for the tab strip's
 /// "+"/"✦" pair. At the plain overlay's strength the icons read as barely
@@ -299,7 +304,7 @@ fn render_mode_toggle(
         .bg(ACCENT)
         .fg(BASE)
         .add_modifier(Modifier::BOLD);
-    let ghost = Style::default().bg(SURFACE_OVERLAY).fg(NAV_INACTIVE);
+    let ghost = Style::default().bg(SURFACE_SUBTLE).fg(NAV_INACTIVE);
     let button_width = "Manage".len() as u16 + 2;
     let centered = |label: &str| {
         let extra = button_width.saturating_sub(label.len() as u16);
@@ -388,7 +393,7 @@ pub(crate) fn render_screen_header(
     let title_style = Style::default()
         .fg(TEXT_BRIGHT)
         .add_modifier(Modifier::BOLD);
-    let title_row = Rect::new(area.x, area.y, area.width, 1);
+    let title_row = Rect::new(area.x, area.y, area.width.saturating_sub(1), 1);
     if let Some(trailer) = trailer {
         let trailer_width = trailer.width() as u16;
         let columns = Layout::default()
@@ -417,34 +422,6 @@ pub(crate) fn render_screen_header(
         area.width,
         area.height.saturating_sub(consumed),
     )
-}
-
-/// Draws one content row and, when there's room for it, a hairline
-/// `BORDER_FAINT` divider directly beneath — the design's
-/// `border-bottom: 1px solid rgba(255,255,255,0.05)` under every list row
-/// (Overview activity, Plugins, Context, Doctor checks, compat rows).
-/// Returns the y position immediately after the divider.
-pub(crate) fn render_divided_row(
-    frame: &mut ratatui::Frame<'_>,
-    area: Rect,
-    y: u16,
-    line: Line<'_>,
-) -> u16 {
-    if y >= area.y + area.height {
-        return y;
-    }
-    frame.render_widget(Paragraph::new(line), Rect::new(area.x, y, area.width, 1));
-    let divider_y = y + 1;
-    if divider_y < area.y + area.height {
-        frame.render_widget(
-            Paragraph::new(Span::styled(
-                "─".repeat(area.width as usize),
-                Style::default().fg(BORDER_FAINT),
-            )),
-            Rect::new(area.x, divider_y, area.width, 1),
-        );
-    }
-    divider_y + 1
 }
 
 fn route_style(route: &str) -> Style {

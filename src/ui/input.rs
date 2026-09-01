@@ -193,7 +193,12 @@ impl TuiModel {
             // Global refresh alias outside Plugins, where `r` already means
             // remove — `g`/F5 keep working everywhere too.
             KeyCode::Char('r') => Intent::Refresh,
-            KeyCode::Char('/') if matches!(self.route, Route::Plugins | Route::Extensions) => {
+            KeyCode::Char('/')
+                if matches!(
+                    self.route,
+                    Route::Plugins | Route::Extensions | Route::Harnesses
+                ) =>
+            {
                 self.filtering = true;
                 Intent::None
             }

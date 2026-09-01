@@ -18,6 +18,8 @@ pub mod overview;
 pub mod plugins;
 pub mod profiles;
 
+pub(crate) const DRAWER_DEFAULT_WIDTH: u16 = 52;
+
 /// The design's `selectedPackage.resources` field is a single flat string
 /// ("README, CHANGELOG") — this mirrors that exactly: every capability's
 /// own logical/file name, comma-joined, in the order the manifest declared

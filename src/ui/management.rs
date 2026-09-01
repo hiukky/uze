@@ -221,6 +221,35 @@ fn route_subtitle(route: Route) -> &'static str {
     }
 }
 
+fn route_count(route: Route, model: &TuiModel) -> Option<usize> {
+    match route {
+        Route::Overview => None,
+        Route::Plugins => Some(model.marketplace_count),
+        Route::Extensions => Some(model.extensions.len()),
+        Route::Harnesses => Some(model.doctor.as_ref().map_or(0, |d| d.harnesses.len())),
+        Route::Profiles => Some(model.profiles.len()),
+    }
+}
+
+fn small_digits(n: usize) -> String {
+    n.to_string()
+        .chars()
+        .map(|c| match c {
+            '0' => '₀',
+            '1' => '₁',
+            '2' => '₂',
+            '3' => '₃',
+            '4' => '₄',
+            '5' => '₅',
+            '6' => '₆',
+            '7' => '₇',
+            '8' => '₈',
+            '9' => '₉',
+            _ => c,
+        })
+        .collect()
+}
+
 fn render_sidebar(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
@@ -281,18 +310,7 @@ fn render_sidebar(
     }
 
     for route in ROUTES {
-        // Selection reads as a left border accent, not a filled bar — the
-        // design never gives the sidebar a background tint at all.
         let selected = route == model.route;
-        let border = if selected {
-            // A full box-drawing "│", not the thin eighth-block "▏" — the
-            // latter renders inconsistently (a sliver, sometimes
-            // misaligned) across terminal fonts; "│" is universally
-            // supported and reads as a clean solid line.
-            Span::styled("│", Style::default().fg(super::ACCENT))
-        } else {
-            Span::raw(" ")
-        };
 
         if narrow {
             let Some(rect) = row(1) else { break };
@@ -303,10 +321,62 @@ fn render_sidebar(
             };
             let mut style = Style::default().fg(fg);
             if selected {
-                style = style.add_modifier(Modifier::BOLD);
+                style = style
+                    .add_modifier(Modifier::BOLD)
+                    .bg(super::SURFACE_OVERLAY);
             }
-            let line = Line::from(vec![border, Span::styled(route.label(), style)]);
-            frame.render_widget(Paragraph::new(line), rect);
+            if selected {
+                frame.render_widget(
+                    Block::default().style(Style::default().bg(super::SURFACE_OVERLAY)),
+                    rect,
+                );
+            }
+            let bar_fg = if selected { super::ACCENT } else { super::BASE };
+            let bar_bg = if selected {
+                super::SURFACE_OVERLAY
+            } else {
+                super::BASE
+            };
+            let bar = Rect::new(rect.x, rect.y, 1, rect.height);
+            for dy in 0..bar.height {
+                let cell = Rect::new(bar.x, bar.y + dy, 1, 1);
+                frame.render_widget(
+                    Paragraph::new(Span::styled("▎", Style::default().fg(bar_fg).bg(bar_bg))),
+                    cell,
+                );
+            }
+            let text_rect = Rect::new(
+                rect.x + 2,
+                rect.y,
+                rect.width.saturating_sub(3),
+                rect.height,
+            );
+            if let Some(count) = route_count(route, model) {
+                let count_str = small_digits(count);
+                let count_w = count_str.len() as u16;
+                let cols = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Min(1), Constraint::Length(count_w)])
+                    .split(text_rect);
+                let count_style = if selected {
+                    Style::default()
+                        .fg(super::ACCENT)
+                        .bg(super::SURFACE_OVERLAY)
+                } else {
+                    Style::default().fg(super::ACCENT)
+                };
+                frame.render_widget(Paragraph::new(Span::styled(route.label(), style)), cols[0]);
+                frame.render_widget(
+                    Paragraph::new(Span::styled(count_str, count_style))
+                        .alignment(ratatui::layout::Alignment::Right),
+                    cols[1],
+                );
+            } else {
+                frame.render_widget(
+                    Paragraph::new(Span::styled(route.label(), style)),
+                    text_rect,
+                );
+            }
             hits.push((rect, Hit::Route(route)));
             continue;
         }
@@ -315,32 +385,109 @@ fn render_sidebar(
         let subtitle_rect = row(1);
         row(1); // breathing room between items
 
-        let label_fg = if selected {
-            super::TEXT_BRIGHT
-        } else {
-            super::NAV_INACTIVE
-        };
-        let mut label_style = Style::default().fg(label_fg);
+        let height = if subtitle_rect.is_some() { 2 } else { 1 };
+        let block_rect = Rect::new(label_rect.x, label_rect.y, label_rect.width, height);
         if selected {
-            label_style = label_style.add_modifier(Modifier::BOLD);
+            frame.render_widget(
+                Block::default().style(Style::default().bg(super::SURFACE_OVERLAY)),
+                block_rect,
+            );
         }
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                border,
-                Span::raw(" "),
-                Span::styled(route.label(), label_style),
-            ])),
-            label_rect,
-        );
-        hits.push((label_rect, Hit::Route(route)));
-
-        if let Some(subtitle_rect) = subtitle_rect {
-            let line = Line::from(vec![
-                Span::raw("  "),
-                Span::styled(route_subtitle(route), Style::default().fg(super::TEXT_DIM)),
-            ]);
-            frame.render_widget(Paragraph::new(line), subtitle_rect);
-            hits.push((subtitle_rect, Hit::Route(route)));
+        let bar_fg = if selected { super::ACCENT } else { super::BASE };
+        let bar_bg = if selected {
+            super::SURFACE_OVERLAY
+        } else {
+            super::BASE
+        };
+        for dy in 0..height {
+            let cell = Rect::new(block_rect.x, block_rect.y + dy, 1, 1);
+            frame.render_widget(
+                Paragraph::new(Span::styled("▎", Style::default().fg(bar_fg).bg(bar_bg))),
+                cell,
+            );
+        }
+        let text_x = block_rect.x + 2;
+        let text_w = block_rect.width.saturating_sub(3);
+        if selected {
+            let label_style = Style::default()
+                .fg(super::TEXT_BRIGHT)
+                .add_modifier(Modifier::BOLD)
+                .bg(super::SURFACE_OVERLAY);
+            let inner_label = Rect::new(text_x, block_rect.y, text_w, 1);
+            if let Some(count) = route_count(route, model) {
+                let count_str = small_digits(count);
+                let count_w = count_str.len() as u16;
+                let cols = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Min(1), Constraint::Length(count_w)])
+                    .split(inner_label);
+                let count_style = Style::default()
+                    .fg(super::ACCENT)
+                    .bg(super::SURFACE_OVERLAY);
+                frame.render_widget(
+                    Paragraph::new(Span::styled(route.label(), label_style)),
+                    cols[0],
+                );
+                frame.render_widget(
+                    Paragraph::new(Span::styled(count_str, count_style))
+                        .alignment(ratatui::layout::Alignment::Right),
+                    cols[1],
+                );
+            } else {
+                frame.render_widget(
+                    Paragraph::new(Span::styled(route.label(), label_style)),
+                    inner_label,
+                );
+            }
+            hits.push((label_rect, Hit::Route(route)));
+            if let Some(sub_rect) = subtitle_rect {
+                let inner_sub = Rect::new(text_x, block_rect.y + 1, text_w, 1);
+                let sub_style = Style::default()
+                    .fg(super::TEXT_DIM)
+                    .bg(super::SURFACE_OVERLAY);
+                frame.render_widget(
+                    Paragraph::new(Span::styled(route_subtitle(route), sub_style))
+                        .style(Style::default().bg(super::SURFACE_OVERLAY)),
+                    inner_sub,
+                );
+                hits.push((sub_rect, Hit::Route(route)));
+            }
+        } else {
+            let label_style = Style::default().fg(super::NAV_INACTIVE);
+            let inner_label = Rect::new(text_x, block_rect.y, text_w, 1);
+            if let Some(count) = route_count(route, model) {
+                let count_str = small_digits(count);
+                let count_w = count_str.len() as u16;
+                let cols = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Min(1), Constraint::Length(count_w)])
+                    .split(inner_label);
+                let count_style = Style::default().fg(super::ACCENT);
+                frame.render_widget(
+                    Paragraph::new(Span::styled(route.label(), label_style)),
+                    cols[0],
+                );
+                frame.render_widget(
+                    Paragraph::new(Span::styled(count_str, count_style))
+                        .alignment(ratatui::layout::Alignment::Right),
+                    cols[1],
+                );
+            } else {
+                frame.render_widget(
+                    Paragraph::new(Span::styled(route.label(), label_style)),
+                    inner_label,
+                );
+            }
+            hits.push((label_rect, Hit::Route(route)));
+            if let Some(sub_rect) = subtitle_rect {
+                let inner_sub = Rect::new(text_x, block_rect.y + 1, text_w, 1);
+                let line = Line::from(vec![Span::styled(
+                    route_subtitle(route),
+                    Style::default().fg(super::TEXT_DIM),
+                )]);
+                frame.render_widget(Paragraph::new(line), inner_sub);
+                hits.push((sub_rect, Hit::Route(route)));
+            }
         }
     }
 }
@@ -478,8 +625,10 @@ fn route_hint(model: &TuiModel) -> &'static str {
         Route::Plugins => {
             "↑↓ select · enter inspect · i install · u update · r remove · a marketplace · / search"
         }
-        Route::Extensions => "↑↓ select · enter details",
-        Route::Harnesses => "↑↓ select · s setup · a analyze · p apply · ? status · esc close",
+        Route::Extensions => "↑↓ select · enter details · / search",
+        Route::Harnesses => {
+            "↑↓ select · s setup · a analyze · p apply · / search · ? status · esc close"
+        }
         Route::Profiles => "↑↓ navigate · enter expand/edit · space toggle",
     }
 }

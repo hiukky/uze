@@ -20,7 +20,7 @@ use ratatui::{
 use super::super::hit::Hit;
 use super::super::model::{ResizablePanel, TuiModel};
 use super::super::{
-    ACCENT, BASE, BLUE, BORDER, MUTED, SELECTED_BG, SURFACE_OVERLAY, TEXT_BRIGHT, TEXT_PRIMARY,
+    ACCENT, BLUE, BORDER, MUTED, SELECTED_BG, SURFACE_SUBTLE, TEXT_BRIGHT, TEXT_PRIMARY,
     TEXT_SECONDARY,
 };
 use super::super::{content_area, render_screen_header};
@@ -32,10 +32,22 @@ pub(crate) fn render_extensions(
     model: &TuiModel,
     hits: &mut Vec<(Rect, Hit)>,
 ) {
-    let content = content_area(area);
+    let outer = content_area(area);
+    let drawer_open = model.extension_drawer_open && model.selected_extension().is_some();
+    let drawer_width = drawer_open.then(|| {
+        model
+            .extension_drawer_width
+            .unwrap_or(super::DRAWER_DEFAULT_WIDTH)
+            .clamp(24, outer.width.saturating_sub(24).max(24))
+    });
+    let header_width = outer
+        .width
+        .saturating_sub(drawer_width.unwrap_or(0))
+        .saturating_sub(if drawer_open { 1 } else { 0 });
+    let header_area = Rect::new(outer.x, outer.y, header_width, outer.height);
     let content = render_screen_header(
         frame,
-        content,
+        header_area,
         "Extensions",
         "official tool extensions",
         Some(Span::styled(
@@ -43,21 +55,12 @@ pub(crate) fn render_extensions(
             Style::default().fg(MUTED),
         )),
     );
-    let drawer_area = area_for_drawer(area);
-    let drawer_open = model.extension_drawer_open && model.selected_extension().is_some();
-    let drawer_width = drawer_open.then(|| {
-        model
-            .extension_drawer_width
-            .unwrap_or(52)
-            .clamp(24, drawer_area.width.saturating_sub(24).max(24))
-    });
-    let catalog_width = content.width.saturating_sub(drawer_width.unwrap_or(0));
-    let filter_area = Rect::new(content.x, content.y, catalog_width, 2);
+    let filter_area = Rect::new(content.x, content.y, content.width, 2);
     render_filter_box(frame, filter_area, model);
     let catalog_area = Rect::new(
         content.x,
         content.y.saturating_add(3),
-        catalog_width,
+        content.width,
         content.height.saturating_sub(3),
     );
 
@@ -117,21 +120,13 @@ pub(crate) fn render_extensions(
     if drawer_open && let Some(extension) = model.selected_extension() {
         render_extension_drawer(
             frame,
-            drawer_area,
+            outer,
             drawer_width.unwrap_or_default(),
             model,
             extension,
             hits,
         );
     }
-}
-
-/// The drawer overlays from the *original* (unshrunk) route area, matching
-/// how Plugins/Harnesses anchor theirs — `content_area` already insets
-/// once for the list; re-deriving here keeps the drawer's own inset
-/// independent of how much of that area the header consumed.
-fn area_for_drawer(area: Rect) -> Rect {
-    content_area(area)
 }
 
 fn render_filter_box(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
@@ -166,7 +161,11 @@ fn render_extension_card(
     hits: &mut Vec<(Rect, Hit)>,
     index: usize,
 ) {
-    let background = if selected { SELECTED_BG } else { BASE };
+    let background = if selected {
+        SELECTED_BG
+    } else {
+        SURFACE_SUBTLE
+    };
     frame.render_widget(
         Paragraph::new("").style(Style::default().bg(background)),
         rect,
@@ -201,12 +200,9 @@ fn render_extension_card(
         Rect::new(inner.x, inner.y + 1, inner.width, 2),
     );
     let tags = Line::from(vec![
-        Span::styled(
-            format!(" {} ", extension.surface),
-            Style::default().fg(MUTED),
-        ),
-        Span::raw(" "),
-        Span::styled(" Built-in ", Style::default().fg(MUTED)),
+        Span::styled(extension.surface, Style::default().fg(MUTED)),
+        Span::raw("  "),
+        Span::styled("Built-in", Style::default().fg(MUTED)),
     ]);
     frame.render_widget(
         Paragraph::new(tags),
@@ -238,10 +234,10 @@ fn render_extension_drawer(
                 if model.dragging_panel == Some(ResizablePanel::ExtensionDrawer) {
                     ACCENT
                 } else {
-                    BORDER
+                    SURFACE_SUBTLE
                 },
             ))
-            .style(Style::default().bg(SURFACE_OVERLAY)),
+            .style(Style::default().bg(SURFACE_SUBTLE)),
         drawer,
     );
     hits.insert(

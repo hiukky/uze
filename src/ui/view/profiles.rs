@@ -16,7 +16,8 @@ use super::super::content_area;
 use super::super::hit::Hit;
 use super::super::model::{ProfilePanel, ResizablePanel, TuiModel};
 use super::super::{
-    ACCENT, BLUE, BORDER, DANGER, MUTED, TEXT_BRIGHT, TEXT_SECONDARY, TEXT_TERTIARY, WARNING,
+    ACCENT, BASE, BLUE, BORDER, DANGER, MUTED, SURFACE_OVERLAY, SURFACE_SUBTLE, TEXT_BRIGHT,
+    TEXT_SECONDARY, TEXT_TERTIARY, WARNING,
 };
 
 pub(crate) fn render_profiles(
@@ -26,22 +27,35 @@ pub(crate) fn render_profiles(
     hits: &mut Vec<(Rect, Hit)>,
 ) {
     let content = content_area(area);
+    let right_default = super::DRAWER_DEFAULT_WIDTH;
     let left_width = model
         .profile_columns_width
-        .unwrap_or(content.width.saturating_mul(65) / 100)
+        .unwrap_or(content.width.saturating_sub(right_default))
         .clamp(24, content.width.saturating_sub(24).max(24))
         .min(content.width);
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Length(left_width), Constraint::Min(1)])
         .split(content);
-    render_profile_tree(frame, columns[0], model, hits);
-    render_harnesses(frame, columns[1], model, hits);
+    let left_area = Rect::new(
+        columns[0].x,
+        columns[0].y.saturating_sub(1),
+        columns[0].width,
+        columns[0].height.saturating_add(1),
+    );
+    let harnesses_area = Rect::new(
+        columns[1].x,
+        columns[1].y.saturating_sub(1),
+        columns[1].width,
+        columns[1].height.saturating_add(1),
+    );
+    render_profile_tree(frame, left_area, model, hits);
+    render_harnesses(frame, harnesses_area, model, hits);
     let divider = Rect::new(
-        columns[0].right().saturating_sub(1),
-        content.y,
+        left_area.right().saturating_sub(1),
+        left_area.y,
         1,
-        content.height,
+        left_area.height,
     );
     if model.dragging_panel == Some(ResizablePanel::ProfileColumns) {
         frame.render_widget(
@@ -58,7 +72,7 @@ pub(crate) fn render_profiles(
     );
 }
 
-fn panel(right_border: bool) -> Block<'static> {
+fn panel(right_border: bool, background: Color) -> Block<'static> {
     Block::default()
         .borders(if right_border {
             Borders::RIGHT
@@ -66,6 +80,7 @@ fn panel(right_border: bool) -> Block<'static> {
             Borders::NONE
         })
         .border_style(Style::default().fg(BORDER))
+        .style(Style::default().bg(background))
 }
 
 fn focus_color(focused: bool) -> Color {
@@ -117,13 +132,24 @@ fn render_profile_tree(
     model: &TuiModel,
     hits: &mut Vec<(Rect, Hit)>,
 ) {
-    let block = panel(true);
-    let inner = block.inner(area);
+    let block = panel(false, BASE);
+    let panel_inner = block.inner(area);
+    let inner = Rect::new(
+        panel_inner.x.saturating_add(2),
+        panel_inner.y.saturating_add(1),
+        panel_inner.width.saturating_sub(3),
+        panel_inner.height.saturating_sub(2),
+    );
     frame.render_widget(block, area);
     let header = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(1), Constraint::Length(5)])
-        .split(Rect::new(inner.x, inner.y, inner.width, 1));
+        .constraints([Constraint::Min(1), Constraint::Length(7)])
+        .split(Rect::new(
+            inner.x,
+            inner.y,
+            inner.width.saturating_sub(1),
+            1,
+        ));
     frame.render_widget(
         Paragraph::new(Span::styled(
             "Profiles",
@@ -153,18 +179,32 @@ fn render_profile_tree(
                 "No profiles yet — press n",
                 Style::default().fg(MUTED),
             )),
-            Rect::new(inner.x, inner.y.saturating_add(3), inner.width, 1),
+            Rect::new(inner.x, inner.y.saturating_add(4), inner.width, 1),
         );
         return;
     }
 
-    let mut y = inner.y.saturating_add(3);
+    let mut y = inner.y.saturating_add(4);
     let bottom = inner.y + inner.height.saturating_sub(1);
     for (index, profile) in model.profiles.iter().enumerate() {
         if y >= bottom {
             break;
         }
         let selected = index == model.profiles_selected;
+        if selected {
+            let content_h: u16 = 4;
+            // 1 top + content + 1 bottom padding inside the overlay
+            let y0 = y.saturating_sub(1);
+            let available = bottom.saturating_sub(y0) as usize;
+            let h = (content_h + 2).min(available as u16);
+            if h > 0 {
+                let bg_rect = Rect::new(inner.x, y0, inner.width, h);
+                frame.render_widget(
+                    Block::default().style(Style::default().bg(SURFACE_OVERLAY)),
+                    bg_rect,
+                );
+            }
+        }
         let mut name_style = Style::default().fg(if profile.active {
             ACCENT
         } else if selected {
@@ -172,6 +212,9 @@ fn render_profile_tree(
         } else {
             TEXT_TERTIARY
         });
+        if selected {
+            name_style = name_style.bg(SURFACE_OVERLAY);
+        }
         if selected || profile.active {
             name_style = name_style.add_modifier(Modifier::BOLD);
         }
@@ -198,9 +241,9 @@ fn render_profile_tree(
                     .direction(Direction::Horizontal)
                     .constraints([
                         Constraint::Min(1),
-                        Constraint::Length(8),
+                        Constraint::Length(10),
                         Constraint::Length(3),
-                        Constraint::Length(8),
+                        Constraint::Length(10),
                     ])
                     .split(row),
             )
@@ -211,12 +254,12 @@ fn render_profile_tree(
         frame.render_widget(Paragraph::new(Line::from(spans)), profile_rect);
         if let Some(parts) = controls {
             frame.render_widget(
-                Paragraph::new(Span::styled("remove", Style::default().fg(DANGER)))
+                Paragraph::new(Span::styled("✕ remove", Style::default().fg(DANGER)))
                     .alignment(Alignment::Right),
                 parts[1],
             );
             frame.render_widget(
-                Paragraph::new(Span::styled(" │ ", Style::default().fg(BORDER)))
+                Paragraph::new(Span::styled("│", Style::default().fg(BORDER)))
                     .alignment(Alignment::Center),
                 parts[2],
             );
@@ -224,7 +267,7 @@ fn render_profile_tree(
             if profile.active {
                 frame.render_widget(
                     Paragraph::new(Span::styled(
-                        "active",
+                        "● active",
                         Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
                     ))
                     .alignment(Alignment::Left),
@@ -232,7 +275,7 @@ fn render_profile_tree(
                 );
             } else {
                 frame.render_widget(
-                    Paragraph::new(Span::styled("apply", Style::default().fg(ACCENT)))
+                    Paragraph::new(Span::styled("○ apply", Style::default().fg(ACCENT)))
                         .alignment(Alignment::Left),
                     parts[3],
                 );
@@ -271,18 +314,22 @@ fn render_profile_tree(
                     Paragraph::new(Line::from(vec![
                         Span::styled(
                             if editing { "  › " } else { "    " },
-                            Style::default().fg(ACCENT),
+                            Style::default().fg(ACCENT).bg(SURFACE_OVERLAY),
                         ),
-                        Span::styled(format!("{label:<20}"), Style::default().fg(TEXT_SECONDARY)),
-                        Span::styled(value, value_style),
-                    ])),
+                        Span::styled(
+                            format!("{label:<20}"),
+                            Style::default().fg(TEXT_SECONDARY).bg(SURFACE_OVERLAY),
+                        ),
+                        Span::styled(value, value_style.bg(SURFACE_OVERLAY)),
+                    ]))
+                    .style(Style::default().bg(SURFACE_OVERLAY)),
                     rect,
                 );
                 hits.push((rect, Hit::PreferenceRow(preference_index)));
                 y += 1;
             }
         }
-        y = y.saturating_add(1);
+        y = y.saturating_add(2);
     }
 }
 
@@ -313,9 +360,19 @@ fn render_harnesses(
                 .collect()
         })
         .unwrap_or_default();
-    let block = panel(false);
-    let inner = block.inner(area);
+    let block = panel(false, SURFACE_SUBTLE);
+    let panel_inner = block.inner(area);
+    let inner = Rect::new(
+        panel_inner.x.saturating_add(2),
+        panel_inner.y.saturating_add(1),
+        panel_inner.width.saturating_sub(3),
+        panel_inner.height.saturating_sub(2),
+    );
     frame.render_widget(block, area);
+    let header = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Min(1), Constraint::Length(12)])
+        .split(Rect::new(inner.x, inner.y, inner.width, 1));
     frame.render_widget(
         Paragraph::new(Span::styled(
             "Harnesses",
@@ -323,7 +380,23 @@ fn render_harnesses(
                 .fg(TEXT_BRIGHT)
                 .add_modifier(Modifier::BOLD),
         )),
-        Rect::new(inner.x, inner.y, inner.width, 1),
+        header[0],
+    );
+    let selected = harnesses
+        .iter()
+        .filter(|harness| {
+            model
+                .profile_harness_selection
+                .contains(&harness.integration)
+        })
+        .count();
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            format!("{selected}/{} selected", harnesses.len()),
+            Style::default().fg(focus_color(focused)),
+        ))
+        .alignment(Alignment::Right),
+        header[1],
     );
     if harnesses.is_empty() {
         frame.render_widget(
@@ -331,12 +404,12 @@ fn render_harnesses(
                 "No harnesses detected",
                 Style::default().fg(MUTED),
             )),
-            Rect::new(inner.x, inner.y.saturating_add(2), inner.width, 1),
+            Rect::new(inner.x, inner.y.saturating_add(3), inner.width, 1),
         );
         return;
     }
 
-    let first_harness_row = inner.y.saturating_add(2);
+    let first_harness_row = inner.y.saturating_add(3);
     let bottom = inner.y + inner.height.saturating_sub(1);
     for (y, (index, harness)) in (first_harness_row..bottom).zip(harnesses.iter().enumerate()) {
         let cursor = focused && index == model.profile_harness_selected;
@@ -374,26 +447,4 @@ fn render_harnesses(
         frame.render_widget(Paragraph::new(Line::from(spans)), rect);
         hits.push((rect, Hit::ProfileHarnessRow(index)));
     }
-
-    let selected = harnesses
-        .iter()
-        .filter(|harness| {
-            model
-                .profile_harness_selection
-                .contains(&harness.integration)
-        })
-        .count();
-    frame.render_widget(
-        Paragraph::new(Span::styled(
-            format!("{selected}/{} selected", harnesses.len()),
-            Style::default().fg(focus_color(focused)),
-        ))
-        .alignment(Alignment::Right),
-        Rect::new(
-            inner.x,
-            inner.y + inner.height.saturating_sub(1),
-            inner.width,
-            1,
-        ),
-    );
 }

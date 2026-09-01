@@ -30,7 +30,7 @@ use crate::application::{DoctorReport, MarketplacePluginSummary};
 use super::super::hit::Hit;
 use super::super::model::{ResizablePanel, TuiModel};
 use super::super::{
-    ACCENT, BLUE, BORDER, MUTED, SELECTED_BG, SURFACE_OVERLAY, TEXT_BRIGHT, TEXT_DIM, TEXT_FAINT,
+    ACCENT, BLUE, BORDER, MUTED, SELECTED_BG, SURFACE_SUBTLE, TEXT_BRIGHT, TEXT_DIM, TEXT_FAINT,
     TEXT_PRIMARY, TEXT_SECONDARY, WARNING, route_style,
 };
 use super::super::{content_area, render_screen_header};
@@ -135,7 +135,20 @@ pub(crate) fn render_plugins(
     model: &TuiModel,
     hits: &mut Vec<(Rect, Hit)>,
 ) {
-    let full_area = content_area(area);
+    let outer = content_area(area);
+    let drawer_open =
+        model.marketplace_drawer_open && model.selected_marketplace_plugin().is_some();
+    let drawer_width = drawer_open.then(|| {
+        model
+            .marketplace_drawer_width
+            .unwrap_or(super::DRAWER_DEFAULT_WIDTH)
+            .clamp(24, outer.width.saturating_sub(24).max(24))
+    });
+    let list_area_width = outer
+        .width
+        .saturating_sub(drawer_width.unwrap_or(0))
+        .saturating_sub(if drawer_open { 1 } else { 0 });
+    let header_area = Rect::new(outer.x, outer.y, list_area_width, outer.height);
     let trailer = (model.marketplace_count > 0).then(|| {
         Span::styled(
             format!(
@@ -152,26 +165,17 @@ pub(crate) fn render_plugins(
     });
     let content = render_screen_header(
         frame,
-        full_area,
+        header_area,
         "Plugins",
         "skills · agents · MCP",
         trailer,
     );
-    let drawer_open =
-        model.marketplace_drawer_open && model.selected_marketplace_plugin().is_some();
-    let drawer_width = drawer_open.then(|| {
-        model
-            .marketplace_drawer_width
-            .unwrap_or(52)
-            .clamp(24, full_area.width.saturating_sub(24).max(24))
-    });
-    let list_width = content.width.saturating_sub(drawer_width.unwrap_or(0));
-    let filter_area = Rect::new(content.x, content.y, list_width, 2);
+    let filter_area = Rect::new(content.x, content.y, content.width, 2);
     render_filter_box(frame, filter_area, model);
     let list_area = Rect::new(
         content.x,
         content.y + 3,
-        list_width,
+        content.width,
         content.height.saturating_sub(3),
     );
 
@@ -266,7 +270,7 @@ pub(crate) fn render_plugins(
     if drawer_open && let Some(plugin) = model.selected_marketplace_plugin() {
         render_plugin_drawer(
             frame,
-            full_area,
+            outer,
             drawer_width.unwrap_or_default(),
             model,
             &plugin,
@@ -442,10 +446,10 @@ fn render_plugin_drawer(
                 if model.dragging_panel == Some(ResizablePanel::MarketplaceDrawer) {
                     ACCENT
                 } else {
-                    BORDER
+                    SURFACE_SUBTLE
                 },
             ))
-            .style(Style::default().bg(SURFACE_OVERLAY)),
+            .style(Style::default().bg(SURFACE_SUBTLE)),
         drawer,
     );
     hits.insert(
