@@ -211,6 +211,42 @@ pub fn primary_checkout(cwd: &Path) -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
+/// An isolated checkout, named apart from the primary it belongs to.
+///
+/// Borrowed from the path it was read out of: this is derived from a path
+/// a caller already holds, and every field is a slice of it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IsolatedCheckout<'a> {
+    /// The primary checkout the isolated one hangs off.
+    pub primary: &'a Path,
+    /// The isolated checkout's own name — the `<name>` in the fixed
+    /// `.worktrees/<name>` layout, and the suffix of its `agent/<name>`
+    /// branch.
+    pub name: &'a str,
+}
+
+/// The isolated checkout `path` sits in, or `None` for a path that is not
+/// isolated.
+///
+/// Lexical against the fixed layout for the same reason [`is_in_primary`]
+/// is: a display asks this of every open tab on every frame, and a
+/// subprocess per tab there is a cost with no matching benefit.
+///
+/// The deepest match wins, so a path inside a checkout that itself sits
+/// inside another names the one it is actually in.
+pub fn isolated_checkout(path: &Path) -> Option<IsolatedCheckout<'_>> {
+    path.ancestors().find_map(|checkout| {
+        let container = checkout.parent()?;
+        if container.file_name()? != WORKTREES_DIRECTORY {
+            return None;
+        }
+        Some(IsolatedCheckout {
+            primary: container.parent()?,
+            name: checkout.file_name()?.to_str()?,
+        })
+    })
+}
+
 /// Whether `path` sits in the primary checkout itself rather than in one of
 /// its isolated checkouts.
 ///
@@ -390,6 +426,37 @@ mod tests {
         ));
         assert!(!WorktreePolicy::owns_region("instruction-bridge"));
         assert!(!WorktreePolicy::owns_region(POLICY_REGION_PREFIX));
+    }
+
+    #[test]
+    fn an_isolated_path_names_the_checkout_it_sits_in() {
+        let checkout = isolated_checkout(Path::new("/repo/.worktrees/ai/src/ui")).unwrap();
+        assert_eq!(checkout.primary, Path::new("/repo"));
+        assert_eq!(checkout.name, "ai");
+
+        // The checkout root itself, not only something under it.
+        let root = isolated_checkout(Path::new("/repo/.worktrees/ai")).unwrap();
+        assert_eq!(root.primary, Path::new("/repo"));
+        assert_eq!(root.name, "ai");
+    }
+
+    #[test]
+    fn a_path_in_the_primary_checkout_is_not_isolated() {
+        assert!(isolated_checkout(Path::new("/repo/src/ui")).is_none());
+        assert!(isolated_checkout(Path::new("/repo")).is_none());
+        // The container is not a checkout; only its children are.
+        assert!(isolated_checkout(Path::new("/repo/.worktrees")).is_none());
+    }
+
+    /// Git keeps its registry flat however the directories nest (see
+    /// `discover_linked_worktrees`), and so must the name a display shows:
+    /// the checkout the path is actually in, not the outermost one.
+    #[test]
+    fn the_deepest_checkout_wins_when_they_nest() {
+        let checkout =
+            isolated_checkout(Path::new("/repo/.worktrees/outer/.worktrees/inner/src")).unwrap();
+        assert_eq!(checkout.name, "inner");
+        assert_eq!(checkout.primary, Path::new("/repo/.worktrees/outer"));
     }
 
     #[test]

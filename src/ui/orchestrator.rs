@@ -431,6 +431,10 @@ pub(crate) fn attach_workspace(
                     model.support_dropdown = None;
                     model.dirty = true;
                 }
+                Event::Key(_) if model.isolation_tip.is_some() => {
+                    model.isolation_tip = None;
+                    model.dirty = true;
+                }
                 Event::Key(key) if model.context_menu.is_some() => {
                     // Up/Down move the selection; Enter confirms whichever
                     // row is selected; anything else (Esc included)
@@ -658,6 +662,16 @@ pub(crate) fn attach_workspace(
                     // Informational dropdown: every click simply dismisses
                     // it, preventing the click from leaking into the pane.
                     model.support_dropdown = None;
+                    model.dirty = true;
+                }
+                Event::Mouse(mouse)
+                    if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+                        && model.isolation_tip.is_some() =>
+                {
+                    // Same rule as the support dropdown above — and it is
+                    // what makes the marker a toggle: the click that would
+                    // reopen the tip closes it instead.
+                    model.isolation_tip = None;
                     model.dirty = true;
                 }
                 Event::Mouse(mouse)
@@ -950,6 +964,13 @@ pub(crate) fn attach_workspace(
                             }
                             model.dirty = true;
                         }
+                        WorkspaceHit::ShowIsolation(tab) => {
+                            model.isolation_tip = Some(IsolationTip {
+                                tab,
+                                anchor: hit_rect,
+                            });
+                            model.dirty = true;
+                        }
                         WorkspaceHit::Extension(_) => {
                             // Only reachable while the git view is open,
                             // which its own guarded arm below already
@@ -1110,6 +1131,10 @@ pub(super) enum WorkspaceHit {
     OpenGitView,
     /// Opens contextual support details for the selected agent tab.
     OpenAgentSupport(Rect),
+    /// The isolation marker on a sidebar caption row — opens the
+    /// [`IsolationTip`] naming the isolated checkout that row's tab is
+    /// actually running in.
+    ShowIsolation(TabId),
     /// A hit the open extension's own render pass produced (a file row, a
     /// worktree header, its tree/diff resize handle, its close button —
     /// see `uze_extensions::ExtensionHit`), wrapped instead of given its
@@ -1160,6 +1185,16 @@ struct AgentPicker {
 /// name — and makes a resolution for some other pane unrenderable here.
 struct AgentSupportDropdown {
     key: SupportKey,
+    anchor: Rect,
+}
+
+/// Open state of the isolation tip — the full path behind a sidebar
+/// caption row's `⋔`. Keyed by the tab rather than by the path it will
+/// show, so the tip tracks a `cd` in that pane the same way the caption
+/// row it hangs off already does.
+struct IsolationTip {
+    tab: TabId,
+    /// The marker's own rect — the tip hangs directly under it.
     anchor: Rect,
 }
 
@@ -1490,6 +1525,10 @@ struct WorkspaceModel {
     agent_picker: Option<AgentPicker>,
     /// Contextual support information for the active harness tab.
     support_dropdown: Option<AgentSupportDropdown>,
+    /// Open state of the isolation tip; `None` when closed. Informational
+    /// like `support_dropdown`, and dismissed the same way: by the next key
+    /// or click, wherever it lands.
+    isolation_tip: Option<IsolationTip>,
     /// The most recently resolved agent support answer, tagged with the
     /// `(harness, cwd)` it answers — never assumed to apply to a different
     /// selection.
@@ -1653,7 +1692,8 @@ impl WorkspaceModel {
         }
     }
     /// None of the modal overlays that own mouse input while they're open
-    /// (rename buffer, agent picker, context menu, Git changes view) are
+    /// (rename buffer, agent picker, support dropdown, isolation tip,
+    /// context menu, Git changes view) are
     /// currently up — the precondition for forwarding a drag/release/scroll
     /// that isn't already claimed by one of them straight into the focused
     /// pane's PTY instead of dropping it.
@@ -1661,6 +1701,7 @@ impl WorkspaceModel {
         self.renaming.is_none()
             && self.agent_picker.is_none()
             && self.support_dropdown.is_none()
+            && self.isolation_tip.is_none()
             && self.context_menu.is_none()
             && self.git_view.is_none()
     }

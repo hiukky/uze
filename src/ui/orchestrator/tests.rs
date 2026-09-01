@@ -7,6 +7,7 @@
 use super::*;
 
 mod workspace_tests {
+    use super::WorkspaceHit;
     use super::{
         AGENT_BUSY_REPAINTS, AGENT_ECHO_GRACE, AGENT_PASTE_GRACE, AgentIdentity, AgentTabStatus,
         WorkspaceModel, agent_identity_for_tab, blank_pane, can_close_tab_from_menu, encode_mouse,
@@ -123,6 +124,117 @@ mod workspace_tests {
         };
         assert_eq!(glyphs("\u{25cf}"), 1, "one selected agent, sidebar-wide");
         assert_eq!(glyphs("\u{25cb}"), 1, "the other space's agent reads idle");
+    }
+
+    /// A one-agent session whose only tab runs in `cwd`.
+    fn agent_session_in(cwd: &str) -> WorkspaceModel {
+        let mut session = Session::new(WorkspaceId("workspace".into()), "/repo".into(), 80, 24);
+        let tab = &mut session.workspace.spaces[0].tabs[0];
+        tab.label = "Agent".into();
+        if let Layout::Pane(pane) = &mut tab.layout {
+            pane.cwd = cwd.into();
+        }
+        WorkspaceModel {
+            session: Some(session),
+            ..WorkspaceModel::default()
+        }
+    }
+
+    /// The sidebar as text, one string per row.
+    fn sidebar_rows(model: &WorkspaceModel, hits: &mut Vec<(Rect, WorkspaceHit)>) -> Vec<String> {
+        let mut terminal = Terminal::new(TestBackend::new(40, 24)).unwrap();
+        terminal
+            .draw(|frame| render_sidebar(frame, frame.area(), model, &IDENTITIES, hits))
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..buffer.area.height)
+            .map(|row| {
+                (0..buffer.area.width)
+                    .map(|column| buffer[(column, row)].symbol())
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_isolated_agent_is_marked_on_its_name_row_and_captioned_by_its_primary() {
+        // The whole point: `.worktrees/<name>` is two more segments in a
+        // column this narrow. The mark belongs beside the agent's name —
+        // the caption below it just stops spelling out the tail.
+        let model = agent_session_in("/repo/.worktrees/ai");
+        let rows = sidebar_rows(&model, &mut Vec::new());
+        let name_row = rows
+            .iter()
+            .find(|row| row.contains("Agent"))
+            .expect("the agent is named in the tree");
+        assert!(name_row.contains("(wt)"), "{name_row}");
+
+        let caption = rows
+            .iter()
+            .find(|row| row.contains("/repo"))
+            .expect("the caption row names where it is");
+        assert!(!caption.contains(".worktrees"), "{caption}");
+        assert!(
+            !caption.contains('\u{22d4}'),
+            "one mark, not two: {caption}"
+        );
+    }
+
+    /// The column in front of an agent's name answers one question — how
+    /// that agent is doing — and the marker must never take it over.
+    #[test]
+    fn the_marker_leaves_the_status_column_alone() {
+        let model = agent_session_in("/repo/.worktrees/ai");
+        let rows = sidebar_rows(&model, &mut Vec::new());
+        let name_row = rows
+            .iter()
+            .find(|row| row.contains("Agent"))
+            .expect("the agent is named in the tree");
+        let status = name_row
+            .find('\u{25cb}')
+            .or_else(|| name_row.find('\u{25cf}'));
+        let marker = name_row.find("(wt)");
+        assert!(status.is_some(), "the status glyph still leads: {name_row}");
+        assert!(status < marker, "the mark follows the name: {name_row}");
+    }
+
+    #[test]
+    fn an_agent_in_the_primary_checkout_carries_no_marker() {
+        let model = agent_session_in("/repo/src");
+        let rows = sidebar_rows(&model, &mut Vec::new());
+        assert!(
+            rows.iter().any(|row| row.contains("/repo/src")),
+            "the ordinary path is shown whole: {rows:?}"
+        );
+        assert!(
+            !rows.iter().any(|row| row.contains("(wt)")),
+            "nothing to mark: {rows:?}"
+        );
+    }
+
+    /// `hits` resolves first match wins, so a marker hit pushed after the
+    /// row-wide one it sits inside would never be reachable — clicking the
+    /// marker would just select the tab.
+    #[test]
+    fn the_isolation_marker_outranks_the_row_it_sits_on() {
+        let model = agent_session_in("/repo/.worktrees/ai");
+        let mut hits = Vec::new();
+        sidebar_rows(&model, &mut hits);
+        let marker = hits
+            .iter()
+            .find(|(_, hit)| matches!(hit, WorkspaceHit::ShowIsolation(_)))
+            .map(|(rect, _)| *rect)
+            .expect("an isolated caption row offers its full path");
+        let resolved = hits
+            .iter()
+            .find(|(rect, _)| {
+                rect.x <= marker.x
+                    && marker.x < rect.x + rect.width
+                    && rect.y <= marker.y
+                    && marker.y < rect.y + rect.height
+            })
+            .map(|(_, hit)| *hit);
+        assert!(matches!(resolved, Some(WorkspaceHit::ShowIsolation(_))));
     }
 
     #[test]

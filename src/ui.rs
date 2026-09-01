@@ -110,7 +110,7 @@ const ACCENT: Color = Color::Rgb(143, 209, 158); // #8fd19e — the one signatur
 const SUCCESS: Color = ACCENT;
 const WARNING: Color = Color::Rgb(224, 181, 103); // #e0b567 (amber)
 const DANGER: Color = Color::Rgb(224, 118, 95); // #e0765f (red)
-const BLUE: Color = Color::Rgb(125, 151, 201); // #7d97c9 — "Default" tag only
+const BLUE: Color = Color::Rgb(125, 151, 201); // #7d97c9 — badges and tags
 
 /// Hairline dividers — solid approximations of the design's
 /// `rgba(255,255,255,a)` borders, pre-blended over `BASE` since ratatui has
