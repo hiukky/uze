@@ -77,7 +77,12 @@ impl TuiModel {
                 self.focus = Focus::Content;
                 Intent::None
             }
-            _ => Intent::None,
+            // Everything the sidebar has no meaning for is still the
+            // current route's own action key. The footer advertises
+            // `i`/`u`/`r`/`/` without qualification, and the sidebar is
+            // where a route lands you — swallowing them here is what made
+            // pressing `u` on a plugin with a pending update look broken.
+            _ => self.content_key(key),
         }
     }
 

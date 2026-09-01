@@ -367,10 +367,29 @@ fn spawn_refresh(home: UzeHome, sender: Sender<WorkerResult>, context_root: Path
 /// is coalesced while this worker is in flight.
 pub(crate) fn spawn_startup(home: UzeHome, sender: Sender<WorkerResult>, context_root: PathBuf) {
     thread::spawn(move || {
+        let mut applied = Vec::new();
         if let Ok(app) = tui_application(home.clone()) {
             let _ = app.ensure_default_plugins();
+            // Opening uze is the explicit, interactive act the CLI's
+            // read-only dispatch path deliberately isn't, so this is where
+            // a pending official-snapshot update gets applied instead of
+            // only reported. Anything it can't settle alone (new
+            // executable capability, managed state it refuses to disturb)
+            // stays reported — `update_available` survives, and the `u`
+            // action with its trust dialog is still the way through.
+            applied = app
+                .auto_update_plugins()
+                .into_iter()
+                .filter(|outcome| outcome.applied)
+                .map(|outcome| outcome.plugin)
+                .collect();
         }
-        let refreshed = load_refresh_data(home, &context_root).map_err(|error| error.to_string());
+        let refreshed = load_refresh_data(home, &context_root)
+            .map(|data| RefreshData {
+                auto_updated: applied,
+                ..data
+            })
+            .map_err(|error| error.to_string());
         let _ = sender.send(WorkerResult::Refreshed(refreshed));
     });
 }
@@ -419,6 +438,9 @@ fn load_refresh_data(home: UzeHome, context_root: &std::path::Path) -> Result<Re
         agent_context,
         workspace,
         prompt_history,
+        // Only `spawn_startup` ever fills this in; an ordinary refresh
+        // reports no auto-updates rather than re-raising old badges.
+        auto_updated: Vec::new(),
     })
 }
 
@@ -504,9 +526,19 @@ pub(crate) fn drain_worker_results(
                     .as_ref()
                     .map(|doctor| doctor.maintenance.repaired_count())
                     .unwrap_or_default();
+                let updated = data.auto_updated.len();
                 model.refreshed(data);
                 model.maintenance_in_flight = false;
-                if repaired > 0 {
+                // The badge only exists on the Plugins screen, and startup
+                // lands on Overview — this is how an operator who never
+                // opens Plugins still learns something changed under them.
+                if updated > 0 {
+                    model.status = Status::Success(format!(
+                        "Updated {updated} plugin{}",
+                        if updated == 1 { "" } else { "s" }
+                    ));
+                    model.status_expires_at = Some(Instant::now() + Duration::from_secs(5));
+                } else if repaired > 0 {
                     model.status = Status::Success(format!(
                         "Synchronized {repaired} attachment{}",
                         if repaired == 1 { "" } else { "s" }

@@ -62,6 +62,12 @@ fn model_with_data() -> TuiModel {
         update_available: Some(false),
         is_default: true,
     }];
+    // Renders the "Updated" badge branch on every route that shows plugin
+    // rows, alongside the "Update available" one `plugins[0]` carries.
+    model.update_badges = vec![super::model::UpdateBadge {
+        plugin: "flow@uze-official".to_owned(),
+        seen_at: None,
+    }];
     model.doctor = Some(DoctorReport {
         uze_home: PathBuf::from("/home/uze"),
         store: StoreHealth::Ready,
@@ -321,6 +327,67 @@ fn update_only_offered_when_available() {
     model.plugins[0].update_available = Some(true);
     model.apply_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
     assert!(matches!(model.overlay, Overlay::ConfirmUpdate(ref id) if id == "one"));
+}
+
+#[test]
+fn an_auto_updated_plugin_badges_until_the_plugins_screen_has_shown_it() {
+    use super::model::{RefreshData, UPDATE_BADGE_TTL, UpdateBadge};
+
+    let mut model = model_with_plugins(&["one"]);
+    model.route = Route::Overview;
+    model.refreshed(RefreshData {
+        auto_updated: vec!["one".to_owned()],
+        ..RefreshData::default()
+    });
+    assert!(model.was_just_updated("one"));
+
+    // Off the Plugins screen the badge never starts its countdown — an
+    // operator who has not looked at it yet has not been told anything.
+    for _ in 0..3 {
+        model.expire_update_badges();
+    }
+    assert!(
+        model.update_badges[0].seen_at.is_none(),
+        "the countdown starts on sight, not on the update"
+    );
+    assert!(model.was_just_updated("one"));
+
+    model.route = Route::Plugins;
+    model.expire_update_badges();
+    assert!(model.update_badges[0].seen_at.is_some());
+
+    // Once seen, it comes down on its own.
+    model.update_badges[0].seen_at = Some(std::time::Instant::now() - UPDATE_BADGE_TTL);
+    model.expire_update_badges();
+    assert!(
+        !model.was_just_updated("one"),
+        "the badge expires after its TTL"
+    );
+
+    // An ordinary refresh reports no auto-updates and must not re-raise
+    // a badge that already had its moment.
+    model.update_badges.push(UpdateBadge {
+        plugin: "two".to_owned(),
+        seen_at: None,
+    });
+    model.refreshed(RefreshData::default());
+    assert!(
+        model.was_just_updated("two"),
+        "a live badge survives a plain refresh"
+    );
+    assert!(!model.was_just_updated("one"));
+}
+
+#[test]
+fn a_route_action_key_works_from_the_sidebar_too() {
+    let mut model = model_with_plugins(&["one"]);
+    model.plugins[0].update_available = Some(true);
+    model.focus = Focus::Sidebar;
+    model.apply_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
+    assert!(
+        matches!(model.overlay, Overlay::ConfirmUpdate(ref id) if id == "one"),
+        "`u` must not be swallowed just because the sidebar holds focus"
+    );
 }
 
 #[test]

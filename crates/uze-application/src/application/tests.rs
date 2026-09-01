@@ -897,6 +897,63 @@ pub(crate) fn a_corrupted_stored_copy_reports_unknown_update_status_without_pani
 }
 
 #[test]
+pub(crate) fn auto_update_applies_a_pending_official_snapshot_update() {
+    let root = uze_testkit::temp::scratch("auto-update-applies");
+    let app = UzeApplication::new(UzeHome::at(&root), Vec::new());
+    app.ensure_default_plugins().unwrap();
+
+    // Drift the stored copy away from the embedded snapshot the same way
+    // an older binary's seed would have.
+    let package = app.package_by_name("uze").unwrap();
+    let manifest = package.root.join("plugin.json");
+    let pristine = fs::read_to_string(&manifest).unwrap();
+    fs::write(&manifest, "{\"name\":\"uze\",\"stale\":true}").unwrap();
+    assert_eq!(
+        app.plugin_summary(&app.package_by_name("uze").unwrap())
+            .unwrap()
+            .update_available,
+        Some(true)
+    );
+
+    let outcomes = app.auto_update_plugins();
+    assert_eq!(outcomes.len(), 1, "one pending update, got: {outcomes:?}");
+    assert!(outcomes[0].applied, "expected applied, got: {outcomes:?}");
+    assert_eq!(outcomes[0].plugin, "uze@uze-official");
+
+    assert_eq!(fs::read_to_string(&manifest).unwrap(), pristine);
+    assert_eq!(
+        app.plugin_summary(&app.package_by_name("uze").unwrap())
+            .unwrap()
+            .update_available,
+        Some(false),
+        "the update it just applied must stop being reported as pending"
+    );
+    // Idempotent: nothing left to do on the next launch.
+    assert!(app.auto_update_plugins().is_empty());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+pub(crate) fn auto_update_never_re_resolves_a_source_it_would_have_to_fetch() {
+    let root = uze_testkit::temp::scratch("auto-update-local-only");
+    let app = UzeApplication::new(UzeHome::at(&root), Vec::new());
+    app.add_plugin(
+        uze_core::PackageSource::local(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../tests/_fixtures/canonical/skill-plugin"),
+        ),
+        &uze_core::trust::AlwaysTrust,
+    )
+    .unwrap();
+
+    assert!(
+        app.auto_update_plugins().is_empty(),
+        "a path/Git-sourced plugin is only ever updated by an explicit request"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 pub(crate) fn official_embedded_plugin_is_protected_from_remove_but_allows_update() {
     let root = uze_testkit::temp::scratch("protected-update");
     let home = UzeHome::at(&root);

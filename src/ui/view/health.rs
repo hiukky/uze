@@ -102,11 +102,15 @@ pub(crate) fn actionable_alerts(doctor: Option<&DoctorReport>) -> Vec<Alert> {
         }
     }
     for plugin in &doctor.plugins {
+        // Startup already applies every update it can settle on its own,
+        // so one still standing here is one that needs a person: an
+        // out-of-band source, new executable capability to confirm, or
+        // managed state the update refused to disturb.
         if plugin.update_available == Some(true) {
             alerts.push(Alert {
                 severity: Severity::Low,
                 label: format!("{} update available", plugin.id),
-                detail: "Open Plugins to update it".to_owned(),
+                detail: "Open Plugins and press u to confirm it".to_owned(),
             });
         }
     }

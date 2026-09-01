@@ -375,9 +375,22 @@ diagnostic command.
 
 `PluginSummary::update_available` is a pure read (a scratch-directory
 comparison, discarded before returning); acting on it is a separate,
-explicit `update_plugin` call.
+explicit `update_plugin` call. Every CLI dispatch — `doctor`/`list`
+included — stays on the reporting side of that line.
 
 > `crates/uze-application/src/application.rs::bootstrap_never_mutates_an_already_installed_default_plugin`
+
+### Automatic update is local-only, and never grants trust
+
+`auto_update_plugins` — the one caller of `update_plugin` that no person
+typed, run when the TUI opens — touches only `PackageSource::Embedded`
+packages (bytes already inside the running binary; no network, no
+re-resolution of a Git or path source) and runs under `NoTrustAuthority`,
+so a revision introducing new executable capability is reported and left
+for an explicit confirmation rather than applied.
+
+> `crates/uze-application/src/application.rs::auto_update_applies_a_pending_official_snapshot_update`
+> `crates/uze-application/src/application.rs::auto_update_never_re_resolves_a_source_it_would_have_to_fetch`
 
 ### A default plugin crossing the trust boundary is never installed silently
 

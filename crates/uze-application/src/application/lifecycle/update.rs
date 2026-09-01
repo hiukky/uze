@@ -67,3 +67,72 @@ impl UzeApplication {
         })
     }
 }
+
+impl UzeApplication {
+    /// Applies every pending update this machine can settle on its own,
+    /// and reports what it did.
+    ///
+    /// "On its own" is two deliberate restrictions, not an optimization:
+    ///
+    /// - **Only an update uze can already see.** `update_available` is a
+    ///   local comparison against the embedded official snapshot — bytes
+    ///   that shipped inside the binary already being run. Nothing here
+    ///   reaches the network, so a Git- or path-sourced plugin is never
+    ///   re-resolved behind the operator's back; those still update only
+    ///   through an explicit `update_plugin`.
+    /// - **Only under `NoTrustAuthority`.** A revision that introduces new
+    ///   executable capability is refused and reported, exactly as a
+    ///   non-interactive bootstrap refuses one (see
+    ///   `docs/architecture/invariants.md`, "A default plugin crossing the
+    ///   trust boundary is never installed silently"). The operator is then
+    ///   still offered the update explicitly, with the dialog.
+    ///
+    /// Best-effort per plugin: one failure never stops the rest, and a
+    /// blocked or refused update leaves the installed revision untouched —
+    /// `update_plugin` already inspects before it detaches.
+    ///
+    /// This is not called from the CLI dispatch path: `ensure_default_plugins`
+    /// runs before every command, read-only ones included, and a diagnostic
+    /// must not rewrite plugin content. Interactive surfaces call this.
+    pub fn auto_update_plugins(&self) -> Vec<AutoUpdateOutcome> {
+        let pending: Vec<String> = self
+            .installed_packages()
+            .into_iter()
+            .filter(|package| {
+                matches!(
+                    package.provenance.requested,
+                    uze_core::PackageSource::Embedded { .. }
+                )
+            })
+            .filter(|package| {
+                self.plugin_summary(package)
+                    .ok()
+                    .and_then(|summary| summary.update_available)
+                    == Some(true)
+            })
+            .map(|package| package.id.as_str().to_owned())
+            .collect();
+
+        pending
+            .into_iter()
+            .map(|plugin| {
+                let detail = match self.update_plugin(&plugin, &trust::NoTrustAuthority) {
+                    Ok(UpdatePluginReport::Updated { .. }) => None,
+                    Ok(UpdatePluginReport::Blocked { .. }) => {
+                        Some("managed state was preserved; update it explicitly".to_owned())
+                    }
+                    Err(UzeError::TrustRequired { detail, .. }) => Some(format!(
+                        "the new revision asks to execute something new ({detail}); \
+                         confirm it explicitly"
+                    )),
+                    Err(error) => Some(error.to_string()),
+                };
+                AutoUpdateOutcome {
+                    plugin,
+                    applied: detail.is_none(),
+                    detail,
+                }
+            })
+            .collect()
+    }
+}

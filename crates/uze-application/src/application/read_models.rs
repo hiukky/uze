@@ -668,3 +668,16 @@ pub(crate) fn package_store_inconsistency(package: &StoredPackage) -> Option<Str
     }
     None
 }
+
+/// What one plugin's automatic update attempt did, from
+/// [`UzeApplication::auto_update_plugins`].
+#[derive(Clone, Debug, Serialize)]
+pub struct AutoUpdateOutcome {
+    pub plugin: String,
+    /// `true` only when the new revision is installed and re-attached.
+    pub applied: bool,
+    /// Why the pending update was left for a person to apply — trust it
+    /// cannot grant on their behalf, managed state it refused to disturb,
+    /// or a failure. `None` when `applied`.
+    pub detail: Option<String>,
+}

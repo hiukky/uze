@@ -1,7 +1,10 @@
 //! TUI — navigation, selection, and overlay state.
 
 use std::collections::BTreeSet;
-use std::{path::PathBuf, time::Instant};
+use std::{
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
 use ratatui::layout::Rect;
 use uze_core::preference::{Autonomy, ModelPreference, SandboxScope};
@@ -229,7 +232,28 @@ pub(crate) struct RefreshData {
     /// first refresh onward (there is always a kind, even `NoWorkspace`).
     pub(crate) workspace: Option<OverviewWorkspaceSummary>,
     pub(crate) prompt_history: Vec<uze_core::prompt_history::PromptEntry>,
+    /// Qualified ids of the plugins the startup worker updated on its own
+    /// this session. Only ever non-empty on the one startup refresh; every
+    /// later refresh reports nothing, so badges already raised are never
+    /// disturbed by an ordinary reload.
+    pub(crate) auto_updated: Vec<String>,
 }
+
+/// A "just updated" mark on one plugin row, raised by the startup
+/// auto-update and dropped once it has had its moment on screen.
+#[derive(Clone, Debug)]
+pub(crate) struct UpdateBadge {
+    /// The qualified plugin id (`name@marketplace`) the badge belongs to.
+    pub(crate) plugin: String,
+    /// When the operator first had the Plugins screen open in front of
+    /// them with this badge on it. `None` until then: a badge that timed
+    /// out while they were on another route would have told nobody
+    /// anything, which is the whole point of raising it.
+    pub(crate) seen_at: Option<Instant>,
+}
+
+/// How long an "Updated" badge stays up once it has actually been seen.
+pub(crate) const UPDATE_BADGE_TTL: Duration = Duration::from_secs(10);
 
 pub(crate) struct TuiModel {
     pub(crate) route: Route,
@@ -300,6 +324,11 @@ pub(crate) struct TuiModel {
     pub(crate) profile_apply_results: Vec<ProfileApplyResult>,
 
     pub(crate) doctor: Option<DoctorReport>,
+
+    /// Plugins updated automatically this session, badged as "Updated" on
+    /// the Plugins screen until [`UPDATE_BADGE_TTL`] after the operator has
+    /// actually had that screen in front of them.
+    pub(crate) update_badges: Vec<UpdateBadge>,
 
     pub(crate) context_root: PathBuf,
     pub(crate) context_status: Option<ProjectContextStatus>,
@@ -374,6 +403,7 @@ impl Default for TuiModel {
             profile_harness_defaulted: false,
             profile_apply_results: Vec::new(),
             doctor: None,
+            update_badges: Vec::new(),
             context_root: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             context_status: None,
             agent_context: Vec::new(),
@@ -405,6 +435,42 @@ impl TuiModel {
             self.status_expires_at = None;
         }
     }
+
+    /// Ages the "Updated" badges by one frame: any badge on screen right
+    /// now starts (or continues) its countdown, and one whose time is up
+    /// comes down.
+    ///
+    /// The countdown starts on first *sight*, not on the update itself —
+    /// auto-updates land during startup, while the operator is usually
+    /// still on Overview, so a badge timed from the update would routinely
+    /// expire before the screen carrying it was ever opened.
+    pub(crate) fn expire_update_badges(&mut self) {
+        if self.update_badges.is_empty() {
+            return;
+        }
+        let now = Instant::now();
+        if self.route == Route::Plugins {
+            for badge in &mut self.update_badges {
+                badge.seen_at.get_or_insert(now);
+            }
+        }
+        self.update_badges.retain(|badge| {
+            badge
+                .seen_at
+                .is_none_or(|seen| now - seen < UPDATE_BADGE_TTL)
+        });
+    }
+
+    /// Whether this plugin carries a live "Updated" badge. Takes the
+    /// qualified id the tree already resolves for every row
+    /// (`marketplace_plugin_id`), so a local-group row and a catalog row
+    /// for the same package answer identically.
+    pub(crate) fn was_just_updated(&self, plugin_id: &str) -> bool {
+        self.update_badges
+            .iter()
+            .any(|badge| badge.plugin == plugin_id)
+    }
+
     /// Installed plugins from `plugins` that no catalog entry knows about
     /// (ad-hoc `uze add`/git/local installs) — the merged Plugins tree's
     /// "local" group, so a direct install never disappears from the TUI
@@ -834,6 +900,17 @@ impl TuiModel {
         }
         self.prompt_history = data.prompt_history;
         self.clamp_prompt_selection();
+        // Additive, never a replacement: only the startup refresh carries
+        // auto-updates, so an ordinary reload (or a mutation's own refresh)
+        // must leave badges already raised exactly where they are.
+        for plugin in data.auto_updated {
+            if !self.was_just_updated(&plugin) {
+                self.update_badges.push(UpdateBadge {
+                    plugin,
+                    seen_at: None,
+                });
+            }
+        }
         self.status = Status::Idle;
     }
 

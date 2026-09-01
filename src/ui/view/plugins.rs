@@ -254,6 +254,7 @@ pub(crate) fn render_plugins(
                                 plugin,
                                 *is_last,
                                 *position == model.marketplace_selected,
+                                model.was_just_updated(&model.marketplace_plugin_id(plugin)),
                                 name_width,
                                 label_width,
                                 list_area.width,
@@ -360,6 +361,7 @@ fn plugin_line<'a>(
     plugin: &'a MarketplacePluginSummary,
     is_last: bool,
     selected: bool,
+    just_updated: bool,
     name_width: usize,
     label_width: usize,
     row_width: u16,
@@ -389,14 +391,19 @@ fn plugin_line<'a>(
             "Available"
         }
     );
-    let update = format!(
-        "{:<UPDATE_WIDTH$}",
-        if plugin.update_available == Some(true) {
-            "Update available"
-        } else {
-            ""
-        }
-    );
+    // "Updated" and "Update available" are the same slot and mutually
+    // exclusive by construction: the badge is only ever raised by an update
+    // that just landed, which is exactly what clears `update_available`.
+    // The remaining "Update available" therefore always means one uze
+    // declined to apply on its own — press `u`.
+    let (update, update_style) = if just_updated {
+        ("Updated", Style::default().fg(ACCENT))
+    } else if plugin.update_available == Some(true) {
+        ("Update available", Style::default().fg(WARNING))
+    } else {
+        ("", Style::default())
+    };
+    let update = format!("{update:<UPDATE_WIDTH$}");
     let mut spans = vec![
         Span::styled(
             if selected { "│" } else { " " },
@@ -407,7 +414,7 @@ fn plugin_line<'a>(
         Span::raw(" ".repeat(2 + extra_pad)),
         Span::styled(status, status_style),
         Span::raw("  "),
-        Span::styled(update, Style::default().fg(WARNING)),
+        Span::styled(update, update_style),
     ];
     if selected {
         for span in &mut spans {
@@ -607,20 +614,29 @@ fn render_plugin_drawer(
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), body);
 
     if plugin.installed {
-        let health = plugin_health(model.doctor.as_ref(), &model.marketplace_plugin_id(plugin));
+        let qualified_id = model.marketplace_plugin_id(plugin);
+        let health = plugin_health(model.doctor.as_ref(), &qualified_id);
         let subtitle = match health {
             "ready" => "Ready to use in your projects",
             "missing" => "Installation is missing artifacts",
             "needs attention" => "Managed state needs attention",
             _ => "Health unknown",
         };
-        if plugin.update_available == Some(true) {
+        if model.was_just_updated(&qualified_id) {
+            render_status_line(
+                frame,
+                status_area,
+                ACCENT,
+                "Updated",
+                "Brought up to date automatically when uze started",
+            );
+        } else if plugin.update_available == Some(true) {
             render_status_line(
                 frame,
                 status_area,
                 WARNING,
                 "Update available",
-                "A newer revision is ready in this marketplace",
+                "Needs your confirmation — press u to apply it",
             );
         } else {
             render_status_line(frame, status_area, ACCENT, "Installed", subtitle);

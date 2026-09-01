@@ -42,6 +42,7 @@ pub(crate) fn run_management(
     loop {
         model.tick = model.tick.wrapping_add(1);
         model.expire_status();
+        model.expire_update_badges();
         let mut hits = Vec::new();
         terminal.draw(|frame| render(frame, &model, &mut hits))?;
         model.hits = hits;
