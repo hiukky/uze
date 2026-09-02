@@ -496,7 +496,8 @@ def phase_hooks_gate(cfg, prov_ip):
     google-antigravity/antigravity-cli#893, and `phase_hooks_api_key_mode`
     keeps that on the report. If a future build closed the gate in signed-in
     mode too, this check would say so instead of the suite quietly proving
-    nothing.
+    nothing. `phase_hooks_delivery` answers the other half: whether the
+    harness loads what UZE itself delivered.
 
     Returns True when the control hook denied the command.
     """
@@ -540,21 +541,22 @@ def phase_hooks_delivery(cfg, prov_ip):
     precondition, and the cheap one: the harness's own log says how many
     `hooks.json` files it read, so a headless start answers it.
 
-    UZE delivers Antigravity's hooks as `plugins/<name>/hooks.json` inside
-    the generated native plugin, which is what the vendor's shipped plugin
-    guide documents: "Hooks defined in `plugins/<name>/hooks.json` are
-    registered and run during the agent's lifecycle". On 1.1.24 they are not:
-    `agy plugin validate` counts the plugin's three hooks, the plugin is
-    listed with a `hooks` component and enabled in `config.json`, and the
-    session still reports `loaded 0 named hooks from 0 hooks.json file(s)`
-    — it never opens the file (no `skipping hooks.json at …`, no `No
-    hooks.json found at …`). The same document at the vendor's shared path
-    (`~/.gemini/config/hooks.json`) loads and executes in the same session,
-    which is what `hooks > vendor` proves.
+    This is the check that decided the delivery route. UZE used to write
+    Antigravity's hooks into the generated native plugin, which is what the
+    vendor's shipped plugin guide documents ("Hooks defined in
+    `plugins/<name>/hooks.json` are registered and run during the agent's
+    lifecycle"). On 1.1.24 they are not: `agy plugin validate` counted the
+    plugin's three hooks, the plugin was listed with a `hooks` component and
+    enabled in `config.json`, and the session still reported `loaded 0 named
+    hooks from 0 hooks.json file(s)` — it never opened the file. UZE now
+    merges its named entries into the shared `~/.gemini/config/hooks.json`,
+    where the same session reports `loaded 3 named hooks from 1 hooks.json
+    file(s)` and the handlers run.
 
-    Measured every run rather than declared once: the day the vendor scans
-    plugin directories, this passes and the gate escalates the declarations
-    that depend on it.
+    It stays measured every run rather than retired with the move: it is
+    what proves the route still works, and what would say a later build
+    started reading plugin hooks — at which point moving back is a measured
+    decision, not a guess.
     """
     final = (
         """
@@ -587,14 +589,14 @@ ls -la /work/home/.gemini/config/plugins/hook-plugin/hooks.json || true
     check(
         "hooks-delivered-hooks-loaded",
         True,
-        "the harness loaded the hooks UZE delivered in its generated plugin"
+        "the harness loaded the hooks UZE merged into its shared "
+        "~/.gemini/config/hooks.json"
         if loaded
         else (
-            "the harness reads no hooks.json from a plugin directory: "
-            "`agy plugin validate` counts the delivered hooks and the session "
-            "still reports `loaded 0 named hooks from 0 hooks.json file(s)`, "
-            "while the same document at ~/.gemini/config/hooks.json executes "
-            "(see hooks > vendor)"
+            "the harness read none of the hooks UZE delivered: the session "
+            "reports `loaded 0 named hooks from 0 hooks.json file(s)` while "
+            "the entries are in place — the delivery route no longer reaches "
+            "this build"
         ),
         kind="assert" if loaded else "adapted",
     )
@@ -678,6 +680,10 @@ def phase_hooks(cfg, prov_ip, kind, blocked):
             "plugin": "hook-plugin",
             "args": RUN_COMMAND_ARGS % "echo API secrets",
             "deny_present": "blocked by protect-env",
+            # The portable vocabulary row: AGY's own shell tool is
+            # `run_command`, so a handler that echoes `tool=shell` proves the
+            # translation happened rather than the native name leaking.
+            "context_present": "tool=shell",
             "deny_absent": ["second-handler-reached"],
         },
         "allow": {
@@ -702,6 +708,8 @@ def phase_hooks(cfg, prov_ip, kind, blocked):
                 f"hooks-{kind}-denial-relayed",
                 f"hooks-{kind}-denial-blocks-tool",
             ]
+        if spec.get("context_present"):
+            declared.append(f"hooks-{kind}-context-relayed")
         declared += [
             f"hooks-{kind}-marker-absent-{absent}" for absent in spec["deny_absent"]
         ]
@@ -745,6 +753,16 @@ def phase_hooks(cfg, prov_ip, kind, blocked):
             "the intercepted tool never executed — the native denial blocked it"
             if not has_output
             else "the tool executed despite the deny — blocking is broken",
+        )
+    if spec.get("context_present"):
+        carried = bool(markers.get(spec["context_present"]))
+        check(
+            f"hooks-{kind}-context-relayed",
+            carried,
+            f"the handler read the portable vocabulary (`{spec['context_present']}`) "
+            f"from this harness's own payload"
+            if carried
+            else ", ".join(f"{m}={markers.get(m)}" for m in sorted(markers)),
         )
     for absent in spec["deny_absent"]:
         common.check_absence(
@@ -814,10 +832,9 @@ def run(cfg, prov_ip):
         elif not delivered_loaded:
             blocked = (
                 "declared: this AGY executes hooks.json hooks (see "
-                "hooks-vendor-hook-executes) but reads none from a plugin "
-                "directory, which is how UZE delivers them (see "
-                "hooks-delivered-hooks-loaded), so nothing of UZE's reaches "
-                "the session to be observed"
+                "hooks-vendor-hook-executes) but read none of the ones UZE "
+                "delivered (see hooks-delivered-hooks-loaded), so nothing of "
+                "UZE's reaches the session to be observed"
             )
         for kind in ("deny", "allow", "order"):
             with describe(kind):

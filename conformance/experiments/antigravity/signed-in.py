@@ -40,10 +40,13 @@ ARGS = (
     '"toolSummary":"Command execution","toolAction":"Running command"}'
 )
 GLOBAL_HOOKS = "/work/home/.gemini/config/hooks.json"
-DENY_HOOK = (
-    """cat > %s <<'EOF'
+#: The named-hook key. UZE's delivered entries are namespaced
+#: `<package>:<group-id>`, so the probe can ask whether the vendor accepts
+#: that character set at all (`SIGNED_IN_HOOK_NAME`).
+HOOK_NAME = os.environ.get("SIGNED_IN_HOOK_NAME", "probe")
+DENY_HOOK = """cat > %s <<'EOF'
 {
-  "probe": {
+  "%s": {
     "PreToolUse": [
       {
         "matcher": "run_command",
@@ -58,9 +61,7 @@ DENY_HOOK = (
   }
 }
 EOF
-"""
-    % GLOBAL_HOOKS
-)
+""" % (GLOBAL_HOOKS, HOOK_NAME)
 TOUCH_HOOK = (
     """cat > %s <<'EOF'
 {

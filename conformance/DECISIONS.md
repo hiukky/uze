@@ -472,3 +472,58 @@ green (that is a product decision about delivery routes and receipt
 ownership — ADR-033/ADR-040 — not something a Lab change may decide);
 leaving the three suites to fail (a red the reviewer cannot act on, where a
 declaration names exactly what the vendor must change).
+
+---
+
+## Antigravity's hooks move to the file the harness actually reads
+
+**Context.** `hooks > delivery` measured what no document could settle: on
+1.1.24 the harness reads named hooks from its shared customization roots and
+never opens a plugin's `hooks.json`, though the vendor's own plugin guide
+says the opposite. UZE delivered Antigravity's hooks into the generated
+plugin, so nothing UZE delivered could ever run — the three UZE hook suites
+were declared against a gate that was never going to open on its own.
+
+**Chosen.** Deliver them where the harness reads them: one receipt-owned
+named entry per group, merged into `~/.gemini/config/hooks.json`, keyed
+`<package>:<group-id>` — the same key `hook_entry_name` already produces for
+Claude and Codex, and a name this harness accepts verbatim (measured: a hook
+named `hook-plugin@uze-lab:protect-env` at that path loads and fires). This
+is the shape UZE already uses for Codex's shared `hooks.json`, so it is a
+route change, not a new mechanism: the compiled wrapper, the ABI and the
+matcher translation are untouched. The wrapper moves out of the plugin to
+`$UZE_HOME/state/attachments/antigravity/hooks/exec`, because a shared
+config file has no plugin root to resolve against and the vendor runs a hook
+with its cwd set to the `hooks.json` directory — every path in the entry is
+absolute. The generated plugin keeps skills and MCP and writes no
+`hooks.json`, and package-level coverage no longer claims hooks.
+
+The document root of that file *is* the named-hook map, so ownership is by
+key: UZE writes, verifies and removes exactly its own keys, and a
+hand-written hook beside them is never read, rewritten or removed. Drift
+blocks removal and an unparsable file blocks the mutation, the same rules
+the other merged deliveries follow.
+
+One more measurement came out of the move: the wrapper's **denial must exit
+0** here. Claude and Codex document exit 2 as the block signal; Antigravity
+reads the decision from the stdout document and logs any non-zero exit as
+`pre-tool hook failed`, falls through to the permission prompt, and runs the
+command. The first signed-in run with the new route showed exactly that —
+the handler denied, the reason reached the log, and the tool ran anyway. The
+exit code is now a per-harness fact of the wrapper dialect, like the
+decision document itself.
+
+`hooks > delivery` stays as the live check rather than being retired with
+the move: it now proves the new route works (`loaded 3 named hooks from 1
+hooks.json file(s)`, and the deny/allow/order suites assert for the first
+time on this harness), and it is what would tell us a later build started
+reading plugin hooks — at which point moving back is a measured decision,
+not a guess.
+
+**Discarded.** Waiting for the vendor to fix plugin hooks (the measurement
+says the delivery, not the vendor, is what UZE controls here); writing the
+entries into `~/.gemini/antigravity-cli/hooks.json` (the vendor's own
+changelog records moving `/hooks` off that path to the shared one precisely
+because the backend does not read it); a project-scoped `.agents/hooks.json`
+(machine scope is what `uze plugin install` promises — a project file is a
+different capability's decision).
