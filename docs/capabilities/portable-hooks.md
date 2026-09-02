@@ -118,7 +118,7 @@ declare to the model, captured with the Lab's `--discovery` mode. A
 |---|---|---|
 | Claude Code | one merged entry per group in `~/.claude/settings.json`, `command` = the generated `hooks/exec` with the group's arguments (exec form: no shell parsing) | native |
 | Codex | one merged entry per group in `~/.codex/hooks.json`, one quoted shell line invoking the same wrapper | native |
-| Antigravity CLI | named entries at the document root of the generated plugin's `hooks.json`, with `hooks/exec` vendored inside the plugin | native (package-level); execution is gated by `enable_json_hooks`, which reaches the CLI only over its signed-in backend — the Lab measures that gate live (`hooks > vendor`) rather than assuming it |
+| Antigravity CLI | named entries at the document root of the generated plugin's `hooks.json` — grouped (`matcher` + `hooks`) for the tool events, a flat handler list for `Stop` — with `hooks/exec` vendored inside the plugin | native (package-level); execution is gated by `enable_json_hooks`, which reaches the CLI only over its signed-in backend — the Lab measures that gate live (`hooks > vendor`) rather than assuming it |
 | OpenCode | one generated `Plugin.define` plugin, `<config root>/plugins/hooks-<package>.ts`, auto-discovered — the plugin *is* the wrapper, with the package's groups as data | adapted (`observe`/`allow` only; `deny`/`ask` unsupported, `Stop` never claimed) |
 
 The `sh` wrapper is one file per harness, byte-identical for every package,
@@ -201,6 +201,13 @@ stated) · **—** = not expressible.
   measures the gate live rather than assuming either answer.
 - **OpenCode V2 cannot block.** Its tool hooks carry the input but no block
   signal; `deny`/`ask` are diagnosed before attach.
+- **Antigravity's two entry shapes are not interchangeable.** Its docs
+  give the tool events a `matcher` and a `hooks` group, and `Stop` a flat
+  list of handler objects. A `Stop` written in the grouped form is parsed
+  as invalid and dropped in silence — `agy plugin validate` reports
+  nothing, and only `--log-file` names the reason
+  ([antigravity-cli#925](https://github.com/google-antigravity/antigravity-cli/issues/925),
+  1.1.24). UZE emits each event in its own shape.
 - **Codex requires the `[features].hooks` flag** in `~/.codex/config.toml`
   (verified against codex-cli 0.150.0).
 - **`tool.execute.before` does not cover subagent-issued tool calls** on

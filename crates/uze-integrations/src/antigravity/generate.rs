@@ -589,6 +589,8 @@ mod generated_native_tests {
             hooks.get("hooks").is_none(),
             "named entries sit at the document root — a `hooks` wrapper is one dead hook to AGY"
         );
+        // A tool event keeps the grouped form: a matcher, and the handlers
+        // under `hooks`.
         let protect = &hooks["protect-env"]["PreToolUse"][0];
         assert_eq!(
             protect["matcher"], "run_command",
@@ -596,14 +598,39 @@ mod generated_native_tests {
         );
         let command = protect["hooks"][0]["command"].as_str().unwrap();
         assert!(
-            command.contains("hook-exec"),
-            "the wrapper carries the portable ABI"
+            command.contains("/hooks/exec"),
+            "the entry runs the wrapper vendored in the plugin: {command}"
         );
-        assert!(command.contains("--adapter 'antigravity'"));
-        assert!(command.contains("--command '${PLUGIN_ROOT}/check'"));
-        // The unnamed Stop group gets its deterministic derived id and
-        // carries no matcher (match-all).
-        assert_eq!(hooks["stop-0"]["Stop"][0].get("matcher"), None);
+        assert!(
+            !command.contains("hook-exec"),
+            "no UZE binary may sit on the hook's execution path"
+        );
+        assert!(
+            dir.join("hooks").join("exec").is_file(),
+            "the wrapper the entry names is vendored inside the plugin"
+        );
+        assert!(
+            command.contains(&pkg.root.join("check").display().to_string()),
+            "the authored handler is resolved against the package root: {command}"
+        );
+
+        // Stop is flat: the handler object sits directly under the event
+        // key, never wrapped in a group (antigravity-cli#925).
+        let stop = &hooks["stop-0"]["Stop"][0];
+        assert_eq!(
+            stop["type"], "command",
+            "a flat entry is the handler itself"
+        );
+        assert!(
+            stop.get("hooks").is_none() && stop.get("matcher").is_none(),
+            "a grouped Stop is parsed as invalid and silently dropped: {stop}"
+        );
+        assert!(
+            stop["command"]
+                .as_str()
+                .is_some_and(|command| command.contains("/hooks/exec")),
+            "the flat entry still runs the wrapper"
+        );
         let _ = fs::remove_dir_all(root);
     }
 

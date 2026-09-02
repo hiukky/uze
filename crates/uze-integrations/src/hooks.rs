@@ -474,9 +474,24 @@ pub(crate) fn group_entry(
     hook: &PortableHook,
     invocation: &HookInvocation,
 ) -> serde_json::Value {
-    // The native timeout is a backstop for the whole group; the sum of the
-    // per-handler timeouts (with a 1s grace for the final render) bounds the
-    // wrapper's own activity, capped at the canonical 300s maximum.
+    let mut entry = serde_json::Map::new();
+    if let Some(matcher) = matcher(target, hook) {
+        entry.insert("matcher".to_owned(), serde_json::Value::String(matcher));
+    }
+    entry.insert(
+        "hooks".to_owned(),
+        serde_json::Value::Array(vec![handler_entry(hook, invocation)]),
+    );
+    serde_json::Value::Object(entry)
+}
+
+/// One handler object — `{type, command[, args], timeout}` — the shape both
+/// the grouped and the flat event forms are built from.
+///
+/// The native timeout is a backstop for the whole group: the sum of the
+/// per-handler timeouts (with a 1s grace for the final render) bounds the
+/// wrapper's own activity, capped at the canonical 300s maximum.
+fn handler_entry(hook: &PortableHook, invocation: &HookInvocation) -> serde_json::Value {
     let timeout: u16 = hook
         .handlers
         .iter()
@@ -484,10 +499,6 @@ pub(crate) fn group_entry(
         .sum::<u32>()
         .saturating_add(1)
         .min(u32::from(uze_core::hook::MAX_TIMEOUT_SECONDS)) as u16;
-    let mut entry = serde_json::Map::new();
-    if let Some(matcher) = matcher(target, hook) {
-        entry.insert("matcher".to_owned(), serde_json::Value::String(matcher));
-    }
     let mut invoked = serde_json::Map::new();
     invoked.insert("type".to_owned(), serde_json::json!("command"));
     match invocation {
@@ -500,11 +511,7 @@ pub(crate) fn group_entry(
         }
     }
     invoked.insert("timeout".to_owned(), serde_json::json!(timeout));
-    entry.insert(
-        "hooks".to_owned(),
-        serde_json::Value::Array(vec![serde_json::Value::Object(invoked)]),
-    );
-    serde_json::Value::Object(entry)
+    serde_json::Value::Object(invoked)
 }
 
 /// One group's delivery: the native entry, the wrapper it needs on disk,
@@ -586,10 +593,24 @@ const fn hook_event_name(event: HookEvent) -> &'static str {
     }
 }
 
+/// Whether this harness expects an event's entry in the grouped form
+/// (`{matcher, hooks: [...]}`) or as a flat list of handler objects.
+///
+/// The vendor's own customization docs (`agy-customizations/docs/hooks.md`)
+/// split them: the tool events carry a matcher and are grouped, while
+/// `PreInvocation`/`PostInvocation`/`Stop` are "flat (list of handler
+/// objects directly)". A `Stop` written in the grouped form is parsed as
+/// invalid and silently dropped — only `--log-file` shows the reason
+/// ("command hook must specify 'command'"), and `agy plugin validate` says
+/// nothing (antigravity-cli#925, 1.1.24).
+const fn agy_event_is_grouped(event: HookEvent) -> bool {
+    matches!(event, HookEvent::PreToolUse | HookEvent::PostToolUse)
+}
+
 /// The generated plugin `hooks.json` for Antigravity CLI: named entries at
-/// the document root (`{"<id>": {"<Event>": [<group>]}}`), each group
-/// carrying the translated matcher and the wrapper invocation.
-/// Deterministic per package.
+/// the document root (`{"<id>": {"<Event>": <entries>}}`), each carrying
+/// the wrapper invocation — grouped with the translated matcher for a tool
+/// event, flat for `Stop`. Deterministic per package.
 ///
 /// The root is the hook map itself, never a `hooks` wrapper: the vendor
 /// reads every root key as one named hook, so a wrapper registers a single
@@ -604,10 +625,14 @@ pub(crate) fn agy_hook_document(
     let mut named = serde_json::Map::new();
     for hook in hooks {
         let invocation = HookInvocation::Line(wrapper_command_line(wrapper, hook, package_root));
-        let entry = group_entry("antigravity", hook, &invocation);
+        let entries = if agy_event_is_grouped(hook.event) {
+            vec![group_entry(ANTIGRAVITY_TARGET, hook, &invocation)]
+        } else {
+            vec![handler_entry(hook, &invocation)]
+        };
         named.insert(
             hook.id.clone(),
-            serde_json::json!({ hook_event_name(hook.event): [entry] }),
+            serde_json::json!({ hook_event_name(hook.event): entries }),
         );
     }
     format!(
@@ -2157,6 +2182,50 @@ mod tests {
             entry.get("matcher").is_none(),
             "no matcher key for a match-all group"
         );
+    }
+
+    /// The vendor's own docs split the two shapes: a tool event is grouped
+    /// with a matcher, while `Stop` is "flat (list of handler objects
+    /// directly)". A grouped `Stop` is parsed as invalid and silently
+    /// dropped — `plugin validate` says nothing and only `--log-file`
+    /// reports it (antigravity-cli#925, 1.1.24).
+    #[test]
+    fn a_stop_entry_is_flat_while_a_tool_event_stays_grouped() {
+        let stop = PortableHook {
+            id: "archive".into(),
+            event: HookEvent::Stop,
+            matchers: Vec::new(),
+            effect: HookEffect::Observe,
+            ..hook()
+        };
+        let document = agy_hook_document(
+            &[&hook(), &stop],
+            Path::new("/state/hooks/exec"),
+            Path::new("/pkg"),
+        );
+        let value: serde_json::Value = serde_json::from_str(&document).unwrap();
+
+        let grouped = &value["protect-env"]["PreToolUse"][0];
+        assert_eq!(grouped["matcher"], "run_command|Write");
+        assert_eq!(grouped["hooks"][0]["type"], "command");
+
+        let flat = &value["archive"]["Stop"][0];
+        assert_eq!(
+            flat["type"], "command",
+            "a flat entry is the handler object itself: {flat}"
+        );
+        assert!(
+            flat.get("hooks").is_none(),
+            "a `hooks` group under Stop is dropped by the vendor's parser"
+        );
+        assert!(flat.get("matcher").is_none(), "Stop matches no tool");
+        assert!(
+            flat["command"]
+                .as_str()
+                .is_some_and(|command| command.contains("'stop' 'observe'")),
+            "the flat entry still runs the wrapper with the group's arguments: {flat}"
+        );
+        assert_eq!(flat["timeout"], 11);
     }
 
     #[test]
