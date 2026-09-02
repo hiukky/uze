@@ -129,7 +129,13 @@ need to).
   implementing the shared `IntegrationPort` from `uze-core`, plus `shared/`
   for cross-vendor process/path helpers.
 - `conformance/` — Harness Conformance Lab (Python): Real Harness +
-  Synthetic World isolation evidence, vertical per harness
+  Synthetic World isolation evidence. `contract/` states what **every**
+  harness must prove, in outcome terms, and names no vendor;
+  `harnesses/<vendor>/bindings.py` says how that harness is driven and
+  carries no assertion; `scenarios.py` keeps only what is genuinely unique
+  to the vendor. A harness that cannot deliver part of a contract declares
+  it through `bindings.unsupported` with a reason, which the run records —
+  never by omitting the check. Vertical per harness
   (`conformance/harnesses/{antigravity,claude,codex,opencode}/`) in a
   disposable Docker environment — the real harness binary, a synthetic
   provider, zero Internet, zero tokens. Vendor-specific by design; never

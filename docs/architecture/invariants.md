@@ -638,6 +638,41 @@ watching the test refuse.
 
 > `src/command_performance.rs::every_cli_command_is_classified`
 
+## Harness conformance (`assert-one-capability-contract`)
+
+### Every harness answers the same questions
+
+A capability contract states an outcome and names no vendor; a harness's
+bindings say how that harness is driven and carry no assertion. The
+contract runs identically against all four, so a check can no longer live
+in one vertical with nothing to disagree with it — which is how a Skill
+that never reached the model read as an invocation policy working, on
+three harnesses, for months.
+
+> `conformance/contract/skill.py`
+> `conformance/contract/mcp.py`
+
+### A harness declines out loud, or not at all
+
+A harness that cannot deliver part of a contract returns a reason from
+`bindings.unsupported`, and the run records it beside the passes. Omitting
+the check is not available: an omission cannot be reviewed, and the
+divergence it hides is exactly what the Lab exists to surface.
+
+This is how the suite now states that `invoke.user: false` is enforced on
+one harness of four — a fact no vertical asked about before.
+
+> `conformance/contract/skill.py::_declined`
+
+### An absence proves nothing until something proves the surface
+
+Every absence assertion in a contract is gated on a presence assertion.
+"the policy hid it" and "the surface was empty" are the same observation
+otherwise. `check_absence` already refuses an unsettled turn (ADR-035);
+this is the other half of the same defence.
+
+> `conformance/contract/skill.py::_assert_catalog`
+
 ## Decisions deliberately *not* taken
 
 Recorded because absence is a decision, and because each one has been proposed
