@@ -138,6 +138,9 @@ mod tests {
     /// `PATH` — including the one test that empties it. Reading ambient env
     /// is exactly what `env::scope` serializes, so a test that only reads it
     /// must still take the lock or it races the one that writes.
+    /// Hand-rolled rather than `uze_testkit::git::Repository`: that fixture
+    /// is built on this crate, so using it here would test the transport
+    /// through itself.
     fn repository(label: &str) -> PathBuf {
         let root = uze_testkit::temp::scratch(label);
         for args in [

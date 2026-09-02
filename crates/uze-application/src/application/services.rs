@@ -210,25 +210,8 @@ mod seat_tests {
     use super::*;
     use uze_core::UzeHome;
 
-    fn repository(label: &str) -> PathBuf {
-        let root = uze_testkit::temp::scratch(label);
-        for args in [
-            vec!["init", "-q", "-b", "main", "."],
-            vec!["config", "user.email", "t@example.invalid"],
-            vec!["config", "user.name", "t"],
-        ] {
-            uze_git::write(&root, &args).unwrap().successful().unwrap();
-        }
-        std::fs::write(root.join("file"), b"seed").unwrap();
-        uze_git::write(&root, &["add", "."])
-            .unwrap()
-            .successful()
-            .unwrap();
-        uze_git::write(&root, &["commit", "-qm", "seed"])
-            .unwrap()
-            .successful()
-            .unwrap();
-        root
+    fn repository(label: &str) -> uze_testkit::git::Repository {
+        uze_testkit::git::Repository::new(label)
     }
 
     fn application(label: &str) -> UzeApplication {
@@ -239,7 +222,8 @@ mod seat_tests {
     /// agent, and every additional live agent gets a checkout of its own.
     #[test]
     fn two_agents_never_share_a_checkout() {
-        let root = repository("seat-two-agents");
+        let repository = repository("seat-two-agents");
+        let root = repository.root().to_path_buf();
         let app = application("seat-two-agents-home");
 
         let first = app
@@ -251,9 +235,10 @@ mod seat_tests {
             .workspace()
             .checkout_for_new_agent(&root, &[first.clone()], "agent-2");
         assert_ne!(second, first, "the seat is taken, so this one isolates");
-        assert!(second.join("file").is_file(), "the checkout is populated");
-
-        std::fs::remove_dir_all(root).unwrap();
+        assert!(
+            second.join("README.md").is_file(),
+            "the checkout is populated"
+        );
     }
 
     /// Occupancy is judged by the checkout a pane is in, never by an exact
@@ -261,7 +246,8 @@ mod seat_tests {
     /// seat and let a second agent in beside it.
     #[test]
     fn an_agent_that_moved_inside_the_primary_still_holds_it() {
-        let root = repository("seat-moved");
+        let repository = repository("seat-moved");
+        let root = repository.root().to_path_buf();
         let app = application("seat-moved-home");
         let inside = root.join("subdirectory");
         std::fs::create_dir_all(&inside).unwrap();
@@ -270,8 +256,6 @@ mod seat_tests {
             .workspace()
             .checkout_for_new_agent(&root, &[inside], "agent-2");
         assert_ne!(taken, root.canonicalize().unwrap_or(root.clone()));
-
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     /// An isolated checkout lives under the same repository but must never
@@ -279,7 +263,8 @@ mod seat_tests {
     /// told the seat is taken by somebody who already left it.
     #[test]
     fn an_isolated_agent_leaves_the_seat_free() {
-        let root = repository("seat-isolated");
+        let repository = repository("seat-isolated");
+        let root = repository.root().to_path_buf();
         let app = application("seat-isolated-home");
         let isolated = root.join(".worktrees").join("agent-1");
 
@@ -287,8 +272,6 @@ mod seat_tests {
             .workspace()
             .checkout_for_new_agent(&root, &[isolated], "agent-2");
         assert_eq!(seat, root.canonicalize().unwrap_or(root.clone()));
-
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     /// Launching an agent unisolated beats not launching it at all.

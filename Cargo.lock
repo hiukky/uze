@@ -2477,7 +2477,6 @@ dependencies = [
  "serde",
  "serde_json",
  "uze-core",
- "uze-git",
  "uze-integrations",
  "uze-testkit",
 ]
