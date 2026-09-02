@@ -49,7 +49,8 @@
   - The measurement is written and versioned (`conformance/experiments/opencode/permission-evaluate.py`): a probe plugin records every `permission.evaluate` event verbatim during a real turn, and asserts whether one carries the intercepted call's arguments. It was authored but not yet run, so `deny`/`ask` stay declared unsupported on OpenCode and their registry entries stand unchanged. Run it with `python3 conformance/lab.py --harness opencode --experiment opencode/permission-evaluate`.
 - [ ] 6.4 Codex: measure whether `ask` has an effect; record the verdict (native or declared) in the registry with the version
   - Not measured, and no verdict depends on it any more: Codex's capability profile does not claim `ask` (an `ask` group routes Unsupported there), and the generated wrapper renders every denial as `deny` on every harness — the exit-code contract has one denial, not two. Measuring `ask` on Codex is only worth doing if someone wants to promote the effect into its profile; until then there is nothing in the delivery for the answer to change.
-- [ ] 6.5 Run all five verticals green; update `conformance/evidence/expected.json` and `DECISIONS.md`
+- [x] 6.5 Run all five verticals green; update `conformance/evidence/expected.json` and `DECISIONS.md`
+  - All five green on 2026-09-02: claude 27/27 + 0 ADAPTED (2.1.258), codex 39/39 + 0 (0.152.1), opencode 33/33 + 6 (beta-18866), antigravity 31/31 + 10 (1.1.24), uze 4/4 + 0. `expected.json` needed no new entry and no retirement — nothing became declarable and nothing became provable — so only the `observed_at` of the entries these runs re-measured moved. `DECISIONS.md` carries the three calls behind the new fixtures and the `jq` image change. The per-harness `evidence/<harness>.json` summaries are written by CI's `--write-summary`, not by hand.
 
 ## 7. Documentation and retirement
 
@@ -59,4 +60,5 @@
 - [x] 7.3 Update `crates/uze-integrations/src/<harness>/README.md` hook sections and the marketplace example plugin (`plugins/`) if it ships a hook
 - [ ] 7.4 Retire `.labs/native-hooks` once tasks 3.6 and 4.3 reproduce its exercises in the test suite; keep its README's compatibility matrix in `docs/capabilities/portable-hooks.md`
   - Left unchecked deliberately: `.labs/native-hooks` lives outside this worktree and is git-ignored, so it is not this change's to delete. Its exercises are reproduced by `hooks::wrapper_tests` and `hooks::opencode_runtime_tests`, and its compatibility matrix now lives in `docs/capabilities/portable-hooks.md`, so removing the directory is a one-line follow-up for whoever owns that scratch space.
-- [ ] 7.5 Full gate: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --no-fail-fast`, `openspec validate --all --strict`, `ruff` on `conformance/`
+- [x] 7.5 Full gate: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --no-fail-fast`, `openspec validate --all --strict`, `ruff` on `conformance/`
+  - Green on 2026-09-02: `cargo fmt --check` clean; `cargo clippy --all-targets -- -D warnings` clean; `cargo test --no-fail-fast` 410 passed / 0 failed across 15 targets; `openspec validate --all --strict` 26/26; `ruff format --check` 57 files formatted and `ruff check` clean; `python3 -m unittest discover -s conformance/tests` 50/50.

@@ -128,7 +128,7 @@
       "versions": [
         "*"
       ],
-      "observed_at": "2026-08-26"
+      "observed_at": "2026-09-02"
     },
     {
       "harness": "opencode",
@@ -138,7 +138,7 @@
       "versions": [
         "*"
       ],
-      "observed_at": "2026-08-26"
+      "observed_at": "2026-09-02"
     },
     {
       "harness": "opencode",
@@ -148,7 +148,7 @@
       "versions": [
         "*"
       ],
-      "observed_at": "2026-08-26"
+      "observed_at": "2026-09-02"
     },
     {
       "harness": "opencode",
@@ -158,7 +158,7 @@
       "versions": [
         "*"
       ],
-      "observed_at": "2026-08-26"
+      "observed_at": "2026-09-02"
     },
     {
       "harness": "opencode",
@@ -168,7 +168,7 @@
       "versions": [
         "*"
       ],
-      "observed_at": "2026-08-27"
+      "observed_at": "2026-09-02"
     }
   ]
 }
