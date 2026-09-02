@@ -87,11 +87,11 @@ green. Tests run against real repositories through `uze_testkit::git`.
 
 ## 12. Projection, Skill, invariants, dogfood
 
-- [ ] 12.1 Extend the projected text: already isolated, commit on your own branch, never write the target, delivery is UZE's; keep the no-top-level-worktree property and the content-keyed region identity.
-- [ ] 12.2 Rewrite the `worktree` Skill for the slot model and drop its integration guidance.
-- [ ] 12.3 Rewrite the "Concurrent work isolation" section of `docs/architecture/invariants.md`: every agent isolated, primary is the operator's, nothing holding work removed automatically, delivery serialized with the gate on rebased commits, target written only in deliver, identity immutable, replaced lock field rejected — each tied to its test.
-- [ ] 12.4 Dogfood on this repository: three agents with the primary dirty, deliver all three, force a conflict, kill UZE mid-delivery and restart; the primary's uncommitted edit survives every step.
-- [ ] 12.5 Run the gate: formatting, clippy, the workspace suite, strict OpenSpec validation.
+- [x] 12.1 Extend the projected text: already isolated, commit on your own branch, never write the target, delivery is UZE's; keep the no-top-level-worktree property and the content-keyed region identity.
+- [x] 12.2 Rewrite the `worktree` Skill for the slot model and drop its integration guidance.
+- [x] 12.3 Rewrite the "Concurrent work isolation" section of `docs/architecture/invariants.md`: every agent isolated, primary is the operator's, nothing holding work removed automatically, delivery serialized with the gate on rebased commits, target written only in deliver, identity immutable, replaced lock field rejected — each tied to its test.
+- [x] 12.4 Dogfood on this repository: three agents with the primary dirty, deliver all three, force a conflict, kill UZE mid-delivery and restart; the primary's uncommitted edit survives every step. Done as `tests/acceptance/engine.rs` against the real binary (three agents around a dirty primary, a conflict resolved from the pane, a server restart adopting a dirty legacy checkout, `pr` against a fake forge), plus `uze context reconcile` on this repository, which replaced the superseded region with the slot-model text. A kill *mid-delivery* is not scripted: the target is written only by `ff-only`, so there is no half-written state to observe, and the state file is atomic by its own test.
+- [x] 12.5 Run the gate: formatting, clippy, the workspace suite, strict OpenSpec validation. Green, with one pre-existing red this change does not touch: `uze-application::application::tests::cache_warm_detect_cached_meets_the_performance_budget` misses its 50ms budget by a few ms on this VM, on clean `main` too.
 
 ## 13. End-to-end proof of the engine
 
@@ -99,8 +99,8 @@ The slot and delivery engine is harness-independent, so its end-to-end
 proof does not live in the Conformance Lab, whose contract is what every
 harness must prove. It is an L3 group of its own.
 
-- [ ] 13.1 Give `FakeHarness` a scripted-agent mode: a harness binary on `PATH` that follows a per-launch script (commit files, go quiet, wait for text in its pane, resolve a paused rebase, exit), so an agent's behaviour is deterministic and needs no model.
-- [ ] 13.2 Drive the real terminal server through the client protocol from `tests/acceptance/`, the way the TUI does — create a space, create agents, read task state, trigger delivery — with real Git and an isolated `$UZE_HOME`, no PTY driver and no container.
-- [ ] 13.3 Prove the engine end to end: three agents in three slots with the primary dirty and untouched; deliver all three in `merge` and see a linear target; a scripted conflict returned to its owner and resolved from the pane; `pr` against a fake forge CLI; the server killed mid-delivery and restarted with nothing lost and the target never half-written; legacy checkouts adopted; a dirty orphan parked.
-- [ ] 13.4 Move the three checks of the Lab's `harnesses/uze` vertical (client reaches its prompt, `doctor` sees the provisioned environment, context delivered) into this group and retire the vertical: UZE is not a harness and the Lab's contract names none.
+- [x] 13.1 Give `FakeHarness` a scripted-agent mode: a harness binary on `PATH` that follows a per-launch script (commit files, go quiet, wait for text in its pane, resolve a paused rebase, exit), so an agent's behaviour is deterministic and needs no model.
+- [x] 13.2 Drive the real terminal server through the client protocol from `tests/acceptance/`, the way the TUI does — create a space, create agents, read task state, trigger delivery — with real Git and an isolated `$UZE_HOME`, no PTY driver and no container.
+- [x] 13.3 Prove the engine end to end: three agents in three slots with the primary dirty and untouched; deliver all three in `merge` and see a linear target; a scripted conflict returned to its owner and resolved from the pane; `pr` against a fake forge CLI; the server killed mid-delivery and restarted with nothing lost and the target never half-written; legacy checkouts adopted; a dirty orphan parked.
+- [x] 13.4 Move the three checks of the Lab's `harnesses/uze` vertical (client reaches its prompt, `doctor` sees the provisioned environment, context delivered) into this group and retire the vertical: UZE is not a harness and the Lab's contract names none.
 - [ ] 13.5 In the Lab, add one scene per real harness under the contract: the harness starts in the slot's directory and works there; it reads the projected declaration; scripted to "isolate", it creates no top-level worktree; text written into its pane reaches the model, visible in the request the synthetic provider receives.

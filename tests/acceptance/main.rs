@@ -5,6 +5,7 @@
 //! `uze` binary → Application → Store/Engine → Integration — never internal
 //! methods, and never against the developer's real HOME/UZE_HOME/PATH.
 
+mod engine;
 mod fresh_project;
 mod lifecycle;
 mod multi_harness;

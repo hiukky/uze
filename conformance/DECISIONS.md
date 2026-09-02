@@ -527,3 +527,33 @@ changelog records moving `/hooks` off that path to the shared one precisely
 because the backend does not read it); a project-scoped `.agents/hooks.json`
 (machine scope is what `uze plugin install` promises — a project file is a
 different capability's decision).
+
+---
+
+## UZE's own vertical leaves the Lab
+
+**Context.** The Lab's contract is what every *harness* must prove, in
+outcome terms, naming no vendor. UZE is not a harness, and the vertical
+that drove its client here said so itself: agent launch and checkout
+isolation were "deliberately not covered", because a second live agent is
+a scenario shape the Lab does not have.
+
+**Chosen.** The vertical is retired. What it proved — the client reaches
+its prompt, the environment is provisioned, context is delivered — and
+what it could not — three agents in three slots, delivery, a conflict
+returned to its agent and resolved, a server restart losing nothing — is
+proved in `tests/acceptance/engine.rs`, against the real `uze` binary's
+terminal server, real Git and a scripted agent, in seconds and without a
+container. The slot-and-delivery engine is harness-independent, so the Lab
+would have tested it through the slowest and most fragile piece of the
+system.
+
+**Discarded.** Keeping the vertical for the three checks it did make: they
+run in the deterministic suite for free, and a vertical for a non-harness
+kept bending the contract's vocabulary.
+
+**Still the Lab's.** One scene per real harness under the contract — the
+harness starts in the slot's directory and works there; it reads the
+projected declaration; scripted to "isolate", it creates no top-level
+worktree; text written into its pane reaches the model — is what needs a
+vendor binary, and stays here as the open task in the worktree change.

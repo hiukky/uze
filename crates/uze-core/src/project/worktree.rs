@@ -71,17 +71,14 @@ impl CompletionBehavior {
     /// vocabulary without also being explainable to a model reading it.
     pub const fn instruction_clause(self) -> &'static str {
         match self {
-            Self::Handoff => {
-                "leave your branch and its commits for review — never merge, rebase, or reset \
-                 the primary branch"
-            }
+            Self::Handoff => "your branch is left for a person to integrate; commit on it and stop",
             Self::Merge => {
-                "integrate your branch into the primary branch once its checks pass, and stop \
-                 and report instead if the primary checkout has uncommitted work"
+                "UZE rebases your branch onto the target, runs the project's checks, and \
+                 fast-forwards the target itself; commit on your branch and stop"
             }
             Self::Pr => {
-                "leave your branch and its commits; the branch is published and a pull request \
-                 opened for it"
+                "UZE publishes your branch and opens a pull request for it; commit on your \
+                 branch and stop"
             }
         }
     }
@@ -190,10 +187,16 @@ impl WorktreePolicy {
         format!(
             "## Concurrent work isolation\n\
              \n\
-             - Isolated checkouts live in `{directory}/<name>` under the primary checkout, one \
-             writer each, on branch `{prefix}<name>`.\n\
-             - If your working directory is already inside `{directory}/`, you are already \
-             isolated. Do not create another worktree, and do not switch branches.\n\
+             - Every agent UZE launches works in a checkout of its own under \
+             `{directory}/<id>`, on branch `{prefix}<id>`. If your working directory is inside \
+             `{directory}/`, you are already isolated: do not create another worktree, and do \
+             not switch branches.\n\
+             - Commit your work on your own branch, as you go. Never commit to, merge into, \
+             rebase, or reset the target branch{target}: delivery is UZE's — \
+             {completion}.\n\
+             - If UZE tells you a rebase is paused in your checkout, resolve the conflicts \
+             preserving the intent of your change, run `git rebase --continue`, run the \
+             project's checks, and end your turn.\n\
              - Before spawning parallel subagents that write files, give each its own checkout \
              so they cannot collide:\n\
              \n\
@@ -203,10 +206,14 @@ impl WorktreePolicy {
              ```\n\
              \n\
              - The path above is resolved against the *primary* checkout on purpose — a path \
-             relative to your own would nest one worktree inside another.\n\
-             - When work is done: {completion}.\n",
+             relative to your own would nest one worktree inside another.\n",
             directory = WORKTREES_DIRECTORY,
             prefix = BRANCH_PREFIX,
+            target = self
+                .target
+                .as_deref()
+                .map(|target| format!(" (`{target}`)"))
+                .unwrap_or_default(),
             completion = self.completion.instruction_clause()
         )
     }

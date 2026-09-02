@@ -67,6 +67,14 @@ pub fn attach(root: &Path, _columns: u16, _rows: u16) -> Result<UnixStream, Runt
     }
 }
 
+/// Where the server for `root` listens. For a client that must connect to
+/// a server it started itself and never start one — a test driving the
+/// runtime through the real binary — since [`attach`] starts a server from
+/// the current executable when none answers.
+pub fn socket_path(root: &Path) -> Result<PathBuf, RuntimeError> {
+    Ok(Endpoint::for_root(root)?.socket)
+}
+
 pub fn stop(root: &Path) -> Result<(), RuntimeError> {
     let endpoint = Endpoint::for_root(root)?;
     let mut stream = UnixStream::connect(&endpoint.socket)?;
