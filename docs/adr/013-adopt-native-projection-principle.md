@@ -125,6 +125,18 @@ Generated artifacts are UZE-owned and live under
 symlink, or inlines a value read from the Store; it never byte-copies files
 that could then drift.
 
+*Amended 2026-09-02.* A symlink only delivers when the consumer
+dereferences it. `codex plugin add` stages the envelope into
+`~/.codex/plugins/cache/` without following symlinks (verified against
+codex-cli 0.149.0 through 0.152.1: a symlinked skill directory and a
+symlinked `.mcp.json` are simply absent from the cache, so the skill never
+reached the model and the server never reached `codex mcp list`). The Codex
+envelope therefore mirrors Store bytes as real files. What keeps it from
+drifting is the property that always mattered — it is rebuilt wholesale
+from the Store on every materialization — not the physical link.
+Antigravity's installer dereferences (verified 1.1.19), so its envelope
+keeps the symlink.
+
 ### 6. Native ≠ zero-copy
 
 `Store → derived marketplace.json → <vendor> plugin install → vendor-owned
