@@ -113,7 +113,14 @@ or an over-promise in the ADR. Claude specifically deserves a check: if an
 inverse of `disable-model-invocation` exists, this is a bug in the Claude
 integration, not a harness limitation.
 
-Out of scope here — the contract's job was to make it visible, and it did.
+**Followed up (2026-09-02).** The inverse exists and is documented:
+`user-invocable: false` hides a Skill from the `/` menu and refuses
+`/name`. UZE already emitted it; the declaration survived because the
+binding read the `/skills` *management* view, which lists every Skill
+whatever its policy. The Claude binding now reads the `/` completions and
+the check is asserted, not declined. Codex and OpenCode keep their
+declarations — those are product routing (`Degraded`/`Adaptable`), not an
+unread control.
 
 ---
 
@@ -192,6 +199,41 @@ is the exact failure this whole change was made to stop).
 **Unblocked by.** Whatever the Claude and Antigravity hook changes discover
 about how each harness actually accepts a scripted tool call. That
 knowledge is what the contract must be written against.
+
+**Followed up (2026-09-02).** Both scripted calls were the Lab's, not the
+harnesses'. Claude Code accumulates a tool's input only from
+`input_json_delta` events — the provider put it on `content_block_start`,
+so every `Bash` call arrived empty. Antigravity 1.1.24 validates a call
+against the tool's declared schema before any hook runs — the provider
+sent `command`, the tool declares `CommandLine`/`Cwd`/`WaitMsBeforeAsync`
+plus the `toolSummary`/`toolAction` pair — and answers the harness's first
+request, which is now a side call to a lighter model with no tools. With
+both fixed, Claude's hook phase is real (deny relayed, tool blocked,
+first-deny-wins, allow executes); Antigravity's MCP call is real too.
+
+Antigravity's hooks are a different case. UZE's generated plugin
+`hooks.json` had its named entries wrapped under a `hooks` key, which the
+vendor reads as one dead hook named `hooks` — fixed, and `agy plugin
+validate` now counts every group. But no `hooks.json` hook executes in the
+Lab session at all: a deny hook in the vendor's own format at the vendor's
+own shared path is loaded (`hooks_manager: loaded 1 named hooks`), listed
+by `/hooks`, and never runs — not for any event, not even a `touch`, on
+1.1.22 and 1.1.24 alike (experiments `antigravity/hook-print` and
+`antigravity/hook-tui`). The executor is gated by
+`CustomizationConfig.enable_json_hooks`, which the CLI's SDK takes from a
+server-delivered feature provider the offline Lab never receives; it is
+not a setting, a plugin field or agent frontmatter, so nothing UZE ships
+can open it and nothing the Lab may honestly stub can either.
+
+So the Antigravity vertical measures the gate instead of assuming it:
+`hooks > vendor` runs that control hook first. When it denies, the UZE
+hook checks are asserted exactly as on Claude; when it does not, each is
+recorded as a declaration carrying that reason, registered per version.
+The registry escalates the moment the vendor opens the gate, so the
+declarations cannot outlive the limitation. This is the `unsupported`
+mechanism used for what it is for — a harness limitation measured live —
+and the reason the earlier "no hook contract" objection no longer holds:
+the shared expectation is now known on all four harnesses.
 
 ---
 

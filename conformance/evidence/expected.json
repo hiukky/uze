@@ -13,23 +13,102 @@
     },
     {
       "harness": "antigravity",
-      "check": "hooks-allow-execution-gap",
-      "suite": "hooks > allow",
-      "reason": "AGY 1.1.21 observed: the hook `allow` decision did not produce an observable tool execution in the lab turn (no function response; the vendor confirmation flow may still gate the first run_command).",
+      "check": "hooks-vendor-hook-executes",
+      "suite": "hooks > vendor",
+      "reason": "AGY executes no hooks.json hook in the Lab session: a vendor-format deny hook at ~/.gemini/config/hooks.json is loaded (hooks_manager) and listed (/hooks) but never runs, for any event; the executor is gated by CustomizationConfig.enable_json_hooks, which the CLI's SDK takes from a server-delivered feature provider the offline Lab never receives (experiments antigravity/hook-print, antigravity/hook-tui; 1.1.22 and 1.1.24 alike).",
       "versions": [
-        "*"
+        "1.1.22",
+        "1.1.24"
       ],
-      "observed_at": "2026-08-26"
+      "observed_at": "2026-09-02"
     },
     {
       "harness": "antigravity",
-      "check": "hooks-allow-turn-unsettled",
-      "suite": "hooks > allow",
-      "reason": "AGY 1.1.22 can leave an allowed run_command behind its vendor confirmation surface, so the hook outcome and the marker absence cannot be observed honestly.",
+      "check": "hooks-deny-denial-relayed",
+      "suite": "hooks > deny",
+      "reason": "Declared while hooks-vendor-hook-executes is ADAPTED: the UZE plugin hook cannot be observed where the vendor runs no hook at all.",
       "versions": [
-        "1.1.22"
+        "1.1.22",
+        "1.1.24"
       ],
-      "observed_at": "2026-08-30"
+      "observed_at": "2026-09-02"
+    },
+    {
+      "harness": "antigravity",
+      "check": "hooks-deny-denial-blocks-tool",
+      "suite": "hooks > deny",
+      "reason": "Declared while hooks-vendor-hook-executes is ADAPTED: the UZE plugin hook cannot be observed where the vendor runs no hook at all.",
+      "versions": [
+        "1.1.22",
+        "1.1.24"
+      ],
+      "observed_at": "2026-09-02"
+    },
+    {
+      "harness": "antigravity",
+      "check": "hooks-deny-marker-absent-second-handler-reached",
+      "suite": "hooks > deny",
+      "reason": "Declared while hooks-vendor-hook-executes is ADAPTED: the UZE plugin hook cannot be observed where the vendor runs no hook at all.",
+      "versions": [
+        "1.1.22",
+        "1.1.24"
+      ],
+      "observed_at": "2026-09-02"
+    },
+    {
+      "harness": "antigravity",
+      "check": "hooks-allow-marker-absent-blocked by protect-env",
+      "suite": "hooks > allow",
+      "reason": "Declared while hooks-vendor-hook-executes is ADAPTED: the UZE plugin hook cannot be observed where the vendor runs no hook at all.",
+      "versions": [
+        "1.1.22",
+        "1.1.24"
+      ],
+      "observed_at": "2026-09-02"
+    },
+    {
+      "harness": "antigravity",
+      "check": "hooks-allow-tool-executed",
+      "suite": "hooks > allow",
+      "reason": "Declared while hooks-vendor-hook-executes is ADAPTED: the UZE plugin hook cannot be observed where the vendor runs no hook at all.",
+      "versions": [
+        "1.1.22",
+        "1.1.24"
+      ],
+      "observed_at": "2026-09-02"
+    },
+    {
+      "harness": "antigravity",
+      "check": "hooks-order-denial-relayed",
+      "suite": "hooks > order",
+      "reason": "Declared while hooks-vendor-hook-executes is ADAPTED: the UZE plugin hook cannot be observed where the vendor runs no hook at all.",
+      "versions": [
+        "1.1.22",
+        "1.1.24"
+      ],
+      "observed_at": "2026-09-02"
+    },
+    {
+      "harness": "antigravity",
+      "check": "hooks-order-denial-blocks-tool",
+      "suite": "hooks > order",
+      "reason": "Declared while hooks-vendor-hook-executes is ADAPTED: the UZE plugin hook cannot be observed where the vendor runs no hook at all.",
+      "versions": [
+        "1.1.22",
+        "1.1.24"
+      ],
+      "observed_at": "2026-09-02"
+    },
+    {
+      "harness": "antigravity",
+      "check": "hooks-order-marker-absent-second-handler-ran",
+      "suite": "hooks > order",
+      "reason": "Declared while hooks-vendor-hook-executes is ADAPTED: the UZE plugin hook cannot be observed where the vendor runs no hook at all.",
+      "versions": [
+        "1.1.22",
+        "1.1.24"
+      ],
+      "observed_at": "2026-09-02"
     },
     {
       "harness": "opencode",

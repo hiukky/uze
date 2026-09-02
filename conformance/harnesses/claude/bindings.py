@@ -27,11 +27,16 @@ class ClaudeBindings(Bindings):
         return plain, any(marker in plain for marker in self.ready_markers)
 
     def skill_catalog(self, tui):
+        """The `/` menu is the surface a person invokes from: typing a
+        namespace prefix opens its completions. `/skills` is the management
+        view and lists every Skill whatever its policy, so it cannot tell a
+        model-only Skill from an invocable one."""
         time.sleep(self.warmup)
-        tui.type("/skills")
-        time.sleep(1)
-        tui.submit()
-        return tui.collect(reads=6)
+        tui.type("/flow:")
+        catalog = tui.collect(reads=4)
+        tui.child.send("\x1b")
+        time.sleep(0.5)
+        return catalog
 
     def lists(self, catalog, skill):
         """Claude names a Skill by its namespaced invocation label."""
@@ -46,17 +51,8 @@ class ClaudeBindings(Bindings):
         return inventory
 
     def unsupported(self, prop):
-        """Claude Code exposes `disable-model-invocation` — which UZE uses to
-        honour `invoke.model: false` — but no verified inverse that hides a
-        Skill from explicit user invocation.
-
-        Declared rather than asserted because the control may exist and
-        simply not be used: see `conformance/DECISIONS.md`. Declaring keeps
-        the question visible; omitting the check would bury it again.
-        """
-        if prop == "model-only-is-not-user-invocable":
-            return (
-                "no verified Claude control hides a Skill from explicit "
-                "invocation (the inverse of disable-model-invocation is unconfirmed)"
-            )
+        """Claude Code documents both halves of the invocation policy:
+        `disable-model-invocation: true` and `user-invocable: false` (the
+        latter hides a Skill from the `/` menu and refuses `/name`), and UZE
+        emits both — nothing to declare."""
         return None

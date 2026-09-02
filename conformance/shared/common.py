@@ -405,7 +405,7 @@ def start_provider(cfg, mode, extra_env=None):
             if not extra_env or "FC_ARGS" not in extra_env:
                 env += [
                     "-e",
-                    'FC_ARGS={"serverName":"uze-conformance","toolName":"uze_conformance","arguments":{}}',
+                    'FC_ARGS={"ServerName":"uze-conformance","ToolName":"uze_conformance","Arguments":{},"toolSummary":"Conformance proof","toolAction":"Calling MCP tool"}',
                 ]
             env += ["-e", "FINAL_TEXT=UZE_CONFORMANCE_PASS"]
         sh(

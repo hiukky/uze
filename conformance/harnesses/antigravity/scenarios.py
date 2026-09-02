@@ -33,7 +33,7 @@ from shared.common import (
 )
 
 
-def agy_setup(cfg, prov_ip, include_mcp, final_cmd, plugins=None):
+def agy_setup(cfg, prov_ip, include_mcp, final_cmd, plugins=None, prelude=""):
     if plugins is None:
         plugins = "flow"
         if include_mcp:
@@ -52,6 +52,7 @@ cp /app/fixtures/installation_id /work/home/.gemini/antigravity-cli/installation
 {materialize_marketplace(cfg)}
 uze market add /work/market >/dev/null 2>&1
 for p in {plugins}; do uze plugin install $p@uze-lab >/dev/null 2>&1; done
+{prelude}
 {final_cmd}
 """
 
@@ -258,11 +259,20 @@ def phase_tui(cfg, prov_ip):
     with open(f"{cfg.outdir}/04b_mcp_invoke_struct.json", "w") as f:
         json.dump(struct2, f, indent=1)
     if struct2:
-        s = struct2[-1].get("summary", {})
+        # The proof rides in the request that carries the functionResponse;
+        # the harness's side requests (a lighter model, no tools) come
+        # after it, so the last request is not the one to read.
+        executed = any(
+            r.get("summary", {}).get("has_function_response")
+            and r.get("summary", {}).get("mcp_proof_present")
+            for r in struct2
+        )
         check(
             "mcp-tool-executed-in-tui",
-            bool(s.get("has_function_response") and s.get("mcp_proof_present")),
-            "the REAL AGY executed the MCP server inside the TUI turn (proof returned)",
+            executed,
+            "the REAL AGY executed the MCP server inside the TUI turn (proof returned)"
+            if executed
+            else "a functionResponse without the proof, or none at all",
         )
     else:
         check("mcp-tool-executed-in-tui", False, "no MCP request captured")
@@ -274,7 +284,178 @@ def phase_tui(cfg, prov_ip):
     child.close(force=True)
 
 
-def phase_hooks(cfg, prov_ip, kind):
+RUN_COMMAND_ARGS = (
+    '{"CommandLine":"%s","Cwd":"/work","WaitMsBeforeAsync":2000,'
+    '"toolSummary":"Command execution","toolAction":"Running command"}'
+)
+
+#: A deny hook in the vendor's own file format at the vendor's own shared
+#: path, with no UZE in the loop: the control that says whether this AGY
+#: executes `hooks.json` hooks at all in this session.
+VENDOR_CONTROL_HOOK = """cat > /work/home/.gemini/config/hooks.json <<'EOF'
+{
+  "uze-conformance-control": {
+    "PreToolUse": [
+      {
+        "matcher": "run_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "printf '{\\"decision\\":\\"deny\\",\\"reason\\":\\"blocked by protect-env\\"}'"
+          }
+        ]
+      }
+    ]
+  }
+}
+EOF
+"""
+
+HOOK_DENIAL_MARKERS = ("blocked by protect-env", "Denied by UZE hook")
+
+
+def hook_turn(cfg, prov_ip, tag, args, plugins, prelude=""):
+    """One interactive AGY turn around a scripted `run_command` (in the
+    tool's declared argument shape): the provider serves the functionCall
+    to the user's turn, the vendor permission prompt is answered if it
+    appears, and the turn is left settled. Returns the TUI verdict and the
+    provider-observed hook markers."""
+    start_provider(cfg, "toolcall", {"TOOL_NAME": "run_command", "FC_ARGS": args})
+    time.sleep(1)
+    setup = agy_setup(
+        cfg,
+        prov_ip,
+        include_mcp=False,
+        final_cmd="exec agy",
+        plugins=plugins,
+        prelude=prelude,
+    )
+    cmd = docker_base(cfg, prov_ip, setup)
+    child = pexpect.spawn(
+        cmd[0], cmd[1:], encoding="utf-8", codec_errors="replace", timeout=300
+    )
+    child.setwinsize(50, 160)
+    try:
+        child.logfile_read = common.CastRecorder(cfg.outdir, f"tui-hooks-{tag}")
+    except Exception:
+        pass
+    screen = make_screen(child)
+    wait_for = make_waiter(screen)
+
+    try:
+        child.expect("Choose your color scheme", timeout=150)
+    except Exception as e:
+        check(f"hooks-{tag}-tui-started", False, f"onboarding never appeared: {e}")
+        child.close(force=True)
+        return None
+    child.send("\r")
+    time.sleep(3)
+    child.send("\t\t")
+    time.sleep(0.7)
+    child.send("\r")
+    time.sleep(5)
+    _, p1 = screen(3)
+    if ">" not in p1:
+        wait_for([">"], tries=6, stop_on_death=True)
+
+    for ch in "run the API check":
+        child.send(ch)
+        time.sleep(0.08)
+    child.send("\r")
+    seen = ""
+    prompted = False
+    for _ in range(16):
+        _, p = screen(2.0)
+        seen += p
+        if "UZE_CONFORMANCE_PASS" in seen or any(
+            m in seen for m in HOOK_DENIAL_MARKERS
+        ):
+            break
+        if not child.isalive():
+            break
+        # The vendor's own permission prompt for the command: a person
+        # approves it, and the hook decision — never this prompt — is what
+        # the turn is judged on. A deny hook that ran never shows it.
+        if "Do you want to proceed" in seen and not prompted:
+            prompted = True
+            child.send("\r")
+            time.sleep(1.0)
+        elif "How's the CLI experience" in p:
+            child.send("0\r")
+            time.sleep(1.0)
+    with open(f"{cfg.outdir}/hooks_{tag}.raw", "w") as f:
+        f.write(seen)
+    turn_settled = "UZE_CONFORMANCE_PASS" in seen or any(
+        m in seen for m in HOOK_DENIAL_MARKERS
+    )
+    # Absence checks may only evaluate once the turn settled and the TUI
+    # went quiet (ADR-035).
+    settled = turn_settled and common.settle_and_quiet(screen)
+
+    struct = provider_struct(cfg)
+    with open(f"{cfg.outdir}/hooks_{tag}_struct.json", "w") as f:
+        json.dump(struct, f, indent=1)
+    child.send("\x03")
+    time.sleep(0.5)
+    child.close(force=True)
+    return {
+        "turn_settled": turn_settled,
+        "settled": settled,
+        "prompted": prompted,
+        "tail": seen[-160:].replace("\n", " "),
+        "markers": common.observed_markers(struct, "hook_markers"),
+    }
+
+
+def phase_hooks_gate(cfg, prov_ip):
+    """Whether this AGY executes `hooks.json` hooks at all — measured, not
+    assumed, with the vendor's own format at the vendor's own path and no
+    UZE in the loop.
+
+    Observed on 1.1.22 and 1.1.24 (2026-09-02, experiments
+    `antigravity/hook-print` and `antigravity/hook-tui`): the hook is
+    loaded (`hooks_manager: loaded 1 named hooks`), listed by `/hooks`, and
+    never executed — not for any event, not even a `touch`. The executor is
+    gated by `CustomizationConfig.enable_json_hooks`, built by the CLI's SDK
+    from a server-delivered feature provider that the offline Lab never
+    receives; it is not a setting, a plugin field or agent frontmatter.
+    While that gate is closed, the UZE hook checks are declared, not
+    asserted: a green there would be the harness's, not ours to fake.
+    Returns True when the control hook denied the command.
+    """
+    outcome = hook_turn(
+        cfg,
+        prov_ip,
+        "vendor",
+        RUN_COMMAND_ARGS % "echo API secrets",
+        plugins="flow",
+        prelude=VENDOR_CONTROL_HOOK,
+    )
+    if outcome is None:
+        return False
+    executes = bool(outcome["markers"].get("blocked by protect-env"))
+    # A closed gate is a declared vendor limitation (ADAPTED, registered
+    # per version), never a failure of UZE's — and never a silent pass.
+    check(
+        "hooks-vendor-hook-executes",
+        True,
+        "a vendor-format deny hook at ~/.gemini/config/hooks.json denied run_command"
+        if executes
+        else (
+            "no hooks.json hook executes in this AGY session: the vendor-format "
+            "control hook was loaded and listed but never ran"
+            + (
+                " (the permission prompt surfaced instead)"
+                if outcome["prompted"]
+                else ""
+            )
+        ),
+        kind="assert" if executes else "adapted",
+    )
+    return executes
+
+
+def phase_hooks(cfg, prov_ip, kind, vendor_executes):
     """Portable-hook evidence inside the REAL Antigravity CLI TUI (ADR-033).
 
     The provider scripts a `run_command` functionCall whose arguments the
@@ -292,144 +473,76 @@ def phase_hooks(cfg, prov_ip, kind):
     Evidence = what the REAL harness relayed: hook marker presence/absence
     in the provider-observed conversation plus the TUI denial surface.
 
-    Known state, 2026-09-02 (needs its own change): on AGY 1.1.24 the
-    scripted `run_command` functionCall produces no functionResponse and no
-    hook marker in any provider request (CI run 33584691903: two requests
-    per deny/order turn, neither carrying a response; locally the same),
-    while the provider still serves UZE_CONFORMANCE_PASS on any follow-up
-    request, so the turn "settles". No hook is observed executing here;
-    `hooks-*-denial-relayed` fails on purpose rather than letting the
-    absence checks pass for a turn no hook ever saw. The earlier green runs
-    were this vacuity, not evidence.
+    Two vacuities hid here until 2026-09-02, and both are why the presence
+    check `hooks-*-denial-relayed` gates the absence checks: the provider
+    answered the harness's first request with the functionCall, which on
+    1.1.24 is a side call to a lighter model with no tools declared, so the
+    user's turn never saw a tool; and the call carried `command`, not the
+    `CommandLine`/`Cwd`/`WaitMsBeforeAsync`/`toolSummary`/`toolAction` the
+    tool declares, which the harness rejects as invalid arguments before a
+    hook runs. The generated plugin `hooks.json` also had its named entries
+    wrapped under a `hooks` key the vendor reads as one dead hook.
+
+    When `phase_hooks_gate` found the vendor executing no hook at all, every
+    check here is recorded as a declaration carrying that reason — the
+    turn would only re-measure the vendor's gate.
     """
     scenarios = {
         "deny": {
             "plugin": "hook-plugin",
-            "args": '{"command":"echo API secrets"}',
+            "args": RUN_COMMAND_ARGS % "echo API secrets",
             "deny_present": "blocked by protect-env",
             "deny_absent": ["second-handler-reached"],
         },
         "allow": {
             "plugin": "hook-plugin",
-            "args": '{"command":"echo plain output"}',
+            "args": RUN_COMMAND_ARGS % "echo plain output",
             "deny_present": None,
             "deny_absent": ["blocked by protect-env"],
-            "adapted": (
-                "AGY 1.1.21 observed: the hook `allow` decision did not produce an "
-                "observable tool execution in the lab turn (no function response; the "
-                "vendor confirmation flow may still gate the first run_command). The "
-                "wrapper contract matches the official decision format; recorded, "
-                "never fabricated."
-            ),
         },
         "order": {
             "plugin": "hook-order-plugin",
-            "args": '{"command":"echo any"}',
+            "args": RUN_COMMAND_ARGS % "echo any",
             "deny_present": "first-handler-denied",
             "deny_absent": ["second-handler-ran"],
         },
     }
     spec = scenarios[kind]
-    start_provider(
-        cfg, "toolcall", {"TOOL_NAME": "run_command", "FC_ARGS": spec["args"]}
-    )
-    time.sleep(1)
-    setup = agy_setup(
-        cfg,
-        prov_ip,
-        include_mcp=False,
-        final_cmd="exec agy",
-        plugins=f"flow {spec['plugin']}",
-    )
-    cmd = docker_base(cfg, prov_ip, setup)
-    child = pexpect.spawn(
-        cmd[0], cmd[1:], encoding="utf-8", codec_errors="replace", timeout=300
-    )
-    child.setwinsize(50, 160)
-    try:
-        child.logfile_read = common.CastRecorder(cfg.outdir, f"tui-hooks-{kind}")
-    except Exception:
-        pass
-    screen = make_screen(child)
-    wait_for = make_waiter(screen)
-
-    try:
-        child.expect("Choose your color scheme", timeout=150)
-    except Exception as e:
-        check("hooks-tui-started", False, f"onboarding never appeared: {e}")
-        child.close(force=True)
+    if not vendor_executes:
+        reason = (
+            "declared: this AGY executes no hooks.json hook in the Lab session "
+            "(see hooks-vendor-hook-executes), so the UZE plugin hook cannot be "
+            "observed here"
+        )
+        declared = []
+        if spec["deny_present"]:
+            declared += [
+                f"hooks-{kind}-denial-relayed",
+                f"hooks-{kind}-denial-blocks-tool",
+            ]
+        declared += [
+            f"hooks-{kind}-marker-absent-{absent}" for absent in spec["deny_absent"]
+        ]
+        if kind == "allow":
+            declared.append("hooks-allow-tool-executed")
+        for name in declared:
+            check(name, True, reason, kind="adapted")
         return
-    child.send("\r")
-    time.sleep(3)
-    child.send("\t\t")
-    time.sleep(0.7)
-    child.send("\r")
-    time.sleep(5)
-    t1, p1 = screen(3)
-    if ">" not in p1:
-        t1, p1, _ = wait_for([">"], tries=6, stop_on_death=True)
 
-    for ch in "run the API check":
-        child.send(ch)
-        time.sleep(0.08)
-    child.send("\r")
-    t4, p4 = screen(1.2)
-    tries = 0
-    while (
-        "UZE_CONFORMANCE_PASS" not in p4
-        and not any(m in p4 for m in ("blocked by protect-env", "Denied by UZE hook"))
-        and tries < 14
-        and child.isalive()
-    ):
-        t4, p4 = screen(2.0)
-        tries += 1
-        # AGY sometimes fronts a confirmation dialog (telemetry/execution
-        # consent) on the first tool call; dismiss it with Enter so the
-        # hook decision — not a consent prompt — decides the turn. AGY
-        # 1.1.22 also surveys the CLI experience after a failed turn;
-        # answer Skip so the turn can settle on the hook decision.
-        if any(k in p4 for k in ("I agree", "Allow", "Run anyway", "Do you want")):
-            child.send("\r")
-            time.sleep(1.0)
-        elif "How's the CLI experience" in p4:
-            child.send("0\r")
-            time.sleep(1.0)
-    with open(f"{cfg.outdir}/hooks_{kind}.raw", "w") as f:
-        f.write(t4)
-    turn_settled = (
-        "UZE_CONFORMANCE_PASS" in p4
-        or "blocked by protect-env" in p4
-        or "Denied by UZE hook" in p4
+    outcome = hook_turn(
+        cfg, prov_ip, kind, spec["args"], plugins=f"flow {spec['plugin']}"
     )
-    # Absence checks may only evaluate once the turn settled and the TUI
-    # went quiet (ADR-035). AGY 1.1.22 can leave the first allowed
-    # run_command behind its vendor confirmation surface indefinitely. This
-    # is an observed execution limitation, not evidence that the portable
-    # hook denied the command; record it through the adaptive gate instead
-    # of claiming an unproven absence.
-    allow_turn_unsettled = kind == "allow" and not turn_settled
-    settled = turn_settled and common.settle_and_quiet(screen)
-    if allow_turn_unsettled:
-        check(
-            "hooks-allow-turn-unsettled",
-            True,
-            "AGY left the allowed run_command behind its confirmation surface; "
-            "the hook outcome cannot be observed",
-            kind="adapted",
-        )
-    else:
-        check(
-            f"hooks-{kind}-turn-settled",
-            turn_settled,
-            "the turn settled (final text or hook denial rendered)"
-            if turn_settled
-            else p4[-160:].replace("\n", " "),
-        )
-
-    struct = provider_struct(cfg)
-    with open(f"{cfg.outdir}/hooks_{kind}_struct.json", "w") as f:
-        json.dump(struct, f, indent=1)
-    markers = common.observed_markers(struct, "hook_markers")
+    if outcome is None:
+        return
+    check(
+        f"hooks-{kind}-turn-settled",
+        outcome["turn_settled"],
+        "the turn settled (final text or hook denial rendered)"
+        if outcome["turn_settled"]
+        else outcome["tail"],
+    )
+    markers = outcome["markers"]
+    settled = outcome["settled"]
     has_output = bool(markers.get("plain output"))
     if spec["deny_present"]:
         # The denial reason relayed to the model is the evidence that the
@@ -451,36 +564,21 @@ def phase_hooks(cfg, prov_ip, kind):
             if not has_output
             else "the tool executed despite the deny — blocking is broken",
         )
-    if not allow_turn_unsettled:
-        for absent in spec["deny_absent"]:
-            common.check_absence(
-                f"hooks-{kind}-marker-absent-{absent}",
-                not markers.get(absent, False),
-                settled,
-                f"`{absent}` never reached the conversation (first-deny-wins)",
-            )
+    for absent in spec["deny_absent"]:
+        common.check_absence(
+            f"hooks-{kind}-marker-absent-{absent}",
+            not markers.get(absent, False),
+            settled,
+            f"`{absent}` never reached the conversation (first-deny-wins)",
+        )
     if kind == "allow":
-        if spec.get("adapted"):
-            check(
-                "hooks-allow-execution-gap",
-                True,
-                spec["adapted"],
-                kind="adapted",
-            )
-        else:
-            check(
-                "hooks-allow-tool-executed",
-                has_output,
-                "run_command actually executed after the hook allowed it"
-                if has_output
-                else "no function response observed",
-            )
-
-    child.send("\x03")
-    time.sleep(0.5)
-    child.sendline("/exit")
-    time.sleep(2)
-    child.close(force=True)
+        check(
+            "hooks-allow-tool-executed",
+            has_output,
+            "run_command actually executed after the hook allowed it"
+            if has_output
+            else "the command's stdout never reached the conversation",
+        )
 
 
 def phase_mcp_registration(cfg, prov_ip):
@@ -516,6 +614,8 @@ def run(cfg, prov_ip):
     with describe("cli.state"):
         phase_mcp_registration(cfg, prov_ip)
     with describe("hooks"):
+        with describe("vendor"):
+            vendor_executes = phase_hooks_gate(cfg, prov_ip)
         for kind in ("deny", "allow", "order"):
             with describe(kind):
-                phase_hooks(cfg, prov_ip, kind)
+                phase_hooks(cfg, prov_ip, kind, vendor_executes)

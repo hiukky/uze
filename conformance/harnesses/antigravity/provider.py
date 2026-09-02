@@ -40,10 +40,15 @@ import variation
 STRUCT_PATH = os.environ.get("PROVIDER_STRUCT", "/tmp/agy-provider-struct.json")
 RESP_SSE = os.environ.get("PROVIDER_RESP", "")
 MODE = os.environ.get("PROVIDER_MODE", "static")
+# Arguments are scripted in the shape the tool declares to the model
+# (`parametersJsonSchema`, PascalCase plus the `toolSummary`/`toolAction`
+# pair every AGY tool requires): the harness validates a call against that
+# schema before any hook runs or any tool executes, and rejects the rest as
+# "invalid arguments" — a turn that settles with no hook and no tool.
 FC_ARGS = json.loads(
     os.environ.get(
         "FC_ARGS",
-        '{"serverName":"uze-conformance","toolName":"uze_conformance","arguments":{}}',
+        '{"ServerName":"uze-conformance","ToolName":"uze_conformance","Arguments":{},"toolSummary":"Conformance proof","toolAction":"Calling MCP tool"}',
     )
 )
 FINAL_TEXT = os.environ.get("FINAL_TEXT", "UZE_CONFORMANCE_PASS")
@@ -120,12 +125,19 @@ def sse(obj):
     return f"data: {json.dumps(obj)}\n\n".encode()
 
 
+def wants_function_call(summary):
+    """A model can only call a function the request declared, and has no
+    reason to call it again once the response is in the conversation. The
+    harness also makes side requests (a lighter model, no tools declared)
+    around the user's turn; counting requests handed the call to one of
+    those and the real turn never saw a tool."""
+    return FC_NAME in summary["tools"] and not summary["has_function_response"]
+
+
 class H(BaseHTTPRequestHandler):
     def _handle(self):
 
-        capture.capture(self)
-        length = int(self.headers.get("Content-Length", 0) or 0)
-        body = self.rfile.read(length).decode("utf-8", "replace") if length else ""
+        body = capture.read_body(self).decode("utf-8", "replace")
         n = COUNTER["n"]
         COUNTER["n"] += 1
         rec = {
@@ -145,7 +157,7 @@ class H(BaseHTTPRequestHandler):
             json.dump(struct, f, indent=1)
         print(f"[provider:{MODE}] {self.command} {self.path} req#{n}", flush=True)
 
-        if MODE == "toolcall" and n == 0:
+        if MODE == "toolcall" and wants_function_call(rec["summary"]):
             fc = {"functionCall": {"name": FC_NAME, "args": FC_ARGS}}
             payload = sse(
                 {
@@ -163,7 +175,7 @@ class H(BaseHTTPRequestHandler):
             if RESP_SSE and os.path.exists(RESP_SSE):
                 with open(RESP_SSE, "rb") as f:
                     payload = f.read()
-            if MODE == "toolcall" and n > 0:
+            if MODE == "toolcall":
                 payload = sse(
                     {
                         "candidates": [
