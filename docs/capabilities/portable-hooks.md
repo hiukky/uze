@@ -118,7 +118,7 @@ declare to the model, captured with the Lab's `--discovery` mode. A
 |---|---|---|
 | Claude Code | one merged entry per group in `~/.claude/settings.json`, `command` = the generated `hooks/exec` with the group's arguments (exec form: no shell parsing) | native |
 | Codex | one merged entry per group in `~/.codex/hooks.json`, one quoted shell line invoking the same wrapper | native |
-| Antigravity CLI | named entries at the document root of the generated plugin's `hooks.json` — grouped (`matcher` + `hooks`) for the tool events, a flat handler list for `Stop` — with `hooks/exec` vendored inside the plugin | native (package-level); execution is gated by `enable_json_hooks`, which reaches the CLI only over its signed-in backend — the Lab measures that gate live (`hooks > vendor`) rather than assuming it |
+| Antigravity CLI | named entries at the document root of the generated plugin's `hooks.json` — grouped (`matcher` + `hooks`) for the tool events, a flat handler list for `Stop` — with `hooks/exec` vendored inside the plugin | native (package-level); two vendor gates, both measured live by the Lab: execution needs a signed-in session (`hooks > vendor`, open — an API-key session runs no hook at all, #893), and the harness must read a plugin's `hooks.json` (`hooks > delivery`, shut on 1.1.24) |
 | OpenCode | one generated `Plugin.define` plugin, `<config root>/plugins/hooks-<package>.ts`, auto-discovered — the plugin *is* the wrapper, with the package's groups as data | adapted (`observe`/`allow` only; `deny`/`ask` unsupported, `Stop` never claimed) |
 
 The `sh` wrapper is one file per harness, byte-identical for every package,
@@ -186,19 +186,37 @@ stated) · **—** = not expressible.
 - **Windows has no wrapper template.** A PowerShell wrapper is future work;
   until then hooks there take the packager-runtime fallback route, which
   speaks the same contract but keeps working only while `uze` is installed.
-- **Antigravity's execution is vendor-gated.** Its hook entries load and
-  list correctly (`hooks_manager: loaded N named hooks`), but the executor
-  reads `enable_json_hooks` — field 17 of the model backend's
+- **Antigravity runs delivered hooks only in a signed-in session.** Its
+  hook entries load and list correctly in either mode
+  (`hooks_manager: loaded N named hooks`), but the executor reads
+  `enable_json_hooks` — field 17 of the model backend's
   `CustomizationConfig`, switched server-side by the `json-hooks-enabled`
-  feature flag. That config reaches the CLI only over the CloudCode
-  backend it speaks when signed in to a Google account; a session running
-  on a Gemini API key never receives it, whatever the flag says. That is
-  the vendor's own open bug —
+  feature flag. That config reaches the CLI only over the CloudCode backend
+  it speaks when signed in to a Google account; a session running on
+  `GEMINI_API_KEY` never receives it, whatever the flag says, and runs no
+  hook at all — not UZE's, not the vendor's own format at the vendor's own
+  path. **If your hooks are silent, check how the CLI is authenticated
+  before suspecting delivery.** That is the vendor's own open bug —
   [antigravity-cli#893](https://github.com/google-antigravity/antigravity-cli/issues/893),
-  hooks loaded but never executed under `GEMINI_API_KEY` while OAuth runs
-  them, with #78 recording that the API-key path is unsupported. The Lab
-  serves the flag and the harness consumes it, and the vertical still
-  measures the gate live rather than assuming either answer.
+  hooks loaded but never executed under `GEMINI_API_KEY` while a signed-in
+  session runs them, with #78 recording that the API-key path is
+  unsupported. The Lab's Antigravity vertical runs signed in (a synthetic
+  identity against its own CloudCode plane) and proves that gate open there
+  — a vendor-format deny hook at the shared path denies the command — while
+  one declared check keeps the API-key mode on the report until #893 is
+  fixed.
+- **Antigravity does not load a plugin's `hooks.json` (1.1.24).** With the
+  signed-in gate open, a second one is still shut: the harness reads
+  `hooks.json` from its shared customization roots but not from a plugin
+  directory, which is where UZE delivers Antigravity's hooks. `agy plugin
+  validate` counts the generated plugin's hooks, the plugin is listed with a
+  `hooks` component and enabled in `config.json`, and the session reports
+  `loaded 0 named hooks from 0 hooks.json file(s)` — the file is never
+  opened. The vendor's own shipped plugin guide documents the opposite
+  ("Hooks defined in `plugins/<name>/hooks.json` are registered and run
+  during the agent's lifecycle"). Until that is true, UZE's hook checks on
+  this harness are declared, not asserted, and the Lab measures the gate
+  live each run (`hooks > delivery`).
 - **OpenCode V2 cannot block.** Its tool hooks carry the input but no block
   signal; `deny`/`ask` are diagnosed before attach.
 - **Antigravity's two entry shapes are not interchangeable.** Its docs

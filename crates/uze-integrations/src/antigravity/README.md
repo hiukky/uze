@@ -65,20 +65,38 @@ it become authoritative.
   generated plugin's `hooks.json`, named entries at the document root, each
   group's matcher translated and its handlers run by the `hooks/exec`
   wrapper vendored inside that same plugin — no `uze` on the execution
-  path); note
-  that AGY executes `hooks.json` hooks only when `enable_json_hooks`
-  (field 17 of the backend's `CustomizationConfig`, switched server-side by
-  the `json-hooks-enabled` feature flag) is set. That config reaches the CLI
-  only over the CloudCode backend it speaks when signed in to a Google
-  account; a Gemini API-key session never receives it. The conformance Lab
-  serves the flag and the harness consumes it, yet still observes hooks
-  loaded and listed but never run (1.1.22, 1.1.24) — which the Antigravity
-  vertical measures with a vendor-format control hook before judging UZE's.
-  The vendor has it open as
-  [google-antigravity/antigravity-cli#893](https://github.com/google-antigravity/antigravity-cli/issues/893)
-  ("hooks loaded but never executed when authenticated via GEMINI_API_KEY";
-  OAuth mode executes the same hook), alongside #78 recording that the
-  Gemini API key path is unsupported.
+  path).
+
+  **Two vendor gates stand between a delivered hook and a hook that runs**,
+  and the Lab measures both live, every run, rather than assuming either:
+
+  1. *Signed-in session.* AGY executes `hooks.json` hooks only when
+     `enable_json_hooks` (field 17 of the backend's `CustomizationConfig`,
+     switched server-side by the `json-hooks-enabled` feature flag) is set,
+     and that config reaches the CLI only over the CloudCode backend it
+     speaks when signed in to a Google account. A `GEMINI_API_KEY` session
+     loads the same hooks, lists them under `/hooks`, and runs none of them
+     — for any event. Nothing UZE delivers changes that; the mode does.
+     Vendor bug
+     [google-antigravity/antigravity-cli#893](https://github.com/google-antigravity/antigravity-cli/issues/893)
+     ("hooks loaded but never executed when authenticated via
+     GEMINI_API_KEY"), alongside #78 recording that the Gemini API-key path
+     is unsupported at all. **This gate is open**: the Lab's Antigravity
+     vertical runs signed in (a synthetic identity against its own CloudCode
+     plane) and a vendor-format deny hook at the shared
+     `~/.gemini/config/hooks.json` denies the command there
+     (`hooks > vendor`).
+  2. *Plugin-scoped `hooks.json`.* **This gate is shut on 1.1.24.** The
+     harness reads no `hooks.json` from a plugin directory — which is
+     exactly where UZE delivers them. `agy plugin validate` counts the
+     generated plugin's hooks, the plugin is listed with a `hooks` component
+     and enabled in `config.json`, and the session still reports
+     `loaded 0 named hooks from 0 hooks.json file(s)`; it never opens the
+     file. The vendor's own shipped plugin guide documents the opposite
+     ("Hooks defined in `plugins/<name>/hooks.json` are registered and run
+     during the agent's lifecycle"). Until it does, UZE's hook checks on
+     this harness stay declared — `hooks > delivery` measures it each run,
+     so the day it loads, the gate escalates.
 - Workspace-level `.agents/mcp_config.json` discovery is a project-scope
   concern outside UZE's machine-scope integration; it was not observable
   headlessly (`agy mcp list` shows global only). `.agents/skills/` is a

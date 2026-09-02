@@ -359,3 +359,116 @@ conversation on Claude and Codex — two harnesses whose shell tools are
 translation happened. Antigravity would only re-measure its closed vendor
 gate, and OpenCode's hook path uses a `native:` matcher (no alias by
 definition), so neither gains the check.
+
+---
+
+## The Antigravity vertical runs the harness signed in
+
+**Context.** Antigravity executes `hooks.json` hooks only when the CLI is
+signed in to a Google account: the executor reads `enable_json_hooks`, which
+arrives only over the CloudCode backend that mode speaks. Under
+`GEMINI_API_KEY` — the mode the vertical ran in — hooks load, list, and
+never run, for any event, vendor's own format included
+(google-antigravity/antigravity-cli#893; #78 records that Google does not
+support the API-key path at all). So every hook check on this harness was a
+declaration, and UZE's hook delivery to Antigravity had never been asserted.
+
+**Chosen.** Run the vertical signed in against a synthetic identity. The
+provider's TLS listener already answered the flag plane; it now also answers
+the identity (`conformance@uze.invalid`), the account/tier RPCs, the model
+catalogue, and the model path itself — `v1internal:streamGenerateContent`,
+whose request is unwrapped from `{project, requestId, model, …, request:{…}}`
+and whose events are re-framed as `{"response": …}`, so the one model logic
+(static/toolcall/`wants_function_call`/variations) serves both auth modes.
+The gate stays a *live* precondition (`hooks > vendor`, a vendor-format deny
+hook with no UZE in the loop) and it now passes, and one declared check
+re-runs the same control hook on the API key so #893 stays on the report and
+fails the day it is fixed.
+
+**What the run then found.** With that gate open, UZE's own hook checks
+still could not be asserted — for a *different*, newly measured reason: this
+harness reads no `hooks.json` from a plugin directory, which is where UZE
+delivers Antigravity's hooks. So the vertical grew a second live
+precondition, `hooks > delivery`, and the UZE hook checks stay declared
+against it rather than against #893. Retiring them was the change's goal;
+retiring them on a run that does not prove them would have been the one
+thing the gate exists to prevent.
+
+**Discarded.** Keeping API-key mode and the old declarations (their stated
+reason had become false — the vertical measures a different gate now); a
+second vertical for the API-key mode (one declared check measures the same
+thing for one extra turn); asserting the hook suites without measuring both
+gates (a green nobody measured).
+
+---
+
+## What the signed-in provider serves, and what it cannot claim to have observed
+
+**Context.** The endpoint list and the request/response shapes were captured
+on a real signed-in account through the sanitizing proxy (structure only).
+Two things the CLI needs were *not* in that capture, and the run stops dead
+without them: the body it reads its model catalogue from, and the fact that
+the model request arrives `Transfer-Encoding: chunked`.
+
+**Chosen.** Both were derived from the binary under test rather than
+invented or guessed:
+
+- `fetchAvailableModels` is answered with a catalogue whose shape is read
+  from the `FetchAvailableModelsResponse` descriptor the binary embeds (the
+  CLI parses it with protojson: a wrong cardinality is a hard error, and it
+  found two — `tieredModelIds` tiers are repeated, not single). Its content
+  is the Lab's, not a recording: two models, because the harness uses two —
+  the user's turn and a lighter side call — with the ids this binary asks
+  for in API-key mode and the `MODEL_PLACEHOLDER_*` enum values its own
+  registry resolves. Without an enum the executor dies with "neither
+  PlanModel nor RequestedModel specified"; that is the field, not a guess
+  about semantics, and no tier, quota or entitlement meaning is invented.
+- `capture.read_body` now decodes chunked bodies. Reading by
+  `Content-Length` handed the provider an empty body, which reads as a turn
+  that declared no tools — the kind of silent nothing the Lab exists to
+  catch.
+
+Two provider defects surfaced the same way and are fixed here: the RPC was
+matched against the raw path, so `…:streamGenerateContent?alt=sse` fell to
+the catch-all and the harness retried its own turn 798 times; and the
+structural summary read only the *first* `tools` entry, while signed in the
+harness sends one entry per tool.
+
+**Discarded.** Recording a real account's catalogue (it would put a live
+backend's answer, and its churn, in the repository); leaving
+`fetchAvailableModels` at `{}` and declaring the vertical blocked (the
+binary's own descriptor answers the shape question, and the run proves the
+answer); a second provider process for the model path (the listener that
+already terminates TLS for these hosts is the one the harness dials).
+
+---
+
+## A second live precondition: does the harness load what UZE delivered?
+
+**Context.** `hooks > vendor` answers "does this harness run `hooks.json`
+hooks at all", and signed in it does. It does not answer "does it run the
+ones UZE delivered" — and on 1.1.24 it does not: the session reports
+`loaded 0 named hooks from 0 hooks.json file(s)` while the generated
+plugin's `hooks.json` sits in `~/.gemini/config/plugins/hook-plugin/`,
+counted by `agy plugin validate`, with the plugin listed as having a `hooks`
+component and `"enabled": true` in `config.json`. No `skipping hooks.json
+at …` and no `No hooks.json found at …` appear either: the file is never
+opened. The vendor's own shipped plugin guide says the opposite — "Hooks
+defined in `plugins/<name>/hooks.json` are registered and run during the
+agent's lifecycle".
+
+**Chosen.** Measure it, every run, as `hooks > delivery`: a headless start
+with the hook plugin installed, reading the harness's own count out of its
+log. It is the cheapest possible probe (no TUI, no turn), it names the
+cause in the verdict instead of leaving three suites failing with empty
+marker lists, and — like the vendor gate — it expires by itself: the day the
+harness scans plugin directories the check passes and the gate escalates
+every declaration that leans on it.
+
+**Discarded.** Declaring the UZE hook checks with the old #893 reason (it is
+now false, and a stale reason is worse than none); moving UZE's Antigravity
+hook delivery to the shared `~/.gemini/config/hooks.json` to make the suites
+green (that is a product decision about delivery routes and receipt
+ownership — ADR-033/ADR-040 — not something a Lab change may decide);
+leaving the three suites to fail (a red the reviewer cannot act on, where a
+declaration names exactly what the vendor must change).
