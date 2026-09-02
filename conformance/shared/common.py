@@ -33,15 +33,19 @@ HARNESS_HOSTS = {
         "telemetry.anthropic.com",
     ],
     "codex": ["api.openai.com"],
-    # Antigravity's model traffic stays on plain HTTP:9999
-    # (GOOGLE_GEMINI_BASE_URL); these are its control plane — the feature
-    # flags that decide whether `hooks.json` hooks execute, plus the
-    # account/telemetry endpoints it calls around them.
+    # Antigravity's signed-in plane: the identity endpoints, the CloudCode
+    # backend that carries both the model path and the config gating
+    # `hooks.json` execution, the feature flags, and the telemetry/avatar
+    # hosts it touches around them. (In API-key mode the model traffic
+    # instead stays on plain HTTP:9999 via GOOGLE_GEMINI_BASE_URL.)
     "antigravity": [
         "antigravity-unleash.goog",
         "daily-cloudcode-pa.googleapis.com",
         "cloudcode-pa.googleapis.com",
         "play.googleapis.com",
+        "www.googleapis.com",
+        "oauth2.googleapis.com",
+        "lh3.googleusercontent.com",
     ],
 }
 HARNESS_SANS = {
@@ -51,7 +55,8 @@ HARNESS_SANS = {
     "codex": "DNS:api.openai.com,DNS:*.openai.com",
     "antigravity": "DNS:antigravity-unleash.goog,DNS:*.goog,"
     "DNS:daily-cloudcode-pa.googleapis.com,DNS:cloudcode-pa.googleapis.com,"
-    "DNS:play.googleapis.com,DNS:*.googleapis.com",
+    "DNS:play.googleapis.com,DNS:www.googleapis.com,DNS:oauth2.googleapis.com,"
+    "DNS:*.googleapis.com,DNS:lh3.googleusercontent.com,DNS:*.googleusercontent.com",
     # UZE's own vertical drives no vendor endpoint — it exercises the
     # client and the CLI, never a provider — so it needs only a SAN the
     # certificate generator will accept.
@@ -946,6 +951,113 @@ def ansi_strip(text):
     return "".join(plain)
 
 
+def render_screen(text, columns=240, rows=200):
+    """Reconstructs what the terminal *shows* after replaying a raw TUI
+    stream, rather than the order in which bytes arrived.
+
+    `ansi_strip` returns a transcript, which is the right thing for most
+    checks and the wrong thing for a streamed answer: a harness that renders
+    it in pieces continues the line by moving the cursor
+    (`… UZE_CONFORMA`, then `ESC[3A ESC[12C NCE_PASS`), so the string the
+    person reads on screen never appears contiguously in the bytes. Only a
+    grid can rejoin it — hence this: a deliberately small VT subset (cursor
+    motion, absolute positioning, the erases, CR/LF/BS/TAB), enough to place
+    printable characters where the harness put them and no more.
+    """
+    grid = [[" "] * columns for _ in range(rows)]
+    row = col = 0
+
+    def clamp():
+        nonlocal row, col
+        row = max(0, min(rows - 1, row))
+        col = max(0, min(columns - 1, col))
+
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        if ch == "\x1b" and i + 1 < n and text[i + 1] == "[":
+            j = i + 2
+            while j < n and (text[j] < "\x40" or text[j] > "\x7e"):
+                j += 1
+            if j >= n:
+                break
+            params = text[i + 2 : j]
+            final = text[j]
+            numbers = [int(p) if p.isdigit() else 0 for p in params.split(";")]
+            first = numbers[0] if numbers else 0
+            if final == "A":
+                row -= max(1, first)
+            elif final == "B":
+                row += max(1, first)
+            elif final == "C":
+                col += max(1, first)
+            elif final == "D":
+                col -= max(1, first)
+            elif final in "Hf":
+                row = (numbers[0] if numbers else 1) - 1 if params else 0
+                col = (numbers[1] - 1) if len(numbers) > 1 else 0
+            elif final == "K":
+                if first == 0:
+                    grid[row][col:] = [" "] * (columns - col)
+                elif first == 1:
+                    grid[row][: col + 1] = [" "] * (col + 1)
+                else:
+                    grid[row] = [" "] * columns
+            elif final == "J":
+                if first == 0:
+                    grid[row][col:] = [" "] * (columns - col)
+                    for r in range(row + 1, rows):
+                        grid[r] = [" "] * columns
+                elif first == 2:
+                    grid = [[" "] * columns for _ in range(rows)]
+            elif final == "X":
+                width = max(1, first)
+                grid[row][col : col + width] = [" "] * min(width, columns - col)
+            clamp()
+            i = j + 1
+            continue
+        if ch == "\x1b":
+            # Every non-CSI escape, consumed the way `ansi_strip` does: none
+            # of them place a character, so the grid only needs them gone.
+            nxt = text[i + 1] if i + 1 < n else ""
+            if nxt in "P^_X]":
+                j = i + 2
+                while j < n:
+                    if text[j] == "\x07":
+                        j += 1
+                        break
+                    if text[j] == "\x1b" and j + 1 < n and text[j + 1] == "\\":
+                        j += 2
+                        break
+                    j += 1
+                i = j
+            elif nxt in "()#%*+":
+                i += 3
+            else:
+                i += 2
+            continue
+        if ch == "\r":
+            col = 0
+        elif ch == "\n":
+            row += 1
+            if row >= rows:
+                grid.pop(0)
+                grid.append([" "] * columns)
+                row = rows - 1
+        elif ch == "\b":
+            col -= 1
+        elif ch == "\t":
+            col = min(columns - 1, (col // 8 + 1) * 8)
+        elif ch >= " ":
+            grid[row][col] = ch
+            col += 1
+            if col >= columns:
+                col = columns - 1
+        clamp()
+        i += 1
+    return "\n".join("".join(line).rstrip() for line in grid).strip("\n")
+
+
 def make_screen(child):
     def screen(wait=2.2):
         time.sleep(wait)
@@ -964,18 +1076,33 @@ def make_screen(child):
 
 
 def make_waiter(screen):
-    def wait_for(markers, tries=12, gap=2.0, stop_on_death=False):
+    def wait_for(markers, tries=12, gap=2.0, stop_on_death=False, accumulate=False):
+        """Waits for any marker to appear on the harness's screen.
+
+        `accumulate` searches the whole wait instead of the latest snapshot:
+        the transcript of everything read since it began, *and* the screen
+        that transcript renders to (`render_screen`). Both are needed for a
+        streamed answer — a read can land mid-render, and the harness then
+        continues the line by moving the cursor, so the marker exists on
+        screen and in no single snapshot. Off by default: a check that reads
+        the returned screen should normally see that screen alone.
+        """
+        seen_raw = ""
+        seen = ""
         for attempt in range(tries):
             t, p = screen(gap)
+            seen_raw += t
+            seen += p
+            searched = f"{seen}\n{render_screen(seen_raw)}" if accumulate else p
             for m in markers:
-                if m in p:
-                    return t, p, m
+                if m in searched:
+                    return t, searched, m
             if (
                 stop_on_death
                 and getattr(screen, "child", None) is not None
                 and not screen.child.isalive()
             ):
-                return t, p, None
+                return t, searched, None
             # Long waits must not look frozen: show progress while the
             # harness process is still alive but none of the markers have
             # appeared yet. (Stdout is flushed so redirected runs stream.)
@@ -984,6 +1111,6 @@ def make_waiter(screen):
                     f"    … waiting for progress (try {attempt + 1}/{tries})",
                     flush=True,
                 )
-        return t, p, None
+        return t, searched, None
 
     return wait_for
