@@ -85,11 +85,18 @@ pub fn resolve_real_executable(names: &[&str], shims_dir: &Path) -> Option<PathB
     let path_var = std::env::var_os("PATH")?;
     let canonical_shims_dir = shims_dir.canonicalize().ok();
     for dir in std::env::split_paths(&path_var) {
-        let canonical_dir = dir.canonicalize().ok();
-        let is_shims_dir = match (&canonical_dir, &canonical_shims_dir) {
-            (Some(a), Some(b)) => a == b,
-            _ => dir == shims_dir,
-        };
+        // Canonicalizing is a filesystem round trip per `PATH` entry, and
+        // on a WSL `PATH` carrying Windows directories each one crosses a
+        // network filesystem. Only an entry that could *be* the shims
+        // directory — same final component — is worth resolving; every
+        // other entry is compared as spelled.
+        let could_be_shims = dir == shims_dir
+            || (dir.file_name().is_some() && dir.file_name() == shims_dir.file_name());
+        let is_shims_dir = could_be_shims
+            && match (dir.canonicalize().ok(), &canonical_shims_dir) {
+                (Some(a), Some(b)) => &a == b,
+                _ => dir == shims_dir,
+            };
         if is_shims_dir {
             continue;
         }
