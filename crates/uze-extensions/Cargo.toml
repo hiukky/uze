@@ -10,7 +10,6 @@ publish = false
 
 [dependencies]
 uze-git = { path = "../uze-git" }
-ratatui = "0.30"
 crossterm = "0.29"
 syntect = "5"
 

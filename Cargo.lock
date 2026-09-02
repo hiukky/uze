@@ -2499,7 +2499,6 @@ name = "uze-extensions"
 version = "0.0.0-alpha.0"
 dependencies = [
  "crossterm",
- "ratatui",
  "syntect",
  "uze-git",
  "uze-testkit",

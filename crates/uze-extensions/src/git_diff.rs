@@ -579,9 +579,10 @@ fn theme_set() -> &'static ThemeSet {
     THEME_SET.get_or_init(ThemeSet::load_defaults)
 }
 
-/// Applies syntax highlighting (by `path`'s extension) to `rows`, producing
-/// ratatui-ready spans — the only place `syntect` types cross into this
-/// module's own `DiffRow`/`DiffCell` shape. The left and right columns are
+/// Applies syntax highlighting (by `path`'s extension) to `rows` — the one
+/// place `syntect` types cross into this module's own `DiffRow`/`DiffCell`
+/// shape, and the one place a colour is produced at all: it comes from the
+/// syntax theme, so it travels to the host as data rather than as a role. The left and right columns are
 /// highlighted as two independent line streams, each with its own
 /// `HighlightLines` — syntect's highlighter carries state (an open block
 /// comment, for instance) across calls, and "before" and "after" are two
