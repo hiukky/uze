@@ -333,6 +333,19 @@ pub fn is_live(state: &TaskState) -> bool {
     !matches!(state, TaskState::Integrated | TaskState::Parked)
 }
 
+/// The branch checked out in `root`, or `None` for a detached `HEAD`.
+/// `symbolic-ref` rather than `rev-parse --abbrev-ref`: it still names the
+/// branch when it has no commit yet, which is the case that must be told
+/// apart from "no branch at all".
+pub fn current_branch(root: &Path) -> Option<String> {
+    let branch = uze_git::read(root, &["symbolic-ref", "--short", "--quiet", "HEAD"])
+        .ok()?
+        .successful()
+        .ok()?;
+    let branch = branch.trim();
+    (!branch.is_empty()).then(|| branch.to_owned())
+}
+
 /// The commit `reference` resolves to in `root`.
 pub fn tip_of(root: &Path, reference: &str) -> String {
     uze_git::read(root, &["rev-parse", "--verify", "--quiet", reference])

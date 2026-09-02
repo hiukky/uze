@@ -56,15 +56,15 @@ green. Tests run against real repositories through `uze_testkit::git`.
 - [x] 8.2 Reconcile at space start: adopt checkouts without a task (parked when holding work, free otherwise), mark tasks without a checkout from where their branch stands, adopt legacy `agent/<name>` checkouts without renaming branches, prune last.
 - [x] 8.3 Safe removal: prune branches fully reachable from the target; remove the directory of a clean slot idle beyond the declared age, keeping its branch.
 - [x] 8.4 Cover slots: ignored artifacts survive reuse, a previous task's edits never reach the next, a dirty orphan is parked and every file preserved, an unintegrated branch outlives its directory, a new directory appears only when none is free, prune runs after adoption.
-- [ ] 8.5 Absorb the existing `worktree` module: keep primary resolution, ignore-file maintenance and the projected text; drop the seat.
+- [x] 8.5 Absorb the existing `worktree` module: keep primary resolution, ignore-file maintenance and the projected text; drop the seat.
 
 ## 9. Every agent is isolated
 
-- [ ] 9.1 Replace the seat decision in the application's launch placement with slot acquisition; no branch to the primary except the impossible-isolation fallback, which the read model reports.
-- [ ] 9.2 Remove the isolation marker and `push_isolation_marker`; keep `isolated_checkout` for the caption and the diff overlay; show the fallback warning on the tab.
-- [ ] 9.3 Cover placement: the first agent is isolated, three agents get three distinct checkouts and none is the primary, the operator's uncommitted work survives agents running, a shell tab creates no checkout, a repository without a commit launches in place with the warning, the diff overlay scopes to the tab's checkout.
+- [x] 9.1 Replace the seat decision in the application's launch placement with slot acquisition; no branch to the primary except the impossible-isolation fallback, which the read model reports.
+- [x] 9.2 Remove the isolation marker and `push_isolation_marker`; keep `isolated_checkout` for the caption and the diff overlay; show the fallback warning on the tab.
+- [x] 9.3 Cover placement: the first agent is isolated, three agents get three distinct checkouts and none is the primary, the operator's uncommitted work survives agents running, a shell tab creates no checkout, a repository without a commit launches in place with the warning, the diff overlay scopes to the tab's checkout.
 
-- [ ] 9.4 Keep listing a shell tab whose foreground process is a known harness, but as an unmanaged harness: name and real directory, no task state, no delivery action. Managed means the tab carries a task identifier from `+ agent`; nothing else is consulted.
+- [x] 9.4 Keep listing a shell tab whose foreground process is a known harness, but as an unmanaged harness: name and real directory, no task state, no delivery action. Managed means the tab was created by `+ agent`, which today the tab's generated label and the slot its pane sits in say; an explicit task identifier on the tab arrives with the terminal protocol bump.
 
 ## 10. Readiness and delivery
 

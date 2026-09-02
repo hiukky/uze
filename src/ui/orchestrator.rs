@@ -418,7 +418,7 @@ pub(crate) fn attach_workspace(
                                 let _ = send_request(
                                     &mut stream,
                                     &ClientRequest::CreateTab {
-                                        cwd: agent_launch_cwd(&model, home, &label),
+                                        cwd: agent_launch_cwd(&model, home),
                                         label,
                                         columns,
                                         rows,
@@ -436,10 +436,6 @@ pub(crate) fn attach_workspace(
                 }
                 Event::Key(_) if model.support_dropdown.is_some() => {
                     model.support_dropdown = None;
-                    model.dirty = true;
-                }
-                Event::Key(_) if model.isolation_tip.is_some() => {
-                    model.isolation_tip = None;
                     model.dirty = true;
                 }
                 Event::Key(key) if model.context_menu.is_some() => {
@@ -622,7 +618,7 @@ pub(crate) fn attach_workspace(
                                 let _ = send_request(
                                     &mut stream,
                                     &ClientRequest::CreateTab {
-                                        cwd: agent_launch_cwd(&model, home, &label),
+                                        cwd: agent_launch_cwd(&model, home),
                                         label,
                                         columns,
                                         rows,
@@ -669,16 +665,6 @@ pub(crate) fn attach_workspace(
                     // Informational dropdown: every click simply dismisses
                     // it, preventing the click from leaking into the pane.
                     model.support_dropdown = None;
-                    model.dirty = true;
-                }
-                Event::Mouse(mouse)
-                    if mouse.kind == MouseEventKind::Down(MouseButton::Left)
-                        && model.isolation_tip.is_some() =>
-                {
-                    // Same rule as the support dropdown above — and it is
-                    // what makes the marker a toggle: the click that would
-                    // reopen the tip closes it instead.
-                    model.isolation_tip = None;
                     model.dirty = true;
                 }
                 Event::Mouse(mouse)
@@ -987,13 +973,6 @@ pub(crate) fn attach_workspace(
                             }
                             model.dirty = true;
                         }
-                        WorkspaceHit::ShowIsolation(tab) => {
-                            model.isolation_tip = Some(IsolationTip {
-                                tab,
-                                anchor: hit_rect,
-                            });
-                            model.dirty = true;
-                        }
                         WorkspaceHit::Extension(_) => {
                             // Only reachable while the git view is open,
                             // which its own guarded arm below already
@@ -1154,10 +1133,6 @@ pub(super) enum WorkspaceHit {
     OpenGitView,
     /// Opens contextual support details for the selected agent tab.
     OpenAgentSupport(Rect),
-    /// The isolation marker on a sidebar caption row — opens the
-    /// [`IsolationTip`] naming the isolated checkout that row's tab is
-    /// actually running in.
-    ShowIsolation(TabId),
     /// A hit the open extension's own render pass produced (a file row, a
     /// worktree header, its tree/diff resize handle, its close button —
     /// see `uze_extensions::ExtensionHit`), wrapped instead of given its
@@ -1208,16 +1183,6 @@ struct AgentPicker {
 /// name — and makes a resolution for some other pane unrenderable here.
 struct AgentSupportDropdown {
     key: SupportKey,
-    anchor: Rect,
-}
-
-/// Open state of the isolation tip — the full path behind a sidebar
-/// caption row's mark. Keyed by the tab rather than by the path it will
-/// show, so the tip tracks a `cd` in that pane the same way the caption
-/// row it hangs off already does.
-struct IsolationTip {
-    tab: TabId,
-    /// The marker's own rect — the tip hangs directly under it.
     anchor: Rect,
 }
 
@@ -1518,10 +1483,6 @@ struct WorkspaceModel {
     agent_picker: Option<AgentPicker>,
     /// Contextual support information for the active harness tab.
     support_dropdown: Option<AgentSupportDropdown>,
-    /// Open state of the isolation tip; `None` when closed. Informational
-    /// like `support_dropdown`, and dismissed the same way: by the next key
-    /// or click, wherever it lands.
-    isolation_tip: Option<IsolationTip>,
     /// The most recently resolved agent support answer, tagged with the
     /// `(harness, cwd)` it answers — never assumed to apply to a different
     /// selection.
@@ -1694,7 +1655,6 @@ impl WorkspaceModel {
         self.renaming.is_none()
             && self.agent_picker.is_none()
             && self.support_dropdown.is_none()
-            && self.isolation_tip.is_none()
             && self.context_menu.is_none()
             && self.git_view.is_none()
     }
@@ -2120,82 +2080,15 @@ fn pane_in_layout(layout: &uze_terminal::Layout, wanted: PaneId) -> Option<&uze_
     }
 }
 
-/// Where a newly created agent starts.
-///
-/// The seat rule: the primary checkout holds one agent at a time. The first
-/// agent in a repository starts there and sees the operator's uncommitted
-/// work, exactly as before this existed. Every additional live agent starts
-/// in an isolated checkout of its own, so two agents can never write to the
-/// same files — a guarantee that holds structurally, without any harness
-/// cooperating and without anyone being asked a question.
-///
-/// Falls back to the seat whenever isolation is impossible (not a Git
-/// repository, no commit to branch from, Git absent): launching an agent
-/// unisolated is worse than not launching it at all only if something else
-/// is already writing there, and that is the rare case against a certain
-/// failure to start.
-fn agent_launch_cwd(model: &WorkspaceModel, home: &UzeHome, label: &str) -> Option<PathBuf> {
+/// Where a newly created agent starts: the slot the application acquired
+/// for it, or — when isolation is impossible — the directory it was created
+/// from. The application decides; this only asks from the selected pane.
+fn agent_launch_cwd(model: &WorkspaceModel, home: &UzeHome) -> Option<PathBuf> {
     let pane_cwd = selected_pane_cwd(model)?;
     let Ok(app) = tui_application(home.clone()) else {
         return Some(pane_cwd);
     };
-    Some(app.workspace().checkout_for_new_agent(
-        &pane_cwd,
-        &live_agent_cwds(model.session.as_ref()),
-        &agent_slug(label),
-    ))
-}
-
-/// The working directory of every live agent pane.
-///
-/// Only agent tabs: a shell is the operator's own, and the conflict the
-/// seat rule prevents is between agents. Which tabs those are is a
-/// presentation fact (the generated label), which is why the caller
-/// answers it and the application decides what it means.
-fn live_agent_cwds(session: Option<&uze_terminal::Session>) -> Vec<PathBuf> {
-    let Some(session) = session else {
-        return Vec::new();
-    };
-    session
-        .workspace
-        .spaces
-        .iter()
-        .flat_map(|space| space.tabs.iter())
-        .filter(|tab| is_generated_agent_label(&tab.label))
-        .flat_map(|tab| layout_panes(&tab.layout).map(|pane| pane.cwd.clone()))
-        .collect()
-}
-
-fn layout_panes(
-    layout: &uze_terminal::Layout,
-) -> Box<dyn Iterator<Item = &uze_terminal::Pane> + '_> {
-    match layout {
-        uze_terminal::Layout::Pane(pane) => Box::new(std::iter::once(pane)),
-        uze_terminal::Layout::Split { first, second, .. } => {
-            Box::new(layout_panes(first).chain(layout_panes(second)))
-        }
-    }
-}
-
-/// One name for the tab, its checkout, and its branch, so the tab strip is
-/// the map of what exists on disk.
-fn agent_slug(label: &str) -> String {
-    let slug: String = label
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() {
-                character.to_ascii_lowercase()
-            } else {
-                '-'
-            }
-        })
-        .collect();
-    let slug = slug.trim_matches('-').to_owned();
-    if slug.is_empty() {
-        "agent".to_owned()
-    } else {
-        slug
-    }
+    Some(app.workspace().place_new_agent(&pane_cwd).cwd)
 }
 
 /// The new-agent picker inherits the selected pane's live directory. The
@@ -2246,85 +2139,3 @@ fn runtime_error(error: uze_terminal::RuntimeError) -> UzeError {
 
 #[cfg(test)]
 mod tests;
-
-#[cfg(test)]
-mod seat_tests {
-    use super::{agent_slug, live_agent_cwds};
-    use std::path::PathBuf;
-    use uze_terminal::{Layout, Pane, PaneId, Session, Tab, WorkspaceId};
-
-    fn session_with(tabs: &[(&str, PathBuf)]) -> Session {
-        let mut session = Session::new(WorkspaceId("test".into()), PathBuf::from("/repo"), 80, 24);
-        let space = session
-            .workspace
-            .spaces
-            .first_mut()
-            .expect("a new session has one space");
-        space.tabs.clear();
-        for (index, (label, cwd)) in tabs.iter().enumerate() {
-            space.tabs.push(Tab {
-                id: uze_terminal::TabId(index as u64 + 1),
-                label: (*label).to_owned(),
-                layout: Layout::Pane(Pane {
-                    id: PaneId(index as u64 + 1),
-                    cwd: cwd.clone(),
-                    columns: 80,
-                    rows: 24,
-                    process: String::new(),
-                }),
-                focus: uze_terminal::Focus {
-                    pane: PaneId(index as u64 + 1),
-                },
-            });
-        }
-        session
-    }
-
-    #[test]
-    fn an_empty_workspace_reports_no_occupied_checkout() {
-        assert!(live_agent_cwds(None).is_empty());
-    }
-
-    #[test]
-    fn a_live_agent_reports_the_directory_it_is_in() {
-        let session = session_with(&[("agent 1", PathBuf::from("/repo/crates/core"))]);
-        assert_eq!(
-            live_agent_cwds(Some(&session)),
-            vec![PathBuf::from("/repo/crates/core")]
-        );
-    }
-
-    /// A shell is the operator's own. The conflict the seat rule prevents
-    /// is between agents, so a terminal tab must never be reported as
-    /// occupying anything.
-    #[test]
-    fn a_shell_tab_occupies_nothing() {
-        let session = session_with(&[("shell 1", PathBuf::from("/repo"))]);
-        assert!(live_agent_cwds(Some(&session)).is_empty());
-    }
-
-    #[test]
-    fn every_live_agent_is_reported_including_isolated_ones() {
-        let session = session_with(&[
-            ("agent 1", PathBuf::from("/repo")),
-            ("shell 1", PathBuf::from("/repo")),
-            ("agent 2", PathBuf::from("/repo/.worktrees/agent-2")),
-        ]);
-        assert_eq!(
-            live_agent_cwds(Some(&session)),
-            vec![
-                PathBuf::from("/repo"),
-                PathBuf::from("/repo/.worktrees/agent-2")
-            ],
-            "what occupancy *means* is the application's rule; this only \
-             reports where the agents are"
-        );
-    }
-
-    #[test]
-    fn the_slug_is_one_name_for_the_tab_its_checkout_and_its_branch() {
-        assert_eq!(agent_slug("agent 2"), "agent-2");
-        assert_eq!(agent_slug("Agent 10"), "agent-10");
-        assert_eq!(agent_slug("  "), "agent");
-    }
-}

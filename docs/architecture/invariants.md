@@ -500,64 +500,96 @@ answer identically for every fixture payload.
 
 ## Concurrent work isolation (`add-portable-worktree-policy`)
 
-### Two agents never share a checkout
+### Every agent is isolated, and the primary checkout belongs to the operator
 
-The primary checkout seats one agent. The first agent in a repository starts
-there; every additional live agent starts in an isolated checkout of its own.
-The guarantee is structural — it needs no harness to cooperate and no model
-to agree — and it degrades to seating the agent rather than refusing to
-launch it when isolation is impossible.
+An agent UZE launches in a Git repository with a commit starts in a slot of
+its own, created before its harness does. The primary checkout is never
+assigned to an agent, so the operator's uncommitted work is exactly what they
+left after any number of agents have run. Where isolation is impossible the
+agent starts in place and its tab says so.
 
-> `src/ui/orchestrator.rs::seat_tests::one_agent_in_the_primary_takes_the_seat`
-> `src/ui/orchestrator.rs::seat_tests::an_agent_in_an_isolated_checkout_leaves_the_seat_free`
-> `src/ui/orchestrator.rs::seat_tests::a_shell_tab_does_not_take_the_seat`
-> `crates/uze-core/src/worktree.rs::an_isolated_checkout_does_not_occupy_the_seat`
+> `crates/uze-application/src/application/services.rs::placement_tests::the_first_agent_is_isolated`
+> `crates/uze-application/src/application/services.rs::placement_tests::three_agents_get_three_distinct_checkouts_and_none_is_the_primary`
+> `crates/uze-application/src/application/services.rs::placement_tests::the_operators_uncommitted_work_survives_agents_launching`
+> `crates/uze-application/src/application/services.rs::placement_tests::a_repository_without_a_commit_launches_in_place_with_the_reason`
+> `src/ui/orchestrator/tests.rs::workspace_tests::the_marker_leaves_the_status_column_alone`
 
-### A pane that moves inside the repository keeps its seat
+### A checkout is a slot; a task is what comes and goes
 
-Pane directories are probed live, so occupancy is judged by which checkout a
-pane is in, never by an exact path. Otherwise an agent that `cd`s one level
-down would free the seat and let a second agent in beside it.
+Slots are long-lived directories named by an identifier that never changes.
+A new agent takes a free slot before a directory is created: the tree is put
+at the base with none of the previous task's tracked or untracked files, and
+ignored artifacts survive. A slot holding work is never reused.
 
-> `src/ui/orchestrator.rs::seat_tests::an_agent_that_moves_within_the_primary_keeps_the_seat`
+> `crates/uze-core/src/project/checkout.rs::a_free_slot_is_reused_and_ignored_artifacts_survive`
+> `crates/uze-core/src/project/checkout.rs::a_previous_tasks_edits_never_reach_the_next`
+> `crates/uze-core/src/project/checkout.rs::a_new_directory_appears_only_when_none_is_free_and_the_cap_holds`
+> `crates/uze-application/src/application/services.rs::placement_tests::a_delivered_tasks_slot_is_reused_by_the_next_agent`
 
-### One repository is one terminal server
+### Nothing that can hold work is removed automatically
 
-The server — and therefore the whole set of agent panes and their seat — is
-keyed on the resolved workspace root, not the launch directory. Keyed on the
-raw cwd, launching UZE from a repository and from a subdirectory of it
-produced two servers over one checkout, each believing its seat was free.
+A dirty orphan is parked with every file preserved. A branch with commits the
+target lacks outlives its directory. The two automatic removals are a branch
+fully reachable from the target and the directory of a clean slot idle beyond
+an age, whose branch stays.
 
-> `crates/uze-core/src/workspace.rs::a_subdirectory_and_its_workspace_root_resolve_to_one_answer`
+> `crates/uze-core/src/project/checkout.rs::a_checkout_holding_work_is_parked_with_every_file_preserved`
+> `crates/uze-core/src/project/checkout.rs::an_unintegrated_branch_outlives_its_directory`
+> `crates/uze-core/src/project/checkout.rs::a_parked_slot_is_never_removed_for_being_idle`
+> `crates/uze-core/src/project/checkout.rs::an_integrated_branch_is_pruned_and_an_unintegrated_one_is_not`
 
-### Isolation never destroys and never silently reuses
+### Reconciliation adopts before it prunes
 
-A name already taken by a directory or a branch is suffixed, never reused;
-a stale registry entry is pruned before creation; a repository with no commit
-to branch from fails cleanly instead of half-creating.
+Checkouts nobody recorded become tasks — parked when they hold work — and a
+legacy checkout keeps its branch name, since it may have been pushed. Git's
+worktree registry is pruned only after every directory has been looked at, so
+a stale entry can never be dropped before its work is.
 
-> `crates/uze-core/src/worktree.rs::a_taken_name_is_suffixed_rather_than_reused_or_refused`
-> `crates/uze-core/src/worktree.rs::isolation_fails_cleanly_on_a_repository_with_no_commits`
+> `crates/uze-core/src/project/checkout.rs::prune_runs_after_adoption_and_an_orphaned_task_keeps_its_branch`
+> `crates/uze-core/src/project/checkout.rs::a_legacy_checkout_is_adopted_under_its_branch_name`
 
-### An isolated checkout is invisible to the seat's own commits
+### A slot is invisible to the primary's own commits
 
-Creating one ignores the isolation directory, idempotently and without
-touching foreign entries. Unignored, `git add -A` in the primary stages
-another agent's whole working tree as an embedded repository.
+The isolation directory is excluded through the repository's own
+`info/exclude`, never through the operator's `.gitignore`, so the primary's
+status stays what the operator left and `git add -A` there never stages a
+slot as an embedded repository.
 
-> `crates/uze-core/src/worktree.rs::isolation_creates_a_checkout_on_its_own_branch_and_ignores_the_directory`
-> `crates/uze-core/src/worktree.rs::ignoring_the_directory_is_idempotent_and_preserves_existing_entries`
+> `crates/uze-core/src/project/checkout.rs::the_isolation_directory_is_excluded_without_touching_the_primary_tree`
+
+### Task identity is immutable; the label is derived
+
+A task's identifier keys its branch, its slot and its persisted state, and a
+new label changes none of them. State lives under UZE's own `state/`, outside
+every checkout, and is written atomically: a reader sees the previous
+document or the new one, never a torn one.
+
+> `crates/uze-core/src/project/task.rs::the_identifier_is_stable_while_the_label_changes`
+> `crates/uze-core/src/project/task.rs::state_survives_checkout_removal`
+> `crates/uze-core/src/project/task.rs::a_kill_mid_write_leaves_the_previous_or_the_new_document`
+
+### Repository writes are serialized under one lock
+
+Every write to a repository goes through `uze_git::write`, which takes an
+inter-process lock keyed on the common directory; reads never wait for it.
+A critical section re-enters its own lock, a panic releases it, and a lock
+left by a dead process is reclaimed.
+
+> `crates/uze-git/src/lib.rs::concurrent_critical_sections_never_interleave`
+> `crates/uze-git/src/lib.rs::concurrent_worktree_adds_do_not_collide`
+> `crates/uze-git/src/lib.rs::a_busy_lock_is_reported_by_name_after_the_timeout_and_reads_never_wait`
+> `crates/uze-git/src/lib.rs::a_lock_held_by_a_dead_process_is_reclaimed`
 
 ### The projection never triggers a harness's own isolation
 
 The text projected into the shared baseline states where the reader already
 is and how to isolate a subagent; it never asks for a top-level worktree. A
 harness with its own worktree primitive activates on exactly that
-instruction, and would isolate a second time on top of the checkout UZE
-already placed the agent in.
+instruction, and would isolate a second time on top of the slot UZE already
+placed the agent in.
 
 > `tests/projection/worktree_policy.rs::the_projection_never_triggers_a_harnesss_own_isolation`
-> `crates/uze-core/src/worktree.rs::the_projected_text_never_asks_for_a_top_level_worktree`
+> `crates/uze-core/src/project/worktree.rs::the_projected_text_never_asks_for_a_top_level_worktree`
 
 ### A declaration stays editable
 
@@ -574,8 +606,8 @@ time, and a hand edit still drifts and is refused.
 The Git changes extension is scoped to the checkout the active tab is in, and
 resolves every `git` call against it. `git worktree list` answers
 repository-wide from anywhere inside the repository, so listing linked
-worktrees put the seat's diff and every sibling agent's — including checkouts
-whose agent is long gone — inside a tab that owns exactly one of them.
+worktrees would put the operator's diff and every sibling agent's — including
+slots whose agent is long gone — inside a tab that owns exactly one of them.
 
 > `crates/uze-extensions/src/git_diff.rs::a_view_is_scoped_to_the_checkout_it_was_opened_in`
 
@@ -589,9 +621,9 @@ everything a project may declare about isolation is already named there. Both
 halves say the same thing — a declared policy can never become no policy in
 silence.
 
-> `crates/uze-core/src/project_lock.rs::the_replaced_directory_key_is_rejected_rather_than_silently_dropped`
-> `crates/uze-core/src/project_lock.rs::an_unknown_key_at_the_top_level_is_tolerated`
-> `crates/uze-core/src/project_lock.rs::an_unknown_key_inside_the_policy_block_is_refused_by_name`
+> `crates/uze-core/src/project/project_lock.rs::the_replaced_directory_key_is_rejected_rather_than_silently_dropped`
+> `crates/uze-core/src/project/project_lock.rs::an_unknown_key_at_the_top_level_is_tolerated`
+> `crates/uze-core/src/project/project_lock.rs::an_unknown_key_inside_the_policy_block_is_refused_by_name`
 
 ---
 

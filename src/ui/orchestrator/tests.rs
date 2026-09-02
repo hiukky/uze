@@ -157,17 +157,17 @@ mod workspace_tests {
     }
 
     #[test]
-    fn an_isolated_agent_is_marked_on_its_name_row_and_captioned_by_its_primary() {
-        // The whole point: `.worktrees/<name>` is two more segments in a
-        // column this narrow. The mark belongs beside the agent's name —
-        // the caption below it just stops spelling out the tail.
+    fn an_agent_in_a_slot_is_captioned_by_its_primary_and_left_unmarked() {
+        // The whole point: `.worktrees/<id>` is two more segments in a
+        // column this narrow, and every agent has a slot, so the caption
+        // just stops spelling out the tail and the name row stays clean.
         let model = agent_session_in("/repo/.worktrees/ai");
         let rows = sidebar_rows(&model, &mut Vec::new());
         let name_row = rows
             .iter()
             .find(|row| row.contains("Agent"))
             .expect("the agent is named in the tree");
-        assert!(name_row.contains("(wt)"), "{name_row}");
+        assert!(!name_row.contains("(unisolated)"), "{name_row}");
 
         let caption = rows
             .iter()
@@ -184,7 +184,7 @@ mod workspace_tests {
     /// that agent is doing — and the marker must never take it over.
     #[test]
     fn the_marker_leaves_the_status_column_alone() {
-        let model = agent_session_in("/repo/.worktrees/ai");
+        let model = agent_session_in("/repo/src");
         let rows = sidebar_rows(&model, &mut Vec::new());
         let name_row = rows
             .iter()
@@ -193,48 +193,30 @@ mod workspace_tests {
         let status = name_row
             .find('\u{25cb}')
             .or_else(|| name_row.find('\u{25cf}'));
-        let marker = name_row.find("(wt)");
+        let marker = name_row.find("(unisolated)");
         assert!(status.is_some(), "the status glyph still leads: {name_row}");
+        assert!(
+            marker.is_some(),
+            "an agent outside any slot is marked: {name_row}"
+        );
         assert!(status < marker, "the mark follows the name: {name_row}");
     }
 
+    /// Every agent has a slot, so a slot is nothing to announce; the
+    /// caption reads as the primary the slot hangs off.
     #[test]
-    fn an_agent_in_the_primary_checkout_carries_no_marker() {
-        let model = agent_session_in("/repo/src");
+    fn an_agent_in_a_slot_carries_no_marker() {
+        let model = agent_session_in("/repo/.worktrees/ai");
         let rows = sidebar_rows(&model, &mut Vec::new());
         assert!(
-            rows.iter().any(|row| row.contains("/repo/src")),
-            "the ordinary path is shown whole: {rows:?}"
-        );
-        assert!(
-            !rows.iter().any(|row| row.contains("(wt)")),
+            !rows.iter().any(|row| row.contains("(unisolated)")),
             "nothing to mark: {rows:?}"
         );
-    }
-
-    /// `hits` resolves first match wins, so a marker hit pushed after the
-    /// row-wide one it sits inside would never be reachable — clicking the
-    /// marker would just select the tab.
-    #[test]
-    fn the_isolation_marker_outranks_the_row_it_sits_on() {
-        let model = agent_session_in("/repo/.worktrees/ai");
-        let mut hits = Vec::new();
-        sidebar_rows(&model, &mut hits);
-        let marker = hits
-            .iter()
-            .find(|(_, hit)| matches!(hit, WorkspaceHit::ShowIsolation(_)))
-            .map(|(rect, _)| *rect)
-            .expect("an isolated caption row offers its full path");
-        let resolved = hits
-            .iter()
-            .find(|(rect, _)| {
-                rect.x <= marker.x
-                    && marker.x < rect.x + rect.width
-                    && rect.y <= marker.y
-                    && marker.y < rect.y + rect.height
-            })
-            .map(|(_, hit)| *hit);
-        assert!(matches!(resolved, Some(WorkspaceHit::ShowIsolation(_))));
+        assert!(
+            rows.iter()
+                .any(|row| row.contains("/repo") && !row.contains(".worktrees")),
+            "the caption reads as the primary: {rows:?}"
+        );
     }
 
     #[test]

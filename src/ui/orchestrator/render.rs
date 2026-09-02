@@ -170,11 +170,6 @@ pub(super) fn render(
     {
         crate::ui::agent_support::render(frame, frame.area(), dropdown.anchor, support);
     }
-    if let Some(tip) = &model.isolation_tip
-        && let Some(cwd) = tab_cwd(model, tip.tab)
-    {
-        render_isolation_tip(frame, frame.area(), tip.anchor, &cwd);
-    }
     if let Some(menu) = &model.context_menu {
         render_context_menu(frame, frame.area(), menu, hits);
     }
@@ -328,29 +323,12 @@ pub(super) fn render_context_menu(
     }
 }
 
-/// The mark an agent's label row carries when its pane runs in an isolated
-/// checkout.
-///
-/// A word rather than a glyph: every symbol that actually *means* branch or
-/// fork (`⑂`, `⎇`, `⋔`) lives in a Unicode block ordinary monospace fonts
-/// cover thinly or draw hairline, and a mark nobody can see is not a mark.
-/// Two letters render in any terminal there is, and give the click target
-/// (see [`push_isolation_marker`]) a width worth aiming at.
-///
-/// Parenthesized so two lowercase letters read as an aside about the name
-/// beside them rather than as part of it, and drawn in the one hue nothing
-/// on this row can be confused with: agent state owns `ACCENT` and
-/// `TEXT_FAINT` (see `AgentTabStatus::color`), so a green or grey mark here
-/// would read as a fifth state. `BLUE` is already the badge hue elsewhere
-/// in the TUI ("✓ Official", the model tag).
-const ISOLATION_MARKER: &str = " (wt)";
-
-/// How a caption row reads a pane's directory: an isolated checkout shows
-/// as the primary it hangs off rather than as its own `.worktrees/<name>`
-/// path — that tail is two more segments in a column only 28-40 wide (see
-/// `crate::ui::MIN_SIDEBAR_WIDTH`), and the row above already names the
-/// checkout and carries [`ISOLATION_MARKER`] saying it is one. The full
-/// path stays one click on that mark away.
+/// How a caption row reads a pane's directory: a slot shows as the primary
+/// it hangs off rather than as its own `.worktrees/<id>` path — that tail
+/// is two more segments in a column only 28-40 wide (see
+/// `crate::ui::MIN_SIDEBAR_WIDTH`), and the primary is where the operator
+/// is; the slot is where the agent is, which every agent has and none
+/// needs announced.
 fn caption_path(cwd: &Path) -> String {
     match uze_application::isolated_checkout(cwd) {
         Some(checkout) => crate::ui::display_project_path(checkout.primary),
@@ -358,78 +336,25 @@ fn caption_path(cwd: &Path) -> String {
     }
 }
 
-/// Appends [`ISOLATION_MARKER`] to an agent tab's label row when its pane
-/// runs in an isolated checkout, and gives it a hit of its own so clicking
-/// it opens the full path.
-///
-/// On the label row rather than on the caption line below it, and after the
-/// label rather than before the status glyph: isolation is a fact about the
-/// agent named here, and the column in front of that name belongs to
-/// `AgentTabStatus` alone — a second mark competing for it would make the
-/// one column that answers "how is this agent doing" answer two questions.
-///
-/// The hit is pushed here so it lands *before* the row-wide hit the caller
-/// adds afterwards — `hits` resolves first match wins, so a marker hit
-/// pushed after the row it sits on would never be reachable.
-fn push_isolation_marker<'a>(
-    spans: &mut Vec<Span<'a>>,
-    rect: Rect,
-    cwd: &Path,
-    tab: TabId,
-    hits: &mut Vec<(Rect, WorkspaceHit)>,
-) {
-    if uze_application::isolated_checkout(cwd).is_none() {
+/// The mark an agent's label row carries when its pane does *not* run in a
+/// slot of its own — the fallback every agent tab otherwise never needs:
+/// no repository, no commit to branch from, Git absent or refusing. An
+/// agent in the operator's own tree is the one thing the operator has to
+/// know about, so it is the one thing marked, in the warning hue.
+const UNISOLATED_MARKER: &str = " (unisolated)";
+
+/// Appends [`UNISOLATED_MARKER`] to an agent tab's label row when its pane
+/// is not inside a slot. After the label rather than before the status
+/// glyph: the column in front of the name belongs to `AgentTabStatus`
+/// alone.
+fn push_unisolated_marker(spans: &mut Vec<Span<'_>>, cwd: &Path) {
+    if uze_application::isolated_checkout(cwd).is_some() {
         return;
     }
-    let marker = Span::styled(ISOLATION_MARKER, Style::default().fg(crate::ui::BLUE));
-    let used: u16 = spans.iter().map(|span| span.width() as u16).sum();
-    hits.push((
-        Rect::new(rect.x + used, rect.y, marker.width() as u16, 1),
-        WorkspaceHit::ShowIsolation(tab),
+    spans.push(Span::styled(
+        UNISOLATED_MARKER,
+        Style::default().fg(crate::ui::WARNING),
     ));
-    spans.push(marker);
-}
-
-/// The full path behind a caption row's isolation marker. A tip, not a
-/// menu: it holds no actions and owns no selection, so — like the agent
-/// support dropdown — the next key or click anywhere dismisses it.
-pub(super) fn render_isolation_tip(
-    frame: &mut ratatui::Frame<'_>,
-    area: Rect,
-    anchor: Rect,
-    checkout: &Path,
-) {
-    const H_PAD: u16 = 2;
-    const TITLE: &str = "ISOLATED CHECKOUT";
-
-    let path = crate::ui::display_project_path(checkout);
-    let content = path.chars().count().max(TITLE.len()) as u16;
-    let width = (content + 2 + 2 * H_PAD).min(area.width).max(1);
-    let height = 4.min(area.height).max(1);
-    let popup = Rect::new(
-        anchor.x.min(area.right().saturating_sub(width)),
-        (anchor.y + anchor.height).min(area.bottom().saturating_sub(height)),
-        width,
-        height,
-    );
-    frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(crate::ui::BORDER))
-        .style(Style::default().bg(crate::ui::BASE))
-        .padding(Padding::new(H_PAD, H_PAD, 0, 0));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
-    frame.render_widget(
-        Paragraph::new(vec![
-            Line::from(Span::styled(TITLE, Style::default().fg(crate::ui::MUTED))),
-            Line::from(Span::styled(
-                path,
-                Style::default().fg(crate::ui::TEXT_PRIMARY),
-            )),
-        ]),
-        inner,
-    );
 }
 
 /// A two-level tree, one block per space the user has created (blank-line
@@ -438,10 +363,10 @@ pub(super) fn render_isolation_tip(
 /// inside it — `●`/`○` for selected/unselected plus its label, and a dim
 /// caption line underneath with its pane's live `cwd · alias` (the alias in
 /// place of the raw process name — see [`agent_identity_for_tab`]; the cwd
-/// as [`caption_path`] renders it, so an isolated agent reads as its
-/// primary checkout, with [`ISOLATION_MARKER`] on the label row above
-/// saying so, rather than as a `.worktrees/<name>` path too long for the
-/// column). A space
+/// as [`caption_path`] renders it, so an agent in a slot reads as its
+/// primary checkout rather than as a `.worktrees/<id>` path too long for
+/// the column, and an agent *outside* any slot carries
+/// [`UNISOLATED_MARKER`] on the label row above). A space
 /// with no agent tabs shows its current `cwd` alone in place of the tree,
 /// so an empty space still reads as "somewhere", not blank. Plain shell
 /// tabs (and anything else not recognized as an agent) never appear here;
@@ -649,7 +574,7 @@ pub(super) fn render_sidebar(
                 Span::styled(indicator, Style::default().fg(indicator_fg)),
                 label,
             ];
-            push_isolation_marker(&mut spans, label_rect, &cwd, tab.id, hits);
+            push_unisolated_marker(&mut spans, &cwd);
             if is_active_space {
                 fill_row_bg(&mut spans, label_rect.width, crate::ui::SURFACE_OVERLAY);
             }

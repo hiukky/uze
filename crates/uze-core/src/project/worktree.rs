@@ -5,12 +5,12 @@
 //!
 //! Isolation itself is performed where UZE launches an agent, by choosing
 //! its working directory — deterministic, and requiring nothing of the
-//! harness. What lives here is the small remainder that cannot be delivered
-//! that way:
+//! harness; the slots it chooses among live in [`crate::checkout`]. What
+//! lives here is the small remainder that cannot be delivered that way:
 //!
-//! - the fixed layout every layer must agree on (`.worktrees/<name>`,
-//!   branch `agent/<name>`);
-//! - the one thing a project declares — what happens to finished work;
+//! - the fixed layout every layer must agree on (`.worktrees/<id>`,
+//!   branch `agent/<id>`), and the lexical questions asked of it;
+//! - what a project declares — what happens to finished work;
 //! - the text projected into the project's shared instruction file, whose
 //!   only audience is a writer UZE did not place: a subagent spawned inside
 //!   a harness session.
@@ -37,7 +37,8 @@ pub const POLICY_REGION_PREFIX: &str = "project:worktree-policy";
 pub const WORKTREES_DIRECTORY: &str = ".worktrees";
 
 /// The branch prefix isolated work is created under. Fixed for the same
-/// reason, and so one name identifies a tab, a directory, and a branch.
+/// reason. Generic on purpose: a branch name travels to remotes and
+/// reviewers, and says what it is, not what made it.
 pub const BRANCH_PREFIX: &str = "agent/";
 
 /// What happens to an isolated agent's work once it is done. The only axis
@@ -162,8 +163,8 @@ impl WorktreePolicy {
 ///
 /// Answers with the *primary* checkout even when `cwd` is inside a linked
 /// worktree: Git keeps one common directory per repository, so this is the
-/// stable answer to "which repository is this", which is what the seat and
-/// the worktree layout are both scoped to.
+/// stable answer to "which repository is this", which is what the slot
+/// layout is scoped to.
 pub fn primary_checkout(cwd: &Path) -> Option<PathBuf> {
     let common = PathBuf::from(
         uze_git::read(
@@ -192,18 +193,17 @@ pub fn primary_checkout(cwd: &Path) -> Option<PathBuf> {
 pub struct IsolatedCheckout<'a> {
     /// The primary checkout the isolated one hangs off.
     pub primary: &'a Path,
-    /// The isolated checkout's own name — the `<name>` in the fixed
-    /// `.worktrees/<name>` layout, and the suffix of its `agent/<name>`
-    /// branch.
+    /// The isolated checkout's own name — the `<id>` in the fixed
+    /// `.worktrees/<id>` layout.
     pub name: &'a str,
 }
 
 /// The isolated checkout `path` sits in, or `None` for a path that is not
 /// isolated.
 ///
-/// Lexical against the fixed layout for the same reason [`is_in_primary`]
-/// is: a display asks this of every open tab on every frame, and a
-/// subprocess per tab there is a cost with no matching benefit.
+/// Lexical against the fixed layout: a display asks this of every open tab
+/// on every frame, and a subprocess per tab there is a cost with no
+/// matching benefit.
 ///
 /// The deepest match wins, so a path inside a checkout that itself sits
 /// inside another names the one it is actually in.
@@ -218,110 +218,6 @@ pub fn isolated_checkout(path: &Path) -> Option<IsolatedCheckout<'_>> {
             name: checkout.file_name()?.to_str()?,
         })
     })
-}
-
-/// Whether `path` sits in the primary checkout itself rather than in one of
-/// its isolated checkouts.
-///
-/// Decided lexically against the fixed layout rather than by asking Git,
-/// because it is answered once per open tab on a user-initiated action and
-/// a subprocess per tab is a cost with no matching benefit.
-pub fn is_in_primary(primary: &Path, path: &Path) -> bool {
-    path.starts_with(primary) && !path.starts_with(primary.join(WORKTREES_DIRECTORY))
-}
-
-/// Creates an isolated checkout named for `slug` under `primary`, branching
-/// from its current `HEAD`, and returns the checkout's path.
-///
-/// `HEAD` rather than a configured base: it is what the agent would have
-/// seen had the seat been free, which is the least surprising thing for a
-/// writer that did not ask to be isolated.
-///
-/// Never overwrites: a name already taken by a directory or a branch — the
-/// ordinary case once checkouts are kept rather than deleted — is suffixed
-/// until it is free.
-pub fn isolate(primary: &Path, slug: &str) -> Result<PathBuf, String> {
-    // A checkout removed outside UZE leaves its registry entry behind, and
-    // `worktree add` then refuses the name. Pruning first is what makes
-    // creation reliable across everything that happened while UZE was not
-    // running.
-    let _ = git(primary, &["worktree", "prune"]);
-
-    let name = available_name(primary, slug);
-    let relative = format!("{WORKTREES_DIRECTORY}/{name}");
-    git(
-        primary,
-        &[
-            "worktree",
-            "add",
-            "-b",
-            &format!("{BRANCH_PREFIX}{name}"),
-            &relative,
-            "HEAD",
-        ],
-    )?;
-
-    // Without this the agent holding the seat sweeps every other agent's
-    // checkout into its own commit: `git add -A` stages a nested working
-    // tree as an embedded repository rather than ignoring it.
-    ignore_worktrees_directory(primary)?;
-
-    Ok(primary.join(&relative))
-}
-
-/// The first name not already taken by a directory or a branch.
-fn available_name(primary: &Path, slug: &str) -> String {
-    let taken = |name: &str| {
-        primary.join(WORKTREES_DIRECTORY).join(name).exists()
-            || uze_git::read(
-                primary,
-                &[
-                    "rev-parse",
-                    "--verify",
-                    "--quiet",
-                    &format!("refs/heads/{BRANCH_PREFIX}{name}"),
-                ],
-            )
-            .is_ok_and(|output| output.is_success())
-    };
-    if !taken(slug) {
-        return slug.to_owned();
-    }
-    (2..)
-        .map(|suffix| format!("{slug}-{suffix}"))
-        .find(|candidate| !taken(candidate))
-        .unwrap_or_else(|| slug.to_owned())
-}
-
-/// Adds the isolated-checkout directory to the project's ignore file when it
-/// is not already ignored. Idempotent, and never rewrites an existing line.
-fn ignore_worktrees_directory(primary: &Path) -> Result<(), String> {
-    let entry = format!("{WORKTREES_DIRECTORY}/");
-    let ignore = primary.join(".gitignore");
-    let current = std::fs::read_to_string(&ignore).unwrap_or_default();
-    if current
-        .lines()
-        .any(|line| line.trim() == entry || line.trim() == WORKTREES_DIRECTORY)
-    {
-        return Ok(());
-    }
-    let mut next = current;
-    if !next.is_empty() && !next.ends_with('\n') {
-        next.push('\n');
-    }
-    next.push_str(&entry);
-    next.push('\n');
-    std::fs::write(&ignore, next).map_err(|error| format!("could not update .gitignore: {error}"))
-}
-
-/// A Git command that changes the repository, with stdout trimmed — every
-/// answer this module reads is a single line (a path, a branch name), never
-/// content whose whitespace carries meaning.
-fn git(root: &Path, args: &[&str]) -> Result<String, String> {
-    uze_git::write(root, args)
-        .map_err(|error| error.to_string())?
-        .successful()
-        .map(|stdout| stdout.trim().to_owned())
 }
 
 #[cfg(test)]
@@ -432,7 +328,16 @@ mod tests {
     fn the_primary_checkout_is_the_same_answer_from_inside_an_isolated_one() {
         let repository = repository("worktree-primary");
         let root = repository.root();
-        let isolated = isolate(root, "agent-1").expect("isolation must succeed");
+        repository.git(&[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "agent/x",
+            ".worktrees/x",
+            "HEAD",
+        ]);
+        let isolated = root.join(".worktrees").join("x");
 
         let from_root = primary_checkout(root).expect("a working tree has a primary");
         let from_isolated = primary_checkout(&isolated).expect("so does a linked worktree");
@@ -447,90 +352,5 @@ mod tests {
     fn a_directory_outside_any_repository_has_no_primary_checkout() {
         let root = uze_testkit::temp::scratch("worktree-norepo");
         assert_eq!(primary_checkout(&root), None);
-    }
-
-    /// The seat is the primary checkout itself. An isolated checkout lives
-    /// under the same repository but must never read as occupying it, or
-    /// every agent after the first would be told the seat is taken by
-    /// somebody who already left it.
-    #[test]
-    fn an_isolated_checkout_does_not_occupy_the_seat() {
-        let primary = Path::new("/repo");
-        assert!(is_in_primary(primary, Path::new("/repo")));
-        assert!(is_in_primary(primary, Path::new("/repo/crates/core")));
-        assert!(!is_in_primary(
-            primary,
-            &Path::new("/repo").join(WORKTREES_DIRECTORY).join("agent-1")
-        ));
-        assert!(!is_in_primary(primary, Path::new("/elsewhere")));
-    }
-
-    #[test]
-    fn isolation_creates_a_checkout_on_its_own_branch_and_ignores_the_directory() {
-        let repository = repository("worktree-isolate");
-        let root = repository.root();
-        let isolated = isolate(root, "agent-1").unwrap();
-
-        assert_eq!(isolated, root.join(WORKTREES_DIRECTORY).join("agent-1"));
-        assert!(isolated.join("file").is_file(), "the checkout is populated");
-        assert_eq!(
-            repository.branch_of(&isolated),
-            format!("{BRANCH_PREFIX}agent-1")
-        );
-        assert!(
-            std::fs::read_to_string(root.join(".gitignore"))
-                .unwrap()
-                .contains(WORKTREES_DIRECTORY),
-            "an unignored checkout is swept into the seat agent's next commit"
-        );
-        // The seat's own status must not see the isolated checkout at all.
-        // The freshly written `.gitignore` does show up — it is a real new
-        // file for the operator to commit, which is the intended outcome.
-        let status = repository.git(&["status", "--short"]);
-        assert!(!status.contains(WORKTREES_DIRECTORY), "{status}");
-        assert_eq!(status, "?? .gitignore");
-    }
-
-    /// Checkouts are kept, not deleted, so the same agent label recurs. A
-    /// second isolation must not fail and must not reuse the first branch.
-    #[test]
-    fn a_taken_name_is_suffixed_rather_than_reused_or_refused() {
-        let repository = repository("worktree-collision");
-        let root = repository.root();
-        let first = isolate(root, "agent-1").unwrap();
-        let second = isolate(root, "agent-1").unwrap();
-
-        assert_ne!(first, second);
-        assert_eq!(second, root.join(WORKTREES_DIRECTORY).join("agent-1-2"));
-        assert_eq!(
-            repository.branch_of(&second),
-            format!("{BRANCH_PREFIX}agent-1-2")
-        );
-    }
-
-    #[test]
-    fn ignoring_the_directory_is_idempotent_and_preserves_existing_entries() {
-        let repository = repository("worktree-ignore");
-        let root = repository.root();
-        std::fs::write(root.join(".gitignore"), "target/\n").unwrap();
-        isolate(root, "agent-1").unwrap();
-        isolate(root, "agent-2").unwrap();
-
-        let ignore = std::fs::read_to_string(root.join(".gitignore")).unwrap();
-        assert!(ignore.contains("target/"), "foreign entries survive");
-        assert_eq!(
-            ignore.matches(WORKTREES_DIRECTORY).count(),
-            1,
-            "the entry is added once, not once per isolation: {ignore}"
-        );
-    }
-
-    /// A repository with no commits has no `HEAD` to branch from. Isolation
-    /// must fail cleanly so the caller can seat the agent instead of
-    /// refusing to launch it.
-    #[test]
-    fn isolation_fails_cleanly_on_a_repository_with_no_commits() {
-        let repository = uze_testkit::git::Repository::empty("worktree-unborn");
-        assert!(isolate(repository.root(), "agent-1").is_err());
     }
 }

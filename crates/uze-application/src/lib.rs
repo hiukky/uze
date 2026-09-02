@@ -4,7 +4,7 @@ pub mod application;
 pub mod bootstrap;
 
 pub use application::UzeApplication;
-pub use application::services::AgentIdentity;
+pub use application::services::{AgentIdentity, AgentPlacement, Isolation};
 
 /// Types the read models above are made of. Presentation consumes these
 /// through this crate rather than reaching into the domain for them: a

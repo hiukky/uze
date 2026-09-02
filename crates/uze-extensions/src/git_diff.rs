@@ -1122,8 +1122,8 @@ mod tests {
     fn discovers_main_and_configured_linked_worktrees() {
         let repository = uze_testkit::git::Repository::new("worktree-test");
         let root = repository.root().to_path_buf();
-        // Ignored the way `worktree::isolate` ignores it, so the primary's
-        // own status is not dominated by the checkouts hanging off it.
+        // Ignored, as UZE excludes it, so the primary's own status is not
+        // dominated by the checkouts hanging off it.
         repository.commit_file(".gitignore", ".worktrees/\n");
         // Mirrors where UZE isolates agents. Spelled out rather than taken
         // from the domain constant: this crate does not depend on the
