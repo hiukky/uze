@@ -69,3 +69,55 @@ or client/server lifecycle semantics.
 - **WHEN** a user on Linux or macOS attaches to a terminal workspace
 - **THEN** the system SHALL use the platform's local transport and PTY backend
 - **AND THEN** the workspace behavior SHALL conform to this specification
+
+### Requirement: One server per user
+The system SHALL run one terminal server per user — per `UZE_HOME` — and
+every `uze` client SHALL attach to it, whatever directory the client was
+started in. The server's spaces, tabs and panes SHALL persist between runs
+in one document under the user's UZE state.
+
+#### Scenario: Two launches from two directories share one server
+- **WHEN** a user starts `uze` in one directory and then in another
+- **THEN** both clients are attached to the same server and see the same spaces
+
+### Requirement: A space has a root
+The system SHALL give every space a root directory, chosen when the space
+is created, and SHALL derive the space's behaviour from that root: an agent
+or a shell created in the space starts from it, and a root that is a Git
+repository with a commit gives agents isolated checkouts. Starting `uze`
+SHALL ensure a space rooted at the launch directory's workspace root exists
+and SHALL select it for that client, creating it only when no space has
+that root. Creating a space explicitly SHALL ask for its root, prefilled
+with the selected space's.
+
+#### Scenario: The launch directory becomes a space
+- **WHEN** a user starts `uze` in a directory no space is rooted at
+- **THEN** a space rooted there is created, labelled from the directory, and selected for that client
+
+#### Scenario: A known root is selected, not duplicated
+- **WHEN** a user starts `uze` in a directory a space is already rooted at
+- **THEN** that space is selected for the client and no space is created
+
+#### Scenario: A new space starts from a chosen root
+- **WHEN** a user creates a space and confirms a root
+- **THEN** the space's first shell opens in that root and agents created in it start from it
+
+### Requirement: Focus is per client
+The system SHALL keep which space and which tab each attached client is
+looking at per client. Selecting a space or a tab in one client SHALL NOT
+move another client's selection, and the session a client receives SHALL
+carry that client's own selection.
+
+#### Scenario: Two terminals look at two agents
+- **WHEN** two clients are attached and one selects a different space
+- **THEN** the other client's selected space is unchanged
+
+### Requirement: A launch inside a pane opens a space
+The system SHALL mark every pane it spawns so a `uze` started inside one
+can tell, and such a `uze` SHALL NOT open a client inside the client: it
+SHALL ask the running server for a space rooted at its directory's
+workspace root, created when none is, and exit reporting the space.
+
+#### Scenario: Nested launch opens a space and leaves
+- **WHEN** `uze` is started inside one of the server's own panes, in a directory no space is rooted at
+- **THEN** a space rooted there appears in the running client and the nested `uze` exits without attaching a client

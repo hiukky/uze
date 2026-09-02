@@ -266,12 +266,10 @@ pub(crate) fn attach_workspace(
     let layout = compute_layout(Rect::new(0, 0, size.width, size.height), *sidebar_width);
     let (columns, rows) = (layout.pane.width, layout.pane.height);
 
-    // The terminal server — and therefore the whole set of agent panes — is
-    // keyed on the directory handed to `attach`. Resolving the workspace
-    // root *before* attaching is what makes one repository mean one server:
-    // with the raw cwd, launching UZE from the repository and from a
-    // subdirectory of it produced two servers over the same checkout, each
-    // believing it was alone. Prompt history keys on the same answer below.
+    // One server per user; what the launch directory decides is which
+    // space this client lands in. Resolving the workspace root *before*
+    // attaching is what makes a repository and a subdirectory of it the
+    // same space rather than two.
     let workspace_root = uze_application::workspace_root_or_self(root);
     let mut stream = attach(&workspace_root, columns, rows).map_err(runtime_error)?;
     let read_stream = stream.try_clone().map_err(io_error)?;
@@ -282,6 +280,7 @@ pub(crate) fn attach_workspace(
             workspace: uze_terminal::WorkspaceId("client".into()),
             columns,
             rows,
+            root: Some(workspace_root.clone()),
         },
     )
     .map_err(runtime_error)?;
@@ -294,21 +293,18 @@ pub(crate) fn attach_workspace(
             }
         }
     });
-    // The same resolved root the server is keyed on, and the one the
-    // management Overview reads against. Writes run on their own thread so
-    // a keystroke never waits on the filesystem, and the thread ends when
-    // `model` drops its sender at the end of this attach.
-    let history_root = workspace_root.clone();
+    // Keyed on the root of the space the prompt was typed in — the same
+    // answer the management Overview reads against. Writes run on their
+    // own thread so a keystroke never waits on the filesystem, and the
+    // thread ends when `model` drops its sender at the end of this attach.
     let (prompt_recorder, recorded_prompts) =
-        mpsc::channel::<(uze_application::PromptOrigin, String)>();
+        mpsc::channel::<(PathBuf, uze_application::PromptOrigin, String)>();
     thread::spawn({
         let home = home.clone();
         move || {
-            while let Ok((origin, prompt)) = recorded_prompts.recv() {
-                let _ = tui_application(home.clone()).and_then(|app| {
-                    app.workspace()
-                        .record_prompt(&history_root, &origin, &prompt)
-                });
+            while let Ok((root, origin, prompt)) = recorded_prompts.recv() {
+                let _ = tui_application(home.clone())
+                    .and_then(|app| app.workspace().record_prompt(&root, &origin, &prompt));
             }
         }
     });
@@ -522,6 +518,14 @@ pub(crate) fn attach_workspace(
                                                 ClientRequest::RenameSpace {
                                                     space,
                                                     label: trimmed,
+                                                }
+                                            }
+                                            RenameTarget::NewSpaceRoot => {
+                                                ClientRequest::CreateSpace {
+                                                    label: None,
+                                                    root: expand_home(&trimmed),
+                                                    columns,
+                                                    rows,
                                                 }
                                             }
                                         },
@@ -1206,14 +1210,15 @@ pub(crate) fn attach_workspace(
                             // agent picker.
                         }
                         WorkspaceHit::NewSpace => {
-                            let _ = send_request(
-                                &mut stream,
-                                &ClientRequest::CreateSpace {
-                                    label: next_space_label(&model),
-                                    columns,
-                                    rows,
-                                },
-                            );
+                            let prefill = model
+                                .session
+                                .as_ref()
+                                .map(|session| {
+                                    crate::ui::display_project_path(&session.selected_space().root)
+                                })
+                                .unwrap_or_default();
+                            model.renaming = Some((RenameTarget::NewSpaceRoot, prefill));
+                            model.dirty = true;
                         }
                         WorkspaceHit::OpenGitView => {
                             open_git_view(&mut model);
@@ -1423,6 +1428,10 @@ pub(super) enum WorkspaceHit {
 enum RenameTarget {
     Tab(TabId),
     Space(SpaceId),
+    /// Not a rename: the root the next space is created at, edited in
+    /// place on the sidebar's "+ new" row with the same buffer and keys,
+    /// prefilled with the selected space's root.
+    NewSpaceRoot,
 }
 
 /// A second `Down(Left)` on the same hit within this window counts as a
@@ -1787,7 +1796,7 @@ struct WorkspaceModel {
     /// Sink for recorded prompts. `None` leaves the history untouched —
     /// the default, so tests exercise the submission path without writing
     /// to a real UZE home.
-    prompt_recorder: Option<mpsc::Sender<(uze_application::PromptOrigin, String)>>,
+    prompt_recorder: Option<mpsc::Sender<(PathBuf, uze_application::PromptOrigin, String)>>,
     /// Every repository's tasks as last evaluated, keyed by its primary
     /// checkout. Display state: the truth is Git and the task store.
     tasks: BTreeMap<PathBuf, Vec<TaskView>>,
@@ -2005,8 +2014,10 @@ impl WorkspaceModel {
         self.completed_agent_panes.remove(&pane);
         self.dirty = true;
 
-        if let (Some(prompt), Some(recorder)) = (prompt, self.prompt_recorder.as_ref()) {
-            let _ = recorder.send((origin, prompt.to_owned()));
+        if let (Some(prompt), Some(recorder)) = (prompt, self.prompt_recorder.as_ref())
+            && let Some(root) = self.space_root_of_pane(pane)
+        {
+            let _ = recorder.send((root, origin, prompt.to_owned()));
         }
     }
 
@@ -2150,6 +2161,22 @@ impl WorkspaceModel {
     /// not over), and both outrank Selected — a spinner or a check on the
     /// tab you are already on still carries information the plain dot does
     /// not.
+    /// The root of the space `pane`'s tab belongs to.
+    fn space_root_of_pane(&self, pane: PaneId) -> Option<PathBuf> {
+        let session = self.session.as_ref()?;
+        session
+            .workspace
+            .spaces
+            .iter()
+            .find(|space| {
+                space
+                    .tabs
+                    .iter()
+                    .any(|tab| pane_in_layout(&tab.layout, pane).is_some())
+            })
+            .map(|space| space.root.clone())
+    }
+
     /// The task whose slot `cwd` sits in, as last evaluated. Lexical: the
     /// slot's name is its identifier, and the primary it hangs off keys
     /// the repository's tasks.
@@ -2331,12 +2358,17 @@ fn next_shell_label_for_tab(model: &WorkspaceModel, tab: TabId) -> String {
 
 /// The label a fresh space opens with — same numbering convention as
 /// [`next_shell_label`], off the workspace's current space count.
-fn next_space_label(model: &WorkspaceModel) -> String {
-    let count = model
-        .session
-        .as_ref()
-        .map_or(0, |session| session.workspace.spaces.len());
-    format!("space {}", count + 1)
+/// A path as typed on the "+ new" row: `~` means the home directory, and a
+/// relative path is relative to the home directory too — what someone
+/// naming a project from anywhere means by it.
+fn expand_home(typed: &str) -> PathBuf {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let path = PathBuf::from(typed);
+    match (typed.strip_prefix('~'), home) {
+        (Some(rest), Some(home)) => home.join(rest.trim_start_matches('/')),
+        (None, Some(home)) if path.is_relative() => home.join(path),
+        _ => path,
+    }
 }
 
 /// Confirms one [`ContextMenu`] row against its `target` — sent from both

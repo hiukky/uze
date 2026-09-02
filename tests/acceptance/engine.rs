@@ -17,8 +17,8 @@ use std::{
 
 use uze_application::{DeliveryOutcome, Isolation, TaskStateView, UzeApplication, UzeHome};
 use uze_terminal::{
-    ClientEvent, ClientRequest, PROTOCOL_VERSION, PaneId, Session, WorkspaceId, attach, read_event,
-    send_request, socket_path,
+    ClientEvent, ClientRequest, PROTOCOL_VERSION, PaneId, Session, WorkspaceId, attach, open_space,
+    read_event, send_request, socket_path,
 };
 use uze_testkit::{env::ProcessEnvGuard, fake_harness::FakeHarness, temp::TestEnvironment};
 
@@ -198,6 +198,17 @@ impl Engine {
             })
     }
 
+    /// Reads session updates until `accept` holds: the server also pushes
+    /// updates on its own clock (a pane's process name resolving), so the
+    /// next event is not necessarily the one a request produced.
+    fn wait_for_session_where(&mut self, what: &str, accept: impl Fn(&Session) -> bool) {
+        let started = Instant::now();
+        while !self.session.as_ref().is_some_and(&accept) {
+            assert!(started.elapsed() < WAIT, "no session update where {what}");
+            self.wait_for_session();
+        }
+    }
+
     /// Reads session updates until a tab runs in `slot`: the server answers
     /// an attach with more than one session event, and the one carrying the
     /// new tab is not necessarily the first to arrive.
@@ -280,6 +291,7 @@ fn connect(project: &Path) -> (UnixStream, UnixStream) {
             workspace: WorkspaceId("engine-test".into()),
             columns: 80,
             rows: 24,
+            root: Some(project.to_path_buf()),
         },
     )
     .unwrap();
@@ -524,5 +536,92 @@ fn pr_publishes_against_a_fake_forge_without_pulling_the_local_target() {
         engine.git(&project, &["rev-parse", "main"]),
         local_target,
         "never pulled"
+    );
+}
+
+/// One server, two clients: each keeps its own selection, and a `uze`
+/// started inside a pane opens a space in the server instead of a client
+/// inside a client.
+#[test]
+fn two_clients_keep_their_own_focus_and_a_nested_launch_opens_a_space() {
+    let mut engine = Engine::start("  completion: handoff\n");
+    let project = engine.project().to_path_buf();
+    let first_space = engine.session.as_ref().unwrap().workspace.selected_space;
+    assert_eq!(
+        engine.session.as_ref().unwrap().selected_space().root,
+        project.canonicalize().unwrap_or(project.clone()),
+        "the launch directory is the first space's root"
+    );
+
+    // A second client attaches for another directory: it gets a space of
+    // its own, selected for it alone.
+    let other = engine.env.root().join("other-project");
+    fs::create_dir_all(&other).unwrap();
+    let (mut second, mut second_reader) = connect(&other);
+    let second_view = loop {
+        match read_event(&mut second_reader).unwrap() {
+            Some(ClientEvent::Attached { session }) => break session,
+            Some(ClientEvent::Error { message }) => panic!("{message}"),
+            Some(_) => {}
+            None => panic!("hung up"),
+        }
+    };
+    assert_ne!(second_view.workspace.selected_space, first_space);
+    assert_eq!(
+        second_view.selected_space().root,
+        other.canonicalize().unwrap_or(other.clone())
+    );
+    assert_eq!(second_view.workspace.spaces.len(), 2);
+
+    // The first client's own view did not move.
+    engine.wait_for_session_where("two spaces exist", |session| {
+        session.workspace.spaces.len() == 2
+    });
+    assert_eq!(
+        engine.session.as_ref().unwrap().workspace.selected_space,
+        first_space,
+        "another client's attach never moves this client's selection"
+    );
+
+    // Selecting in one client is invisible to the other.
+    send_request(
+        &mut second,
+        &ClientRequest::SelectSpace { space: first_space },
+    )
+    .unwrap();
+    let moved = loop {
+        match read_event(&mut second_reader).unwrap() {
+            Some(ClientEvent::SessionUpdated { session }) => break session,
+            Some(_) => {}
+            None => panic!("hung up"),
+        }
+    };
+    assert_eq!(moved.workspace.selected_space, first_space);
+    engine.wait_for_session();
+    assert_eq!(
+        engine.session.as_ref().unwrap().workspace.selected_space,
+        first_space
+    );
+    let _ = send_request(&mut second, &ClientRequest::Detach);
+
+    // A nested launch: what `uze` does when UZE_PANE is set.
+    let nested = engine.env.root().join("nested-project");
+    fs::create_dir_all(&nested).unwrap();
+    let label = open_space(&nested).expect("the running server opens a space");
+    assert_eq!(label, "nested-project");
+    engine.wait_for_session_where("three spaces exist", |session| {
+        session.workspace.spaces.len() == 3
+    });
+    let session = engine.session.as_ref().unwrap();
+    assert!(
+        session
+            .workspace
+            .spaces
+            .iter()
+            .any(|space| space.label == "nested-project")
+    );
+    assert_eq!(
+        session.workspace.selected_space, first_space,
+        "a space opened from a pane does not steal this client's focus"
     );
 }

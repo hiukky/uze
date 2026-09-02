@@ -56,3 +56,12 @@
       `cargo test --no-fail-fast`, and the applicable terminal-runtime tests.
 - [x] 5.4 Document Windows named-pipe and ConPTY support as a future backend
       without making it a release blocker for the initial Linux/macOS runtime.
+
+## 6. One server per user, spaces with roots
+
+- [x] 6.1 Key the endpoint and the persisted document on `UZE_HOME` rather than on a workspace root; `serve --root` only roots the first space when nothing is persisted.
+- [x] 6.2 Give `Space` a root, drop the workspace's; derive a space's label from its root; `CreateSpace` names the root, `Attach` names the root the client wants a space for, and the server ensures one exists and selects it for that client. Protocol bumped.
+- [x] 6.3 Keep selection per attached client, overlaid on the session each client receives; structure and damage still broadcast to all.
+- [x] 6.4 Stamp every pane with `UZE_PANE`; a `uze` started with it asks the server for a space at its workspace root and exits reporting it.
+- [x] 6.5 TUI: `+ new` prompts for the root in place, prefilled with the selected space's; the space header shows its root; prompt history keys on the space's root.
+- [x] 6.6 Prove it end to end in `tests/acceptance/engine.rs`: two clients on one server keep their own focus, a second directory becomes a second space, a nested launch opens a space without stealing focus; and in `uze-terminal`, that a client's view overlays its selection and heals a stale one.

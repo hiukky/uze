@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -26,16 +26,17 @@ pub struct Session {
     pub next_pane_id: u64,
 }
 
-/// The one server/socket per `uze` invocation (keyed off the directory it
-/// was launched from — see `workspace_identity` in `runtime.rs`) — an
-/// infrastructure detail, not something a person organizes their work by.
-/// `spaces` is where that organizing actually happens: a person creates as
-/// many as they like, freely renamed, with no tie to any directory of their
-/// own — two spaces' tabs can `cd` into the very same place.
+/// The one server per user — an infrastructure detail, not something a
+/// person organizes their work by. `spaces` is where that organizing
+/// happens: a person creates as many as they like, freely renamed, each
+/// born with a root directory that says what its agents work on.
+///
+/// `selected_space`, like every `Space::selected_tab`, is the server's
+/// default; what each attached client actually looks at is the client's
+/// own, and the `Session` a client receives carries *its* selection here.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Workspace {
     pub id: WorkspaceId,
-    pub root: PathBuf,
     pub spaces: Vec<Space>,
     pub selected_space: SpaceId,
 }
@@ -44,8 +45,25 @@ pub struct Workspace {
 pub struct Space {
     pub id: SpaceId,
     pub label: String,
+    /// Where this space's work lives, chosen when it was created: an agent
+    /// created here starts from it, a shell opens in it, and whether it is
+    /// a Git repository decides whether agents get slots.
+    pub root: PathBuf,
     pub tabs: Vec<Tab>,
     pub selected_tab: TabId,
+}
+
+/// The label a space gets from its root when nobody names it: the root's
+/// last component, or `home` for the home directory itself.
+pub fn space_label(root: &Path) -> String {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    if home.as_deref().is_some_and(|home| home == root) {
+        return "home".to_owned();
+    }
+    root.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "root".to_owned())
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -101,6 +119,7 @@ pub struct Focus {
 /// it sees fit.
 pub struct SpaceSeed {
     pub label: String,
+    pub root: PathBuf,
     pub tabs: Vec<TabSeed>,
 }
 
@@ -126,14 +145,14 @@ impl Session {
         };
         let space = Space {
             id: SpaceId(1),
-            label: "space 1".to_owned(),
+            label: space_label(&root),
+            root,
             tabs: vec![tab],
             selected_tab: TabId(1),
         };
         Self {
             workspace: Workspace {
                 id,
-                root,
                 spaces: vec![space],
                 selected_space: SpaceId(1),
             },
@@ -190,6 +209,7 @@ impl Session {
             spaces.push(Space {
                 id: space_id,
                 label: seed.label,
+                root: seed.root,
                 tabs,
                 selected_tab,
             });
@@ -200,7 +220,6 @@ impl Session {
         Self {
             workspace: Workspace {
                 id,
-                root,
                 spaces,
                 selected_space,
             },
@@ -227,10 +246,31 @@ impl Session {
             .expect("space selected tab is always present")
     }
 
-    /// Creates a space with one default tab (mirroring [`Session::new`]'s
-    /// own bootstrap tab), selects it, and returns the new tab's pane so
-    /// the caller can spawn it exactly like [`Session::add_tab`]'s result.
-    pub fn add_space(&mut self, label: String, columns: u16, rows: u16) -> PaneId {
+    /// The space whose root is `root`, compared as the filesystem sees it.
+    pub fn space_for_root(&self, root: &Path) -> Option<SpaceId> {
+        let wanted = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        self.workspace
+            .spaces
+            .iter()
+            .find(|space| {
+                space
+                    .root
+                    .canonicalize()
+                    .unwrap_or_else(|_| space.root.clone())
+                    == wanted
+            })
+            .map(|space| space.id)
+    }
+
+    pub fn space(&self, space: SpaceId) -> Option<&Space> {
+        self.workspace.spaces.iter().find(|s| s.id == space)
+    }
+
+    /// Creates a space rooted at `root` with one default tab (mirroring
+    /// [`Session::new`]'s own bootstrap tab), selects it, and returns the
+    /// new tab's pane so the caller can spawn it exactly like
+    /// [`Session::add_tab`]'s result.
+    pub fn add_space(&mut self, label: String, root: PathBuf, columns: u16, rows: u16) -> PaneId {
         let space_id = SpaceId(self.next_space_id);
         let tab_id = TabId(self.next_tab_id);
         let pane_id = PaneId(self.next_pane_id);
@@ -245,13 +285,14 @@ impl Session {
                 label: "shell".to_owned(),
                 layout: Layout::Pane(Pane {
                     id: pane_id,
-                    cwd: self.workspace.root.clone(),
+                    cwd: root.clone(),
                     columns,
                     rows,
                     process: "shell".to_owned(),
                 }),
                 focus: Focus { pane: pane_id },
             }],
+            root,
             selected_tab: tab_id,
         });
         self.workspace.selected_space = space_id;
@@ -312,17 +353,30 @@ impl Session {
         true
     }
 
-    pub fn add_tab(&mut self, label: String, columns: u16, rows: u16, cwd: PathBuf) -> PaneId {
+    /// Adds a tab to `space` — the one the creating client is looking at,
+    /// which is not necessarily the server's default — and selects it
+    /// there. Falls back to the default space when `space` is gone.
+    pub fn add_tab(
+        &mut self,
+        space: SpaceId,
+        label: String,
+        columns: u16,
+        rows: u16,
+        cwd: PathBuf,
+    ) -> PaneId {
         let tab_id = TabId(self.next_tab_id);
         let pane_id = PaneId(self.next_pane_id);
         self.next_tab_id += 1;
         self.next_pane_id += 1;
-        let space = self
+        let default = self.workspace.selected_space;
+        let index = self
             .workspace
             .spaces
-            .iter_mut()
-            .find(|s| s.id == self.workspace.selected_space)
+            .iter()
+            .position(|s| s.id == space)
+            .or_else(|| self.workspace.spaces.iter().position(|s| s.id == default))
             .expect("session selected space is always present");
+        let space = &mut self.workspace.spaces[index];
         space.tabs.push(Tab {
             id: tab_id,
             label,
@@ -463,7 +517,13 @@ mod tests {
         );
         assert_eq!(session.selected_tab().focus.pane, PaneId(1));
         assert_eq!(
-            session.add_tab("agent".into(), 100, 30, PathBuf::from("/tmp/agent")),
+            session.add_tab(
+                session.workspace.selected_space,
+                "agent".into(),
+                100,
+                30,
+                PathBuf::from("/tmp/agent")
+            ),
             PaneId(2)
         );
         assert_eq!(session.selected_space().selected_tab, TabId(2));
@@ -485,7 +545,13 @@ mod tests {
         );
         assert_eq!(session.remove_tab(TabId(1)), None);
 
-        let second_pane = session.add_tab("agent".into(), 80, 24, PathBuf::from("/tmp/a"));
+        let second_pane = session.add_tab(
+            session.workspace.selected_space,
+            "agent".into(),
+            80,
+            24,
+            PathBuf::from("/tmp/a"),
+        );
         assert_eq!(session.selected_space().selected_tab, TabId(2));
 
         let removed = session.remove_tab(TabId(2)).expect("second tab removed");
@@ -502,8 +568,20 @@ mod tests {
             80,
             24,
         );
-        session.add_tab("two".into(), 80, 24, PathBuf::from("/tmp/a"));
-        session.add_tab("three".into(), 80, 24, PathBuf::from("/tmp/a"));
+        session.add_tab(
+            session.workspace.selected_space,
+            "two".into(),
+            80,
+            24,
+            PathBuf::from("/tmp/a"),
+        );
+        session.add_tab(
+            session.workspace.selected_space,
+            "three".into(),
+            80,
+            24,
+            PathBuf::from("/tmp/a"),
+        );
         assert_eq!(session.selected_space().selected_tab, TabId(3));
 
         session.remove_tab(TabId(3)).expect("third tab removed");
@@ -553,7 +631,7 @@ mod tests {
             80,
             24,
         );
-        let pane = session.add_space("frontend".into(), 80, 24);
+        let pane = session.add_space("frontend".into(), PathBuf::from("/tmp/frontend"), 80, 24);
         assert_eq!(session.workspace.spaces.len(), 2);
         assert_eq!(session.selected_space().label, "frontend");
         assert_eq!(session.selected_space().tabs.len(), 1);
@@ -571,9 +649,15 @@ mod tests {
         let first_space = session.workspace.selected_space;
         assert_eq!(session.remove_space(first_space), None);
 
-        session.add_space("frontend".into(), 80, 24);
+        session.add_space("frontend".into(), PathBuf::from("/tmp/frontend"), 80, 24);
         let second_space = session.workspace.selected_space;
-        session.add_tab("extra".into(), 80, 24, PathBuf::from("/tmp/a"));
+        session.add_tab(
+            session.workspace.selected_space,
+            "extra".into(),
+            80,
+            24,
+            PathBuf::from("/tmp/a"),
+        );
         assert_eq!(session.selected_space().tabs.len(), 2);
 
         let removed = session
@@ -609,7 +693,7 @@ mod tests {
             24,
         );
         let first_space = session.workspace.selected_space;
-        session.add_space("frontend".into(), 80, 24);
+        session.add_space("frontend".into(), PathBuf::from("/tmp/frontend"), 80, 24);
         let second_space = session.workspace.selected_space;
 
         assert!(!session.select_space(second_space), "already selected");
@@ -633,7 +717,7 @@ mod tests {
         );
         let original_tab = session.selected_tab().id;
         let original_pane = session.selected_tab().focus.pane;
-        session.add_space("frontend".into(), 80, 24);
+        session.add_space("frontend".into(), PathBuf::from("/tmp/frontend"), 80, 24);
         // The newly added space is now selected; `original_tab` lives in
         // the *other*, non-selected space.
         assert_ne!(session.selected_tab().id, original_tab);
@@ -666,6 +750,7 @@ mod tests {
             vec![
                 SpaceSeed {
                     label: "frontend".into(),
+                    root: PathBuf::from("/tmp/seed"),
                     tabs: vec![
                         TabSeed {
                             label: "claude".into(),
@@ -679,6 +764,7 @@ mod tests {
                 },
                 SpaceSeed {
                     label: "backend".into(),
+                    root: PathBuf::from("/tmp/seed"),
                     tabs: vec![TabSeed {
                         label: "codex".into(),
                         cwd: PathBuf::from("/tmp/a/api"),
@@ -729,6 +815,7 @@ mod tests {
             24,
             vec![SpaceSeed {
                 label: "empty".into(),
+                root: PathBuf::from("/tmp/seed"),
                 tabs: vec![],
             }],
         );

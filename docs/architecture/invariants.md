@@ -684,6 +684,38 @@ silence.
 
 ---
 
+## Terminal runtime (`add-terminal-runtime`)
+
+### One server per user; a space has a root
+
+The terminal server is one per `UZE_HOME`, and every client attaches to it
+whatever directory it was started in. A space is born from a root: starting
+`uze` ensures a space rooted at the launch directory's workspace root exists
+and selects it for that client, creating it only when no space has that
+root. Behaviour derives from the root; there is no global space.
+
+> `tests/acceptance/engine.rs::two_clients_keep_their_own_focus_and_a_nested_launch_opens_a_space`
+> `crates/uze-terminal/src/runtime.rs::a_restarted_server_relaunches_the_same_spaces_tabs_and_agent_commands`
+
+### Focus is per client
+
+Which space and tab a client looks at is the client's own; the session it
+receives carries its selection overlaid on the shared structure, and another
+client's selection never moves it.
+
+> `crates/uze-terminal/src/runtime.rs::a_clients_view_overlays_its_own_selection_and_heals_a_stale_one`
+> `tests/acceptance/engine.rs::two_clients_keep_their_own_focus_and_a_nested_launch_opens_a_space`
+
+### A launch inside a pane opens a space, never a client
+
+Every pane carries `UZE_PANE`; a `uze` that finds it asks the running server
+for a space at its workspace root and exits, so a client is never opened
+inside a client.
+
+> `tests/acceptance/engine.rs::two_clients_keep_their_own_focus_and_a_nested_launch_opens_a_space`
+
+---
+
 ## Architecture seams (`enforce-architecture-seams`)
 
 ### The layer direction is a fact, not a convention

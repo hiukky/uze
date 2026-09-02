@@ -23,7 +23,8 @@ use thiserror::Error;
 
 use crate::{
     CellAttributes, ClientEvent, ClientRequest, Cursor, MouseMode, PROTOCOL_VERSION, PaneDamage,
-    PaneId, PaneSnapshot, RenderCell, Session, SpaceSeed, TabSeed, TerminalColor, WorkspaceId,
+    PaneId, PaneSnapshot, RenderCell, Session, SpaceId, SpaceSeed, TabId, TabSeed, TerminalColor,
+    WorkspaceId,
 };
 
 /// ADR-038: the endpoint is local and user-private; no network transport is
@@ -40,8 +41,12 @@ pub enum RuntimeError {
     Pty(String),
 }
 
+/// Connects to the user's one server, starting it when none answers —
+/// rooted at `root`, which only matters for a server that has nothing
+/// persisted yet. The caller then sends `Attach` naming the root it wants a
+/// space for.
 pub fn attach(root: &Path, _columns: u16, _rows: u16) -> Result<UnixStream, RuntimeError> {
-    let endpoint = Endpoint::for_root(root)?;
+    let endpoint = Endpoint::global()?;
     // A server left running from a previous build (e.g. a `cargo install
     // --force` while it was still up) is *alive*, so the connect below
     // would succeed — this has to be caught before that, not after, since
@@ -67,16 +72,49 @@ pub fn attach(root: &Path, _columns: u16, _rows: u16) -> Result<UnixStream, Runt
     }
 }
 
-/// Where the server for `root` listens. For a client that must connect to
-/// a server it started itself and never start one — a test driving the
+/// Where the user's server listens. For a client that must connect to a
+/// server it started itself and never start one — a test driving the
 /// runtime through the real binary — since [`attach`] starts a server from
 /// the current executable when none answers.
-pub fn socket_path(root: &Path) -> Result<PathBuf, RuntimeError> {
-    Ok(Endpoint::for_root(root)?.socket)
+pub fn socket_path(_root: &Path) -> Result<PathBuf, RuntimeError> {
+    Ok(Endpoint::global()?.socket)
 }
 
-pub fn stop(root: &Path) -> Result<(), RuntimeError> {
-    let endpoint = Endpoint::for_root(root)?;
+/// Asks the running server for a space rooted at `root` — created when
+/// none is — and answers with its label. For a `uze` started inside one of
+/// the server's own panes: it must not open a client inside a client, so
+/// it opens a space in the one it is already in and leaves. An error when
+/// no server is running.
+pub fn open_space(root: &Path) -> Result<String, RuntimeError> {
+    let endpoint = Endpoint::global()?;
+    let mut stream = UnixStream::connect(&endpoint.socket)
+        .map_err(|_| RuntimeError::Protocol("no running uze to open a space in".into()))?;
+    send_request(
+        &mut stream,
+        &ClientRequest::Attach {
+            version: PROTOCOL_VERSION,
+            workspace: WorkspaceId("nested".into()),
+            columns: 0,
+            rows: 0,
+            root: Some(root.to_path_buf()),
+        },
+    )?;
+    let label = loop {
+        match read_event(&mut stream)? {
+            Some(ClientEvent::Attached { session }) => {
+                break session.selected_space().label.clone();
+            }
+            Some(ClientEvent::Error { message }) => return Err(RuntimeError::Protocol(message)),
+            Some(_) => {}
+            None => return Err(RuntimeError::Protocol("the server hung up".into())),
+        }
+    };
+    let _ = send_request(&mut stream, &ClientRequest::Detach);
+    Ok(label)
+}
+
+pub fn stop(_root: &Path) -> Result<(), RuntimeError> {
+    let endpoint = Endpoint::global()?;
     let mut stream = UnixStream::connect(&endpoint.socket)?;
     write_message(&mut stream, &ClientRequest::Stop)?;
     match read_message::<_, ClientEvent>(&mut BufReader::new(stream))? {
@@ -88,8 +126,10 @@ pub fn stop(root: &Path) -> Result<(), RuntimeError> {
     }
 }
 
+/// Serves the user's one workspace. `root` roots the first space when
+/// nothing is persisted yet, and is otherwise ignored.
 pub fn serve(root: PathBuf) -> Result<(), RuntimeError> {
-    let endpoint = Endpoint::for_root(&root)?;
+    let endpoint = Endpoint::global()?;
     recover_stale_endpoint(&endpoint)?;
     let listener = UnixListener::bind(&endpoint.socket)?;
     fs::set_permissions(&endpoint.socket, fs::Permissions::from_mode(0o600))?;
@@ -125,7 +165,9 @@ struct Endpoint {
 }
 
 impl Endpoint {
-    fn for_root(root: &Path) -> Result<Self, RuntimeError> {
+    /// One endpoint per user — per `UZE_HOME`, which is what "user" means
+    /// to UZE: a second home is a second world, with a server of its own.
+    fn global() -> Result<Self, RuntimeError> {
         let preferred = env::var_os("XDG_RUNTIME_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(env::temp_dir)
@@ -150,7 +192,7 @@ impl Endpoint {
             Err(error) => return Err(error.into()),
         };
         fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700))?;
-        let identity = workspace_identity(root);
+        let identity = identity_of(&uze_home_dir());
         Ok(Self {
             socket: runtime.join(format!("uze-{identity}.sock")),
             pid: runtime.join(format!("uze-{identity}.pid")),
@@ -158,31 +200,30 @@ impl Endpoint {
     }
 }
 
-/// Where a server persists this workspace's space/tab shape between runs —
-/// deliberately not `Endpoint::for_root`'s `XDG_RUNTIME_DIR`/temp directory
-/// (that's routinely wiped on reboot, exactly the case this needs to
-/// survive). `$UZE_HOME` (or `$HOME/.uze`) is resolved directly rather than
-/// through `uze-core`'s `UzeHome` so this crate's own dependency footprint
-/// stays untouched; `state/terminal/<identity>.json` mirrors the
-/// `state/…json` layout `UzeHome::state_dir()` already uses for everything
-/// else UZE persists. `None` only when neither env var resolves, which
-/// mirrors `UzeHome::from_env`'s own failure case.
-fn persisted_state_path(root: &Path) -> Option<PathBuf> {
-    let home = env::var_os("UZE_HOME")
+/// `$UZE_HOME`, or `$HOME/.uze` — resolved directly rather than through
+/// `uze-core`'s `UzeHome` so this crate's own dependency footprint stays
+/// untouched. The current directory is the last resort, so a server can
+/// still start in an environment with neither.
+fn uze_home_dir() -> PathBuf {
+    env::var_os("UZE_HOME")
         .map(PathBuf::from)
-        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".uze")))?;
-    Some(
-        home.join("state")
-            .join("terminal")
-            .join(format!("{}.json", workspace_identity(root))),
-    )
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".uze")))
+        .unwrap_or_else(|| PathBuf::from("."))
 }
 
-/// What gets written to [`persisted_state_path`] — deliberately its own
-/// shape, not the wire-protocol `Session`: clients never need this (it
-/// carries a tab's original spawn `command`, which is respawned, never
-/// displayed), and keeping it separate means restoring what a workspace
-/// looked like never has to touch `PROTOCOL_VERSION`.
+/// Where the server persists the workspace's space/tab shape between runs —
+/// deliberately not [`Endpoint::global`]'s `XDG_RUNTIME_DIR`/temp directory
+/// (that's routinely wiped on reboot, exactly the case this needs to
+/// survive). One file per user under `state/terminal/`, mirroring the
+/// `state/…json` layout `UzeHome::state_dir()` already uses for everything
+/// else UZE persists.
+fn persisted_state_path() -> PathBuf {
+    uze_home_dir()
+        .join("state")
+        .join("terminal")
+        .join("workspace.json")
+}
+
 #[derive(Default, Serialize, serde::Deserialize)]
 struct PersistedWorkspace {
     spaces: Vec<PersistedSpace>,
@@ -191,6 +232,7 @@ struct PersistedWorkspace {
 #[derive(Serialize, serde::Deserialize)]
 struct PersistedSpace {
     label: String,
+    root: PathBuf,
     tabs: Vec<PersistedTab>,
 }
 
@@ -209,9 +251,8 @@ struct PersistedTab {
 /// file is missing/unreadable/corrupt) is not an error — [`Server::new`]
 /// falls back to its ordinary fresh-bootstrap path exactly as if this
 /// returned `None` from the start.
-fn load_persisted_workspace(root: &Path) -> Option<PersistedWorkspace> {
-    let path = persisted_state_path(root)?;
-    let bytes = fs::read(path).ok()?;
+fn load_persisted_workspace() -> Option<PersistedWorkspace> {
+    let bytes = fs::read(persisted_state_path()).ok()?;
     serde_json::from_slice(&bytes).ok()
 }
 
@@ -350,10 +391,27 @@ fn replace_incompatible_server(endpoint: &Endpoint) -> Result<(), RuntimeError> 
     Ok(())
 }
 
+/// What one attached client is looking at. The session itself carries the
+/// server's defaults; a client's own selection overlays them in the
+/// `Session` it receives, so two terminals attached to the one server can
+/// look at two different agents.
+#[derive(Clone, Debug, Default)]
+struct Selection {
+    space: Option<SpaceId>,
+    tabs: BTreeMap<SpaceId, TabId>,
+}
+
+struct Client {
+    id: u64,
+    events: mpsc::Sender<ClientEvent>,
+    selection: Selection,
+}
+
 struct Server {
     session: Mutex<Session>,
     panes: Mutex<BTreeMap<PaneId, Arc<PaneRuntime>>>,
-    clients: Mutex<Vec<mpsc::Sender<ClientEvent>>>,
+    clients: Mutex<Vec<Client>>,
+    next_client: std::sync::atomic::AtomicU64,
     stopped: Mutex<bool>,
     endpoint: Endpoint,
     /// Cloned into every [`PaneRuntime`] so its PTY reader thread can report
@@ -370,7 +428,7 @@ impl Server {
         // `persisted_state_path` for why a crash, a `kill -9`, or a reboot
         // still leaves this behind even though nothing else about a pane's
         // running state survives any of those.
-        let persisted = load_persisted_workspace(&root);
+        let persisted = load_persisted_workspace();
         let seeds: Vec<SpaceSeed> = persisted
             .as_ref()
             .map(|workspace| {
@@ -379,6 +437,7 @@ impl Server {
                     .iter()
                     .map(|space| SpaceSeed {
                         label: space.label.clone(),
+                        root: space.root.clone(),
                         tabs: space
                             .tabs
                             .iter()
@@ -392,22 +451,18 @@ impl Server {
             })
             .unwrap_or_default();
         let restoring = !seeds.is_empty();
+        let identity = WorkspaceId(identity_of(&uze_home_dir()));
         let session = if restoring {
-            Session::restore(
-                WorkspaceId(workspace_identity(&root)),
-                root.clone(),
-                80,
-                24,
-                seeds,
-            )
+            Session::restore(identity, root.clone(), 80, 24, seeds)
         } else {
-            Session::new(WorkspaceId(workspace_identity(&root)), root, 80, 24)
+            Session::new(identity, root, 80, 24)
         };
         let (damage, damage_events) = mpsc::channel();
         let server = Self {
             session: Mutex::new(session),
             panes: Mutex::new(BTreeMap::new()),
             clients: Mutex::new(Vec::new()),
+            next_client: std::sync::atomic::AtomicU64::new(1),
             stopped: Mutex::new(false),
             endpoint,
             damage,
@@ -469,16 +524,7 @@ impl Server {
     /// moved to a new cwd), so whatever's on disk is never more than one
     /// change stale, however this process eventually stops.
     fn persist(&self) {
-        let Some(path) = persisted_state_path(
-            &self
-                .session
-                .lock()
-                .expect("session poisoned")
-                .workspace
-                .root,
-        ) else {
-            return;
-        };
+        let path = persisted_state_path();
         let panes = self.panes.lock().expect("panes poisoned");
         let session = self.session.lock().expect("session poisoned");
         let workspace = PersistedWorkspace {
@@ -488,6 +534,7 @@ impl Server {
                 .iter()
                 .map(|space| PersistedSpace {
                     label: space.label.clone(),
+                    root: space.root.clone(),
                     tabs: space
                         .tabs
                         .iter()
@@ -545,30 +592,51 @@ impl Server {
                 version,
                 columns,
                 rows,
+                root,
                 ..
             })) if version == PROTOCOL_VERSION => {
-                self.resize_selected(columns, rows);
-                self.clients
-                    .lock()
-                    .expect("clients poisoned")
-                    .push(events.clone());
+                let client = self
+                    .next_client
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let mut selection = Selection::default();
+                if let Some(root) = root {
+                    match self.ensure_space(&root) {
+                        Ok(space) => selection.space = Some(space),
+                        Err(error) => {
+                            let _ = events.send(ClientEvent::Error {
+                                message: format!(
+                                    "could not open a space at {}: {error}",
+                                    root.display()
+                                ),
+                            });
+                        }
+                    }
+                }
+                self.clients.lock().expect("clients poisoned").push(Client {
+                    id: client,
+                    events: events.clone(),
+                    selection,
+                });
+                if columns > 0 && rows > 0 {
+                    self.resize_pane(self.selected_pane_of(client), columns, rows);
+                }
                 let _ = events.send(ClientEvent::Attached {
-                    session: self.session.lock().expect("session poisoned").clone(),
+                    session: self.view_of(client),
                 });
                 self.broadcast_snapshot();
-                true
+                Some(client)
             }
             Ok(Some(ClientRequest::Attach { .. })) => {
                 let _ = events.send(ClientEvent::Error {
                     message: "incompatible terminal runtime protocol".into(),
                 });
-                false
+                None
             }
-            _ => false,
+            _ => None,
         };
-        if !attached {
+        let Some(client) = attached else {
             return;
-        }
+        };
 
         while let Ok(Some(request)) = read_message::<_, ClientRequest>(&mut reader) {
             match request {
@@ -590,11 +658,30 @@ impl Server {
                     cwd,
                     command,
                 } => {
-                    let pane = {
+                    let (pane, tab, space) = {
                         let mut session = self.session.lock().expect("session poisoned");
-                        let cwd = cwd.unwrap_or_else(|| session.workspace.root.clone());
-                        session.add_tab(label, columns, rows, cwd)
+                        let space = self
+                            .selection_of(client)
+                            .space
+                            .filter(|space| session.space(*space).is_some())
+                            .unwrap_or(session.workspace.selected_space);
+                        let cwd = cwd.unwrap_or_else(|| {
+                            session
+                                .space(space)
+                                .map(|space| space.root.clone())
+                                .unwrap_or_else(|| PathBuf::from("."))
+                        });
+                        let pane = session.add_tab(space, label, columns, rows, cwd);
+                        let tab = session
+                            .space(space)
+                            .expect("the space the tab was added to")
+                            .selected_tab;
+                        (pane, tab, space)
                     };
+                    self.update_selection(client, |selection| {
+                        selection.space = Some(space);
+                        selection.tabs.insert(space, tab);
+                    });
                     if self.spawn_pane(pane, command.as_deref()).is_err() {
                         let _ = events.send(ClientEvent::Error {
                             message: "could not create terminal pane".into(),
@@ -603,12 +690,21 @@ impl Server {
                     self.broadcast_session();
                 }
                 ClientRequest::SelectTab { tab } => {
-                    let changed = self
-                        .session
-                        .lock()
-                        .expect("session poisoned")
-                        .select_tab(tab);
-                    if changed {
+                    let located = {
+                        let mut session = self.session.lock().expect("session poisoned");
+                        session.select_tab(tab);
+                        session
+                            .workspace
+                            .spaces
+                            .iter()
+                            .find(|space| space.tabs.iter().any(|t| t.id == tab))
+                            .map(|space| space.id)
+                    };
+                    if let Some(space) = located {
+                        self.update_selection(client, |selection| {
+                            selection.space = Some(space);
+                            selection.tabs.insert(space, tab);
+                        });
                         self.broadcast_session();
                     }
                 }
@@ -648,14 +744,17 @@ impl Server {
                 }
                 ClientRequest::CreateSpace {
                     label,
+                    root,
                     columns,
                     rows,
                 } => {
-                    let pane = self
-                        .session
-                        .lock()
-                        .expect("session poisoned")
-                        .add_space(label, columns, rows);
+                    let (pane, space) = {
+                        let mut session = self.session.lock().expect("session poisoned");
+                        let label = label.unwrap_or_else(|| crate::state::space_label(&root));
+                        let pane = session.add_space(label, root, columns, rows);
+                        (pane, session.workspace.selected_space)
+                    };
+                    self.update_selection(client, |selection| selection.space = Some(space));
                     if self.spawn_pane(pane, None).is_err() {
                         let _ = events.send(ClientEvent::Error {
                             message: "could not create terminal pane".into(),
@@ -664,12 +763,13 @@ impl Server {
                     self.broadcast_session();
                 }
                 ClientRequest::SelectSpace { space } => {
-                    let changed = self
-                        .session
-                        .lock()
-                        .expect("session poisoned")
-                        .select_space(space);
-                    if changed {
+                    let exists = {
+                        let mut session = self.session.lock().expect("session poisoned");
+                        session.select_space(space);
+                        session.space(space).is_some()
+                    };
+                    if exists {
+                        self.update_selection(client, |selection| selection.space = Some(space));
                         self.broadcast_session();
                     }
                 }
@@ -717,8 +817,62 @@ impl Server {
                 ClientRequest::Attach { .. } => {}
             }
         }
+        self.clients
+            .lock()
+            .expect("clients poisoned")
+            .retain(|attached| attached.id != client);
     }
 
+    /// The space rooted at `root`, created — with its first shell pane —
+    /// when none is.
+    fn ensure_space(&self, root: &Path) -> Result<SpaceId, RuntimeError> {
+        let (pane, space) = {
+            let mut session = self.session.lock().expect("session poisoned");
+            if let Some(space) = session.space_for_root(root) {
+                return Ok(space);
+            }
+            let label = crate::state::space_label(root);
+            let pane = session.add_space(label, root.to_path_buf(), 80, 24);
+            (pane, session.workspace.selected_space)
+        };
+        self.spawn_pane(pane, None)?;
+        Ok(space)
+    }
+
+    fn selection_of(&self, client: u64) -> Selection {
+        self.clients
+            .lock()
+            .expect("clients poisoned")
+            .iter()
+            .find(|attached| attached.id == client)
+            .map(|attached| attached.selection.clone())
+            .unwrap_or_default()
+    }
+
+    fn update_selection(&self, client: u64, change: impl FnOnce(&mut Selection)) {
+        if let Some(attached) = self
+            .clients
+            .lock()
+            .expect("clients poisoned")
+            .iter_mut()
+            .find(|attached| attached.id == client)
+        {
+            change(&mut attached.selection);
+        }
+    }
+
+    /// The session as `client` sees it: the shared structure with this
+    /// client's own selection overlaid wherever it still points at
+    /// something that exists.
+    fn view_of(&self, client: u64) -> Session {
+        let selection = self.selection_of(client);
+        let session = self.session.lock().expect("session poisoned");
+        view_for(&session, &selection)
+    }
+
+    fn selected_pane_of(&self, client: u64) -> PaneId {
+        self.view_of(client).selected_tab().focus.pane
+    }
     fn spawn_pane(&self, pane_id: PaneId, command: Option<&[String]>) -> Result<(), RuntimeError> {
         let pane = find_pane(&self.session.lock().expect("session poisoned"), pane_id)
             .ok_or_else(|| RuntimeError::Protocol("unknown pane".into()))?;
@@ -821,17 +975,6 @@ impl Server {
         }
     }
 
-    fn resize_selected(&self, columns: u16, rows: u16) {
-        let pane = self
-            .session
-            .lock()
-            .expect("session poisoned")
-            .selected_tab()
-            .focus
-            .pane;
-        self.resize_pane(pane, columns, rows);
-    }
-
     fn resize_pane(&self, pane: PaneId, columns: u16, rows: u16) {
         if let Some(runtime) = self.panes.lock().expect("panes poisoned").get(&pane) {
             runtime.resize(columns, rows);
@@ -862,7 +1005,12 @@ impl Server {
         self.clients
             .lock()
             .expect("clients poisoned")
-            .retain(|sender| sender.send(ClientEvent::Damage(damage.clone())).is_ok());
+            .retain(|client| {
+                client
+                    .events
+                    .send(ClientEvent::Damage(damage.clone()))
+                    .is_ok()
+            });
     }
 
     /// Sends just the tab/selection structure to every attached client —
@@ -879,10 +1027,11 @@ impl Server {
         self.clients
             .lock()
             .expect("clients poisoned")
-            .retain(|sender| {
-                sender
+            .retain(|client| {
+                client
+                    .events
                     .send(ClientEvent::SessionUpdated {
-                        session: session.clone(),
+                        session: view_for(&session, &client.selection),
                     })
                     .is_ok()
             });
@@ -900,10 +1049,11 @@ impl Server {
         self.clients
             .lock()
             .expect("clients poisoned")
-            .retain(|sender| {
-                sender
+            .retain(|client| {
+                client
+                    .events
                     .send(ClientEvent::Snapshot {
-                        session: session.clone(),
+                        session: view_for(&session, &client.selection),
                         panes: panes.clone(),
                     })
                     .is_ok()
@@ -1064,6 +1214,9 @@ impl PaneRuntime {
             }
         };
         command.cwd(cwd);
+        // What tells a `uze` started inside this pane that it is inside one,
+        // so it opens a space here instead of a client within a client.
+        command.env("UZE_PANE", id.0.to_string());
         if env::var_os("TERM").is_none() {
             command.env("TERM", "xterm-256color");
         }
@@ -1342,6 +1495,25 @@ fn color(color: EngineColor) -> TerminalColor {
     }
 }
 
+/// `session` with `selection` overlaid: the client's space when it still
+/// exists, and its tab in every space where the tab still exists.
+fn view_for(session: &Session, selection: &Selection) -> Session {
+    let mut view = session.clone();
+    if let Some(space) = selection.space
+        && view.workspace.spaces.iter().any(|s| s.id == space)
+    {
+        view.workspace.selected_space = space;
+    }
+    for space in &mut view.workspace.spaces {
+        if let Some(tab) = selection.tabs.get(&space.id)
+            && space.tabs.iter().any(|t| t.id == *tab)
+        {
+            space.selected_tab = *tab;
+        }
+    }
+    view
+}
+
 fn find_pane(session: &Session, wanted: PaneId) -> Option<crate::Pane> {
     session
         .workspace
@@ -1399,7 +1571,7 @@ fn read_message<R: Read, T: DeserializeOwned>(reader: &mut R) -> Result<Option<T
         .map_err(|error| RuntimeError::Protocol(error.to_string()))
 }
 
-fn workspace_identity(root: &Path) -> String {
+fn identity_of(root: &Path) -> String {
     let canonical = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let hash = canonical
         .as_os_str()
@@ -1415,31 +1587,72 @@ fn workspace_identity(root: &Path) -> String {
 mod tests {
     use super::{
         Endpoint, PaneRuntime, PersistedSpace, PersistedTab, PersistedWorkspace, REPLY_BACKGROUND,
-        REPLY_FOREGROUND, ReplySink, Server, persisted_state_path, relaunch_command_for_process,
-        replace_incompatible_server, server_protocol_version, snapshot, workspace_identity,
+        REPLY_FOREGROUND, ReplySink, Selection, Server, identity_of, persisted_state_path,
+        relaunch_command_for_process, replace_incompatible_server, server_protocol_version,
+        snapshot, view_for,
     };
     use crate::{MouseMode, PaneId, TerminalColor};
+    use crate::{Session, SpaceId, TabId, WorkspaceId};
     use alacritty_terminal::{
         Term,
         grid::Scroll,
         term::{Config, test::TermSize},
         vte::ansi::Processor,
     };
+    use std::collections::BTreeMap;
     use std::{
         path::{Path, PathBuf},
         thread,
         time::Duration,
     };
 
+    /// A client's selection overlays the shared session wherever it still
+    /// points at something, and falls back to the server's default where
+    /// it does not — the rule that lets two terminals look at two agents.
+    #[test]
+    fn a_clients_view_overlays_its_own_selection_and_heals_a_stale_one() {
+        let mut session = Session::new(WorkspaceId("w".into()), "/tmp/a".into(), 80, 24);
+        let first_space = session.workspace.selected_space;
+        session.add_space("b".into(), "/tmp/b".into(), 80, 24);
+        let second_space = session.workspace.selected_space;
+        session.add_tab(second_space, "extra".into(), 80, 24, "/tmp/b".into());
+        let extra_tab = session.selected_tab().id;
+        let first_tab_of_second = session.space(second_space).unwrap().tabs[0].id;
+
+        let selection = Selection {
+            space: Some(first_space),
+            tabs: BTreeMap::from([(second_space, first_tab_of_second)]),
+        };
+        let view = view_for(&session, &selection);
+        assert_eq!(view.workspace.selected_space, first_space);
+        assert_eq!(
+            view.space(second_space).unwrap().selected_tab,
+            first_tab_of_second
+        );
+        assert_eq!(
+            session.workspace.selected_space, second_space,
+            "the shared default is untouched"
+        );
+        assert_eq!(session.space(second_space).unwrap().selected_tab, extra_tab);
+
+        let stale = Selection {
+            space: Some(SpaceId(99)),
+            tabs: BTreeMap::from([(second_space, TabId(99))]),
+        };
+        let healed = view_for(&session, &stale);
+        assert_eq!(healed.workspace.selected_space, second_space);
+        assert_eq!(healed.space(second_space).unwrap().selected_tab, extra_tab);
+    }
+
     #[test]
     fn endpoint_identity_is_project_specific() {
         assert_eq!(
-            workspace_identity(Path::new("/tmp/a")),
-            workspace_identity(Path::new("/tmp/a"))
+            identity_of(Path::new("/tmp/a")),
+            identity_of(Path::new("/tmp/a"))
         );
         assert_ne!(
-            workspace_identity(Path::new("/tmp/a")),
-            workspace_identity(Path::new("/tmp/b"))
+            identity_of(Path::new("/tmp/a")),
+            identity_of(Path::new("/tmp/b"))
         );
     }
 
@@ -1831,14 +2044,14 @@ mod tests {
         env.set("UZE_HOME", &uze_home)
             .set("XDG_RUNTIME_DIR", &runtime_dir);
 
-        let endpoint = Endpoint::for_root(&project).unwrap();
+        let endpoint = Endpoint::global().unwrap();
         let (first, _damage) = Server::new(project.clone(), endpoint.clone()).unwrap();
-        let agent_pane =
-            first
-                .session
-                .lock()
-                .expect("session poisoned")
-                .add_space("frontend".into(), 80, 24);
+        let agent_pane = first.session.lock().expect("session poisoned").add_space(
+            "frontend".into(),
+            project.clone(),
+            80,
+            24,
+        );
         first
             .spawn_pane(agent_pane, Some(&["sleep".to_owned(), "5".to_owned()]))
             .unwrap();
@@ -1888,14 +2101,14 @@ mod tests {
         env.set("UZE_HOME", &uze_home)
             .set("XDG_RUNTIME_DIR", &runtime_dir);
 
-        let endpoint = Endpoint::for_root(&project).unwrap();
-        let (server, _damage) = Server::new(project, endpoint).unwrap();
-        let pane =
-            server
-                .session
-                .lock()
-                .expect("session poisoned")
-                .add_space("agent".into(), 80, 24);
+        let endpoint = Endpoint::global().unwrap();
+        let (server, _damage) = Server::new(project.clone(), endpoint).unwrap();
+        let pane = server.session.lock().expect("session poisoned").add_space(
+            "agent".into(),
+            project.clone(),
+            80,
+            24,
+        );
         server
             .spawn_pane(pane, Some(&["/bin/true".to_owned()]))
             .unwrap();
@@ -1955,7 +2168,7 @@ mod tests {
         let mut env = uze_testkit::env::scope();
         env.set("UZE_HOME", &uze_home);
 
-        let endpoint = Endpoint::for_root(&project).unwrap();
+        let endpoint = Endpoint::global().unwrap();
         let (first, _damage) = Server::new(project.clone(), endpoint.clone()).unwrap();
         let pane_id = first
             .session
@@ -2006,11 +2219,12 @@ mod tests {
         let mut env = uze_testkit::env::scope();
         env.set("UZE_HOME", &uze_home);
 
-        let path = persisted_state_path(&project).expect("resolvable under a scoped UZE_HOME");
+        let path = persisted_state_path();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let stale = PersistedWorkspace {
             spaces: vec![PersistedSpace {
                 label: "space 1".into(),
+                root: project.clone(),
                 tabs: vec![PersistedTab {
                     label: "shell".into(),
                     cwd: project.clone(),
@@ -2020,7 +2234,7 @@ mod tests {
         };
         std::fs::write(&path, serde_json::to_vec(&stale).unwrap()).unwrap();
 
-        let endpoint = Endpoint::for_root(&project).unwrap();
+        let endpoint = Endpoint::global().unwrap();
         let (server, _damage) = Server::new(project.clone(), endpoint)
             .expect("a stale persisted command must not fail server startup");
         let session = server.session.lock().expect("session poisoned");

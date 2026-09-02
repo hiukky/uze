@@ -530,6 +530,20 @@ fn run(cli: Cli) -> Result<()> {
     let home = UzeHome::from_env()?;
     let verbose = cli.verbose;
     let Some(command) = cli.command else {
+        // Started inside one of the running client's own panes: a client
+        // inside a client is never what that means. Open a space for this
+        // directory in the uze already running, and leave.
+        if std::env::var_os("UZE_PANE").is_some() {
+            let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            let root = uze_application::workspace_root_or_self(&root);
+            let label = uze_terminal::open_space(&root)
+                .map_err(|error| uze_application::UzeError::AcquisitionFailed(error.to_string()))?;
+            println!(
+                "opened space `{label}` at {} in the running uze",
+                root.display()
+            );
+            return Ok(());
+        }
         if std::io::stdout().is_terminal() && std::io::stdin().is_terminal() {
             // Seeding default marketplace plugins now happens inside the
             // TUI's own startup worker (see `ui::spawn_startup`), off the

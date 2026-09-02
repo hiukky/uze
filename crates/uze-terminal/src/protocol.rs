@@ -28,15 +28,28 @@ use crate::{PaneId, Session, SpaceId, TabId, WorkspaceId};
 /// stream instead of failing this version check cleanly.
 ///
 /// Bumped again for terminal-owned scrollback requests.
-pub const PROTOCOL_VERSION: u16 = 7;
+///
+/// Bumped again for one server per user: a `Space` carries its `root`,
+/// `Workspace` no longer does, `Attach` names the root the client wants a
+/// space for, `CreateSpace` names the new space's root, and the selection
+/// a `Session` carries is the receiving client's own.
+pub const PROTOCOL_VERSION: u16 = 8;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ClientRequest {
     Attach {
         version: u16,
         workspace: WorkspaceId,
+        /// The size of the pane this client will show first; zero in
+        /// either dimension leaves every pane alone (a client that opens a
+        /// space and leaves, never drawing).
         columns: u16,
         rows: u16,
+        /// The directory this client was started in, resolved to its
+        /// workspace root: the server makes sure a space rooted there
+        /// exists and selects it for this client. `None` keeps the
+        /// server's default selection.
+        root: Option<std::path::PathBuf>,
     },
     Detach,
     Input {
@@ -78,7 +91,9 @@ pub enum ClientRequest {
         label: String,
     },
     CreateSpace {
-        label: String,
+        /// `None` derives the label from the root.
+        label: Option<String>,
+        root: std::path::PathBuf,
         columns: u16,
         rows: u16,
     },
@@ -216,6 +231,7 @@ mod tests {
             workspace: WorkspaceId("w".into()),
             columns: 80,
             rows: 24,
+            root: Some(std::path::PathBuf::from("/tmp/w")),
         };
         assert_eq!(
             serde_json::from_str::<ClientRequest>(&serde_json::to_string(&request).unwrap())
@@ -241,7 +257,8 @@ mod tests {
     fn space_requests_round_trip() {
         let requests = [
             ClientRequest::CreateSpace {
-                label: "frontend".into(),
+                label: Some("frontend".into()),
+                root: std::path::PathBuf::from("/tmp/frontend"),
                 columns: 80,
                 rows: 24,
             },

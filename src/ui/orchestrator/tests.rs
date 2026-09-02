@@ -104,7 +104,7 @@ mod workspace_tests {
         // per open space.
         let mut session = Session::new(WorkspaceId("workspace".into()), "/tmp".into(), 80, 24);
         session.workspace.spaces[0].tabs[0].label = "Agent".into();
-        session.add_space("second".into(), 80, 24);
+        session.add_space("second".into(), "/tmp/second".into(), 80, 24);
         session.workspace.spaces[1].tabs[0].label = "Agent".into();
         let model = WorkspaceModel {
             session: Some(session),
@@ -660,7 +660,13 @@ mod workspace_tests {
     #[test]
     fn completed_background_agent_keeps_a_check_until_its_tab_is_opened() {
         let mut session = Session::new(WorkspaceId("workspace".into()), "/tmp".into(), 80, 24);
-        let agent_pane = session.add_tab("Agent".into(), 80, 24, "/tmp".into());
+        let agent_pane = session.add_tab(
+            session.workspace.selected_space,
+            "Agent".into(),
+            80,
+            24,
+            "/tmp".into(),
+        );
         let agent_tab = session.workspace.spaces[0].selected_tab;
         session.workspace.spaces[0].selected_tab = TabId(1);
         let mut model = WorkspaceModel {
@@ -688,7 +694,13 @@ mod workspace_tests {
         // looking at it. Clearing it only at the call sites that happened to
         // know about it is what made "done" survive on a tab already open.
         let mut session = Session::new(WorkspaceId("workspace".into()), "/tmp".into(), 80, 24);
-        let agent_pane = session.add_tab("Agent".into(), 80, 24, "/tmp".into());
+        let agent_pane = session.add_tab(
+            session.workspace.selected_space,
+            "Agent".into(),
+            80,
+            24,
+            "/tmp".into(),
+        );
         let agent_tab = session.workspace.spaces[0].selected_tab;
         session.workspace.spaces[0].selected_tab = TabId(1);
         let mut model = WorkspaceModel {
@@ -715,7 +727,13 @@ mod workspace_tests {
     #[test]
     fn a_closed_tab_leaves_no_status_behind_for_the_next_pane() {
         let mut session = Session::new(WorkspaceId("workspace".into()), "/tmp".into(), 80, 24);
-        let agent_pane = session.add_tab("Agent".into(), 80, 24, "/tmp".into());
+        let agent_pane = session.add_tab(
+            session.workspace.selected_space,
+            "Agent".into(),
+            80,
+            24,
+            "/tmp".into(),
+        );
         let agent_tab = session.workspace.spaces[0].selected_tab;
         session.workspace.spaces[0].selected_tab = TabId(1);
         let mut model = WorkspaceModel {
@@ -866,7 +884,13 @@ mod workspace_tests {
         };
         assert_eq!(next_agent_label(&model), "agent 1");
 
-        session.add_tab("agent 1".into(), 80, 24, "/tmp".into());
+        session.add_tab(
+            session.workspace.selected_space,
+            "agent 1".into(),
+            80,
+            24,
+            "/tmp".into(),
+        );
         let model = WorkspaceModel {
             session: Some(session),
             ..WorkspaceModel::default()

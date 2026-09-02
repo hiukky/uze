@@ -99,6 +99,39 @@ The LikeC4 model will add the terminal runtime server and workspace client as
 containers, show the root CLI/TUI as their composition point, and preserve the
 existing Core/Application/Integration relationships.
 
+**One server per user, not per repository.** The first iteration keyed the
+server on the resolved workspace root, so a repository had a server of its
+own and every space in it. That put two layers on one job: the server's
+root and a space's root meant the same thing, and a person with three
+projects had three servers to attach to. The server is now one per
+`UZE_HOME`; the space is the unit that carries a root. What the launch
+directory decides is which space the client lands in, never which server.
+Persisted state moves from one file per root to one file for the user;
+per-root files from before are simply not read — this is pre-1.0 and a
+migration would outlive the mistake it patches.
+
+**A space is born from a root.** Its label derives from the root, its first
+shell opens there, an agent created in it starts from it, and whether the
+root is a Git repository with a commit is what decides whether that agent
+gets a slot. Two spaces may share a root: they are organisation, and the
+repository's slot pool is the repository's. There is no "global" space; a
+space rooted at the home directory is a space whose root has no Git.
+
+**Selection is per client, structure is shared.** Two terminals attached to
+one server used to move each other's cursor, because `selected_space` and
+each space's `selected_tab` lived in the shared session. They still do, as
+the server's defaults; each client's own selection is kept beside its event
+channel and overlaid on the session it receives, healing lazily when what it
+points at is gone. Damage and structure broadcast to everyone; selection
+never does.
+
+**A `uze` inside a pane opens a space and leaves.** The server stamps every
+pane with `UZE_PANE`. A `uze` that finds it does not attach a client — a
+client inside a client is never what that means — but asks the running
+server for a space rooted at its directory, created when none is, and
+reports it. The way `tmux` inside `tmux` is refused, except that here the
+request has a useful answer.
+
 ## Risks / Trade-offs
 
 - [Terminal compatibility is broader than text rendering] → Use the selected

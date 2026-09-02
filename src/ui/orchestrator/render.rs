@@ -487,6 +487,24 @@ pub(super) fn render_sidebar(
             WorkspaceHit::NewSpace,
         ));
     }
+    // The root the next space is created at, edited in place under "+ new":
+    // a space is born from a directory, and the prompt is that directory
+    // with the selected space's root prefilled.
+    if let Some((RenameTarget::NewSpaceRoot, buffer)) = &model.renaming
+        && let Some(rect) = row(1)
+    {
+        let mut spans = vec![
+            Span::styled(" at ", Style::default().fg(crate::ui::MUTED)),
+            Span::styled(
+                format!("{buffer}▏"),
+                Style::default()
+                    .fg(crate::ui::TEXT_BRIGHT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ];
+        fill_row_bg(&mut spans, rect.width, crate::ui::SURFACE_OVERLAY);
+        frame.render_widget(Paragraph::new(Line::from(spans)), rect);
+    }
     row(1);
 
     for space in &session.workspace.spaces {
@@ -700,6 +718,17 @@ pub(super) fn render_space_header(
         None => Span::styled(format!(" {}", space.label), label_style),
     };
     let mut spans = vec![label];
+    // Where this space's work lives, dim after the name when the column
+    // has room for both: the root is what the space *is*, and what every
+    // agent created here starts from.
+    let root = crate::ui::display_project_path(&space.root);
+    let used: u16 = spans.iter().map(|span| span.width() as u16).sum();
+    if renaming_this.is_none() && used + 2 + root.chars().count() as u16 <= rect.width {
+        spans.push(Span::styled(
+            format!("  {root}"),
+            Style::default().fg(crate::ui::TEXT_DIM),
+        ));
+    }
     if selected {
         fill_row_bg(&mut spans, rect.width, crate::ui::SURFACE_OVERLAY);
     }
