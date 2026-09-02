@@ -1,0 +1,4 @@
+schema: adr-driven
+created: 2026-09-02
+# Restructures how the Lab asserts, not what the product does.
+skip_specs: true
