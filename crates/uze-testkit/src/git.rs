@@ -31,7 +31,7 @@ const AUTHOR_EMAIL: &str = "test@uze.invalid";
 /// A scratch Git repository, isolated from all ambient Git configuration.
 pub struct Repository {
     root: PathBuf,
-    _environment: ProcessEnvGuard<'static>,
+    environment: ProcessEnvGuard<'static>,
 }
 
 impl Repository {
@@ -49,10 +49,7 @@ impl Repository {
 
         let root = base.join("repository");
         std::fs::create_dir_all(&root).expect("could not create the fixture repository");
-        let repository = Self {
-            root,
-            _environment: environment,
-        };
+        let repository = Self { root, environment };
         repository.git(&["init", "--quiet", "-b", INITIAL_BRANCH, "."]);
         repository.git(&["config", "user.name", AUTHOR_NAME]);
         repository.git(&["config", "user.email", AUTHOR_EMAIL]);
@@ -69,6 +66,13 @@ impl Repository {
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Sets a process environment variable for the fixture's lifetime,
+    /// under the same guard that isolates Git's configuration — for a test
+    /// that puts a fake tool on `PATH` beside the repository.
+    pub fn set_env(&mut self, key: &'static str, value: impl AsRef<std::ffi::OsStr>) {
+        self.environment.set(key, value);
     }
 
     /// Writes `relative`, stages it, and commits it. Returns the new `HEAD`.

@@ -7,8 +7,9 @@
 //! project begins ([`project_root`], [`workspace`]), the instruction
 //! context it carries ([`context`], [`project_context`]), the mechanism
 //! for owning a slice of a file UZE did not write ([`text_region`]), and
-//! the work UZE runs inside it: the tasks it launched ([`task`]) and the
-//! checkouts they run in ([`checkout`]).
+//! the work UZE runs inside it: the tasks it launched ([`task`]), the
+//! checkouts they run in ([`checkout`]), and how their work reaches the
+//! target ([`landing`]).
 //!
 //! Module file names keep their full public spelling — `project/lock.rs`
 //! would read better in the tree but would no longer match
@@ -16,6 +17,7 @@
 //! the outside costs more than the prefix saves.
 pub mod checkout;
 pub mod context;
+pub mod landing;
 pub mod project_context;
 pub mod project_lock;
 pub mod project_root;

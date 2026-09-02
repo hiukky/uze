@@ -134,6 +134,9 @@ pub struct Task {
     pub state: TaskState,
     /// Frozen once the branch has left the machine.
     pub pushed: bool,
+    /// The readable name the branch was published under, once it was.
+    #[serde(default)]
+    pub published_as: Option<String>,
     pub created_at_unix: u64,
 }
 
@@ -154,6 +157,7 @@ impl Task {
             checkout: None,
             state: TaskState::Running,
             pushed: false,
+            published_as: None,
             created_at_unix: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|elapsed| elapsed.as_secs())

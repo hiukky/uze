@@ -51,8 +51,10 @@ pub enum CompletionBehavior {
     /// reaches the primary branch without someone deciding it should.
     #[default]
     Handoff,
-    /// Integrate into the primary branch once checks pass.
+    /// Integrate into the target branch once checks pass.
     Merge,
+    /// Publish the branch and open a pull request against the target.
+    Pr,
 }
 
 impl CompletionBehavior {
@@ -60,6 +62,7 @@ impl CompletionBehavior {
         match self {
             Self::Handoff => "handoff",
             Self::Merge => "merge",
+            Self::Pr => "pr",
         }
     }
 
@@ -75,6 +78,10 @@ impl CompletionBehavior {
             Self::Merge => {
                 "integrate your branch into the primary branch once its checks pass, and stop \
                  and report instead if the primary checkout has uncommitted work"
+            }
+            Self::Pr => {
+                "leave your branch and its commits; the branch is published and a pull request \
+                 opened for it"
             }
         }
     }
