@@ -1,103 +1,178 @@
 ## Context
 
-Three delivery routes were available for a project's worktree policy, and the
-choice between them determines whether the policy reaches a harness at all.
+UZE launches every agent it runs and chooses the working directory of every
+pane. That fact made isolation a launch-time decision rather than an
+instruction, and it remains the foundation. The first design built on it
+seated the first agent in the primary checkout and isolated the rest, kept
+every checkout forever, and left delivery to prose. Dogfooding showed the
+three costs: the operator and an agent sharing one tree, a cold build per
+isolated agent with directories accumulating, and no path from a finished
+branch back to the target inside the UI.
 
-1. **A Skill that decides.** What existed. It fails structurally: the skill
-   must be selected before it can argue for its own selection, and selection
-   is driven by matching a description against the user's request, where the
-   conditions for isolation never appear.
-2. **A per-harness native configuration.** Attractive, but no harness
-   surveyed exposes a configurable worktree root. One exposes a base-ref
-   setting; one pins its worktree location entirely. Writing vendor settings
-   would deliver a fraction of the policy to a fraction of the harnesses.
-3. **The shared instruction baseline.** `AGENTS.md` is already projected into
-   every harness through bridges UZE owns. It is in context for every agent
-   and every subagent, in all four harnesses, at the moment work begins.
-
-Route 3 is not a fallback. The harness that ships a native worktree primitive
-documents its activation condition as the user or the project's instructions
-— so the projected policy is the trigger for the native mechanism, and the
-substitute for it where none exists. One route serves both.
+Three things are already in place and shape the design: the terminal
+runtime already tells a quiet agent pane from a working one, which is the
+signal behind today's `Completed` status; `uze-git` separates `read` from
+`write` precisely so a repository write lock has one place to live; and the
+terminal runtime persists per-workspace state under `UzeHome`'s `state/`
+layout, which task state follows.
 
 ## Decisions
 
-**Isolation is performed, not requested.** UZE chooses the working directory
-of every agent it launches, so isolation is a property of the environment the
-agent is born into. Delivering it as instruction text would make the
-guarantee depend on a model reading, believing, and correctly executing
-prose. The projected text is demoted to the one job placement cannot do:
+**Isolation is performed, not requested.** Unchanged. Delivering isolation as
+text would make the guarantee depend on a model reading, believing and
+executing prose. The projected text keeps the one job placement cannot do:
 addressing writers UZE never sees.
 
-**The seat rule.** The primary checkout holds one agent. The first agent
-starts there and keeps access to the operator's uncommitted work — the
-common case pays nothing. Every additional live agent is isolated. This uses
-the one fact UZE has and no agent does: how many agents are live in this
-repository. No question, no trigger to evaluate, no model judgment.
+**Every agent is isolated; the primary checkout is the operator's.** The seat
+rule is removed. Its benefit — the first agent sees uncommitted work — is
+the collision the policy exists to prevent, with the operator as the other
+writer. Its cost — a fresh checkout per agent — is removed by slots below,
+which leaves the seat with no defence. An agent on the operator's own tree
+is a legitimate need ("write the commit for what I changed") and is served
+by the operator running a harness in a shell tab, which is not a UZE agent
+and has nothing to deliver.
 
-**Occupancy is a checkout, not a path.** Pane directories are probed live, so
-comparing exact paths would free the seat the moment an agent changed
-directory. Membership is decided against the fixed layout, which also keeps
-an isolated agent from being mistaken for the seat's occupant.
+**A checkout is a slot; a task is what comes and goes.** `.worktrees/<id>`
+is long-lived and named by a generated identifier that never changes.
+Acquiring a slot is `switch -c agent/<task-id>` from the base, `reset
+--hard`, `clean -fd` without `-x`: tracked and untracked files of the
+previous task go, ignored artifacts stay. This is what makes the second Rust
+agent build incrementally, and it bounds the number of directories by peak
+concurrency. A slot is created only when none is free. No warmed pool and no
+background replenishment: reuse is the optimisation, and a slot on demand is
+cheap enough.
 
-**Degrade to the seat, never to a refusal.** No repository, no commit to
-branch from, no Git — the agent still starts. Failing to isolate is a risk
-only when something else is already writing there; failing to launch is
-certain.
+**Identity is not the label.** The task identifier keys the slot, the branch
+and the persisted state. The label is derived from the prompt and names the
+tab. The branch is `agent/<id>` while local; the readable name derived from
+the label is produced once, at publication in `pr` mode, which is the only
+place a human reads it. In `merge` mode the branch never leaves the machine.
+This removes the rename problem instead of solving it.
 
-**The layout is fixed.** Every tool in this space either fixes the location
-or demands it per invocation; none offers a project-level default to
-configure. A configuration axis is earned by a concrete case, not offered
-preventively.
+**Readiness is a Git fact, evaluated when the pane goes quiet.** Commits
+ahead of the base and a clean tree is ready; a dirty tree is surfaced and
+not offered for delivery. The evaluation is idempotent, so a quiet pane that
+resumes simply flips the state back. No model instruction, no output
+parsing, and no signal from the harness: a hook-delivered end-of-turn event
+could sharpen the moment later, but nothing depends on one. Delivery is
+never triggered by readiness itself, because a quiet pane also means the
+agent is waiting for an answer.
 
-**The only declared axis is what happens to finished work.** That is a team
-decision; a path is not. `handoff` is the default because nothing should
-reach the primary branch without someone deciding it should.
+**Delivery is serialized under the write lock, in the task's checkout.** One
+task at a time: rebase the task's branch onto the target's tip inside its own
+slot, run the declared gate on the rebased commits, fast-forward the target.
+Rebasing in the task's checkout keeps the target untouched until the last
+step; running the gate after the rebase tests the commits that will land,
+not a base that no longer exists; `ff-only` makes a half-finished merge
+impossible. The second task rebases onto a target that already contains the
+first. The lock lives behind `uze_git::write`, keyed on the common
+directory, because a lock a second module can spawn Git around is worthless.
 
-**The projection must not trigger foreign isolation.** A harness with its own
-worktree primitive activates on an instruction to isolate — exactly what the
-first draft of this text said. It would have isolated a second time on top of
-the checkout UZE had already placed the agent in. The text now states where
-the reader already is, and asks for a worktree only for a subagent, resolved
-against the primary so directories never nest.
+**The target is declared, and its tip is read from where it lives.** The
+lock names the branch finished work targets, defaulting to the branch the
+primary checkout is on when a task is created. In `pr` mode the target is
+protected and lives at the remote, so its tip is the remote-tracking branch
+after a fetch, and the operator's local branch is out of the flow entirely.
+In `merge` and `handoff` the target is the local branch. Switching a project
+from direct commits to a protected branch is one field, `completion`, and
+changes nothing about slots, readiness, rebase or the gate.
 
-**Nothing is deleted.** Checkouts are kept; a closing tab removes nothing. A
-clean working tree is not proof there is nothing to lose — commits absent
-from the primary branch look identical to an empty checkout — so removal
-waits for a guard that checks both, and for a real request.
+**A live task follows the target on its own.** When the target has moved
+and a task's pane goes quiet with a clean tree, its branch is rebased onto
+the target under the same rules as delivery, conflicts returned to the
+owner. No manual mode: every harness already refreshes its own view of the
+tree between turns, and the one unsafe moment — a rebase under an agent
+mid-edit — is excluded by the clean-tree condition, not by a setting.
 
-**The region's identity carries the rendered content's digest.** With a fixed
-identity, editing the lock renders different bytes into a region that already
-exists, which `text_region` correctly refuses as drift — the declaration
-would be projectable once and never updatable. Keying on content turns an
-edit into "one region is stale, another is missing". A hand edit still
-drifts, because it changes content *inside* an unchanged identity.
+**Rebase, not merge commits.** Agents already produce granular, verified
+commits; a rebase keeps them one by one and keeps `git bisect` useful. This
+is a deliberate choice, recorded so it is not revisited.
 
-**Discovery avoids a subprocess.** Status commands are budgeted; linked
-worktrees are read from `.git/worktrees/*/gitdir`, Git's own registry, which
-stays flat however the directories nest.
+**Conflicts go to the owner, with the rebase paused.** The agent that wrote
+the branch is the only party holding the intent. The rebase stays paused in
+its slot, with markers in place, and a message with the conflicting files
+and the target's range is written into its pane. The next evaluation reads
+Git: rebase finished and tip descending from the target's tip means the
+gate runs and delivery continues; anything else keeps the task in conflict,
+visibly. UZE does not touch a slot while its rebase is paused.
 
-**The replaced lock key fails loudly.** `ProjectLock` does not deny unknown
-fields, so leaving `worktrees_dir` in place would silently drop a declared
-policy. This is a rejection, not a compatibility path.
+**The target lives in the operator's tree, and `merge` says so.** A
+fast-forward on the checked-out target updates the primary working tree;
+that is what Git does. If the operator has uncommitted changes to files the
+task touched, Git refuses and UZE reports it without writing anything. The
+rule is narrowed from "any dirty primary" to real overlap.
+
+**Nothing that can hold work is removed automatically.** A dirty orphan is
+parked, never deleted. A branch with commits absent from the target is never
+deleted. Two removals are safe and automatic: a branch fully reachable from
+the target, and the directory of a clean slot idle beyond a declared age,
+whose branch stays. Discard is an operator action on a named task. This is
+what keeps three slots from becoming thirty after a busy week.
+
+**Materialisation is minimal and declared.** `link` symlinks ignored files
+from the primary — `.env` and friends — and `setup` prepares the checkout.
+`link` is validated at read time: relative, inside the repository, ignored.
+A `setup` failure warns and launches; a checkout without dependencies is
+still better than no agent. `copy`, ports and compose namespacing are not
+added; the lock gains a field when a project needs one. `setup` and `gate`
+run through the bounded subprocess helper and inherit the hook surface's
+timeout and output limits.
+
+**Adoption at startup, prune last.** The isolation directory, the `agent/`
+branches and the persisted state are reconciled when a repository's space
+starts. Legacy checkouts become tasks labelled from their branch, and no
+branch is renamed since it may have been pushed. `git worktree prune` runs
+after adoption so a registry entry is never dropped before its directory has
+been looked at.
+
+**Task state lives under `UzeHome`, outside every checkout.** `state/`
+already holds the terminal's per-workspace snapshot, keyed on the resolved
+root; task state uses the same identity and layout, is written atomically
+and carries a schema version. Removing a worktree can never remove history.
+
+**The task model carries `base` and `base_commit` from the first commit**,
+without behaviour. Stacking is what the operator already does by hand and
+retrofitting a graph onto flat tasks is a migration; carrying two fields is
+not.
+
+**The projection must not trigger foreign isolation.** Unchanged, and the
+text gains three statements: the reader commits on its own branch, never
+writes the target, and delivery is UZE's.
+
+**The region's identity carries the rendered content's digest.** Unchanged.
+
+**The replaced lock key fails loudly.** Unchanged, and extended: unknown
+fields inside the policy block are rejected by name, while the top level
+stays tolerant so a lock from a newer UZE still loads.
 
 ## Risks
 
 - **Subagents are out of reach.** A writer spawned inside a harness session
   is never placed by UZE. The projected text asks; the harness complies or
-  does not. This is the original pain and it is only partly closed.
-- **A harness started outside UZE** — a bare CLI in a terminal — is in the
-  same category, as is the operator's own editor holding the seat invisibly.
-- **A fresh checkout lacks ignored state.** Build caches, `.env` files, and
-  dependency directories do not travel. This is a property of worktrees; no
-  ecosystem-specific handling is added, deliberately.
-- **Checkouts accumulate**, because nothing is deleted, and a checkout whose
-  tab was closed has no path back inside the UI yet.
+  does not.
+- **The target can be written by convention only.** Git refuses to check out
+  the target in a second worktree, but refs are shared and an agent could
+  write `main` without checking it out. No harness does; the projected text
+  forbids it; the fast-forward step detects an unexpected move.
+- **The write lock covers UZE, not the agent's own Git.** Each agent writes
+  only its own branch, and every shared write — target, worktree add and
+  prune, branch deletion — is UZE's. A paused rebase is the one state where
+  an agent and UZE could touch the same slot, and UZE stays out of it.
+- **`merge` writes into the operator's tree.** The overlap rule keeps this
+  from destroying anything, but it is a surprise the first time.
+- **`setup` runs project-declared code on first launch.** Remote executable
+  capabilities cross an explicit consent boundary in this project. Whether
+  the lock's `setup` inherits that boundary is decided during
+  implementation and recorded in the invariants.
+- **Two spaces on one repository share one slot pool.** Correct by design;
+  the state file needs its own lock for it to be safe.
 
 ## Candidate ADRs
 
-- **Isolate concurrent agents at launch** — UZE places every agent it starts,
-  seating one per primary checkout and isolating the rest, instead of asking
-  a model to isolate itself. Hard to reverse: it makes agent placement a
-  product guarantee, fixes the on-disk layout, adds a lock axis, and changes
-  what the terminal runtime is keyed on.
+- **Isolate every agent in a reusable checkout, and deliver from the
+  system** — every agent gets a slot, the primary belongs to the operator,
+  readiness is read from Git, delivery is rebase-gate-fast-forward under
+  the write lock, and nothing holding work is removed automatically. Hard to
+  reverse: it fixes the on-disk layout and branch naming, adds lock fields,
+  makes delivery a product mechanism, and puts the write lock in the Git
+  transport.
