@@ -8,12 +8,11 @@
 
 use std::{fs, path::PathBuf};
 
-use uze::{
-    UzeApplication, UzeHome,
+use uze_application::{
+    UzeApplication,
     application::{InstallReport, ProjectLockStatus, RemoveProjectPluginReport},
-    project_lock, project_root,
-    trust::AlwaysTrust,
 };
+use uze_core::{UzeHome, project_lock, project_root, trust::AlwaysTrust};
 
 fn temp(label: &str) -> PathBuf {
     uze_testkit::temp::scratch(label)
@@ -327,7 +326,7 @@ fn same_named_plugins_from_two_marketplaces_coexist_and_require_qualified_lookup
         .unwrap_err();
     assert!(matches!(
         collision,
-        uze::UzeError::PluginNameCollision { existing, requested, .. }
+        uze_core::UzeError::PluginNameCollision { existing, requested, .. }
             if existing == "flow@first" && requested == "flow@second"
     ));
     // Refused: only `flow@first` is installed.
@@ -361,7 +360,7 @@ fn same_named_plugins_from_two_marketplaces_coexist_and_require_qualified_lookup
     assert_eq!(ids, vec!["flow@first", "flow@second"]);
     assert!(
         home.plugin_dir(
-            &uze::PackageId::from_marketplace_plugin(
+            &uze_core::PackageId::from_marketplace_plugin(
                 "first",
                 "flow",
                 std::path::Path::new("plugin.json"),
@@ -376,12 +375,12 @@ fn same_named_plugins_from_two_marketplaces_coexist_and_require_qualified_lookup
     // The aliased one is addressable the same way, by its own active name.
     assert!(matches!(
         app.plugins().remove("flow-second"),
-        Ok(uze::application::RemovePluginReport::Removed { .. })
+        Ok(uze_application::application::RemovePluginReport::Removed { .. })
     ));
     assert_eq!(app.plugins().list().unwrap()[0].id, "flow@first");
     assert!(matches!(
         app.plugins().remove("flow"),
-        Ok(uze::application::RemovePluginReport::Removed { .. })
+        Ok(uze_application::application::RemovePluginReport::Removed { .. })
     ));
     assert!(app.plugins().list().unwrap().is_empty());
 }

@@ -27,8 +27,8 @@
 
 use std::{fs, path::Path};
 
-use uze::UzeHome;
-use uze::integration::IntegrationPort;
+use uze_core::UzeHome;
+use uze_core::integration::IntegrationPort;
 use uze_integrations::antigravity::AntigravityIntegration;
 use uze_integrations::claude::ClaudeIntegration;
 use uze_integrations::codex::CodexIntegration;

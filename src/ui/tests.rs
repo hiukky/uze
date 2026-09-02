@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{Terminal, backend::TestBackend, layout::Rect};
 
-use crate::UzeHome;
-use crate::application::{
+use uze_application::UzeHome;
+use uze_application::application::{
     DoctorReport, MaintenanceReport, MarketplacePluginSummary, PluginSummary,
 };
 
@@ -43,7 +43,7 @@ fn model_with_plugins(ids: &[&str]) -> TuiModel {
 /// route exercises its non-empty branch rather than only the
 /// nothing-loaded-yet placeholder every other test leaves in place.
 fn model_with_data() -> TuiModel {
-    use crate::application::{
+    use uze_application::application::{
         HarnessContextDelivery, HarnessContextStatus, HarnessHealth, ManagedStateSummary,
         PackageManagedState, Portability, ProjectContextStatus, StoreHealth,
     };
@@ -157,7 +157,7 @@ fn model_with_data() -> TuiModel {
     });
     model.harnesses_selected = 0;
     model.profiles = vec![
-        crate::application::ProfileSummary {
+        uze_application::application::ProfileSummary {
             id: "dev-autonomous".to_owned(),
             description: Some("My daily autonomous coding setup.".to_owned()),
             active: true,
@@ -167,7 +167,7 @@ fn model_with_data() -> TuiModel {
                 model: uze_core::preference::ModelPreference::Default,
             },
         },
-        crate::application::ProfileSummary {
+        uze_application::application::ProfileSummary {
             id: "safe-mode".to_owned(),
             description: None,
             active: false,
@@ -831,10 +831,10 @@ fn editor_selection_clamps_to_the_preference_row_count() {
 
 #[test]
 fn overview_alerts_classify_conflicts_as_high_and_missing_as_low() {
-    use crate::application::{ManagedStateSummary, PackageManagedState};
+    use uze_application::application::{ManagedStateSummary, PackageManagedState};
     let doctor = DoctorReport {
         uze_home: PathBuf::from("/home"),
-        store: crate::application::StoreHealth::Ready,
+        store: uze_application::application::StoreHealth::Ready,
         plugins: Vec::new(),
         harnesses: Vec::new(),
         attachments: vec![
@@ -1015,7 +1015,7 @@ fn r_refreshes_outside_plugins_but_still_removes_within_plugins() {
 
 #[test]
 fn attachment_health_is_never_unknown_after_a_refresh() {
-    use crate::application::{ManagedStateSummary, PackageManagedState};
+    use uze_application::application::{ManagedStateSummary, PackageManagedState};
     // Every refresh carries the full doctor with attachments (served by
     // the inspection cache), so the Plugins drawer's status line derives
     // real health from it instead of the masked "unknown" placeholder.
@@ -1024,7 +1024,7 @@ fn attachment_health_is_never_unknown_after_a_refresh() {
     model.marketplace_drawer_open = true;
     model.doctor = Some(DoctorReport {
         uze_home: PathBuf::from("/home"),
-        store: crate::application::StoreHealth::Ready,
+        store: uze_application::application::StoreHealth::Ready,
         plugins: vec![plugin("one")],
         harnesses: Vec::new(),
         attachments: vec![PackageManagedState {
@@ -1261,7 +1261,7 @@ fn clip_line_truncates_long_status_with_ellipsis() {
 
 // --- Overview workspace awareness ---------------------------------------
 
-use crate::application::{
+use uze_application::application::{
     MarketplaceState, MemoryState, OverviewMarketplace, OverviewWorkspaceSummary,
     ProjectEnvironmentState, ProjectOverview, WorkspaceKind,
 };

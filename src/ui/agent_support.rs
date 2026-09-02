@@ -8,7 +8,7 @@ use ratatui::{
 };
 use uze_application::{CapabilityKind, HarnessCapabilities};
 
-use crate::application::{
+use uze_application::application::{
     AgentContextStatus, HarnessHealth, ProfileSummary, ResourceDelivery, UndeliveredReason,
 };
 

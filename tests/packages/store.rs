@@ -1,6 +1,6 @@
 use std::{fs, path::PathBuf};
 
-use uze::{
+use uze_core::{
     ResourceOrigin, UzeEngine, UzeHome, UzeStore,
     capability::{CapabilityKind, Representation},
 };
@@ -12,10 +12,10 @@ use uze::{
 fn install(
     store: &UzeStore,
     path: impl Into<std::path::PathBuf>,
-) -> uze::Result<uze::StoredPackage> {
-    store.ingest(&uze::acquisition::acquire(&uze::PackageSource::local(
-        path,
-    ))?)
+) -> uze_core::Result<uze_core::StoredPackage> {
+    store.ingest(&uze_core::acquisition::acquire(
+        &uze_core::PackageSource::local(path),
+    )?)
 }
 
 fn package_fixture() -> PathBuf {
@@ -84,7 +84,7 @@ fn store_keeps_same_named_plugins_from_distinct_marketplaces_separate_but_only_o
     let home = UzeHome::at(&root);
     let store = UzeStore::new(home.clone());
     let materialized =
-        uze::acquisition::acquire(&uze::PackageSource::local(package_fixture())).unwrap();
+        uze_core::acquisition::acquire(&uze_core::PackageSource::local(package_fixture())).unwrap();
 
     let from_alpha = store
         .ingest_from_marketplace(&materialized, "alpha")
@@ -101,7 +101,7 @@ fn store_keeps_same_named_plugins_from_distinct_marketplaces_separate_but_only_o
         .unwrap_err();
     assert!(matches!(
         collision,
-        uze::UzeError::PluginNameCollision { existing, requested, .. }
+        uze_core::UzeError::PluginNameCollision { existing, requested, .. }
             if existing == "uze-agent-skill-conformance@alpha"
                 && requested == "uze-agent-skill-conformance@beta"
     ));
@@ -149,7 +149,7 @@ fn store_rejects_an_invalid_marketplace_name_before_writing_plugin_bytes() {
     let home = UzeHome::at(&root);
     let store = UzeStore::new(home.clone());
     let materialized =
-        uze::acquisition::acquire(&uze::PackageSource::local(package_fixture())).unwrap();
+        uze_core::acquisition::acquire(&uze_core::PackageSource::local(package_fixture())).unwrap();
 
     assert!(
         store

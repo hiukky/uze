@@ -7,7 +7,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 
-use crate::application::PluginCapability;
+use uze_application::application::PluginCapability;
 
 use super::{BORDER, MUTED};
 

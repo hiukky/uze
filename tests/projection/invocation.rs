@@ -21,12 +21,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use uze::integrations::{
-    antigravity::AntigravityIntegration, claude::ClaudeIntegration, codex::CodexIntegration,
-    opencode::OpenCodeIntegration,
-};
-use uze::{
-    PackageSource, Resource, UzeApplication, UzeEngine, UzeHome, UzeStore,
+use uze_application::UzeApplication;
+use uze_core::{
+    PackageSource, Resource, UzeEngine, UzeHome, UzeStore,
     capability::CapabilityKind,
     exposure::{ExposurePlan, PackageExposurePlan},
     integration::{
@@ -39,6 +36,10 @@ use uze::{
     state,
     store::StoredPackage,
 };
+use uze_integrations::{
+    antigravity::AntigravityIntegration, claude::ClaudeIntegration, codex::CodexIntegration,
+    opencode::OpenCodeIntegration,
+};
 
 fn temp(label: &str) -> PathBuf {
     uze_testkit::temp::scratch(label)
@@ -48,8 +49,10 @@ fn workflow_fixture() -> PathBuf {
     uze_testkit::fixtures::canonical("workflow")
 }
 
-fn install(store: &UzeStore, path: impl Into<PathBuf>) -> uze::Result<StoredPackage> {
-    store.ingest(&uze::acquisition::acquire(&PackageSource::local(path))?)
+fn install(store: &UzeStore, path: impl Into<PathBuf>) -> uze_core::Result<StoredPackage> {
+    store.ingest(&uze_core::acquisition::acquire(&PackageSource::local(
+        path,
+    ))?)
 }
 
 fn mark_setup(home: &UzeHome, integration: &dyn IntegrationPort) {
@@ -86,7 +89,7 @@ fn skills_of(resources: &[Resource]) -> &Resource {
 struct NoopProcessRunner;
 
 impl ProcessRunner for NoopProcessRunner {
-    fn run(&self, _spec: &ProcessSpec) -> uze::Result<ProcessResult> {
+    fn run(&self, _spec: &ProcessSpec) -> uze_core::Result<ProcessResult> {
         Ok(ProcessResult {
             success: true,
             timed_out: false,
@@ -128,33 +131,39 @@ impl<T: IntegrationPort> IntegrationPort for AlwaysPresent<T> {
     fn provision(
         &self,
         _runner: &dyn ProcessRunner,
-    ) -> uze::Result<uze::provisioning::ProvisioningResult> {
-        Ok(uze::provisioning::ProvisioningResult::verified(
-            uze::provisioning::ProvisionAction::None,
+    ) -> uze_core::Result<uze_core::provisioning::ProvisioningResult> {
+        Ok(uze_core::provisioning::ProvisioningResult::verified(
+            uze_core::provisioning::ProvisionAction::None,
             "test-always-present",
             self.detect(),
         ))
     }
-    fn install(&self, home: &UzeHome, detection: &HarnessDetection) -> uze::Result<()> {
+    fn install(&self, home: &UzeHome, detection: &HarnessDetection) -> uze_core::Result<()> {
         self.0.install(home, detection)
     }
-    fn attach(&self, resource: &ProjectResource) -> uze::Result<Option<PathBuf>> {
+    fn attach(&self, resource: &ProjectResource) -> uze_core::Result<Option<PathBuf>> {
         self.0.attach(resource)
     }
     fn attach_package(
         &self,
         package: &StoredPackage,
         plan: &PackageExposurePlan,
-    ) -> uze::Result<Option<AttachmentReceipt>> {
+    ) -> uze_core::Result<Option<AttachmentReceipt>> {
         self.0.attach_package(package, plan)
     }
-    fn attach_receipt(&self, resource: &ProjectResource) -> uze::Result<Option<AttachmentReceipt>> {
+    fn attach_receipt(
+        &self,
+        resource: &ProjectResource,
+    ) -> uze_core::Result<Option<AttachmentReceipt>> {
         self.0.attach_receipt(resource)
     }
     fn inspect_receipt(&self, receipt: &AttachmentReceipt) -> AttachmentInspection {
         self.0.inspect_receipt(receipt)
     }
-    fn detach_receipt(&self, receipt: &AttachmentReceipt) -> uze::Result<AttachmentInspection> {
+    fn detach_receipt(
+        &self,
+        receipt: &AttachmentReceipt,
+    ) -> uze_core::Result<AttachmentInspection> {
         self.0.detach_receipt(receipt)
     }
 }
@@ -259,7 +268,7 @@ fn installing_another_plugin_never_renames_an_existing_one() {
         .plugins()
         .add(
             PackageSource::local(skill_fixture(&root.join("f"), "alpha", "review")),
-            &uze::trust::AlwaysTrust,
+            &uze_core::trust::AlwaysTrust,
         )
         .unwrap();
     let skills_dir = agents_home.join("skills");
@@ -272,7 +281,7 @@ fn installing_another_plugin_never_renames_an_existing_one() {
         .plugins()
         .add(
             PackageSource::local(skill_fixture(&root.join("f"), "beta", "review")),
-            &uze::trust::AlwaysTrust,
+            &uze_core::trust::AlwaysTrust,
         )
         .unwrap();
     assert!(alpha_before.is_symlink(), "alpha:review is untouched");
@@ -285,14 +294,14 @@ fn installing_another_plugin_never_renames_an_existing_one() {
         .plugins()
         .add(
             PackageSource::local(skill_fixture(&root2.join("f"), "beta", "review")),
-            &uze::trust::AlwaysTrust,
+            &uze_core::trust::AlwaysTrust,
         )
         .unwrap();
     application2
         .plugins()
         .add(
             PackageSource::local(skill_fixture(&root2.join("f"), "alpha", "review")),
-            &uze::trust::AlwaysTrust,
+            &uze_core::trust::AlwaysTrust,
         )
         .unwrap();
     let skills2 = agents2.join("skills");
@@ -310,14 +319,14 @@ fn same_named_skills_from_two_packages_are_independently_addressable() {
         .plugins()
         .add(
             PackageSource::local(skill_fixture(&root.join("f"), "alpha", "review")),
-            &uze::trust::AlwaysTrust,
+            &uze_core::trust::AlwaysTrust,
         )
         .unwrap();
     application
         .plugins()
         .add(
             PackageSource::local(skill_fixture(&root.join("f"), "beta", "review")),
-            &uze::trust::AlwaysTrust,
+            &uze_core::trust::AlwaysTrust,
         )
         .unwrap();
     let skills_dir = agents_home.join("skills");

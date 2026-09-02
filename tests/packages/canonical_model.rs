@@ -14,8 +14,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use uze::{PackageSource, UzeApplication};
-use uze::{
+use uze_application::UzeApplication;
+use uze_core::PackageSource;
+use uze_core::{
     Result, UzeHome,
     capability::CapabilityKind,
     integration::{AttachmentReceipt, AttachmentState, HarnessDetection, IntegrationPort},
@@ -50,18 +51,18 @@ impl IntegrationPort for StubIntegration {
             version: None,
         }
     }
-    fn exposure_plan(&self, resource: &uze::Resource) -> uze::exposure::ExposurePlan {
-        uze::exposure::ExposurePlan {
+    fn exposure_plan(&self, resource: &uze_core::Resource) -> uze_core::exposure::ExposurePlan {
+        uze_core::exposure::ExposurePlan {
             representation: resource.capability.representation,
-            route: uze::router::CompatibilityRoute::Unsupported,
-            verification: uze::router::VerificationStatus::NotExposed,
-            mechanism: uze::exposure::ExposureMechanism::Unsupported {
+            route: uze_core::router::CompatibilityRoute::Unsupported,
+            verification: uze_core::router::VerificationStatus::NotExposed,
+            mechanism: uze_core::exposure::ExposureMechanism::Unsupported {
                 rationale: "test stub attaches nothing".to_owned(),
             },
             evidence: "test stub".to_owned(),
         }
     }
-    fn attach_receipt(&self, _resource: &uze::Resource) -> Result<Option<AttachmentReceipt>> {
+    fn attach_receipt(&self, _resource: &uze_core::Resource) -> Result<Option<AttachmentReceipt>> {
         Ok(None)
     }
 }
@@ -94,7 +95,7 @@ fn the_official_package_installs_through_the_unmodified_pipeline() {
         .plugins()
         .add(
             PackageSource::local(official_package()),
-            &uze::trust::AlwaysTrust,
+            &uze_core::trust::AlwaysTrust,
         )
         .expect("the official uze package is a valid Agent Plugins 1.0 package");
     assert_eq!(report.plugin.id, "uze@local");
@@ -109,7 +110,7 @@ fn the_official_package_contributes_its_agent_skill_resources() {
         .plugins()
         .add(
             PackageSource::local(official_package()),
-            &uze::trust::AlwaysTrust,
+            &uze_core::trust::AlwaysTrust,
         )
         .unwrap();
     let inspection = application.plugins().inspect("uze").unwrap();
@@ -152,7 +153,7 @@ fn the_package_receives_no_special_treatment_a_renamed_copy_behaves_identically(
     let application = app(&root);
     let report = application
         .plugins()
-        .add(PackageSource::local(renamed), &uze::trust::AlwaysTrust)
+        .add(PackageSource::local(renamed), &uze_core::trust::AlwaysTrust)
         .expect("an identical package under a different id installs the same way");
     assert_eq!(report.plugin.id, "totally-different-name@local");
     let inspection = application
@@ -174,7 +175,7 @@ fn status_context_inspect_and_context_plan_produce_valid_json() {
         .plugins()
         .add(
             PackageSource::local(official_package()),
-            &uze::trust::AlwaysTrust,
+            &uze_core::trust::AlwaysTrust,
         )
         .unwrap();
     let project = root.join("project");
@@ -205,7 +206,7 @@ fn installing_the_skill_package_never_touches_managed_regions_of_other_packages(
         .plugins()
         .add(
             PackageSource::local(uze_testkit::fixtures::canonical("instructions-a")),
-            &uze::trust::AlwaysTrust,
+            &uze_core::trust::AlwaysTrust,
         )
         .unwrap();
     let project = root.join("project");
@@ -220,7 +221,7 @@ fn installing_the_skill_package_never_touches_managed_regions_of_other_packages(
         .plugins()
         .add(
             PackageSource::local(official_package()),
-            &uze::trust::AlwaysTrust,
+            &uze_core::trust::AlwaysTrust,
         )
         .unwrap();
     assert_eq!(
@@ -244,14 +245,14 @@ fn drift_is_still_blocked_with_the_skill_package_also_installed() {
         .plugins()
         .add(
             PackageSource::local(official_package()),
-            &uze::trust::AlwaysTrust,
+            &uze_core::trust::AlwaysTrust,
         )
         .unwrap();
     application
         .plugins()
         .add(
             PackageSource::local(uze_testkit::fixtures::canonical("instructions-a")),
-            &uze::trust::AlwaysTrust,
+            &uze_core::trust::AlwaysTrust,
         )
         .unwrap();
     let project = root.join("project");

@@ -11,11 +11,10 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
-use crate::integration::AttachmentState;
-use crate::{
+use uze_application::AttachmentState;
+use uze_application::{
+    CapabilityKind, HarnessCapabilities,
     application::{AgentContextStatus, HarnessHealth, ResourceDelivery, UndeliveredReason},
-    capability::CapabilityKind,
-    router::HarnessCapabilities,
 };
 
 use super::super::hit::Hit;

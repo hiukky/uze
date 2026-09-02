@@ -18,13 +18,13 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use uze::{
+use uze_core::{
     PackageId, Resource, UzeEngine, UzeHome, UzeStore,
     exposure::ExposureMechanism,
     integration::{IntegrationPort, default_exposure_name_candidates},
 };
 
-use uze::integrations::{
+use uze_integrations::{
     claude::ClaudeIntegration, codex::CodexIntegration, opencode::OpenCodeIntegration,
 };
 
@@ -35,10 +35,10 @@ use uze::integrations::{
 fn install(
     store: &UzeStore,
     path: impl Into<std::path::PathBuf>,
-) -> uze::Result<uze::StoredPackage> {
-    store.ingest(&uze::acquisition::acquire(&uze::PackageSource::local(
-        path,
-    ))?)
+) -> uze_core::Result<uze_core::StoredPackage> {
+    store.ingest(&uze_core::acquisition::acquire(
+        &uze_core::PackageSource::local(path),
+    )?)
 }
 
 struct SharedStoreFixture {

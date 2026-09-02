@@ -21,12 +21,9 @@
 
 use std::path::PathBuf;
 
-use uze::{
-    UzeEngine, UzeHome, UzeStore, capability::CapabilityKind, exposure::ExposureMechanism,
-    integration::IntegrationPort, router::CompatibilityRoute,
-};
+use uze_core::{UzeEngine, UzeHome, UzeStore, capability::CapabilityKind, exposure::ExposureMechanism, integration::IntegrationPort, router::CompatibilityRoute};
 
-use uze::integrations::{
+use uze_integrations::{
     antigravity::AntigravityIntegration, claude::ClaudeIntegration, codex::CodexIntegration,
     opencode::OpenCodeIntegration,
 };
@@ -34,8 +31,8 @@ use uze::integrations::{
 fn install(
     store: &UzeStore,
     path: impl Into<std::path::PathBuf>,
-) -> uze::Result<uze::StoredPackage> {
-    store.ingest(&uze::acquisition::acquire(&uze::PackageSource::local(
+) -> uze_core::Result<uze_core::StoredPackage> {
+    store.ingest(&uze_core::acquisition::acquire(&uze_core::PackageSource::local(
         path,
     ))?)
 }
@@ -45,9 +42,9 @@ fn fixture() -> PathBuf {
 }
 
 fn mark_setup(home: &UzeHome, integration: &dyn IntegrationPort) {
-    uze::state::record(
+    uze_core::state::record(
         home,
-        uze::state::IntegrationRecord {
+        uze_core::state::IntegrationRecord {
             harness: integration.id().to_owned(),
             version: None,
             strategy: "test".to_owned(),

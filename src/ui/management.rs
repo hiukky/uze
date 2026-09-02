@@ -16,7 +16,7 @@ use ratatui::{
     widgets::{Block, Borders, Padding, Paragraph, Wrap},
 };
 
-use crate::{Result, UzeHome};
+use uze_application::{Result, UzeHome};
 
 use super::hit::Hit;
 use super::model::{self, Focus, Overlay, ROUTES, Route, Status, TuiModel};

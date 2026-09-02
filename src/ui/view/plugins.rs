@@ -25,7 +25,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
-use crate::application::{DoctorReport, MarketplacePluginSummary};
+use uze_application::application::{DoctorReport, MarketplacePluginSummary};
 
 use super::super::hit::Hit;
 use super::super::model::{ResizablePanel, TuiModel};
@@ -652,21 +652,21 @@ fn render_plugin_drawer(
     }
 }
 
-fn exposure_route_label(plan: &crate::exposure::ExposurePlan) -> &'static str {
+fn exposure_route_label(plan: &uze_application::ExposurePlan) -> &'static str {
     match plan.route {
-        crate::router::CompatibilityRoute::Native => "native",
-        crate::router::CompatibilityRoute::Adaptable => "adapted",
-        crate::router::CompatibilityRoute::Degraded => "degraded",
-        crate::router::CompatibilityRoute::Unsupported => "unsupported",
+        uze_application::CompatibilityRoute::Native => "native",
+        uze_application::CompatibilityRoute::Adaptable => "adapted",
+        uze_application::CompatibilityRoute::Degraded => "degraded",
+        uze_application::CompatibilityRoute::Unsupported => "unsupported",
     }
 }
 
-fn package_strategy(plan: &crate::exposure::PackageExposurePlan) -> &'static str {
+fn package_strategy(plan: &uze_application::PackageExposurePlan) -> &'static str {
     match plan.route {
-        crate::router::CompatibilityRoute::Native => "native",
-        crate::router::CompatibilityRoute::Adaptable => "adapted",
-        crate::router::CompatibilityRoute::Degraded => "degraded",
-        crate::router::CompatibilityRoute::Unsupported => "unsupported",
+        uze_application::CompatibilityRoute::Native => "native",
+        uze_application::CompatibilityRoute::Adaptable => "adapted",
+        uze_application::CompatibilityRoute::Degraded => "degraded",
+        uze_application::CompatibilityRoute::Unsupported => "unsupported",
     }
 }
 

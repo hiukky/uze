@@ -19,7 +19,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use uze::{PackageSource, UzeError, UzeHome, UzeStore};
+use uze_core::{PackageSource, UzeError, UzeHome, UzeStore};
 
 fn temporary(label: &str) -> PathBuf {
     uze_testkit::temp::scratch(label)
@@ -41,16 +41,16 @@ fn package_at(root: &Path) {
     .unwrap();
 }
 
-fn install(root: &Path) -> (UzeHome, uze::Result<uze::StoredPackage>) {
+fn install(root: &Path) -> (UzeHome, uze_core::Result<uze_core::StoredPackage>) {
     let home = UzeHome::at(root.join("uze-home"));
     let store = UzeStore::new(home.clone());
     let package = root.join("package");
-    let result = uze::acquisition::acquire(&PackageSource::local(&package))
+    let result = uze_core::acquisition::acquire(&PackageSource::local(&package))
         .and_then(|materialized| store.ingest(&materialized));
     (home, result)
 }
 
-fn assert_escape_rejected(result: uze::Result<uze::StoredPackage>, label: &str) {
+fn assert_escape_rejected(result: uze_core::Result<uze_core::StoredPackage>, label: &str) {
     match result {
         Err(UzeError::PackageEscapesRoot { .. }) => {}
         Err(other) => panic!("{label} was rejected for the wrong reason: {other}"),
@@ -187,7 +187,7 @@ fn a_mutual_symlink_cycle_does_not_hang_discovery() {
     let (home, result) = install(&root);
     let installed = result.expect("a cyclic but contained package installs");
     // The real skill is still found; the cycle is simply not entered.
-    let found = uze::project::files_named(&installed.root.join("skills"), "SKILL.md").unwrap();
+    let found = uze_core::project::files_named(&installed.root.join("skills"), "SKILL.md").unwrap();
     assert_eq!(found.len(), 1);
 
     let _ = fs::remove_dir_all(home.root());
@@ -205,7 +205,7 @@ fn a_self_referencing_symlink_does_not_hang_discovery() {
     let (home, result) = install(&root);
     let installed = result.expect("a self-linked but contained package installs");
     assert_eq!(
-        uze::project::files_named(&installed.root.join("skills"), "SKILL.md")
+        uze_core::project::files_named(&installed.root.join("skills"), "SKILL.md")
             .unwrap()
             .len(),
         1
@@ -227,7 +227,7 @@ fn a_symlinked_directory_pointing_at_its_own_ancestor_does_not_hang_discovery() 
     let (home, result) = install(&root);
     let installed = result.expect("an ancestor-linked but contained package installs");
     assert_eq!(
-        uze::project::files_named(&installed.root.join("skills"), "SKILL.md")
+        uze_core::project::files_named(&installed.root.join("skills"), "SKILL.md")
             .unwrap()
             .len(),
         1
@@ -261,7 +261,7 @@ fn content_reachable_only_through_a_symlinked_directory_is_not_discovered() {
         "the symlink was not preserved as package content"
     );
     assert_eq!(
-        uze::project::files_named(&installed.root.join("skills"), "SKILL.md")
+        uze_core::project::files_named(&installed.root.join("skills"), "SKILL.md")
             .unwrap()
             .len(),
         1,

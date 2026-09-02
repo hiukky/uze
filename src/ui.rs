@@ -47,9 +47,9 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use crate::{
-    Result, UzeApplication, UzeHome,
-    provisioning::{ProcessOutput, ProcessResult, ProcessRunner, ProcessSpec, SystemProcessRunner},
+use uze_application::{
+    ProcessOutput, ProcessResult, ProcessRunner, ProcessSpec, Result, SystemProcessRunner,
+    UzeApplication, UzeHome,
 };
 
 mod agent_support;
@@ -237,8 +237,8 @@ impl Drop for TerminalSession {
     }
 }
 
-fn io_error(source: io::Error) -> crate::UzeError {
-    crate::UzeError::Write {
+fn io_error(source: io::Error) -> uze_application::UzeError {
+    uze_application::UzeError::Write {
         path: PathBuf::from("terminal"),
         source,
     }

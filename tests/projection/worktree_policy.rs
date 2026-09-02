@@ -9,8 +9,9 @@
 
 use std::{fs, path::Path, path::PathBuf};
 
-use uze::{
-    UzeApplication, UzeHome,
+use uze_application::UzeApplication;
+use uze_core::{
+    UzeHome,
     integration::AttachmentState,
     worktree::{self, CompletionBehavior},
 };

@@ -43,7 +43,7 @@ use std::{
 // test runner — same discipline, same reason, as
 // `uze_core::harness_runtime`'s own `PATH_ENV_GUARD`.
 
-use uze::{
+use uze_core::{
     acquisition::{PackageSource, Provenance, ResolvedSource},
     capability::{Capability, CapabilityKind, Representation},
     home::UzeHome,
@@ -53,7 +53,7 @@ use uze::{
     store::{PackageId, StoredPackage},
 };
 
-use uze::integrations::{
+use uze_integrations::{
     antigravity::AntigravityIntegration, claude::ClaudeIntegration, codex::CodexIntegration,
     opencode::OpenCodeIntegration,
 };
@@ -374,11 +374,11 @@ fn antigravity_has_no_shared_skill_root_by_design() {
 /// one that could spawn an installer.
 struct NeverCalledProcessRunner;
 
-impl uze::provisioning::ProcessRunner for NeverCalledProcessRunner {
+impl uze_core::provisioning::ProcessRunner for NeverCalledProcessRunner {
     fn run(
         &self,
-        _spec: &uze::provisioning::ProcessSpec,
-    ) -> uze::Result<uze::provisioning::ProcessResult> {
+        _spec: &uze_core::provisioning::ProcessSpec,
+    ) -> uze_core::Result<uze_core::provisioning::ProcessResult> {
         panic!(
             "add_plugin must never invoke ProcessRunner::run — only explicit `uze setup` provisions"
         );
@@ -423,7 +423,7 @@ fn no_duplicate_capability_receipt_when_a_package_covers_the_resource() {
     let mut env_scope = uze_testkit::env::scope();
     env_scope.set("PATH", uze_testkit::temp::path_prefixed(&fake_bin));
 
-    let application = uze::UzeApplication::new_with_runner(
+    let application = uze_application::UzeApplication::new_with_runner(
         uze_home.clone(),
         vec![
             Box::new(ClaudeIntegration::new(
@@ -451,8 +451,8 @@ fn no_duplicate_capability_receipt_when_a_package_covers_the_resource() {
     let report = application
         .plugins()
         .add(
-            uze::PackageSource::local(pkg_root.join("pkg")),
-            &uze::trust::AlwaysTrust,
+            uze_core::PackageSource::local(pkg_root.join("pkg")),
+            &uze_core::trust::AlwaysTrust,
         )
         .unwrap();
 

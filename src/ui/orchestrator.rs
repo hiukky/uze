@@ -6,7 +6,6 @@
 //! contexts with Ctrl+O reads as one product, not two.
 
 use super::tui_application;
-use crate::{Result, UzeError, UzeHome};
 use crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
@@ -26,6 +25,7 @@ use std::{
     time::{Duration, Instant},
 };
 use uze_application::AgentIdentity;
+use uze_application::{Result, UzeError, UzeHome};
 use uze_extensions::{
     ExtensionHit, git_diff,
     view::{ScrollDirection, ViewHit},

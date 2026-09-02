@@ -1,7 +1,7 @@
 //! Actionable machine-health signals for the Overview.
 
-use crate::application::DoctorReport;
-use crate::integration::AttachmentState;
+use uze_application::AttachmentState;
+use uze_application::application::DoctorReport;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum Severity {

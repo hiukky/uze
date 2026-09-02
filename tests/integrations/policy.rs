@@ -9,17 +9,17 @@
 pub(crate) use std::fs;
 pub(crate) use std::path::PathBuf;
 
-use uze::capability::CapabilityKind;
-pub(crate) use uze::integrations::{
-    antigravity::AntigravityIntegration, claude::ClaudeIntegration, codex::CodexIntegration,
-    opencode::OpenCodeIntegration,
-};
-pub(crate) use uze::{
+use uze_core::capability::CapabilityKind;
+pub(crate) use uze_core::{
     PackageSource, Resource, SkillInvocationPolicy, UzeEngine, UzeHome, UzeStore,
     integration::{AttachmentState, IntegrationPort, ManagedArtifact},
     router::CompatibilityRoute,
     state,
     store::StoredPackage,
+};
+pub(crate) use uze_integrations::{
+    antigravity::AntigravityIntegration, claude::ClaudeIntegration, codex::CodexIntegration,
+    opencode::OpenCodeIntegration,
 };
 pub(crate) fn temp(label: &str) -> PathBuf {
     uze_testkit::temp::scratch(label)
@@ -33,8 +33,13 @@ pub(crate) fn flow_fixture() -> PathBuf {
     uze_testkit::fixtures::canonical("flow")
 }
 
-pub(crate) fn install(store: &UzeStore, path: impl Into<PathBuf>) -> uze::Result<StoredPackage> {
-    store.ingest(&uze::acquisition::acquire(&PackageSource::local(path))?)
+pub(crate) fn install(
+    store: &UzeStore,
+    path: impl Into<PathBuf>,
+) -> uze_core::Result<StoredPackage> {
+    store.ingest(&uze_core::acquisition::acquire(&PackageSource::local(
+        path,
+    ))?)
 }
 
 pub(crate) fn mark_setup(home: &UzeHome, integration: &dyn IntegrationPort) {

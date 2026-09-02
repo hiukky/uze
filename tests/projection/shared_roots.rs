@@ -11,8 +11,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use uze::{
-    PackageSource, UzeApplication, UzeHome,
+use uze_application::UzeApplication;
+use uze_core::{
+    PackageSource, UzeHome,
     exposure::{ExposurePlan, PackageExposurePlan},
     integration::{AttachmentInspection, AttachmentReceipt, HarnessDetection, IntegrationPort},
     project::Resource as ProjectResource,
@@ -59,7 +60,7 @@ fn invalid_body(name: &str) -> String {
 struct NoopProcessRunner;
 
 impl ProcessRunner for NoopProcessRunner {
-    fn run(&self, _spec: &ProcessSpec) -> uze::Result<ProcessResult> {
+    fn run(&self, _spec: &ProcessSpec) -> uze_core::Result<ProcessResult> {
         Ok(ProcessResult {
             success: true,
             timed_out: false,
@@ -105,36 +106,42 @@ impl<T: IntegrationPort> IntegrationPort for AlwaysPresent<T> {
     fn provision(
         &self,
         _runner: &dyn ProcessRunner,
-    ) -> uze::Result<uze::provisioning::ProvisioningResult> {
-        Ok(uze::provisioning::ProvisioningResult::verified(
-            uze::provisioning::ProvisionAction::None,
+    ) -> uze_core::Result<uze_core::provisioning::ProvisioningResult> {
+        Ok(uze_core::provisioning::ProvisioningResult::verified(
+            uze_core::provisioning::ProvisionAction::None,
             "test-always-present",
             self.detect(),
         ))
     }
-    fn install(&self, home: &UzeHome, detection: &HarnessDetection) -> uze::Result<()> {
+    fn install(&self, home: &UzeHome, detection: &HarnessDetection) -> uze_core::Result<()> {
         self.0.install(home, detection)
     }
-    fn status(&self, home: &UzeHome) -> uze::integration::IntegrationStatus {
+    fn status(&self, home: &UzeHome) -> uze_core::integration::IntegrationStatus {
         self.0.status(home)
     }
-    fn attach(&self, resource: &ProjectResource) -> uze::Result<Option<PathBuf>> {
+    fn attach(&self, resource: &ProjectResource) -> uze_core::Result<Option<PathBuf>> {
         self.0.attach(resource)
     }
     fn attach_package(
         &self,
         package: &StoredPackage,
         plan: &PackageExposurePlan,
-    ) -> uze::Result<Option<AttachmentReceipt>> {
+    ) -> uze_core::Result<Option<AttachmentReceipt>> {
         self.0.attach_package(package, plan)
     }
-    fn attach_receipt(&self, resource: &ProjectResource) -> uze::Result<Option<AttachmentReceipt>> {
+    fn attach_receipt(
+        &self,
+        resource: &ProjectResource,
+    ) -> uze_core::Result<Option<AttachmentReceipt>> {
         self.0.attach_receipt(resource)
     }
     fn inspect_receipt(&self, receipt: &AttachmentReceipt) -> AttachmentInspection {
         self.0.inspect_receipt(receipt)
     }
-    fn detach_receipt(&self, receipt: &AttachmentReceipt) -> uze::Result<AttachmentInspection> {
+    fn detach_receipt(
+        &self,
+        receipt: &AttachmentReceipt,
+    ) -> uze_core::Result<AttachmentInspection> {
         self.0.detach_receipt(receipt)
     }
 }
@@ -277,7 +284,7 @@ fn codex_and_opencode_reuse_one_physical_entry_for_a_default_skill() {
             .plugins()
             .add(
                 PackageSource::local(flow_fixture()),
-                &uze::trust::AlwaysTrust,
+                &uze_core::trust::AlwaysTrust,
             )
             .expect("a default Skill installs cleanly with both harnesses");
         let entry = agents_home.join("skills/flow:commit");
@@ -338,7 +345,7 @@ fn model_only_skill_shared_root_reuse_carries_both_encodings() {
             .plugins()
             .add(
                 PackageSource::local(&fixture_root),
-                &uze::trust::AlwaysTrust,
+                &uze_core::trust::AlwaysTrust,
             )
             .expect("the superset shared entry preserves both encodings");
         let entry = agents_home.join("skills/flow:legacy");
@@ -358,7 +365,7 @@ fn model_only_skill_shared_root_reuse_carries_both_encodings() {
             "no Codex policy sidecar for a model=true Skill"
         );
         // Both consumers hold a Matched receipt against the same entry.
-        let receipts = uze::state::receipts(&uze_home, Some("flow@local")).unwrap();
+        let receipts = uze_core::state::receipts(&uze_home, Some("flow@local")).unwrap();
         // The shared-entry receipts are the SymlinkReference pair; Codex
         // also holds an integration-owned package receipt (its generated
         // envelope), which is not the surface this scenario asserts.
@@ -369,7 +376,7 @@ fn model_only_skill_shared_root_reuse_carries_both_encodings() {
                     r.integration == integration
                         && matches!(
                             r.artifact,
-                            uze::integration::ManagedArtifact::SymlinkReference { .. }
+                            uze_core::integration::ManagedArtifact::SymlinkReference { .. }
                         )
                 })
                 .map(|(_, r)| r)
@@ -387,14 +394,14 @@ fn model_only_skill_shared_root_reuse_carries_both_encodings() {
         .inspect_receipt(opencode_receipt);
         assert_eq!(
             codex_inspection.state,
-            uze::integration::AttachmentState::Matched,
+            uze_core::integration::AttachmentState::Matched,
             "codex: {} ({:?})",
             codex_inspection.reason,
             codex_receipt.artifact
         );
         assert_eq!(
             opencode_inspection.state,
-            uze::integration::AttachmentState::Matched,
+            uze_core::integration::AttachmentState::Matched,
             "opencode: {} ({:?})",
             opencode_inspection.reason,
             opencode_receipt.artifact
@@ -458,27 +465,27 @@ fn foreign_shared_entry_without_opencode_encoding_still_conflicts() {
         fs::create_dir_all(agents_home.join("skills")).unwrap();
         std::os::unix::fs::symlink(&legacy_wrapper, agents_home.join("skills/flow:legacy"))
             .unwrap();
-        let resource_identity = uze::project::Resource::from_package(
-            uze::store::PackageId::from_plugin_name("flow", &fixture_root.join("plugin.json"))
+        let resource_identity = uze_core::project::Resource::from_package(
+            uze_core::store::PackageId::from_plugin_name("flow", &fixture_root.join("plugin.json"))
                 .unwrap(),
             fixture_root.clone(),
-            uze::capability::Capability {
-                kind: uze::capability::CapabilityKind::AgentSkill,
-                representation: uze::capability::Representation::Standard,
+            uze_core::capability::Capability {
+                kind: uze_core::capability::CapabilityKind::AgentSkill,
+                representation: uze_core::capability::Representation::Standard,
                 path: fixture_root.join("skills/legacy/SKILL.md"),
                 payload: Vec::new(),
             },
         )
         .identity();
-        uze::state::record_receipt(
+        uze_core::state::record_receipt(
             &uze_home,
             "flow/codex/skill:flow:legacy".to_owned(),
-            uze::integration::AttachmentReceipt {
+            uze_core::integration::AttachmentReceipt {
                 package_id: "flow".to_owned(),
                 resource_identity: Some(resource_identity),
                 integration: "codex".to_owned(),
                 strategy: "managed-user-scope-reference".to_owned(),
-                artifact: uze::integration::ManagedArtifact::SymlinkReference {
+                artifact: uze_core::integration::ManagedArtifact::SymlinkReference {
                     path: agents_home.join("skills/flow:legacy"),
                     target: legacy_wrapper.clone(),
                 },
@@ -488,10 +495,10 @@ fn foreign_shared_entry_without_opencode_encoding_still_conflicts() {
 
         let result = application.plugins().add(
             PackageSource::local(&fixture_root),
-            &uze::trust::AlwaysTrust,
+            &uze_core::trust::AlwaysTrust,
         );
         match result {
-            Err(uze::UzeError::ProjectionConflict(details)) => {
+            Err(uze_core::UzeError::ProjectionConflict(details)) => {
                 assert!(
                     details.entry.ends_with("skills/flow:legacy"),
                     "the conflict is about the shared physical entry: {}",
@@ -559,7 +566,7 @@ fn user_only_skill_codex_and_opencode_preserves_codex_policy() {
             .plugins()
             .add(
                 PackageSource::local(&fixture_root),
-                &uze::trust::AlwaysTrust,
+                &uze_core::trust::AlwaysTrust,
             )
             .expect("Codex + OpenCode must both receive a user-only Skill");
         let entry = agents_home.join("skills/flow:review");
@@ -635,7 +642,7 @@ fn user_only_skill_installs_cleanly_with_codex_and_opencode() {
             .plugins()
             .add(
                 PackageSource::local(&fixture_root),
-                &uze::trust::AlwaysTrust,
+                &uze_core::trust::AlwaysTrust,
             )
             .expect("each harness gets its own native encoding for a user-only Skill");
         let entry = agents_home.join("skills/flow:review");
@@ -680,7 +687,7 @@ fn user_only_skill_codex_only_is_model_hidden() {
             .plugins()
             .add(
                 PackageSource::local(&fixture_root),
-                &uze::trust::AlwaysTrust,
+                &uze_core::trust::AlwaysTrust,
             )
             .expect("Codex-only user-only Skill installs");
         assert!(
@@ -719,7 +726,7 @@ fn attach_order_is_equivalent_codex_then_opencode_and_reverse() {
             app.plugins()
                 .add(
                     PackageSource::local(user_only_fixture(root)),
-                    &uze::trust::AlwaysTrust,
+                    &uze_core::trust::AlwaysTrust,
                 )
                 .expect("install succeeds in either order");
         }
@@ -774,19 +781,19 @@ fn repeated_setup_is_idempotent() {
         app.plugins()
             .add(
                 PackageSource::local(user_only_fixture(&root)),
-                &uze::trust::AlwaysTrust,
+                &uze_core::trust::AlwaysTrust,
             )
             .expect("initial install");
         let before = shared_wrapper_bytes(&agents_home);
         app.plugins()
-            .update("flow", &uze::trust::AlwaysTrust)
+            .update("flow", &uze_core::trust::AlwaysTrust)
             .expect("repeated setup (update) succeeds");
         let after = shared_wrapper_bytes(&agents_home);
         assert_eq!(
             before, after,
             "update leaves the shared wrapper byte-identical"
         );
-        let receipt = uze::state::receipts(&uze_home, Some("flow@local"))
+        let receipt = uze_core::state::receipts(&uze_home, Some("flow@local"))
             .unwrap()
             .into_iter()
             .find(|(_, r)| r.integration == "opencode")
@@ -800,7 +807,7 @@ fn repeated_setup_is_idempotent() {
             )
             .inspect_receipt(&receipt)
             .state,
-            uze::integration::AttachmentState::Matched
+            uze_core::integration::AttachmentState::Matched
         );
         fs::remove_dir_all(&root).unwrap();
     });
@@ -827,17 +834,17 @@ fn detach_codex_preserves_opencode_consumer() {
         app.plugins()
             .add(
                 PackageSource::local(user_only_fixture(&root)),
-                &uze::trust::AlwaysTrust,
+                &uze_core::trust::AlwaysTrust,
             )
             .expect("install");
-        let codex_receipt = uze::state::receipts(&uze_home, Some("flow@local"))
+        let codex_receipt = uze_core::state::receipts(&uze_home, Some("flow@local"))
             .unwrap()
             .into_iter()
             .find(|(_, r)| {
                 r.integration == "codex"
                     && matches!(
                         r.artifact,
-                        uze::integration::ManagedArtifact::IntegrationOwned { .. }
+                        uze_core::integration::ManagedArtifact::IntegrationOwned { .. }
                     )
             })
             .map(|(_, r)| r)
@@ -847,7 +854,7 @@ fn detach_codex_preserves_opencode_consumer() {
             .unwrap();
         assert_eq!(
             detached.state,
-            uze::integration::AttachmentState::Missing,
+            uze_core::integration::AttachmentState::Missing,
             "codex: {} ({:?})",
             detached.reason,
             codex_receipt.artifact
@@ -861,7 +868,7 @@ fn detach_codex_preserves_opencode_consumer() {
             entry.is_symlink(),
             "OpenCode's shared entry survives Codex detach"
         );
-        let opencode_receipt = uze::state::receipts(&uze_home, Some("flow@local"))
+        let opencode_receipt = uze_core::state::receipts(&uze_home, Some("flow@local"))
             .unwrap()
             .into_iter()
             .find(|(_, r)| r.integration == "opencode")
@@ -875,7 +882,7 @@ fn detach_codex_preserves_opencode_consumer() {
             )
             .inspect_receipt(&opencode_receipt)
             .state,
-            uze::integration::AttachmentState::Matched
+            uze_core::integration::AttachmentState::Matched
         );
         fs::remove_dir_all(&root).unwrap();
     });
@@ -901,17 +908,19 @@ fn detach_opencode_preserves_codex_consumer() {
         app.plugins()
             .add(
                 PackageSource::local(user_only_fixture(&root)),
-                &uze::trust::AlwaysTrust,
+                &uze_core::trust::AlwaysTrust,
             )
             .expect("install");
-        let opencode_receipt = uze::state::receipts(&uze_home, Some("flow@local"))
+        let opencode_receipt = uze_core::state::receipts(&uze_home, Some("flow@local"))
             .unwrap()
             .into_iter()
             .find(|(_, r)| r.integration == "opencode")
             .map(|(_, r)| r)
             .unwrap();
         let default_target = match &opencode_receipt.artifact {
-            uze::integration::ManagedArtifact::SymlinkReference { target, .. } => target.clone(),
+            uze_core::integration::ManagedArtifact::SymlinkReference { target, .. } => {
+                target.clone()
+            }
             other => panic!("expected a symlink receipt, got {other:?}"),
         };
         let detached = OpenCodeIntegration::new(
@@ -921,7 +930,10 @@ fn detach_opencode_preserves_codex_consumer() {
         )
         .detach_receipt(&opencode_receipt)
         .unwrap();
-        assert_eq!(detached.state, uze::integration::AttachmentState::Missing);
+        assert_eq!(
+            detached.state,
+            uze_core::integration::AttachmentState::Missing
+        );
         assert!(
             !agents_home.join("skills/flow:review").exists(),
             "the shared entry is removed with OpenCode's receipt"
@@ -935,7 +947,7 @@ fn detach_opencode_preserves_codex_consumer() {
             "Codex's generated envelope is untouched by OpenCode detach"
         );
         assert!(
-            uze::state::receipts(&uze_home, Some("flow@local"))
+            uze_core::state::receipts(&uze_home, Some("flow@local"))
                 .unwrap()
                 .iter()
                 .any(|(_, r)| r.integration == "codex"),
@@ -965,10 +977,10 @@ fn detach_last_consumer_cleans_projection() {
         app.plugins()
             .add(
                 PackageSource::local(user_only_fixture(&root)),
-                &uze::trust::AlwaysTrust,
+                &uze_core::trust::AlwaysTrust,
             )
             .expect("install");
-        let receipts: Vec<_> = uze::state::receipts(&uze_home, Some("flow@local"))
+        let receipts: Vec<_> = uze_core::state::receipts(&uze_home, Some("flow@local"))
             .unwrap()
             .into_iter()
             .map(|(_, r)| r)
@@ -997,7 +1009,7 @@ fn detach_last_consumer_cleans_projection() {
             !generated_root.join("flow@local").exists(),
             "the generated envelope is gone with its receipt"
         );
-        let stale_opencode = uze::state::receipts(&uze_home, Some("flow@local"))
+        let stale_opencode = uze_core::state::receipts(&uze_home, Some("flow@local"))
             .unwrap()
             .into_iter()
             .find(|(_, r)| r.integration == "opencode")
@@ -1005,7 +1017,7 @@ fn detach_last_consumer_cleans_projection() {
             .unwrap();
         assert_eq!(
             stale_opencode,
-            uze::integration::AttachmentState::Missing,
+            uze_core::integration::AttachmentState::Missing,
             "the last consumer's artifact is gone; the ledger entry is the app's to forget"
         );
         fs::remove_dir_all(&root).unwrap();

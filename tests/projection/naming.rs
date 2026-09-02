@@ -37,9 +37,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use uze::integrations::opencode::OpenCodeIntegration;
-use uze::{
-    PackageSource, Resource, UzeApplication, UzeEngine, UzeHome, UzeStore,
+use uze_application::UzeApplication;
+use uze_core::{
+    PackageSource, Resource, UzeEngine, UzeHome, UzeStore,
     exposure::{ExposurePlan, PackageExposurePlan},
     integration::{
         AttachmentInspection, AttachmentReceipt, HarnessDetection, IntegrationPort,
@@ -50,6 +50,7 @@ use uze::{
     router::HarnessCapabilities,
     store::StoredPackage,
 };
+use uze_integrations::opencode::OpenCodeIntegration;
 
 fn temp(label: &str) -> PathBuf {
     uze_testkit::temp::scratch(label)
@@ -68,7 +69,7 @@ fn temp(label: &str) -> PathBuf {
 fn setup_without_touching_the_real_shell_rc(
     application: &UzeApplication,
     requested: Option<&str>,
-) -> uze::Result<Vec<uze::application::SetupResult>> {
+) -> uze_core::Result<Vec<uze_application::application::SetupResult>> {
     uze_testkit::env::with_env_var("SHELL", "uze-test-no-recognized-shell", || {
         application.setup(requested)
     })
@@ -81,7 +82,7 @@ fn setup_without_touching_the_real_shell_rc(
 struct NoopProcessRunner;
 
 impl ProcessRunner for NoopProcessRunner {
-    fn run(&self, _spec: &ProcessSpec) -> uze::Result<ProcessResult> {
+    fn run(&self, _spec: &ProcessSpec) -> uze_core::Result<ProcessResult> {
         Ok(ProcessResult {
             success: true,
             timed_out: false,
@@ -131,45 +132,51 @@ impl<T: IntegrationPort> IntegrationPort for AlwaysPresent<T> {
     fn provision(
         &self,
         _runner: &dyn ProcessRunner,
-    ) -> uze::Result<uze::provisioning::ProvisioningResult> {
-        Ok(uze::provisioning::ProvisioningResult::verified(
-            uze::provisioning::ProvisionAction::None,
+    ) -> uze_core::Result<uze_core::provisioning::ProvisioningResult> {
+        Ok(uze_core::provisioning::ProvisioningResult::verified(
+            uze_core::provisioning::ProvisionAction::None,
             "test-always-present",
             self.detect(),
         ))
     }
-    fn install(&self, home: &UzeHome, detection: &HarnessDetection) -> uze::Result<()> {
+    fn install(&self, home: &UzeHome, detection: &HarnessDetection) -> uze_core::Result<()> {
         self.0.install(home, detection)
     }
     fn status(&self, home: &UzeHome) -> IntegrationStatus {
         self.0.status(home)
     }
-    fn attach(&self, resource: &ProjectResource) -> uze::Result<Option<PathBuf>> {
+    fn attach(&self, resource: &ProjectResource) -> uze_core::Result<Option<PathBuf>> {
         self.0.attach(resource)
     }
     fn attach_package(
         &self,
         package: &StoredPackage,
         plan: &PackageExposurePlan,
-    ) -> uze::Result<Option<AttachmentReceipt>> {
+    ) -> uze_core::Result<Option<AttachmentReceipt>> {
         self.0.attach_package(package, plan)
     }
     fn aliases(&self) -> &'static [&'static str] {
         self.0.aliases()
     }
-    fn republish_packages(&self, packages: &[StoredPackage]) -> uze::Result<()> {
+    fn republish_packages(&self, packages: &[StoredPackage]) -> uze_core::Result<()> {
         self.0.republish_packages(packages)
     }
     fn publication(&self, packages: &[StoredPackage]) -> PublicationStatus {
         self.0.publication(packages)
     }
-    fn attach_receipt(&self, resource: &ProjectResource) -> uze::Result<Option<AttachmentReceipt>> {
+    fn attach_receipt(
+        &self,
+        resource: &ProjectResource,
+    ) -> uze_core::Result<Option<AttachmentReceipt>> {
         self.0.attach_receipt(resource)
     }
     fn inspect_receipt(&self, receipt: &AttachmentReceipt) -> AttachmentInspection {
         self.0.inspect_receipt(receipt)
     }
-    fn detach_receipt(&self, receipt: &AttachmentReceipt) -> uze::Result<AttachmentInspection> {
+    fn detach_receipt(
+        &self,
+        receipt: &AttachmentReceipt,
+    ) -> uze_core::Result<AttachmentInspection> {
         self.0.detach_receipt(receipt)
     }
 }
@@ -205,9 +212,9 @@ fn app_with_opencode(root: &Path) -> (UzeApplication, PathBuf) {
     (application, agents_home)
 }
 
-fn install(app: &UzeApplication, path: PathBuf) -> uze::application::PluginSummary {
+fn install(app: &UzeApplication, path: PathBuf) -> uze_application::application::PluginSummary {
     app.plugins()
-        .add(PackageSource::local(path), &uze::trust::AlwaysTrust)
+        .add(PackageSource::local(path), &uze_core::trust::AlwaysTrust)
         .unwrap()
         .plugin
 }
@@ -238,7 +245,7 @@ fn store_resource(root: &Path, package_dir: PathBuf) -> Resource {
     let home = UzeHome::at(root.join("uze-home"));
     let store = UzeStore::new(home.clone());
     let installed = store
-        .ingest(&uze::acquisition::acquire(&PackageSource::local(package_dir)).unwrap())
+        .ingest(&uze_core::acquisition::acquire(&PackageSource::local(package_dir)).unwrap())
         .unwrap();
     let environment = UzeEngine::new(store)
         .compose(std::slice::from_ref(&installed.id))
@@ -246,7 +253,9 @@ fn store_resource(root: &Path, package_dir: PathBuf) -> Resource {
     environment
         .resources
         .into_iter()
-        .find(|resource| resource.capability.kind == uze::capability::CapabilityKind::AgentSkill)
+        .find(|resource| {
+            resource.capability.kind == uze_core::capability::CapabilityKind::AgentSkill
+        })
         .unwrap()
 }
 
@@ -544,11 +553,12 @@ fn a_foreign_artifact_occupying_the_short_name_is_never_overwritten() {
     )
     .unwrap();
 
-    let result = application
-        .plugins()
-        .add(PackageSource::local(package_dir), &uze::trust::AlwaysTrust);
+    let result = application.plugins().add(
+        PackageSource::local(package_dir),
+        &uze_core::trust::AlwaysTrust,
+    );
     assert!(
-        matches!(result, Err(uze::UzeError::ManagedEntryConflict(_))),
+        matches!(result, Err(uze_core::UzeError::ManagedEntryConflict(_))),
         "a foreign occupant of the desired name must surface as an explicit conflict, \
          not a silent skip or an automatic fallback retry: {result:?}"
     );
@@ -598,7 +608,7 @@ fn inspect_matched_missing_drifted_and_detach_all_still_work_under_new_naming() 
     // Drift blocks destructive removal.
     assert!(matches!(
         application.plugins().remove("acme").unwrap(),
-        uze::application::RemovePluginReport::Blocked { .. }
+        uze_application::application::RemovePluginReport::Blocked { .. }
     ));
     assert_eq!(
         fs::read_link(agents_home.join("skills/acme:review")).unwrap(),
@@ -610,11 +620,11 @@ fn inspect_matched_missing_drifted_and_detach_all_still_work_under_new_naming() 
     setup_without_touching_the_real_shell_rc(&application, None).unwrap();
     assert!(matches!(
         application.plugins().remove("acme").unwrap(),
-        uze::application::RemovePluginReport::Removed { .. }
+        uze_application::application::RemovePluginReport::Removed { .. }
     ));
     assert!(matches!(
         application.plugins().remove("acme").unwrap(),
-        uze::application::RemovePluginReport::AlreadyAbsent { .. }
+        uze_application::application::RemovePluginReport::AlreadyAbsent { .. }
     ));
     fs::remove_dir_all(root).unwrap();
 }

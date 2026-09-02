@@ -6,11 +6,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use uze::integrations::{
-    antigravity::AntigravityIntegration, claude::ClaudeIntegration, codex::CodexIntegration,
-    opencode::OpenCodeIntegration,
-};
-use uze::{
+use uze_core::{
     engine::package_resources_at,
     home::UzeHome,
     hook::HookEvent,
@@ -19,6 +15,10 @@ use uze::{
     router::CompatibilityRoute,
     state,
     store::PackageId,
+};
+use uze_integrations::{
+    antigravity::AntigravityIntegration, claude::ClaudeIntegration, codex::CodexIntegration,
+    opencode::OpenCodeIntegration,
 };
 
 fn temp(label: &str) -> PathBuf {
@@ -203,7 +203,7 @@ fn claude_merges_into_settings_json_preserving_foreign_content() {
 
     let plan = claude.exposure_plan(protect);
     assert_eq!(plan.route, CompatibilityRoute::Native);
-    let uze::exposure::ExposureMechanism::ManagedHookConfig {
+    let uze_core::exposure::ExposureMechanism::ManagedHookConfig {
         config_file,
         entry_name,
         event,
@@ -404,7 +404,7 @@ fn codex_writes_its_own_hooks_json_command_form() {
 
     let plan = codex.exposure_plan(protect);
     assert_eq!(plan.route, CompatibilityRoute::Native);
-    let uze::exposure::ExposureMechanism::ManagedHookConfig {
+    let uze_core::exposure::ExposureMechanism::ManagedHookConfig {
         config_file,
         entry_name,
         event,
@@ -500,7 +500,7 @@ fn opencode(home_root: &std::path::Path) -> OpenCodeIntegration {
 /// installation would — OpenCode detach re-resolves the package bytes from
 /// the Store, never from the resource that may no longer be in hand.
 fn ingest_package(home: &UzeHome, pkg_root: &std::path::Path) {
-    use uze::{
+    use uze_core::{
         acquisition::{MaterializedPackage, PackageSource, Provenance, ResolvedSource},
         store::UzeStore,
     };
@@ -524,7 +524,7 @@ fn ingest_package(home: &UzeHome, pkg_root: &std::path::Path) {
 /// detach all resolve Store bytes, so the fixture resources must point at
 /// the Store too.
 fn stored_resources(home: &UzeHome, name: &str) -> Vec<Resource> {
-    use uze::{engine::package_resources_at, store::UzeStore};
+    use uze_core::{engine::package_resources_at, store::UzeStore};
     let package = UzeStore::new(home.clone())
         .package(&PackageId::from_plugin_name(name, std::path::Path::new("plugin.json")).unwrap())
         .expect("stored package exists");
@@ -558,7 +558,7 @@ fn opencode_bridge_lifecycle_preserves_foreign_plugins_in_the_directory() {
 
     let plan = integration.exposure_plan(protect);
     assert_eq!(plan.route, CompatibilityRoute::Adaptable);
-    let uze::exposure::ExposureMechanism::ManagedHookFile { path } = &plan.mechanism else {
+    let uze_core::exposure::ExposureMechanism::ManagedHookFile { path } = &plan.mechanism else {
         panic!("OpenCode hook plan is an owned bridge file");
     };
     assert_eq!(*path, bridge);
@@ -722,7 +722,7 @@ fn opencode_unmatch_all_groups_carry_no_matcher_and_stop_is_never_bridged() {
     assert_eq!(plan.route, CompatibilityRoute::Degraded);
     assert!(matches!(
         plan.mechanism,
-        uze::exposure::ExposureMechanism::Unsupported { .. }
+        uze_core::exposure::ExposureMechanism::Unsupported { .. }
     ));
     assert!(
         integration.attach_receipt(stop).unwrap().is_none(),
@@ -754,17 +754,17 @@ fn antigravity_plans_hooks_through_the_generated_named_plugin() {
 
     let plan = antigravity
         .package_exposure_plan(
-            &uze::store::StoredPackage {
+            &uze_core::store::StoredPackage {
                 id: PackageId::from_plugin_name("hook-demo", &_root.join("pkg/plugin.json"))
                     .unwrap(),
                 active_name: "hook-demo".to_owned(),
                 root: _root.join("pkg"),
                 manifest: _root.join("pkg/plugin.json"),
-                provenance: uze::acquisition::Provenance {
-                    requested: uze::acquisition::PackageSource::Local {
+                provenance: uze_core::acquisition::Provenance {
+                    requested: uze_core::acquisition::PackageSource::Local {
                         path: _root.join("pkg"),
                     },
-                    resolved: uze::acquisition::ResolvedSource::Local {
+                    resolved: uze_core::acquisition::ResolvedSource::Local {
                         path: _root.join("pkg"),
                     },
                 },
@@ -785,7 +785,7 @@ fn antigravity_plans_hooks_through_the_generated_named_plugin() {
     assert_eq!(fallback.route, CompatibilityRoute::Native);
     assert!(matches!(
         fallback.mechanism,
-        uze::exposure::ExposureMechanism::Unsupported { .. }
+        uze_core::exposure::ExposureMechanism::Unsupported { .. }
     ));
     let _ = fs::remove_dir_all(_root);
 }

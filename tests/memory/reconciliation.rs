@@ -18,10 +18,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use uze::{PackageSource, UzeApplication};
-use uze::{
+use uze_application::UzeApplication;
+use uze_application::application::{BridgeStatus, ContextReconciliationReport};
+use uze_core::PackageSource;
+use uze_core::{
     Result, UzeError, UzeHome,
-    application::{BridgeStatus, ContextReconciliationReport},
     integration::{AttachmentReceipt, AttachmentState, HarnessDetection, IntegrationPort},
     router::HarnessCapabilities,
 };
@@ -62,8 +63,8 @@ impl IntegrationPort for StubBridgeHarness {
     /// The one bridged harness in v0 declares its bridge like any real
     /// integration would — the Application reads `context_delivery`, never
     /// a vendor name.
-    fn context_delivery(&self) -> uze::integration::ContextDelivery {
-        uze::integration::ContextDelivery::Bridge {
+    fn context_delivery(&self) -> uze_core::integration::ContextDelivery {
+        uze_core::integration::ContextDelivery::Bridge {
             file_name: "CLAUDE.md",
         }
     }
@@ -77,18 +78,18 @@ impl IntegrationPort for StubBridgeHarness {
             version: None,
         }
     }
-    fn exposure_plan(&self, resource: &uze::Resource) -> uze::exposure::ExposurePlan {
-        uze::exposure::ExposurePlan {
+    fn exposure_plan(&self, resource: &uze_core::Resource) -> uze_core::exposure::ExposurePlan {
+        uze_core::exposure::ExposurePlan {
             representation: resource.capability.representation,
-            route: uze::router::CompatibilityRoute::Unsupported,
-            verification: uze::router::VerificationStatus::NotExposed,
-            mechanism: uze::exposure::ExposureMechanism::Unsupported {
+            route: uze_core::router::CompatibilityRoute::Unsupported,
+            verification: uze_core::router::VerificationStatus::NotExposed,
+            mechanism: uze_core::exposure::ExposureMechanism::Unsupported {
                 rationale: "test stub attaches nothing".to_owned(),
             },
             evidence: "test stub".to_owned(),
         }
     }
-    fn attach_receipt(&self, _resource: &uze::Resource) -> Result<Option<AttachmentReceipt>> {
+    fn attach_receipt(&self, _resource: &uze_core::Resource) -> Result<Option<AttachmentReceipt>> {
         Ok(None)
     }
 }
@@ -105,7 +106,7 @@ fn app(root: &Path, claude_present: bool) -> UzeApplication {
 
 fn install(app: &UzeApplication, path: PathBuf) {
     app.plugins()
-        .add(PackageSource::local(path), &uze::trust::AlwaysTrust)
+        .add(PackageSource::local(path), &uze_core::trust::AlwaysTrust)
         .expect("fixture installs cleanly");
 }
 

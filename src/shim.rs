@@ -26,7 +26,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use uze::{
+use uze_core::{
     UzeHome,
     harness_runtime::{self, HarnessRuntimeContribution, RuntimeContext},
 };

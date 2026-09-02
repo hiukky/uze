@@ -44,7 +44,7 @@ use std::{
 // test runner — same discipline, same reason, as
 // `uze_core::harness_runtime`'s own `PATH_ENV_GUARD`.
 
-use uze::{
+use uze_core::{
     acquisition::{PackageSource, Provenance, ResolvedSource},
     capability::{Capability, CapabilityKind, Representation},
     home::UzeHome,
@@ -54,7 +54,7 @@ use uze::{
     store::{PackageId, StoredPackage},
 };
 
-use uze::integrations::{
+use uze_integrations::{
     antigravity::AntigravityIntegration, claude::ClaudeIntegration, codex::CodexIntegration,
     opencode::OpenCodeIntegration,
 };

@@ -1,16 +1,16 @@
 //! Canonical Agent capability routes remain explicit across every harness.
 
-use uze::integrations::{
-    antigravity::AntigravityIntegration, claude::ClaudeIntegration, codex::CodexIntegration,
-    opencode::OpenCodeIntegration,
-};
-use uze::{
+use uze_core::{
     capability::{Capability, CapabilityKind, Representation},
     home::UzeHome,
     integration::IntegrationPort,
     project::Resource,
     router::CompatibilityRoute,
     store::PackageId,
+};
+use uze_integrations::{
+    antigravity::AntigravityIntegration, claude::ClaudeIntegration, codex::CodexIntegration,
+    opencode::OpenCodeIntegration,
 };
 
 fn agent(root: &std::path::Path) -> Resource {
@@ -71,7 +71,8 @@ fn codex_generates_the_documented_custom_agent_toml_before_exposure() {
         .attach_receipt(&resource)
         .expect("Codex agent attachment succeeds")
         .expect("Codex agent attachment has a receipt");
-    let uze::integration::ManagedArtifact::SymlinkReference { path, target } = receipt.artifact
+    let uze_core::integration::ManagedArtifact::SymlinkReference { path, target } =
+        receipt.artifact
     else {
         panic!("Codex native agent is a receipt-owned reference");
     };
@@ -94,7 +95,8 @@ fn claude_attaches_an_agent_without_treating_its_markdown_as_a_skill_plugin() {
         .attach_receipt(&resource)
         .expect("Claude agent attachment succeeds")
         .expect("Claude agent attachment has a receipt");
-    let uze::integration::ManagedArtifact::SymlinkReference { path, target } = receipt.artifact
+    let uze_core::integration::ManagedArtifact::SymlinkReference { path, target } =
+        receipt.artifact
     else {
         panic!("Claude native agent is a receipt-owned reference");
     };

@@ -3,12 +3,12 @@
 
 use std::{fs, path::PathBuf};
 
-use uze::{
+use uze_core::{
     UzeEngine, UzeHome, UzeStore, capability::CapabilityKind, exposure::ExposureMechanism,
     integration::IntegrationPort, router::CompatibilityRoute,
 };
 
-use uze::integrations::{
+use uze_integrations::{
     claude::ClaudeIntegration, codex::CodexIntegration, opencode::OpenCodeIntegration,
 };
 
@@ -19,10 +19,10 @@ use uze::integrations::{
 fn install(
     store: &UzeStore,
     path: impl Into<std::path::PathBuf>,
-) -> uze::Result<uze::StoredPackage> {
-    store.ingest(&uze::acquisition::acquire(&uze::PackageSource::local(
-        path,
-    ))?)
+) -> uze_core::Result<uze_core::StoredPackage> {
+    store.ingest(&uze_core::acquisition::acquire(
+        &uze_core::PackageSource::local(path),
+    )?)
 }
 
 fn fixture() -> PathBuf {
@@ -31,7 +31,7 @@ fn fixture() -> PathBuf {
 fn temp(label: &str) -> PathBuf {
     uze_testkit::temp::scratch(label)
 }
-fn installed(home: &UzeHome) -> (uze::StoredPackage, uze::EffectiveEnvironment) {
+fn installed(home: &UzeHome) -> (uze_core::StoredPackage, uze_core::EffectiveEnvironment) {
     let store = UzeStore::new(home.clone());
     let package = install(&store, fixture()).unwrap();
     let environment = UzeEngine::new(store)
@@ -40,9 +40,9 @@ fn installed(home: &UzeHome) -> (uze::StoredPackage, uze::EffectiveEnvironment) 
     (package, environment)
 }
 fn mark_setup(home: &UzeHome, integration: &dyn IntegrationPort) {
-    uze::state::record(
+    uze_core::state::record(
         home,
-        uze::state::IntegrationRecord {
+        uze_core::state::IntegrationRecord {
             harness: integration.id().to_owned(),
             version: None,
             strategy: "test".to_owned(),

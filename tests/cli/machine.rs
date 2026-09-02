@@ -378,7 +378,8 @@ const SETUP_CONFORMANCE_HARNESSES: [(&str, &str, &str); 4] = [
 #[test]
 #[cfg(unix)]
 fn setup_conformance_matrix_covers_every_registered_harness() {
-    use uze::{home::UzeHome, integrations::registry::IntegrationRegistry};
+    use uze_core::home::UzeHome;
+    use uze_integrations::registry::IntegrationRegistry;
 
     let registry_root = temporary_home("cli-setup-conformance-registry");
     let registry_home = UzeHome::at(registry_root.join("uze"));

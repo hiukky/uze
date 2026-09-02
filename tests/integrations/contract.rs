@@ -1,6 +1,6 @@
 use std::{collections::BTreeSet, fs, path::PathBuf};
 
-use uze::{
+use uze_core::{
     UzeEngine, UzeHome, UzeStore,
     capability::{CapabilityKind, Representation},
     exposure::{ExposureMechanism, ExposurePlan},
@@ -8,7 +8,7 @@ use uze::{
     router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus},
 };
 
-use uze::integrations::{
+use uze_integrations::{
     claude::{self, ClaudeIntegration},
     codex::{self, CodexIntegration},
     opencode::OpenCodeIntegration,
@@ -21,10 +21,10 @@ use uze::integrations::{
 fn install(
     store: &UzeStore,
     path: impl Into<std::path::PathBuf>,
-) -> uze::Result<uze::StoredPackage> {
-    store.ingest(&uze::acquisition::acquire(&uze::PackageSource::local(
-        path,
-    ))?)
+) -> uze_core::Result<uze_core::StoredPackage> {
+    store.ingest(&uze_core::acquisition::acquire(
+        &uze_core::PackageSource::local(path),
+    )?)
 }
 
 fn package_fixture() -> PathBuf {
@@ -35,7 +35,7 @@ fn mcp_package_fixture() -> PathBuf {
     uze_testkit::fixtures::canonical("mcp-plugin")
 }
 
-fn mcp_stored_environment(label: &str) -> (PathBuf, uze::EffectiveEnvironment) {
+fn mcp_stored_environment(label: &str) -> (PathBuf, uze_core::EffectiveEnvironment) {
     let root = temporary_home(label);
     let store = UzeStore::new(UzeHome::at(&root));
     let package = install(&store, mcp_package_fixture()).unwrap();
@@ -47,7 +47,7 @@ fn temporary_home(label: &str) -> PathBuf {
     uze_testkit::temp::scratch(label)
 }
 
-fn stored_environment(label: &str) -> (PathBuf, uze::EffectiveEnvironment) {
+fn stored_environment(label: &str) -> (PathBuf, uze_core::EffectiveEnvironment) {
     let root = temporary_home(label);
     let store = UzeStore::new(UzeHome::at(&root));
     let package = install(&store, package_fixture()).unwrap();
@@ -119,7 +119,7 @@ impl IntegrationPort for FakeIntegration {
         }
     }
 
-    fn exposure_plan(&self, resource: &uze::Resource) -> ExposurePlan {
+    fn exposure_plan(&self, resource: &uze_core::Resource) -> ExposurePlan {
         ExposurePlan {
             representation: resource.capability.representation,
             route: CompatibilityRoute::Native,
@@ -184,9 +184,9 @@ fn claude_prefers_managed_attachment_once_setup_state_is_recorded() {
 
     // Simulate what `uze setup` records, without spawning a real `claude`
     // process.
-    uze::state::record(
+    uze_core::state::record(
         &uze_home,
-        uze::state::IntegrationRecord {
+        uze_core::state::IntegrationRecord {
             harness: claude.id().to_owned(),
             version: Some("2.1.237".to_owned()),
             strategy: "managed-user-scope-skills-dir".to_owned(),
@@ -236,9 +236,9 @@ fn codex_prefers_managed_attachment_once_setup_state_is_recorded() {
         ExposureMechanism::FilesystemProjection { .. }
     ));
 
-    uze::state::record(
+    uze_core::state::record(
         &uze_home,
-        uze::state::IntegrationRecord {
+        uze_core::state::IntegrationRecord {
             harness: codex.id().to_owned(),
             version: Some("0.148.0".to_owned()),
             strategy: "managed-user-scope-skills-dir".to_owned(),
@@ -277,7 +277,7 @@ fn codex_prefers_managed_attachment_once_setup_state_is_recorded() {
     // Idempotent, and independent of Claude's own attachment state.
     let attached_again = codex.attach(resource).unwrap().unwrap();
     assert_eq!(attached, attached_again);
-    assert!(!uze::state::is_installed(&uze_home, "claude-code"));
+    assert!(!uze_core::state::is_installed(&uze_home, "claude-code"));
 
     fs::remove_dir_all(home_root).unwrap();
 }
@@ -317,9 +317,9 @@ fn mcp_resource_routes_to_managed_vendor_config_once_setup_state_is_recorded() {
     let resource = environment.resources.first().unwrap();
 
     for harness in [claude.id(), codex.id()] {
-        uze::state::record(
+        uze_core::state::record(
             &uze_home,
-            uze::state::IntegrationRecord {
+            uze_core::state::IntegrationRecord {
                 harness: harness.to_owned(),
                 version: Some("0.0.0".to_owned()),
                 strategy: "managed-user-scope-skills-dir".to_owned(),

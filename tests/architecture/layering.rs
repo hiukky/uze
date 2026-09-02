@@ -42,15 +42,25 @@ const RULES: &[Rule] = &[
         // naming it here. That facade is itself budgeted above, and its own
         // doc calls it transitional — deleting it is what closes the hole,
         // which is the same work this rule exists to drive.
-        sanctioned: &[],
+        sanctioned: &[
+            (
+                "src/shim.rs",
+                "a separate binary entry point, not presentation: the runtime \
+                 shim resolves a harness's real executable and must name the \
+                 runtime contract to do it",
+            ),
+            (
+                "src/bin/uze-harness-matrix.rs",
+                "tooling, and a binary of its own — it reports on the domain \
+                 rather than presenting it to a user",
+            ),
+        ],
         budget: &[
-            // The last one. A documented transitional re-export: this crate
-            // exists to "preserve the established public imports while
-            // application, integrations, and presentation complete their
-            // own extraction" (see its module doc). Deleting it is what
-            // lets the binary drop its `uze-core` dependency, after which
-            // rustc enforces this rule and it can be removed.
-            ("src/lib.rs", 2),
+            // Newly *visible*, not newly incurred: the compatibility facade
+            // in `src/lib.rs` re-exported all of `uze-core`, so the CLI
+            // reached the domain as `uze::…` and this rule saw nothing.
+            // Deleting the facade is what put a number on it.
+            ("src/main.rs", 54),
         ],
     },
     Rule {
@@ -74,7 +84,7 @@ const RULES: &[Rule] = &[
                 "tooling, likewise named in AGENTS.md as a registry consumer",
             ),
         ],
-        budget: &[("src/lib.rs", 1)],
+        budget: &[("src/main.rs", 1)],
     },
     Rule {
         name: "an extension never touches UZE's own state",

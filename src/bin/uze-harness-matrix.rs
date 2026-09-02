@@ -19,7 +19,7 @@
 
 use std::path::PathBuf;
 
-use uze::{
+use uze_core::{
     PackageId, UzeHome,
     acquisition::{PackageSource, Provenance, ResolvedSource},
     capability::{Capability, CapabilityKind, Representation},
@@ -155,9 +155,9 @@ struct Harness {
 /// surface. Writes only inside the temp root.
 fn mark_setup(home: &UzeHome, integration: &dyn IntegrationPort) {
     std::fs::create_dir_all(home.state_dir()).unwrap();
-    uze::state::record(
+    uze_core::state::record(
         home,
-        uze::state::IntegrationRecord {
+        uze_core::state::IntegrationRecord {
             harness: integration.id().to_owned(),
             version: None,
             strategy: "harness-matrix".to_owned(),

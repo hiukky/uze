@@ -11,7 +11,7 @@ use std::{
 
 use uze_application::Preferences;
 
-use crate::{
+use uze_application::{
     Result, UzeApplication, UzeError, UzeHome,
     application::{
         ContextPlan, ContextReconciliationReport, InstallReport, ProfileApplyResult,
@@ -80,8 +80,10 @@ pub(crate) enum Intent {
 
 pub(crate) enum WorkerResult {
     Refreshed(std::result::Result<RefreshData, String>),
-    PluginInspected(std::result::Result<crate::application::PluginInspection, String>),
-    MarketplaceInspected(std::result::Result<crate::application::MarketplacePluginDetail, String>),
+    PluginInspected(std::result::Result<uze_application::application::PluginInspection, String>),
+    MarketplaceInspected(
+        std::result::Result<uze_application::application::MarketplacePluginDetail, String>,
+    ),
     Mutated(std::result::Result<(String, RefreshData), String>),
     TrustRequired {
         plugin: String,
@@ -261,7 +263,7 @@ pub(crate) fn dispatch(
                     // Same use case and same default (no trust flag) as the
                     // CLI's `uze install`; the TUI adds no install logic.
                     app.project()
-                        .install(&root, &crate::trust::NoTrustAuthority)
+                        .install(&root, &uze_application::NoTrustAuthority)
                         .map(|report| match report {
                             InstallReport::NoChanges => {
                                 "Project environment already up to date".to_owned()
@@ -480,7 +482,7 @@ fn spawn_trust_sensitive(
     context_root: PathBuf,
     grant: TrustGrant,
     package_hint: String,
-    operation: impl FnOnce(&UzeApplication, &dyn crate::trust::TrustAuthority) -> Result<String>
+    operation: impl FnOnce(&UzeApplication, &dyn uze_application::TrustAuthority) -> Result<String>
     + Send
     + 'static,
     retry: TrustedRetry,
@@ -488,8 +490,8 @@ fn spawn_trust_sensitive(
     thread::spawn(move || {
         let outcome = tui_application(home.clone()).and_then(|app| {
             let result = match grant {
-                TrustGrant::Ask => operation(&app, &crate::trust::NoTrustAuthority),
-                TrustGrant::Granted => operation(&app, &crate::trust::AlwaysTrust),
+                TrustGrant::Ask => operation(&app, &uze_application::NoTrustAuthority),
+                TrustGrant::Granted => operation(&app, &uze_application::AlwaysTrust),
             };
             result.map(|message| (message, ()))
         });
@@ -672,7 +674,9 @@ fn update_message(report: UpdatePluginReport) -> String {
 mod tests {
     use std::{path::PathBuf, sync::mpsc};
 
-    use crate::application::{DoctorReport, MaintenanceOutcome, MaintenanceReport, StoreHealth};
+    use uze_application::application::{
+        DoctorReport, MaintenanceOutcome, MaintenanceReport, StoreHealth,
+    };
 
     use super::*;
 

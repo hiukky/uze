@@ -10,7 +10,7 @@ use ratatui::layout::Rect;
 use uze_application::{Autonomy, ModelPreference, SandboxScope};
 use uze_extensions::registry::BuiltinExtension;
 
-use crate::application::{
+use uze_application::application::{
     AgentContextStatus, ContextPlan, DoctorReport, HarnessHealth, MarketplacePluginDetail,
     MarketplacePluginSummary, OverviewWorkspaceSummary, PluginInspection, PluginSummary,
     ProfileApplyResult, ProfileSummary, ProjectContextStatus, ProjectEnvironmentState,

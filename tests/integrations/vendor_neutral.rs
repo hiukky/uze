@@ -8,8 +8,9 @@
 
 use std::{cell::RefCell, collections::BTreeSet, fs, path::PathBuf};
 
-use uze::{
-    PackageExposurePlan, Resource, UzeApplication, UzeEngine, UzeHome, UzeStore,
+use uze_application::UzeApplication;
+use uze_core::{
+    PackageExposurePlan, Resource, UzeEngine, UzeHome, UzeStore,
     exposure::ExposurePlan,
     integration::{
         AttachmentReceipt, HarnessDetection, IntegrationPort, ManagedArtifact, PublicationStatus,
@@ -25,10 +26,10 @@ use uze::{
 fn install(
     store: &UzeStore,
     path: impl Into<std::path::PathBuf>,
-) -> uze::Result<uze::StoredPackage> {
-    store.ingest(&uze::acquisition::acquire(&uze::PackageSource::local(
-        path,
-    ))?)
+) -> uze_core::Result<uze_core::StoredPackage> {
+    store.ingest(&uze_core::acquisition::acquire(
+        &uze_core::PackageSource::local(path),
+    )?)
 }
 
 fn native_package_fixture() -> PathBuf {
@@ -103,7 +104,7 @@ impl IntegrationPort for PublishingIntegration {
             representation: resource.capability.representation,
             route: CompatibilityRoute::Unsupported,
             verification: VerificationStatus::Unverified,
-            mechanism: uze::ExposureMechanism::Unsupported {
+            mechanism: uze_core::ExposureMechanism::Unsupported {
                 rationale: "fake integration exposes nothing individually".to_owned(),
             },
             evidence: "test double".to_owned(),
@@ -117,19 +118,19 @@ impl IntegrationPort for PublishingIntegration {
         }
     }
 
-    fn republish_packages(&self, packages: &[StoredPackage]) -> Result<(), uze::UzeError> {
+    fn republish_packages(&self, packages: &[StoredPackage]) -> Result<(), uze_core::UzeError> {
         let names = Self::publishable(packages);
         self.calls.borrow_mut().push(names.clone());
         if self.fail {
-            return Err(uze::UzeError::ExposureUnavailable(
+            return Err(uze_core::UzeError::ExposureUnavailable(
                 "fake publication failure".to_owned(),
             ));
         }
-        fs::create_dir_all(&self.root).map_err(|source| uze::UzeError::Write {
+        fs::create_dir_all(&self.root).map_err(|source| uze_core::UzeError::Write {
             path: self.root.clone(),
             source,
         })?;
-        fs::write(self.catalogue(), names.join("\n")).map_err(|source| uze::UzeError::Write {
+        fs::write(self.catalogue(), names.join("\n")).map_err(|source| uze_core::UzeError::Write {
             path: self.catalogue(),
             source,
         })
@@ -163,7 +164,7 @@ impl IntegrationPort for QuietIntegration {
             representation: resource.capability.representation,
             route: CompatibilityRoute::Unsupported,
             verification: VerificationStatus::Unverified,
-            mechanism: uze::ExposureMechanism::Unsupported {
+            mechanism: uze_core::ExposureMechanism::Unsupported {
                 rationale: "quiet".to_owned(),
             },
             evidence: "test double".to_owned(),
@@ -201,8 +202,8 @@ fn republish_is_a_noop_for_an_integration_that_publishes_nothing() {
     application
         .plugins()
         .add(
-            uze::PackageSource::local(plain_package_fixture()),
-            &uze::trust::AlwaysTrust,
+            uze_core::PackageSource::local(plain_package_fixture()),
+            &uze_core::trust::AlwaysTrust,
         )
         .expect("install succeeds with an integration that publishes nothing");
 
@@ -224,8 +225,8 @@ fn a_derived_view_is_rebuilt_from_the_package_set_alone() {
     application
         .plugins()
         .add(
-            uze::PackageSource::local(native_package_fixture()),
-            &uze::trust::AlwaysTrust,
+            uze_core::PackageSource::local(native_package_fixture()),
+            &uze_core::trust::AlwaysTrust,
         )
         .expect("install succeeds");
 
@@ -261,8 +262,8 @@ fn a_package_without_the_native_envelope_is_not_published() {
     application
         .plugins()
         .add(
-            uze::PackageSource::local(plain_package_fixture()),
-            &uze::trust::AlwaysTrust,
+            uze_core::PackageSource::local(plain_package_fixture()),
+            &uze_core::trust::AlwaysTrust,
         )
         .expect("install succeeds");
 
@@ -292,8 +293,8 @@ fn a_failed_publication_leaves_the_package_installed_and_says_so() {
     let report = application
         .plugins()
         .add(
-            uze::PackageSource::local(native_package_fixture()),
-            &uze::trust::AlwaysTrust,
+            uze_core::PackageSource::local(native_package_fixture()),
+            &uze_core::trust::AlwaysTrust,
         )
         .expect("a failed derived view never fails the installation");
 

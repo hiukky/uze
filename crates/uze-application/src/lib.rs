@@ -12,12 +12,16 @@ pub use application::services::AgentIdentity;
 /// making the caller find it elsewhere is what put `uze_core::` in the
 /// TUI's imports.
 pub use uze_core::{
+    ExposureMechanism, ExposurePlan, PackageExposurePlan, Result, UzeError, UzeHome,
     capability::CapabilityKind,
     integration::AttachmentState,
     preference::{Autonomy, ModelPreference, PreferenceApplyOutcome, Preferences, SandboxScope},
     project_lock::parse_plugin_marketplace_spec,
     prompt_history::{PromptEntry, PromptOrigin},
+    provisioning::{ProcessOutput, ProcessResult, ProcessRunner, ProcessSpec, SystemProcessRunner},
+    router::CompatibilityRoute,
     router::HarnessCapabilities,
+    trust::{AlwaysTrust, NoTrustAuthority, TrustAuthority},
     workspace::workspace_root_or_self,
     worktree::{IsolatedCheckout, isolated_checkout},
 };

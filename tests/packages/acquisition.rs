@@ -13,7 +13,7 @@ use std::{
     process::Command,
 };
 
-use uze::{PackageSource, ResolvedSource, UzeError, UzeHome, UzeStore, acquisition::acquire};
+use uze_core::{PackageSource, ResolvedSource, UzeError, UzeHome, UzeStore, acquisition::acquire};
 
 fn temporary(label: &str) -> PathBuf {
     uze_testkit::temp::scratch(label)
@@ -406,10 +406,8 @@ fn submodules_are_not_recursed_into() {
 // meaning "authorize execution of something nobody read".
 // ---------------------------------------------------------------------------
 
-use uze::{
-    UzeApplication,
-    trust::{NoTrustAuthority, TrustAuthority, TrustOutcome, TrustRequest},
-};
+use uze_application::UzeApplication;
+use uze_core::trust::{NoTrustAuthority, TrustAuthority, TrustOutcome, TrustRequest};
 
 /// Records what it was asked, so a test can assert the operator was shown
 /// enough to decide.

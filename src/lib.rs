@@ -1,16 +1,10 @@
-//! Compatibility facade for the `uze` binary and existing library callers.
+//! The `uze` binary's library half: the terminal UI.
 //!
-//! The harness-agnostic model now lives in `uze-core`; this crate preserves
-//! the established public imports while application, integrations, and
-//! presentation complete their own extraction.
+//! It carried a compatibility facade re-exporting all of `uze-core` and
+//! `uze-integrations`, which let the CLI, the TUI and the test suite reach
+//! the domain without naming it — the one hole the layering rule in
+//! `tests/architecture/layering.rs` could not see, since a reach written as
+//! `uze_application::UzeHome` names no forbidden path. Callers now name the crate
+//! they mean.
 
-pub use uze_core::*;
-pub use uze_core::{
-    acquisition, bundle, capability, context, engine, error, exposure, harness_runtime, home,
-    importer, importers, integration, persistence, project, reconciliation, router, state, store,
-    text_region, trust,
-};
-
-pub use uze_application::{UzeApplication, application};
-pub use uze_integrations as integrations;
 pub mod ui;

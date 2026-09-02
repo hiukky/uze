@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use uze::UzeHome;
+use uze_core::UzeHome;
 use uze_testkit::fake_harness::FakeHarness;
 use uze_testkit::temp::TestEnvironment;
 
