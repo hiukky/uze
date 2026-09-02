@@ -5,12 +5,9 @@ import subprocess
 """Codex scenario (latest channel) — Real Harness + Synthetic World.
 
 Phase A (TUI): auth.json seed skips login; trust prompt dismissed; prompt;
-/skills surface; /plugins surface; /mcp surface; deterministic turn; model
-request captured (skills catalog section present).
-
-Honest findings (documented, never a pass): with the current UZE delivery the
-plugin skills are not in codex's model catalog (only built-ins), and the UZE
-MCP config does not reach the /mcp inventory.
+/skills lists the default Skill delivered through the generated plugin;
+/plugins lists the plugin; /mcp lists the UZE-delivered server; deterministic
+turn; the model request carries `flow:commit` and never `flow:review`.
 
 Phase B (CLI/state): `codex plugin list` reports the UZE plugins installed +
 enabled (secondary; the /plugins TUI surface is the primary assertion).
@@ -19,8 +16,12 @@ Phase C (invocation policy, ADR-030): `codex debug prompt-input` renders the
 model-visible catalog with zero model calls; a user-only Skill must be absent
 from it and a default one present, with a sidecar-removal control proving the
 exclusion is caused by Codex reading UZE's policy sidecar.
+
+Every absence assertion here is guarded by a presence precondition in the
+same capture: an empty catalog hides nothing, it proves nothing.
 """
 import os
+import re
 import sys
 import time
 
@@ -146,6 +147,17 @@ def phase_tui(cfg, prov_ip):
         "Enable/Disable" in p,
         "the Enable/Disable skill list opens",
     )
+    # The list names plugin skills `<skill> (<plugin>)`. `commit` only gets
+    # here through the generated plugin's cache copy — the real-harness
+    # proof that the envelope is self-contained.
+    joined = p.replace(" ", "")
+    check(
+        "default-skill-in-skills-list",
+        "commit(flow)" in joined,
+        "the default Skill delivered through the generated plugin is listed"
+        if "commit(flow)" in joined
+        else p[-240:].replace("\n", " "),
+    )
     child.send("\x1b")
     time.sleep(1.0)
 
@@ -157,24 +169,35 @@ def phase_tui(cfg, prov_ip):
     child.send("\r")
     t, p, m = wait_for(["Installed", "Plugins"], tries=8, stop_on_death=True)
     snap("02c_plugins", t)
-    joined = p.replace(" ", "")
     check(
         "plugins-in-tui",
-        "Installed" in p and ("uze" in joined or "flow" in joined),
-        "/plugins shows the UZE-delivered plugins installed",
+        "Installed" in p and "flow" in p,
+        "/plugins shows the UZE-delivered `flow` plugin installed"
+        if "flow" in p
+        else p[-240:].replace("\n", " "),
     )
     child.send("\x1b")
     time.sleep(1.0)
 
-    # /mcp
+    # /mcp — the inventory must name the UZE-delivered server. The heading
+    # "MCP Tools" renders even over "No MCP servers configured", so the
+    # heading alone is not evidence.
     for ch in "/mcp":
         child.send(ch)
         time.sleep(0.08)
     time.sleep(1)
     child.send("\r")
-    t, p, m = wait_for(["MCP"], tries=8, stop_on_death=True)
+    t, p, m = wait_for(
+        ["uze-conformance", "No MCP servers configured"], tries=8, stop_on_death=True
+    )
     snap("02d_mcp", t)
-    check("mcp-surface-in-tui", "MCP" in p, "/mcp opens the MCP inventory surface")
+    check(
+        "mcp-server-in-tui-inventory",
+        "uze-conformance" in p,
+        "/mcp lists the UZE-delivered `uze-conformance` server"
+        if "uze-conformance" in p
+        else p[-240:].replace("\n", " "),
+    )
     child.send("\x1b")
     time.sleep(1.0)
 
@@ -219,13 +242,27 @@ def phase_tui(cfg, prov_ip):
             bool(has_catalog),
             "the model request carries the skills catalog section",
         )
-        # Honest finding (documented, not a pass): with the current UZE
-        # delivery the plugin skills are not listed in codex's model catalog
-        # (only the built-ins); UZE-delivered flow skills are absent.
+        default_listed = bool(markers.get("flow:commit"))
         check(
-            "plugin-skill-catalog-finding",
-            not any(markers.get(m) for m in ("flow:commit", "North Star")),
-            "observed: uze plugin skills absent from the model catalog (finding)",
+            "model-visible-skill-present",
+            default_listed,
+            "flow:commit in the request codex sent to its provider"
+            if default_listed
+            else ", ".join(f"{m}={markers.get(m)}" for m in sorted(markers)),
+        )
+        check(
+            "model-only-skill-present",
+            bool(markers.get("flow:analyze")),
+            "flow:analyze (model-only, delivered individually) in the request",
+        )
+        # Only meaningful once the catalog is proven to carry this plugin's
+        # skills: an empty catalog would hide `flow:review` for free.
+        check(
+            "user-only-skill-hidden-from-model",
+            default_listed and not markers.get("flow:review"),
+            "flow:review absent from the request while flow:commit is present"
+            if default_listed
+            else "not proven: the catalog carries no flow skill at all",
         )
     else:
         check("provider-request-captured", False, "no provider request captured")
@@ -299,11 +336,13 @@ def phase_hooks(cfg, prov_ip, kind):
             "args": '{"cmd":"echo plain output"}',
             "deny_present": None,
             "deny_absent": ["blocked by protect-env"],
-            # The native approval gate used to block headless allow turns;
-            # with the sandbox prerequisite fixed (bubblewrap/userns in the
-            # disposable topology) the exec_command tool actually runs and
-            # its output reaches the conversation — allow is now asserted
-            # evidence, not an approximation.
+            # The allow path asserts only that no denial reached the
+            # conversation. Whether exec_command then actually ran is NOT
+            # asserted: locally it does (`plain output` returns, exit 0),
+            # but under GitHub-hosted Docker Codex's bubblewrap sandbox
+            # fails before the command (`bwrap: Failed to make / slave:
+            # Permission denied`, exit 1) — an environment gap, not hook
+            # evidence, and an asserted check would flip between the two.
         },
         "order": {
             "plugin": "hook-order-plugin",
@@ -411,9 +450,21 @@ def phase_hooks(cfg, prov_ip, kind):
         has_output = has_output or bool(s.get("hook_markers", {}).get("plain output"))
         has_call = has_call or bool(s.get("has_function_call"))
     if spec["deny_present"]:
+        # The denial reason in the function_call_output is the evidence that
+        # the hook ran and Codex relayed its decision instead of the tool's
+        # output. Without it the absence checks below hold for a turn where
+        # no hook ran at all.
+        relayed = bool(markers.get(spec["deny_present"]))
+        check(
+            f"hooks-{kind}-denial-relayed",
+            relayed,
+            f"`{spec['deny_present']}` reached the conversation as the tool outcome"
+            if relayed
+            else ", ".join(f"{m}={markers.get(m)}" for m in sorted(markers)),
+        )
         common.check_absence(
             f"hooks-{kind}-denial-blocks-tool",
-            not has_output,
+            relayed and not has_output,
             settled,
             "the intercepted tool never executed — the native denial blocked it"
             if not has_output
@@ -434,6 +485,14 @@ def phase_hooks(cfg, prov_ip, kind):
     child.close(force=True)
 
 
+def listed_skills(prompt_input):
+    """The plugin skills `codex debug prompt-input` offers to the model, as
+    the `- <name>: <description>` catalog lines name them. Plugin skills are
+    listed as `<plugin>:<skill>`; individually attached ones carry the same
+    label from their wrapper's frontmatter."""
+    return set(re.findall(r"- (flow:[a-z]+): ", prompt_input))
+
+
 def phase_skill_invocation_policy(cfg, prov_ip):
     """Invocation policy (ADR-030) as the REAL Codex binary renders it.
 
@@ -444,23 +503,33 @@ def phase_skill_invocation_policy(cfg, prov_ip):
     HOME, and the network are the container's.
 
     `codex debug prompt-input` renders exactly what the model would receive,
-    with zero model calls. The `flow` fixture carries both shapes: `commit`
-    (default: model-visible) and `review` (`invoke: {model: false, user:
-    true}`: user-only). Expected: `commit` is offered, `review` is not.
+    with zero model calls. The `flow` fixture carries every shape: `commit`
+    (default: model-visible), `review` (`invoke: {model: false, user:
+    true}`: user-only) and `analyze` (model-only). Expected: `flow:commit`
+    and `flow:analyze` are offered, `flow:review` is not.
+
+    Delivery shape, so the evidence is read where it lives: `commit` and
+    `review` arrive through the GENERATED native plugin (`uze plugin inspect`
+    reports them "provided by package"), which Codex stages into its own
+    cache under `$CODEX_HOME/plugins/cache/uze-store/flow/<version>/` — the
+    sidecar Codex actually reads is that cache copy. `analyze` is Degraded
+    on Codex and attached individually under `~/.agents/skills`.
 
     The control matters as much as the assertion. Deleting the
-    `agents/openai.yaml` policy sidecar must bring `review` back — proving the
-    exclusion is caused by Codex genuinely reading the sidecar UZE wrote, not
-    by the Skill being absent, misnamed, or undelivered for some unrelated
-    reason.
+    `agents/openai.yaml` policy sidecar from the cache copy must bring
+    `flow:review` back — proving the exclusion is caused by Codex genuinely
+    reading the sidecar UZE wrote, not by the Skill being absent, misnamed,
+    or undelivered for some unrelated reason.
     """
     final = """
-echo '===== attached skills ====='
-find /work/home/.agents -name openai.yaml 2>/dev/null
+echo '===== sidecar in the generated envelope ====='
+find /work/home/.uze/state/attachments/codex/generated -path '*/skills/review/agents/openai.yaml' 2>/dev/null
+echo '===== sidecar in the codex plugin cache ====='
+find /work/home/.codex/plugins/cache -path '*/skills/review/agents/openai.yaml' 2>/dev/null
 echo '===== prompt-input (policy present) ====='
 codex debug prompt-input 2>&1
 echo '===== prompt-input (policy removed: control) ====='
-find /work/home/.agents -name openai.yaml -delete 2>/dev/null
+find /work/home/.codex/plugins/cache -path '*/skills/review/agents/openai.yaml' -delete 2>/dev/null
 codex debug prompt-input 2>&1
 """
     setup = codex_setup(cfg, prov_ip, final, plugins="flow")
@@ -477,28 +546,56 @@ codex debug prompt-input 2>&1
     with open(f"{cfg.outdir}/06_skill_invocation_policy.txt", "w") as f:
         f.write(out)
 
-    marker = "===== prompt-input (policy removed: control) ====="
-    with_policy, _, without_policy = out.partition(marker)
+    envelope_section, _, rest = out.partition(
+        "===== sidecar in the codex plugin cache ====="
+    )
+    cache_section, _, rest = rest.partition("===== prompt-input (policy present) =====")
+    with_policy, _, without_policy = rest.partition(
+        "===== prompt-input (policy removed: control) ====="
+    )
+    offered = listed_skills(with_policy)
+    offered_without_policy = listed_skills(without_policy)
 
     check(
         "policy-sidecar-delivered",
-        "openai.yaml" in with_policy,
-        "UZE writes the Codex invocation-policy sidecar for the attached Skill",
+        "/generated/flow@uze-lab/skills/review/agents/openai.yaml" in envelope_section,
+        "UZE writes the invocation-policy sidecar into the generated envelope",
+    )
+    check(
+        "policy-sidecar-ingested",
+        "/plugins/cache/uze-store/flow/" in cache_section
+        and "/skills/review/agents/openai.yaml" in cache_section,
+        "Codex staged the envelope, sidecar included, into its plugin cache",
     )
     check(
         "default-skill-offered",
-        "commit" in with_policy,
-        "a default Skill stays discoverable by the model",
+        "flow:commit" in offered,
+        "flow:commit (generated plugin) is offered to the model"
+        if "flow:commit" in offered
+        else f"offered: {sorted(offered)}",
     )
+    check(
+        "model-only-skill-offered",
+        "flow:analyze" in offered,
+        "flow:analyze (individually attached) is offered to the model"
+        if "flow:analyze" in offered
+        else f"offered: {sorted(offered)}",
+    )
+    hidden = "flow:commit" in offered and "flow:review" not in offered
     check(
         "user-only-skill-hidden",
-        "review" not in with_policy,
-        "a user-only Skill is never offered to the model",
+        hidden,
+        "flow:review is absent while flow:commit from the same plugin is present"
+        if hidden
+        else f"not proven — offered: {sorted(offered)}",
     )
+    control = hidden and "flow:review" in offered_without_policy
     check(
         "control-sidecar-drives-the-exclusion",
-        "review" in without_policy,
-        "removing the sidecar restores the listing, proving Codex reads it",
+        control,
+        "removing the cached sidecar restores flow:review, proving Codex reads it"
+        if control
+        else f"offered without the sidecar: {sorted(offered_without_policy)}",
     )
 
 

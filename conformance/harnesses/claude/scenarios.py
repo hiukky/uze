@@ -315,6 +315,17 @@ def phase_hooks(cfg, prov_ip, kind):
 
     Evidence = what the REAL harness relayed: hook marker presence/absence
     in the provider-observed conversation plus the TUI denial surface.
+
+    Known state, 2026-09-02 (needs its own change): Claude Code rejects the
+    scripted `Bash` tool_use before any hook runs — the TUI renders
+    `⎿ Invalid tool parameters` and the tool_result it sends back carries
+    no hook marker. Observed on 2.1.252 (CI run 33463936487) and 2.1.258
+    (CI run 33584691903, and locally), for deny, allow and order alike.
+    Until the scripted call matches what this channel accepts, no hook
+    executes here at all; `hooks-*-denial-relayed` fails on purpose rather
+    than letting the absence checks pass for a turn no hook ever saw, and
+    `hooks-allow-tool-executed` is satisfied by that error result, not by
+    an execution. The earlier green runs were this vacuity, not evidence.
     """
     scenarios = {
         "deny": {
@@ -401,9 +412,20 @@ def phase_hooks(cfg, prov_ip, kind):
         has_result = has_result or bool(s.get("has_tool_result"))
         has_tool_result = has_tool_result or bool(s.get("has_tool_result"))
     if spec["deny_present"]:
+        # The denial reason relayed to the model is the evidence that the
+        # hook ran and Claude honored it. Without it the absence checks
+        # below hold for a turn where no hook ran at all.
+        relayed = bool(markers.get(spec["deny_present"]))
+        check(
+            f"hooks-{kind}-denial-relayed",
+            relayed,
+            f"`{spec['deny_present']}` reached the conversation as the tool outcome"
+            if relayed
+            else ", ".join(f"{m}={markers.get(m)}" for m in sorted(markers)),
+        )
         common.check_absence(
             f"hooks-{kind}-denial-blocks-tool",
-            not has_output,
+            relayed and not has_output,
             settled,
             "the intercepted tool never executed — the native denial blocked it"
             if not has_output
