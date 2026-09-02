@@ -1,9 +1,7 @@
 #!/bin/sh
-# Second handler of the group: runs only when the guard above allowed
-# (first-deny-wins). The exit-code contract has no channel for an allowed
-# handler to speak on, so it records what it saw beside the plugin instead
-# — first-deny-wins itself is proven by hook-order-plugin, whose first
-# handler denies and whose second handler's reason must never appear.
-printf '%s\t%s\t%s\n' "$HOOK_HARNESS" "$HOOK_TOOL_NATIVE" "$HOOK_COMMAND" \
-  >> "${PLUGIN_ROOT}/second-handler.log"
-exit 0
+# Second handler of the group: must run only when the guard above allowed.
+# It denies with its own marker, so the deny scenario can prove it never
+# ran — first-deny-wins is only evidence when the second handler could
+# have spoken. hook-allow-plugin is the fixture whose call goes through.
+echo "second-handler-reached [tool=$HOOK_TOOL native=$HOOK_TOOL_NATIVE]" >&2
+exit 3

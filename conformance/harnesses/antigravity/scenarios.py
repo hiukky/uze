@@ -495,7 +495,7 @@ def phase_hooks(cfg, prov_ip, kind, vendor_executes):
             "deny_absent": ["second-handler-reached"],
         },
         "allow": {
-            "plugin": "hook-plugin",
+            "plugin": "hook-allow-plugin",
             "args": RUN_COMMAND_ARGS % "echo plain output",
             "deny_present": None,
             "deny_absent": ["blocked by protect-env"],

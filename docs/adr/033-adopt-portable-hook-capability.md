@@ -2,6 +2,14 @@
 
 Status: Accepted
 
+Its command ABI and dispatcher are superseded by
+[040 — Compile portable hooks into the delivered artifact](040-compile-portable-hooks-into-the-delivered-artifact.md):
+handlers now read the hook context from `HOOK_*` environment and answer with
+an exit code, and the translation is compiled into a wrapper vendored in the
+delivered artifact instead of running in the `uze` binary. Everything else
+below — the canonical manifest, its events, matchers, effects and handler
+shape, the capability profiles, the route vocabulary — still holds.
+
 ## Context
 
 UZE's Store, Engine, IntegrationPort, and receipt ledger already separate

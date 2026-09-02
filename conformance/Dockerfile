@@ -21,8 +21,12 @@ FROM node:22-bookworm-slim AS harness-lab
 # version probe, scenario R6).
 # ARG PNPM_VERSION=10.0.0  # (reserved; see note below)
 
+# `jq` is the generated hook wrapper's own dependency (ADR-033): the file a
+# harness executes reads the payload with it. The Lab installs it the way a
+# machine running delivered hooks must have it, and the wrapper's
+# missing-dependency behaviour is proven in the deterministic suite.
 RUN apt-get update \
-    && apt-get install --no-install-recommends -y ca-certificates curl git ripgrep tini bubblewrap \
+    && apt-get install --no-install-recommends -y ca-certificates curl git jq ripgrep tini bubblewrap \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=uze-build /out/uze /usr/local/bin/uze

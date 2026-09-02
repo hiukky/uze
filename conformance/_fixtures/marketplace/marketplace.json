@@ -18,6 +18,11 @@
       "description": "Portable hooks: PreToolUse deny/allow guard around the shell tool (ADR-033)."
     },
     {
+      "name": "hook-allow-plugin",
+      "source": "./plugins/hook-allow-plugin",
+      "description": "Portable hooks: a guard with nothing behind it \u2014 the allow path, where the intercepted tool must really run (ADR-033)."
+    },
+    {
       "name": "hook-order-plugin",
       "source": "./plugins/hook-order-plugin",
       "description": "Portable hooks: two-handler PreToolUse group proving first-deny-wins ordering (ADR-033)."
@@ -25,7 +30,7 @@
     {
       "name": "hook-fail-plugin",
       "source": "./plugins/hook-fail-plugin",
-      "description": "Portable hooks: a declared deny whose handler cannot run — the fail-closed contract against real harnesses (ADR-033)."
+      "description": "Portable hooks: a declared deny whose handler cannot run \u2014 the fail-closed contract against real harnesses (ADR-033)."
     }
   ]
 }

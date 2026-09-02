@@ -72,6 +72,10 @@ HOOK_MARKERS = [
     "second-handler-ran",
     "second-handler-reached",
     "Denied by UZE hook",
+    # The portable vocabulary row itself: the guard echoes the alias it was
+    # handed, so a relayed denial proves the handler read `shell` (not the
+    # harness's own tool name) whichever harness delivered the hook.
+    "tool=shell",
 ]
 COUNTER = {"n": 0}
 

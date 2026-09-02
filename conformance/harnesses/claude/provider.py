@@ -59,6 +59,10 @@ HOOK_MARKERS = [
     "second-handler-ran",
     "second-handler-reached",
     "Denied by UZE hook",
+    # The portable vocabulary row itself: the guard echoes the alias it was
+    # handed, so a relayed denial proves the handler read `shell` (not the
+    # harness's own tool name) whichever harness delivered the hook.
+    "tool=shell",
     # The real tool stdout marker: only present when the intercepted tool
     # actually executed after an allow — the deny/allow contrast relies
     # on it, not on the ambiguous presence of a tool result.

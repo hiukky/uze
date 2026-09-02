@@ -82,6 +82,7 @@ naming them, and the absorbed records are listed under
 - [037 — Adopt bounded environment maintenance](037-adopt-bounded-environment-maintenance.md)
 - [038 — Adopt a local terminal runtime server](038-adopt-local-terminal-runtime-server.md)
 - [039 — Adopt syntect for diff syntax highlighting](039-adopt-syntect-for-diff-syntax-highlighting.md)
+- [040 — Compile portable hooks into the delivered artifact](040-compile-portable-hooks-into-the-delivered-artifact.md)
 
 ## Consolidated records
 

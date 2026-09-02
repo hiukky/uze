@@ -234,6 +234,7 @@ def validate_marketplace(cfg):
         "flow": "./plugins/flow",
         "mcp-plugin": "./plugins/mcp-plugin",
         "hook-plugin": "./plugins/hook-plugin",
+        "hook-allow-plugin": "./plugins/hook-allow-plugin",
         "hook-order-plugin": "./plugins/hook-order-plugin",
         "hook-fail-plugin": "./plugins/hook-fail-plugin",
     }
@@ -249,6 +250,8 @@ def validate_marketplace(cfg):
         "plugins/hook-plugin/hooks.json",
         "plugins/hook-plugin/scripts/guard",
         "plugins/hook-plugin/scripts/mark",
+        "plugins/hook-allow-plugin/hooks.json",
+        "plugins/hook-allow-plugin/scripts/guard",
         "plugins/hook-order-plugin/hooks.json",
         "plugins/hook-order-plugin/scripts/order-1",
         "plugins/hook-order-plugin/scripts/order-2",

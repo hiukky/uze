@@ -49,8 +49,10 @@
 
 ## 7. Documentation and retirement
 
-- [ ] 7.1 Rewrite `docs/capabilities/portable-hooks.md` around the new contract: `HOOK_*` table, exit codes, wrapper, per-harness delivery matrix (native / adapted / declared), the `jq` note and fail-closed rule
-- [ ] 7.2 Amend ADR-033 (or add the superseding ADR) recording the decision: compile at install, wrapper vendored in the artifact, environment + exit-code contract, `hook-exec` as reference/fallback, `transform` deferred
-- [ ] 7.3 Update `crates/uze-integrations/src/<harness>/README.md` hook sections and the marketplace example plugin (`plugins/`) if it ships a hook
+- [x] 7.1 Rewrite `docs/capabilities/portable-hooks.md` around the new contract: `HOOK_*` table, exit codes, wrapper, per-harness delivery matrix (native / adapted / declared), the `jq` note and fail-closed rule
+- [x] 7.2 Amend ADR-033 (or add the superseding ADR) recording the decision: compile at install, wrapper vendored in the artifact, environment + exit-code contract, `hook-exec` as reference/fallback, `transform` deferred
+  - A superseding ADR (`docs/adr/040-compile-portable-hooks-into-the-delivered-artifact.md`), not an amendment: ADR-033 is already pushed, and only its ABI and dispatcher change — the rest of it still holds, which the new ADR and a note on 033 both say.
+- [x] 7.3 Update `crates/uze-integrations/src/<harness>/README.md` hook sections and the marketplace example plugin (`plugins/`) if it ships a hook
 - [ ] 7.4 Retire `.labs/native-hooks` once tasks 3.6 and 4.3 reproduce its exercises in the test suite; keep its README's compatibility matrix in `docs/capabilities/portable-hooks.md`
+  - Left unchecked deliberately: `.labs/native-hooks` lives outside this worktree and is git-ignored, so it is not this change's to delete. Its exercises are reproduced by `hooks::wrapper_tests` and `hooks::opencode_runtime_tests`, and its compatibility matrix now lives in `docs/capabilities/portable-hooks.md`, so removing the directory is a one-line follow-up for whoever owns that scratch space.
 - [ ] 7.5 Full gate: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --no-fail-fast`, `openspec validate --all --strict`, `ruff` on `conformance/`
