@@ -401,9 +401,20 @@ def phase_hooks(cfg, prov_ip, kind):
         has_result = has_result or bool(s.get("has_tool_result"))
         has_tool_result = has_tool_result or bool(s.get("has_tool_result"))
     if spec["deny_present"]:
+        # The denial reason relayed to the model is the evidence that the
+        # hook ran and Claude honored it. Without it the absence checks
+        # below hold for a turn where no hook ran at all.
+        relayed = bool(markers.get(spec["deny_present"]))
+        check(
+            f"hooks-{kind}-denial-relayed",
+            relayed,
+            f"`{spec['deny_present']}` reached the conversation as the tool outcome"
+            if relayed
+            else ", ".join(f"{m}={markers.get(m)}" for m in sorted(markers)),
+        )
         common.check_absence(
             f"hooks-{kind}-denial-blocks-tool",
-            not has_output,
+            relayed and not has_output,
             settled,
             "the intercepted tool never executed — the native denial blocked it"
             if not has_output
