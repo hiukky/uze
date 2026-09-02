@@ -86,22 +86,31 @@ problem behind a sleep).
 
 ---
 
-## Two harnesses cannot enforce `user: false` — recorded, not hidden
+## Three of four harnesses do not enforce `user: false`
 
-**Context.** Asking every harness the same question surfaced that Codex
-*and* OpenCode both offer a model-only Skill to the user. Neither vertical
-asked before, so this was invisible.
+**Context.** Asking every harness the same question surfaced that Codex,
+OpenCode *and* Claude Code all offer a model-only Skill to explicit user
+invocation. Only Antigravity enforces it, through
+`disable-slash-command: true`. No vertical asked before, so a canonical
+policy honoured on one harness out of four was invisible.
 
-**Chosen.** Both declare it through `unsupported`, with reasons grounded in
-what the product already reports — Codex routes model-only as `Degraded`,
-OpenCode routes every Skill as `Adaptable`. The run records an adapted
-result carrying the reason.
+**Chosen.** Each declares it through `unsupported`, with a reason grounded
+in what the product already reports where one exists — Codex routes
+model-only as `Degraded`, OpenCode routes every Skill as `Adaptable`. Claude
+is the weakest of the three: it *has* `disable-model-invocation` (UZE uses
+it to honour `invoke.model: false`), so the inverse may exist and simply not
+be used. Its reason says so rather than claiming a limitation.
 
 **Discarded.** Failing both (the product does not claim to enforce it, so
 the suite would be asserting something never promised); staying silent (the
 old behaviour, and the reason this went unnoticed).
 
-**Worth a second look.** This means `invoke.user: false` is enforced on at
-most two of four harnesses. That is a product-level fact the contract made
-visible, and it belongs in a conversation about whether the canonical policy
-is deliverable as specified — not in this change.
+**Worth a second look — this is the most important thing here.**
+`invoke.user: false` is enforced on **one harness out of four**. ADR-030
+makes invocation policy the canonical Skill's portable semantics; a
+canonical semantic delivered once out of four times is either a product gap
+or an over-promise in the ADR. Claude specifically deserves a check: if an
+inverse of `disable-model-invocation` exists, this is a bug in the Claude
+integration, not a harness limitation.
+
+Out of scope here — the contract's job was to make it visible, and it did.
