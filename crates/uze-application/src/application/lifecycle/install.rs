@@ -17,9 +17,10 @@ use uze_core::{
 
 use crate::bootstrap;
 
+use super::super::services::Plugins;
 use super::super::*;
 
-impl UzeApplication {
+impl Plugins<'_> {
     pub(crate) fn acquire(&self, source: &PackageSource) -> Result<uze_core::MaterializedPackage> {
         match source {
             PackageSource::Embedded { id } => bootstrap::materialize(id),
@@ -27,25 +28,25 @@ impl UzeApplication {
         }
     }
 
-    pub fn add_plugin(
+    pub fn add(
         &self,
         source: PackageSource,
         authority: &dyn TrustAuthority,
     ) -> Result<AddPluginReport> {
-        self.add_plugin_resolving(source, authority, &NoNameCollisionAuthority)
+        self.add_resolving(source, authority, &NoNameCollisionAuthority)
     }
 
     /// `add_plugin`, with an explicit answer for what to do if the
     /// package's bare plugin name is already active under a different
     /// marketplace (ADR-038) — the CLI/TUI's interactive `--alias`/
     /// `--replace` entry point. Plain `add_plugin` refuses without asking.
-    pub fn add_plugin_resolving(
+    pub fn add_resolving(
         &self,
         source: PackageSource,
         authority: &dyn TrustAuthority,
         name_authority: &dyn NameCollisionAuthority,
     ) -> Result<AddPluginReport> {
-        let _mutation = uze_core::persistence::MutationLock::acquire(&self.home)?;
+        let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
         // An embedded snapshot is always the official marketplace, never
         // `local` — `install_from_marketplace` takes this same path and
         // relies on it for the official-plugin protection/removal rules to
@@ -106,7 +107,7 @@ impl UzeApplication {
     ) -> Result<AddPluginReport> {
         // Any installation changes vendor-visible state; cached inspection
         // verdicts must not outlive it (ADR 018).
-        self.inspection_cache.invalidate();
+        self.0.inspection_cache.invalidate();
         // Deliberately does NOT run `reconcile_orphaned_receipts` here.
         // Attach's own conflict detection needs the first look at whatever
         // occupies a shared projection slot: a receipt that is Matched but
@@ -123,7 +124,7 @@ impl UzeApplication {
         // be inspected honestly, and strictly before anything is written to
         // the Store or shown to a harness. Neither the Store nor any
         // integration knows this question exists.
-        self.authorize(
+        self.0.authorize(
             &materialized,
             authority,
             already_trusted,
@@ -137,7 +138,7 @@ impl UzeApplication {
         // the vendor executable.  Do it before ingesting so a preparation
         // failure cannot leave a newly installed package with no reported
         // delivery attempt.
-        self.prepare_detected_integrations(None)?;
+        self.0.prepare_detected_integrations(None)?;
 
         let installed = self.ingest_resolving_name_collision(
             &materialized,
@@ -150,23 +151,26 @@ impl UzeApplication {
         // reads the view it was just given. A failure here is recorded, never
         // propagated — the package is installed, and one integration's view
         // being stale does not make the installation invalid.
-        let publications = self.republish_all();
+        let publications = self.0.republish_all();
         let unpublished: BTreeSet<&str> = publications
             .iter()
             .filter(|outcome| outcome.error.is_some())
             .map(|outcome| outcome.integration.as_str())
             .collect();
 
-        let environment = self.engine().compose(std::slice::from_ref(&installed.id))?;
+        let environment = self
+            .0
+            .engine()
+            .compose(std::slice::from_ref(&installed.id))?;
         let resources: Vec<_> = environment.resources.iter().collect();
         let mut attachments = Vec::new();
         let mut package_plans = Vec::new();
-        for integration in &self.integrations {
+        for integration in &self.0.integrations {
             // A package must remain installable on a machine that has only a
             // subset of UZE's peer harnesses. `add` prepares and attaches to
             // detected harnesses; an absent executable is neither a package
             // incompatibility nor a reason to invoke its vendor CLI.
-            if !self.detect_cached(integration.as_ref()).present {
+            if !self.0.detect_cached(integration.as_ref()).present {
                 continue;
             }
             let mut provided = BTreeSet::new();
@@ -183,7 +187,7 @@ impl UzeApplication {
                 // would hit preflight ("already has an imported plugin named
                 // `git`") even though UZE owns it. Skip attach and keep
                 // `provided` so capability-level attach is also skipped.
-                let already_attached = state::receipts(&self.home, Some(installed.id.as_str()))?
+                let already_attached = state::receipts(&self.0.home, Some(installed.id.as_str()))?
                     .into_iter()
                     .any(|(_, receipt)| {
                         receipt.integration == integration.id()
@@ -200,7 +204,7 @@ impl UzeApplication {
                 // covered capability receipts that are now provided, but only
                 // if they are safely detachable.
                 let existing: Vec<(String, uze_core::integration::AttachmentReceipt)> =
-                    state::receipts(&self.home, Some(installed.id.as_str()))?
+                    state::receipts(&self.0.home, Some(installed.id.as_str()))?
                         .into_iter()
                         .filter(|(_, r)| {
                             r.integration == integration.id() && r.resource_identity.is_some()
@@ -235,16 +239,16 @@ impl UzeApplication {
                         if inspection.state == AttachmentState::Matched {
                             let detached = integration.detach_receipt(&receipt)?;
                             if detached.state == AttachmentState::Missing {
-                                state::forget_receipt(&self.home, &key)?;
+                                state::forget_receipt(&self.0.home, &key)?;
                             }
                         } else if inspection.state == AttachmentState::Missing {
-                            state::forget_receipt(&self.home, &key)?;
+                            state::forget_receipt(&self.0.home, &key)?;
                         }
                     }
                     if let Some(receipt) = integration.attach_package(&installed, &plan)? {
                         let location = receipt_location(&receipt);
                         state::record_receipt(
-                            &self.home,
+                            &self.0.home,
                             package_receipt_key(installed.id.as_str(), integration.id()),
                             receipt,
                         )?;
@@ -261,11 +265,13 @@ impl UzeApplication {
             }
             for resource in &resources {
                 if !provided.contains(&resource.identity()) {
-                    let resolved = self.resolve_exposure_name(resource, integration.as_ref())?;
+                    let resolved = self
+                        .0
+                        .resolve_exposure_name(resource, integration.as_ref())?;
                     if let Some(receipt) = integration.attach_receipt(&resolved)? {
                         let location = receipt_location(&receipt);
                         state::record_receipt(
-                            &self.home,
+                            &self.0.home,
                             resource_receipt_key(installed.id.as_str(), integration.id(), resource),
                             receipt,
                         )?;
@@ -278,7 +284,7 @@ impl UzeApplication {
             }
         }
         Ok(AddPluginReport {
-            plugin: self.plugin_summary(&installed)?,
+            plugin: self.0.plugin_summary(&installed)?,
             package_plans,
             attachments,
             publications,
@@ -303,7 +309,7 @@ impl UzeApplication {
         requested_active_name: Option<&str>,
         name_authority: &dyn NameCollisionAuthority,
     ) -> Result<uze_core::StoredPackage> {
-        let (name, existing, requested) = match self.store.ingest_with_active_name(
+        let (name, existing, requested) = match self.0.store.ingest_with_active_name(
             materialized,
             marketplace,
             requested_active_name,
@@ -328,13 +334,15 @@ impl UzeApplication {
                 requested,
             }),
             NameCollisionResolution::Alias(alias) => {
-                self.store
+                self.0
+                    .store
                     .ingest_with_active_name(materialized, marketplace, Some(&alias))
             }
             NameCollisionResolution::Replace => {
                 match self.detach_and_remove(&existing, false)? {
                     RemovePluginReport::Removed { .. }
                     | RemovePluginReport::AlreadyAbsent { .. } => self
+                        .0
                         .store
                         .ingest_with_active_name(materialized, marketplace, requested_active_name),
                     RemovePluginReport::Blocked { .. } => Err(UzeError::PluginNameCollision {

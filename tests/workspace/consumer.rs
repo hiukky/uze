@@ -94,7 +94,7 @@ fn add_project_plugin_creates_a_deterministic_lock() {
     let app = fx.app();
 
     app.project()
-        .add_plugin("flow", "test-market", &fx.project_root, &AlwaysTrust)
+        .add("flow", "test-market", &fx.project_root, &AlwaysTrust)
         .unwrap();
 
     let lock_path = project_lock::lock_path_for(&fx.project_root);
@@ -109,7 +109,7 @@ fn add_project_plugin_creates_a_deterministic_lock() {
     // (install_materialized's own same-origin idempotency) and produce a
     // byte-identical lock — determinism, not just "doesn't crash".
     app.project()
-        .add_plugin("flow", "test-market", &fx.project_root, &AlwaysTrust)
+        .add("flow", "test-market", &fx.project_root, &AlwaysTrust)
         .unwrap();
     let second_bytes = fs::read(&lock_path).unwrap();
     assert_eq!(
@@ -128,7 +128,7 @@ fn add_project_plugin_populates_resolved_revision_for_a_local_marketplace_plugin
     fx.add_marketplace_to_global_registry();
     let app = fx.app();
     app.project()
-        .add_plugin("flow", "test-market", &fx.project_root, &AlwaysTrust)
+        .add("flow", "test-market", &fx.project_root, &AlwaysTrust)
         .unwrap();
     let lock = project_lock::load_lock(&fx.project_root).unwrap().unwrap();
     assert_eq!(lock.plugins["flow"].resolved.revision, None);
@@ -142,7 +142,7 @@ fn install_project_environment_reproduces_a_lock_on_a_fresh_machine() {
     // "Machine A": adds the plugin, produces agents.lock.
     fx.app()
         .project()
-        .add_plugin("flow", "test-market", &fx.project_root, &AlwaysTrust)
+        .add("flow", "test-market", &fx.project_root, &AlwaysTrust)
         .unwrap();
 
     // "Machine B": same UZE_HOME layout path but a fresh Store directory,
@@ -158,7 +158,7 @@ fn install_project_environment_reproduces_a_lock_on_a_fresh_machine() {
     let fresh_home = fx.uze_home.parent().unwrap().join("home-fresh-machine");
     let fresh_app = UzeApplication::new(UzeHome::at(&fresh_home), Vec::new());
     assert!(
-        fresh_app.list_plugins().unwrap().is_empty(),
+        fresh_app.plugins().list().unwrap().is_empty(),
         "fresh machine starts with nothing installed"
     );
     assert!(
@@ -178,7 +178,8 @@ fn install_project_environment_reproduces_a_lock_on_a_fresh_machine() {
     }
     assert!(
         fresh_app
-            .list_plugins()
+            .plugins()
+            .list()
             .unwrap()
             .iter()
             .any(|p| p.id == "flow@test-market"),
@@ -221,7 +222,7 @@ fn install_project_environment_is_a_no_op_once_everything_is_installed() {
     fx.add_marketplace_to_global_registry();
     let app = fx.app();
     app.project()
-        .add_plugin("flow", "test-market", &fx.project_root, &AlwaysTrust)
+        .add("flow", "test-market", &fx.project_root, &AlwaysTrust)
         .unwrap();
 
     let report = app
@@ -248,13 +249,10 @@ fn remove_project_plugin_removes_from_lock_but_not_from_the_store() {
     fx.add_marketplace_to_global_registry();
     let app = fx.app();
     app.project()
-        .add_plugin("flow", "test-market", &fx.project_root, &AlwaysTrust)
+        .add("flow", "test-market", &fx.project_root, &AlwaysTrust)
         .unwrap();
 
-    let report = app
-        .project()
-        .remove_plugin("flow", &fx.project_root)
-        .unwrap();
+    let report = app.project().remove("flow", &fx.project_root).unwrap();
     assert!(matches!(report, RemoveProjectPluginReport::Removed { .. }));
 
     let lock = project_lock::load_lock(&fx.project_root).unwrap().unwrap();
@@ -263,7 +261,8 @@ fn remove_project_plugin_removes_from_lock_but_not_from_the_store() {
         "removed plugin must be gone from the lock"
     );
     assert!(
-        app.list_plugins()
+        app.plugins()
+            .list()
             .unwrap()
             .iter()
             .any(|p| p.id == "flow@test-market"),
@@ -276,19 +275,16 @@ fn remove_project_plugin_reports_no_lock_and_not_in_lock_distinctly() {
     let fx = Fixture::new("remove-reports");
     let app = fx.app();
 
-    let no_lock = app
-        .project()
-        .remove_plugin("flow", &fx.project_root)
-        .unwrap();
+    let no_lock = app.project().remove("flow", &fx.project_root).unwrap();
     assert!(matches!(no_lock, RemoveProjectPluginReport::NoLock));
 
     fx.add_marketplace_to_global_registry();
     app.project()
-        .add_plugin("flow", "test-market", &fx.project_root, &AlwaysTrust)
+        .add("flow", "test-market", &fx.project_root, &AlwaysTrust)
         .unwrap();
     let not_in_lock = app
         .project()
-        .remove_plugin("does-not-exist", &fx.project_root)
+        .remove("does-not-exist", &fx.project_root)
         .unwrap();
     assert!(matches!(
         not_in_lock,
@@ -336,7 +332,8 @@ fn same_named_plugins_from_two_marketplaces_coexist_and_require_qualified_lookup
     ));
     // Refused: only `flow@first` is installed.
     assert_eq!(
-        app.list_plugins()
+        app.plugins()
+            .list()
             .unwrap()
             .into_iter()
             .map(|plugin| plugin.id)
@@ -355,7 +352,8 @@ fn same_named_plugins_from_two_marketplaces_coexist_and_require_qualified_lookup
         .unwrap();
 
     let ids: Vec<_> = app
-        .list_plugins()
+        .plugins()
+        .list()
         .unwrap()
         .into_iter()
         .map(|plugin| plugin.id)
@@ -377,15 +375,15 @@ fn same_named_plugins_from_two_marketplaces_coexist_and_require_qualified_lookup
     // it", never the old "installed from multiple marketplaces" refusal.
     // The aliased one is addressable the same way, by its own active name.
     assert!(matches!(
-        app.remove_plugin("flow-second"),
+        app.plugins().remove("flow-second"),
         Ok(uze::application::RemovePluginReport::Removed { .. })
     ));
-    assert_eq!(app.list_plugins().unwrap()[0].id, "flow@first");
+    assert_eq!(app.plugins().list().unwrap()[0].id, "flow@first");
     assert!(matches!(
-        app.remove_plugin("flow"),
+        app.plugins().remove("flow"),
         Ok(uze::application::RemovePluginReport::Removed { .. })
     ));
-    assert!(app.list_plugins().unwrap().is_empty());
+    assert!(app.plugins().list().unwrap().is_empty());
 }
 
 #[test]
@@ -434,7 +432,7 @@ fn global_add_plugin_never_touches_the_project_lock() {
     let source = uze_core::PackageSource::Local {
         path: fx.marketplace_root.join("flow"),
     };
-    app.add_plugin(source, &AlwaysTrust).unwrap();
+    app.plugins().add(source, &AlwaysTrust).unwrap();
 
     assert!(
         !project_lock::lock_path_for(&fx.project_root).is_file(),
@@ -448,7 +446,7 @@ fn project_root_resolution_is_deterministic_from_a_subdirectory() {
     fx.add_marketplace_to_global_registry();
     fx.app()
         .project()
-        .add_plugin("flow", "test-market", &fx.project_root, &AlwaysTrust)
+        .add("flow", "test-market", &fx.project_root, &AlwaysTrust)
         .unwrap();
 
     let nested = fx.project_root.join("a/b/c");

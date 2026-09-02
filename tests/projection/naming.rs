@@ -206,7 +206,8 @@ fn app_with_opencode(root: &Path) -> (UzeApplication, PathBuf) {
 }
 
 fn install(app: &UzeApplication, path: PathBuf) -> uze::application::PluginSummary {
-    app.add_plugin(PackageSource::local(path), &uze::trust::AlwaysTrust)
+    app.plugins()
+        .add(PackageSource::local(path), &uze::trust::AlwaysTrust)
         .unwrap()
         .plugin
 }
@@ -443,7 +444,7 @@ fn a_legacy_name_taken_over_by_foreign_content_is_surrendered_and_relabeled() {
         skills_dir.join("legacy-pkg:review").is_symlink(),
         "UZE delivers under its stable labeled name"
     );
-    let inspection = application.inspect_plugin(&summary.id).unwrap();
+    let inspection = application.plugins().inspect(&summary.id).unwrap();
     assert_eq!(inspection.managed_state.matched, 1);
     assert_eq!(inspection.managed_state.conflicts, 0);
     fs::remove_dir_all(root).unwrap();
@@ -517,7 +518,7 @@ fn two_packages_with_the_same_skill_name_coexist_deterministically() {
     );
 
     // Removing one must not disturb the other.
-    application.remove_plugin("frontend").unwrap();
+    application.plugins().remove("frontend").unwrap();
     let remaining: Vec<String> = fs::read_dir(agents_home.join("skills"))
         .unwrap()
         .map(|entry| entry.unwrap().file_name().to_str().unwrap().to_owned())
@@ -543,8 +544,9 @@ fn a_foreign_artifact_occupying_the_short_name_is_never_overwritten() {
     )
     .unwrap();
 
-    let result =
-        application.add_plugin(PackageSource::local(package_dir), &uze::trust::AlwaysTrust);
+    let result = application
+        .plugins()
+        .add(PackageSource::local(package_dir), &uze::trust::AlwaysTrust);
     assert!(
         matches!(result, Err(uze::UzeError::ManagedEntryConflict(_))),
         "a foreign occupant of the desired name must surface as an explicit conflict, \
@@ -569,19 +571,19 @@ fn inspect_matched_missing_drifted_and_detach_all_still_work_under_new_naming() 
         skill_fixture(&root.join("fixtures"), "acme", "review"),
     );
 
-    let inspection = application.inspect_plugin("acme").unwrap();
+    let inspection = application.plugins().inspect("acme").unwrap();
     assert_eq!(inspection.managed_state.matched, 1);
 
     // MISSING: remove the physical artifact by hand.
     fs::remove_file(agents_home.join("skills/acme:review")).unwrap();
-    let inspection = application.inspect_plugin("acme").unwrap();
+    let inspection = application.plugins().inspect("acme").unwrap();
     assert_eq!(inspection.managed_state.missing, 1);
 
     // Re-add is idempotent: recreates exactly the same (existing-receipt)
     // artifact name.
     setup_without_touching_the_real_shell_rc(&application, None).unwrap();
     assert!(agents_home.join("skills/acme:review").is_symlink());
-    let inspection = application.inspect_plugin("acme").unwrap();
+    let inspection = application.plugins().inspect("acme").unwrap();
     assert_eq!(inspection.managed_state.matched, 1);
 
     // DRIFTED: repoint the symlink elsewhere.
@@ -590,12 +592,12 @@ fn inspect_matched_missing_drifted_and_detach_all_still_work_under_new_naming() 
     fs::remove_file(agents_home.join("skills/acme:review")).unwrap();
     #[cfg(unix)]
     std::os::unix::fs::symlink(&elsewhere, agents_home.join("skills/acme:review")).unwrap();
-    let inspection = application.inspect_plugin("acme").unwrap();
+    let inspection = application.plugins().inspect("acme").unwrap();
     assert_eq!(inspection.managed_state.drifted, 1);
 
     // Drift blocks destructive removal.
     assert!(matches!(
-        application.remove_plugin("acme").unwrap(),
+        application.plugins().remove("acme").unwrap(),
         uze::application::RemovePluginReport::Blocked { .. }
     ));
     assert_eq!(
@@ -607,11 +609,11 @@ fn inspect_matched_missing_drifted_and_detach_all_still_work_under_new_naming() 
     fs::remove_file(agents_home.join("skills/acme:review")).unwrap();
     setup_without_touching_the_real_shell_rc(&application, None).unwrap();
     assert!(matches!(
-        application.remove_plugin("acme").unwrap(),
+        application.plugins().remove("acme").unwrap(),
         uze::application::RemovePluginReport::Removed { .. }
     ));
     assert!(matches!(
-        application.remove_plugin("acme").unwrap(),
+        application.plugins().remove("acme").unwrap(),
         uze::application::RemovePluginReport::AlreadyAbsent { .. }
     ));
     fs::remove_dir_all(root).unwrap();

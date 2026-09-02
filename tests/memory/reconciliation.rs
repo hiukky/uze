@@ -104,7 +104,8 @@ fn app(root: &Path, claude_present: bool) -> UzeApplication {
 }
 
 fn install(app: &UzeApplication, path: PathBuf) {
-    app.add_plugin(PackageSource::local(path), &uze::trust::AlwaysTrust)
+    app.plugins()
+        .add(PackageSource::local(path), &uze::trust::AlwaysTrust)
         .expect("fixture installs cleanly");
 }
 
@@ -240,7 +241,8 @@ fn a_matched_region_can_be_cleanly_removed_preserving_user_content() {
     // set (simulated here by removing the package from the store first)
     // must remove exactly its region.
     application
-        .remove_plugin("uze-instructions-fixture-a")
+        .plugins()
+        .remove("uze-instructions-fixture-a")
         .unwrap();
     let report = application.context().reconcile(&project).unwrap();
     assert!(report.packages.is_empty());
@@ -302,7 +304,8 @@ fn an_orphaned_regions_cleanup_is_structural_not_content_verified_but_still_refu
     fs::write(&agents_md, &edited).unwrap();
 
     application
-        .remove_plugin("uze-instructions-fixture-a")
+        .plugins()
+        .remove("uze-instructions-fixture-a")
         .unwrap();
     let report = application.context().reconcile(&project).unwrap();
     assert_eq!(report.removed_orphans.len(), 1);
@@ -337,7 +340,8 @@ fn a_drifted_bridge_line_blocks_its_own_removal_even_after_the_last_package_is_g
     fs::write(&claude_md, &tampered_bridge).unwrap();
 
     application
-        .remove_plugin("uze-instructions-fixture-a")
+        .plugins()
+        .remove("uze-instructions-fixture-a")
         .unwrap();
     let report = application.context().reconcile(&project).unwrap();
     assert_eq!(
@@ -378,7 +382,8 @@ fn two_packages_share_one_agents_md_and_exactly_one_bridge_per_harness() {
 
     // Removing package A leaves B's region and the bridge intact.
     application
-        .remove_plugin("uze-instructions-fixture-a")
+        .plugins()
+        .remove("uze-instructions-fixture-a")
         .unwrap();
     let report = application.context().reconcile(&project).unwrap();
     assert_eq!(report.packages.len(), 1);
@@ -408,7 +413,8 @@ fn two_packages_share_one_agents_md_and_exactly_one_bridge_per_harness() {
     // — it cannot tell "UZE created this file from nothing" apart from "the
     // user's own file happened to end up empty," so it treats both alike.
     application
-        .remove_plugin("uze-instructions-fixture-b")
+        .plugins()
+        .remove("uze-instructions-fixture-b")
         .unwrap();
     let report = application.context().reconcile(&project).unwrap();
     assert!(report.packages.is_empty());

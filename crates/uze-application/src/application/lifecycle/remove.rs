@@ -12,17 +12,18 @@ use uze_core::{
 
 use crate::bootstrap;
 
+use super::super::services::Plugins;
 use super::super::*;
 
-impl UzeApplication {
-    pub fn remove_plugin(&self, id: &str) -> Result<RemovePluginReport> {
-        let _mutation = uze_core::persistence::MutationLock::acquire(&self.home)?;
+impl Plugins<'_> {
+    pub fn remove(&self, id: &str) -> Result<RemovePluginReport> {
+        let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
         // Removal changes vendor-visible state; cached inspection verdicts
         // must not outlive it (ADR 018).
-        self.inspection_cache.invalidate();
+        self.0.inspection_cache.invalidate();
         let report = self.detach_and_remove(id, false)?;
         if matches!(report, RemovePluginReport::Removed { .. }) {
-            let _ = uze_core::state::plugin_marketplace_remove(&self.home, id);
+            let _ = uze_core::state::plugin_marketplace_remove(&self.0.home, id);
         }
         Ok(report)
     }
@@ -52,19 +53,19 @@ impl UzeApplication {
         id: &str,
         allow_protected: bool,
     ) -> Result<RemovePluginReport> {
-        let package = match self.package_by_name(id) {
+        let package = match self.0.package_by_name(id) {
             Ok(package) => package,
             Err(UzeError::UnknownPackage(_)) => {
                 // There is no tombstone, so UZE cannot claim this package was
                 // previously installed. It can still make repeated remove a
                 // safe no-op when no ownership evidence remains.
-                if state::receipts(&self.home, Some(id))?.is_empty() {
+                if state::receipts(&self.0.home, Some(id))?.is_empty() {
                     return Ok(RemovePluginReport::AlreadyAbsent {
                         plugin: id.to_owned(),
                     });
                 }
                 return Ok(RemovePluginReport::Blocked {
-                    report: self.reconcile(id),
+                    report: self.0.reconcile(id),
                     plan: PackageRemovalPlan::BlockedByInspection,
                 });
             }
@@ -76,7 +77,7 @@ impl UzeApplication {
                 package.id.as_str()
             )));
         }
-        let report = self.reconcile(package.id.as_str());
+        let report = self.0.reconcile(package.id.as_str());
         let plan = plan_remove(&report);
         let (detached_receipts, already_missing_receipts) = match &plan {
             PackageRemovalPlan::Safe {
@@ -96,24 +97,25 @@ impl UzeApplication {
                 continue;
             }
             let Some(integration) = self
+                .0
                 .integrations
                 .iter()
                 .find(|integration| integration.id() == reconciled.receipt.integration)
             else {
                 return Ok(RemovePluginReport::Blocked {
-                    report: self.reconcile(package.id.as_str()),
+                    report: self.0.reconcile(package.id.as_str()),
                     plan: PackageRemovalPlan::BlockedByInspection,
                 });
             };
             let detached = integration.detach_receipt(&reconciled.receipt)?;
             if detached.state != AttachmentState::Missing {
                 return Ok(RemovePluginReport::Blocked {
-                    report: self.reconcile(package.id.as_str()),
-                    plan: plan_remove(&self.reconcile(package.id.as_str())),
+                    report: self.0.reconcile(package.id.as_str()),
+                    plan: plan_remove(&self.0.reconcile(package.id.as_str())),
                 });
             }
         }
-        let final_report = self.reconcile(package.id.as_str());
+        let final_report = self.0.reconcile(package.id.as_str());
         let final_plan = plan_remove(&final_report);
         if !matches!(final_plan, PackageRemovalPlan::Safe { .. }) {
             return Ok(RemovePluginReport::Blocked {
@@ -122,12 +124,12 @@ impl UzeApplication {
             });
         }
         for reconciled in &final_report.receipts {
-            state::forget_receipt(&self.home, &reconciled.ledger_key)?;
+            state::forget_receipt(&self.0.home, &reconciled.ledger_key)?;
         }
-        self.store.remove_package(&package.id)?;
+        self.0.store.remove_package(&package.id)?;
         // The package set changed, so every derived view is now stale. A
         // failure to rebuild one does not un-remove the package.
-        let _ = self.republish_all();
+        let _ = self.0.republish_all();
         Ok(RemovePluginReport::Removed {
             plugin: package.id.as_str().to_owned(),
             detached_receipts,

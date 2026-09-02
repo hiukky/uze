@@ -256,7 +256,8 @@ fn installing_another_plugin_never_renames_an_existing_one() {
     let (application, agents_home) = app_with_opencode(&root);
 
     application
-        .add_plugin(
+        .plugins()
+        .add(
             PackageSource::local(skill_fixture(&root.join("f"), "alpha", "review")),
             &uze::trust::AlwaysTrust,
         )
@@ -268,7 +269,8 @@ fn installing_another_plugin_never_renames_an_existing_one() {
     // Installing a second plugin with the SAME logical name must not rename
     // or disturb the first.
     application
-        .add_plugin(
+        .plugins()
+        .add(
             PackageSource::local(skill_fixture(&root.join("f"), "beta", "review")),
             &uze::trust::AlwaysTrust,
         )
@@ -280,13 +282,15 @@ fn installing_another_plugin_never_renames_an_existing_one() {
     let root2 = temp("order-reverse");
     let (application2, agents2) = app_with_opencode(&root2);
     application2
-        .add_plugin(
+        .plugins()
+        .add(
             PackageSource::local(skill_fixture(&root2.join("f"), "beta", "review")),
             &uze::trust::AlwaysTrust,
         )
         .unwrap();
     application2
-        .add_plugin(
+        .plugins()
+        .add(
             PackageSource::local(skill_fixture(&root2.join("f"), "alpha", "review")),
             &uze::trust::AlwaysTrust,
         )
@@ -303,13 +307,15 @@ fn same_named_skills_from_two_packages_are_independently_addressable() {
     let root = temp("skill-independence");
     let (application, agents_home) = app_with_opencode(&root);
     application
-        .add_plugin(
+        .plugins()
+        .add(
             PackageSource::local(skill_fixture(&root.join("f"), "alpha", "review")),
             &uze::trust::AlwaysTrust,
         )
         .unwrap();
     application
-        .add_plugin(
+        .plugins()
+        .add(
             PackageSource::local(skill_fixture(&root.join("f"), "beta", "review")),
             &uze::trust::AlwaysTrust,
         )

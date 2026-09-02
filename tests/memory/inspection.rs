@@ -136,7 +136,8 @@ fn app(root: &Path, claude_present: bool) -> UzeApplication {
 }
 
 fn install(app: &UzeApplication, path: PathBuf) {
-    app.add_plugin(PackageSource::local(path), &uze::trust::AlwaysTrust)
+    app.plugins()
+        .add(PackageSource::local(path), &uze::trust::AlwaysTrust)
         .expect("fixture installs cleanly");
 }
 
@@ -470,11 +471,11 @@ fn context_operations_never_alter_the_installed_package_set() {
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();
 
-    let before = application.list_plugins().unwrap();
+    let before = application.plugins().list().unwrap();
     application.context().inspect(&project).unwrap();
     application.context().plan(&project).unwrap();
     application.context().reconcile(&project).unwrap();
-    let after = application.list_plugins().unwrap();
+    let after = application.plugins().list().unwrap();
     assert_eq!(before.len(), after.len());
     assert_eq!(before[0].id, after[0].id);
 }

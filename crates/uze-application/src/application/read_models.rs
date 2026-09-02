@@ -10,22 +10,25 @@
 
 use uze_core::Result;
 
+use super::services::Plugins;
 use super::*;
 
-impl UzeApplication {
-    pub fn list_plugins(&self) -> Result<Vec<PluginSummary>> {
-        self.store
+impl Plugins<'_> {
+    pub fn list(&self) -> Result<Vec<PluginSummary>> {
+        self.0
+            .store
             .package_ids()?
             .into_iter()
-            .map(|id| self.plugin_summary(&self.store.package(&id)?))
+            .map(|id| self.0.plugin_summary(&self.0.store.package(&id)?))
             .collect()
     }
 
-    pub fn inspect_plugin(&self, id: &str) -> Result<PluginInspection> {
-        let package = self.package_by_name(id)?;
-        let environment = self.engine().compose(std::slice::from_ref(&package.id))?;
+    pub fn inspect(&self, id: &str) -> Result<PluginInspection> {
+        let package = self.0.package_by_name(id)?;
+        let environment = self.0.engine().compose(std::slice::from_ref(&package.id))?;
         let resources: Vec<_> = environment.resources.iter().collect();
         let deliveries = self
+            .0
             .integrations
             .iter()
             .map(|integration| {
@@ -52,9 +55,9 @@ impl UzeApplication {
                 }
             })
             .collect();
-        let reconciliation = self.reconcile_cached_report(package.id.as_str());
+        let reconciliation = self.0.reconcile_cached_report(package.id.as_str());
         Ok(PluginInspection {
-            plugin: self.plugin_summary(&package)?,
+            plugin: self.0.plugin_summary(&package)?,
             capabilities: resources
                 .iter()
                 .map(|resource| PluginCapability {

@@ -91,7 +91,8 @@ fn the_official_package_installs_through_the_unmodified_pipeline() {
     let root = temp("install");
     let application = app(&root);
     let report = application
-        .add_plugin(
+        .plugins()
+        .add(
             PackageSource::local(official_package()),
             &uze::trust::AlwaysTrust,
         )
@@ -105,12 +106,13 @@ fn the_official_package_contributes_its_agent_skill_resources() {
     let root = temp("resources");
     let application = app(&root);
     application
-        .add_plugin(
+        .plugins()
+        .add(
             PackageSource::local(official_package()),
             &uze::trust::AlwaysTrust,
         )
         .unwrap();
-    let inspection = application.inspect_plugin("uze").unwrap();
+    let inspection = application.plugins().inspect("uze").unwrap();
     assert_eq!(inspection.capabilities.len(), 2);
     assert!(
         inspection
@@ -149,11 +151,13 @@ fn the_package_receives_no_special_treatment_a_renamed_copy_behaves_identically(
 
     let application = app(&root);
     let report = application
-        .add_plugin(PackageSource::local(renamed), &uze::trust::AlwaysTrust)
+        .plugins()
+        .add(PackageSource::local(renamed), &uze::trust::AlwaysTrust)
         .expect("an identical package under a different id installs the same way");
     assert_eq!(report.plugin.id, "totally-different-name@local");
     let inspection = application
-        .inspect_plugin("totally-different-name")
+        .plugins()
+        .inspect("totally-different-name")
         .unwrap();
     assert_eq!(inspection.capabilities.len(), 1);
     assert_eq!(inspection.capabilities[0].kind, CapabilityKind::AgentSkill);
@@ -167,7 +171,8 @@ fn status_context_inspect_and_context_plan_produce_valid_json() {
     let root = temp("json-shape");
     let application = app(&root);
     application
-        .add_plugin(
+        .plugins()
+        .add(
             PackageSource::local(official_package()),
             &uze::trust::AlwaysTrust,
         )
@@ -197,7 +202,8 @@ fn installing_the_skill_package_never_touches_managed_regions_of_other_packages(
     let root = temp("ownership-preserved");
     let application = app(&root);
     application
-        .add_plugin(
+        .plugins()
+        .add(
             PackageSource::local(uze_testkit::fixtures::canonical("instructions-a")),
             &uze::trust::AlwaysTrust,
         )
@@ -211,7 +217,8 @@ fn installing_the_skill_package_never_touches_managed_regions_of_other_packages(
     // itself) must not touch the project's AGENTS.md at all — it
     // contributes no Instruction resource.
     application
-        .add_plugin(
+        .plugins()
+        .add(
             PackageSource::local(official_package()),
             &uze::trust::AlwaysTrust,
         )
@@ -234,13 +241,15 @@ fn drift_is_still_blocked_with_the_skill_package_also_installed() {
     let root = temp("drift-still-blocked");
     let application = app(&root);
     application
-        .add_plugin(
+        .plugins()
+        .add(
             PackageSource::local(official_package()),
             &uze::trust::AlwaysTrust,
         )
         .unwrap();
     application
-        .add_plugin(
+        .plugins()
+        .add(
             PackageSource::local(uze_testkit::fixtures::canonical("instructions-a")),
             &uze::trust::AlwaysTrust,
         )

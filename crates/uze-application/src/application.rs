@@ -328,7 +328,7 @@ impl UzeApplication {
             return Ok(false);
         }
         let materialized = bootstrap::materialize(id)?;
-        match self.install_materialized_from_marketplace(
+        match self.plugins().install_materialized_from_marketplace(
             materialized,
             "uze-official",
             &trust::NoTrustAuthority,

@@ -448,7 +448,8 @@ fn a_remote_package_with_only_a_skill_requires_no_trust() {
     let authority = RecordingAuthority::new(TrustOutcome::Denied);
 
     application
-        .add_plugin(PackageSource::git(&fixture.url), &authority)
+        .plugins()
+        .add(PackageSource::git(&fixture.url), &authority)
         .expect("a declarative package installs without a trust question");
 
     assert!(
@@ -466,7 +467,8 @@ fn a_remote_package_with_an_mcp_command_requires_trust() {
     let authority = RecordingAuthority::new(TrustOutcome::Granted);
 
     application
-        .add_plugin(PackageSource::git(&fixture.url), &authority)
+        .plugins()
+        .add(PackageSource::git(&fixture.url), &authority)
         .expect("a granted install succeeds");
 
     let seen = authority.seen.borrow();
@@ -493,11 +495,12 @@ fn denied_trust_leaves_the_store_completely_untouched() {
     let authority = RecordingAuthority::new(TrustOutcome::Denied);
 
     let error = application
-        .add_plugin(PackageSource::git(&fixture.url), &authority)
+        .plugins()
+        .add(PackageSource::git(&fixture.url), &authority)
         .expect_err("a denied install succeeded");
     assert!(matches!(error, UzeError::TrustDenied(_)));
 
-    assert!(application.list_plugins().unwrap().is_empty());
+    assert!(application.plugins().list().unwrap().is_empty());
     assert!(
         !home.plugins_dir().join("local/git-fixture").exists(),
         "a denied package left bytes in the store"
@@ -512,7 +515,8 @@ fn a_non_interactive_process_reports_trust_required_rather_than_assuming_consent
     let (home, application) = application(&fixture.root);
 
     let error = application
-        .add_plugin(PackageSource::git(&fixture.url), &NoTrustAuthority)
+        .plugins()
+        .add(PackageSource::git(&fixture.url), &NoTrustAuthority)
         .expect_err("a headless install succeeded");
     match &error {
         UzeError::TrustRequired { package, detail } => {
@@ -537,7 +541,8 @@ fn a_local_package_with_an_mcp_command_still_requires_no_trust() {
     let authority = RecordingAuthority::new(TrustOutcome::Denied);
 
     application
-        .add_plugin(PackageSource::local(&package), &authority)
+        .plugins()
+        .add(PackageSource::local(&package), &authority)
         .expect("a local install is not gated on trust");
     assert!(authority.seen.borrow().is_empty());
 
@@ -554,7 +559,8 @@ fn an_update_introducing_executable_capability_asks_again() {
     // First revision is declarative and installs unasked.
     let silent = RecordingAuthority::new(TrustOutcome::Denied);
     application
-        .add_plugin(PackageSource::git(&fixture.url), &silent)
+        .plugins()
+        .add(PackageSource::git(&fixture.url), &silent)
         .expect("the declarative revision installs");
     assert!(silent.seen.borrow().is_empty());
 
@@ -570,7 +576,8 @@ fn an_update_introducing_executable_capability_asks_again() {
 
     let asked = RecordingAuthority::new(TrustOutcome::Granted);
     application
-        .update_plugin("git-fixture", &asked)
+        .plugins()
+        .update("git-fixture", &asked)
         .expect("the update succeeds once trusted");
 
     let seen = asked.seen.borrow();

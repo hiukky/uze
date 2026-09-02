@@ -449,7 +449,8 @@ fn no_duplicate_capability_receipt_when_a_package_covers_the_resource() {
     let _ = skill_resource(&_package, "skills", "commit");
 
     let report = application
-        .add_plugin(
+        .plugins()
+        .add(
             uze::PackageSource::local(pkg_root.join("pkg")),
             &uze::trust::AlwaysTrust,
         )

@@ -615,7 +615,7 @@ fn run(cli: Cli) -> Result<()> {
                 source,
             })?;
             let spinner = progress::spinner(&format!("Removing {plugin} from this project..."));
-            let report = match app.project().remove_plugin(&plugin, &current_dir) {
+            let report = match app.project().remove(&plugin, &current_dir) {
                 Ok(report) => report,
                 Err(e) => {
                     spinner.finish_and_clear();
@@ -790,7 +790,7 @@ fn run(cli: Cli) -> Result<()> {
                 }
             }
             PluginAction::List { format } => {
-                let plugins = app.list_plugins()?;
+                let plugins = app.plugins().list()?;
                 match format {
                     OutputFormat::Text => {
                         println!(
@@ -826,14 +826,14 @@ fn run(cli: Cli) -> Result<()> {
                 }
             }
             PluginAction::Inspect { plugin, format } => {
-                let report = app.inspect_plugin(&plugin)?;
+                let report = app.plugins().inspect(&plugin)?;
                 match format {
                     OutputFormat::Text => print!("{}", render_inspection(&report)),
                     OutputFormat::Json => print_json(&report),
                 }
             }
             PluginAction::Remove { plugin, format } => {
-                let report = app.remove_plugin(&plugin)?;
+                let report = app.plugins().remove(&plugin)?;
                 match format {
                     OutputFormat::Text => print!("{}", render_remove(&report)),
                     OutputFormat::Json => print_json(&report),
@@ -845,7 +845,7 @@ fn run(cli: Cli) -> Result<()> {
                 format,
             } => {
                 let authority = trust_authority(trust);
-                let report = app.update_plugin(&plugin, authority.as_ref())?;
+                let report = app.plugins().update(&plugin, authority.as_ref())?;
                 match format {
                     OutputFormat::Text => print!("{}", render_update(&report)),
                     OutputFormat::Json => print_json(&report),
@@ -1490,9 +1490,9 @@ fn run_shorthand(app: &UzeApplication, args: Vec<String>, verbose: bool) -> Resu
         source,
     })?;
     let authority = trust_authority(shorthand.trust);
-    let report =
-        app.project()
-            .add_plugin(&plugin, &marketplace, &current_dir, authority.as_ref())?;
+    let report = app
+        .project()
+        .add(&plugin, &marketplace, &current_dir, authority.as_ref())?;
 
     match shorthand.format {
         OutputFormat::Text => {

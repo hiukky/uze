@@ -132,7 +132,7 @@ pub(crate) fn dispatch(
             let (home, sender) = (home.clone(), sender.clone());
             thread::spawn(move || {
                 let result = tui_application(home)
-                    .and_then(|app| app.inspect_plugin(&id))
+                    .and_then(|app| app.plugins().inspect(&id))
                     .map_err(|error| error.to_string());
                 let _ = sender.send(WorkerResult::PluginInspected(result));
             });
@@ -153,7 +153,7 @@ pub(crate) fn dispatch(
                 home.clone(),
                 sender.clone(),
                 model.context_root.clone(),
-                move |app| app.remove_plugin(&id).map(remove_message),
+                move |app| app.plugins().remove(&id).map(remove_message),
             );
         }
         Intent::Update(id, grant) => {
@@ -165,7 +165,7 @@ pub(crate) fn dispatch(
                 model.context_root.clone(),
                 grant,
                 id.clone(),
-                move |app, authority| app.update_plugin(&id, authority).map(update_message),
+                move |app, authority| app.plugins().update(&id, authority).map(update_message),
                 TrustedRetry::Update(retry_id),
             );
         }
@@ -383,7 +383,8 @@ pub(crate) fn spawn_startup(home: UzeHome, sender: Sender<WorkerResult>, context
             // stays reported — `update_available` survives, and the `u`
             // action with its trust dialog is still the way through.
             applied = app
-                .auto_update_plugins()
+                .plugins()
+                .auto_update()
                 .into_iter()
                 .filter(|outcome| outcome.applied)
                 .map(|outcome| outcome.plugin)
@@ -402,7 +403,7 @@ pub(crate) fn spawn_startup(home: UzeHome, sender: Sender<WorkerResult>, context
 fn load_refresh_data(home: UzeHome, context_root: &std::path::Path) -> Result<RefreshData> {
     let prompt_home = home.clone();
     let app = tui_application(home)?;
-    let mut plugins = app.list_plugins()?;
+    let mut plugins = app.plugins().list()?;
     // Official plugins always lead the list — a stable sort keeps every
     // other ordering (whatever `list_plugins` returns) untouched within
     // each of the two groups.

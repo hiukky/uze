@@ -7,16 +7,13 @@ use uze_core::{
     trust::{self, TrustAuthority},
 };
 
+use super::super::services::Plugins;
 use super::super::*;
 
-impl UzeApplication {
-    pub fn update_plugin(
-        &self,
-        id: &str,
-        authority: &dyn TrustAuthority,
-    ) -> Result<UpdatePluginReport> {
-        let _mutation = uze_core::persistence::MutationLock::acquire(&self.home)?;
-        let installed = self.package_by_name(id)?;
+impl Plugins<'_> {
+    pub fn update(&self, id: &str, authority: &dyn TrustAuthority) -> Result<UpdatePluginReport> {
+        let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
+        let installed = self.0.package_by_name(id)?;
         // An update is a version change, never a re-namespacing (ADR-038):
         // whatever local name this package currently answers to — its own
         // bare name, or an `alias` a past collision resolution gave it —
@@ -30,11 +27,15 @@ impl UzeApplication {
         let materialized = self.acquire(&installed.provenance.requested)?;
 
         let previous = {
-            let environment = self.engine().compose(std::slice::from_ref(&installed.id))?;
+            let environment = self
+                .0
+                .engine()
+                .compose(std::slice::from_ref(&installed.id))?;
             let resources: Vec<&uze_core::Resource> = environment.resources.iter().collect();
             trust::executable_capabilities(&resources)
         };
-        self.authorize(&materialized, authority, &previous, true)?;
+        self.0
+            .authorize(&materialized, authority, &previous, true)?;
 
         // Nothing destructive has happened yet. From here the current package
         // is removed under the same ownership rules any removal obeys.
@@ -68,7 +69,7 @@ impl UzeApplication {
     }
 }
 
-impl UzeApplication {
+impl Plugins<'_> {
     /// Applies every pending update this machine can settle on its own,
     /// and reports what it did.
     ///
@@ -94,8 +95,9 @@ impl UzeApplication {
     /// This is not called from the CLI dispatch path: `ensure_default_plugins`
     /// runs before every command, read-only ones included, and a diagnostic
     /// must not rewrite plugin content. Interactive surfaces call this.
-    pub fn auto_update_plugins(&self) -> Vec<AutoUpdateOutcome> {
+    pub fn auto_update(&self) -> Vec<AutoUpdateOutcome> {
         let pending: Vec<String> = self
+            .0
             .installed_packages()
             .into_iter()
             .filter(|package| {
@@ -105,7 +107,8 @@ impl UzeApplication {
                 )
             })
             .filter(|package| {
-                self.plugin_summary(package)
+                self.0
+                    .plugin_summary(package)
                     .ok()
                     .and_then(|summary| summary.update_available)
                     == Some(true)
@@ -116,7 +119,7 @@ impl UzeApplication {
         pending
             .into_iter()
             .map(|plugin| {
-                let detail = match self.update_plugin(&plugin, &trust::NoTrustAuthority) {
+                let detail = match self.update(&plugin, &trust::NoTrustAuthority) {
                     Ok(UpdatePluginReport::Updated { .. }) => None,
                     Ok(UpdatePluginReport::Blocked { .. }) => {
                         Some("managed state was preserved; update it explicitly".to_owned())

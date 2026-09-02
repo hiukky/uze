@@ -208,7 +208,7 @@ impl Project<'_> {
     }
 
     /// Adds a plugin to the project lock and ensures it's in the Store.
-    pub fn add_plugin(
+    pub fn add(
         &self,
         plugin: &str,
         marketplace: &str,
@@ -284,8 +284,8 @@ impl Project<'_> {
 
         // Acquire and ingest (reuses existing lifecycle).
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
-        let materialized = self.0.acquire(&package_source)?;
-        let report = self.0.install_materialized_from_marketplace(
+        let materialized = self.0.plugins().acquire(&package_source)?;
+        let report = self.0.plugins().install_materialized_from_marketplace(
             materialized,
             marketplace,
             authority,
@@ -319,7 +319,7 @@ impl Project<'_> {
     }
 
     /// Removes a plugin from the project lock (does NOT remove from Store).
-    pub fn remove_plugin(&self, plugin: &str, root: &Path) -> Result<RemoveProjectPluginReport> {
+    pub fn remove(&self, plugin: &str, root: &Path) -> Result<RemoveProjectPluginReport> {
         let canonical = project_root::resolve_project_root(root)?;
         let mut lock = match project_lock::load_lock(&canonical)? {
             Some(lock) => lock,
@@ -400,12 +400,12 @@ impl Project<'_> {
                 )?;
             }
             let package_source = Self::resolve_locked_plugin_source(&lock, &name, &locked.source)?;
-            let materialized = self.0.acquire(&package_source)?;
+            let materialized = self.0.plugins().acquire(&package_source)?;
             let marketplace = match &locked.source {
                 PluginSource::Marketplace { marketplace, .. } => marketplace.as_str(),
                 PluginSource::Git { .. } => "local",
             };
-            self.0.install_materialized_from_marketplace(
+            self.0.plugins().install_materialized_from_marketplace(
                 materialized,
                 marketplace,
                 authority,

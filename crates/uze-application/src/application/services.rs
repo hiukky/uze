@@ -86,3 +86,15 @@ impl UzeApplication {
         Project(self)
     }
 }
+
+/// The plugins this machine has installed, and their lifecycle.
+///
+/// The only service here that writes the Store.
+pub struct Plugins<'a>(pub(super) &'a UzeApplication);
+
+impl UzeApplication {
+    /// Installing, removing, updating and reading installed plugins.
+    pub fn plugins(&self) -> Plugins<'_> {
+        Plugins(self)
+    }
+}

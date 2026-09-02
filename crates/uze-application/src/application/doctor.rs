@@ -391,13 +391,14 @@ mod tests {
         );
         let package_root = base.join("flow");
         write_plugin(&base, "flow");
-        app.add_plugin(
-            PackageSource::Local {
-                path: package_root.clone(),
-            },
-            &AlwaysTrust,
-        )
-        .unwrap();
+        app.plugins()
+            .add(
+                PackageSource::Local {
+                    path: package_root.clone(),
+                },
+                &AlwaysTrust,
+            )
+            .unwrap();
         let package_id =
             PackageId::from_plugin_name("flow", &package_root.join("plugin.json")).unwrap();
         state::record_receipt(
@@ -445,13 +446,14 @@ mod tests {
         let app = UzeApplication::new(home.clone(), vec![Box::new(integration)]);
         let package_root = base.join("flow");
         write_plugin(&base, "flow");
-        app.add_plugin(
-            PackageSource::Local {
-                path: package_root.clone(),
-            },
-            &AlwaysTrust,
-        )
-        .unwrap();
+        app.plugins()
+            .add(
+                PackageSource::Local {
+                    path: package_root.clone(),
+                },
+                &AlwaysTrust,
+            )
+            .unwrap();
         let package_id =
             PackageId::from_plugin_name("flow", &package_root.join("plugin.json")).unwrap();
         state::record_receipt(
@@ -495,13 +497,14 @@ mod tests {
         let app = UzeApplication::new(home.clone(), vec![Box::new(integration)]);
         let package_root = base.join("flow");
         write_plugin(&base, "flow");
-        app.add_plugin(
-            PackageSource::Local {
-                path: package_root.clone(),
-            },
-            &AlwaysTrust,
-        )
-        .unwrap();
+        app.plugins()
+            .add(
+                PackageSource::Local {
+                    path: package_root.clone(),
+                },
+                &AlwaysTrust,
+            )
+            .unwrap();
         let package_id =
             PackageId::from_plugin_name("flow", &package_root.join("plugin.json")).unwrap();
         state::record_receipt(
@@ -527,13 +530,14 @@ mod tests {
         // Installing another package is a mutation: cached verdicts must
         // not outlive it.
         write_plugin(&base, "std");
-        app.add_plugin(
-            PackageSource::Local {
-                path: base.join("std"),
-            },
-            &AlwaysTrust,
-        )
-        .unwrap();
+        app.plugins()
+            .add(
+                PackageSource::Local {
+                    path: base.join("std"),
+                },
+                &AlwaysTrust,
+            )
+            .unwrap();
         let _ = app.health().report();
         assert_eq!(
             inspected.load(Ordering::SeqCst),

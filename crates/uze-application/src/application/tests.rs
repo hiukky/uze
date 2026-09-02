@@ -244,14 +244,15 @@ pub(crate) fn multi_mcp_fixture() -> PathBuf {
 pub(crate) fn list_and_inspect_are_package_centric() {
     let root = uze_testkit::temp::scratch("inspect");
     let app = UzeApplication::new(UzeHome::at(&root), vec![Box::new(SymlinkIntegration)]);
-    app.add_plugin(
-        uze_core::PackageSource::local(fixture()),
-        &uze_core::trust::AlwaysTrust,
-    )
-    .unwrap();
-    let listed = app.list_plugins().unwrap();
+    app.plugins()
+        .add(
+            uze_core::PackageSource::local(fixture()),
+            &uze_core::trust::AlwaysTrust,
+        )
+        .unwrap();
+    let listed = app.plugins().list().unwrap();
     assert_eq!(listed.len(), 1);
-    let inspection = app.inspect_plugin(&listed[0].id).unwrap();
+    let inspection = app.plugins().inspect(&listed[0].id).unwrap();
     assert_eq!(inspection.plugin.id, listed[0].id);
     assert_eq!(inspection.capabilities[0].kind, CapabilityKind::AgentSkill);
     assert_eq!(inspection.deliveries.len(), 1);
@@ -265,12 +266,13 @@ pub(crate) fn add_installs_portable_package_without_invoking_absent_harnesses() 
         attach_attempted: Cell::new(false),
     };
     let app = UzeApplication::new(UzeHome::at(&root), vec![Box::new(absent)]);
-    app.add_plugin(
-        uze_core::PackageSource::local(fixture()),
-        &uze_core::trust::AlwaysTrust,
-    )
-    .unwrap();
-    assert_eq!(app.list_plugins().unwrap().len(), 1);
+    app.plugins()
+        .add(
+            uze_core::PackageSource::local(fixture()),
+            &uze_core::trust::AlwaysTrust,
+        )
+        .unwrap();
+    assert_eq!(app.plugins().list().unwrap().len(), 1);
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -306,7 +308,7 @@ pub(crate) fn removal_uses_reconciliation_and_preserves_drift() {
     )
     .unwrap();
     assert!(matches!(
-        app.remove_plugin(package.id.as_str()).unwrap(),
+        app.plugins().remove(package.id.as_str()).unwrap(),
         RemovePluginReport::Removed { .. }
     ));
     assert!(!managed.exists());
@@ -337,7 +339,7 @@ pub(crate) fn removal_uses_reconciliation_and_preserves_drift() {
     )
     .unwrap();
     assert!(matches!(
-        app.remove_plugin(package.id.as_str()).unwrap(),
+        app.plugins().remove(package.id.as_str()).unwrap(),
         RemovePluginReport::Blocked {
             plan: PackageRemovalPlan::BlockedByDrift,
             ..
@@ -397,7 +399,8 @@ pub(crate) fn replace_resolution_removes_the_existing_active_plugin_and_installs
             .is_err()
     );
     let ids: Vec<_> = app
-        .list_plugins()
+        .plugins()
+        .list()
         .unwrap()
         .into_iter()
         .map(|plugin| plugin.id)
@@ -545,7 +548,8 @@ pub(crate) fn update_preserves_an_aliased_plugins_active_name() {
     assert_eq!(beta.plugin.active_name, "conformance-beta");
 
     let updated = app
-        .update_plugin("conformance-beta", &uze_core::trust::AlwaysTrust)
+        .plugins()
+        .update("conformance-beta", &uze_core::trust::AlwaysTrust)
         .unwrap();
     let UpdatePluginReport::Updated { plugin, .. } = updated else {
         panic!("expected Updated, got {updated:?}");
@@ -658,11 +662,12 @@ pub(crate) fn add_failure_after_a_confirmed_attachment_leaves_reconcilable_ledge
     };
     let app = UzeApplication::new(home.clone(), vec![Box::new(integration)]);
     assert!(
-        app.add_plugin(
-            uze_core::PackageSource::local(multi_mcp_fixture()),
-            &uze_core::trust::AlwaysTrust
-        )
-        .is_err()
+        app.plugins()
+            .add(
+                uze_core::PackageSource::local(multi_mcp_fixture()),
+                &uze_core::trust::AlwaysTrust
+            )
+            .is_err()
     );
     assert!(
         app.store
@@ -688,19 +693,20 @@ pub(crate) fn remove_is_idempotent_without_claiming_history_for_absent_state() {
         )
         .unwrap();
     assert!(matches!(
-        app.remove_plugin(package.id.as_str()).unwrap(),
+        app.plugins().remove(package.id.as_str()).unwrap(),
         RemovePluginReport::Removed { .. }
     ));
     assert!(matches!(
-        app.remove_plugin(package.id.as_str()).unwrap(),
+        app.plugins().remove(package.id.as_str()).unwrap(),
         RemovePluginReport::AlreadyAbsent { .. }
     ));
-    app.add_plugin(
-        uze_core::PackageSource::local(fixture()),
-        &uze_core::trust::AlwaysTrust,
-    )
-    .unwrap();
-    assert_eq!(app.list_plugins().unwrap().len(), 1);
+    app.plugins()
+        .add(
+            uze_core::PackageSource::local(fixture()),
+            &uze_core::trust::AlwaysTrust,
+        )
+        .unwrap();
+    assert_eq!(app.plugins().list().unwrap().len(), 1);
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -715,11 +721,12 @@ pub(crate) fn multi_mcp_package_has_independent_receipts_through_safe_removal() 
             root: root.clone(),
         })],
     );
-    app.add_plugin(
-        uze_core::PackageSource::local(multi_mcp_fixture()),
-        &uze_core::trust::AlwaysTrust,
-    )
-    .unwrap();
+    app.plugins()
+        .add(
+            uze_core::PackageSource::local(multi_mcp_fixture()),
+            &uze_core::trust::AlwaysTrust,
+        )
+        .unwrap();
     let receipts = state::receipts(&home, Some("multi-mcp-plugin@local")).unwrap();
     assert_eq!(receipts.len(), 2);
     assert_ne!(
@@ -727,7 +734,7 @@ pub(crate) fn multi_mcp_package_has_independent_receipts_through_safe_removal() 
         receipts[1].1.resource_identity
     );
     assert!(matches!(
-        app.remove_plugin("multi-mcp-plugin").unwrap(),
+        app.plugins().remove("multi-mcp-plugin").unwrap(),
         RemovePluginReport::Removed { .. }
     ));
     assert!(
@@ -751,7 +758,8 @@ pub(crate) fn bootstrap_installs_exactly_the_default_policy_and_is_idempotent() 
 
     assert!(app.ensure_default_plugins().unwrap(), "first call installs");
     let installed: Vec<String> = app
-        .list_plugins()
+        .plugins()
+        .list()
         .unwrap()
         .into_iter()
         .map(|p| p.id)
@@ -806,7 +814,7 @@ pub(crate) fn read_only_bootstrap_leaves_store_state_byte_identical_on_repeat() 
     let attachments_before = fs::read(&attachments_path).ok();
 
     app.ensure_default_plugins().unwrap();
-    app.list_plugins().unwrap();
+    app.plugins().list().unwrap();
     app.health().report();
 
     assert_eq!(fs::read(home.registry_path()).unwrap(), packages_before);
@@ -868,7 +876,7 @@ pub(crate) fn a_default_plugin_that_would_cross_the_trust_boundary_is_not_instal
     );
     assert!(matches!(result, Err(UzeError::TrustRequired { .. })));
     assert!(
-        app.list_plugins().unwrap().is_empty(),
+        app.plugins().list().unwrap().is_empty(),
         "nothing was installed"
     );
     let _ = fs::remove_dir_all(root);
@@ -915,7 +923,7 @@ pub(crate) fn auto_update_applies_a_pending_official_snapshot_update() {
         Some(true)
     );
 
-    let outcomes = app.auto_update_plugins();
+    let outcomes = app.plugins().auto_update();
     assert_eq!(outcomes.len(), 1, "one pending update, got: {outcomes:?}");
     assert!(outcomes[0].applied, "expected applied, got: {outcomes:?}");
     assert_eq!(outcomes[0].plugin, "uze@uze-official");
@@ -929,7 +937,7 @@ pub(crate) fn auto_update_applies_a_pending_official_snapshot_update() {
         "the update it just applied must stop being reported as pending"
     );
     // Idempotent: nothing left to do on the next launch.
-    assert!(app.auto_update_plugins().is_empty());
+    assert!(app.plugins().auto_update().is_empty());
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -937,17 +945,18 @@ pub(crate) fn auto_update_applies_a_pending_official_snapshot_update() {
 pub(crate) fn auto_update_never_re_resolves_a_source_it_would_have_to_fetch() {
     let root = uze_testkit::temp::scratch("auto-update-local-only");
     let app = UzeApplication::new(UzeHome::at(&root), Vec::new());
-    app.add_plugin(
-        uze_core::PackageSource::local(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../tests/_fixtures/canonical/skill-plugin"),
-        ),
-        &uze_core::trust::AlwaysTrust,
-    )
-    .unwrap();
+    app.plugins()
+        .add(
+            uze_core::PackageSource::local(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../tests/_fixtures/canonical/skill-plugin"),
+            ),
+            &uze_core::trust::AlwaysTrust,
+        )
+        .unwrap();
 
     assert!(
-        app.auto_update_plugins().is_empty(),
+        app.plugins().auto_update().is_empty(),
         "a path/Git-sourced plugin is only ever updated by an explicit request"
     );
     fs::remove_dir_all(root).unwrap();
@@ -958,15 +967,16 @@ pub(crate) fn official_embedded_plugin_is_protected_from_remove_but_allows_updat
     let root = uze_testkit::temp::scratch("protected-update");
     let home = UzeHome::at(&root);
     let app = UzeApplication::new(home, Vec::new());
-    app.add_plugin(
-        uze_core::PackageSource::Embedded {
-            id: "uze".to_owned(),
-        },
-        &uze_core::trust::AlwaysTrust,
-    )
-    .unwrap();
+    app.plugins()
+        .add(
+            uze_core::PackageSource::Embedded {
+                id: "uze".to_owned(),
+            },
+            &uze_core::trust::AlwaysTrust,
+        )
+        .unwrap();
 
-    let err = app.remove_plugin("uze").unwrap_err();
+    let err = app.plugins().remove("uze").unwrap_err();
     assert!(
         err.to_string()
             .contains("official marketplace plugin `uze@uze-official` is protected"),
@@ -974,7 +984,8 @@ pub(crate) fn official_embedded_plugin_is_protected_from_remove_but_allows_updat
     );
 
     let report = app
-        .update_plugin("uze", &uze_core::trust::AlwaysTrust)
+        .plugins()
+        .update("uze", &uze_core::trust::AlwaysTrust)
         .unwrap();
     assert!(
         matches!(report, UpdatePluginReport::Updated { .. }),
@@ -998,18 +1009,19 @@ pub(crate) fn local_spoof_named_uze_is_not_protected() {
 
     let home = UzeHome::at(&root);
     let app = UzeApplication::new(home, Vec::new());
-    app.add_plugin(
-        uze_core::PackageSource::Local {
-            path: spoof_src.clone(),
-        },
-        &uze_core::trust::AlwaysTrust,
-    )
-    .unwrap();
+    app.plugins()
+        .add(
+            uze_core::PackageSource::Local {
+                path: spoof_src.clone(),
+            },
+            &uze_core::trust::AlwaysTrust,
+        )
+        .unwrap();
 
     let package = app.package_by_name("uze").unwrap();
     assert!(!UzeApplication::is_protected_package(&package));
 
-    let report = app.remove_plugin("uze").unwrap();
+    let report = app.plugins().remove("uze").unwrap();
     assert!(matches!(report, RemovePluginReport::Removed { .. }));
     fs::remove_dir_all(root).unwrap();
     fs::remove_dir_all(spoof_src).unwrap();
@@ -1512,11 +1524,12 @@ fn setup_continues_when_one_harness_has_foreign_state_and_other_succeeds() {
     // Seed store with the default `uze` package (the one Antigravity
     // would see as foreign) plus one additional fixture package.
     app.ensure_default_plugins().unwrap();
-    app.add_plugin(
-        uze_core::PackageSource::local(fixture()),
-        &uze_core::trust::AlwaysTrust,
-    )
-    .unwrap();
+    app.plugins()
+        .add(
+            uze_core::PackageSource::local(fixture()),
+            &uze_core::trust::AlwaysTrust,
+        )
+        .unwrap();
 
     // Mock the real binaries for shim resolution: create fake executables
     // for both harnesses so `ensure_runtime_shim` for the shim-less ones
@@ -1581,11 +1594,12 @@ fn attach_stored_packages_to_is_per_package_resilient() {
     // Two packages: default `uze` is externally available and the
     // canonical skill fixture still attaches.
     app.ensure_default_plugins().unwrap();
-    app.add_plugin(
-        uze_core::PackageSource::local(fixture()),
-        &uze_core::trust::AlwaysTrust,
-    )
-    .unwrap();
+    app.plugins()
+        .add(
+            uze_core::PackageSource::local(fixture()),
+            &uze_core::trust::AlwaysTrust,
+        )
+        .unwrap();
 
     let foreign: &dyn IntegrationPort = app.integrations[0].as_ref();
     let result = app.attach_stored_packages_to(foreign);

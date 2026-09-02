@@ -105,8 +105,8 @@ impl Marketplace<'_> {
             path: plugin_source,
         };
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
-        let materialized = self.0.acquire(&source)?;
-        let report = self.0.install_materialized_from_marketplace(
+        let materialized = self.0.plugins().acquire(&source)?;
+        let report = self.0.plugins().install_materialized_from_marketplace(
             materialized,
             &marketplace_name,
             authority,
@@ -239,10 +239,10 @@ impl Marketplace<'_> {
         name_authority: &dyn uze_core::naming::NameCollisionAuthority,
     ) -> Result<AddPluginReport> {
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
-        let materialized = self.0.acquire(&PackageSource::Embedded {
+        let materialized = self.0.plugins().acquire(&PackageSource::Embedded {
             id: name.to_owned(),
         })?;
-        self.0.install_materialized_from_marketplace(
+        self.0.plugins().install_materialized_from_marketplace(
             materialized,
             "uze-official",
             authority,

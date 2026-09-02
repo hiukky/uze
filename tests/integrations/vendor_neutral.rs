@@ -199,7 +199,8 @@ fn republish_is_a_noop_for_an_integration_that_publishes_nothing() {
     let home = temporary_home("quiet");
     let application = UzeApplication::new(home.clone(), vec![Box::new(QuietIntegration)]);
     application
-        .add_plugin(
+        .plugins()
+        .add(
             uze::PackageSource::local(plain_package_fixture()),
             &uze::trust::AlwaysTrust,
         )
@@ -221,7 +222,8 @@ fn a_derived_view_is_rebuilt_from_the_package_set_alone() {
         vec![Box::new(PublishingIntegration::new(views.clone()))],
     );
     application
-        .add_plugin(
+        .plugins()
+        .add(
             uze::PackageSource::local(native_package_fixture()),
             &uze::trust::AlwaysTrust,
         )
@@ -257,7 +259,8 @@ fn a_package_without_the_native_envelope_is_not_published() {
         vec![Box::new(PublishingIntegration::new(views.clone()))],
     );
     application
-        .add_plugin(
+        .plugins()
+        .add(
             uze::PackageSource::local(plain_package_fixture()),
             &uze::trust::AlwaysTrust,
         )
@@ -269,7 +272,7 @@ fn a_package_without_the_native_envelope_is_not_published() {
         fs::read_to_string(views.join("catalogue.json")).unwrap(),
         ""
     );
-    assert_eq!(application.list_plugins().unwrap().len(), 1);
+    assert_eq!(application.plugins().list().unwrap().len(), 1);
 
     let _ = fs::remove_dir_all(home.root());
 }
@@ -287,14 +290,15 @@ fn a_failed_publication_leaves_the_package_installed_and_says_so() {
     );
 
     let report = application
-        .add_plugin(
+        .plugins()
+        .add(
             uze::PackageSource::local(native_package_fixture()),
             &uze::trust::AlwaysTrust,
         )
         .expect("a failed derived view never fails the installation");
 
     // The package is a valid UZE installation.
-    assert_eq!(application.list_plugins().unwrap().len(), 1);
+    assert_eq!(application.plugins().list().unwrap().len(), 1);
     assert!(report.plugin.store_path.is_dir());
 
     // And the failure is reported, per integration, actionably.

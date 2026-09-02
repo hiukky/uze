@@ -274,7 +274,8 @@ fn codex_and_opencode_reuse_one_physical_entry_for_a_default_skill() {
             Box::new(NoopProcessRunner),
         );
         application
-            .add_plugin(
+            .plugins()
+            .add(
                 PackageSource::local(flow_fixture()),
                 &uze::trust::AlwaysTrust,
             )
@@ -334,7 +335,8 @@ fn model_only_skill_shared_root_reuse_carries_both_encodings() {
         .unwrap();
 
         application
-            .add_plugin(
+            .plugins()
+            .add(
                 PackageSource::local(&fixture_root),
                 &uze::trust::AlwaysTrust,
             )
@@ -484,7 +486,7 @@ fn foreign_shared_entry_without_opencode_encoding_still_conflicts() {
         )
         .unwrap();
 
-        let result = application.add_plugin(
+        let result = application.plugins().add(
             PackageSource::local(&fixture_root),
             &uze::trust::AlwaysTrust,
         );
@@ -554,7 +556,8 @@ fn user_only_skill_codex_and_opencode_preserves_codex_policy() {
         let store_bytes = fs::read(fixture_root.join("skills/review/SKILL.md")).unwrap();
 
         application
-            .add_plugin(
+            .plugins()
+            .add(
                 PackageSource::local(&fixture_root),
                 &uze::trust::AlwaysTrust,
             )
@@ -629,7 +632,8 @@ fn user_only_skill_installs_cleanly_with_codex_and_opencode() {
         .unwrap();
 
         application
-            .add_plugin(
+            .plugins()
+            .add(
                 PackageSource::local(&fixture_root),
                 &uze::trust::AlwaysTrust,
             )
@@ -673,7 +677,8 @@ fn user_only_skill_codex_only_is_model_hidden() {
         let fixture_root = user_only_fixture(&root);
         let store_bytes = fs::read(fixture_root.join("skills/review/SKILL.md")).unwrap();
         application
-            .add_plugin(
+            .plugins()
+            .add(
                 PackageSource::local(&fixture_root),
                 &uze::trust::AlwaysTrust,
             )
@@ -711,11 +716,12 @@ fn attach_order_is_equivalent_codex_then_opencode_and_reverse() {
         let (app_a, agents_a, _) = shared_user_only_app(&root_a, true);
         let (app_b, agents_b, _) = shared_user_only_app(&root_b, false);
         for (app, root) in [(&app_a, &root_a), (&app_b, &root_b)] {
-            app.add_plugin(
-                PackageSource::local(user_only_fixture(root)),
-                &uze::trust::AlwaysTrust,
-            )
-            .expect("install succeeds in either order");
+            app.plugins()
+                .add(
+                    PackageSource::local(user_only_fixture(root)),
+                    &uze::trust::AlwaysTrust,
+                )
+                .expect("install succeeds in either order");
         }
         let (skill_a, policy_a) = shared_wrapper_bytes(&agents_a);
         let (skill_b, policy_b) = shared_wrapper_bytes(&agents_b);
@@ -765,13 +771,15 @@ fn repeated_setup_is_idempotent() {
         generated_root.join("flow@local").display()
     );
     with_truthful_fake_codex(&root, &marketplaces, &plugins, || {
-        app.add_plugin(
-            PackageSource::local(user_only_fixture(&root)),
-            &uze::trust::AlwaysTrust,
-        )
-        .expect("initial install");
+        app.plugins()
+            .add(
+                PackageSource::local(user_only_fixture(&root)),
+                &uze::trust::AlwaysTrust,
+            )
+            .expect("initial install");
         let before = shared_wrapper_bytes(&agents_home);
-        app.update_plugin("flow", &uze::trust::AlwaysTrust)
+        app.plugins()
+            .update("flow", &uze::trust::AlwaysTrust)
             .expect("repeated setup (update) succeeds");
         let after = shared_wrapper_bytes(&agents_home);
         assert_eq!(
@@ -816,11 +824,12 @@ fn detach_codex_preserves_opencode_consumer() {
         generated_root.join("flow@local").display()
     );
     with_truthful_fake_codex(&root, &marketplaces, &plugins, || {
-        app.add_plugin(
-            PackageSource::local(user_only_fixture(&root)),
-            &uze::trust::AlwaysTrust,
-        )
-        .expect("install");
+        app.plugins()
+            .add(
+                PackageSource::local(user_only_fixture(&root)),
+                &uze::trust::AlwaysTrust,
+            )
+            .expect("install");
         let codex_receipt = uze::state::receipts(&uze_home, Some("flow@local"))
             .unwrap()
             .into_iter()
@@ -889,11 +898,12 @@ fn detach_opencode_preserves_codex_consumer() {
         generated_root.join("flow@local").display()
     );
     with_truthful_fake_codex(&root, &marketplaces, &plugins, || {
-        app.add_plugin(
-            PackageSource::local(user_only_fixture(&root)),
-            &uze::trust::AlwaysTrust,
-        )
-        .expect("install");
+        app.plugins()
+            .add(
+                PackageSource::local(user_only_fixture(&root)),
+                &uze::trust::AlwaysTrust,
+            )
+            .expect("install");
         let opencode_receipt = uze::state::receipts(&uze_home, Some("flow@local"))
             .unwrap()
             .into_iter()
@@ -952,11 +962,12 @@ fn detach_last_consumer_cleans_projection() {
         generated_root.join("flow@local").display()
     );
     with_truthful_fake_codex(&root, &marketplaces, &plugins, || {
-        app.add_plugin(
-            PackageSource::local(user_only_fixture(&root)),
-            &uze::trust::AlwaysTrust,
-        )
-        .expect("install");
+        app.plugins()
+            .add(
+                PackageSource::local(user_only_fixture(&root)),
+                &uze::trust::AlwaysTrust,
+            )
+            .expect("install");
         let receipts: Vec<_> = uze::state::receipts(&uze_home, Some("flow@local"))
             .unwrap()
             .into_iter()

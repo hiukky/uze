@@ -353,15 +353,16 @@ mod tests {
         let link = root.join("harness/skill");
         fs::create_dir_all(&target).unwrap();
         let app = UzeApplication::new(home.clone(), vec![Box::new(TestIntegration)]);
-        app.add_plugin(
-            PackageSource::local(
-                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../tests/_fixtures/canonical/skill-plugin"),
-            ),
-            &AlwaysTrust,
-        )
-        .unwrap();
-        let package_id = app.list_plugins().unwrap().remove(0).id;
+        app.plugins()
+            .add(
+                PackageSource::local(
+                    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                        .join("../../tests/_fixtures/canonical/skill-plugin"),
+                ),
+                &AlwaysTrust,
+            )
+            .unwrap();
+        let package_id = app.plugins().list().unwrap().remove(0).id;
         state::record_receipt(
             &home,
             "fixture:receipt".to_owned(),
@@ -398,15 +399,16 @@ mod tests {
         fs::create_dir_all(link.parent().unwrap()).unwrap();
         std::os::unix::fs::symlink(&foreign, &link).unwrap();
         let app = UzeApplication::new(home.clone(), vec![Box::new(TestIntegration)]);
-        app.add_plugin(
-            PackageSource::local(
-                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../tests/_fixtures/canonical/skill-plugin"),
-            ),
-            &AlwaysTrust,
-        )
-        .unwrap();
-        let package_id = app.list_plugins().unwrap().remove(0).id;
+        app.plugins()
+            .add(
+                PackageSource::local(
+                    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                        .join("../../tests/_fixtures/canonical/skill-plugin"),
+                ),
+                &AlwaysTrust,
+            )
+            .unwrap();
+        let package_id = app.plugins().list().unwrap().remove(0).id;
         state::record_receipt(
             &home,
             "fixture:drifted".to_owned(),
