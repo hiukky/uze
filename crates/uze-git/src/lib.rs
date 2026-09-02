@@ -31,23 +31,44 @@
 //!
 //! # Reads and writes are separate on purpose
 //!
-//! [`read`] and [`write`] do the same thing today. They are two entry
-//! points because a repository-wide write lock is coming, and a lock is
-//! worthless if a second module can spawn Git around it. Putting the
-//! asymmetry in the signature now means the day the lock arrives, every
-//! call site has already declared which side it is on — and a status view
-//! never ends up blocking behind a rebase.
+//! [`write`] takes the repository write lock; [`read`] never does. The
+//! lock lives here and nowhere else because a lock is worthless if a
+//! second module can spawn Git around it, and every call site has already
+//! declared which side it is on — so a status view never blocks behind a
+//! rebase.
+//!
+//! # The write lock
+//!
+//! Linked worktrees share one `.git`: `packed-refs`, branch creation,
+//! `worktree add`, `prune`, `fetch`, `rebase` and `merge` are not safe
+//! against each other, and the operator may have another UZE or a bare
+//! `git` running. The lock is therefore inter-process — a `flock` on
+//! `<common dir>/uze-write.lock`, keyed on the repository's common
+//! directory so a write from inside any worktree of a repository contends
+//! with every other — and it is reentrant on the thread that holds it, so
+//! [`locked`] can make several writes one critical section. The kernel
+//! releases a `flock` when its holder dies, so a lock left by a crashed
+//! process costs nothing to reclaim. A directory that is not a repository
+//! has no common directory and no lock, which is how `git init` runs.
 
 use std::{
     io,
     path::Path,
     process::{Command, Stdio},
+    time::Duration,
 };
+
+mod lock;
+
+/// How long a write waits for the lock before giving up. Long enough for a
+/// rebase or a fetch in another process, short enough that a hung holder
+/// is reported rather than waited on forever.
+pub const DEFAULT_WRITE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Git could not be run at all. A Git that ran and disagreed with the
 /// caller is an [`Output`], not this.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SpawnError(String);
+pub struct SpawnError(pub(crate) String);
 
 impl std::fmt::Display for SpawnError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -105,10 +126,31 @@ pub fn read(root: &Path, args: &[&str]) -> Result<Output, SpawnError> {
     run(command)
 }
 
-/// Runs a Git command that changes the repository. Separate from [`read`]
-/// so the write lock has one place to live when it arrives.
+/// Runs a Git command that changes the repository, under the repository
+/// write lock, waiting up to [`DEFAULT_WRITE_TIMEOUT`] for it.
 pub fn write(root: &Path, args: &[&str]) -> Result<Output, SpawnError> {
+    write_within(root, args, DEFAULT_WRITE_TIMEOUT)
+}
+
+/// [`write`] with an explicit bound on how long to wait for the lock. A
+/// wait that runs out is a [`SpawnError`] naming the lock, since Git never
+/// ran.
+pub fn write_within(root: &Path, args: &[&str], timeout: Duration) -> Result<Output, SpawnError> {
+    let _held = lock::acquire(root, timeout)?;
     run(base_command(root, args))
+}
+
+/// Runs `body` with the repository write lock held throughout, so the
+/// writes it makes — through [`write`], which re-enters the lock on this
+/// thread — form one critical section: a prune, a name check and a
+/// `worktree add` that no other process can interleave with.
+pub fn locked<R>(
+    root: &Path,
+    timeout: Duration,
+    body: impl FnOnce() -> R,
+) -> Result<R, SpawnError> {
+    let _held = lock::acquire(root, timeout)?;
+    Ok(body())
 }
 
 fn base_command(root: &Path, args: &[&str]) -> Command {
@@ -141,7 +183,7 @@ fn describe_spawn_failure(error: io::Error) -> SpawnError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use std::{path::PathBuf, time::Instant};
 
     /// Every test here spawns Git, which resolves through the process-global
     /// `PATH` — including the one test that empties it. Reading ambient env
@@ -228,6 +270,213 @@ mod tests {
         environment.set("PATH", uze_testkit::temp::scratch("git-absent"));
         let error = read(Path::new("."), &["status"]).unwrap_err();
         assert!(error.to_string().contains("not installed"), "{error}");
+    }
+
+    /// Lost updates are the observable failure a missing lock produces:
+    /// every thread reads a counter, pauses, and writes it back, and only
+    /// mutual exclusion makes the total come out right.
+    #[test]
+    fn concurrent_critical_sections_never_interleave() {
+        let _environment = uze_testkit::env::scope();
+        let root = repository("git-lock-sections");
+        let counter = root.join("counter");
+        std::fs::write(&counter, b"0").unwrap();
+        std::thread::scope(|scope| {
+            for _ in 0..6 {
+                scope.spawn(|| {
+                    for _ in 0..5 {
+                        locked(&root, DEFAULT_WRITE_TIMEOUT, || {
+                            let value: u32 = std::fs::read_to_string(&counter)
+                                .unwrap()
+                                .trim()
+                                .parse()
+                                .unwrap();
+                            std::thread::sleep(Duration::from_millis(1));
+                            std::fs::write(&counter, (value + 1).to_string()).unwrap();
+                        })
+                        .unwrap();
+                    }
+                });
+            }
+        });
+        assert_eq!(std::fs::read_to_string(&counter).unwrap().trim(), "30");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// The write that motivated the lock: several worktrees created at
+    /// once contend on the shared refs, and each must still succeed and be
+    /// registered.
+    #[test]
+    fn concurrent_worktree_adds_do_not_collide() {
+        let _environment = uze_testkit::env::scope();
+        let root = repository("git-lock-worktrees");
+        let names: Vec<String> = (0..6).map(|index| format!("slot-{index}")).collect();
+        std::thread::scope(|scope| {
+            for name in &names {
+                let root = &root;
+                scope.spawn(move || {
+                    let path = root.join(".worktrees").join(name);
+                    write(
+                        root,
+                        &[
+                            "worktree",
+                            "add",
+                            "-b",
+                            name,
+                            path.to_str().unwrap(),
+                            "HEAD",
+                        ],
+                    )
+                    .unwrap()
+                    .successful()
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                });
+            }
+        });
+        let listed = read(&root, &["worktree", "list", "--porcelain"])
+            .unwrap()
+            .successful()
+            .unwrap();
+        for name in &names {
+            assert!(
+                listed.contains(&format!("branch refs/heads/{name}")),
+                "{listed}"
+            );
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A write inside a critical section must not deadlock against the
+    /// section that contains it.
+    #[test]
+    fn a_write_inside_a_critical_section_re_enters_the_lock() {
+        let _environment = uze_testkit::env::scope();
+        let root = repository("git-lock-reentry");
+        locked(&root, Duration::from_millis(500), || {
+            write(&root, &["branch", "inner"])
+                .unwrap()
+                .successful()
+                .unwrap();
+            locked(&root, Duration::from_millis(500), || {
+                write(&root, &["branch", "innermost"])
+                    .unwrap()
+                    .successful()
+                    .unwrap();
+            })
+            .unwrap();
+        })
+        .unwrap();
+        let branches = read(&root, &["branch", "--list"])
+            .unwrap()
+            .successful()
+            .unwrap();
+        assert!(
+            branches.contains("inner") && branches.contains("innermost"),
+            "{branches}"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_panic_inside_the_critical_section_releases_the_lock() {
+        let _environment = uze_testkit::env::scope();
+        let root = repository("git-lock-panic");
+        let outcome = std::panic::catch_unwind(|| {
+            let _ = locked(&root, DEFAULT_WRITE_TIMEOUT, || panic!("inside"));
+        });
+        assert!(outcome.is_err());
+        locked(&root, Duration::from_millis(500), || ()).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_busy_lock_is_reported_by_name_after_the_timeout_and_reads_never_wait() {
+        let _environment = uze_testkit::env::scope();
+        let root = repository("git-lock-busy");
+        let root_for_holder = root.clone();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let (held_tx, held_rx) = std::sync::mpsc::channel::<()>();
+        std::thread::scope(|scope| {
+            scope.spawn(move || {
+                locked(&root_for_holder, DEFAULT_WRITE_TIMEOUT, || {
+                    held_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                })
+                .unwrap();
+            });
+            held_rx.recv().unwrap();
+
+            let started = Instant::now();
+            assert!(
+                read(&root, &["status", "--porcelain"])
+                    .unwrap()
+                    .is_success(),
+                "a read runs while the lock is held"
+            );
+            assert!(started.elapsed() < Duration::from_millis(500));
+
+            let error = write_within(&root, &["branch", "blocked"], Duration::from_millis(150))
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains("write lock") && error.contains("busy"),
+                "{error}"
+            );
+            release_tx.send(()).unwrap();
+        });
+        write(&root, &["branch", "after"])
+            .unwrap()
+            .successful()
+            .unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Holds the lock until killed; the process side of the test below.
+    /// Ignored so it never runs on its own.
+    #[test]
+    #[ignore]
+    fn hold_the_lock_until_killed() {
+        let Some(root) = std::env::var_os("UZE_GIT_LOCK_HOLD") else {
+            return;
+        };
+        let root = PathBuf::from(root);
+        locked(&root, DEFAULT_WRITE_TIMEOUT, || {
+            std::fs::write(root.join("held"), b"").unwrap();
+            std::thread::sleep(Duration::from_secs(120));
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn a_lock_held_by_a_dead_process_is_reclaimed() {
+        let _environment = uze_testkit::env::scope();
+        let root = repository("git-lock-dead-holder");
+        let mut holder = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "tests::hold_the_lock_until_killed", "--ignored"])
+            .env("UZE_GIT_LOCK_HOLD", &root)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let started = Instant::now();
+        while !root.join("held").exists() {
+            assert!(
+                started.elapsed() < Duration::from_secs(30),
+                "holder never took the lock"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            write_within(&root, &["branch", "blocked"], Duration::from_millis(150)).is_err(),
+            "the lock is held across processes"
+        );
+        holder.kill().unwrap();
+        holder.wait().unwrap();
+        write_within(&root, &["branch", "reclaimed"], Duration::from_secs(5))
+            .unwrap()
+            .successful()
+            .unwrap();
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

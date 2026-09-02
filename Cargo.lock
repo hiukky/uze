@@ -2508,6 +2508,7 @@ dependencies = [
 name = "uze-git"
 version = "0.0.0-alpha.0"
 dependencies = [
+ "libc",
  "uze-testkit",
 ]
 

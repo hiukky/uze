@@ -10,5 +10,8 @@ publish = false
 
 [dependencies]
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 uze-testkit = { path = "../uze-testkit" }
