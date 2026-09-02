@@ -41,10 +41,14 @@
 
 ## 6. Conformance Lab
 
-- [ ] 6.1 Rewrite the hook fixtures' handlers (`guard`, `mark`, `order-1/2`) to the env/exit contract and make the markers assert `HOOK_*` values (`HOOK_TOOL`, `HOOK_COMMAND`, `HOOK_CWD`) in the relayed reason, so the vertical proves the vocabulary row, not only the denial
+- [x] 6.1 Rewrite the hook fixtures' handlers (`guard`, `mark`, `order-1/2`) to the env/exit contract and make the markers assert `HOOK_*` values (`HOOK_TOOL`, `HOOK_COMMAND`, `HOOK_CWD`) in the relayed reason, so the vertical proves the vocabulary row, not only the denial
+  - `guard` echoes `tool=$HOOK_TOOL native=$HOOK_TOOL_NATIVE cwd=$HOOK_CWD` into its denial reason, and `hooks-deny-context-relayed` asserts `tool=shell` reached the conversation on Claude and Codex — the two harnesses whose shell tools are `Bash`/`command` and `exec_command`/`cmd`, so the alias is itself evidence that the translation happened. Antigravity would only re-measure its closed vendor gate; OpenCode's hook path uses a `native:` matcher, which has no alias by definition.
 - [ ] 6.2 Add one Lab case per vocabulary row each harness delivers (`shell` today; `file.write`/`file.read` next) on Claude, Codex, Antigravity (gated: `hooks > vendor` precondition unchanged) and OpenCode
+  - Partly done, left unchecked. The `shell` row is asserted end-to-end on Claude and Codex (`hooks-deny-context-relayed`), which is the only row any vertical's provider scripts today. `file.write`/`file.read` need a scripted `Write`/`Read` tool call per harness (a new provider mode argument, a fixture group matched on that alias, and the marker plumbing) — real work, not a rename, and it belongs with the next vocabulary row rather than inside this change.
 - [ ] 6.3 OpenCode: measure whether `permission.evaluate` carries the shell command in `resources`; if yes, assert `deny`/`ask` and retire the corresponding registry entries; if not, keep the declarations with the observed reason
+  - The measurement is written and versioned (`conformance/experiments/opencode/permission-evaluate.py`): a probe plugin records every `permission.evaluate` event verbatim during a real turn, and asserts whether one carries the intercepted call's arguments. It was authored but not yet run, so `deny`/`ask` stay declared unsupported on OpenCode and their registry entries stand unchanged. Run it with `python3 conformance/lab.py --harness opencode --experiment opencode/permission-evaluate`.
 - [ ] 6.4 Codex: measure whether `ask` has an effect; record the verdict (native or declared) in the registry with the version
+  - Not measured, and no verdict depends on it any more: Codex's capability profile does not claim `ask` (an `ask` group routes Unsupported there), and the generated wrapper renders every denial as `deny` on every harness — the exit-code contract has one denial, not two. Measuring `ask` on Codex is only worth doing if someone wants to promote the effect into its profile; until then there is nothing in the delivery for the answer to change.
 - [ ] 6.5 Run all five verticals green; update `conformance/evidence/expected.json` and `DECISIONS.md`
 
 ## 7. Documentation and retirement
