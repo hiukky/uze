@@ -33,12 +33,25 @@ HARNESS_HOSTS = {
         "telemetry.anthropic.com",
     ],
     "codex": ["api.openai.com"],
+    # Antigravity's model traffic stays on plain HTTP:9999
+    # (GOOGLE_GEMINI_BASE_URL); these are its control plane — the feature
+    # flags that decide whether `hooks.json` hooks execute, plus the
+    # account/telemetry endpoints it calls around them.
+    "antigravity": [
+        "antigravity-unleash.goog",
+        "daily-cloudcode-pa.googleapis.com",
+        "cloudcode-pa.googleapis.com",
+        "play.googleapis.com",
+    ],
 }
 HARNESS_SANS = {
     "claude": "DNS:api.anthropic.com,DNS:*.anthropic.com,DNS:platform.claude.com,"
     "DNS:*.claude.com,DNS:console.anthropic.com,DNS:statsig.anthropic.com,"
     "DNS:api.statsig.com,DNS:sentry.io,DNS:telemetry.anthropic.com",
     "codex": "DNS:api.openai.com,DNS:*.openai.com",
+    "antigravity": "DNS:antigravity-unleash.goog,DNS:*.goog,"
+    "DNS:daily-cloudcode-pa.googleapis.com,DNS:cloudcode-pa.googleapis.com,"
+    "DNS:play.googleapis.com,DNS:*.googleapis.com",
     # UZE's own vertical drives no vendor endpoint — it exercises the
     # client and the CLI, never a provider — so it needs only a SAN the
     # certificate generator will accept.
@@ -367,6 +380,10 @@ def start_provider(cfg, mode, extra_env=None):
         env += ["-e", "DISCOVERY=1"]
     if cfg.variation:
         env += ["-e", f"VARIATION={cfg.variation}"]
+    # Diagnostic switch for the Antigravity flag plane (see its provider):
+    # never set by a canonical run.
+    if os.environ.get("UNLEASH_UNCONSTRAINED"):
+        env += ["-e", "UNLEASH_UNCONSTRAINED=1"]
     for name, value in (extra_env or {}).items():
         env += ["-e", f"{name}={value}"]
 
@@ -394,7 +411,20 @@ def start_provider(cfg, mode, extra_env=None):
         f"{cfg.repo}/shared/websocket.py:/app/websocket.py:ro",
     ]
     if cfg.harness == "antigravity":
-        mounts = ["-v", f"{provider}/provider.py:/app/fp.py:ro", *shared_mounts]
+        # The Gemini plane stays plain HTTP on 9999; the same process also
+        # serves the TLS control plane on 443, which is what decides
+        # whether the harness runs `hooks.json` hooks at all.
+        _, leaf_crt, leaf_key = generate_certs(cfg)
+        env += ["-e", "LEAF_CERT=/app/leaf.crt", "-e", "LEAF_KEY=/app/leaf.key"]
+        mounts = [
+            "-v",
+            f"{provider}/provider.py:/app/fp.py:ro",
+            "-v",
+            f"{leaf_crt}:/app/leaf.crt:ro",
+            "-v",
+            f"{leaf_key}:/app/leaf.key:ro",
+            *shared_mounts,
+        ]
         if mode == "static":
             mounts += [
                 "-v",
@@ -739,6 +769,16 @@ def write_evidence_summary(cfg, manifest, outcome, retry=0):
     return path
 
 
+def ca_mount(cfg):
+    """Mount arguments putting the run's synthetic CA at `/app/ca.crt`, for
+    a harness whose own control plane is served over TLS. Empty for a
+    harness whose vertical mounts it itself (claude, codex)."""
+    if cfg.harness != "antigravity":
+        return []
+    ca_crt, _, _ = generate_certs(cfg)
+    return ["-v", f"{ca_crt}:/app/ca.crt:ro"]
+
+
 def docker_base(cfg, prov_ip, final_cmd, tty=True):
     cmd = (
         [
@@ -765,6 +805,7 @@ def docker_base(cfg, prov_ip, final_cmd, tty=True):
     matrix_mount = os.environ.get("UZE_MARKETPLACE_MOUNT")
     if matrix_mount:
         cmd += ["-v", f"{matrix_mount}:/opt/uze-conformance-fixtures/marketplace:ro"]
+    cmd += ca_mount(cfg)
     cmd += [
         "--tmpfs",
         "/tmp:rw,exec,nosuid,nodev,size=128m,uid=1000,gid=1000,mode=700",
