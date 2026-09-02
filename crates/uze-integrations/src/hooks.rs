@@ -213,7 +213,7 @@ const CODEX_TOOLS: &[ToolBinding] = &[
     ToolBinding {
         alias: "shell",
         native_tool: Some("exec_command"),
-        also_matches: &["Bash", "shell"],
+        also_matches: &["Bash"],
         fields: &[("command", "cmd")],
     },
     ToolBinding {
@@ -362,17 +362,31 @@ const OPENCODE_TOOLS: &[ToolBinding] = &[
     },
 ];
 
-/// The native tool name a matcher becomes on one target. `native:<name>`
-/// passes through unchanged; an alias this harness binds to no tool falls
-/// back to the alias literal, which matches nothing.
-pub(crate) fn tool_name(target: &str, matcher: &HookMatcher) -> String {
+/// Every native tool name one matcher intercepts on a target. `native:<name>`
+/// passes through unchanged; a portable alias yields every tool this harness
+/// binds it to, because a vendor that renames its shell tool keeps answering
+/// to the old name for a while and a hook must intercept both. An alias the
+/// harness binds to no tool falls back to the alias literal, which matches
+/// nothing — an honest no-op rather than a fabricated tool name.
+pub(crate) fn tool_names(target: &str, matcher: &HookMatcher) -> Vec<String> {
     match matcher {
-        HookMatcher::Native(name) => name.clone(),
-        HookMatcher::Portable(alias) => vocabulary(target)
-            .binding(alias)
-            .and_then(|binding| binding.native_tool)
-            .unwrap_or(alias.as_str())
-            .to_owned(),
+        HookMatcher::Native(name) => vec![name.clone()],
+        HookMatcher::Portable(alias) => match vocabulary(target).binding(alias) {
+            Some(binding) => {
+                let names: Vec<String> = binding
+                    .native_tool
+                    .into_iter()
+                    .chain(binding.also_matches.iter().copied())
+                    .map(str::to_owned)
+                    .collect();
+                if names.is_empty() {
+                    vec![alias.clone()]
+                } else {
+                    names
+                }
+            }
+            None => vec![alias.clone()],
+        },
     }
 }
 
@@ -385,9 +399,10 @@ pub(crate) fn matcher(target: &str, hook: &PortableHook) -> Option<String> {
         // the entry names it once.
         let mut names: Vec<String> = Vec::new();
         for entry in &hook.matchers {
-            let name = tool_name(target, entry);
-            if !names.contains(&name) {
-                names.push(name);
+            for name in tool_names(target, entry) {
+                if !names.contains(&name) {
+                    names.push(name);
+                }
             }
         }
         names.join("|")
@@ -1258,7 +1273,7 @@ fn bridge_hooks(hooks: &[&PortableHook], package_root: &Path) -> serde_json::Val
                     "id": hook.id,
                     "event": hook.event.abi_name(),
                     "effect": hook.effect.abi_name(),
-                    "matchers": hook.matchers.iter().map(|m| tool_name("opencode", m)).collect::<Vec<_>>(),
+                    "matchers": hook.matchers.iter().flat_map(|m| tool_names("opencode", m)).collect::<Vec<_>>(),
                     "handlers": hook.handlers.iter().map(|handler| serde_json::json!({
                         "command": handler.command.replace(
                             "${PLUGIN_ROOT}",
@@ -1961,16 +1976,16 @@ mod tests {
     #[test]
     fn vendor_aliases_are_explicit() {
         assert_eq!(
-            tool_name("claude", &HookMatcher::Portable("shell".into())),
-            "Bash"
+            tool_names("claude", &HookMatcher::Portable("shell".into())),
+            ["Bash"]
         );
         assert_eq!(
-            tool_name("antigravity", &HookMatcher::Portable("shell".into())),
-            "run_command"
+            tool_names("antigravity", &HookMatcher::Portable("shell".into())),
+            ["run_command"]
         );
         assert_eq!(
-            tool_name("opencode", &HookMatcher::Native("Write".into())),
-            "Write"
+            tool_names("opencode", &HookMatcher::Native("Write".into())),
+            ["Write"]
         );
         assert_eq!(
             vocabulary("claude")
@@ -2013,8 +2028,8 @@ mod tests {
         let table = vocabulary("claude");
         assert!(table.binding_for_native("SomeVendorOnlyTool").is_none());
         assert_eq!(
-            tool_name("claude", &HookMatcher::Native("Write".into())),
-            "Write"
+            tool_names("claude", &HookMatcher::Native("Write".into())),
+            ["Write"]
         );
         assert!(
             matched_tool("claude", "SomeVendorOnlyTool", &serde_json::json!({"x": 1}))
@@ -2047,9 +2062,9 @@ mod tests {
         assert_eq!(alias("exec_command"), Some("shell"));
         assert_eq!(alias("Bash"), Some("shell"));
         assert_eq!(
-            tool_name("codex", &HookMatcher::Portable("shell".into())),
-            "exec_command",
-            "the matcher names the tool the harness actually offers today"
+            tool_names("codex", &HookMatcher::Portable("shell".into())),
+            ["exec_command", "Bash"],
+            "the matcher intercepts every name this harness's shell tool answers to"
         );
     }
 

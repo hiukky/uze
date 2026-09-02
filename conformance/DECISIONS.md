@@ -250,3 +250,68 @@ than widening it.
 **Discarded.** A partial Agent contract covering only the two harnesses
 that already assert it — that is the per-vertical divergence this change
 exists to remove.
+
+---
+
+## The wrapper is what the Lab exercises, and `jq` is in the image
+
+**Context.** Hooks are no longer delivered as a `uze hook-exec` command
+line: each harness receives a generated `hooks/exec` shell wrapper (or, on
+OpenCode, a generated plugin that is the same runtime), and the handlers
+read `HOOK_*` and answer with an exit code (ADR-040). The wrapper reads the
+harness's payload with `jq`, which the Lab image did not have.
+
+**Chosen.** Install `jq` in `conformance/Dockerfile`. It is the delivered
+artifact's own dependency, and a machine running delivered hooks needs it
+the same way; the Lab should model that machine, not a machine where the
+wrapper cannot run. The missing-dependency behaviour is not thereby
+untested — the deterministic suite proves it directly, both directions
+(`a_missing_wrapper_dependency_follows_the_groups_effect`).
+
+**Discarded.** Writing the wrapper without `jq` (parsing nested JSON in
+POSIX `sh` is exactly the fragility the capability exists to spare authors);
+leaving `jq` out and asserting the fail-closed path in the vertical (that
+proves the guard, and nothing about delivery).
+
+---
+
+## First-deny-wins keeps its proof by gaining a second fixture
+
+**Context.** Under the exit-code contract an *allowed* handler has no
+channel to speak on: exit 0 means allow, and stderr is only read on a
+denial. `hook-plugin`'s second handler used to relay
+`second-handler-reached` on an allow, which was both the ordering evidence
+(absent in the deny scenario) and the reason its allow scenario could not
+simply drop it.
+
+**Chosen.** `hook-plugin`'s second handler now *denies* with that marker,
+so the deny scenario's absence check keeps meaning "the second handler
+could have spoken and did not". The allow scenario moves to a new fixture,
+`hook-allow-plugin` — the same guard with nothing behind it — so an allowed
+call still proves the intercepted tool really ran. Every check name and
+count is preserved, and the "an allowance lets the next handler run" case
+moved to the deterministic suite, where the wrapper can be observed
+directly.
+
+**Discarded.** Dropping the absence check (it is the only first-deny-wins
+evidence in `hook-plugin`, and a check nobody wrote is a check nobody can
+fail); giving the wrapper an allow-reason channel from stderr (a second
+decision channel, invented for a test).
+
+---
+
+## The vocabulary row is asserted, not assumed
+
+**Context.** The hook suites proved that a denial was relayed and that the
+tool was blocked. They did not prove that the handler received the
+*portable* context — which is the whole promise: one handler, unchanged,
+on every harness.
+
+**Chosen.** The `guard` fixture echoes what it was handed
+(`tool=$HOOK_TOOL native=$HOOK_TOOL_NATIVE cwd=$HOOK_CWD`) into its denial
+reason, and `hooks-deny-context-relayed` asserts `tool=shell` reached the
+conversation on Claude and Codex — two harnesses whose shell tools are
+`Bash`/`command` and `exec_command`/`cmd`, so the alias is evidence that the
+translation happened. Antigravity would only re-measure its closed vendor
+gate, and OpenCode's hook path uses a `native:` matcher (no alias by
+definition), so neither gains the check.
