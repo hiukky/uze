@@ -192,7 +192,11 @@ stated) · **—** = not expressible.
   `CustomizationConfig`, switched server-side by the `json-hooks-enabled`
   feature flag. That config reaches the CLI only over the CloudCode
   backend it speaks when signed in to a Google account; a session running
-  on a Gemini API key never receives it, whatever the flag says. The Lab
+  on a Gemini API key never receives it, whatever the flag says. That is
+  the vendor's own open bug —
+  [antigravity-cli#893](https://github.com/google-antigravity/antigravity-cli/issues/893),
+  hooks loaded but never executed under `GEMINI_API_KEY` while OAuth runs
+  them, with #78 recording that the API-key path is unsupported. The Lab
   serves the flag and the harness consumes it, and the vertical still
   measures the gate live rather than assuming either answer.
 - **OpenCode V2 cannot block.** Its tool hooks carry the input but no block

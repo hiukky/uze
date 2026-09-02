@@ -250,11 +250,24 @@ never speaks CloudCode, never receives a `CustomizationConfig`, and
 switch that decides what CloudCode *puts in* that config; handing it to the
 CLI does not synthesize the config.
 
+This is the vendor's own open bug, not only our measurement:
+google-antigravity/antigravity-cli#893, "Hooks from .agents/hooks.json are
+loaded but never executed when authenticated via GEMINI_API_KEY (headless
+-p, 1.1.22)" — labelled bug / comp:auth / comp:customizations, assigned,
+open since 2026-08-28, with the identical symptom (`loaded 1 named hooks`,
+tools run, hooks never fire) and the same contrast (OAuth works). Confirmed
+on the host on 2026-09-02 with agy 1.1.22 online: the same global hook
+fires PreInvocation under OAuth and never fires under GEMINI_API_KEY.
+Issue #78 is the wider context — Google states the Gemini API key path is
+not supported currently, and that is the mode this vertical runs in.
+
 So the flag plane is a prerequisite that is now in place and no longer a
 confound, and the remaining distance is a different, larger piece of work:
 serving the CloudCode `v1internal` protocol and running the vertical in
 signed-in mode, which changes which backend the whole vertical exercises.
-The ten declarations stand, with that reason recorded against them.
+The ten declarations stand, with that reason recorded against them, and
+they expire the way every declaration should — when the vendor closes #893
+the gate opens and the registry escalates.
 
 So the Antigravity vertical measures the gate instead of assuming it:
 `hooks > vendor` runs that control hook first. When it denies, the UZE

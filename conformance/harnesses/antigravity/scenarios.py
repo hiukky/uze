@@ -431,6 +431,16 @@ def phase_hooks_gate(cfg, prov_ip):
     Google account. This vertical runs it on a Gemini API key, so no such
     config ever arrives, whatever the flag says.
 
+    The vendor has the same bug open:
+    google-antigravity/antigravity-cli#893, "Hooks from .agents/hooks.json
+    are loaded but never executed when authenticated via GEMINI_API_KEY"
+    (bug, comp:auth, comp:customizations, assigned, open 2026-08-28) —
+    identical symptom, and OAuth mode executes the same hook. Confirmed on
+    the host (2026-09-02, agy 1.1.22 online): one global hook, OAuth ->
+    PreInvocation fires; GEMINI_API_KEY -> loaded, never fires. #78 records
+    that Google does not support the Gemini API key path at all, which is
+    the mode this vertical runs in.
+
     While that gate is closed, the UZE hook checks are declared, not
     asserted: a green there would be the harness's, not ours to fake.
     Returns True when the control hook denied the command.

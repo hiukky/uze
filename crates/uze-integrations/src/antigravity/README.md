@@ -74,6 +74,11 @@ it become authoritative.
   serves the flag and the harness consumes it, yet still observes hooks
   loaded and listed but never run (1.1.22, 1.1.24) — which the Antigravity
   vertical measures with a vendor-format control hook before judging UZE's.
+  The vendor has it open as
+  [google-antigravity/antigravity-cli#893](https://github.com/google-antigravity/antigravity-cli/issues/893)
+  ("hooks loaded but never executed when authenticated via GEMINI_API_KEY";
+  OAuth mode executes the same hook), alongside #78 recording that the
+  Gemini API key path is unsupported.
 - Workspace-level `.agents/mcp_config.json` discovery is a project-scope
   concern outside UZE's machine-scope integration; it was not observable
   headlessly (`agy mcp list` shows global only). `.agents/skills/` is a

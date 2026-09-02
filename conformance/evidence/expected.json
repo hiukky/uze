@@ -15,7 +15,7 @@
       "harness": "antigravity",
       "check": "hooks-vendor-hook-executes",
       "suite": "hooks > vendor",
-      "reason": "AGY executes no hooks.json hook in the Lab session even with the gate's flag served: `json-hooks-enabled` is delivered from the Lab's own Unleash listener and consumed by the harness (provider log), and dropping its `ide IN [jetski]` constraint changes nothing. The executor reads `enable_json_hooks`, field 17 of `exa.cortex_pb.CustomizationConfig`, which arrives only over the CloudCode `v1internal` backend the CLI speaks when signed in to a Google account; the Lab runs it in Gemini API-key mode and never receives that config. A vendor-format deny hook at ~/.gemini/config/hooks.json is loaded (hooks_manager: loaded 1 named hooks) and listed (/hooks) but never runs, for any event (1.1.22 and 1.1.24 alike; experiments antigravity/hook-print, antigravity/hook-tui).",
+      "reason": "AGY executes no hooks.json hook in the Lab session even with the gate's flag served: `json-hooks-enabled` is delivered from the Lab's own Unleash listener and consumed by the harness (provider log), and dropping its `ide IN [jetski]` constraint changes nothing. The executor reads `enable_json_hooks`, field 17 of `exa.cortex_pb.CustomizationConfig`, which arrives only over the CloudCode `v1internal` backend the CLI speaks when signed in to a Google account; the Lab runs it in Gemini API-key mode and never receives that config. A vendor-format deny hook at ~/.gemini/config/hooks.json is loaded (hooks_manager: loaded 1 named hooks) and listed (/hooks) but never runs, for any event (1.1.22 and 1.1.24 alike; experiments antigravity/hook-print, antigravity/hook-tui). Vendor bug google-antigravity/antigravity-cli#893: hooks never execute under GEMINI_API_KEY; OAuth mode executes them.",
       "versions": [
         "1.1.22",
         "1.1.24"
@@ -26,7 +26,7 @@
       "harness": "antigravity",
       "check": "hooks-deny-denial-relayed",
       "suite": "hooks > deny",
-      "reason": "Declared while hooks-vendor-hook-executes is ADAPTED: the UZE plugin hook cannot be observed where the vendor runs no hook at all. The gate's flag is served by the Lab and consumed by the harness; what is missing is the CloudCode-mode config that carries `enable_json_hooks` (see that entry).",
+      "reason": "Declared while hooks-vendor-hook-executes is ADAPTED: the UZE plugin hook cannot be observed where the vendor runs no hook at all. The gate's flag is served by the Lab and consumed by the harness; what is missing is the CloudCode-mode config that carries `enable_json_hooks` (see that entry). Vendor bug google-antigravity/antigravity-cli#893: hooks never execute under GEMINI_API_KEY; OAuth mode executes them.",
       "versions": [
         "1.1.22",
         "1.1.24"
@@ -37,7 +37,7 @@
       "harness": "antigravity",
       "check": "hooks-deny-denial-blocks-tool",
       "suite": "hooks > deny",
-      "reason": "Declared while hooks-vendor-hook-executes is ADAPTED: the UZE plugin hook cannot be observed where the vendor runs no hook at all. The gate's flag is served by the Lab and consumed by the harness; what is missing is the CloudCode-mode config that carries `enable_json_hooks` (see that entry).",
+      "reason": "Declared while hooks-vendor-hook-executes is ADAPTED: the UZE plugin hook cannot be observed where the vendor runs no hook at all. The gate's flag is served by the Lab and consumed by the harness; what is missing is the CloudCode-mode config that carries `enable_json_hooks` (see that entry). Vendor bug google-antigravity/antigravity-cli#893: hooks never execute under GEMINI_API_KEY; OAuth mode executes them.",
       "versions": [
         "1.1.22",
         "1.1.24"
@@ -48,7 +48,7 @@
       "harness": "antigravity",
       "check": "hooks-deny-marker-absent-second-handler-reached",
       "suite": "hooks > deny",
-      "reason": "Declared while hooks-vendor-hook-executes is ADAPTED: the UZE plugin hook cannot be observed where the vendor runs no hook at all. The gate's flag is served by the Lab and consumed by the harness; what is missing is the CloudCode-mode config that carries `enable_json_hooks` (see that entry).",
+      "reason": "Declared while hooks-vendor-hook-executes is ADAPTED: the UZE plugin hook cannot be observed where the vendor runs no hook at all. The gate's flag is served by the Lab and consumed by the harness; what is missing is the CloudCode-mode config that carries `enable_json_hooks` (see that entry). Vendor bug google-antigravity/antigravity-cli#893: hooks never execute under GEMINI_API_KEY; OAuth mode executes them.",
       "versions": [
         "1.1.22",
         "1.1.24"
@@ -59,7 +59,7 @@
       "harness": "antigravity",
       "check": "hooks-allow-marker-absent-blocked by protect-env",
       "suite": "hooks > allow",
-      "reason": "Declared while hooks-vendor-hook-executes is ADAPTED: the UZE plugin hook cannot be observed where the vendor runs no hook at all. The gate's flag is served by the Lab and consumed by the harness; what is missing is the CloudCode-mode config that carries `enable_json_hooks` (see that entry).",
+      "reason": "Declared while hooks-vendor-hook-executes is ADAPTED: the UZE plugin hook cannot be observed where the vendor runs no hook at all. The gate's flag is served by the Lab and consumed by the harness; what is missing is the CloudCode-mode config that carries `enable_json_hooks` (see that entry). Vendor bug google-antigravity/antigravity-cli#893: hooks never execute under GEMINI_API_KEY; OAuth mode executes them.",
       "versions": [
         "1.1.22",
         "1.1.24"
@@ -70,7 +70,7 @@
       "harness": "antigravity",
       "check": "hooks-allow-tool-executed",
       "suite": "hooks > allow",
-      "reason": "Declared while hooks-vendor-hook-executes is ADAPTED: the UZE plugin hook cannot be observed where the vendor runs no hook at all. The gate's flag is served by the Lab and consumed by the harness; what is missing is the CloudCode-mode config that carries `enable_json_hooks` (see that entry).",
+      "reason": "Declared while hooks-vendor-hook-executes is ADAPTED: the UZE plugin hook cannot be observed where the vendor runs no hook at all. The gate's flag is served by the Lab and consumed by the harness; what is missing is the CloudCode-mode config that carries `enable_json_hooks` (see that entry). Vendor bug google-antigravity/antigravity-cli#893: hooks never execute under GEMINI_API_KEY; OAuth mode executes them.",
       "versions": [
         "1.1.22",
         "1.1.24"
@@ -81,7 +81,7 @@
       "harness": "antigravity",
       "check": "hooks-order-denial-relayed",
       "suite": "hooks > order",
-      "reason": "Declared while hooks-vendor-hook-executes is ADAPTED: the UZE plugin hook cannot be observed where the vendor runs no hook at all. The gate's flag is served by the Lab and consumed by the harness; what is missing is the CloudCode-mode config that carries `enable_json_hooks` (see that entry).",
+      "reason": "Declared while hooks-vendor-hook-executes is ADAPTED: the UZE plugin hook cannot be observed where the vendor runs no hook at all. The gate's flag is served by the Lab and consumed by the harness; what is missing is the CloudCode-mode config that carries `enable_json_hooks` (see that entry). Vendor bug google-antigravity/antigravity-cli#893: hooks never execute under GEMINI_API_KEY; OAuth mode executes them.",
       "versions": [
         "1.1.22",
         "1.1.24"
@@ -92,7 +92,7 @@
       "harness": "antigravity",
       "check": "hooks-order-denial-blocks-tool",
       "suite": "hooks > order",
-      "reason": "Declared while hooks-vendor-hook-executes is ADAPTED: the UZE plugin hook cannot be observed where the vendor runs no hook at all. The gate's flag is served by the Lab and consumed by the harness; what is missing is the CloudCode-mode config that carries `enable_json_hooks` (see that entry).",
+      "reason": "Declared while hooks-vendor-hook-executes is ADAPTED: the UZE plugin hook cannot be observed where the vendor runs no hook at all. The gate's flag is served by the Lab and consumed by the harness; what is missing is the CloudCode-mode config that carries `enable_json_hooks` (see that entry). Vendor bug google-antigravity/antigravity-cli#893: hooks never execute under GEMINI_API_KEY; OAuth mode executes them.",
       "versions": [
         "1.1.22",
         "1.1.24"
@@ -103,7 +103,7 @@
       "harness": "antigravity",
       "check": "hooks-order-marker-absent-second-handler-ran",
       "suite": "hooks > order",
-      "reason": "Declared while hooks-vendor-hook-executes is ADAPTED: the UZE plugin hook cannot be observed where the vendor runs no hook at all. The gate's flag is served by the Lab and consumed by the harness; what is missing is the CloudCode-mode config that carries `enable_json_hooks` (see that entry).",
+      "reason": "Declared while hooks-vendor-hook-executes is ADAPTED: the UZE plugin hook cannot be observed where the vendor runs no hook at all. The gate's flag is served by the Lab and consumed by the harness; what is missing is the CloudCode-mode config that carries `enable_json_hooks` (see that entry). Vendor bug google-antigravity/antigravity-cli#893: hooks never execute under GEMINI_API_KEY; OAuth mode executes them.",
       "versions": [
         "1.1.22",
         "1.1.24"
