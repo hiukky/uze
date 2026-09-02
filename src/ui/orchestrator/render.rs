@@ -118,24 +118,23 @@ pub(super) fn render(
     // immediately hidden underneath it, so skip it outright rather than
     // paying for a sidebar/tab-strip/pane render this frame will never
     // show.
-    if let Some(view) = &model.git_view {
-        // The extension pushes its own `ExtensionHit`s into a scratch vec
-        // (it has no reason to know about `WorkspaceHit` at all — that
-        // type lives one crate up); wrap each one on the way into the
-        // shared `hits` vec, the one place that translation needs to
-        // happen.
-        let mut extension_hits = Vec::new();
-        git_diff::render(
-            frame,
-            view,
-            frame.area(),
-            model.git_tree_width,
-            &mut extension_hits,
+    if let Some(git) = &model.git_view {
+        // The extension answers with content; the host lays it out and
+        // therefore is the only side that can say which rectangle a click
+        // landed in. The hits come back in the view's own vocabulary and
+        // are tagged with the extension they belong to on the way into the
+        // shared `hits` vec — the one place that translation happens.
+        let mut view_hits = Vec::new();
+        let area = frame.area();
+        let view = git_diff::view(
+            git,
+            crate::ui::extension_view::content_space(area, model.git_tree_width),
         );
+        crate::ui::extension_view::render(frame, &view, area, model.git_tree_width, &mut view_hits);
         hits.extend(
-            extension_hits
+            view_hits
                 .into_iter()
-                .map(|(rect, hit)| (rect, WorkspaceHit::Extension(hit))),
+                .map(|(rect, hit)| (rect, WorkspaceHit::Extension(ExtensionHit::GitChanges(hit)))),
         );
         return;
     }

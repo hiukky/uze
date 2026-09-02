@@ -53,6 +53,7 @@ use crate::{
 };
 
 mod agent_support;
+mod extension_view;
 mod hit;
 mod input;
 mod management;

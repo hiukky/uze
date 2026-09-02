@@ -18,9 +18,10 @@
 //! discards on `Esc`), just sized to the whole frame instead of a small
 //! anchored box — see `openspec/changes/add-git-diff-overlay/design.md`.
 //! Its own module (originally its own file inside the TUI crate itself,
-//! before the `uze-extensions` split) for the git subprocess handling,
-//! unified-diff parsing, and syntax highlighting this needs that nothing
-//! else in the client does.
+//! before the `uze-extensions` split) for the unified-diff parsing and
+//! syntax highlighting this needs that nothing else in the client does.
+//! Speaking to Git is `uze-git`'s job, and drawing is the host's — this
+//! answers with a [`crate::view::View`].
 
 use std::{
     collections::BTreeMap,
@@ -29,16 +30,15 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
-use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap},
-};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use syntect::{easy::HighlightLines, highlighting::ThemeSet, parsing::SyntaxSet};
 
-use crate::{ExtensionHit, display_project_path, hint_spans, palette::*};
+use crate::view::{
+    Content, ContentLine, LineTone, Navigator, NavigatorRow, Rgb, Role, ScrollDirection,
+    ScrollTarget, Size, Span, View, ViewHit,
+};
+
+use crate::display_project_path;
 
 /// What to do after a key/mouse event reaches an open [`GitView`] —
 /// `orchestrator`'s event loop only needs to know whether to keep the
@@ -135,12 +135,12 @@ impl FileStatus {
         }
     }
 
-    fn color(self) -> Color {
+    fn role(self) -> Role {
         match self {
-            FileStatus::Modified => WARNING,
-            FileStatus::Added | FileStatus::Untracked => SUCCESS,
-            FileStatus::Deleted => DANGER,
-            FileStatus::Renamed => BLUE,
+            FileStatus::Modified => Role::Warning,
+            FileStatus::Added | FileStatus::Untracked => Role::Success,
+            FileStatus::Deleted => Role::Danger,
+            FileStatus::Renamed => Role::Info,
         }
     }
 }
@@ -184,9 +184,11 @@ enum DiffLineKind {
 struct DiffCell {
     line_no: u32,
     kind: DiffLineKind,
-    /// Pre-highlighted (see `highlight_diff_rows`) — ready to render, no
-    /// syntect types beyond this module's boundary.
-    spans: Vec<(Style, String)>,
+    /// Pre-highlighted (see `highlight_diff_rows`) — no syntect types
+    /// beyond this module's boundary, and the colour travels as data
+    /// because it comes from the syntax theme rather than from the host's
+    /// palette (see [`crate::view::Rgb`]).
+    spans: Vec<(Rgb, String)>,
 }
 
 /// One row of a before/after side-by-side diff (see `pair_side_by_side`) —
@@ -614,7 +616,7 @@ fn highlight_one_line(
     highlighter: &mut HighlightLines<'_>,
     syntax_set: &SyntaxSet,
     text: &str,
-) -> Vec<(Style, String)> {
+) -> Vec<(Rgb, String)> {
     // syntect's line-oriented highlighter expects a trailing newline
     // (matches `load_defaults_newlines` above) to track multi-line
     // constructs correctly across calls.
@@ -627,7 +629,7 @@ fn highlight_one_line(
         .map(|(style, piece)| {
             let fg = style.foreground;
             (
-                Style::default().fg(Color::Rgb(fg.r, fg.g, fg.b)),
+                Rgb(fg.r, fg.g, fg.b),
                 piece.trim_end_matches('\n').to_owned(),
             )
         })
@@ -667,10 +669,10 @@ pub fn handle_key(view: &mut GitView, key: KeyEvent) -> GitViewOutcome {
     GitViewOutcome::Stay
 }
 
-pub fn handle_mouse(view: &mut GitView, hit: Option<ExtensionHit>) -> GitViewOutcome {
+pub fn handle_mouse(view: &mut GitView, hit: Option<ViewHit>) -> GitViewOutcome {
     match hit {
-        Some(ExtensionHit::SelectFile(index)) => view.select(index),
-        Some(ExtensionHit::Close) => return GitViewOutcome::Close,
+        Some(ViewHit::SelectItem(index)) => view.select(index),
+        Some(ViewHit::Close) => return GitViewOutcome::Close,
         _ => {}
     }
     GitViewOutcome::Stay
@@ -681,159 +683,149 @@ pub fn handle_mouse(view: &mut GitView, hit: Option<ExtensionHit>) -> GitViewOut
 /// navigation): hovering the file list moves the selection, hovering the
 /// diff scrolls it, matching how a mouse wheel behaves everywhere else
 /// (VS Code included) regardless of which panel last had keyboard focus.
-pub fn handle_scroll(
-    view: &mut GitView,
-    frame_area: Rect,
-    tree_width_override: Option<u16>,
-    mouse: MouseEvent,
-) {
+///
+/// *Where* is resolved by the host, which owns the layout — this used to
+/// re-derive the columns from the frame rectangle, which meant two sides
+/// computing the same geometry and only one of them being authoritative.
+pub fn handle_scroll(view: &mut GitView, target: ScrollTarget, direction: ScrollDirection) {
     if view.error.is_some() || view.files.is_empty() {
         return;
     }
-    let (files_area, diff_area, _footer) = content_columns(frame_area, tree_width_override);
-    let in_column = |column: Rect| {
-        column.x <= mouse.column
-            && mouse.column < column.x + column.width
-            && column.y <= mouse.row
-            && mouse.row < column.y + column.height
-    };
-    match mouse.kind {
-        MouseEventKind::ScrollUp if in_column(files_area) => {
+    match (target, direction) {
+        (ScrollTarget::Navigator, ScrollDirection::Up) => {
             view.select(view.selected.saturating_sub(1));
         }
-        MouseEventKind::ScrollDown if in_column(files_area) => {
-            view.select(view.selected + 1);
-        }
-        MouseEventKind::ScrollUp if in_column(diff_area) => {
+        (ScrollTarget::Navigator, ScrollDirection::Down) => view.select(view.selected + 1),
+        (ScrollTarget::Content, ScrollDirection::Up) => {
             view.scroll = view.scroll.saturating_sub(3);
         }
-        MouseEventKind::ScrollDown if in_column(diff_area) => {
+        (ScrollTarget::Content, ScrollDirection::Down) => {
             view.scroll = view.scroll.saturating_add(3);
         }
-        _ => {}
     }
 }
 
-/// Draws the overlay across the entire frame — every other row this frame
-/// would otherwise have drawn (sidebar, tab strip, pane, any other popup)
-/// is skipped by the caller for this frame instead of drawn and covered,
-/// see `orchestrator::render`.
-pub fn render(
-    frame: &mut ratatui::Frame<'_>,
-    view: &GitView,
-    area: Rect,
-    tree_width_override: Option<u16>,
-    hits: &mut Vec<(Rect, ExtensionHit)>,
-) {
-    frame.render_widget(Clear, area);
-    let block = Block::default()
-        .title(format!(
-            " git changes — {}{} ",
-            display_project_path(&view.root),
-            if view.branch.is_empty() {
-                String::new()
-            } else {
-                format!(" · {}", view.branch)
-            }
-        ))
-        .title_style(Style::default().fg(ACCENT).add_modifier(Modifier::BOLD))
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(BORDER))
-        .padding(Padding::new(1, 1, 1, 1))
-        .style(Style::default().bg(BASE));
-    frame.render_widget(block, area);
-    // This closes the whole overlay, so make it an explicit, comfortably
-    // clickable control rather than the compact tab-close glyph.
-    let close_rect = Rect::new(area.right().saturating_sub(10), area.y, 9, 1);
-    frame.render_widget(
-        Paragraph::new(Span::styled(" ✕ close ", Style::default().fg(DANGER))),
-        close_rect,
+/// What this extension shows, as data — see [`crate::view`] for why it
+/// hands back a description instead of drawing.
+///
+/// `space` is advisory: it bounds how much content is worth producing,
+/// never where any of it goes.
+pub fn view(git: &GitView, space: Size) -> View {
+    let title = format!(
+        " git changes — {}{} ",
+        display_project_path(&git.root),
+        if git.branch.is_empty() {
+            String::new()
+        } else {
+            format!(" · {}", git.branch)
+        }
     );
-    hits.push((close_rect, ExtensionHit::Close));
+    let footer_hint = "↑↓ navigate · ↵ diff · tab focus · esc close".to_owned();
 
-    let (files_area, diff_area, footer) = content_columns(area, tree_width_override);
-    // The tree's own right border doubles as the resize handle — same
-    // shape as the sidebar's own `ExtensionHit::ResizeSidebar` push in
-    // `orchestrator::render` (drag arm lives there too, alongside
-    // `dragging_sidebar`/`dragging_git_tree`).
-    hits.push((
-        Rect::new(
-            files_area.right().saturating_sub(1),
-            files_area.y,
-            1,
-            files_area.height,
-        ),
-        ExtensionHit::ResizeTree,
-    ));
-
-    if let Some(message) = &view.error {
-        frame.render_widget(
-            Paragraph::new(Span::styled(message.clone(), Style::default().fg(DANGER))),
-            diff_area,
-        );
-        render_footer(frame, footer);
-        return;
-    }
-    if view.files.is_empty() {
-        render_file_list(frame, files_area, view, hits);
-        frame.render_widget(
-            Paragraph::new(Span::styled("no changes", Style::default().fg(MUTED))),
-            diff_area,
-        );
-        render_footer(frame, footer);
-        return;
+    if let Some(message) = &git.error {
+        return View {
+            title,
+            navigator: None,
+            content: Content::Message {
+                text: message.clone(),
+                role: Role::Danger,
+            },
+            footer_hint,
+        };
     }
 
-    render_file_list(frame, files_area, view, hits);
-    render_diff(frame, diff_area, view);
-    render_footer(frame, footer);
+    let content = if git.files.is_empty() {
+        Content::Message {
+            text: "no changes".to_owned(),
+            role: Role::Muted,
+        }
+    } else if git.files.get(git.selected).is_none() {
+        Content::Message {
+            text: "no changes in this checkout".to_owned(),
+            role: Role::Muted,
+        }
+    } else {
+        Content::Lines {
+            heading: format!(
+                "DIFF · {}",
+                git.files
+                    .get(git.selected)
+                    .and_then(|file| file.path.strip_prefix(&git.root).ok())
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|| display_project_path(&git.root))
+            ),
+            scroll: git.scroll,
+            // Bounded by the space plus what is scrolled past, not by the
+            // space alone: a wrapped line occupies more than one row, and
+            // only the host — which does the wrapping — knows how many.
+            // Erring long costs a few unrendered lines; erring short would
+            // show blank rows at the bottom of a long diff.
+            lines: unified_lines(&git.diff)
+                .into_iter()
+                .take(usize::from(space.height).saturating_mul(2) + git.scroll as usize)
+                .map(content_line)
+                .collect(),
+        }
+    };
+
+    View {
+        title,
+        navigator: Some(navigator(git)),
+        content,
+        footer_hint,
+    }
 }
 
-/// Narrowest/widest the Git changes tree can be dragged, and the floor
-/// left for the diff column — same shape as the host TUI's own
-/// `clamp_sidebar_width` (`src/ui.rs`), just scoped to this extension
-/// instead of the sidebar.
-const MIN_TREE_WIDTH: u16 = 20;
-const MAX_TREE_WIDTH: u16 = 50;
-const MIN_DIFF_WIDTH: u16 = 40;
-
-pub fn clamp_tree_width(width: u16, total_width: u16) -> u16 {
-    let max = total_width
-        .saturating_sub(MIN_DIFF_WIDTH)
-        .clamp(MIN_TREE_WIDTH, MAX_TREE_WIDTH);
-    width.clamp(MIN_TREE_WIDTH, max)
+fn navigator(git: &GitView) -> Navigator {
+    let items = file_tree_items(git);
+    Navigator {
+        heading: "CHANGES".to_owned(),
+        badge: git.files.len().to_string(),
+        focused: git.focus == GitViewFocus::Files,
+        anchor: selected_tree_row(&items, git).unwrap_or(0),
+        rows: items
+            .iter()
+            .map(|item| match item {
+                FileTreeItem::Directory { name, depth } => NavigatorRow::Group {
+                    name: format!("{name}/"),
+                    depth: *depth,
+                },
+                FileTreeItem::File { index, name, depth } => NavigatorRow::Item {
+                    id: *index,
+                    name: name.clone(),
+                    depth: depth + 1,
+                    marker: Span::new(
+                        git.files[*index].status.glyph(),
+                        git.files[*index].status.role(),
+                    ),
+                    selected: *index == git.selected,
+                },
+            })
+            .collect(),
+    }
 }
 
-/// The tree/diff split, derived from the outer overlay area so render and
-/// mouse hit-testing always share the exact same geometry. The tree stays
-/// deliberately narrow while the diff gets the remaining code width — this
-/// splits horizontally first, so the tree column spans the *entire* inner
-/// height (its right-border divider reaches edge to edge); only the diff
-/// side is then split again to carve out its own footer row, since the
-/// footer is scoped to the diff column alone (`diff_area`'s own x/width),
-/// not the full overlay width — it used to run under the tree column too,
-/// reading as a global app bar rather than something that belongs to the
-/// diff container specifically, and that same vertical split used to cut
-/// the tree column's own height short to match.
-pub fn content_columns(frame_area: Rect, tree_width_override: Option<u16>) -> (Rect, Rect, Rect) {
-    let inner = Rect::new(
-        frame_area.x + 2,
-        frame_area.y + 2,
-        frame_area.width.saturating_sub(4),
-        frame_area.height.saturating_sub(4),
-    );
-    let tree_width = tree_width_override
-        .map(|width| clamp_tree_width(width, inner.width))
-        .unwrap_or_else(|| (inner.width / 4).clamp(MIN_TREE_WIDTH, MAX_TREE_WIDTH));
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(tree_width), Constraint::Min(10)])
-        .split(inner);
-    let diff_rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(2)])
-        .split(columns[1]);
-    (columns[0], diff_rows[0], diff_rows[1])
+fn content_line(cell: &DiffCell) -> ContentLine {
+    let (gutter, tone) = match cell.kind {
+        DiffLineKind::Context => (" ", LineTone::Neutral),
+        DiffLineKind::Added => ("+", LineTone::Added),
+        DiffLineKind::Removed => ("-", LineTone::Removed),
+    };
+    ContentLine {
+        gutter: gutter.to_owned(),
+        number: cell.line_no.to_string(),
+        tone,
+        spans: cell
+            .spans
+            .iter()
+            .map(|(color, text)| Span {
+                text: text.clone(),
+                role: Role::Default,
+                color: Some(*color),
+                bold: false,
+            })
+            .collect(),
+    }
 }
 
 /// Builds a stable, compact change navigator from repository-relative paths.
@@ -893,160 +885,10 @@ fn compact_directory<'a>(name: &str, mut node: &'a FileTreeNode) -> (String, &'a
     (path, node)
 }
 
-fn render_file_list(
-    frame: &mut ratatui::Frame<'_>,
-    area: Rect,
-    view: &GitView,
-    hits: &mut Vec<(Rect, ExtensionHit)>,
-) {
-    let panel = Block::default()
-        .borders(Borders::RIGHT)
-        .border_style(Style::default().fg(BORDER))
-        .padding(Padding::new(1, 1, 0, 0))
-        .style(Style::default().bg(BASE));
-    let inner = panel.inner(area);
-    frame.render_widget(panel, area);
-    let focused = view.focus == GitViewFocus::Files;
-    let mut title = vec![Span::styled(
-        "CHANGES",
-        Style::default()
-            .fg(TEXT_SECONDARY)
-            .add_modifier(Modifier::BOLD),
-    )];
-    push_right_aligned(&mut title, view.files.len().to_string(), inner.width, MUTED);
-    frame.render_widget(
-        Paragraph::new(Line::from(title)),
-        Rect::new(inner.x, inner.y, inner.width, 1),
-    );
-    let list = Rect::new(
-        inner.x,
-        inner.y.saturating_add(1),
-        inner.width,
-        inner.height.saturating_sub(1),
-    );
-    let visible = list.height as usize;
-    let items = file_tree_items(view);
-    let selected_row = selected_tree_row(&items, view).unwrap_or(0);
-    let first = selected_row.saturating_sub(visible.saturating_sub(1));
-    for (offset, item) in items.iter().skip(first).take(visible).enumerate() {
-        let row = Rect::new(list.x, list.y + offset as u16, list.width, 1);
-        match item {
-            FileTreeItem::Directory { name, depth } => {
-                let spans = vec![
-                    Span::styled("  ".repeat(*depth), Style::default()),
-                    Span::styled(format!("{name}/"), Style::default().fg(TEXT_SECONDARY)),
-                ];
-                frame.render_widget(Paragraph::new(Line::from(spans)), row);
-            }
-            FileTreeItem::File { index, name, depth } => {
-                let file = &view.files[*index];
-                let selected = *index == view.selected;
-                let label_style = if selected && focused {
-                    Style::default()
-                        .fg(TEXT_BRIGHT)
-                        .add_modifier(Modifier::BOLD)
-                } else if selected {
-                    Style::default().fg(TEXT_BRIGHT)
-                } else {
-                    Style::default().fg(NAV_INACTIVE)
-                };
-                let mut spans = vec![
-                    Span::styled("  ".repeat(*depth + 1), Style::default()),
-                    Span::styled(
-                        format!("{} ", file.status.glyph()),
-                        Style::default().fg(file.status.color()),
-                    ),
-                    Span::styled(name.clone(), label_style),
-                ];
-                if selected {
-                    fill_row_bg(&mut spans, row.width, SURFACE_OVERLAY);
-                }
-                frame.render_widget(Paragraph::new(Line::from(spans)), row);
-                hits.push((row, ExtensionHit::SelectFile(*index)));
-            }
-        }
-    }
-}
-
 fn selected_tree_row(items: &[FileTreeItem], view: &GitView) -> Option<usize> {
     items.iter().position(
         |item| matches!(item, FileTreeItem::File { index, .. } if *index == view.selected),
     )
-}
-
-fn push_right_aligned(spans: &mut Vec<Span<'static>>, value: String, width: u16, color: Color) {
-    let used: usize = spans.iter().map(Span::width).sum();
-    let value_width = value.chars().count();
-    let gap = (width as usize).saturating_sub(used + value_width);
-    if gap > 0 {
-        spans.push(Span::raw(" ".repeat(gap)));
-        spans.push(Span::styled(value, Style::default().fg(color)));
-    }
-}
-
-fn fill_row_bg<'a>(spans: &mut Vec<Span<'a>>, width: u16, bg: Color) {
-    for span in spans.iter_mut() {
-        span.style = span.style.bg(bg);
-    }
-    let used: usize = spans.iter().map(Span::width).sum();
-    spans.push(Span::styled(
-        " ".repeat((width as usize).saturating_sub(used)),
-        Style::default().bg(bg),
-    ));
-}
-
-/// A subtle wash behind a removed unified-diff line — same family as
-/// `SELECTED_BG`/`SURFACE_OVERLAY` (barely-there tints over
-/// `BASE`), just red-leaning instead of green/neutral.
-const DIFF_REMOVED_BG: Color = Color::Rgb(38, 22, 20);
-/// The added-line counterpart — green-leaning, same family and strength as
-/// `DIFF_REMOVED_BG`.
-const DIFF_ADDED_BG: Color = Color::Rgb(18, 32, 23);
-
-/// One unified diff in the dedicated right-hand column. This avoids the old
-/// before/after split, which halved the useful code width again, while the
-/// tree remains available alongside it.
-fn render_diff(frame: &mut ratatui::Frame<'_>, area: Rect, view: &GitView) {
-    let selected_file = view.files.get(view.selected);
-    let selected_name = selected_file
-        .and_then(|file| file.path.strip_prefix(&view.root).ok())
-        .map(|path| path.display().to_string())
-        .unwrap_or_else(|| display_project_path(&view.root));
-    frame.render_widget(
-        Paragraph::new(Span::styled(
-            format!("DIFF · {selected_name}"),
-            Style::default().fg(TEXT_SECONDARY),
-        )),
-        Rect::new(area.x, area.y, area.width, 1),
-    );
-    let content = Rect::new(
-        area.x,
-        area.y.saturating_add(1),
-        area.width,
-        area.height.saturating_sub(1),
-    );
-    if selected_file.is_none() {
-        frame.render_widget(
-            Paragraph::new(Span::styled(
-                "no changes in this checkout",
-                Style::default().fg(MUTED),
-            )),
-            content,
-        );
-        return;
-    }
-    let mut y = content.y;
-    for cell in unified_lines(&view.diff)
-        .into_iter()
-        .skip(view.scroll as usize)
-    {
-        let height = diff_cell_height(cell, content.width);
-        if y.saturating_add(height) > content.bottom() {
-            break;
-        }
-        render_diff_cell(frame, Rect::new(content.x, y, content.width, height), cell);
-        y = y.saturating_add(height);
-    }
 }
 
 /// Expands paired rows back into their unified representation. Context is
@@ -1069,77 +911,6 @@ fn unified_lines(rows: &[DiffRow]) -> Vec<&DiffCell> {
         }
     }
     lines
-}
-
-const DIFF_GUTTER_WIDTH: u16 = 7;
-
-fn diff_cell_height(cell: &DiffCell, width: u16) -> u16 {
-    let content_width = width.saturating_sub(DIFF_GUTTER_WIDTH).max(1) as usize;
-    let text_width: usize = cell
-        .spans
-        .iter()
-        .map(|(style, text)| Span::styled(text.clone(), *style).width())
-        .sum();
-    (text_width.max(1).div_ceil(content_width)) as u16
-}
-
-/// One unified-diff line: a signed gutter, one stable line-number column,
-/// then syntax-highlighted content wrapped to the available column width.
-fn render_diff_cell(frame: &mut ratatui::Frame<'_>, area: Rect, cell: &DiffCell) {
-    let (marker, marker_style, bg) = match cell.kind {
-        DiffLineKind::Context => (" ", Style::default().fg(TEXT_FAINT), None),
-        DiffLineKind::Added => ("+", Style::default().fg(SUCCESS), Some(DIFF_ADDED_BG)),
-        DiffLineKind::Removed => ("-", Style::default().fg(DANGER), Some(DIFF_REMOVED_BG)),
-    };
-    let mut content_spans: Vec<Span<'_>> = cell
-        .spans
-        .iter()
-        .map(|(style, text)| Span::styled(text.clone(), *style))
-        .collect();
-    if let Some(bg) = bg {
-        for span in &mut content_spans {
-            span.style = span.style.bg(bg);
-        }
-    }
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(DIFF_GUTTER_WIDTH), Constraint::Min(1)])
-        .split(area);
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(format!("{marker} "), marker_style),
-            Span::styled(
-                format!("{:>4} ", cell.line_no),
-                Style::default().fg(TEXT_DIM),
-            ),
-        ]))
-        .style(Style::default().bg(bg.unwrap_or(BASE))),
-        columns[0],
-    );
-    frame.render_widget(
-        Paragraph::new(Line::from(content_spans))
-            .wrap(Wrap { trim: false })
-            .style(Style::default().bg(bg.unwrap_or(BASE))),
-        columns[1],
-    );
-}
-
-/// A hairline top border plus the hint text directly under it — the same
-/// shape `management::render_footer` uses, instead of the bare text this
-/// used to be with no border of its own, floating in whatever space the
-/// outer overlay's own generous padding happened to leave around it.
-fn render_footer(frame: &mut ratatui::Frame<'_>, area: Rect) {
-    let block = Block::default()
-        .borders(Borders::TOP)
-        .border_style(Style::default().fg(BORDER_FAINT));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    frame.render_widget(
-        Paragraph::new(Line::from(hint_spans(
-            "↑↓ navigate · ↵ diff · tab focus · esc close",
-        ))),
-        inner,
-    );
 }
 
 #[cfg(test)]
@@ -1459,14 +1230,102 @@ mod tests {
         assert_eq!(lines[1].kind, DiffLineKind::Removed);
         assert_eq!(lines[2].kind, DiffLineKind::Added);
     }
+}
+
+#[cfg(test)]
+mod view_tests {
+    use super::*;
+
+    fn fixture() -> GitView {
+        let root = PathBuf::from("/repo");
+        GitView {
+            root: root.clone(),
+            branch: "main".to_owned(),
+            files: vec![
+                ChangedFile {
+                    status: FileStatus::Modified,
+                    path: root.join("src/ui/git_diff.rs"),
+                },
+                ChangedFile {
+                    status: FileStatus::Added,
+                    path: root.join("src/ui.rs"),
+                },
+            ],
+            selected: 1,
+            diff: highlight_diff_rows(
+                pair_side_by_side(parse_unified_diff(
+                    "@@ -1,3 +1,4 @@\n context\n-removed line\n+added line\n",
+                )),
+                Path::new("/repo/src/ui.rs"),
+            ),
+            error: None,
+            scroll: 0,
+            focus: GitViewFocus::Files,
+            refreshed_at: Instant::now(),
+        }
+    }
+
+    fn space() -> Size {
+        Size {
+            width: 80,
+            height: 20,
+        }
+    }
+
+    /// The view carries meaning, never appearance: a status mark is a
+    /// [`Role`], not a colour, so the host's palette stays the only place
+    /// chrome colour is decided.
+    #[test]
+    fn the_view_names_meaning_rather_than_colour() {
+        let view = view(&fixture(), space());
+        let navigator = view.navigator.expect("files to navigate");
+        assert_eq!(navigator.badge, "2");
+        assert!(navigator.focused);
+
+        let marker = navigator.rows.iter().find_map(|row| match row {
+            NavigatorRow::Item { name, marker, .. } if name == "ui.rs" => Some(marker),
+            _ => None,
+        });
+        let marker = marker.expect("the added file is listed");
+        assert_eq!(marker.role, Role::Success, "added, not a colour");
+        assert!(
+            marker.color.is_none(),
+            "chrome never carries its own colour"
+        );
+    }
+
+    /// Syntax colour is the one thing that does travel as data: it comes
+    /// from a theme the extension ships, and a role would throw it away.
+    #[test]
+    fn syntax_colour_survives_as_the_extensions_own_data() {
+        let view = view(&fixture(), space());
+        let Content::Lines { lines, .. } = view.content else {
+            panic!("a selected file has a diff");
+        };
+        assert!(lines.iter().any(|line| line.tone == LineTone::Added));
+        assert!(lines.iter().any(|line| line.tone == LineTone::Removed));
+        assert!(
+            lines
+                .iter()
+                .flat_map(|line| &line.spans)
+                .any(|span| span.color.is_some()),
+            "highlighting reaches the host"
+        );
+    }
 
     #[test]
-    fn diff_lines_expand_to_fit_the_available_column_width() {
-        let cell = DiffCell {
-            line_no: 1,
-            kind: DiffLineKind::Context,
-            spans: vec![(Style::default(), "abcdefgh".to_owned())],
-        };
-        assert_eq!(diff_cell_height(&cell, DIFF_GUTTER_WIDTH + 4), 2);
+    fn an_unreadable_checkout_has_nothing_to_navigate() {
+        let view = view(
+            &GitView::with_error(PathBuf::from("/nope"), "boom".to_owned()),
+            space(),
+        );
+        assert!(view.navigator.is_none());
+        assert!(matches!(
+            view.content,
+            Content::Message {
+                role: Role::Danger,
+                ..
+            }
+        ));
     }
 }

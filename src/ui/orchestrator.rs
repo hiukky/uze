@@ -25,7 +25,10 @@ use std::{
     time::{Duration, Instant},
 };
 use uze_core::prompt_history;
-use uze_extensions::{ExtensionHit, git_diff};
+use uze_extensions::{
+    ExtensionHit, git_diff,
+    view::{ScrollDirection, ViewHit},
+};
 use uze_integrations::registry::IntegrationRegistry;
 use uze_terminal::{
     CellAttributes, ClientEvent, ClientRequest, Cursor, PROTOCOL_VERSION, PaneDamage, PaneId,
@@ -763,15 +766,17 @@ pub(crate) fn attach_workspace(
                     // which only knows about `ExtensionHit`s that are its
                     // own — the resize handle's drag lifecycle belongs to
                     // this workspace client, not the extension.
-                    let extension_hit = match hit {
-                        Some(WorkspaceHit::Extension(extension_hit)) => Some(extension_hit),
+                    let view_hit = match hit {
+                        Some(WorkspaceHit::Extension(ExtensionHit::GitChanges(view_hit))) => {
+                            Some(view_hit)
+                        }
                         _ => None,
                     };
-                    if extension_hit == Some(ExtensionHit::ResizeTree) {
+                    if view_hit == Some(ViewHit::ResizeNavigator) {
                         model.dragging_git_tree = true;
                     } else if let Some(view) = model.git_view.as_mut()
                         && matches!(
-                            git_diff::handle_mouse(view, extension_hit),
+                            git_diff::handle_mouse(view, view_hit),
                             git_diff::GitViewOutcome::Close
                         )
                     {
@@ -785,8 +790,11 @@ pub(crate) fn attach_workspace(
                 {
                     let frame_area = Rect::new(0, 0, size.width, size.height);
                     let (tree_column, diff_column, _footer) =
-                        git_diff::content_columns(frame_area, model.git_tree_width);
-                    let new_width = git_diff::clamp_tree_width(
+                        crate::ui::extension_view::content_columns(
+                            frame_area,
+                            model.git_tree_width,
+                        );
+                    let new_width = crate::ui::extension_view::clamp_navigator_width(
                         mouse.column.saturating_sub(tree_column.x),
                         tree_column.width + diff_column.width,
                     );
@@ -801,12 +809,22 @@ pub(crate) fn attach_workspace(
                         MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
                     ) && model.git_view.is_some() =>
                 {
-                    if let Some(view) = model.git_view.as_mut() {
-                        git_diff::handle_scroll(
-                            view,
+                    if let Some(view) = model.git_view.as_mut()
+                        && let Some(target) = crate::ui::extension_view::scroll_target(
                             Rect::new(0, 0, size.width, size.height),
                             model.git_tree_width,
-                            mouse,
+                            mouse.column,
+                            mouse.row,
+                        )
+                    {
+                        git_diff::handle_scroll(
+                            view,
+                            target,
+                            if mouse.kind == MouseEventKind::ScrollUp {
+                                ScrollDirection::Up
+                            } else {
+                                ScrollDirection::Down
+                            },
                         );
                     }
                     model.dirty = true;
