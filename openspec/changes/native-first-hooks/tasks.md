@@ -1,51 +1,64 @@
 ## 1. Vocabulary (single source in uze-core)
 
-- [ ] 1.1 Extend the portable alias table in `uze-core::hook` with, per alias, its portable fields and per harness the native tool name and native field names (`shell.command` → `command` / `CommandLine`; `file.*.path` → `file_path` / `TargetFile` / `filePath`; …); capture Antigravity and OpenCode native field names from the schemas the harnesses declare (`--discovery`), not from memory
-- [ ] 1.2 Replace the hand-written `tool_name()` matcher translation in `uze-integrations::hooks` with a lookup on the vocabulary; keep `native:<name>` as pass-through
-- [ ] 1.3 Unit tests: every alias row resolves on every harness; a `native:` matcher yields no portable fields; the table is exhaustive for the aliases `portable_tool_aliases()` lists
+- [x] 1.1 Extend the portable alias table in `uze-core::hook` with, per alias, its portable fields and per harness the native tool name and native field names (`shell.command` → `command` / `CommandLine`; `file.*.path` → `file_path` / `TargetFile` / `filePath`; …); capture Antigravity and OpenCode native field names from the schemas the harnesses declare (`--discovery`), not from memory
+  - Core owns the alias set and its portable fields (`portable_tool_vocabulary`, `alias_fields`, `hook_field_variable`); the per-harness native tool/field bindings live in `uze-integrations::hooks` (`vocabulary(target)`) because `uze-core` may name no vendor (`core_never_names_a_vendor_harness`). Core owns the shape (`ToolBinding`/`HarnessToolVocabulary`), the integration owns the names — the same split `HookCapabilities` already uses.
+- [x] 1.2 Replace the hand-written `tool_name()` matcher translation in `uze-integrations::hooks` with a lookup on the vocabulary; keep `native:<name>` as pass-through
+- [x] 1.3 Unit tests: every alias row resolves on every harness; a `native:` matcher yields no portable fields; the table is exhaustive for the aliases `portable_tool_aliases()` lists
 
 ## 2. Handler contract in the reference runtime
 
-- [ ] 2.1 Change `uze hook-exec` dispatch to the new contract: `HOOK_*` environment (`HOOK_HARNESS`, `HOOK_EVENT`, `HOOK_TOOL`, `HOOK_TOOL_NATIVE`, `HOOK_CWD`, `HOOK_INPUT`, `PLUGIN_ROOT`, alias fields) instead of stdin JSON; exit code decision (`0` allow, `3` deny + stderr reason, other = failure by effect) instead of stdout JSON; sequential order and first-deny-wins unchanged
-- [ ] 2.2 Update the ABI types/docs in `uze-core::hook` (`HookCommandInput` becomes the environment set; the decision parser becomes an exit-code mapper) and remove the 64 KiB stdout cap that no longer applies
-- [ ] 2.3 Rewrite handler fixtures to the new contract: `tests/_fixtures/canonical/hook-plugin/scripts/*`, `conformance/_fixtures/marketplace/plugins/hook-plugin` and `hook-order-plugin` scripts, `playground/` example if any
-- [ ] 2.4 Unit tests for the reference runtime: each harness dialect in → `HOOK_*` set as expected; exit 3 → native deny (exit 2 + JSON on Claude/Codex, `decision: deny` on AGY); handler failure → deny for `deny`/`ask`, proceed for `observe`/`allow`
+- [x] 2.1 Change `uze hook-exec` dispatch to the new contract: `HOOK_*` environment (`HOOK_HARNESS`, `HOOK_EVENT`, `HOOK_TOOL`, `HOOK_TOOL_NATIVE`, `HOOK_CWD`, `HOOK_INPUT`, `PLUGIN_ROOT`, alias fields) instead of stdin JSON; exit code decision (`0` allow, `3` deny + stderr reason, other = failure by effect) instead of stdout JSON; sequential order and first-deny-wins unchanged
+- [x] 2.2 Update the ABI types/docs in `uze-core::hook` (`HookCommandInput` becomes the environment set; the decision parser becomes an exit-code mapper) and remove the 64 KiB stdout cap that no longer applies
+- [x] 2.3 Rewrite handler fixtures to the new contract: `tests/_fixtures/canonical/hook-plugin/scripts/*`, `conformance/_fixtures/marketplace/plugins/hook-plugin` and `hook-order-plugin` scripts, `playground/` example if any
+  - `hook-plugin`'s second handler (`mark`) no longer relays a marker: the exit-code contract gives an allowed handler no channel to speak on. First-deny-wins keeps its Lab proof in `hook-order-plugin` (first handler denies, second handler's reason must never appear) and gains a deterministic one in the wrapper's golden tests.
+- [x] 2.4 Unit tests for the reference runtime: each harness dialect in → `HOOK_*` set as expected; exit 3 → native deny (exit 2 + JSON on Claude/Codex, `decision: deny` on AGY); handler failure → deny for `deny`/`ask`, proceed for `observe`/`allow`
 
 ## 3. Wrapper templates (Claude, Codex, Antigravity)
 
-- [ ] 3.1 Add a `hooks/exec` POSIX `sh` template generator in `uze-integrations`: slots for harness id, payload paths (tool name, input, cwd), alias table (native tool → `HOOK_TOOL` + field extraction), native deny/allow rendering and exit code; constants for order, first-deny-wins, per-handler timeout, fail-closed by effect, `jq` guard
-- [ ] 3.2 Generate `hooks/exec` into the Claude generated plugin and emit native entries in exec form: `command: ${CLAUDE_PLUGIN_ROOT}/hooks/exec`, `args: [<effect>, <handler>…]`, timeout = sum of handler timeouts + 1
-- [ ] 3.3 Generate `hooks/exec` for Codex under the derived attachment directory and emit the merged `~/.codex/hooks.json` entry as a shell line with absolute paths (no plugin-root variable on Codex)
-- [ ] 3.4 Generate `hooks/exec` into the Antigravity generated plugin (named entries at the document root; cwd is the `hooks.json` directory; `toolCall.args` field names; `{"decision"}` rendering)
-- [ ] 3.5 Receipts: the wrapper file and each native entry are receipt-owned; inspect verifies content identity; detach removes them and never a foreign entry; regeneration is idempotent (same bytes for the same package)
-- [ ] 3.6 Golden tests: generated wrapper + native entry per harness compared byte-for-byte against fixtures; the same handler fixtures exercised through the generated wrapper with each harness's recorded payload (port `.labs/native-hooks/exercise.sh` cases: deny relayed, allow lets the second handler run, denial stops the chain, handler missing/crash/timeout → by effect, `jq` absent → by effect)
-- [ ] 3.7 Equivalence tests: for every fixture payload, the generated wrapper and `uze hook-exec` produce the same native decision, exit code and stderr
+- [x] 3.1 Add a `hooks/exec` POSIX `sh` template generator in `uze-integrations`: slots for harness id, payload paths (tool name, input, cwd), alias table (native tool → `HOOK_TOOL` + field extraction), native deny/allow rendering and exit code; constants for order, first-deny-wins, per-handler timeout, fail-closed by effect, `jq` guard
+- [x] 3.2 Generate `hooks/exec` into the Claude generated plugin and emit native entries in exec form: `command: ${CLAUDE_PLUGIN_ROOT}/hooks/exec`, `args: [<effect>, <handler>…]`, timeout = sum of handler timeouts + 1
+  - The wrapper's first argument is the package root: `exec <plugin-root> <event> <effect> <handler>…`. That keeps the file a per-harness constant (byte-identical for every package), which is what makes content-identity inspection a comparison against the template instead of a copy stored in every receipt. Claude's hooks are delivered through `~/.claude/settings.json`, where `${CLAUDE_PLUGIN_ROOT}` does not exist, so the wrapper is named by absolute path — the exec form (`command` + `args`) is used, so nothing is shell-parsed.
+- [x] 3.3 Generate `hooks/exec` for Codex under the derived attachment directory and emit the merged `~/.codex/hooks.json` entry as a shell line with absolute paths (no plugin-root variable on Codex)
+- [x] 3.4 Generate `hooks/exec` into the Antigravity generated plugin (named entries at the document root; cwd is the `hooks.json` directory; `toolCall.args` field names; `{"decision"}` rendering)
+- [x] 3.5 Receipts: the wrapper file and each native entry are receipt-owned; inspect verifies content identity; detach removes them and never a foreign entry; regeneration is idempotent (same bytes for the same package)
+- [x] 3.6 Golden tests: generated wrapper + native entry per harness compared byte-for-byte against fixtures; the same handler fixtures exercised through the generated wrapper with each harness's recorded payload (port `.labs/native-hooks/exercise.sh` cases: deny relayed, allow lets the second handler run, denial stops the chain, handler missing/crash/timeout → by effect, `jq` absent → by effect)
+- [x] 3.7 Equivalence tests: for every fixture payload, the generated wrapper and `uze hook-exec` produce the same native decision, exit code and stderr
 
 ## 4. OpenCode plugin
 
-- [ ] 4.1 Regenerate the OpenCode bridge as `hooks-<package>.ts`: the runtime once (spawn handlers with `HOOK_*` environment, exit-code decision, order, first-deny-wins, fail-closed by effect) and the package's groups as data; no packager reference in the file
-- [ ] 4.2 `observe`/`allow` on `tool.hook("execute.before")` and `execute.after`; `deny`/`ask` on `permission.hook("evaluate")` only if task 6.3 confirms `resources` carries the input — otherwise keep them declared unsupported
-- [ ] 4.3 Golden test for the generated plugin and a runtime test under Bun with a fake plugin context (port `.labs/native-hooks/exercise-opencode.ts`)
+- [x] 4.1 Regenerate the OpenCode bridge as `hooks-<package>.ts`: the runtime once (spawn handlers with `HOOK_*` environment, exit-code decision, order, first-deny-wins, fail-closed by effect) and the package's groups as data; no packager reference in the file
+- [x] 4.2 `observe`/`allow` on `tool.hook("execute.before")` and `execute.after`; `deny`/`ask` on `permission.hook("evaluate")` only if task 6.3 confirms `resources` carries the input — otherwise keep them declared unsupported
+  - Kept declared unsupported: task 6.3's measurement is not in yet. `transform` also leaves OpenCode's effect set — the exit-code contract has no channel for a handler to answer a rewrite on, so a `transform` group now degrades on every harness rather than attaching as an observation.
+- [x] 4.3 Golden test for the generated plugin and a runtime test under Bun with a fake plugin context (port `.labs/native-hooks/exercise-opencode.ts`)
 
 ## 5. Routing, fallback and diagnostics
 
-- [ ] 5.1 Compatibility assessment reports the route per hook: `native` (wrapper), `adapted` (fallback `uze hook-exec` with the reason: platform without template, `transform`), `unsupported`
-- [ ] 5.2 Fallback route: on platforms without a template, the native entry invokes `uze hook-exec` with the new contract; test that both routes satisfy the same fixtures
-- [ ] 5.3 `uze doctor`: reports a delivered wrapper whose dependency (`jq`) is missing, and hooks delivered through the fallback
-- [ ] 5.4 Re-projection: installing/updating a package with hooks replaces the previous `hook-exec` entries (receipt-owned) with the wrapper form; test that a foreign entry beside them is untouched
+- [x] 5.1 Compatibility assessment reports the route per hook: `native` (wrapper), `adapted` (fallback `uze hook-exec` with the reason: platform without template, `transform`), `unsupported`
+  - `transform` is not one of the fallback's reasons: the exit-code contract has no channel for a handler to answer a rewrite on, so a `transform` group degrades rather than routing anywhere (its own change lifts this).
+- [x] 5.2 Fallback route: on platforms without a template, the native entry invokes `uze hook-exec` with the new contract; test that both routes satisfy the same fixtures
+- [x] 5.3 `uze doctor`: reports a delivered wrapper whose dependency (`jq`) is missing, and hooks delivered through the fallback
+- [x] 5.4 Re-projection: installing/updating a package with hooks replaces the previous `hook-exec` entries (receipt-owned) with the wrapper form; test that a foreign entry beside them is untouched
 
 ## 6. Conformance Lab
 
-- [ ] 6.1 Rewrite the hook fixtures' handlers (`guard`, `mark`, `order-1/2`) to the env/exit contract and make the markers assert `HOOK_*` values (`HOOK_TOOL`, `HOOK_COMMAND`, `HOOK_CWD`) in the relayed reason, so the vertical proves the vocabulary row, not only the denial
+- [x] 6.1 Rewrite the hook fixtures' handlers (`guard`, `mark`, `order-1/2`) to the env/exit contract and make the markers assert `HOOK_*` values (`HOOK_TOOL`, `HOOK_COMMAND`, `HOOK_CWD`) in the relayed reason, so the vertical proves the vocabulary row, not only the denial
+  - `guard` echoes `tool=$HOOK_TOOL native=$HOOK_TOOL_NATIVE cwd=$HOOK_CWD` into its denial reason, and `hooks-deny-context-relayed` asserts `tool=shell` reached the conversation on Claude and Codex — the two harnesses whose shell tools are `Bash`/`command` and `exec_command`/`cmd`, so the alias is itself evidence that the translation happened. Antigravity would only re-measure its closed vendor gate; OpenCode's hook path uses a `native:` matcher, which has no alias by definition.
 - [ ] 6.2 Add one Lab case per vocabulary row each harness delivers (`shell` today; `file.write`/`file.read` next) on Claude, Codex, Antigravity (gated: `hooks > vendor` precondition unchanged) and OpenCode
+  - Partly done, left unchecked. The `shell` row is asserted end-to-end on Claude and Codex (`hooks-deny-context-relayed`), which is the only row any vertical's provider scripts today. `file.write`/`file.read` need a scripted `Write`/`Read` tool call per harness (a new provider mode argument, a fixture group matched on that alias, and the marker plumbing) — real work, not a rename, and it belongs with the next vocabulary row rather than inside this change.
 - [ ] 6.3 OpenCode: measure whether `permission.evaluate` carries the shell command in `resources`; if yes, assert `deny`/`ask` and retire the corresponding registry entries; if not, keep the declarations with the observed reason
+  - The measurement is written and versioned (`conformance/experiments/opencode/permission-evaluate.py`): a probe plugin records every `permission.evaluate` event verbatim during a real turn, and asserts whether one carries the intercepted call's arguments. It was authored but not yet run, so `deny`/`ask` stay declared unsupported on OpenCode and their registry entries stand unchanged. Run it with `python3 conformance/lab.py --harness opencode --experiment opencode/permission-evaluate`.
 - [ ] 6.4 Codex: measure whether `ask` has an effect; record the verdict (native or declared) in the registry with the version
-- [ ] 6.5 Run all five verticals green; update `conformance/evidence/expected.json` and `DECISIONS.md`
+  - Not measured, and no verdict depends on it any more: Codex's capability profile does not claim `ask` (an `ask` group routes Unsupported there), and the generated wrapper renders every denial as `deny` on every harness — the exit-code contract has one denial, not two. Measuring `ask` on Codex is only worth doing if someone wants to promote the effect into its profile; until then there is nothing in the delivery for the answer to change.
+- [x] 6.5 Run all five verticals green; update `conformance/evidence/expected.json` and `DECISIONS.md`
+  - All five green on 2026-09-02: claude 27/27 + 0 ADAPTED (2.1.258), codex 39/39 + 0 (0.152.1), opencode 33/33 + 6 (beta-18866), antigravity 31/31 + 10 (1.1.24), uze 4/4 + 0. `expected.json` needed no new entry and no retirement — nothing became declarable and nothing became provable — so only the `observed_at` of the entries these runs re-measured moved. `DECISIONS.md` carries the three calls behind the new fixtures and the `jq` image change. The per-harness `evidence/<harness>.json` summaries are written by CI's `--write-summary`, not by hand.
 
 ## 7. Documentation and retirement
 
-- [ ] 7.1 Rewrite `docs/capabilities/portable-hooks.md` around the new contract: `HOOK_*` table, exit codes, wrapper, per-harness delivery matrix (native / adapted / declared), the `jq` note and fail-closed rule
-- [ ] 7.2 Amend ADR-033 (or add the superseding ADR) recording the decision: compile at install, wrapper vendored in the artifact, environment + exit-code contract, `hook-exec` as reference/fallback, `transform` deferred
-- [ ] 7.3 Update `crates/uze-integrations/src/<harness>/README.md` hook sections and the marketplace example plugin (`plugins/`) if it ships a hook
+- [x] 7.1 Rewrite `docs/capabilities/portable-hooks.md` around the new contract: `HOOK_*` table, exit codes, wrapper, per-harness delivery matrix (native / adapted / declared), the `jq` note and fail-closed rule
+- [x] 7.2 Amend ADR-033 (or add the superseding ADR) recording the decision: compile at install, wrapper vendored in the artifact, environment + exit-code contract, `hook-exec` as reference/fallback, `transform` deferred
+  - A superseding ADR (`docs/adr/040-compile-portable-hooks-into-the-delivered-artifact.md`), not an amendment: ADR-033 is already pushed, and only its ABI and dispatcher change — the rest of it still holds, which the new ADR and a note on 033 both say.
+- [x] 7.3 Update `crates/uze-integrations/src/<harness>/README.md` hook sections and the marketplace example plugin (`plugins/`) if it ships a hook
 - [ ] 7.4 Retire `.labs/native-hooks` once tasks 3.6 and 4.3 reproduce its exercises in the test suite; keep its README's compatibility matrix in `docs/capabilities/portable-hooks.md`
-- [ ] 7.5 Full gate: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --no-fail-fast`, `openspec validate --all --strict`, `ruff` on `conformance/`
+  - Left unchecked deliberately: `.labs/native-hooks` lives outside this worktree and is git-ignored, so it is not this change's to delete. Its exercises are reproduced by `hooks::wrapper_tests` and `hooks::opencode_runtime_tests`, and its compatibility matrix now lives in `docs/capabilities/portable-hooks.md`, so removing the directory is a one-line follow-up for whoever owns that scratch space.
+- [x] 7.5 Full gate: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --no-fail-fast`, `openspec validate --all --strict`, `ruff` on `conformance/`
+  - Green on 2026-09-02: `cargo fmt --check` clean; `cargo clippy --all-targets -- -D warnings` clean; `cargo test --no-fail-fast` 410 passed / 0 failed across 15 targets; `openspec validate --all --strict` 26/26; `ruff format --check` 57 files formatted and `ruff check` clean; `python3 -m unittest discover -s conformance/tests` 50/50.

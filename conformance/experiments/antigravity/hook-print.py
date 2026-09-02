@@ -16,6 +16,10 @@ Switches (environment):
                        PreToolUse hook run in this session mode".
   HOOK_PRINT_ASK=1     drop `--dangerously-skip-permissions`.
 
+This experiment pins the **API-key** mode it was written against
+(`auth="apikey"`), so its recording stays reproducible now that the vertical
+runs signed in; `antigravity/signed-in` is the probe for that mode.
+
 Finding (2026-09-02, 1.1.24): with the call in its declared shape the
 tool executes and the turn completes; `hooks_manager` reports `loaded 0
 named hooks from 0 hooks.json file(s)` for the plugin, and with the hooks
@@ -73,6 +77,8 @@ agy --print "run the API check" --output-format stream-json \\
   {skip} --print-timeout 90s --log-file /work/agy.log 2>&1 | tail -c 3000
 echo '===== agy.log (hooks) ====='
 grep -n -i "hook" /work/agy.log | grep -v Migration | head -40
+echo '===== agy.log (feature flags) ====='
+grep -n -iE "unleash|experiment|feature|flag|json-hooks" /work/agy.log | head -40
 """
 
 
@@ -86,6 +92,7 @@ def run(cfg, prov_ip):
         include_mcp=False,
         final_cmd=final_script(),
         plugins="flow hook-plugin",
+        auth="apikey",
     )
     r = subprocess.run(
         common.docker_base(cfg, prov_ip, setup, tty=False),

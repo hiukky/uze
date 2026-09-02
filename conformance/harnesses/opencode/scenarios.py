@@ -378,7 +378,7 @@ def phase_hooks(cfg, prov_ip, kind):
             ),
         },
         "allow": {
-            "plugin": "hook-plugin",
+            "plugin": "hook-allow-plugin",
             "args": '{"serverName":"uze-conformance","toolName":"uze_conformance","arguments":{"command":"echo plain output"}}',
             "deny_present": None,
             "deny_absent": ["blocked by protect-env"],

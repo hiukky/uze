@@ -61,14 +61,46 @@ it become authoritative.
 
 - Subagents (`agents/` — vendor format is JSON `agent.json`) are supported
   by the native plugin format but are a future UZE surface, exactly as
-  with every other harness. Hooks are delivered (ADR-033: the generated
-  plugin's `hooks.json`, named entries at the document root, each group's
-  matcher translated and its handlers wrapped by `uze hook-exec`); note
-  that AGY executes `hooks.json` hooks only when its server-delivered
-  feature provider enables `CustomizationConfig.enable_json_hooks` — the
-  offline conformance Lab observes them loaded and listed but never run
-  (1.1.22, 1.1.24), which the Antigravity vertical measures with a
-  vendor-format control hook before judging UZE's.
+  with every other harness.
+
+  **Hooks are delivered into the shared `~/.gemini/config/hooks.json`**
+  (ADR-033/ADR-040), not into the generated plugin: one named entry per
+  canonical group, keyed `<package>:<group-id>`, grouped with the translated
+  matcher for the tool events and flat for `Stop`, whose command is the
+  generated `hooks/exec` wrapper under
+  `$UZE_HOME/state/attachments/antigravity/hooks/exec` — absolute, because
+  the harness runs a hook with its cwd set to the directory holding
+  `hooks.json`, and no `uze` sits on the execution path. The document root
+  *is* the named-hook map, so UZE owns exactly its own keys: a hand-written
+  hook in the same file is never read, rewritten or removed, and drift or an
+  unreadable file blocks the mutation. This is the same shape as Codex's
+  shared `hooks.json` delivery.
+
+  It is delivered there because **the harness does not read a plugin's
+  `hooks.json`.** The vendor's own plugin guide says hooks in
+  `plugins/<name>/hooks.json` are "registered and run during the agent's
+  lifecycle"; on 1.1.24 they are not. `agy plugin validate` counts them, the
+  plugin is listed with a `hooks` component and enabled in `config.json`,
+  and the session still reports `loaded 0 named hooks from 0 hooks.json
+  file(s)` — it never opens the file. The Conformance Lab measures that live
+  every run (`hooks > delivery`), so if a later build starts reading plugin
+  hooks, the check says so and the delivery can move back.
+
+  One vendor gate still stands in front of every delivered hook: **AGY
+  executes `hooks.json` hooks only in a signed-in session.** The executor
+  reads `enable_json_hooks` (field 17 of the backend's
+  `CustomizationConfig`, switched server-side by the `json-hooks-enabled`
+  feature flag), and that config reaches the CLI only over the CloudCode
+  backend it speaks when signed in to a Google account. A `GEMINI_API_KEY`
+  session loads the same hooks, lists them under `/hooks`, and runs none of
+  them — for any event. Nothing UZE delivers changes that; the mode does.
+  Vendor bug
+  [google-antigravity/antigravity-cli#893](https://github.com/google-antigravity/antigravity-cli/issues/893)
+  ("hooks loaded but never executed when authenticated via GEMINI_API_KEY"),
+  alongside #78 recording that the Gemini API-key path is unsupported at
+  all. The Lab runs the vertical signed in and asserts UZE's own hooks there
+  (deny relayed, tool blocked, first-deny-wins, allow executes), and keeps
+  one declared check on the API-key mode so #893 stays visible.
 - Workspace-level `.agents/mcp_config.json` discovery is a project-scope
   concern outside UZE's machine-scope integration; it was not observable
   headlessly (`agy mcp list` shows global only). `.agents/skills/` is a

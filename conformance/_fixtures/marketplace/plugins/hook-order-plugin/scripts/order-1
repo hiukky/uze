@@ -1,6 +1,5 @@
 #!/bin/sh
 # Always denies. Its reason is the conformance evidence marker for
 # first-deny-wins across handlers of one group.
-set -e
-read -r payload || exit 0
-printf '{"decision":"deny","reason":"first-handler-denied"}'
+echo "first-handler-denied [tool=$HOOK_TOOL native=$HOOK_TOOL_NATIVE]" >&2
+exit 3

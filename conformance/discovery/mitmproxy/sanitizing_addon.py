@@ -2,7 +2,12 @@
 
 Persists ONLY protocol shape — never personal identity.
 Masks: Authorization/cookie/api-key headers, token-like query params,
-and token/credential-like JSON fields. Raw flows are never written to disk.
+and token/credential-like JSON fields. Identity also hides *inside* string
+values — a response carried an account address in a URL
+(`upgradeSubscriptionUri=...?Email=<addr>&...`), which no key-based rule
+sees — so every string value is additionally scrubbed of e-mail addresses
+and of embedded `email=`/`user=` query values. Raw flows are never written
+to disk.
 """
 
 import json
@@ -43,6 +48,10 @@ SENSITIVE_PARAM_KEYS = {
     "state",
     "jwt",
     "sig",
+    "email",
+    "user",
+    "username",
+    "login",
 }
 SENSITIVE_JSON_KEYS = {
     "access_token",
@@ -80,6 +89,13 @@ SENSITIVE_JSON_KEYS = {
 }
 
 TOKEN_RE = re.compile(r"(?i)([A-Za-z0-9._~+/=-]{16,})")
+# An address is identity at any length, so it can never ride out on the
+# token heuristic (which only fires at 24 characters).
+EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+# The same identity url-encoded inside a link a JSON value happens to carry
+# (`...?Email=user%40example.com&...`): masked by parameter name, before
+# any pattern gets a chance to miss it.
+EMBEDDED_PARAM_RE = re.compile(r"(?i)\b(email|user|username|login)=([^&\s\"']*)")
 
 
 def _mask(value, key=None):
@@ -88,6 +104,11 @@ def _mask(value, key=None):
     if key is not None and key.lower() in SENSITIVE_JSON_KEYS:
         return "<UZE_MASKED:%s>" % key
     s = str(value)
+    # Identity first: a `?Email=` inside a link, then any bare address.
+    # Both are masked whatever their length — the token heuristic below
+    # only fires at 24 characters and would let a short address through.
+    s = EMBEDDED_PARAM_RE.sub(lambda m: f"{m.group(1)}=<UZE_MASKED>", s)
+    s = EMAIL_RE.sub("<UZE_MASKED_EMAIL>", s)
     # Mask anything that looks like a bearer/JWT/opaque token
     if re.search(r"(?i)bearer\s+", s):
         s = re.sub(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+", r"\1<UZE_TEST_TOKEN>", s)
@@ -145,7 +166,7 @@ def _sanitize_json_body(body_text):
             }
         if isinstance(o, list):
             return [walk(v) for v in o]
-        if isinstance(o, str) and len(o) >= 24:
+        if isinstance(o, str):
             return _mask(o)
         return o
 

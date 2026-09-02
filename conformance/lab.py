@@ -341,6 +341,7 @@ def docker_shell_cmd(cfg, prov_ip, shell_command):
     ]
     for h in common.HARNESS_HOSTS.get(cfg.harness, []):
         cmd += ["--add-host", f"{h}:{prov_ip}"]
+    cmd += common.ca_mount(cfg)
     cmd += [
         "--network",
         cfg.net,

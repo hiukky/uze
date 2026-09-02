@@ -100,10 +100,14 @@ pub enum ExposureMechanism {
         entry_name: String,
         event: Option<HookEvent>,
         expected: String,
+        /// The generated wrapper the entry runs, when the delivery took the
+        /// native route. Owned alongside the entry: materialized on attach,
+        /// verified by content identity, removed once no entry needs it.
+        wrapper: Option<PathBuf>,
     },
     /// A whole, UZE-owned derived file loaded by the harness directly from
     /// its own discovery directory — e.g. the OpenCode hook bridge
-    /// (`<config root>/plugins/uze-hooks-<package>.ts`, auto-discovered by
+    /// (`<config root>/plugins/hooks-<package>.ts`, auto-discovered by
     /// the harness, so there is no configuration entry to merge). The
     /// integration owns attach/inspect/detach; the Core only routes it.
     ManagedHookFile {

@@ -20,7 +20,7 @@ in a second, UZE-owned marketplace (Generated Native Package, ADR-013).
 | MCP | Supported (config), unproven behaviorally | `codex mcp add` → `~/.codex/config.toml` | EMPIRICAL (configuration), UNKNOWN (discovery), gap (behavioral) |
 | Context (AGENTS.md) | Native, out of this crate's scope | Codex reads `AGENTS.md` directly | DOCUMENTED |
 | Agents | Not implemented (also a real Codex vendor gap) | — | DOCUMENTED |
-| Hooks | Not implemented (research-only project-wide) | — | DOCUMENTED |
+| Hooks | Supported | Native — one merged entry per canonical group in `~/.codex/hooks.json`, one quoted shell line invoking the generated `hooks/exec` wrapper (ADR-033, ADR-040). The shell alias is `exec_command` with a `cmd` argument. Requires the `[features].hooks` flag in `~/.codex/config.toml`. | EMPIRICAL — the conformance vertical's `hooks` suite |
 | Runtime Integration | None | Passthrough (trait default) | CODE_FACT |
 
 ## Delivery

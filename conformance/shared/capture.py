@@ -14,6 +14,33 @@ from __future__ import annotations
 import os
 
 
+def _read_chunked(stream) -> bytes:
+    """The body of a `Transfer-Encoding: chunked` request.
+
+    `BaseHTTPRequestHandler` does not decode chunked bodies, and a harness
+    that streams its request (Antigravity's signed-in CloudCode path does)
+    would otherwise hand every provider an empty body — a request that
+    declares tools the provider never sees, and a turn where nothing
+    happens. A malformed stream stops the read rather than blocking: the
+    provider must always answer.
+    """
+    body = b""
+    while True:
+        line = stream.readline()
+        if not line:
+            break
+        try:
+            size = int(line.split(b";", 1)[0].strip() or b"0", 16)
+        except ValueError:
+            break
+        if size == 0:
+            stream.readline()  # the trailer's terminating CRLF
+            break
+        body += stream.read(size)
+        stream.readline()  # the CRLF that closes this chunk
+    return body
+
+
 def read_body(handler) -> bytes:
     """Reads the request body once, appending the raw request to the
     provider's capture log when the lab enabled `DISCOVERY=1`.
@@ -24,8 +51,11 @@ def read_body(handler) -> bytes:
     OSError on the log is swallowed: a capture failure must never break
     the provider serving a harness.
     """
-    length = int(handler.headers.get("Content-Length", "0") or 0)
-    body = handler.rfile.read(length) if length else b""
+    if "chunked" in (handler.headers.get("Transfer-Encoding", "") or "").lower():
+        body = _read_chunked(handler.rfile)
+    else:
+        length = int(handler.headers.get("Content-Length", "0") or 0)
+        body = handler.rfile.read(length) if length else b""
     if not os.environ.get("DISCOVERY"):
         return body
     try:

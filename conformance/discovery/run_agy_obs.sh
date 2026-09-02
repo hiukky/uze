@@ -12,9 +12,11 @@ mkdir -p "$LOGDIR"
 LOG_PATH="$LOGDIR/$LOG.jsonl"
 rm -f "$LOG_PATH"
 export AGY_LOG_PATH="$LOG_PATH"
+# Resolved from this script, not from one machine's checkout path.
+ADDON="$(cd "$(dirname "$0")" && pwd)/mitmproxy/sanitizing_addon.py"
 
 "$V/bin/mitmdump" --mode regular@$PORT \
-  -s /home/hiukky/uze/conformance/agy-isolation/bin/sanitizing_addon.py \
+  -s "$ADDON" \
   -q >/dev/null 2>&1 &
 MITM=$!
 trap 'kill $MITM 2>/dev/null' EXIT

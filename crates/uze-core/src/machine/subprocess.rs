@@ -159,8 +159,39 @@ pub fn read_bounded<R: Read>(mut handle: R, cap: usize) -> (Vec<u8>, bool) {
     (bytes, false)
 }
 
+/// Whether an executable of this name is reachable through `PATH`. A
+/// generated artifact may depend on a small system program (the hook
+/// wrapper's `jq`); this is how a diagnostic checks for one without
+/// running it.
+pub fn program_on_path(program: &str) -> bool {
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path).any(|directory| {
+        let candidate = directory.join(program);
+        candidate.is_file() && is_executable(&candidate)
+    })
+}
+
+#[cfg(unix)]
+fn is_executable(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path).is_ok_and(|meta| meta.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn is_executable(_path: &std::path::Path) -> bool {
+    true
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_program_is_found_only_where_path_actually_holds_an_executable() {
+        assert!(super::program_on_path("sh"), "the system shell is on PATH");
+        assert!(!super::program_on_path("a-program-nobody-installed"));
+    }
+
     use super::*;
 
     #[test]

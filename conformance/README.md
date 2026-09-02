@@ -69,11 +69,14 @@ python3 lab.py --harness codex         # 11/11 PASS (pre-hooks baseline)
 python3 lab.py --harness opencode      # 14/14 PASS + 1 ADAPTED (pre-hooks baseline)
 ```
 
-Every vertical additionally runs the **portable-hooks phase** (ADR-033):
-three TUI-first scenarios — `deny` (a real tool call blocked by a portable
-hook), `allow` (the same hook lets the real tool execute, proven by the
-tool's own output reaching the conversation), and `order` (first-deny-wins:
-the second handler's marker must never appear). Runs are grouped
+Every vertical additionally runs the **portable-hooks phase** (ADR-033,
+ADR-040): three TUI-first scenarios — `deny` (a real tool call blocked by a
+portable hook, whose relayed reason also carries the portable vocabulary row
+the handler was handed), `allow` (a guard with nothing behind it lets the
+real tool execute, proven by the tool's own output reaching the
+conversation), and `order` (first-deny-wins: the second handler's marker
+must never appear). What the harness runs is the generated `hooks/exec`
+wrapper, not the `uze` binary. Runs are grouped
 `describe`/`test`-style (tui, cli.state, hooks > deny/allow/order) so a
 growing suite stays interpretable, and every wait aborts immediately when
 the harness process dies instead of burning its try budget.
@@ -82,10 +85,11 @@ Latest evidence per harness (run-by-run, recorded honestly — including the
 ADAPTED vendor-limitation records and any pre-existing base-phase failure):
 
 ```bash
-python3 lab.py --harness claude        # 18/18 PASS (hooks deny/allow/order proven)
-python3 lab.py --harness codex         # 20/20 PASS + 1 ADAPTED (allow recorded ADAPTED: approval gate)
-python3 lab.py --harness antigravity   # 28/28 PASS + 2 ADAPTED (MCP round-trip proven: the proof returns)
-python3 lab.py --harness opencode      # 28/28 PASS + 6 ADAPTED (MCP tool not exposed on the V2 beta channel — recorded, never fabricated)
+python3 lab.py --harness claude        # 27/27 PASS (hooks deny/allow/order proven, plus the portable vocabulary row)
+python3 lab.py --harness codex         # 39/39 PASS
+python3 lab.py --harness antigravity   # 31/31 PASS + 10 ADAPTED (hook execution gated by the vendor, measured live)
+python3 lab.py --harness opencode      # 33/33 PASS + 6 ADAPTED (MCP tool not exposed on the V2 beta channel — recorded, never fabricated)
+python3 lab.py --harness uze           # 4/4 PASS
 ```
 
 Evidence JSON goes under `AGY_OUTDIR` (default

@@ -94,6 +94,7 @@ impl Health<'_> {
                         }
                         _ => None,
                     },
+                    delivery: hook_delivery_note(&plan.mechanism),
                     artifact: attached.map(|entry| receipt_location(&entry.receipt)),
                     state: attached.map(|entry| entry.inspection.state),
                 });
@@ -565,5 +566,69 @@ impl UzeApplication {
             // a symlink into the UZE install — the normal `~/.uze/shims`
             // case) must count as active, not merely byte-equal paths.
             .is_some_and(|resolved| resolved.canonicalize().ok() == expected.canonicalize().ok())
+    }
+}
+
+/// What a person needs to know about how a hook actually reaches its
+/// harness. A hook the packager runtime carries keeps working only while
+/// UZE is installed at that path; a generated wrapper keeps working without
+/// UZE but needs its own system dependency present.
+fn hook_delivery_note(mechanism: &ExposureMechanism) -> Option<String> {
+    let ExposureMechanism::ManagedHookConfig { wrapper, .. } = mechanism else {
+        return None;
+    };
+    let Some(wrapper) = wrapper else {
+        return Some(
+            "delivered through the UZE runtime (no wrapper template for this platform); the hook \
+             stops working if UZE is moved or removed"
+                .to_owned(),
+        );
+    };
+    let dependency = uze_core::hook::WRAPPER_DEPENDENCY;
+    (!uze_core::subprocess::program_on_path(dependency)).then(|| {
+        format!(
+            "the delivered wrapper at {} needs `{dependency}`, which is not installed",
+            wrapper.display()
+        )
+    })
+}
+
+#[cfg(test)]
+mod delivery_note_tests {
+    use super::*;
+
+    fn managed(wrapper: Option<&str>) -> ExposureMechanism {
+        ExposureMechanism::ManagedHookConfig {
+            config_file: std::path::PathBuf::from("/config/settings.json"),
+            entry_name: "demo:protect".to_owned(),
+            event: None,
+            expected: "{}".to_owned(),
+            wrapper: wrapper.map(std::path::PathBuf::from),
+        }
+    }
+
+    #[test]
+    fn doctor_names_the_route_and_the_dependency_a_delivered_hook_depends_on() {
+        let fallback = hook_delivery_note(&managed(None)).expect("the fallback route is reported");
+        assert!(fallback.contains("no wrapper template"));
+        assert!(fallback.contains("moved or removed"));
+
+        let note = hook_delivery_note(&managed(Some("/state/hooks/exec")));
+        if uze_core::subprocess::program_on_path(uze_core::hook::WRAPPER_DEPENDENCY) {
+            assert_eq!(note, None, "a native delivery with its dependency is quiet");
+        } else {
+            assert!(
+                note.is_some_and(|note| note.contains(uze_core::hook::WRAPPER_DEPENDENCY)),
+                "a wrapper whose dependency is missing must say so"
+            );
+        }
+
+        assert_eq!(
+            hook_delivery_note(&ExposureMechanism::Unsupported {
+                rationale: "no route".to_owned()
+            }),
+            None,
+            "an unsupported hook has no delivery to describe"
+        );
     }
 }

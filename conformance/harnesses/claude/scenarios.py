@@ -330,9 +330,13 @@ def phase_hooks(cfg, prov_ip, kind):
             "tui_markers": ["blocked by protect-env"],
             "deny_present": "blocked by protect-env",
             "deny_absent": ["second-handler-reached"],
+            # The vocabulary row the harness delivered: the guard echoes the
+            # portable alias it was handed, so the relayed reason proves the
+            # handler read `shell` and this harness's own command field.
+            "context_present": "tool=shell",
         },
         "allow": {
-            "plugin": "hook-plugin",
+            "plugin": "hook-allow-plugin",
             "args": '{"command":"echo plain output"}',
             "prompt": "run the API check",
             "tui_markers": [],
@@ -418,6 +422,16 @@ def phase_hooks(cfg, prov_ip, kind):
             "the intercepted tool never executed — the native denial blocked it"
             if not has_output
             else "the tool executed despite the deny — blocking is broken",
+        )
+    if spec.get("context_present"):
+        carried = bool(markers.get(spec["context_present"]))
+        check(
+            f"hooks-{kind}-context-relayed",
+            carried,
+            f"the handler read the portable vocabulary (`{spec['context_present']}`) "
+            f"from this harness's own payload"
+            if carried
+            else ", ".join(f"{m}={markers.get(m)}" for m in sorted(markers)),
         )
     for absent in spec["deny_absent"]:
         common.check_absence(

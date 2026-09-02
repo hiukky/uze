@@ -84,6 +84,11 @@ pub enum ManagedArtifact {
         entry_name: String,
         event: Option<crate::hook::HookEvent>,
         expected: String,
+        /// The generated wrapper this entry runs, when the hook took the
+        /// native route; `None` for the packager-runtime fallback, which
+        /// has no artifact of its own.
+        #[serde(default)]
+        wrapper: Option<PathBuf>,
     },
     /// A whole, UZE-owned derived file the harness loads from its own
     /// discovery directory (the OpenCode bridge): no configuration entry
@@ -555,11 +560,13 @@ pub trait IntegrationPort {
                 entry_name,
                 event,
                 expected,
+                wrapper,
             } => ManagedArtifact::HookConfigEntry {
                 config_file,
                 entry_name,
                 event,
                 expected,
+                wrapper,
             },
             ExposureMechanism::ManagedHookFile { path } => {
                 ManagedArtifact::ManagedHookFile { path }

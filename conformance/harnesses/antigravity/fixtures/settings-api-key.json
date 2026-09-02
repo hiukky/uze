@@ -1,0 +1,7 @@
+{
+  "modelProvider": "gemini",
+  "trustedWorkspaces": ["/work"],
+  "permissions": {
+    "allow": ["mcp(*)"]
+  }
+}

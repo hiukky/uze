@@ -1,0 +1,5 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "hook-allow-plugin",
+  "description": "Conformance portable hooks: the same guard as hook-plugin with nothing behind it, so an allowed call proves the intercepted tool really ran. hook-plugin keeps the second handler that must never be reached."
+}

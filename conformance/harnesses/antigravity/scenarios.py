@@ -4,6 +4,14 @@ import subprocess
 
 """Antigravity scenario (latest channel) — Real Harness + Synthetic World.
 
+The session runs **signed in**, against a synthetic identity: a `consumer`
+token file the CLI reads as a Google account, and the CloudCode plane
+answered by the run's own provider (identity, tier, flags, model catalogue,
+model path). That is the mode users are in, and the only one in which this
+harness executes `hooks.json` hooks at all — under `GEMINI_API_KEY` they are
+loaded and never run (vendor bug google-antigravity/antigravity-cli#893).
+API-key mode keeps one declared check so the bug stays on the report.
+
 Phase A (TUI): prompt + synthetic credential, /skills (flow:commit,
 flow:review, uze:init), /mcp (server listed + tools enumerated),
 deterministic turn, model-only Skill hidden from the slash surface but
@@ -32,8 +40,36 @@ from shared.common import (
     start_provider,
 )
 
+#: Signed-in ("consumer") mode is how the vertical runs: it is the mode
+#: users are in, and the only one in which this harness executes
+#: `hooks.json` hooks at all (vendor bug
+#: google-antigravity/antigravity-cli#893). API-key mode stays reachable —
+#: `phase_hooks_api_key_mode` measures the bug there — and is what
+#: `auth="apikey"` selects.
+CONSUMER_TOKEN = "/work/home/.gemini/antigravity-cli/antigravity-oauth-token"
 
-def agy_setup(cfg, prov_ip, include_mcp, final_cmd, plugins=None, prelude=""):
+
+def auth_fragment(prov_ip, auth):
+    if auth == "apikey":
+        # `modelProvider: gemini` is what routes the turn at the API key:
+        # without it the CLI expects its signed-in backend, and with it the
+        # CLI refuses to start unless GEMINI_API_KEY is set — the two travel
+        # together, which is why the mode carries its own settings fixture.
+        return f"""export GEMINI_API_KEY=uze-conformance-invalid-by-design
+export GOOGLE_GEMINI_BASE_URL=http://{prov_ip}:9999
+cp /app/fixtures/settings-api-key.json /work/home/.gemini/antigravity-cli/settings.json
+rm -f {CONSUMER_TOKEN}"""
+    # The synthetic account: a token file the CLI reads as a signed-in
+    # session, whose every value is a literal and whose expiry is far
+    # enough away that no refresh is attempted. With it in place the CLI
+    # ignores GOOGLE_GEMINI_BASE_URL and speaks CloudCode over TLS — which
+    # the provider's signed-in listener answers.
+    return f"cp /app/fixtures/antigravity-oauth-token {CONSUMER_TOKEN}"
+
+
+def agy_setup(
+    cfg, prov_ip, include_mcp, final_cmd, plugins=None, prelude="", auth="consumer"
+):
     if plugins is None:
         plugins = "flow"
         if include_mcp:
@@ -42,13 +78,17 @@ def agy_setup(cfg, prov_ip, include_mcp, final_cmd, plugins=None, prelude=""):
 set -e
 export PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/.local/bin
 export HOME=/work/home UZE_HOME=/work/home/.uze
-export GEMINI_API_KEY=uze-conformance-invalid-by-design
-export GOOGLE_GEMINI_BASE_URL=http://{prov_ip}:9999
 export AGY_CLI_DISABLE_AUTO_UPDATE=1
+# The harness is Go and honours SSL_CERT_FILE on Linux: this is how it
+# trusts the run's synthetic CA for its own signed-in plane (identity,
+# feature flags, account endpoints, the model path) without any Internet.
+export SSL_CERT_FILE=/app/ca.crt
+export SSL_CERT_DIR=/app
 mkdir -p /work/home/.gemini/antigravity-cli
 cp /app/fixtures/settings.json /work/home/.gemini/antigravity-cli/settings.json
 cp /app/fixtures/jetski_state.pbtxt /work/home/.gemini/antigravity-cli/jetski_state.pbtxt
 cp /app/fixtures/installation_id /work/home/.gemini/antigravity-cli/installation_id
+{auth_fragment(prov_ip, auth)}
 {materialize_marketplace(cfg)}
 uze market add /work/market >/dev/null 2>&1
 for p in {plugins}; do uze plugin install $p@uze-lab >/dev/null 2>&1; done
@@ -98,8 +138,11 @@ def phase_tui(cfg, prov_ip):
     )
     check(
         "synthetic-credential",
-        "Gemini API key" in p1,
-        "account row shows API key, not a personal account",
+        "conformance@uze.invalid" in p1,
+        "the signed-in account row is the Lab's synthetic identity, "
+        "never a personal account"
+        if "conformance@uze.invalid" in p1
+        else p1[-200:].replace("\n", " "),
     )
 
     # /skills
@@ -170,7 +213,16 @@ def phase_tui(cfg, prov_ip):
         child.send(ch)
         time.sleep(0.1)
     child.send("\r")
-    t3, p3, _ = wait_for(["UZE_CONFORMANCE_OK"], tries=30, gap=2.5, stop_on_death=True)
+    # The answer is streamed and the TUI repaints around it, so a marker can
+    # land across two screen reads (`UZE_CONFORMA` … `NCE_OK`): the wait
+    # searches everything read since the turn started.
+    t3, p3, _ = wait_for(
+        ["UZE_CONFORMANCE_OK"],
+        tries=30,
+        gap=2.5,
+        stop_on_death=True,
+        accumulate=True,
+    )
     snap("03_after_prompt", t3)
     check(
         "deterministic-response-rendered",
@@ -241,10 +293,17 @@ def phase_tui(cfg, prov_ip):
         child.send(ch)
         time.sleep(0.08)
     child.send("\r")
-    t4, p4 = screen(1.2)
+    # Transcript plus rendered screen, for the same reason as the
+    # deterministic turn: a streamed final is continued by cursor motion.
+    t4, chunk = screen(1.2)
+    raw4, plain4 = t4, chunk
+    p4 = f"{plain4}\n{common.render_screen(raw4)}"
     tries = 0
     while "UZE_CONFORMANCE_PASS" not in p4 and tries < 14 and child.isalive():
-        t4, p4 = screen(2.0)
+        t4, chunk = screen(2.0)
+        raw4 += t4
+        plain4 += chunk
+        p4 = f"{plain4}\n{common.render_screen(raw4)}"
         tries += 1
     snap("03b_mcp_invoke_tui", t4)
     check(
@@ -314,7 +373,7 @@ EOF
 HOOK_DENIAL_MARKERS = ("blocked by protect-env", "Denied by UZE hook")
 
 
-def hook_turn(cfg, prov_ip, tag, args, plugins, prelude=""):
+def hook_turn(cfg, prov_ip, tag, args, plugins, prelude="", auth="consumer"):
     """One interactive AGY turn around a scripted `run_command` (in the
     tool's declared argument shape): the provider serves the functionCall
     to the user's turn, the vendor permission prompt is answered if it
@@ -329,6 +388,7 @@ def hook_turn(cfg, prov_ip, tag, args, plugins, prelude=""):
         final_cmd="exec agy",
         plugins=plugins,
         prelude=prelude,
+        auth=auth,
     )
     cmd = docker_base(cfg, prov_ip, setup)
     child = pexpect.spawn(
@@ -362,14 +422,25 @@ def hook_turn(cfg, prov_ip, tag, args, plugins, prelude=""):
         child.send(ch)
         time.sleep(0.08)
     child.send("\r")
+    # The transcript, plus the screen it renders to: AGY streams its answer
+    # and continues the line by moving the cursor, so a marker can exist on
+    # screen while no snapshot — and no concatenation of snapshots — holds it
+    # contiguously (`… UZE_CONFORMA`, then `ESC[3A ESC[12C NCE_PASS`).
+    seen_raw = ""
     seen = ""
     prompted = False
+
+    def settled_now():
+        rendered = f"{seen}\n{common.render_screen(seen_raw)}"
+        return "UZE_CONFORMANCE_PASS" in rendered or any(
+            m in rendered for m in HOOK_DENIAL_MARKERS
+        )
+
     for _ in range(16):
-        _, p = screen(2.0)
+        t, p = screen(2.0)
+        seen_raw += t
         seen += p
-        if "UZE_CONFORMANCE_PASS" in seen or any(
-            m in seen for m in HOOK_DENIAL_MARKERS
-        ):
+        if settled_now():
             break
         if not child.isalive():
             break
@@ -384,10 +455,8 @@ def hook_turn(cfg, prov_ip, tag, args, plugins, prelude=""):
             child.send("0\r")
             time.sleep(1.0)
     with open(f"{cfg.outdir}/hooks_{tag}.raw", "w") as f:
-        f.write(seen)
-    turn_settled = "UZE_CONFORMANCE_PASS" in seen or any(
-        m in seen for m in HOOK_DENIAL_MARKERS
-    )
+        f.write(f"{seen}\n===== rendered =====\n{common.render_screen(seen_raw)}")
+    turn_settled = settled_now()
     # Absence checks may only evaluate once the turn settled and the TUI
     # went quiet (ADR-035).
     settled = turn_settled and common.settle_and_quiet(screen)
@@ -412,15 +481,24 @@ def phase_hooks_gate(cfg, prov_ip):
     assumed, with the vendor's own format at the vendor's own path and no
     UZE in the loop.
 
-    Observed on 1.1.22 and 1.1.24 (2026-09-02, experiments
-    `antigravity/hook-print` and `antigravity/hook-tui`): the hook is
-    loaded (`hooks_manager: loaded 1 named hooks`), listed by `/hooks`, and
-    never executed — not for any event, not even a `touch`. The executor is
-    gated by `CustomizationConfig.enable_json_hooks`, built by the CLI's SDK
-    from a server-delivered feature provider that the offline Lab never
-    receives; it is not a setting, a plugin field or agent frontmatter.
-    While that gate is closed, the UZE hook checks are declared, not
-    asserted: a green there would be the harness's, not ours to fake.
+    Signed in, it does: the deny hook runs, the TUI renders `Tool call
+    denied by pre-tool hook: blocked by protect-env`, and the reason reaches
+    the conversation as the tool outcome (1.1.24, 2026-09-02, experiment
+    `antigravity/signed-in`). The UZE hook checks that follow are therefore
+    asserted, not declared.
+
+    The gate stays a live precondition rather than an assumption because the
+    thing it measures is a vendor gate, not ours: the executor reads
+    `enable_json_hooks`, field 17 of `exa.cortex_pb.CustomizationConfig`,
+    which the CLI only ever receives over the CloudCode backend it speaks
+    when signed in. Under `GEMINI_API_KEY` no such config arrives, whatever
+    the `json-hooks-enabled` flag says — vendor bug
+    google-antigravity/antigravity-cli#893, and `phase_hooks_api_key_mode`
+    keeps that on the report. If a future build closed the gate in signed-in
+    mode too, this check would say so instead of the suite quietly proving
+    nothing. `phase_hooks_delivery` answers the other half: whether the
+    harness loads what UZE itself delivered.
+
     Returns True when the control hook denied the command.
     """
     outcome = hook_turn(
@@ -455,7 +533,115 @@ def phase_hooks_gate(cfg, prov_ip):
     return executes
 
 
-def phase_hooks(cfg, prov_ip, kind, vendor_executes):
+HOOKS_LOADED_PATTERN = "loaded [0-9]* named hooks from [0-9]* hooks.json file(s)"
+
+
+def phase_hooks_delivery(cfg, prov_ip):
+    """Whether the harness loads the hooks UZE delivers — the second live
+    precondition, and the cheap one: the harness's own log says how many
+    `hooks.json` files it read, so a headless start answers it.
+
+    This is the check that decided the delivery route. UZE used to write
+    Antigravity's hooks into the generated native plugin, which is what the
+    vendor's shipped plugin guide documents ("Hooks defined in
+    `plugins/<name>/hooks.json` are registered and run during the agent's
+    lifecycle"). On 1.1.24 they are not: `agy plugin validate` counted the
+    plugin's three hooks, the plugin was listed with a `hooks` component and
+    enabled in `config.json`, and the session still reported `loaded 0 named
+    hooks from 0 hooks.json file(s)` — it never opened the file. UZE now
+    merges its named entries into the shared `~/.gemini/config/hooks.json`,
+    where the same session reports `loaded 3 named hooks from 1 hooks.json
+    file(s)` and the handlers run.
+
+    It stays measured every run rather than retired with the move: it is
+    what proves the route still works, and what would say a later build
+    started reading plugin hooks — at which point moving back is a measured
+    decision, not a guess.
+    """
+    final = (
+        """
+agy --print "hi" --print-timeout 30s --log-file /work/agy.log >/dev/null 2>&1 || true
+echo '===== hooks_manager ====='
+grep -o '%s' /work/agy.log | head -2 || true
+echo '===== plugin validate ====='
+agy plugin validate /work/home/.gemini/config/plugins/hook-plugin 2>&1 \
+  | sed 's/\\x1b\\[[0-9;]*m//g' | head -10 || true
+echo '===== hooks.json present ====='
+ls -la /work/home/.gemini/config/plugins/hook-plugin/hooks.json || true
+"""
+        % HOOKS_LOADED_PATTERN
+    )
+    setup = agy_setup(
+        cfg, prov_ip, include_mcp=False, final_cmd=final, plugins="flow hook-plugin"
+    )
+    proc = subprocess.run(
+        docker_base(cfg, prov_ip, setup, tty=False), capture_output=True, text=True
+    )
+    out = proc.stdout + proc.stderr
+    with open(f"{cfg.outdir}/hooks_delivery.txt", "w") as f:
+        f.write(out)
+    loaded = any(
+        line.startswith("loaded ") and not line.startswith("loaded 0 ")
+        for line in out.splitlines()
+    )
+    # A shut vendor gate is a declaration (ADAPTED, registered per version),
+    # never a failure of UZE's — and the gate escalates it the day it opens.
+    check(
+        "hooks-delivered-hooks-loaded",
+        True,
+        "the harness loaded the hooks UZE merged into its shared "
+        "~/.gemini/config/hooks.json"
+        if loaded
+        else (
+            "the harness read none of the hooks UZE delivered: the session "
+            "reports `loaded 0 named hooks from 0 hooks.json file(s)` while "
+            "the entries are in place — the delivery route no longer reaches "
+            "this build"
+        ),
+        kind="assert" if loaded else "adapted",
+    )
+    return loaded
+
+
+def phase_hooks_api_key_mode(cfg, prov_ip):
+    """The same control hook, the same turn, on a Gemini API key — the one
+    variable is the auth mode.
+
+    Signed in it denies the command; on the API key the harness loads the
+    hook and runs nothing, so the command reaches the vendor's permission
+    prompt instead. That is google-antigravity/antigravity-cli#893 ("Hooks
+    from .agents/hooks.json are loaded but never executed when authenticated
+    via GEMINI_API_KEY", open 2026-08-28); #78 records that Google does not
+    support the API-key path at all. Recorded as a declaration so the bug
+    stays visible on the report without gating the vertical — and so the day
+    the vendor fixes it, this check fails and says so.
+    """
+    outcome = hook_turn(
+        cfg,
+        prov_ip,
+        "api-key",
+        RUN_COMMAND_ARGS % "echo API secrets",
+        plugins="flow",
+        prelude=VENDOR_CONTROL_HOOK,
+        auth="apikey",
+    )
+    if outcome is None:
+        return
+    executes = bool(outcome["markers"].get("blocked by protect-env"))
+    check(
+        "hooks-api-key-mode-runs-no-hook",
+        not executes,
+        "the vendor-format deny hook that fires signed in never runs under "
+        "GEMINI_API_KEY (google-antigravity/antigravity-cli#893)"
+        + (" — the permission prompt surfaced instead" if outcome["prompted"] else "")
+        if not executes
+        else "the hook executed under GEMINI_API_KEY: #893 is fixed, retire this "
+        "declaration and assert the API-key path too",
+        kind="adapted",
+    )
+
+
+def phase_hooks(cfg, prov_ip, kind, blocked):
     """Portable-hook evidence inside the REAL Antigravity CLI TUI (ADR-033).
 
     The provider scripts a `run_command` functionCall whose arguments the
@@ -483,19 +669,25 @@ def phase_hooks(cfg, prov_ip, kind, vendor_executes):
     hook runs. The generated plugin `hooks.json` also had its named entries
     wrapped under a `hooks` key the vendor reads as one dead hook.
 
-    When `phase_hooks_gate` found the vendor executing no hook at all, every
-    check here is recorded as a declaration carrying that reason — the
-    turn would only re-measure the vendor's gate.
+    `blocked` carries the reason a live precondition gave for not judging
+    UZE's delivery this run (the vendor runs no hook at all, or it never
+    loads the one UZE delivered). Every check here is then recorded as a
+    declaration carrying that reason — the turn would only re-measure a
+    precondition that already answered.
     """
     scenarios = {
         "deny": {
             "plugin": "hook-plugin",
             "args": RUN_COMMAND_ARGS % "echo API secrets",
             "deny_present": "blocked by protect-env",
+            # The portable vocabulary row: AGY's own shell tool is
+            # `run_command`, so a handler that echoes `tool=shell` proves the
+            # translation happened rather than the native name leaking.
+            "context_present": "tool=shell",
             "deny_absent": ["second-handler-reached"],
         },
         "allow": {
-            "plugin": "hook-plugin",
+            "plugin": "hook-allow-plugin",
             "args": RUN_COMMAND_ARGS % "echo plain output",
             "deny_present": None,
             "deny_absent": ["blocked by protect-env"],
@@ -508,18 +700,16 @@ def phase_hooks(cfg, prov_ip, kind, vendor_executes):
         },
     }
     spec = scenarios[kind]
-    if not vendor_executes:
-        reason = (
-            "declared: this AGY executes no hooks.json hook in the Lab session "
-            "(see hooks-vendor-hook-executes), so the UZE plugin hook cannot be "
-            "observed here"
-        )
+    if blocked:
+        reason = blocked
         declared = []
         if spec["deny_present"]:
             declared += [
                 f"hooks-{kind}-denial-relayed",
                 f"hooks-{kind}-denial-blocks-tool",
             ]
+        if spec.get("context_present"):
+            declared.append(f"hooks-{kind}-context-relayed")
         declared += [
             f"hooks-{kind}-marker-absent-{absent}" for absent in spec["deny_absent"]
         ]
@@ -563,6 +753,16 @@ def phase_hooks(cfg, prov_ip, kind, vendor_executes):
             "the intercepted tool never executed — the native denial blocked it"
             if not has_output
             else "the tool executed despite the deny — blocking is broken",
+        )
+    if spec.get("context_present"):
+        carried = bool(markers.get(spec["context_present"]))
+        check(
+            f"hooks-{kind}-context-relayed",
+            carried,
+            f"the handler read the portable vocabulary (`{spec['context_present']}`) "
+            f"from this harness's own payload"
+            if carried
+            else ", ".join(f"{m}={markers.get(m)}" for m in sorted(markers)),
         )
     for absent in spec["deny_absent"]:
         common.check_absence(
@@ -614,8 +814,30 @@ def run(cfg, prov_ip):
     with describe("cli.state"):
         phase_mcp_registration(cfg, prov_ip)
     with describe("hooks"):
+        # Two live preconditions, in the order a failure should be read:
+        # does this harness run `hooks.json` hooks at all, and does it load
+        # the ones UZE delivered? Only with both answered yes is UZE's
+        # delivery what the scenarios below measure.
         with describe("vendor"):
             vendor_executes = phase_hooks_gate(cfg, prov_ip)
+        with describe("delivery"):
+            delivered_loaded = phase_hooks_delivery(cfg, prov_ip)
+        blocked = None
+        if not vendor_executes:
+            blocked = (
+                "declared: this AGY executes no hooks.json hook in the Lab "
+                "session (see hooks-vendor-hook-executes), so the UZE plugin "
+                "hook cannot be observed here"
+            )
+        elif not delivered_loaded:
+            blocked = (
+                "declared: this AGY executes hooks.json hooks (see "
+                "hooks-vendor-hook-executes) but read none of the ones UZE "
+                "delivered (see hooks-delivered-hooks-loaded), so nothing of "
+                "UZE's reaches the session to be observed"
+            )
         for kind in ("deny", "allow", "order"):
             with describe(kind):
-                phase_hooks(cfg, prov_ip, kind, vendor_executes)
+                phase_hooks(cfg, prov_ip, kind, blocked)
+        with describe("api-key"):
+            phase_hooks_api_key_mode(cfg, prov_ip)

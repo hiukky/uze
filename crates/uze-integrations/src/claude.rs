@@ -524,6 +524,7 @@ impl IntegrationPort for ClaudeIntegration {
                 entry_name,
                 event,
                 expected,
+                wrapper,
             } => {
                 let path = hook_projection::attach_event_entry(
                     &self.uze_home,
@@ -536,6 +537,7 @@ impl IntegrationPort for ClaudeIntegration {
                     })?,
                     entry_name,
                     expected,
+                    wrapper.as_deref().map(|path| ("claude", path)),
                 )?;
                 Ok(Some(path))
             }
@@ -567,6 +569,7 @@ impl IntegrationPort for ClaudeIntegration {
                 config_file,
                 event,
                 expected,
+                wrapper,
                 ..
             } => {
                 // A ledger entry damaged or predating the event field must
@@ -577,7 +580,12 @@ impl IntegrationPort for ClaudeIntegration {
                         reason: "hook receipt has no event; refusing to inspect".to_owned(),
                     };
                 };
-                hook_projection::inspect_event_entry(config_file, event, expected)
+                hook_projection::inspect_event_entry(
+                    config_file,
+                    event,
+                    expected,
+                    wrapper.as_deref().map(|path| ("claude", path)),
+                )
             }
             ManagedArtifact::IntegrationOwned {
                 kind,
@@ -617,6 +625,7 @@ impl IntegrationPort for ClaudeIntegration {
                 config_file,
                 event,
                 expected,
+                wrapper,
                 ..
             } => {
                 let Some(event) = *event else {
@@ -625,7 +634,14 @@ impl IntegrationPort for ClaudeIntegration {
                         reason: "hook receipt has no event; refusing to detach".to_owned(),
                     });
                 };
-                hook_projection::remove_event_entry(config_file, event, expected)
+                let detached = hook_projection::remove_event_entry(
+                    config_file,
+                    event,
+                    expected,
+                    wrapper.as_deref().map(|path| ("claude", path)),
+                )?;
+                hook_projection::prune_shared_wrapper(&self.uze_home, self.id(), "claude");
+                Ok(detached)
             }
             ManagedArtifact::IntegrationOwned { kind, selector, .. }
                 if kind == "claude-plugin" || kind == GENERATED_PLUGIN_KIND =>
@@ -679,13 +695,17 @@ impl ClaudeIntegration {
 
     fn hook_exposure_plan(&self, resource: &Resource) -> ExposurePlan {
         hook_projection::hook_exposure_plan(
+            &self.uze_home,
             resource,
             &self.hook_capabilities(),
             self.hooks_config_path(),
             "claude",
             self.id(),
+            // Claude's hook entries accept `command` + `args`, so the
+            // wrapper is started directly: nothing to quote, no shell.
+            true,
             false,
-            "Claude Code reads `hooks` from its user settings file; UZE merges one group entry per canonical hook (command + matcher + timeout preserved through the hook-exec wrapper carrying the portable ABI) and keeps the exact entry receipt-owned. The generated settings entry follows the plugin `hooks/hooks.json` group form.",
+            "Claude Code reads `hooks` from its user settings file; UZE merges one group entry per canonical hook (matcher and timeout preserved) whose command is the generated `hooks/exec` wrapper — the handlers run against the portable HOOK_* contract with no UZE binary on the execution path — and keeps the exact entry receipt-owned. The generated settings entry follows the plugin `hooks/hooks.json` group form.",
         )
     }
 }

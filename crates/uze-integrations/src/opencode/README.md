@@ -16,7 +16,7 @@ discovery directory and the global `mcp` object in `opencode.json`.
 | MCP | Supported | Adapted — direct write to `opencode.json`'s `mcp.<name>` | TESTED (config-level); no behavioral/CLI-discovery probe recorded for OpenCode in any ADR |
 | Instructions/Context | Native (outside this crate) | Reads `AGENTS.md` directly, no bridge needed | DOCUMENTED (ADR-014) |
 | Agents | Not implemented | `CapabilityKind::Agent` is import-only, routed to no integration | CODE_FACT |
-| Hooks | Not implemented | `CapabilityKind::Hook` is import-only, routed to no integration | CODE_FACT |
+| Hooks | Adapted (`observe`/`allow`) | One generated `Plugin.define` plugin at `<config root>/plugins/hooks-<package>.ts`, auto-discovered: the plugin *is* the wrapper (same `HOOK_*`/exit-code contract, package groups as data) — ADR-033, ADR-040. `deny`/`ask` are Unsupported: the V2 tool hooks see the input but cannot block, and `permission.evaluate` carries the action's resources rather than the tool input. | EMPIRICAL (Lab, registered ADAPTED for the blocking checks) + TESTED (a Bun runtime check drives the generated plugin) |
 | Runtime projection | None | `runtime_contribution`/`supports_runtime_integration` never overridden — inherits passthrough default | CODE_FACT |
 
 ## Delivery

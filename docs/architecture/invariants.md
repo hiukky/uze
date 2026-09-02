@@ -419,7 +419,7 @@ granting, even for the official marketplace.
 
 ---
 
-## Portable Hook delivery (ADR-033)
+## Portable Hook delivery (ADR-033, ADR-040)
 
 ### Hook semantics are assessed per event/effect, never by event names alone
 
@@ -428,7 +428,34 @@ A `Stop` hook is never represented as an OpenCode tool callback and an
 a degraded or unsupported route states the exact loss.
 
 > `tests/integrations/hooks.rs::compatibility_is_semantic_and_never_fabricates_a_stop_equivalence`
-> `tests/integrations/hooks.rs::transform_is_adaptable_through_the_bridge_and_degraded_on_claude`
+> `tests/integrations/hooks.rs::transform_degrades_on_every_harness_while_it_has_no_answer_channel`
+
+### A delivered hook runs without the packager
+
+The harness invokes a wrapper vendored in the delivered artifact, never the
+`uze` binary, and nothing in that artifact names the packager. The wrapper
+is a per-harness constant, owned alongside the entry that names it: written
+on attach, drift-checked on inspect, removed with the last entry. Where no
+wrapper template covers the platform the packager runtime carries the hook
+with the same contract, and the route is reported as adapted with its
+reason rather than claimed native.
+
+> `tests/integrations/hooks.rs::the_generated_wrapper_is_owned_alongside_the_entry_it_serves`
+> `tests/integrations/hooks.rs::reinstalling_replaces_a_previous_packager_entry_and_leaves_foreign_ones`
+> `crates/uze-integrations/src/hooks.rs::a_platform_without_a_wrapper_template_falls_back_to_the_packager_runtime`
+> `crates/uze-integrations/src/hooks.rs::the_wrapper_is_one_byte_identical_file_per_harness`
+
+### One vocabulary drives matchers, wrappers and handlers
+
+Each alias names the portable fields it guarantees; each harness names the
+tool it matches and the native input field each portable field is read
+from. A matcher intercepts every native name its alias binds, a handler
+receives the same `HOOK_*` values on every harness that delivers the hook,
+and a `native:` tool yields raw input only.
+
+> `crates/uze-integrations/src/hooks.rs::every_alias_is_bound_on_every_harness_and_carries_its_portable_fields`
+> `crates/uze-integrations/src/hooks.rs::a_renamed_vendor_tool_still_normalizes_to_its_alias`
+> `crates/uze-integrations/src/hooks.rs::a_native_tool_the_vocabulary_does_not_bind_carries_raw_input_only`
 
 ### Hook delivery is receipt-owned and content-identity safe
 
@@ -451,19 +478,24 @@ second `plugin` config entry) and regenerates from the receipt set.
 > `tests/integrations/hooks.rs::an_update_replaces_the_previous_version_of_the_samed_group`
 > `tests/integrations/hooks.rs::opencode_bridge_is_package_scoped_and_regenerates_across_groups`
 
-### The dispatcher never silently weakens a safety hook
+### Neither route ever silently weakens a safety hook
 
-Launch failure, timeout, oversized output, and a non-zero exit (except the
-canonical deny exit) are fail-open for observational hooks and fail-closed
-(a deny) for declared deny/ask/transform effects; the first deny stops
-later handlers. A deny is translated into the harness's own blocking
-contract (JSON decision plus exit 2 on the command-hook harnesses) —
-internal exit codes never leak outward, because any other non-zero exit is
-a non-blocking error there.
+A handler answers with its exit code: `0` allows, `3` denies with the reason
+on stderr. A failure to start, a timeout, and any other exit are fail-open
+for observational hooks and fail-closed (a deny) for a declared
+deny/ask/transform effect; the first deny stops later handlers, whatever
+order the harness itself would have used. The wrapper's own dependency
+follows the same rule. A deny is translated into the harness's own blocking
+contract (its decision document plus exit 2 on the command-hook harnesses)
+— internal exit codes never leak outward, because any other non-zero exit is
+a non-blocking error there. The generated wrapper and the packager runtime
+answer identically for every fixture payload.
 
 > `crates/uze-core/src/hook.rs::observation_fails_open_but_a_declared_deny_effect_fails_closed`
 > `crates/uze-core/src/hook.rs::handlers_run_in_order_and_the_first_deny_stops_later_ones`
 > `crates/uze-core/src/hook.rs::timeout_terminates_a_hung_handler_and_fails_closed_for_deny`
+> `crates/uze-integrations/src/hooks.rs::a_missing_wrapper_dependency_follows_the_groups_effect`
+> `crates/uze-integrations/src/hooks.rs::the_wrapper_and_the_reference_runtime_answer_alike`
 > `crates/uze-integrations/src/hooks.rs::adapters_render_native_decisions_and_block_exit_codes`
 
 ## Concurrent work isolation (`add-portable-worktree-policy`)
