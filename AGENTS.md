@@ -98,6 +98,18 @@ need to).
   install/remove/update/context lifecycle operations. `src/application.rs`
   is the large orchestration surface; `src/application/lifecycle/` holds
   the per-operation modules (add/install/remove/update/attach).
+- `crates/uze-git` — the one transport for speaking to the Git binary:
+  spawn convention, `read`/`write` entry points, and Git's exit code
+  reported rather than classified (a non-zero exit is an answer for
+  `diff`, `rebase` and `rev-parse --verify`, and a failure elsewhere —
+  only the caller knows which). Carries no domain.
+- `crates/uze-terminal` — the local terminal runtime: a server owning the
+  pseudoterminals and a versioned client protocol, so a pane survives a
+  client leaving. Depends on nothing else in the workspace.
+- `crates/uze-extensions` — built-in TUI extensions. An extension answers
+  with a `view::View` (what it has) and never draws, computes geometry, or
+  names a colour; `src/ui/extension_view.rs` renders it. Presentation, one
+  module per extension, one `ExtensionRegistry::builtin` entry.
 - `crates/uze-integrations` — one module per harness
   (`claude`, `codex`, `opencode`, `antigravity`)
   implementing the shared `IntegrationPort` from `uze-core`, plus `shared/`
@@ -137,14 +149,42 @@ need to).
 Dependency direction is one-way and enforced by tests, not just convention:
 
 ```
-CLI/TUI (src/)
-      ↓
+CLI/TUI (src/)  ──uses──▶  uze-extensions   (presentation: an extension
+      ↓                                      describes, src/ui renders)
 uze-application  (orchestration: add/install/remove/update/context)
       ↓
 uze-core         (domain contracts: Package, Store, Engine, Router,
       ↑           IntegrationPort, capability/exposure model)
 uze-integrations (Claude, Codex, Antigravity, OpenCode — implement IntegrationPort)
+
+uze-git          (transport, no domain — used by core and by extensions)
+uze-terminal     (local terminal runtime, depends on nothing here)
 ```
+
+**`src/` must not name `uze_core::` or `uze_integrations`.** Presentation
+consumes read models from `uze-application`; reaching into the domain
+directly makes every domain change ripple into the frontend and leaves no
+single surface anything else could consume. Enforced by
+`tests/architecture/layering.rs::architecture_rules_hold`, which freezes
+today's violations as a per-file budget that may only shrink — so a new
+one fails immediately even while the existing debt stands. The end state
+is deleting `uze-core` from the binary's `[dependencies]`, after which
+`rustc` enforces it. **Do not raise a budget.** If a reach is genuinely
+architecture rather than debt, move the file to that rule's `sanctioned`
+list with the reason.
+
+**An extension never draws and never touches UZE's own state.** It returns
+a `view::View`; the host owns rendering, geometry, hit-testing and the
+palette. It may use `uze-git` (a transport) but never `uze-core` or
+`uze-application` — same test. An extension is code UZE runs in its own
+process, which is a different trust class from plugin bytes a harness
+reads; see the ADR in
+`openspec/changes/enforce-architecture-seams/adr/`.
+
+**Speak to Git through `uze-git`.** Never spawn `git` directly: two callers
+with two exit-code conventions is what this replaced, and a repository
+write lock cannot be complete if a module spawns Git around it. Reads go
+through `read`, writes through `write`.
 
 `uze-core` production code never names a specific harness (Claude/Codex/
 OpenCode/Antigravity) — enforced by

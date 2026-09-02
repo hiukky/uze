@@ -540,6 +540,57 @@ become no policy in silence.
 
 ---
 
+## Architecture seams (`enforce-architecture-seams`)
+
+### The layer direction is a fact, not a convention
+
+`src/` does not name `uze_core::` or `uze_integrations`. Existing
+violations are frozen as a per-file budget that may only shrink, so a new
+one fails immediately while the standing debt is still visible and
+counted; a budget that is too high fails too, which is what keeps every
+improvement in a diff. The permanently allowed consumers of the
+integration registry — the runtime shim and the harness matrix — are
+listed separately, because they are architecture rather than debt and must
+never be "fixed" to make a number go down.
+
+> `tests/architecture/layering.rs::architecture_rules_hold`
+
+### An extension describes; the host draws
+
+An extension answers with a `view::View` and never receives a frame,
+computes a rectangle, or names a colour. The host resolves semantic roles
+against the one palette, wraps the content, and derives every click target
+from what it actually drew — so layout has a single owner rather than two
+sides computing the same geometry. Syntax highlighting is the one thing
+that travels as colour, because it comes from a theme the extension ships
+rather than from the host's design system.
+
+> `src/ui/extension_view.rs::a_click_target_comes_from_what_the_host_drew`
+> `src/ui/extension_view.rs::chrome_uses_the_hosts_palette_and_content_keeps_its_own`
+> `crates/uze-extensions/src/git_diff.rs::the_view_names_meaning_rather_than_colour`
+
+### An extension never touches UZE's own state
+
+No `UzeHome`, no Store, no receipts, no `uze-application`. An extension is
+code UZE runs in its own process, which is a different trust class from
+plugin bytes a harness reads; keeping it a pure function of what it is
+handed is what makes that tractable. A transport crate — speaking to a
+foreign binary — is not UZE state and is allowed.
+
+> `tests/architecture/layering.rs::architecture_rules_hold`
+
+### Git's exit code is reported, never classified by the transport
+
+`uze-git` hands back what Git said. What a non-zero exit *means* is a
+property of the subcommand — `diff` reporting differences, `rebase`
+reporting a conflict, `rev-parse --verify` reporting a missing ref — and
+flattening that into one error is how two callers ended up with two
+incompatible conventions over the same binary. Reads and writes are
+separate entry points so a repository write lock has one place to live,
+and so a status view never blocks behind one.
+
+> `crates/uze-git/src/lib.rs::a_non_zero_exit_is_reported_not_flattened_into_an_error`
+
 ## Decisions deliberately *not* taken
 
 Recorded because absence is a decision, and because each one has been proposed
