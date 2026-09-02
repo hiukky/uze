@@ -605,6 +605,16 @@ directions; a third spawn is what the rule prevents.
 
 > `tests/architecture/layering.rs::architecture_rules_hold`
 
+### No command ships without a performance decision
+
+The leaf list is derived from `clap`'s own grammar rather than maintained
+beside it, and checked both ways: a command added without a
+`PerformanceClass` fails by name, and a classification for a command that
+no longer exists fails by name. Verified by adding each in turn and
+watching the test refuse.
+
+> `src/command_performance.rs::every_cli_command_is_classified`
+
 ## Decisions deliberately *not* taken
 
 Recorded because absence is a decision, and because each one has been proposed
@@ -622,6 +632,7 @@ and set aside for a reason rather than forgotten.
 | persistent trust database | one consent boundary, not a permission system |
 | network-dependent gating test | local bare repositories prove the mechanism; a public repo would test that provider's availability |
 | remote marketplace search | only one marketplace (embedded, official) exists; nothing to search yet |
+| a registry-driven CLI grammar | a feature cannot contribute a command today: `Command` is a closed `clap` derive. Building it dynamically instead would rewrite a 2400-line dispatch and trade `clap`'s typed parsing for a builder — to serve an author who does not exist yet. What already holds is the part that mattered: the leaf list is derived from the real grammar, so a command added without a `PerformanceClass` fails by name, and a stale entry fails by name too. Revisit when something outside `main.rs` actually needs to register a command — an installable extension, or a second binary sharing the grammar |
 | installable extensions | the TUI's Extensions screen catalogs bundled, compiled-in extensions (`ExtensionRegistry::builtin`); loading/enablement of user-installed extensions is not built |
 | plugin version resolver | `plugin.json` carries no version field yet; nothing depends on one |
 | marketplace federation | one official marketplace; combining several is unproven need |
