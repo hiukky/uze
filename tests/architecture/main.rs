@@ -11,9 +11,16 @@
 //! two lists that mean opposite things: `sanctioned` is architecture and
 //! should never be "fixed", while `budget` is debt with a number on it.
 //!
-//! The end state of the layering rules is not a passing test. It is the
-//! deletion of `uze-core` from the binary's `[dependencies]`, after which
-//! `rustc` enforces them and this file is redundant. Until then it reports
-//! how far away that is.
+//! The debt these rules were built to count is now zero: no presentation
+//! file reaches the domain. What remains is `sanctioned`, and it is not
+//! debt — `src/shim.rs` and `src/bin/uze-harness-matrix.rs` are separate
+//! binary entry points sharing this crate, and both legitimately name the
+//! domain.
+//!
+//! That is also why the binary cannot simply drop its `uze-core`
+//! dependency and let `rustc` enforce this instead: those two files need
+//! it. Making the compiler the enforcer would mean moving them into crates
+//! of their own, which is a decision about what the `uze` binary *is*,
+//! not a tidy-up. Until someone takes it, this file is the enforcement.
 
 mod layering;

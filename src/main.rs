@@ -11,6 +11,7 @@ mod shim;
 use std::{collections::BTreeMap, io::IsTerminal, path::Path, path::PathBuf};
 
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum, error::ErrorKind};
+use uze_application::{HookEffect, HookEvent, PlannedAction, Result, UzeHome};
 use uze_application::{
     UzeApplication,
     application::{
@@ -19,15 +20,6 @@ use uze_application::{
         ProjectContextStatus, RemovePluginReport, RemoveProjectPluginReport, StatusReport,
     },
 };
-use uze_core::{
-    Result, UzeHome,
-    context::PlannedAction,
-    hook::{
-        CommandHandlerType, CommandHook, DEFAULT_TIMEOUT_SECONDS, HookEffect, HookEvent,
-        PortableHook, dispatch_handlers,
-    },
-};
-use uze_integrations::registry::IntegrationRegistry;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -549,7 +541,7 @@ fn run(cli: Cli) -> Result<()> {
         }
         Cli::command()
             .print_help()
-            .map_err(|source| uze_core::UzeError::Write {
+            .map_err(|source| uze_application::UzeError::Write {
                 path: PathBuf::from("stdout"),
                 source,
             })?;
@@ -557,7 +549,7 @@ fn run(cli: Cli) -> Result<()> {
         return Ok(());
     };
     if let Command::Terminal { action } = command {
-        let root = std::env::current_dir().map_err(|source| uze_core::UzeError::Read {
+        let root = std::env::current_dir().map_err(|source| uze_application::UzeError::Read {
             path: PathBuf::from("."),
             source,
         })?;
@@ -566,12 +558,12 @@ fn run(cli: Cli) -> Result<()> {
             // Resolved the same way `ui::orchestrator` resolves it before
             // attaching — `stop` must target the server that `attach`
             // actually started, not one keyed on the raw cwd.
-            TerminalAction::Stop => {
-                uze_terminal::stop(&uze_core::workspace::workspace_root_or_self(&root))
-                    .map_err(|error| uze_core::UzeError::AcquisitionFailed(error.to_string()))
-            }
+            TerminalAction::Stop => uze_terminal::stop(&uze_application::workspace_root_or_self(
+                &root,
+            ))
+            .map_err(|error| uze_application::UzeError::AcquisitionFailed(error.to_string())),
             TerminalAction::Serve { root } => uze_terminal::serve(root)
-                .map_err(|error| uze_core::UzeError::AcquisitionFailed(error.to_string())),
+                .map_err(|error| uze_application::UzeError::AcquisitionFailed(error.to_string())),
         };
     }
     let app = UzeApplication::from_env(home.clone())?;
@@ -616,7 +608,7 @@ fn run(cli: Cli) -> Result<()> {
         }
         Command::Remove { plugin, format } => {
             let current_dir =
-                std::env::current_dir().map_err(|source| uze_core::UzeError::Read {
+                std::env::current_dir().map_err(|source| uze_application::UzeError::Read {
                     path: PathBuf::from("."),
                     source,
                 })?;
@@ -643,16 +635,16 @@ fn run(cli: Cli) -> Result<()> {
                 }
                 // Strictly project-scoped, by design (ADR-019): neither of
                 // these falls through to machine-level removal. `?` below
-                // surfaces `uze_core::UzeError::{NoProjectEnvironment,
+                // surfaces `uze_application::UzeError::{NoProjectEnvironment,
                 // PluginNotUsedByProject}` through the same `uze: {error}`
                 // path every other failure in this program uses.
                 RemoveProjectPluginReport::NoLock => {
                     spinner.finish_and_clear();
-                    return Err(uze_core::UzeError::NoProjectEnvironment { plugin });
+                    return Err(uze_application::UzeError::NoProjectEnvironment { plugin });
                 }
                 RemoveProjectPluginReport::NotInLock { .. } => {
                     spinner.finish_and_clear();
-                    return Err(uze_core::UzeError::PluginNotUsedByProject { plugin });
+                    return Err(uze_application::UzeError::PluginNotUsedByProject { plugin });
                 }
             }
         }
@@ -749,7 +741,7 @@ fn run(cli: Cli) -> Result<()> {
                         name_authority.as_ref(),
                     )
                 } else {
-                    return Err(uze_core::UzeError::UnknownPackage(format!(
+                    return Err(uze_application::UzeError::UnknownPackage(format!(
                         "`{plugin}` is not a `name@marketplace` spec; add its marketplace with \
                          `uze market add <market>` first, then install with \
                          `uze plugin install {plugin}@<market>`"
@@ -909,16 +901,12 @@ fn run_hook_exec(
     commands: Vec<String>,
 ) -> Result<i32> {
     use std::io::{Read, Write};
-    use uze_core::UzeError;
+    use uze_application::UzeError;
 
     let event = HookEvent::parse_abi(event_name)
         .ok_or_else(|| UzeError::HookDispatch(format!("unknown hook event `{event_name}`")))?;
     let effect = HookEffect::parse_abi(effect_name)
         .ok_or_else(|| UzeError::HookDispatch(format!("unknown hook effect `{effect_name}`")))?;
-    let registry = IntegrationRegistry::builtin(home)?;
-    let adapter = registry
-        .hook_adapter(adapter_id)
-        .ok_or_else(|| UzeError::HookDispatch(format!("unknown hook adapter `{adapter_id}`")))?;
     let mut native = String::new();
     std::io::stdin()
         .read_to_string(&mut native)
@@ -928,28 +916,15 @@ fn run_hook_exec(
     let native: serde_json::Value = serde_json::from_str(&native).map_err(|source| {
         UzeError::HookDispatch(format!("the native hook payload is not JSON: {source}"))
     })?;
-    let input = adapter
-        .normalize_input(&native, event)
-        .map_err(UzeError::HookDispatch)?;
-    let hook = PortableHook {
-        id: "dispatch".to_owned(),
+
+    let rendered = UzeApplication::from_env(home.clone())?.hooks().dispatch(
+        adapter_id,
         event,
-        matchers: Vec::new(),
-        handlers: commands
-            .into_iter()
-            .map(|command| CommandHook {
-                handler_type: CommandHandlerType::Command,
-                command,
-                timeout: DEFAULT_TIMEOUT_SECONDS,
-            })
-            .collect(),
         effect,
-        order: 0,
-    };
-    let outcome = dispatch_handlers(&hook, &input, plugin_root)?;
-    let rendered = adapter
-        .render_output(&outcome, event)
-        .map_err(UzeError::HookDispatch)?;
+        plugin_root,
+        commands,
+        &native,
+    )?;
     if let Some(bytes) = rendered.stdout {
         std::io::stdout().write_all(&bytes).map_err(|source| {
             UzeError::HookDispatch(format!("cannot render hook output: {source}"))
@@ -1368,11 +1343,11 @@ impl CapturingRunner {
     }
 }
 
-impl uze_core::provisioning::ProcessRunner for CapturingRunner {
+impl uze_application::ProcessRunner for CapturingRunner {
     fn run(
         &self,
-        spec: &uze_core::provisioning::ProcessSpec,
-    ) -> uze_core::Result<uze_core::provisioning::ProcessResult> {
+        spec: &uze_application::ProcessSpec,
+    ) -> uze_application::Result<uze_application::ProcessResult> {
         use std::fs::OpenOptions;
         use std::process::{Command, Stdio};
         use std::thread;
@@ -1381,10 +1356,10 @@ impl uze_core::provisioning::ProcessRunner for CapturingRunner {
         let mut command = Command::new(&spec.program);
         command.args(&spec.arguments).stdin(Stdio::null());
         match spec.output {
-            uze_core::provisioning::ProcessOutput::Quiet => {
+            uze_application::ProcessOutput::Quiet => {
                 command.stdout(Stdio::null()).stderr(Stdio::null());
             }
-            uze_core::provisioning::ProcessOutput::Inherit => {
+            uze_application::ProcessOutput::Inherit => {
                 if let Ok(mut f) = OpenOptions::new()
                     .create(true)
                     .append(true)
@@ -1403,16 +1378,16 @@ impl uze_core::provisioning::ProcessRunner for CapturingRunner {
                     .create(true)
                     .append(true)
                     .open(&self.log_path)
-                    .map_err(|source| uze_core::UzeError::Write {
+                    .map_err(|source| uze_application::UzeError::Write {
                         path: self.log_path.clone(),
                         source,
                     })?;
-                let stdout = file
-                    .try_clone()
-                    .map_err(|source| uze_core::UzeError::Write {
-                        path: self.log_path.clone(),
-                        source,
-                    })?;
+                let stdout =
+                    file.try_clone()
+                        .map_err(|source| uze_application::UzeError::Write {
+                            path: self.log_path.clone(),
+                            source,
+                        })?;
                 let stderr = file;
                 command
                     .stdout(Stdio::from(stdout))
@@ -1424,7 +1399,7 @@ impl uze_core::provisioning::ProcessRunner for CapturingRunner {
         }
         let mut child = command
             .spawn()
-            .map_err(|source| uze_core::UzeError::Process {
+            .map_err(|source| uze_application::UzeError::Process {
                 program: spec.program.clone(),
                 source,
             })?;
@@ -1433,12 +1408,12 @@ impl uze_core::provisioning::ProcessRunner for CapturingRunner {
             if let Some(status) =
                 child
                     .try_wait()
-                    .map_err(|source| uze_core::UzeError::Process {
+                    .map_err(|source| uze_application::UzeError::Process {
                         program: spec.program.clone(),
                         source,
                     })?
             {
-                return Ok(uze_core::provisioning::ProcessResult {
+                return Ok(uze_application::ProcessResult {
                     success: status.success(),
                     timed_out: false,
                 });
@@ -1446,7 +1421,7 @@ impl uze_core::provisioning::ProcessRunner for CapturingRunner {
             if started.elapsed() >= spec.timeout {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Ok(uze_core::provisioning::ProcessResult {
+                return Ok(uze_application::ProcessResult {
                     success: false,
                     timed_out: true,
                 });
@@ -1498,10 +1473,11 @@ fn run_shorthand(app: &UzeApplication, args: Vec<String>, verbose: bool) -> Resu
     let shorthand = ShorthandArgs::try_parse_from(std::iter::once("uze".to_owned()).chain(args))
         .unwrap_or_else(|error| error.exit());
 
-    let current_dir = std::env::current_dir().map_err(|source| uze_core::UzeError::Read {
-        path: PathBuf::from("."),
-        source,
-    })?;
+    let current_dir =
+        std::env::current_dir().map_err(|source| uze_application::UzeError::Read {
+            path: PathBuf::from("."),
+            source,
+        })?;
     let authority = trust_authority(shorthand.trust);
     let report = app
         .project()
@@ -1541,20 +1517,20 @@ fn context_path(path: Option<PathBuf>) -> PathBuf {
 /// Without `--trust`, an interactive terminal prompts and anything else
 /// refuses to answer — a pipeline gets `TRUST_REQUIRED` rather than a silent
 /// yes.
-fn trust_authority(trusted: bool) -> Box<dyn uze_core::trust::TrustAuthority> {
+fn trust_authority(trusted: bool) -> Box<dyn uze_application::TrustAuthority> {
     if trusted {
-        return Box::new(uze_core::trust::AlwaysTrust);
+        return Box::new(uze_application::AlwaysTrust);
     }
     if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
         return Box::new(PromptingAuthority);
     }
-    Box::new(uze_core::trust::NoTrustAuthority)
+    Box::new(uze_application::NoTrustAuthority)
 }
 
 struct PromptingAuthority;
 
-impl uze_core::trust::TrustAuthority for PromptingAuthority {
-    fn authorize(&self, request: &uze_core::trust::TrustRequest) -> uze_core::trust::TrustOutcome {
+impl uze_application::TrustAuthority for PromptingAuthority {
+    fn authorize(&self, request: &uze_application::TrustRequest) -> uze_application::TrustOutcome {
         println!();
         if request.previously_trusted {
             println!(
@@ -1583,9 +1559,9 @@ impl uze_core::trust::TrustAuthority for PromptingAuthority {
             .default(false)
             .interact()
         {
-            Ok(true) => uze_core::trust::TrustOutcome::Granted,
-            Ok(false) => uze_core::trust::TrustOutcome::Denied,
-            Err(_) => uze_core::trust::TrustOutcome::Unavailable,
+            Ok(true) => uze_application::TrustOutcome::Granted,
+            Ok(false) => uze_application::TrustOutcome::Denied,
+            Err(_) => uze_application::TrustOutcome::Unavailable,
         }
     }
 }
@@ -1599,30 +1575,30 @@ impl uze_core::trust::TrustAuthority for PromptingAuthority {
 fn name_collision_authority(
     alias: Option<String>,
     replace: bool,
-) -> Box<dyn uze_core::naming::NameCollisionAuthority> {
+) -> Box<dyn uze_application::NameCollisionAuthority> {
     if let Some(alias) = alias {
-        return Box::new(uze_core::naming::FixedResolution(
-            uze_core::naming::NameCollisionResolution::Alias(alias),
+        return Box::new(uze_application::FixedResolution(
+            uze_application::NameCollisionResolution::Alias(alias),
         ));
     }
     if replace {
-        return Box::new(uze_core::naming::FixedResolution(
-            uze_core::naming::NameCollisionResolution::Replace,
+        return Box::new(uze_application::FixedResolution(
+            uze_application::NameCollisionResolution::Replace,
         ));
     }
     if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
         return Box::new(PromptingCollisionAuthority);
     }
-    Box::new(uze_core::naming::NoNameCollisionAuthority)
+    Box::new(uze_application::NoNameCollisionAuthority)
 }
 
 struct PromptingCollisionAuthority;
 
-impl uze_core::naming::NameCollisionAuthority for PromptingCollisionAuthority {
+impl uze_application::NameCollisionAuthority for PromptingCollisionAuthority {
     fn resolve(
         &self,
-        request: &uze_core::naming::NameCollisionRequest,
-    ) -> uze_core::naming::NameCollisionResolution {
+        request: &uze_application::NameCollisionRequest,
+    ) -> uze_application::NameCollisionResolution {
         println!();
         println!(
             "`{}` is already active as `{}` — installing `{}` under the same name would silently \
@@ -1640,17 +1616,17 @@ impl uze_core::naming::NameCollisionAuthority for PromptingCollisionAuthority {
             .default(0)
             .interact_opt();
         match choice {
-            Ok(Some(1)) => uze_core::naming::NameCollisionResolution::Replace,
+            Ok(Some(1)) => uze_application::NameCollisionResolution::Replace,
             Ok(Some(2)) => match dialoguer::Input::<String>::new()
                 .with_prompt("New local name")
                 .interact_text()
             {
                 Ok(alias) if !alias.trim().is_empty() => {
-                    uze_core::naming::NameCollisionResolution::Alias(alias.trim().to_owned())
+                    uze_application::NameCollisionResolution::Alias(alias.trim().to_owned())
                 }
-                _ => uze_core::naming::NameCollisionResolution::Abort,
+                _ => uze_application::NameCollisionResolution::Abort,
             },
-            _ => uze_core::naming::NameCollisionResolution::Abort,
+            _ => uze_application::NameCollisionResolution::Abort,
         }
     }
 }
@@ -1878,8 +1854,7 @@ fn render_doctor(report: &DoctorReport) -> String {
                 provisioning.status, provisioning.method, provisioning.action
             ));
         }
-        if let uze_core::integration::PublicationStatus::Unpublished(reason) = &harness.publication
-        {
+        if let uze_application::PublicationStatus::Unpublished(reason) = &harness.publication {
             text.push_str(&format!("    package view not published: {reason}\n"));
         }
     }
@@ -2117,7 +2092,7 @@ fn render_status_harness(harness: &uze_application::application::HarnessContextS
         HarnessContextDelivery::Native => progress::success_text("Native"),
         HarnessContextDelivery::NotDetected => progress::label("Not installed"),
         HarnessContextDelivery::Bridge {
-            state: uze_core::integration::AttachmentState::Matched,
+            state: uze_application::AttachmentState::Matched,
             ..
         } => progress::success_text("Bridged"),
         HarnessContextDelivery::Bridge { needed: false, .. } => progress::label("Not needed"),
@@ -2400,7 +2375,7 @@ fn render_context_reconciliation(
     text
 }
 
-fn render_managed_state(states: &[uze_core::integration::AttachmentState]) -> String {
+fn render_managed_state(states: &[uze_application::AttachmentState]) -> String {
     let mut matched = 0;
     let mut missing = 0;
     let mut drifted = 0;
@@ -2408,11 +2383,11 @@ fn render_managed_state(states: &[uze_core::integration::AttachmentState]) -> St
     let mut blocked = 0;
     for state in states {
         match state {
-            uze_core::integration::AttachmentState::Matched => matched += 1,
-            uze_core::integration::AttachmentState::Missing => missing += 1,
-            uze_core::integration::AttachmentState::Drifted => drifted += 1,
-            uze_core::integration::AttachmentState::Conflict => conflict += 1,
-            uze_core::integration::AttachmentState::Blocked => blocked += 1,
+            uze_application::AttachmentState::Matched => matched += 1,
+            uze_application::AttachmentState::Missing => missing += 1,
+            uze_application::AttachmentState::Drifted => drifted += 1,
+            uze_application::AttachmentState::Conflict => conflict += 1,
+            uze_application::AttachmentState::Blocked => blocked += 1,
         }
     }
     format!(

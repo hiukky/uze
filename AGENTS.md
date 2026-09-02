@@ -179,13 +179,18 @@ uze-terminal     (local terminal runtime, depends on nothing here)
 consumes read models from `uze-application`; reaching into the domain
 directly makes every domain change ripple into the frontend and leaves no
 single surface anything else could consume. Enforced by
-`tests/architecture/layering.rs::architecture_rules_hold`, which freezes
-today's violations as a per-file budget that may only shrink — so a new
-one fails immediately even while the existing debt stands. The end state
-is deleting `uze-core` from the binary's `[dependencies]`, after which
-`rustc` enforces it. **Do not raise a budget.** If a reach is genuinely
-architecture rather than debt, move the file to that rule's `sanctioned`
-list with the reason.
+`tests/architecture/layering.rs::architecture_rules_hold`, and the debt is
+**zero** — every remaining reach is `sanctioned` and named. Need something
+the domain has? Add it to `uze-application`: a read model, a method on a
+service, or a re-export when it is vocabulary a read model is made of.
+**Never raise a budget**, and add to `sanctioned` only for a file that is
+genuinely not presentation, with the reason written down.
+
+The compiler cannot enforce this in place of the test, because
+`src/shim.rs` and `src/bin/uze-harness-matrix.rs` share the binary crate
+and legitimately name the domain. Making `rustc` the enforcer would mean
+giving them crates of their own — a decision about what the `uze` binary
+is, not a tidy-up.
 
 **An extension never draws and never touches UZE's own state.** It returns
 a `view::View`; the host owns rendering, geometry, hit-testing and the

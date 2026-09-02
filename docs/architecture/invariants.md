@@ -550,14 +550,12 @@ silence.
 
 ### The layer direction is a fact, not a convention
 
-`src/` does not name `uze_core::` or `uze_integrations`. Existing
-violations are frozen as a per-file budget that may only shrink, so a new
-one fails immediately while the standing debt is still visible and
-counted; a budget that is too high fails too, which is what keeps every
-improvement in a diff. The permanently allowed consumers of the
-integration registry — the runtime shim and the harness matrix — are
-listed separately, because they are architecture rather than debt and must
-never be "fixed" to make a number go down.
+No presentation file names `uze_core::` or `uze_integrations`: the CLI and
+the TUI consume `uze-application` and nothing below it. The budget that
+carried the transition is empty; what remains is `sanctioned` and named —
+the runtime shim and the harness matrix, which share the binary crate but
+are separate entry points that report on the domain rather than present
+it.
 
 > `tests/architecture/layering.rs::architecture_rules_hold`
 

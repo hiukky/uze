@@ -55,13 +55,7 @@ const RULES: &[Rule] = &[
                  rather than presenting it to a user",
             ),
         ],
-        budget: &[
-            // Newly *visible*, not newly incurred: the compatibility facade
-            // in `src/lib.rs` re-exported all of `uze-core`, so the CLI
-            // reached the domain as `uze::…` and this rule saw nothing.
-            // Deleting the facade is what put a number on it.
-            ("src/main.rs", 54),
-        ],
+        budget: &[],
     },
     Rule {
         name: "only the composition root's own consumers name the integrations crate",
@@ -84,7 +78,7 @@ const RULES: &[Rule] = &[
                 "tooling, likewise named in AGENTS.md as a registry consumer",
             ),
         ],
-        budget: &[("src/main.rs", 1)],
+        budget: &[],
     },
     Rule {
         name: "only the two declared owners spawn Git",

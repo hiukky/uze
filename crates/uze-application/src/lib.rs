@@ -14,14 +14,23 @@ pub use application::services::AgentIdentity;
 pub use uze_core::{
     ExposureMechanism, ExposurePlan, PackageExposurePlan, Result, UzeError, UzeHome,
     capability::CapabilityKind,
-    integration::AttachmentState,
+    context::PlannedAction,
+    hook::{
+        CommandHandlerType, CommandHook, DEFAULT_TIMEOUT_SECONDS, HookEffect, HookEvent,
+        HookNativeOutput,
+    },
+    integration::{AttachmentState, PublicationStatus},
+    naming::{
+        FixedResolution, NameCollisionAuthority, NameCollisionRequest, NameCollisionResolution,
+        NoNameCollisionAuthority,
+    },
     preference::{Autonomy, ModelPreference, PreferenceApplyOutcome, Preferences, SandboxScope},
     project_lock::parse_plugin_marketplace_spec,
     prompt_history::{PromptEntry, PromptOrigin},
     provisioning::{ProcessOutput, ProcessResult, ProcessRunner, ProcessSpec, SystemProcessRunner},
     router::CompatibilityRoute,
     router::HarnessCapabilities,
-    trust::{AlwaysTrust, NoTrustAuthority, TrustAuthority},
+    trust::{AlwaysTrust, NoTrustAuthority, TrustAuthority, TrustOutcome, TrustRequest},
     workspace::workspace_root_or_self,
     worktree::{IsolatedCheckout, isolated_checkout},
 };
