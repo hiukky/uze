@@ -243,12 +243,16 @@ pub(super) fn materialize_generated_plugin(
     if canonical_hook_groups(package) {
         // The plugin system reads `hooks.json` in its own named-entry form,
         // never the canonical shape, so the canonical groups are translated
-        // into the named document with the hook-exec wrapper carrying the
-        // portable ABI (ADR-033).
+        // into the named document (ADR-033). The wrapper the entries run is
+        // vendored here, inside the plugin: what executes at hook time is
+        // `sh` reading the payload, never the UZE binary.
         let groups = hook_projection::package_hook_groups(&package.root)?;
         let references: Vec<&uze_core::hook::PortableHook> = groups.iter().collect();
-        let executable = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("uze"));
-        let document = hook_projection::agy_hook_document(&references, &executable, &package.root);
+        let wrapper = dir.join(hook_projection::WRAPPER_RELATIVE_PATH);
+        if let Some(source) = hook_projection::wrapper_source(hook_projection::ANTIGRAVITY_TARGET) {
+            hook_projection::materialize_wrapper(&wrapper, &source)?;
+        }
+        let document = hook_projection::agy_hook_document(&references, &wrapper, &package.root);
         fs::write(dir.join("hooks.json"), document).map_err(|source| UzeError::Write {
             path: dir.join("hooks.json"),
             source,

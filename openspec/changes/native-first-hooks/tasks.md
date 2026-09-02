@@ -15,13 +15,14 @@
 
 ## 3. Wrapper templates (Claude, Codex, Antigravity)
 
-- [ ] 3.1 Add a `hooks/exec` POSIX `sh` template generator in `uze-integrations`: slots for harness id, payload paths (tool name, input, cwd), alias table (native tool → `HOOK_TOOL` + field extraction), native deny/allow rendering and exit code; constants for order, first-deny-wins, per-handler timeout, fail-closed by effect, `jq` guard
-- [ ] 3.2 Generate `hooks/exec` into the Claude generated plugin and emit native entries in exec form: `command: ${CLAUDE_PLUGIN_ROOT}/hooks/exec`, `args: [<effect>, <handler>…]`, timeout = sum of handler timeouts + 1
-- [ ] 3.3 Generate `hooks/exec` for Codex under the derived attachment directory and emit the merged `~/.codex/hooks.json` entry as a shell line with absolute paths (no plugin-root variable on Codex)
-- [ ] 3.4 Generate `hooks/exec` into the Antigravity generated plugin (named entries at the document root; cwd is the `hooks.json` directory; `toolCall.args` field names; `{"decision"}` rendering)
-- [ ] 3.5 Receipts: the wrapper file and each native entry are receipt-owned; inspect verifies content identity; detach removes them and never a foreign entry; regeneration is idempotent (same bytes for the same package)
-- [ ] 3.6 Golden tests: generated wrapper + native entry per harness compared byte-for-byte against fixtures; the same handler fixtures exercised through the generated wrapper with each harness's recorded payload (port `.labs/native-hooks/exercise.sh` cases: deny relayed, allow lets the second handler run, denial stops the chain, handler missing/crash/timeout → by effect, `jq` absent → by effect)
-- [ ] 3.7 Equivalence tests: for every fixture payload, the generated wrapper and `uze hook-exec` produce the same native decision, exit code and stderr
+- [x] 3.1 Add a `hooks/exec` POSIX `sh` template generator in `uze-integrations`: slots for harness id, payload paths (tool name, input, cwd), alias table (native tool → `HOOK_TOOL` + field extraction), native deny/allow rendering and exit code; constants for order, first-deny-wins, per-handler timeout, fail-closed by effect, `jq` guard
+- [x] 3.2 Generate `hooks/exec` into the Claude generated plugin and emit native entries in exec form: `command: ${CLAUDE_PLUGIN_ROOT}/hooks/exec`, `args: [<effect>, <handler>…]`, timeout = sum of handler timeouts + 1
+  - The wrapper's first argument is the package root: `exec <plugin-root> <event> <effect> <handler>…`. That keeps the file a per-harness constant (byte-identical for every package), which is what makes content-identity inspection a comparison against the template instead of a copy stored in every receipt. Claude's hooks are delivered through `~/.claude/settings.json`, where `${CLAUDE_PLUGIN_ROOT}` does not exist, so the wrapper is named by absolute path — the exec form (`command` + `args`) is used, so nothing is shell-parsed.
+- [x] 3.3 Generate `hooks/exec` for Codex under the derived attachment directory and emit the merged `~/.codex/hooks.json` entry as a shell line with absolute paths (no plugin-root variable on Codex)
+- [x] 3.4 Generate `hooks/exec` into the Antigravity generated plugin (named entries at the document root; cwd is the `hooks.json` directory; `toolCall.args` field names; `{"decision"}` rendering)
+- [x] 3.5 Receipts: the wrapper file and each native entry are receipt-owned; inspect verifies content identity; detach removes them and never a foreign entry; regeneration is idempotent (same bytes for the same package)
+- [x] 3.6 Golden tests: generated wrapper + native entry per harness compared byte-for-byte against fixtures; the same handler fixtures exercised through the generated wrapper with each harness's recorded payload (port `.labs/native-hooks/exercise.sh` cases: deny relayed, allow lets the second handler run, denial stops the chain, handler missing/crash/timeout → by effect, `jq` absent → by effect)
+- [x] 3.7 Equivalence tests: for every fixture payload, the generated wrapper and `uze hook-exec` produce the same native decision, exit code and stderr
 
 ## 4. OpenCode plugin
 

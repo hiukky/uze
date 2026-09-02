@@ -100,6 +100,10 @@ pub enum ExposureMechanism {
         entry_name: String,
         event: Option<HookEvent>,
         expected: String,
+        /// The generated wrapper the entry runs, when the delivery took the
+        /// native route. Owned alongside the entry: materialized on attach,
+        /// verified by content identity, removed once no entry needs it.
+        wrapper: Option<PathBuf>,
     },
     /// A whole, UZE-owned derived file loaded by the harness directly from
     /// its own discovery directory — e.g. the OpenCode hook bridge

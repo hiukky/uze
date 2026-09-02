@@ -208,6 +208,7 @@ fn claude_merges_into_settings_json_preserving_foreign_content() {
         entry_name,
         event,
         expected: _expected,
+        ..
     } = &plan.mechanism
     else {
         panic!("Claude hook plan is a managed config entry");
@@ -225,6 +226,7 @@ fn claude_merges_into_settings_json_preserving_foreign_content() {
         entry_name,
         event,
         expected,
+        ..
     } = &receipt.artifact
     else {
         panic!("Claude hook receipt is a HookConfigEntry");
@@ -243,15 +245,29 @@ fn claude_merges_into_settings_json_preserving_foreign_content() {
     assert_eq!(entry["matcher"], "Bash");
     let command = entry["hooks"][0]["command"].as_str().unwrap();
     assert!(
-        command.contains("hook-exec"),
-        "the authored command runs through the wrapper"
+        command.ends_with("/hooks/exec"),
+        "the entry runs the generated wrapper, not the packager: {command}"
     );
-    assert!(command.contains("--adapter 'claude-code'"));
-    assert!(command.contains("--event pre_tool_use"));
-    assert!(command.contains("--effect deny"));
     assert!(
-        command.contains("--command '${PLUGIN_ROOT}/scripts/check'"),
-        "the authored command is retained verbatim"
+        !command.contains("hook-exec"),
+        "no UZE binary may sit on the hook's execution path"
+    );
+    assert!(
+        Path::new(command).is_file(),
+        "the wrapper the entry names must exist on disk"
+    );
+    let args: Vec<&str> = entry["hooks"][0]["args"]
+        .as_array()
+        .expect("the wrapper is started through the exec form")
+        .iter()
+        .map(|value| value.as_str().unwrap())
+        .collect();
+    assert_eq!(args[1], "pre_tool_use");
+    assert_eq!(args[2], "deny");
+    assert!(
+        args[3].ends_with("/scripts/check") && !args[3].contains("${PLUGIN_ROOT}"),
+        "the authored handler is resolved against the package root: {}",
+        args[3]
     );
     assert_eq!(entry["hooks"][0]["timeout"], 11);
     assert_eq!(
@@ -321,6 +337,62 @@ fn claude_merges_into_settings_json_preserving_foreign_content() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// The wrapper is the other half of the delivery, and is owned like the
+/// entry that names it: written on attach, drift-checked on inspect, and
+/// removed once no entry is left to run it.
+#[test]
+fn the_generated_wrapper_is_owned_alongside_the_entry_it_serves() {
+    let (root, resources) = hook_package("claude-wrapper", deny_group());
+    let protect = hook_resource(&resources, "protect-env");
+    let home = UzeHome::at(root.join("uze"));
+    let claude = ClaudeIntegration::new(root.join("claude"), home);
+
+    let receipt = claude
+        .attach_receipt(protect)
+        .expect("attach succeeds")
+        .expect("attach produces a receipt");
+    let ManagedArtifact::HookConfigEntry {
+        wrapper: Some(wrapper),
+        ..
+    } = &receipt.artifact
+    else {
+        panic!("a natively delivered hook receipt owns its wrapper");
+    };
+    assert!(wrapper.is_file(), "the wrapper is written at attach time");
+    let source = fs::read_to_string(wrapper).unwrap();
+    assert!(
+        !source.to_lowercase().contains("uze"),
+        "nothing in the delivered artifact names the packager"
+    );
+    assert_eq!(
+        claude.inspect_receipt(&receipt).state,
+        AttachmentState::Matched
+    );
+
+    fs::write(wrapper, "#!/bin/sh\nexit 0\n").unwrap();
+    assert_eq!(
+        claude.inspect_receipt(&receipt).state,
+        AttachmentState::Drifted,
+        "an edited wrapper is drift, not a match"
+    );
+    assert_eq!(
+        claude.detach_receipt(&receipt).unwrap().state,
+        AttachmentState::Drifted,
+        "removal refuses drift rather than deleting what it does not own"
+    );
+
+    fs::write(wrapper, &source).unwrap();
+    assert_eq!(
+        claude.detach_receipt(&receipt).unwrap().state,
+        AttachmentState::Missing
+    );
+    assert!(
+        !wrapper.exists(),
+        "the last entry to need the wrapper takes it with it"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
 #[test]
 fn claude_removal_cleans_an_entry_when_the_shared_file_is_left_empty() {
     let (root, resources) = hook_package("claude-cleanup", deny_group());
@@ -381,10 +453,13 @@ fn an_update_replaces_the_previous_version_of_the_samed_group() {
         "the old version is replaced, not duplicated"
     );
     assert!(
-        groups[0]["hooks"][0]["command"]
-            .as_str()
+        groups[0]["hooks"][0]["args"]
+            .as_array()
             .unwrap()
-            .contains("check-v2")
+            .iter()
+            .any(|argument| argument
+                .as_str()
+                .is_some_and(|value| value.ends_with("check-v2")))
     );
     let _ = fs::remove_dir_all(root);
     let _ = fs::remove_dir_all(_root2);
@@ -409,6 +484,7 @@ fn codex_writes_its_own_hooks_json_command_form() {
         entry_name,
         event,
         expected,
+        ..
     } = &plan.mechanism
     else {
         panic!("Codex hook plan is a managed config entry");
@@ -426,7 +502,14 @@ fn codex_writes_its_own_hooks_json_command_form() {
     let groups = document["hooks"]["PreToolUse"].as_array().unwrap();
     assert_eq!(groups.len(), 1);
     let command = groups[0]["hooks"][0]["command"].as_str().unwrap();
-    assert!(command.contains("--adapter 'codex'"));
+    assert!(
+        command.contains("/hooks/exec' ") && command.contains(" 'pre_tool_use' 'deny' "),
+        "Codex's entry is one shell line invoking the generated wrapper: {command}"
+    );
+    assert!(
+        !command.contains("hook-exec"),
+        "no UZE binary may sit on the hook's execution path"
+    );
     assert_eq!(
         serde_json::to_string(&groups[0]).unwrap(),
         *expected,
@@ -810,6 +893,7 @@ fn a_hook_receipt_without_an_event_blocks_inspection_and_detach() {
             entry_name: "hook-demo@local:protect-env".to_owned(),
             event: None,
             expected: r#"{"hooks":{"PreToolUse":[]}}"#.to_owned(),
+            wrapper: None,
         },
     };
 

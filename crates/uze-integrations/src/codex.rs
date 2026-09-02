@@ -497,6 +497,7 @@ impl IntegrationPort for CodexIntegration {
                 entry_name,
                 event,
                 expected,
+                wrapper,
             } => {
                 let path = hook_projection::attach_event_entry(
                     &self.uze_home,
@@ -509,6 +510,7 @@ impl IntegrationPort for CodexIntegration {
                     })?,
                     entry_name,
                     expected,
+                    wrapper.as_deref().map(|path| ("codex", path)),
                 )?;
                 Ok(Some(path))
             }
@@ -597,6 +599,7 @@ impl IntegrationPort for CodexIntegration {
                 config_file,
                 event,
                 expected,
+                wrapper,
                 ..
             } => {
                 // A ledger entry damaged or predating the event field must
@@ -607,7 +610,12 @@ impl IntegrationPort for CodexIntegration {
                         reason: "hook receipt has no event; refusing to inspect".to_owned(),
                     };
                 };
-                hook_projection::inspect_event_entry(config_file, event, expected)
+                hook_projection::inspect_event_entry(
+                    config_file,
+                    event,
+                    expected,
+                    wrapper.as_deref().map(|path| ("codex", path)),
+                )
             }
             ManagedArtifact::IntegrationOwned {
                 kind,
@@ -647,6 +655,7 @@ impl IntegrationPort for CodexIntegration {
                 config_file,
                 event,
                 expected,
+                wrapper,
                 ..
             } => {
                 let Some(event) = *event else {
@@ -655,7 +664,14 @@ impl IntegrationPort for CodexIntegration {
                         reason: "hook receipt has no event; refusing to detach".to_owned(),
                     });
                 };
-                return hook_projection::remove_event_entry(config_file, event, expected);
+                let detached = hook_projection::remove_event_entry(
+                    config_file,
+                    event,
+                    expected,
+                    wrapper.as_deref().map(|path| ("codex", path)),
+                )?;
+                hook_projection::prune_shared_wrapper(&self.uze_home, self.id(), "codex");
+                return Ok(detached);
             }
             ManagedArtifact::IntegrationOwned { kind, selector, .. }
                 if kind == "marketplace-plugin" || kind == GENERATED_PLUGIN_KIND =>
@@ -707,13 +723,17 @@ impl CodexIntegration {
 
     fn hook_exposure_plan(&self, resource: &Resource) -> ExposurePlan {
         hook_projection::hook_exposure_plan(
+            &self.uze_home,
             resource,
             &self.hook_capabilities(),
             self.hooks_config_path(),
             "codex",
             self.id(),
+            // Codex's hook entry carries a command string only, so the
+            // wrapper invocation is rendered as one quoted shell line.
             false,
-            "Codex's own hooks.json command form reads PreToolUse/PostToolUse/Stop command hooks; UZE merges one group entry per canonical hook (command + matcher + timeout preserved through the hook-exec wrapper carrying the portable ABI) and keeps the exact entry receipt-owned.",
+            false,
+            "Codex's own hooks.json command form reads PreToolUse/PostToolUse/Stop command hooks; UZE merges one group entry per canonical hook (matcher and timeout preserved) whose command is the generated `hooks/exec` wrapper — the handlers run against the portable HOOK_* contract with no UZE binary on the execution path — and keeps the exact entry receipt-owned.",
         )
     }
 }
