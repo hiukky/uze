@@ -467,30 +467,25 @@ mod tests {
         assert_eq!(discover_linked_worktrees(&root), vec![linked]);
     }
 
-    fn repository(label: &str) -> PathBuf {
-        let root = uze_testkit::temp::scratch(label);
-        for args in [
-            vec!["init", "-q", "-b", "main", "."],
-            vec!["config", "user.email", "t@example.invalid"],
-            vec!["config", "user.name", "t"],
-        ] {
-            git(&root, &args).expect("git must be available for these tests");
-        }
-        std::fs::write(root.join("file"), b"seed").unwrap();
-        git(&root, &["add", "."]).unwrap();
-        git(&root, &["commit", "-qm", "seed"]).unwrap();
-        root
+    fn repository(label: &str) -> uze_testkit::git::Repository {
+        let repository = uze_testkit::git::Repository::new(label);
+        repository.commit_file("file", "seed");
+        repository
     }
 
     #[test]
     fn the_primary_checkout_is_the_same_answer_from_inside_an_isolated_one() {
-        let root = repository("worktree-primary");
-        let isolated = isolate(&root, "agent-1").expect("isolation must succeed");
+        let repository = repository("worktree-primary");
+        let root = repository.root();
+        let isolated = isolate(root, "agent-1").expect("isolation must succeed");
 
-        let from_root = primary_checkout(&root).expect("a working tree has a primary");
+        let from_root = primary_checkout(root).expect("a working tree has a primary");
         let from_isolated = primary_checkout(&isolated).expect("so does a linked worktree");
         assert_eq!(from_root, from_isolated);
-        assert_eq!(from_root, root.canonicalize().unwrap_or(root.clone()));
+        assert_eq!(
+            from_root,
+            root.canonicalize().unwrap_or_else(|_| root.to_path_buf())
+        );
     }
 
     #[test]
@@ -517,13 +512,14 @@ mod tests {
 
     #[test]
     fn isolation_creates_a_checkout_on_its_own_branch_and_ignores_the_directory() {
-        let root = repository("worktree-isolate");
-        let isolated = isolate(&root, "agent-1").unwrap();
+        let repository = repository("worktree-isolate");
+        let root = repository.root();
+        let isolated = isolate(root, "agent-1").unwrap();
 
         assert_eq!(isolated, root.join(WORKTREES_DIRECTORY).join("agent-1"));
         assert!(isolated.join("file").is_file(), "the checkout is populated");
         assert_eq!(
-            git(&isolated, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap(),
+            repository.branch_of(&isolated),
             format!("{BRANCH_PREFIX}agent-1")
         );
         assert!(
@@ -535,7 +531,7 @@ mod tests {
         // The seat's own status must not see the isolated checkout at all.
         // The freshly written `.gitignore` does show up — it is a real new
         // file for the operator to commit, which is the intended outcome.
-        let status = git(&root, &["status", "--short"]).unwrap();
+        let status = repository.git(&["status", "--short"]);
         assert!(!status.contains(WORKTREES_DIRECTORY), "{status}");
         assert_eq!(status, "?? .gitignore");
     }
@@ -544,24 +540,26 @@ mod tests {
     /// second isolation must not fail and must not reuse the first branch.
     #[test]
     fn a_taken_name_is_suffixed_rather_than_reused_or_refused() {
-        let root = repository("worktree-collision");
-        let first = isolate(&root, "agent-1").unwrap();
-        let second = isolate(&root, "agent-1").unwrap();
+        let repository = repository("worktree-collision");
+        let root = repository.root();
+        let first = isolate(root, "agent-1").unwrap();
+        let second = isolate(root, "agent-1").unwrap();
 
         assert_ne!(first, second);
         assert_eq!(second, root.join(WORKTREES_DIRECTORY).join("agent-1-2"));
         assert_eq!(
-            git(&second, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap(),
+            repository.branch_of(&second),
             format!("{BRANCH_PREFIX}agent-1-2")
         );
     }
 
     #[test]
     fn ignoring_the_directory_is_idempotent_and_preserves_existing_entries() {
-        let root = repository("worktree-ignore");
+        let repository = repository("worktree-ignore");
+        let root = repository.root();
         std::fs::write(root.join(".gitignore"), "target/\n").unwrap();
-        isolate(&root, "agent-1").unwrap();
-        isolate(&root, "agent-2").unwrap();
+        isolate(root, "agent-1").unwrap();
+        isolate(root, "agent-2").unwrap();
 
         let ignore = std::fs::read_to_string(root.join(".gitignore")).unwrap();
         assert!(ignore.contains("target/"), "foreign entries survive");
@@ -577,9 +575,8 @@ mod tests {
     /// refusing to launch it.
     #[test]
     fn isolation_fails_cleanly_on_a_repository_with_no_commits() {
-        let root = uze_testkit::temp::scratch("worktree-unborn");
-        git(&root, &["init", "-q", "-b", "main", "."]).unwrap();
-        assert!(isolate(&root, "agent-1").is_err());
+        let repository = uze_testkit::git::Repository::empty("worktree-unborn");
+        assert!(isolate(repository.root(), "agent-1").is_err());
     }
 
     #[test]

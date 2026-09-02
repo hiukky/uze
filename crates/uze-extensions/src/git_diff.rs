@@ -1037,28 +1037,15 @@ mod tests {
     /// the fixture-string tests above assume, not just those fixtures.
     #[test]
     fn open_reads_a_real_repositorys_staged_unstaged_and_untracked_changes() {
-        let _environment = uze_testkit::env::scope();
-        let root = uze_testkit::temp::scratch("git-diff-test");
-        std::fs::create_dir_all(&root).unwrap();
-        let git = |args: &[&str]| {
-            uze_git::write(&root, args)
-                .expect("git must be on PATH for this test")
-                .successful()
-                .unwrap_or_else(|error| panic!("git {args:?} failed: {error}"));
-        };
-        git(&["init", "--quiet"]);
-        git(&["config", "user.email", "test@example.com"]);
-        git(&["config", "user.name", "Test"]);
-        git(&["config", "commit.gpgsign", "false"]);
-        std::fs::write(root.join("tracked.rs"), "fn one() {}\n").unwrap();
-        git(&["add", "tracked.rs"]);
-        git(&["commit", "--quiet", "-m", "initial"]);
+        let repository = uze_testkit::git::Repository::new("git-diff-test");
+        let root = repository.root().to_path_buf();
+        repository.commit_file("tracked.rs", "fn one() {}\n");
 
         assert_eq!(change_summary(&root), None);
 
         std::fs::write(root.join("tracked.rs"), "fn one() {}\nfn two() {}\n").unwrap();
         std::fs::write(root.join("staged.rs"), "fn staged() {}\n").unwrap();
-        git(&["add", "staged.rs"]);
+        repository.git(&["add", "staged.rs"]);
         std::fs::write(root.join("new.rs"), "fn brand_new() {}\n").unwrap();
 
         let mut view = GitView::open(root.clone());
@@ -1108,39 +1095,23 @@ mod tests {
     /// checkouts whose agent is long gone. Scoping is by checkout, not by
     /// the isolation layout, so it holds for any worktree, however created.
     #[test]
-    fn a_view_is_scoped_to_the_checkout_it_was_opened_in() {
-        let _environment = uze_testkit::env::scope();
-        let parent = uze_testkit::temp::scratch("git-diff-scope");
-        let root = parent.join("project");
-        // Where UZE isolates agents, mirrored here so the fixture matches
-        // what the overlay actually meets in a running workspace.
-        let linked = root.join(".worktrees").join("feature");
-        std::fs::create_dir_all(&root).unwrap();
-        let git = |directory: &Path, args: &[&str]| {
-            uze_git::write(directory, args)
-                .expect("git must be on PATH for this test")
-                .successful()
-                .unwrap_or_else(|error| panic!("git {args:?} failed: {error}"));
-        };
-        git(&root, &["init", "--quiet"]);
-        git(&root, &["config", "user.email", "test@example.com"]);
-        git(&root, &["config", "user.name", "Test"]);
-        git(&root, &["config", "commit.gpgsign", "false"]);
-        std::fs::write(root.join("README.md"), "# test\n").unwrap();
-        std::fs::write(root.join(".gitignore"), ".worktrees/\n").unwrap();
-        git(&root, &["add", "."]);
-        git(&root, &["commit", "--quiet", "-m", "initial"]);
-        git(
-            &root,
-            &[
-                "worktree",
-                "add",
-                "--quiet",
-                "-b",
-                "feature",
-                linked.to_str().unwrap(),
-            ],
-        );
+    fn discovers_main_and_configured_linked_worktrees() {
+        let repository = uze_testkit::git::Repository::new("worktree-test");
+        let root = repository.root().to_path_buf();
+        // The isolation directory is fixed layout, under the primary
+        // checkout — the same place UZE creates agent checkouts in.
+        let worktrees = root.join(uze_core::worktree::WORKTREES_DIRECTORY);
+        let feature = worktrees.join("feature");
+        std::fs::create_dir_all(&worktrees).unwrap();
+        repository.git(&[
+            "worktree",
+            "add",
+            "--quiet",
+            "-b",
+            "feature",
+            feature.to_str().unwrap(),
+        ]);
+        std::fs::write(root.join("agents.lock"), "version: 1\nworktrees: {}\n").unwrap();
 
         std::fs::write(root.join("primary-only.rs"), "fn primary() {}\n").unwrap();
         std::fs::write(linked.join("agent-only.rs"), "fn agent() {}\n").unwrap();
@@ -1170,7 +1141,7 @@ mod tests {
             "and the seat sees the seat, not the agents hanging off it"
         );
 
-        let _ = std::fs::remove_dir_all(parent);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

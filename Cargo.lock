@@ -2541,6 +2541,7 @@ name = "uze-testkit"
 version = "0.0.0-alpha.0"
 dependencies = [
  "serde_json",
+ "uze-git",
 ]
 
 [[package]]

@@ -9,6 +9,10 @@
 //! - **Process-global safety**: [`env::scope`] serializes and restores any
 //!   `PATH`/`HOME`/cwd mutation (Rust tests run in parallel; process env is
 //!   shared).
+//! - **Git**: [`git::Repository`] is a real scratch repository with every
+//!   ambient Git configuration (global and system) pointed at an empty file,
+//!   so `commit.gpgsign`, `init.defaultBranch`, hooks and aliases cannot
+//!   decide a test's outcome.
 //! - **Process simulation**: [`fake_harness::FakeHarness`] writes executable
 //!   scripts with a rule table and an invocation log, so integration tests
 //!   describe vendor behavior instead of inventing shell scripts inline.
@@ -26,6 +30,7 @@ pub mod assertions;
 pub mod env;
 pub mod fake_harness;
 pub mod fixtures;
+pub mod git;
 pub mod marketplace;
 pub mod scenario;
 pub mod temp;

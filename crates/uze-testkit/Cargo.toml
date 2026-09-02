@@ -8,4 +8,5 @@ publish = false
 description = "Shared, harness-agnostic test infrastructure for the UZE workspace (TestEnvironment, FakeHarness, fixtures, scenario builder, assertions)."
 
 [dependencies]
+uze-git = { path = "../uze-git" }
 serde_json = "1"
