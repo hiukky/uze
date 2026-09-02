@@ -58,6 +58,14 @@ impl UzeHome {
         self.state_dir().join("packages.json")
     }
 
+    /// A project's task graph — every agent launch UZE has made in it, keyed
+    /// on the project id so removing a checkout can never remove history.
+    pub fn tasks_path(&self, project_id: &str) -> PathBuf {
+        self.state_dir()
+            .join("tasks")
+            .join(format!("{project_id}.json"))
+    }
+
     /// Per-harness machine integration setup facts. Ownership of individual
     /// package attachments lives exclusively in `attachments.json`.
     pub fn integrations_state_path(&self) -> PathBuf {

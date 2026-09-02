@@ -77,6 +77,12 @@ pub enum UzeError {
     UnknownPackage(String),
     #[error("unsupported agents.lock version {found}; expected {expected}")]
     UnsupportedLockVersion { found: u32, expected: u32 },
+    #[error("unsupported state schema {found} in {path}; this uze writes {expected}")]
+    UnsupportedStateSchema {
+        path: PathBuf,
+        found: u32,
+        expected: u32,
+    },
     #[error("malformed agents.lock at {path}: {reason}")]
     MalformedLock { path: PathBuf, reason: String },
     #[error(

@@ -157,36 +157,6 @@ impl WorktreePolicy {
     }
 }
 
-/// The linked worktrees Git records for a checkout, read straight from
-/// `.git/worktrees/*/gitdir` rather than by running `git`.
-///
-/// Status views are budgeted commands; a subprocess spawn per invocation is
-/// exactly the cost that classification exists to keep out. Each `gitdir`
-/// file holds the absolute path of a linked worktree's `.git` pointer, so
-/// its parent is the checkout — a handful of small reads.
-///
-/// Every linked worktree registers here, including one created from inside
-/// another linked worktree: Git keeps this registry in the common directory,
-/// so the record stays flat however the directories nest.
-///
-/// Returns empty for anything that is not a primary checkout with linked
-/// worktrees. Purely observational, and never an error — an unreadable Git
-/// layout is "nothing observed", not a reason to fail a status view.
-pub fn discover_linked_worktrees(project_root: &Path) -> Vec<PathBuf> {
-    let registry = project_root.join(".git").join("worktrees");
-    let Ok(entries) = std::fs::read_dir(&registry) else {
-        return Vec::new();
-    };
-    let mut roots: Vec<PathBuf> = entries
-        .filter_map(|entry| entry.ok())
-        .filter_map(|entry| std::fs::read_to_string(entry.path().join("gitdir")).ok())
-        .filter_map(|gitdir| PathBuf::from(gitdir.trim()).parent().map(Path::to_path_buf))
-        .collect();
-    roots.sort();
-    roots.dedup();
-    roots
-}
-
 /// The primary checkout `cwd` belongs to, or `None` when `cwd` is not in a
 /// Git working tree.
 ///
@@ -441,30 +411,15 @@ mod tests {
         assert!(isolated_checkout(Path::new("/repo/.worktrees")).is_none());
     }
 
-    /// Git keeps its registry flat however the directories nest (see
-    /// `discover_linked_worktrees`), and so must the name a display shows:
-    /// the checkout the path is actually in, not the outermost one.
+    /// Git keeps its registry flat however the directories nest, and so
+    /// must the name a display shows: the checkout the path is actually in,
+    /// not the outermost one.
     #[test]
     fn the_deepest_checkout_wins_when_they_nest() {
         let checkout =
             isolated_checkout(Path::new("/repo/.worktrees/outer/.worktrees/inner/src")).unwrap();
         assert_eq!(checkout.name, "inner");
         assert_eq!(checkout.primary, Path::new("/repo/.worktrees/outer"));
-    }
-
-    #[test]
-    fn discovery_reads_gits_own_registry_without_running_git() {
-        let root = uze_testkit::temp::scratch("worktree-discovery");
-        let registry = root.join(".git").join("worktrees").join("topic");
-        std::fs::create_dir_all(&registry).unwrap();
-        let linked = root.join(WORKTREES_DIRECTORY).join("topic");
-        std::fs::write(
-            registry.join("gitdir"),
-            format!("{}\n", linked.join(".git").display()),
-        )
-        .unwrap();
-
-        assert_eq!(discover_linked_worktrees(&root), vec![linked]);
     }
 
     fn repository(label: &str) -> uze_testkit::git::Repository {
@@ -577,12 +532,5 @@ mod tests {
     fn isolation_fails_cleanly_on_a_repository_with_no_commits() {
         let repository = uze_testkit::git::Repository::empty("worktree-unborn");
         assert!(isolate(repository.root(), "agent-1").is_err());
-    }
-
-    #[test]
-    fn a_checkout_with_no_linked_worktrees_observes_nothing() {
-        let root = uze_testkit::temp::scratch("worktree-empty");
-        std::fs::create_dir_all(root.join(".git")).unwrap();
-        assert!(discover_linked_worktrees(&root).is_empty());
     }
 }

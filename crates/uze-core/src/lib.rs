@@ -59,7 +59,8 @@ pub use delivery::{engine, exposure, integration, persistence, reconciliation, r
 pub use machine::{detection_cache, harness_runtime, home, provisioning, shell_path, subprocess};
 pub use package::{acquisition, bundle, importer, importers, naming, store, trust};
 pub use project::{
-    context, project_context, project_lock, project_root, text_region, workspace, worktree,
+    checkout, context, project_context, project_lock, project_root, task, text_region, workspace,
+    worktree,
 };
 
 pub use acquisition::{MaterializedPackage, PackageSource, Provenance, ResolvedSource};
