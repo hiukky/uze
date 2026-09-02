@@ -289,7 +289,8 @@ pub(crate) fn dispatch(
                 sender.clone(),
                 model.context_root.clone(),
                 move |app| {
-                    app.create_profile(&id, None, Preferences::default())
+                    app.profiles()
+                        .create(&id, None, Preferences::default())
                         .map(|()| format!("Created profile \"{id}\""))
                 },
             );
@@ -301,7 +302,8 @@ pub(crate) fn dispatch(
                 sender.clone(),
                 model.context_root.clone(),
                 move |app| {
-                    app.delete_profile(&id)
+                    app.profiles()
+                        .delete(&id)
                         .map(|()| format!("Deleted profile \"{id}\""))
                 },
             );
@@ -312,7 +314,8 @@ pub(crate) fn dispatch(
                 sender.clone(),
                 model.context_root.clone(),
                 move |app| {
-                    app.set_active_profile(&id)
+                    app.profiles()
+                        .set_active(&id)
                         .map(|()| format!("\"{id}\" is now the active profile"))
                 },
             );
@@ -321,7 +324,7 @@ pub(crate) fn dispatch(
             let home = home.clone();
             thread::spawn(move || {
                 if let Ok(app) = tui_application(home) {
-                    let _ = app.update_profile_preferences(&id, preferences);
+                    let _ = app.profiles().update_preferences(&id, preferences);
                 }
             });
         }
@@ -332,8 +335,8 @@ pub(crate) fn dispatch(
             thread::spawn(move || {
                 let result = tui_application(home.clone())
                     .and_then(|app| {
-                        app.set_active_profile(&id)?;
-                        let results = app.apply_profile(&id, &harness_ids)?;
+                        app.profiles().set_active(&id)?;
+                        let results = app.profiles().apply(&id, &harness_ids)?;
                         let data = load_refresh_data(home, &context_root)?;
                         Ok({
                             let message = apply_message(&id, &results);
@@ -408,7 +411,7 @@ fn load_refresh_data(home: UzeHome, context_root: &std::path::Path) -> Result<Re
     let doctor = app.doctor();
     let marketplace_count = app.marketplace_list()?.len();
     let marketplace_plugins = app.list_marketplace_plugins()?;
-    let profiles = app.list_profiles()?;
+    let profiles = app.profiles().list()?;
     // Workspace detection first, then context at the detected root: callers
     // deep inside a subdirectory get the workspace's own AGENTS.md/bridge
     // state, not a cwd-scoped one that misses it. Best-effort — a summary

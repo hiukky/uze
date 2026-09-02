@@ -30,3 +30,13 @@ impl UzeApplication {
         Workspace(self)
     }
 }
+
+/// Universal user preferences and the profiles that carry them.
+pub struct Profiles<'a>(pub(super) &'a UzeApplication);
+
+impl UzeApplication {
+    /// Reading and applying user preference profiles.
+    pub fn profiles(&self) -> Profiles<'_> {
+        Profiles(self)
+    }
+}

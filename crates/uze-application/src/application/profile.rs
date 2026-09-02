@@ -10,7 +10,7 @@ use uze_core::{
     profile_state,
 };
 
-use super::*;
+use super::services::Profiles;
 
 /// A profile as shown in a list. Includes `preferences` — unlike a vendor
 /// probe (e.g. `PluginSummary`'s "detail is a separate, expensive read"
@@ -31,12 +31,12 @@ pub struct ProfileApplyResult {
     pub outcome: PreferenceApplyOutcome,
 }
 
-impl UzeApplication {
-    pub fn list_profiles(&self) -> Result<Vec<ProfileSummary>> {
-        let _mutation = uze_core::persistence::MutationLock::acquire(&self.home)?;
-        profile_state::ensure_default(&self.home)?;
-        let active = profile_state::active(&self.home)?;
-        Ok(profile_state::load(&self.home)?
+impl Profiles<'_> {
+    pub fn list(&self) -> Result<Vec<ProfileSummary>> {
+        let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
+        profile_state::ensure_default(&self.0.home)?;
+        let active = profile_state::active(&self.0.home)?;
+        Ok(profile_state::load(&self.0.home)?
             .into_values()
             .map(|record| ProfileSummary {
                 active: active.as_deref() == Some(record.id.as_str()),
@@ -47,41 +47,41 @@ impl UzeApplication {
             .collect())
     }
 
-    pub fn get_profile(&self, id: &str) -> Result<Option<profile_state::ProfileRecord>> {
-        profile_state::get(&self.home, id)
+    pub fn get(&self, id: &str) -> Result<Option<profile_state::ProfileRecord>> {
+        profile_state::get(&self.0.home, id)
     }
 
-    pub fn create_profile(
+    pub fn create(
         &self,
         id: &str,
         description: Option<String>,
         preferences: Preferences,
     ) -> Result<()> {
-        let _mutation = uze_core::persistence::MutationLock::acquire(&self.home)?;
+        let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
         if id != profile_state::DEFAULT_PROFILE_ID {
-            profile_state::ensure_default(&self.home)?;
+            profile_state::ensure_default(&self.0.home)?;
         }
-        profile_state::create(&self.home, id, description, preferences)?;
-        if profile_state::active(&self.home)?.is_none() {
-            profile_state::set_active(&self.home, id)?;
+        profile_state::create(&self.0.home, id, description, preferences)?;
+        if profile_state::active(&self.0.home)?.is_none() {
+            profile_state::set_active(&self.0.home, id)?;
         }
         Ok(())
     }
 
-    pub fn update_profile_preferences(&self, id: &str, preferences: Preferences) -> Result<()> {
-        let _mutation = uze_core::persistence::MutationLock::acquire(&self.home)?;
-        profile_state::update_preferences(&self.home, id, preferences)
+    pub fn update_preferences(&self, id: &str, preferences: Preferences) -> Result<()> {
+        let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
+        profile_state::update_preferences(&self.0.home, id, preferences)
     }
 
-    pub fn delete_profile(&self, id: &str) -> Result<()> {
-        let _mutation = uze_core::persistence::MutationLock::acquire(&self.home)?;
-        profile_state::ensure_default(&self.home)?;
-        profile_state::delete(&self.home, id)
+    pub fn delete(&self, id: &str) -> Result<()> {
+        let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
+        profile_state::ensure_default(&self.0.home)?;
+        profile_state::delete(&self.0.home, id)
     }
 
-    pub fn set_active_profile(&self, id: &str) -> Result<()> {
-        let _mutation = uze_core::persistence::MutationLock::acquire(&self.home)?;
-        profile_state::set_active(&self.home, id)
+    pub fn set_active(&self, id: &str) -> Result<()> {
+        let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
+        profile_state::set_active(&self.0.home, id)
     }
 
     /// Applies one profile's preferences to exactly the requested harnesses.
@@ -89,18 +89,15 @@ impl UzeApplication {
     /// registered adapter for the id) never aborts the rest — it becomes a
     /// `Failed` result for that harness alone, matching `setup()`'s
     /// per-harness partial-failure isolation.
-    pub fn apply_profile(
-        &self,
-        id: &str,
-        harness_ids: &[String],
-    ) -> Result<Vec<ProfileApplyResult>> {
-        let _mutation = uze_core::persistence::MutationLock::acquire(&self.home)?;
-        let record = profile_state::get(&self.home, id)?
+    pub fn apply(&self, id: &str, harness_ids: &[String]) -> Result<Vec<ProfileApplyResult>> {
+        let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
+        let record = profile_state::get(&self.0.home, id)?
             .ok_or_else(|| UzeError::UnknownProfile(id.to_owned()))?;
         Ok(harness_ids
             .iter()
             .map(|harness_id| {
                 let outcome = match self
+                    .0
                     .preference_adapters
                     .iter()
                     .find(|adapter| adapter.preference_id() == harness_id.as_str())
@@ -205,14 +202,16 @@ mod tests {
     fn create_list_and_delete_round_trip_preserves_one_active_profile() {
         let home = temp_home("crud");
         let app = UzeApplication::new(home.clone(), Vec::new());
-        app.create_profile("default", None, Preferences::default())
+        app.profiles()
+            .create("default", None, Preferences::default())
             .unwrap();
-        assert_eq!(app.list_profiles().unwrap().len(), 1);
-        assert!(app.list_profiles().unwrap()[0].active);
-        app.create_profile("coding", None, Preferences::default())
+        assert_eq!(app.profiles().list().unwrap().len(), 1);
+        assert!(app.profiles().list().unwrap()[0].active);
+        app.profiles()
+            .create("coding", None, Preferences::default())
             .unwrap();
-        app.delete_profile("default").unwrap();
-        let profiles = app.list_profiles().unwrap();
+        app.profiles().delete("default").unwrap();
+        let profiles = app.profiles().list().unwrap();
         assert_eq!(profiles.len(), 1);
         assert_eq!(profiles[0].id, "coding");
         assert!(profiles[0].active);
@@ -224,7 +223,8 @@ mod tests {
         let home = temp_home("partial-failure");
         let bootstrap = UzeApplication::new(home.clone(), Vec::new());
         bootstrap
-            .create_profile("default", None, Preferences::default())
+            .profiles()
+            .create("default", None, Preferences::default())
             .unwrap();
 
         let app = app_with_adapters(
@@ -235,7 +235,8 @@ mod tests {
             ],
         );
         let results = app
-            .apply_profile("default", &["good".to_owned(), "bad".to_owned()])
+            .profiles()
+            .apply("default", &["good".to_owned(), "bad".to_owned()])
             .unwrap();
         assert_eq!(results.len(), 2);
         assert!(matches!(
@@ -254,10 +255,14 @@ mod tests {
         let home = temp_home("unregistered");
         let bootstrap = UzeApplication::new(home.clone(), Vec::new());
         bootstrap
-            .create_profile("default", None, Preferences::default())
+            .profiles()
+            .create("default", None, Preferences::default())
             .unwrap();
         let app = app_with_adapters(home.clone(), Vec::new());
-        let results = app.apply_profile("default", &["ghost".to_owned()]).unwrap();
+        let results = app
+            .profiles()
+            .apply("default", &["ghost".to_owned()])
+            .unwrap();
         assert!(matches!(
             results[0].outcome,
             PreferenceApplyOutcome::Failed { .. }
@@ -270,7 +275,7 @@ mod tests {
         let home = temp_home("unknown-profile");
         let app = UzeApplication::new(home.clone(), Vec::new());
         assert!(matches!(
-            app.apply_profile("ghost", &[]),
+            app.profiles().apply("ghost", &[]),
             Err(UzeError::UnknownProfile(_))
         ));
         let _ = std::fs::remove_dir_all(home.root());
@@ -280,25 +285,38 @@ mod tests {
     fn updating_preferences_changes_only_the_targeted_profile() {
         let home = temp_home("update");
         let app = UzeApplication::new(home.clone(), Vec::new());
-        app.create_profile("a", None, Preferences::default())
+        app.profiles()
+            .create("a", None, Preferences::default())
             .unwrap();
-        app.create_profile("b", None, Preferences::default())
+        app.profiles()
+            .create("b", None, Preferences::default())
             .unwrap();
-        app.update_profile_preferences(
-            "a",
-            Preferences {
-                autonomy: Autonomy::Unattended,
-                sandbox: SandboxScope::FullAccess,
-                model: ModelPreference::Capable,
-            },
-        )
-        .unwrap();
+        app.profiles()
+            .update_preferences(
+                "a",
+                Preferences {
+                    autonomy: Autonomy::Unattended,
+                    sandbox: SandboxScope::FullAccess,
+                    model: ModelPreference::Capable,
+                },
+            )
+            .unwrap();
         assert_eq!(
-            app.get_profile("a").unwrap().unwrap().preferences.autonomy,
+            app.profiles()
+                .get("a")
+                .unwrap()
+                .unwrap()
+                .preferences
+                .autonomy,
             Autonomy::Unattended
         );
         assert_eq!(
-            app.get_profile("b").unwrap().unwrap().preferences.autonomy,
+            app.profiles()
+                .get("b")
+                .unwrap()
+                .unwrap()
+                .preferences
+                .autonomy,
             Autonomy::Balanced
         );
         let _ = std::fs::remove_dir_all(home.root());
@@ -341,19 +359,21 @@ mod tests {
             Box::new(SystemProcessRunner),
         );
 
-        app.create_profile(
-            "dev-autonomous",
-            Some("test profile".to_owned()),
-            Preferences {
-                autonomy: Autonomy::Unattended,
-                sandbox: SandboxScope::FullAccess,
-                model: ModelPreference::Capable,
-            },
-        )
-        .unwrap();
+        app.profiles()
+            .create(
+                "dev-autonomous",
+                Some("test profile".to_owned()),
+                Preferences {
+                    autonomy: Autonomy::Unattended,
+                    sandbox: SandboxScope::FullAccess,
+                    model: ModelPreference::Capable,
+                },
+            )
+            .unwrap();
 
         let results = app
-            .apply_profile(
+            .profiles()
+            .apply(
                 "dev-autonomous",
                 &["claude-code".to_owned(), "codex".to_owned()],
             )
