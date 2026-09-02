@@ -682,7 +682,7 @@ fn run(cli: Cli) -> Result<()> {
         Command::Market { action } => match action {
             MarketAction::Add { source } => {
                 let spinner = progress::spinner("Adding marketplace...");
-                match app.marketplace_add(&source) {
+                match app.marketplace().add(&source) {
                     Ok(true) => {
                         spinner.finish_and_clear();
                         progress::success(&format!("Added marketplace from {source}"));
@@ -699,18 +699,18 @@ fn run(cli: Cli) -> Result<()> {
                 }
             }
             MarketAction::List { format } => {
-                let mps = app.marketplace_list()?;
+                let mps = app.marketplace().list()?;
                 match format {
                     OutputFormat::Text => print!("{}", render_market_list(&mps)),
                     OutputFormat::Json => print_json(&mps),
                 }
             }
             MarketAction::Remove { name } => {
-                app.marketplace_remove(&name)?;
+                app.marketplace().remove(&name)?;
                 println!("Removed marketplace {name}");
             }
             MarketAction::Inspect { name, format } => {
-                let detail = app.market_inspect(&name)?;
+                let detail = app.marketplace().inspect(&name)?;
                 match format {
                     OutputFormat::Text => print!("{}", render_market_detail(&detail)),
                     OutputFormat::Json => print_json(&detail),
@@ -734,7 +734,7 @@ fn run(cli: Cli) -> Result<()> {
                 // (path or Git URL) is never accepted — the marketplace is
                 // the product's provenance contract (see ADR-019).
                 let installed = if plugin.contains('@') {
-                    app.plugin_install_resolving(
+                    app.marketplace().install_plugin_resolving(
                         &plugin,
                         authority.as_ref(),
                         name_authority.as_ref(),

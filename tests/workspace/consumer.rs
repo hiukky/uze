@@ -158,7 +158,7 @@ fn install_project_environment_reproduces_a_lock_on_a_fresh_machine() {
         "fresh machine starts with nothing installed"
     );
     assert!(
-        fresh_app.marketplace_list().unwrap().len() == 1,
+        fresh_app.marketplace().list().unwrap().len() == 1,
         "fresh machine starts with only the embedded uze-official marketplace"
     );
 
@@ -181,7 +181,8 @@ fn install_project_environment_reproduces_a_lock_on_a_fresh_machine() {
     );
     assert!(
         fresh_app
-            .marketplace_list()
+            .marketplace()
+            .list()
             .unwrap()
             .iter()
             .any(|m| m.name == "test-market"),
@@ -304,8 +305,13 @@ fn same_named_plugins_from_two_marketplaces_coexist_and_require_qualified_lookup
     .unwrap();
     let app = UzeApplication::new(home.clone(), Vec::new());
 
-    app.plugin_install("flow@first", &AlwaysTrust).unwrap();
-    let collision = app.plugin_install("flow@second", &AlwaysTrust).unwrap_err();
+    app.marketplace()
+        .install_plugin("flow@first", &AlwaysTrust)
+        .unwrap();
+    let collision = app
+        .marketplace()
+        .install_plugin("flow@second", &AlwaysTrust)
+        .unwrap_err();
     assert!(matches!(
         collision,
         uze::UzeError::PluginNameCollision { existing, requested, .. }
@@ -321,14 +327,15 @@ fn same_named_plugins_from_two_marketplaces_coexist_and_require_qualified_lookup
         vec!["flow@first"]
     );
 
-    app.plugin_install_resolving(
-        "flow@second",
-        &AlwaysTrust,
-        &uze_core::naming::FixedResolution(uze_core::naming::NameCollisionResolution::Alias(
-            "flow-second".to_owned(),
-        )),
-    )
-    .unwrap();
+    app.marketplace()
+        .install_plugin_resolving(
+            "flow@second",
+            &AlwaysTrust,
+            &uze_core::naming::FixedResolution(uze_core::naming::NameCollisionResolution::Alias(
+                "flow-second".to_owned(),
+            )),
+        )
+        .unwrap();
 
     let ids: Vec<_> = app
         .list_plugins()

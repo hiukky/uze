@@ -142,7 +142,7 @@ pub(crate) fn dispatch(
             let (home, sender) = (home.clone(), sender.clone());
             thread::spawn(move || {
                 let result = tui_application(home)
-                    .and_then(|app| app.inspect_marketplace_plugin(&marketplace, &name))
+                    .and_then(|app| app.marketplace().inspect_plugin(&marketplace, &name))
                     .map_err(|error| error.to_string());
                 let _ = sender.send(WorkerResult::MarketplaceInspected(result));
             });
@@ -185,7 +185,8 @@ pub(crate) fn dispatch(
                 grant,
                 name,
                 move |app, authority| {
-                    app.plugin_install(&spec, authority)
+                    app.marketplace()
+                        .install_plugin(&spec, authority)
                         .map(|report| format!("Installed {}", report.plugin.id))
                 },
                 TrustedRetry::Install {
@@ -224,7 +225,7 @@ pub(crate) fn dispatch(
                 sender.clone(),
                 model.context_root.clone(),
                 move |app| {
-                    app.marketplace_add(&source).map(|added| {
+                    app.marketplace().add(&source).map(|added| {
                         if added {
                             format!("Added marketplace from {source}")
                         } else {
@@ -409,8 +410,8 @@ fn load_refresh_data(home: UzeHome, context_root: &std::path::Path) -> Result<Re
     // per-receipt vendor probing milliseconds in steady state, so every
     // screen sees real attachment state (never a masked "unknown").
     let doctor = app.doctor();
-    let marketplace_count = app.marketplace_list()?.len();
-    let marketplace_plugins = app.list_marketplace_plugins()?;
+    let marketplace_count = app.marketplace().list()?.len();
+    let marketplace_plugins = app.marketplace().plugins()?;
     let profiles = app.profiles().list()?;
     // Workspace detection first, then context at the detected root: callers
     // deep inside a subdirectory get the workspace's own AGENTS.md/bridge

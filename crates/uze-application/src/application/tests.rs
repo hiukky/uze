@@ -643,7 +643,7 @@ pub(crate) fn harness_inspect_finds_by_id_or_display_name_and_errors_on_unknown(
 pub(crate) fn market_inspect_errors_on_an_unregistered_marketplace() {
     let root = uze_testkit::temp::scratch("market-inspect-unknown");
     let app = UzeApplication::new(UzeHome::at(&root), Vec::new());
-    assert!(app.market_inspect("does-not-exist").is_err());
+    assert!(app.marketplace().inspect("does-not-exist").is_err());
     let _ = fs::remove_dir_all(root);
 }
 

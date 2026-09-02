@@ -6,33 +6,34 @@ use uze_core::{PackageSource, Result, UzeError, store::StoredPackage, trust::Tru
 
 use crate::bootstrap;
 
+use super::services::Marketplace;
 use super::*;
 
-impl UzeApplication {
+impl Marketplace<'_> {
     /// `Ok(true)` when the marketplace was newly registered, `Ok(false)`
     /// when it was already registered from the exact same source
     /// (idempotent no-op — see `state::marketplace_add`). A different
     /// source under the same name is a `MarketplaceConflict` error.
-    pub fn marketplace_add(&self, source_str: &str) -> Result<bool> {
-        let source = Self::parse_marketplace_source(source_str)?;
-        let (marketplace_root, manifest) = Self::load_marketplace_manifest(&source)?;
+    pub fn add(&self, source_str: &str) -> Result<bool> {
+        let source = UzeApplication::parse_marketplace_source(source_str)?;
+        let (marketplace_root, manifest) = UzeApplication::load_marketplace_manifest(&source)?;
         let name = manifest.name.clone();
         if name == "uze-official" {
             return Err(UzeError::ReservedMarketplace(name));
         }
-        let added = uze_core::state::marketplace_add(&self.home, &name, source)?;
+        let added = uze_core::state::marketplace_add(&self.0.home, &name, source)?;
         let _ = (marketplace_root, manifest);
         Ok(added)
     }
 
-    pub fn marketplace_remove(&self, name: &str) -> Result<()> {
+    pub fn remove(&self, name: &str) -> Result<()> {
         if name == "uze-official" {
             return Err(UzeError::ReservedMarketplace(name.to_owned()));
         }
-        uze_core::state::marketplace_remove(&self.home, name)
+        uze_core::state::marketplace_remove(&self.0.home, name)
     }
 
-    pub fn marketplace_list(&self) -> Result<Vec<MarketplaceSummary>> {
+    pub fn list(&self) -> Result<Vec<MarketplaceSummary>> {
         let mut out = Vec::new();
         let (official_name, official_entries) = bootstrap::entries()?;
         out.push(MarketplaceSummary {
@@ -40,8 +41,8 @@ impl UzeApplication {
             source: "embedded:uze-official".to_owned(),
             plugin_count: official_entries.len(),
         });
-        for (name, record) in uze_core::state::marketplace_list(&self.home)? {
-            let plugin_count = match Self::load_marketplace_manifest(&record.source) {
+        for (name, record) in uze_core::state::marketplace_list(&self.0.home)? {
+            let plugin_count = match UzeApplication::load_marketplace_manifest(&record.source) {
                 Ok((_, manifest)) => manifest.plugins.len(),
                 Err(_) => 0,
             };
@@ -60,25 +61,25 @@ impl UzeApplication {
     /// (`inspect_marketplace_plugin`). Filters the same per-entry
     /// computation `marketplace_list` already does down to one named entry;
     /// no new state or invariant.
-    pub fn market_inspect(&self, name: &str) -> Result<MarketplaceSummary> {
-        self.marketplace_list()?
+    pub fn inspect(&self, name: &str) -> Result<MarketplaceSummary> {
+        self.list()?
             .into_iter()
             .find(|entry| entry.name == name)
             .ok_or_else(|| UzeError::UnknownPackage(format!("marketplace `{name}` not found")))
     }
 
-    pub fn plugin_install(
+    pub fn install_plugin(
         &self,
         spec: &str,
         authority: &dyn TrustAuthority,
     ) -> Result<AddPluginReport> {
-        self.plugin_install_resolving(spec, authority, &uze_core::naming::NoNameCollisionAuthority)
+        self.install_plugin_resolving(spec, authority, &uze_core::naming::NoNameCollisionAuthority)
     }
 
     /// `plugin_install`, with an explicit answer for a bare-plugin-name
     /// collision with an already-active, differently-marketplaced package
     /// (ADR-038) — see `add_plugin_resolving`.
-    pub fn plugin_install_resolving(
+    pub fn install_plugin_resolving(
         &self,
         spec: &str,
         authority: &dyn TrustAuthority,
@@ -87,17 +88,14 @@ impl UzeApplication {
         let (plugin_name, marketplace_name) =
             uze_core::project_lock::parse_plugin_marketplace_spec(spec)?;
         if marketplace_name == "uze-official" {
-            return self.install_from_marketplace_resolving(
-                &plugin_name,
-                authority,
-                name_authority,
-            );
+            return self.install_from_resolving(&plugin_name, authority, name_authority);
         }
-        let record =
-            uze_core::state::marketplace_get(&self.home, &marketplace_name)?.ok_or_else(|| {
+        let record = uze_core::state::marketplace_get(&self.0.home, &marketplace_name)?
+            .ok_or_else(|| {
                 UzeError::UnknownPackage(format!("marketplace `{marketplace_name}` not found"))
             })?;
-        let (marketplace_root, manifest) = Self::load_marketplace_manifest(&record.source)?;
+        let (marketplace_root, manifest) =
+            UzeApplication::load_marketplace_manifest(&record.source)?;
         let plugin_source = uze_core::acquisition::marketplace::resolve_plugin_source(
             &manifest,
             &plugin_name,
@@ -106,9 +104,9 @@ impl UzeApplication {
         let source = PackageSource::Local {
             path: plugin_source,
         };
-        let _mutation = uze_core::persistence::MutationLock::acquire(&self.home)?;
-        let materialized = self.acquire(&source)?;
-        let report = self.install_materialized_from_marketplace(
+        let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
+        let materialized = self.0.acquire(&source)?;
+        let report = self.0.install_materialized_from_marketplace(
             materialized,
             &marketplace_name,
             authority,
@@ -117,7 +115,7 @@ impl UzeApplication {
             name_authority,
         )?;
         uze_core::state::plugin_marketplace_record(
-            &self.home,
+            &self.0.home,
             &report.plugin.id,
             &marketplace_name,
         )?;
@@ -130,8 +128,8 @@ impl UzeApplication {
     /// marketplace whose manifest can no longer be read (moved/deleted
     /// source) is skipped rather than failing the whole listing, mirroring
     /// `marketplace_list`'s own `plugin_count: 0` fallback.
-    pub fn list_marketplace_plugins(&self) -> Result<Vec<MarketplacePluginSummary>> {
-        let installed_packages = self.installed_packages();
+    pub fn plugins(&self) -> Result<Vec<MarketplacePluginSummary>> {
+        let installed_packages = self.0.installed_packages();
         let installed: std::collections::BTreeMap<&str, &StoredPackage> = installed_packages
             .iter()
             .map(|package| (package.id.as_str(), package))
@@ -161,8 +159,9 @@ impl UzeApplication {
             }
         }));
 
-        for (name, record) in uze_core::state::marketplace_list(&self.home)? {
-            let Ok((_, manifest)) = Self::load_marketplace_manifest(&record.source) else {
+        for (name, record) in uze_core::state::marketplace_list(&self.0.home)? {
+            let Ok((_, manifest)) = UzeApplication::load_marketplace_manifest(&record.source)
+            else {
                 continue;
             };
             out.extend(manifest.plugins.into_iter().map(|entry| {
@@ -184,13 +183,9 @@ impl UzeApplication {
         Ok(out)
     }
 
-    pub fn inspect_marketplace_plugin(
-        &self,
-        marketplace: &str,
-        name: &str,
-    ) -> Result<MarketplacePluginDetail> {
+    pub fn inspect_plugin(&self, marketplace: &str, name: &str) -> Result<MarketplacePluginDetail> {
         let summary = self
-            .list_marketplace_plugins()?
+            .plugins()?
             .into_iter()
             .find(|plugin| plugin.marketplace == marketplace && plugin.name == name)
             .ok_or_else(|| UzeError::UnknownPackage(name.to_owned()))?;
@@ -198,10 +193,11 @@ impl UzeApplication {
             bootstrap::materialize(name)?
         } else {
             let record =
-                uze_core::state::marketplace_get(&self.home, marketplace)?.ok_or_else(|| {
+                uze_core::state::marketplace_get(&self.0.home, marketplace)?.ok_or_else(|| {
                     UzeError::UnknownPackage(format!("marketplace `{marketplace}` not found"))
                 })?;
-            let (marketplace_root, manifest) = Self::load_marketplace_manifest(&record.source)?;
+            let (marketplace_root, manifest) =
+                UzeApplication::load_marketplace_manifest(&record.source)?;
             let plugin_source = uze_core::acquisition::marketplace::resolve_plugin_source(
                 &manifest,
                 name,
@@ -226,31 +222,27 @@ impl UzeApplication {
         })
     }
 
-    pub fn install_from_marketplace(
+    pub fn install_from(
         &self,
         name: &str,
         authority: &dyn TrustAuthority,
     ) -> Result<AddPluginReport> {
-        self.install_from_marketplace_resolving(
-            name,
-            authority,
-            &uze_core::naming::NoNameCollisionAuthority,
-        )
+        self.install_from_resolving(name, authority, &uze_core::naming::NoNameCollisionAuthority)
     }
 
     /// `install_from_marketplace`, with an explicit answer for a
     /// bare-plugin-name collision (ADR-038) — see `add_plugin_resolving`.
-    pub fn install_from_marketplace_resolving(
+    pub fn install_from_resolving(
         &self,
         name: &str,
         authority: &dyn TrustAuthority,
         name_authority: &dyn uze_core::naming::NameCollisionAuthority,
     ) -> Result<AddPluginReport> {
-        let _mutation = uze_core::persistence::MutationLock::acquire(&self.home)?;
-        let materialized = self.acquire(&PackageSource::Embedded {
+        let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
+        let materialized = self.0.acquire(&PackageSource::Embedded {
             id: name.to_owned(),
         })?;
-        self.install_materialized_from_marketplace(
+        self.0.install_materialized_from_marketplace(
             materialized,
             "uze-official",
             authority,

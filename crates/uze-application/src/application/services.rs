@@ -40,3 +40,14 @@ impl UzeApplication {
         Profiles(self)
     }
 }
+
+/// Marketplaces this machine knows, and the plugins they publish.
+pub struct Marketplace<'a>(pub(super) &'a UzeApplication);
+
+impl UzeApplication {
+    /// Marketplace registration, catalogue reads, and installs sourced
+    /// from one.
+    pub fn marketplace(&self) -> Marketplace<'_> {
+        Marketplace(self)
+    }
+}
