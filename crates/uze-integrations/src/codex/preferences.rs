@@ -17,31 +17,39 @@ use std::path::Path;
 use uze_core::{
     Result,
     preference::{
-        Autonomy, ModelPreference, PreferenceApplyDetail, PreferenceApplyOutcome,
-        PreferenceMapping, PreferenceTranslation, Preferences, SandboxScope, summarize_apply,
+        Autonomy, ModelPreference, PreferenceApplyOutcome, PreferenceTranslation, Preferences,
+        SandboxScope,
     },
     router::CompatibilityRoute,
 };
 
-use crate::shared::toml_config;
+use crate::shared::preference::{Axis, Mapping, Value};
 
-fn autonomy_mapping(autonomy: Autonomy) -> (CompatibilityRoute, &'static str) {
-    match autonomy {
-        Autonomy::Manual => (CompatibilityRoute::Native, "untrusted"),
-        Autonomy::Balanced => (CompatibilityRoute::Native, "on-request"),
-        // Codex expresses a Claude-style auto mode as no command approvals
-        // while retaining the separately configured sandbox boundary.
-        Autonomy::Auto => (CompatibilityRoute::Native, "never"),
-        Autonomy::Unattended => (CompatibilityRoute::Native, "never"),
+const APPROVAL_POLICY: &[&str] = &["approval_policy"];
+const SANDBOX_MODE: &[&str] = &["sandbox_mode"];
+const NETWORK_ACCESS: &[&str] = &["sandbox_workspace_write", "network_access"];
+
+fn mapping(preferences: &Preferences) -> Mapping {
+    Mapping {
+        autonomy: autonomy(preferences.autonomy),
+        sandbox: sandbox(preferences),
+        model: model(preferences.model),
     }
 }
 
-fn sandbox_mapping(sandbox: SandboxScope) -> (CompatibilityRoute, &'static str) {
-    match sandbox {
-        SandboxScope::ReadOnly => (CompatibilityRoute::Native, "read-only"),
-        SandboxScope::WorkspaceWrite => (CompatibilityRoute::Native, "workspace-write"),
-        SandboxScope::FullAccess => (CompatibilityRoute::Native, "danger-full-access"),
-    }
+fn autonomy(autonomy: Autonomy) -> Axis {
+    // Codex expresses a Claude-style auto mode as no command approvals
+    // while retaining the separately configured sandbox boundary.
+    let value = match autonomy {
+        Autonomy::Manual => "untrusted",
+        Autonomy::Balanced => "on-request",
+        Autonomy::Auto | Autonomy::Unattended => "never",
+    };
+    Axis::new(
+        CompatibilityRoute::Native,
+        format!("approval_policy = \"{value}\""),
+    )
+    .set(APPROVAL_POLICY, Value::Text(value))
 }
 
 /// Codex's automatic mode is intended to run the whole development loop,
@@ -56,121 +64,74 @@ fn effective_sandbox(preferences: &Preferences) -> SandboxScope {
     }
 }
 
-/// `Some` naming the override whenever `effective_sandbox` raised the
-/// sandbox past what the profile actually asked for — the override in
-/// `effective_sandbox` must never apply silently: a user who explicitly
-/// chose `ReadOnly`/`WorkspaceWrite` and then picks `Auto` autonomy has to
-/// be able to see that their sandbox choice was not the one applied.
-fn sandbox_override_note(preferences: &Preferences, effective: SandboxScope) -> Option<String> {
-    (effective != preferences.sandbox).then(|| {
+fn sandbox(preferences: &Preferences) -> Axis {
+    let effective = effective_sandbox(preferences);
+    let value = match effective {
+        SandboxScope::ReadOnly => "read-only",
+        SandboxScope::WorkspaceWrite => "workspace-write",
+        SandboxScope::FullAccess => "danger-full-access",
+    };
+    // The override must never apply silently: someone who chose
+    // `ReadOnly`/`WorkspaceWrite` and then picked `Auto` autonomy has to be
+    // able to see that their sandbox choice was not the one applied — so it
+    // can never report as a plain `Native` match either.
+    let override_note = (effective != preferences.sandbox).then(|| {
         format!(
             "sandbox raised to full-access because autonomy is Auto (overrides your configured \
              {:?})",
             preferences.sandbox
         )
-    })
+    });
+    let summary = match &override_note {
+        Some(note) => format!("sandbox_mode = \"{value}\" ({note})"),
+        None => format!("sandbox_mode = \"{value}\""),
+    };
+    let mut axis = Axis::new(
+        match &override_note {
+            Some(_) => CompatibilityRoute::Degraded,
+            None => CompatibilityRoute::Native,
+        },
+        summary,
+    )
+    .set(SANDBOX_MODE, Value::Text(value));
+    axis = if effective == SandboxScope::WorkspaceWrite {
+        axis.set(NETWORK_ACCESS, Value::Flag(false))
+    } else {
+        // Cleared rather than written false: an absent key is Codex's own
+        // default, and a value we invented is not.
+        axis.clear(NETWORK_ACCESS)
+    };
+    match override_note {
+        Some(note) => axis.note(note),
+        None => axis,
+    }
 }
 
-fn model_mapping(model: ModelPreference) -> CompatibilityRoute {
+fn model(model: ModelPreference) -> Axis {
     match model {
-        ModelPreference::Default => CompatibilityRoute::Native,
-        ModelPreference::Fast | ModelPreference::Capable => CompatibilityRoute::Unsupported,
+        ModelPreference::Default => {
+            Axis::new(CompatibilityRoute::Native, "unset (Codex's own default)")
+        }
+        _ => Axis::new(
+            CompatibilityRoute::Unsupported,
+            "unsupported: no verified model catalog",
+        )
+        .note(
+            "Codex requires an exact model id; no verified fast/capable catalog to translate \
+             against",
+        ),
     }
 }
 
 pub(crate) fn translate(preferences: &Preferences) -> PreferenceTranslation {
-    let (autonomy_route, autonomy_value) = autonomy_mapping(preferences.autonomy);
-    let effective_sandbox = effective_sandbox(preferences);
-    let (sandbox_route, sandbox_value) = sandbox_mapping(effective_sandbox);
-    let override_note = sandbox_override_note(preferences, effective_sandbox);
-    // The override changes what was actually applied versus what the
-    // profile asked for, so it can never report as a plain `Native` match.
-    let sandbox_route = if override_note.is_some() {
-        CompatibilityRoute::Degraded
-    } else {
-        sandbox_route
-    };
-    let model_route = model_mapping(preferences.model);
-    PreferenceTranslation {
-        autonomy: PreferenceMapping {
-            route: autonomy_route,
-            native_summary: format!("approval_policy = \"{autonomy_value}\""),
-        },
-        sandbox: PreferenceMapping {
-            route: sandbox_route,
-            native_summary: match &override_note {
-                Some(note) => format!("sandbox_mode = \"{sandbox_value}\" ({note})"),
-                None => format!("sandbox_mode = \"{sandbox_value}\""),
-            },
-        },
-        model: PreferenceMapping {
-            route: model_route,
-            native_summary: match preferences.model {
-                ModelPreference::Default => "unset (Codex's own default)".to_owned(),
-                _ => "unsupported: no verified model catalog".to_owned(),
-            },
-        },
-    }
+    mapping(preferences).translate()
 }
 
 pub(crate) fn apply(
     config_path: &Path,
     preferences: &Preferences,
 ) -> Result<PreferenceApplyOutcome> {
-    let (autonomy_route, autonomy_value) = autonomy_mapping(preferences.autonomy);
-    let effective_sandbox = effective_sandbox(preferences);
-    let (sandbox_route, sandbox_value) = sandbox_mapping(effective_sandbox);
-    let override_note = sandbox_override_note(preferences, effective_sandbox);
-    // Same reasoning as `translate`: an overridden sandbox is not the exact
-    // preference applied, so it must not summarize as a plain `Native` hit.
-    let sandbox_route = if override_note.is_some() {
-        CompatibilityRoute::Degraded
-    } else {
-        sandbox_route
-    };
-    let model_route = model_mapping(preferences.model);
-
-    toml_config::merge(config_path, |document| {
-        toml_config::set_path(document, &["approval_policy"], autonomy_value)?;
-        toml_config::set_path(document, &["sandbox_mode"], sandbox_value)?;
-        if effective_sandbox == SandboxScope::WorkspaceWrite {
-            toml_config::set_path(
-                document,
-                &["sandbox_workspace_write", "network_access"],
-                false,
-            )?;
-        } else {
-            toml_config::remove_path(document, &["sandbox_workspace_write", "network_access"]);
-        }
-        Ok(())
-    })?;
-
-    let mut sandbox_keys = vec!["sandbox_mode".to_owned()];
-    if effective_sandbox == SandboxScope::WorkspaceWrite {
-        sandbox_keys.push("sandbox_workspace_write.network_access".to_owned());
-    }
-
-    Ok(summarize_apply([
-        PreferenceApplyDetail {
-            route: autonomy_route,
-            changed_keys: vec!["approval_policy".to_owned()],
-            note: None,
-        },
-        PreferenceApplyDetail {
-            route: sandbox_route,
-            changed_keys: sandbox_keys,
-            note: override_note,
-        },
-        PreferenceApplyDetail {
-            route: model_route,
-            changed_keys: Vec::new(),
-            note: (model_route == CompatibilityRoute::Unsupported).then(|| {
-                "Codex requires an exact model id; no verified fast/capable catalog to translate \
-                 against"
-                    .to_owned()
-            }),
-        },
-    ]))
+    mapping(preferences).apply_toml(config_path)
 }
 
 #[cfg(test)]

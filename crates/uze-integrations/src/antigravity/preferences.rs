@@ -15,134 +15,87 @@ use std::path::Path;
 use uze_core::{
     Result,
     preference::{
-        Autonomy, PreferenceApplyDetail, PreferenceApplyOutcome, PreferenceMapping,
-        PreferenceTranslation, Preferences, SandboxScope, summarize_apply,
+        Autonomy, PreferenceApplyOutcome, PreferenceTranslation, Preferences, SandboxScope,
     },
     router::CompatibilityRoute,
 };
 
-use crate::shared::json_config;
+use crate::shared::preference::{Axis, Mapping, Value};
 
-struct AutonomyKeys {
-    agent_mode: &'static str,
-    tool_permission: &'static str,
-}
+const AGENT_MODE: &[&str] = &["agentMode"];
+const TOOL_PERMISSION: &[&str] = &["toolPermission"];
+const TERMINAL_SANDBOX: &[&str] = &["enableTerminalSandbox"];
+const NON_WORKSPACE: &[&str] = &["allowNonWorkspaceAccess"];
 
-fn autonomy_mapping(autonomy: Autonomy) -> AutonomyKeys {
-    match autonomy {
-        Autonomy::Manual => AutonomyKeys {
-            agent_mode: "default",
-            tool_permission: "strict",
-        },
-        Autonomy::Balanced => AutonomyKeys {
-            agent_mode: "accept-edits",
-            tool_permission: "request-review",
-        },
-        Autonomy::Auto => AutonomyKeys {
-            agent_mode: "accept-edits",
-            tool_permission: "proceed-in-sandbox",
-        },
-        Autonomy::Unattended => AutonomyKeys {
-            agent_mode: "accept-edits",
-            tool_permission: "always-proceed",
-        },
+fn mapping(preferences: &Preferences) -> Mapping {
+    Mapping {
+        autonomy: autonomy(preferences.autonomy),
+        sandbox: sandbox(preferences.sandbox),
+        // Never written: no persisted key was confirmed, and guessing one
+        // risks silently corrupting a real user setting.
+        model: Axis::new(
+            CompatibilityRoute::Unsupported,
+            "no confirmed persisted model key",
+        )
+        .note("Antigravity has no confirmed persisted model key"),
     }
 }
 
-fn sandbox_mapping(sandbox: SandboxScope) -> (CompatibilityRoute, bool, bool) {
-    // (route, enableTerminalSandbox, allowNonWorkspaceAccess)
-    match sandbox {
-        // No verified mechanism blocks writes *within* the sandboxed
-        // workspace itself — only sandboxing and the workspace boundary are
-        // confirmed, so this is weaker than a real read-only guarantee.
+fn autonomy(autonomy: Autonomy) -> Axis {
+    let (agent_mode, tool_permission) = match autonomy {
+        Autonomy::Manual => ("default", "strict"),
+        Autonomy::Balanced => ("accept-edits", "request-review"),
+        Autonomy::Auto => ("accept-edits", "proceed-in-sandbox"),
+        Autonomy::Unattended => ("accept-edits", "always-proceed"),
+    };
+    Axis::new(
+        CompatibilityRoute::Adaptable,
+        format!("agentMode = {agent_mode}, toolPermission = {tool_permission}"),
+    )
+    .set(AGENT_MODE, Value::Text(agent_mode))
+    .set(TOOL_PERMISSION, Value::Text(tool_permission))
+    .note(
+        "Antigravity has no single autonomy key; translated across agentMode and toolPermission \
+         (unverified against current docs — re-check before relying on this)",
+    )
+}
+
+fn sandbox(sandbox: SandboxScope) -> Axis {
+    // No verified mechanism blocks writes *within* the sandboxed workspace
+    // itself — only sandboxing and the workspace boundary are confirmed,
+    // so read-only is weaker here than a real read-only guarantee.
+    let (route, terminal_sandbox, non_workspace) = match sandbox {
         SandboxScope::ReadOnly => (CompatibilityRoute::Degraded, true, false),
         SandboxScope::WorkspaceWrite => (CompatibilityRoute::Adaptable, true, false),
         SandboxScope::FullAccess => (CompatibilityRoute::Adaptable, false, true),
+    };
+    let axis = Axis::new(
+        route,
+        format!(
+            "enableTerminalSandbox = {terminal_sandbox}, allowNonWorkspaceAccess = {non_workspace}"
+        ),
+    )
+    .set(TERMINAL_SANDBOX, Value::Flag(terminal_sandbox))
+    .set(NON_WORKSPACE, Value::Flag(non_workspace));
+    if route == CompatibilityRoute::Degraded {
+        axis.note(
+            "no verified mechanism blocks writes within the sandboxed workspace itself, only the \
+             workspace boundary",
+        )
+    } else {
+        axis
     }
 }
 
 pub(crate) fn translate(preferences: &Preferences) -> PreferenceTranslation {
-    let keys = autonomy_mapping(preferences.autonomy);
-    let (sandbox_route, sandbox, non_workspace) = sandbox_mapping(preferences.sandbox);
-    PreferenceTranslation {
-        autonomy: PreferenceMapping {
-            route: CompatibilityRoute::Adaptable,
-            native_summary: format!(
-                "agentMode = {}, toolPermission = {}",
-                keys.agent_mode, keys.tool_permission
-            ),
-        },
-        sandbox: PreferenceMapping {
-            route: sandbox_route,
-            native_summary: format!(
-                "enableTerminalSandbox = {sandbox}, allowNonWorkspaceAccess = {non_workspace}"
-            ),
-        },
-        model: PreferenceMapping {
-            route: CompatibilityRoute::Unsupported,
-            native_summary: "no confirmed persisted model key".to_owned(),
-        },
-    }
+    mapping(preferences).translate()
 }
 
 pub(crate) fn apply(
     settings_path: &Path,
     preferences: &Preferences,
 ) -> Result<PreferenceApplyOutcome> {
-    let keys = autonomy_mapping(preferences.autonomy);
-    let (sandbox_route, sandbox, non_workspace) = sandbox_mapping(preferences.sandbox);
-
-    json_config::merge(settings_path, |config| {
-        json_config::set_path(config, &["agentMode"], serde_json::json!(keys.agent_mode))?;
-        json_config::set_path(
-            config,
-            &["toolPermission"],
-            serde_json::json!(keys.tool_permission),
-        )?;
-        json_config::set_path(
-            config,
-            &["enableTerminalSandbox"],
-            serde_json::json!(sandbox),
-        )?;
-        json_config::set_path(
-            config,
-            &["allowNonWorkspaceAccess"],
-            serde_json::json!(non_workspace),
-        )?;
-        Ok(())
-    })?;
-
-    // `model` is never written: no persisted key was confirmed, so guessing
-    // one risks silently corrupting a real user setting.
-    Ok(summarize_apply([
-        PreferenceApplyDetail {
-            route: CompatibilityRoute::Adaptable,
-            changed_keys: vec!["agentMode".to_owned(), "toolPermission".to_owned()],
-            note: Some(
-                "Antigravity has no single autonomy key; translated across agentMode and \
-                 toolPermission (unverified against current docs — re-check before relying on \
-                 this)"
-                    .to_owned(),
-            ),
-        },
-        PreferenceApplyDetail {
-            route: sandbox_route,
-            changed_keys: vec![
-                "enableTerminalSandbox".to_owned(),
-                "allowNonWorkspaceAccess".to_owned(),
-            ],
-            note: (sandbox_route == CompatibilityRoute::Degraded).then(|| {
-                "no verified mechanism blocks writes within the sandboxed workspace itself, only \
-                 the workspace boundary"
-                    .to_owned()
-            }),
-        },
-        PreferenceApplyDetail {
-            route: CompatibilityRoute::Unsupported,
-            changed_keys: Vec::new(),
-            note: Some("Antigravity has no confirmed persisted model key".to_owned()),
-        },
-    ]))
+    mapping(preferences).apply_json(settings_path)
 }
 
 #[cfg(test)]

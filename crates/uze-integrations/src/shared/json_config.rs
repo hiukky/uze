@@ -59,6 +59,28 @@ pub(crate) fn set_path(
 }
 
 /// Writes `config` back with a trailing newline, atomically.
+/// Removes `path` if it exists, leaving every other key untouched. An
+/// absent key is a successful no-op: the caller asked for it to be gone.
+pub(crate) fn remove_path(config: &mut serde_json::Value, path: &[&str]) {
+    let Some((last, ancestors)) = path.split_last() else {
+        return;
+    };
+    let mut cursor = match config.as_object_mut() {
+        Some(object) => object,
+        None => return,
+    };
+    for key in ancestors {
+        cursor = match cursor
+            .get_mut(*key)
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            Some(next) => next,
+            None => return,
+        };
+    }
+    cursor.remove(*last);
+}
+
 pub(crate) fn write_object(path: &Path, config: &serde_json::Value) -> Result<()> {
     let mut bytes = serde_json::to_vec_pretty(config).expect("preference config serializes");
     bytes.push(b'\n');

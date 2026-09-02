@@ -18,134 +18,92 @@ use std::path::Path;
 use uze_core::{
     Result,
     preference::{
-        Autonomy, ModelPreference, PreferenceApplyDetail, PreferenceApplyOutcome,
-        PreferenceMapping, PreferenceTranslation, Preferences, SandboxScope, summarize_apply,
+        Autonomy, ModelPreference, PreferenceApplyOutcome, PreferenceTranslation, Preferences,
+        SandboxScope,
     },
     router::CompatibilityRoute,
 };
 
-use crate::shared::json_config;
+use crate::shared::preference::{Axis, Mapping, Value};
 
-fn autonomy_mapping(autonomy: Autonomy) -> (CompatibilityRoute, &'static str) {
-    match autonomy {
-        Autonomy::Manual => (CompatibilityRoute::Native, "default"),
-        Autonomy::Balanced => (CompatibilityRoute::Native, "acceptEdits"),
-        Autonomy::Auto => (CompatibilityRoute::Native, "auto"),
-        // The documented equivalent of "never ask" is `bypassPermissions`
-        // (the modern name for what `--dangerously-skip-permissions`
-        // invoked) — an exact key/value match, hence still Native, though
-        // the TUI colors it as the highest-risk value on its own axis.
-        Autonomy::Unattended => (CompatibilityRoute::Native, "bypassPermissions"),
+const AUTONOMY: &[&str] = &["permissions", "defaultMode"];
+const SANDBOX: &[&str] = &["sandbox", "enabled"];
+const ALLOW_WRITE: &[&str] = &["sandbox", "filesystem", "allowWrite"];
+const MODEL: &[&str] = &["model"];
+
+/// Neither non-default sandbox value claims `Native`: enabling the sandbox
+/// without a workspace-scoped allowlist does not precisely deliver
+/// "workspace-write", only "sandboxed with Claude's own default scope".
+const SANDBOX_NOTE: &str = "Claude has no workspace-scoped write allowlist at user scope; \
+                            sandbox is set to its coarse enabled/disabled state only";
+
+fn mapping(preferences: &Preferences) -> Mapping {
+    Mapping {
+        autonomy: autonomy(preferences.autonomy),
+        sandbox: sandbox(preferences.sandbox),
+        model: model(preferences.model),
     }
 }
 
-fn sandbox_mapping(sandbox: SandboxScope) -> (CompatibilityRoute, &'static str) {
+fn autonomy(autonomy: Autonomy) -> Axis {
+    // The documented equivalent of "never ask" is `bypassPermissions` (the
+    // modern name for what `--dangerously-skip-permissions` invoked) — an
+    // exact key/value match, hence still Native, though the TUI colors it
+    // as the highest-risk value on its own axis.
+    let value = match autonomy {
+        Autonomy::Manual => "default",
+        Autonomy::Balanced => "acceptEdits",
+        Autonomy::Auto => "auto",
+        Autonomy::Unattended => "bypassPermissions",
+    };
+    Axis::new(
+        CompatibilityRoute::Native,
+        format!("permissions.defaultMode = {value}"),
+    )
+    .set(AUTONOMY, Value::Text(value))
+}
+
+fn sandbox(sandbox: SandboxScope) -> Axis {
     match sandbox {
-        SandboxScope::FullAccess => (
+        SandboxScope::FullAccess => Axis::new(
             CompatibilityRoute::Native,
             "sandbox.enabled=false (default)",
-        ),
-        SandboxScope::WorkspaceWrite => (
+        )
+        .set(SANDBOX, Value::Flag(false)),
+        SandboxScope::WorkspaceWrite => Axis::new(
             CompatibilityRoute::Adaptable,
             "sandbox.enabled=true (default filesystem scope; no workspace allowlist at user scope)",
-        ),
-        SandboxScope::ReadOnly => (
+        )
+        .set(SANDBOX, Value::Flag(true))
+        .note(SANDBOX_NOTE),
+        SandboxScope::ReadOnly => Axis::new(
             CompatibilityRoute::Adaptable,
             "sandbox.enabled=true, sandbox.filesystem.allowWrite=[] (no writes anywhere)",
-        ),
+        )
+        .set(SANDBOX, Value::Flag(true))
+        .set(ALLOW_WRITE, Value::EmptyList)
+        .note(SANDBOX_NOTE),
     }
 }
 
-fn model_mapping(model: ModelPreference) -> (CompatibilityRoute, &'static str) {
-    match model {
-        ModelPreference::Default => (CompatibilityRoute::Native, "default"),
-        ModelPreference::Fast => (CompatibilityRoute::Native, "haiku"),
-        ModelPreference::Capable => (CompatibilityRoute::Native, "opus"),
-    }
+fn model(model: ModelPreference) -> Axis {
+    let value = match model {
+        ModelPreference::Default => "default",
+        ModelPreference::Fast => "haiku",
+        ModelPreference::Capable => "opus",
+    };
+    Axis::new(CompatibilityRoute::Native, format!("model = {value}")).set(MODEL, Value::Text(value))
 }
 
 pub(crate) fn translate(preferences: &Preferences) -> PreferenceTranslation {
-    let (autonomy_route, autonomy_value) = autonomy_mapping(preferences.autonomy);
-    let (sandbox_route, sandbox_value) = sandbox_mapping(preferences.sandbox);
-    let (model_route, model_value) = model_mapping(preferences.model);
-    PreferenceTranslation {
-        autonomy: PreferenceMapping {
-            route: autonomy_route,
-            native_summary: format!("permissions.defaultMode = {autonomy_value}"),
-        },
-        sandbox: PreferenceMapping {
-            route: sandbox_route,
-            native_summary: sandbox_value.to_owned(),
-        },
-        model: PreferenceMapping {
-            route: model_route,
-            native_summary: format!("model = {model_value}"),
-        },
-    }
+    mapping(preferences).translate()
 }
 
 pub(crate) fn apply(
     settings_path: &Path,
     preferences: &Preferences,
 ) -> Result<PreferenceApplyOutcome> {
-    let (autonomy_route, autonomy_value) = autonomy_mapping(preferences.autonomy);
-    let (sandbox_route, _) = sandbox_mapping(preferences.sandbox);
-    let (model_route, model_value) = model_mapping(preferences.model);
-
-    json_config::merge(settings_path, |config| {
-        json_config::set_path(
-            config,
-            &["permissions", "defaultMode"],
-            serde_json::json!(autonomy_value),
-        )?;
-        match preferences.sandbox {
-            SandboxScope::FullAccess => {
-                json_config::set_path(config, &["sandbox", "enabled"], serde_json::json!(false))?;
-            }
-            SandboxScope::WorkspaceWrite => {
-                json_config::set_path(config, &["sandbox", "enabled"], serde_json::json!(true))?;
-            }
-            SandboxScope::ReadOnly => {
-                json_config::set_path(config, &["sandbox", "enabled"], serde_json::json!(true))?;
-                json_config::set_path(
-                    config,
-                    &["sandbox", "filesystem", "allowWrite"],
-                    serde_json::json!([]),
-                )?;
-            }
-        }
-        json_config::set_path(config, &["model"], serde_json::json!(model_value))?;
-        Ok(())
-    })?;
-
-    let sandbox_keys = match preferences.sandbox {
-        SandboxScope::ReadOnly => vec![
-            "sandbox.enabled".to_owned(),
-            "sandbox.filesystem.allowWrite".to_owned(),
-        ],
-        _ => vec!["sandbox.enabled".to_owned()],
-    };
-    Ok(summarize_apply([
-        PreferenceApplyDetail {
-            route: autonomy_route,
-            changed_keys: vec!["permissions.defaultMode".to_owned()],
-            note: None,
-        },
-        PreferenceApplyDetail {
-            route: sandbox_route,
-            changed_keys: sandbox_keys,
-            note: (sandbox_route != CompatibilityRoute::Native).then(|| {
-                "Claude has no workspace-scoped write allowlist at user scope; sandbox is set \
-                 to its coarse enabled/disabled state only"
-                    .to_owned()
-            }),
-        },
-        PreferenceApplyDetail {
-            route: model_route,
-            changed_keys: vec!["model".to_owned()],
-            note: None,
-        },
-    ]))
+    mapping(preferences).apply_json(settings_path)
 }
 
 #[cfg(test)]

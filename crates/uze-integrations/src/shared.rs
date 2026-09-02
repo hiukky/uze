@@ -19,6 +19,7 @@
 
 pub(crate) mod json_config;
 pub(crate) mod path;
+pub(crate) mod preference;
 pub(crate) mod process;
 pub(crate) mod provision;
 pub(crate) mod skill;

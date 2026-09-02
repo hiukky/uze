@@ -21,178 +21,107 @@ use std::path::Path;
 use uze_core::{
     Result,
     preference::{
-        Autonomy, ModelPreference, PreferenceApplyDetail, PreferenceApplyOutcome,
-        PreferenceMapping, PreferenceTranslation, Preferences, SandboxScope, summarize_apply,
+        Autonomy, ModelPreference, PreferenceApplyOutcome, PreferenceTranslation, Preferences,
+        SandboxScope,
     },
     router::CompatibilityRoute,
 };
 
-use crate::shared::json_config;
+use crate::shared::preference::{Axis, Mapping, Value};
 
-struct AutonomyKeys {
-    edit: &'static str,
-    bash: &'static str,
-    webfetch: &'static str,
-    websearch: &'static str,
-}
+const EDIT: &[&str] = &["permission", "edit"];
+const BASH: &[&str] = &["permission", "bash"];
+const WEBFETCH: &[&str] = &["permission", "webfetch"];
+const WEBSEARCH: &[&str] = &["permission", "websearch"];
+const EXTERNAL_DIRECTORY: &[&str] = &["permission", "external_directory"];
 
-fn autonomy_mapping(autonomy: Autonomy) -> (CompatibilityRoute, AutonomyKeys) {
-    let keys = match autonomy {
-        Autonomy::Manual => AutonomyKeys {
-            edit: "ask",
-            bash: "ask",
-            webfetch: "ask",
-            websearch: "ask",
-        },
-        Autonomy::Balanced => AutonomyKeys {
-            edit: "allow",
-            bash: "ask",
-            webfetch: "ask",
-            websearch: "allow",
-        },
-        // OpenCode's persisted config has no distinction between "mostly
-        // autonomous" and "never ask" beyond explicit deny rules (the
-        // closer `--auto` CLI flag is a runtime flag, not persisted) — Auto
-        // and Unattended produce the same category values.
-        Autonomy::Auto | Autonomy::Unattended => AutonomyKeys {
-            edit: "allow",
-            bash: "allow",
-            webfetch: "allow",
-            websearch: "allow",
-        },
-    };
-    (CompatibilityRoute::Adaptable, keys)
-}
-
-fn sandbox_mapping(sandbox: SandboxScope) -> (CompatibilityRoute, &'static str) {
-    match sandbox {
-        SandboxScope::ReadOnly => (CompatibilityRoute::Adaptable, "deny"),
-        SandboxScope::WorkspaceWrite => (CompatibilityRoute::Adaptable, "deny"),
-        SandboxScope::FullAccess => (CompatibilityRoute::Adaptable, "allow"),
+fn mapping(preferences: &Preferences) -> Mapping {
+    Mapping {
+        autonomy: autonomy(preferences.autonomy),
+        // Ordered after autonomy on purpose: read-only re-writes
+        // `permission.edit`, and the later write is the one that stands.
+        sandbox: sandbox(preferences.sandbox),
+        model: model(preferences.model),
     }
 }
 
-fn model_mapping(model: ModelPreference) -> CompatibilityRoute {
+fn autonomy(autonomy: Autonomy) -> Axis {
+    // OpenCode's persisted config has no distinction between "mostly
+    // autonomous" and "never ask" beyond explicit deny rules (the closer
+    // `--auto` CLI flag is a runtime flag, not persisted) — Auto and
+    // Unattended produce the same category values.
+    let (edit, bash, webfetch, websearch) = match autonomy {
+        Autonomy::Manual => ("ask", "ask", "ask", "ask"),
+        Autonomy::Balanced => ("allow", "ask", "ask", "allow"),
+        Autonomy::Auto | Autonomy::Unattended => ("allow", "allow", "allow", "allow"),
+    };
+    Axis::new(
+        CompatibilityRoute::Adaptable,
+        format!(
+            "permission.edit={edit}, permission.bash={bash}, permission.webfetch={webfetch}, \
+             permission.websearch={websearch}"
+        ),
+    )
+    .set(EDIT, Value::Text(edit))
+    .set(BASH, Value::Text(bash))
+    .set(WEBFETCH, Value::Text(webfetch))
+    .set(WEBSEARCH, Value::Text(websearch))
+    .note("OpenCode has no single autonomy key; translated across several permission categories")
+}
+
+fn sandbox(sandbox: SandboxScope) -> Axis {
+    let external_directory = match sandbox {
+        SandboxScope::ReadOnly | SandboxScope::WorkspaceWrite => "deny",
+        SandboxScope::FullAccess => "allow",
+    };
+    let read_only = sandbox == SandboxScope::ReadOnly;
+    let axis = Axis::new(
+        CompatibilityRoute::Adaptable,
+        format!(
+            "permission.external_directory={external_directory}{}",
+            if read_only {
+                " (also forces permission.edit=deny)"
+            } else {
+                ""
+            }
+        ),
+    )
+    .set(EXTERNAL_DIRECTORY, Value::Text(external_directory));
+    if read_only {
+        axis.set(EDIT, Value::Text("deny")).note(
+            "OpenCode's bash tool can still write files; read-only only blocks the edit tool and \
+             paths outside the workspace",
+        )
+    } else {
+        axis
+    }
+}
+
+fn model(model: ModelPreference) -> Axis {
     match model {
-        ModelPreference::Default => CompatibilityRoute::Native,
-        ModelPreference::Fast | ModelPreference::Capable => CompatibilityRoute::Unsupported,
+        ModelPreference::Default => {
+            Axis::new(CompatibilityRoute::Native, "unset (OpenCode's own default)")
+        }
+        _ => Axis::new(
+            CompatibilityRoute::Unsupported,
+            "unsupported: no verified model catalog",
+        )
+        .note(
+            "OpenCode's model id is provider-specific; no verified fast/capable catalog to \
+             translate against",
+        ),
     }
 }
 
 pub(crate) fn translate(preferences: &Preferences) -> PreferenceTranslation {
-    let (autonomy_route, keys) = autonomy_mapping(preferences.autonomy);
-    let (sandbox_route, external_directory) = sandbox_mapping(preferences.sandbox);
-    let model_route = model_mapping(preferences.model);
-    PreferenceTranslation {
-        autonomy: PreferenceMapping {
-            route: autonomy_route,
-            native_summary: format!(
-                "permission.edit={}, permission.bash={}, permission.webfetch={}, \
-                 permission.websearch={}",
-                keys.edit, keys.bash, keys.webfetch, keys.websearch
-            ),
-        },
-        sandbox: PreferenceMapping {
-            route: sandbox_route,
-            native_summary: format!(
-                "permission.external_directory={external_directory}{}",
-                if preferences.sandbox == SandboxScope::ReadOnly {
-                    " (also forces permission.edit=deny)"
-                } else {
-                    ""
-                }
-            ),
-        },
-        model: PreferenceMapping {
-            route: model_route,
-            native_summary: match preferences.model {
-                ModelPreference::Default => "unset (OpenCode's own default)".to_owned(),
-                _ => "unsupported: no verified model catalog".to_owned(),
-            },
-        },
-    }
+    mapping(preferences).translate()
 }
 
 pub(crate) fn apply(
     config_path: &Path,
     preferences: &Preferences,
 ) -> Result<PreferenceApplyOutcome> {
-    let (autonomy_route, keys) = autonomy_mapping(preferences.autonomy);
-    let (sandbox_route, external_directory) = sandbox_mapping(preferences.sandbox);
-    let model_route = model_mapping(preferences.model);
-
-    json_config::merge(config_path, |config| {
-        json_config::set_path(
-            config,
-            &["permission", "edit"],
-            serde_json::json!(keys.edit),
-        )?;
-        json_config::set_path(
-            config,
-            &["permission", "bash"],
-            serde_json::json!(keys.bash),
-        )?;
-        json_config::set_path(
-            config,
-            &["permission", "webfetch"],
-            serde_json::json!(keys.webfetch),
-        )?;
-        json_config::set_path(
-            config,
-            &["permission", "websearch"],
-            serde_json::json!(keys.websearch),
-        )?;
-        json_config::set_path(
-            config,
-            &["permission", "external_directory"],
-            serde_json::json!(external_directory),
-        )?;
-        // Applied after autonomy's own `edit` value so "read only" wins.
-        if preferences.sandbox == SandboxScope::ReadOnly {
-            json_config::set_path(config, &["permission", "edit"], serde_json::json!("deny"))?;
-        }
-        Ok(())
-    })?;
-
-    let mut sandbox_keys = vec!["permission.external_directory".to_owned()];
-    if preferences.sandbox == SandboxScope::ReadOnly {
-        sandbox_keys.push("permission.edit".to_owned());
-    }
-
-    Ok(summarize_apply([
-        PreferenceApplyDetail {
-            route: autonomy_route,
-            changed_keys: vec![
-                "permission.edit".to_owned(),
-                "permission.bash".to_owned(),
-                "permission.webfetch".to_owned(),
-                "permission.websearch".to_owned(),
-            ],
-            note: Some(
-                "OpenCode has no single autonomy key; translated across several permission \
-                 categories"
-                    .to_owned(),
-            ),
-        },
-        PreferenceApplyDetail {
-            route: sandbox_route,
-            changed_keys: sandbox_keys,
-            note: (preferences.sandbox == SandboxScope::ReadOnly).then(|| {
-                "OpenCode's bash tool can still write files; read-only only blocks the edit \
-                 tool and paths outside the workspace"
-                    .to_owned()
-            }),
-        },
-        PreferenceApplyDetail {
-            route: model_route,
-            changed_keys: Vec::new(),
-            note: (model_route == CompatibilityRoute::Unsupported).then(|| {
-                "OpenCode's model id is provider-specific; no verified fast/capable catalog to \
-                 translate against"
-                    .to_owned()
-            }),
-        },
-    ]))
+    mapping(preferences).apply_json(config_path)
 }
 
 #[cfg(test)]
