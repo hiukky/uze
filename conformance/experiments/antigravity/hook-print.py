@@ -73,6 +73,8 @@ agy --print "run the API check" --output-format stream-json \\
   {skip} --print-timeout 90s --log-file /work/agy.log 2>&1 | tail -c 3000
 echo '===== agy.log (hooks) ====='
 grep -n -i "hook" /work/agy.log | grep -v Migration | head -40
+echo '===== agy.log (feature flags) ====='
+grep -n -iE "unleash|experiment|feature|flag|json-hooks" /work/agy.log | head -40
 """
 
 

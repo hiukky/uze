@@ -66,11 +66,14 @@ it become authoritative.
   group's matcher translated and its handlers run by the `hooks/exec`
   wrapper vendored inside that same plugin — no `uze` on the execution
   path); note
-  that AGY executes `hooks.json` hooks only when its server-delivered
-  feature provider enables `CustomizationConfig.enable_json_hooks` — the
-  offline conformance Lab observes them loaded and listed but never run
-  (1.1.22, 1.1.24), which the Antigravity vertical measures with a
-  vendor-format control hook before judging UZE's.
+  that AGY executes `hooks.json` hooks only when `enable_json_hooks`
+  (field 17 of the backend's `CustomizationConfig`, switched server-side by
+  the `json-hooks-enabled` feature flag) is set. That config reaches the CLI
+  only over the CloudCode backend it speaks when signed in to a Google
+  account; a Gemini API-key session never receives it. The conformance Lab
+  serves the flag and the harness consumes it, yet still observes hooks
+  loaded and listed but never run (1.1.22, 1.1.24) — which the Antigravity
+  vertical measures with a vendor-format control hook before judging UZE's.
 - Workspace-level `.agents/mcp_config.json` discovery is a project-scope
   concern outside UZE's machine-scope integration; it was not observable
   headlessly (`agy mcp list` shows global only). `.agents/skills/` is a

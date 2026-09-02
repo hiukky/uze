@@ -225,6 +225,37 @@ server-delivered feature provider the offline Lab never receives; it is
 not a setting, a plugin field or agent frontmatter, so nothing UZE ships
 can open it and nothing the Lab may honestly stub can either.
 
+**Followed up again (2026-09-02), with the flag now served.** The gate has
+a name: `json-hooks-enabled` ("Whether to enable hooks based on json
+files"), a `flexibleRollout` at 100% constrained to `ide IN [jetski]`,
+delivered by Unleash at `GET https://antigravity-unleash.goog/api/client/
+features`. The Lab now serves that plane — a TLS listener on 443 beside the
+Gemini stub, replaying the recorded feature verbatim — and the run's
+provider log proves the harness consumes it
+(`[provider:flags] GET antigravity-unleash.goog/api/client/features`,
+`POST /api/client/register`, `POST play.googleapis.com/log`).
+
+Hooks still do not execute, and the reason is now measured rather than
+guessed. Serving the flag with its constraint dropped
+(`UNLEASH_UNCONSTRAINED=1`, the provider's own diagnostic switch) changes
+nothing, so the strategy is not what fails. Reading the binary says why:
+`enable_json_hooks` is field 17 of `exa.cortex_pb.CustomizationConfig`, a
+*model-backend* config, and `ListExperiments` is a
+`google.internal.cloud.code.v1internal` RPC. The CLI receives that config
+only when it speaks the CloudCode backend protocol — which it does when
+signed in to a Google account. The Lab runs it in Gemini API-key mode
+(`GEMINI_API_KEY` + `GOOGLE_GEMINI_BASE_URL` at the synthetic stub), so it
+never speaks CloudCode, never receives a `CustomizationConfig`, and
+`enable_json_hooks` is never set. `json-hooks-enabled` is the server-side
+switch that decides what CloudCode *puts in* that config; handing it to the
+CLI does not synthesize the config.
+
+So the flag plane is a prerequisite that is now in place and no longer a
+confound, and the remaining distance is a different, larger piece of work:
+serving the CloudCode `v1internal` protocol and running the vertical in
+signed-in mode, which changes which backend the whole vertical exercises.
+The ten declarations stand, with that reason recorded against them.
+
 So the Antigravity vertical measures the gate instead of assuming it:
 `hooks > vendor` runs that control hook first. When it denies, the UZE
 hook checks are asserted exactly as on Claude; when it does not, each is

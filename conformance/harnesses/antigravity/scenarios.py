@@ -45,6 +45,11 @@ export HOME=/work/home UZE_HOME=/work/home/.uze
 export GEMINI_API_KEY=uze-conformance-invalid-by-design
 export GOOGLE_GEMINI_BASE_URL=http://{prov_ip}:9999
 export AGY_CLI_DISABLE_AUTO_UPDATE=1
+# The harness is Go and honours SSL_CERT_FILE on Linux: this is how it
+# trusts the run's synthetic CA for its own control plane (feature flags,
+# account endpoints) without any Internet.
+export SSL_CERT_FILE=/app/ca.crt
+export SSL_CERT_DIR=/app
 mkdir -p /work/home/.gemini/antigravity-cli
 cp /app/fixtures/settings.json /work/home/.gemini/antigravity-cli/settings.json
 cp /app/fixtures/jetski_state.pbtxt /work/home/.gemini/antigravity-cli/jetski_state.pbtxt
@@ -415,10 +420,17 @@ def phase_hooks_gate(cfg, prov_ip):
     Observed on 1.1.22 and 1.1.24 (2026-09-02, experiments
     `antigravity/hook-print` and `antigravity/hook-tui`): the hook is
     loaded (`hooks_manager: loaded 1 named hooks`), listed by `/hooks`, and
-    never executed — not for any event, not even a `touch`. The executor is
-    gated by `CustomizationConfig.enable_json_hooks`, built by the CLI's SDK
-    from a server-delivered feature provider that the offline Lab never
-    receives; it is not a setting, a plugin field or agent frontmatter.
+    never executed — not for any event, not even a `touch`.
+
+    The gate's flag is now served by the Lab and consumed by the harness
+    (`json-hooks-enabled`, from the provider's Unleash listener), and
+    dropping its `ide IN [jetski]` constraint changes nothing. What is
+    missing is one layer further in: the executor reads `enable_json_hooks`,
+    field 17 of `exa.cortex_pb.CustomizationConfig`, which arrives only over
+    the CloudCode `v1internal` backend the CLI speaks when signed in to a
+    Google account. This vertical runs it on a Gemini API key, so no such
+    config ever arrives, whatever the flag says.
+
     While that gate is closed, the UZE hook checks are declared, not
     asserted: a green there would be the harness's, not ours to fake.
     Returns True when the control hook denied the command.

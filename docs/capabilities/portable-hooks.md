@@ -118,7 +118,7 @@ declare to the model, captured with the Lab's `--discovery` mode. A
 |---|---|---|
 | Claude Code | one merged entry per group in `~/.claude/settings.json`, `command` = the generated `hooks/exec` with the group's arguments (exec form: no shell parsing) | native |
 | Codex | one merged entry per group in `~/.codex/hooks.json`, one quoted shell line invoking the same wrapper | native |
-| Antigravity CLI | named entries at the document root of the generated plugin's `hooks.json`, with `hooks/exec` vendored inside the plugin | native (package-level); execution is gated by the vendor's server-delivered `enable_json_hooks`, which the offline Lab measures (`hooks > vendor`) rather than assumes |
+| Antigravity CLI | named entries at the document root of the generated plugin's `hooks.json`, with `hooks/exec` vendored inside the plugin | native (package-level); execution is gated by `enable_json_hooks`, which reaches the CLI only over its signed-in backend — the Lab measures that gate live (`hooks > vendor`) rather than assuming it |
 | OpenCode | one generated `Plugin.define` plugin, `<config root>/plugins/hooks-<package>.ts`, auto-discovered — the plugin *is* the wrapper, with the package's groups as data | adapted (`observe`/`allow` only; `deny`/`ask` unsupported, `Stop` never claimed) |
 
 The `sh` wrapper is one file per harness, byte-identical for every package,
@@ -187,9 +187,14 @@ stated) · **—** = not expressible.
   until then hooks there take the packager-runtime fallback route, which
   speaks the same contract but keeps working only while `uze` is installed.
 - **Antigravity's execution is vendor-gated.** Its hook entries load and
-  list correctly, but the executor is gated by a server-delivered setting
-  the offline Lab never receives; the vertical measures that gate live
-  rather than assuming it.
+  list correctly (`hooks_manager: loaded N named hooks`), but the executor
+  reads `enable_json_hooks` — field 17 of the model backend's
+  `CustomizationConfig`, switched server-side by the `json-hooks-enabled`
+  feature flag. That config reaches the CLI only over the CloudCode
+  backend it speaks when signed in to a Google account; a session running
+  on a Gemini API key never receives it, whatever the flag says. The Lab
+  serves the flag and the harness consumes it, and the vertical still
+  measures the gate live rather than assuming either answer.
 - **OpenCode V2 cannot block.** Its tool hooks carry the input but no block
   signal; `deny`/`ask` are diagnosed before attach.
 - **Codex requires the `[features].hooks` flag** in `~/.codex/config.toml`
