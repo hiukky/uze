@@ -14,6 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use super::services::Plugins;
 use super::*;
 use uze_core::{
     capability::CapabilityKind,
@@ -361,6 +362,7 @@ pub(crate) fn replace_resolution_removes_the_existing_active_plugin_and_installs
     let acquired =
         uze_core::acquisition::acquire(&uze_core::PackageSource::local(fixture())).unwrap();
     let alpha = app
+        .plugins()
         .install_materialized_from_marketplace(
             acquired,
             "alpha",
@@ -375,6 +377,7 @@ pub(crate) fn replace_resolution_removes_the_existing_active_plugin_and_installs
     let acquired =
         uze_core::acquisition::acquire(&uze_core::PackageSource::local(fixture())).unwrap();
     let beta = app
+        .plugins()
         .install_materialized_from_marketplace(
             acquired,
             "beta",
@@ -423,6 +426,7 @@ pub(crate) fn replace_resolution_aborts_and_preserves_the_existing_plugin_when_r
     let acquired =
         uze_core::acquisition::acquire(&uze_core::PackageSource::local(fixture())).unwrap();
     let alpha = app
+        .plugins()
         .install_materialized_from_marketplace(
             acquired,
             "alpha",
@@ -468,7 +472,7 @@ pub(crate) fn replace_resolution_aborts_and_preserves_the_existing_plugin_when_r
 
     let acquired =
         uze_core::acquisition::acquire(&uze_core::PackageSource::local(fixture())).unwrap();
-    let result = app.install_materialized_from_marketplace(
+    let result = app.plugins().install_materialized_from_marketplace(
         acquired,
         "beta",
         &uze_core::trust::AlwaysTrust,
@@ -521,19 +525,21 @@ pub(crate) fn update_preserves_an_aliased_plugins_active_name() {
     let app = UzeApplication::new(home.clone(), vec![Box::new(SymlinkIntegration)]);
     let acquired =
         uze_core::acquisition::acquire(&uze_core::PackageSource::local(fixture())).unwrap();
-    app.install_materialized_from_marketplace(
-        acquired,
-        "alpha",
-        &uze_core::trust::AlwaysTrust,
-        &[],
-        false,
-        &uze_core::naming::NoNameCollisionAuthority,
-    )
-    .unwrap();
+    app.plugins()
+        .install_materialized_from_marketplace(
+            acquired,
+            "alpha",
+            &uze_core::trust::AlwaysTrust,
+            &[],
+            false,
+            &uze_core::naming::NoNameCollisionAuthority,
+        )
+        .unwrap();
 
     let acquired =
         uze_core::acquisition::acquire(&uze_core::PackageSource::local(fixture())).unwrap();
     let beta = app
+        .plugins()
         .install_materialized_from_marketplace(
             acquired,
             "beta",
@@ -866,7 +872,7 @@ pub(crate) fn a_default_plugin_that_would_cross_the_trust_boundary_is_not_instal
         },
     );
 
-    let result = app.install_materialized_from_marketplace(
+    let result = app.plugins().install_materialized_from_marketplace(
         materialized,
         "local",
         &uze_core::trust::NoTrustAuthority,
@@ -1019,7 +1025,7 @@ pub(crate) fn local_spoof_named_uze_is_not_protected() {
         .unwrap();
 
     let package = app.package_by_name("uze").unwrap();
-    assert!(!UzeApplication::is_protected_package(&package));
+    assert!(!Plugins::is_protected_package(&package));
 
     let report = app.plugins().remove("uze").unwrap();
     assert!(matches!(report, RemovePluginReport::Removed { .. }));

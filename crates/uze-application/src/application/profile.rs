@@ -122,6 +122,8 @@ impl Profiles<'_> {
 
 #[cfg(test)]
 mod tests {
+    use crate::UzeApplication;
+    use uze_core::provisioning::SystemProcessRunner;
     use uze_core::{
         home::UzeHome,
         preference::{

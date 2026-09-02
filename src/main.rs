@@ -1453,8 +1453,7 @@ fn run_shorthand(app: &UzeApplication, args: Vec<String>, verbose: bool) -> Resu
     // `external_subcommand` only ever fires with at least one token: the
     // unrecognized first argument that caused the fallback.
     let first = args[0].clone();
-    let (plugin, marketplace) = match uze_core::project_lock::parse_plugin_marketplace_spec(&first)
-    {
+    let (plugin, marketplace) = match uze_application::parse_plugin_marketplace_spec(&first) {
         Ok(parsed) => parsed,
         // No `@` at all: this was never shorthand — it's an unrecognized
         // command. Reuse `clap`'s own error type/formatting/exit code

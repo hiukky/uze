@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use uze_core::preference::Preferences;
+use uze_application::Preferences;
 
 use crate::{
     Result, UzeApplication, UzeError, UzeHome,
@@ -109,7 +109,9 @@ pub(crate) fn dispatch(
         | Intent::SwitchToWorkspaceTab(_) => {}
         Intent::ClearPromptHistory => {
             let root = model.workspace_root();
-            match uze_core::prompt_history::clear(home, &root) {
+            match tui_application(home.clone())
+                .and_then(|app| app.workspace().clear_prompt_history(&root))
+            {
                 Ok(()) => {
                     model.prompt_history.clear();
                     model.overview_prompt_selected = 0;
@@ -401,7 +403,6 @@ pub(crate) fn spawn_startup(home: UzeHome, sender: Sender<WorkerResult>, context
 }
 
 fn load_refresh_data(home: UzeHome, context_root: &std::path::Path) -> Result<RefreshData> {
-    let prompt_home = home.clone();
     let app = tui_application(home)?;
     let mut plugins = app.plugins().list()?;
     // Official plugins always lead the list — a stable sort keeps every
@@ -432,8 +433,7 @@ fn load_refresh_data(home: UzeHome, context_root: &std::path::Path) -> Result<Re
     let agent_context = app.workspace().agent_context(context_root);
     // Same root the workspace client records against, so a uze launched
     // from a subdirectory still reads back its own history.
-    let prompt_history =
-        uze_core::prompt_history::list_for_workspace(&prompt_home, status_root, 20);
+    let prompt_history = app.workspace().prompt_history(status_root, 20);
     Ok(RefreshData {
         plugins,
         doctor: Some(doctor),
@@ -610,7 +610,7 @@ pub(crate) fn drain_worker_results(
 /// concise status line the spec asks for; per-harness detail lives in the
 /// Harnesses panel's badges (`model.profile_apply_results`), not here.
 fn apply_message(id: &str, results: &[ProfileApplyResult]) -> String {
-    use uze_core::preference::PreferenceApplyOutcome;
+    use uze_application::PreferenceApplyOutcome;
     let approximated = results
         .iter()
         .filter(|result| {

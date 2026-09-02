@@ -351,7 +351,7 @@ const ISOLATION_MARKER: &str = " (wt)";
 /// checkout and carries [`ISOLATION_MARKER`] saying it is one. The full
 /// path stays one click on that mark away.
 fn caption_path(cwd: &Path) -> String {
-    match uze_core::worktree::isolated_checkout(cwd) {
+    match uze_application::isolated_checkout(cwd) {
         Some(checkout) => crate::ui::display_project_path(checkout.primary),
         None => crate::ui::display_project_path(cwd),
     }
@@ -377,7 +377,7 @@ fn push_isolation_marker<'a>(
     tab: TabId,
     hits: &mut Vec<(Rect, WorkspaceHit)>,
 ) {
-    if uze_core::worktree::isolated_checkout(cwd).is_none() {
+    if uze_application::isolated_checkout(cwd).is_none() {
         return;
     }
     let marker = Span::styled(ISOLATION_MARKER, Style::default().fg(crate::ui::BLUE));

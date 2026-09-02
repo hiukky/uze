@@ -6,7 +6,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Padding, Paragraph},
 };
-use uze_core::{capability::CapabilityKind, router::HarnessCapabilities};
+use uze_application::{CapabilityKind, HarnessCapabilities};
 
 use crate::application::{
     AgentContextStatus, HarnessHealth, ProfileSummary, ResourceDelivery, UndeliveredReason,

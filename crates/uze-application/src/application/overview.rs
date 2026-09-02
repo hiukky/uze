@@ -330,11 +330,13 @@ mod tests {
         fn install_from(&self, source: &Path, marketplace: &str) {
             let materialized = self
                 .app
+                .plugins()
                 .acquire(&PackageSource::Local {
                     path: source.to_path_buf(),
                 })
                 .unwrap();
             self.app
+                .plugins()
                 .install_materialized_from_marketplace(
                     materialized,
                     marketplace,

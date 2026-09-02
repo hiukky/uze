@@ -5,6 +5,7 @@
 //! filled panels) so switching between the workspace and management
 //! contexts with Ctrl+O reads as one product, not two.
 
+use super::tui_application;
 use crate::{Result, UzeError, UzeHome};
 use crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
@@ -24,12 +25,11 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use uze_core::prompt_history;
+use uze_application::AgentIdentity;
 use uze_extensions::{
     ExtensionHit, git_diff,
     view::{ScrollDirection, ViewHit},
 };
-use uze_integrations::registry::IntegrationRegistry;
 use uze_terminal::{
     CellAttributes, ClientEvent, ClientRequest, Cursor, PROTOCOL_VERSION, PaneDamage, PaneId,
     PaneSnapshot, RenderCell, Session, Space, SpaceId, Tab, TabId, TerminalColor, attach,
@@ -182,7 +182,7 @@ pub(crate) fn attach_workspace(
     // with the raw cwd, launching UZE from the repository and from a
     // subdirectory of it produced two servers over the same checkout, each
     // believing it was alone. Prompt history keys on the same answer below.
-    let workspace_root = uze_core::workspace::workspace_root_or_self(root);
+    let workspace_root = uze_application::workspace_root_or_self(root);
     let mut stream = attach(&workspace_root, columns, rows).map_err(runtime_error)?;
     let read_stream = stream.try_clone().map_err(io_error)?;
     send_request(
@@ -210,12 +210,15 @@ pub(crate) fn attach_workspace(
     // `model` drops its sender at the end of this attach.
     let history_root = workspace_root.clone();
     let (prompt_recorder, recorded_prompts) =
-        mpsc::channel::<(prompt_history::PromptOrigin, String)>();
+        mpsc::channel::<(uze_application::PromptOrigin, String)>();
     thread::spawn({
         let home = home.clone();
         move || {
             while let Ok((origin, prompt)) = recorded_prompts.recv() {
-                let _ = prompt_history::record(&home, &history_root, &origin, &prompt);
+                let _ = tui_application(home.clone()).and_then(|app| {
+                    app.workspace()
+                        .record_prompt(&history_root, &origin, &prompt)
+                });
             }
         }
     });
@@ -414,7 +417,7 @@ pub(crate) fn attach_workspace(
                                 let _ = send_request(
                                     &mut stream,
                                     &ClientRequest::CreateTab {
-                                        cwd: agent_launch_cwd(&model, &label),
+                                        cwd: agent_launch_cwd(&model, home, &label),
                                         label,
                                         columns,
                                         rows,
@@ -618,7 +621,7 @@ pub(crate) fn attach_workspace(
                                 let _ = send_request(
                                     &mut stream,
                                     &ClientRequest::CreateTab {
-                                        cwd: agent_launch_cwd(&model, &label),
+                                        cwd: agent_launch_cwd(&model, home, &label),
                                         label,
                                         columns,
                                         rows,
@@ -1262,24 +1265,6 @@ struct ContextMenu {
     anchor: Rect,
 }
 
-/// One built-in harness's identity for recognizing which pane (if any) is
-/// running it — the same alias/id vocabulary [`agent_options`] offers in the
-/// agent picker, kept as its own small table so the sidebar/tab-strip
-/// classification that runs on every dirty frame (see
-/// [`agent_identity_for_tab`]) doesn't rebuild the registry each time; this
-/// is built once per [`attach_workspace`] call instead.
-struct AgentIdentity {
-    /// The short, typed name — an alias when the harness has one (`claude`,
-    /// where the stable id is `claude-code`), else its id (`codex`,
-    /// `opencode`, whose id already is their binary name). Also the exact
-    /// value `UZE_SHIM_NAME` carries (see `src/shim.rs`), which is what a
-    /// shim-launched pane's live process name (see
-    /// `uze_terminal::PaneRuntime::foreground_status`) resolves to.
-    binary: &'static str,
-    integration: &'static str,
-    display_name: &'static str,
-}
-
 /// Resolved entirely through the generic `IntegrationPort` contract
 /// (`.id()`/`.display_name()`/`.aliases()`) — never a hardcoded vendor list,
 /// which `src/` is not allowed to hold (see
@@ -1288,21 +1273,9 @@ struct AgentIdentity {
 /// `.ok()` fallback) just yields no identities rather than failing the
 /// whole workspace session.
 fn agent_identities(home: &UzeHome) -> Vec<AgentIdentity> {
-    let Ok(registry) = IntegrationRegistry::builtin(home) else {
-        return Vec::new();
-    };
-    registry
-        .iter()
-        .map(|integration| AgentIdentity {
-            binary: integration
-                .aliases()
-                .first()
-                .copied()
-                .unwrap_or_else(|| integration.id()),
-            integration: integration.id(),
-            display_name: integration.display_name(),
-        })
-        .collect()
+    tui_application(home.clone())
+        .map(|app| app.workspace().agent_identities())
+        .unwrap_or_default()
 }
 
 /// The harnesses the agent picker offers — one row per
@@ -1578,7 +1551,7 @@ struct WorkspaceModel {
     /// Sink for recorded prompts. `None` leaves the history untouched —
     /// the default, so tests exercise the submission path without writing
     /// to a real UZE home.
-    prompt_recorder: Option<mpsc::Sender<(prompt_history::PromptOrigin, String)>>,
+    prompt_recorder: Option<mpsc::Sender<(uze_application::PromptOrigin, String)>>,
 }
 
 /// Client-side reconstruction of what the user typed into a pane before
@@ -1762,7 +1735,7 @@ impl WorkspaceModel {
                         return None;
                     }
                     agent_identity_for_tab(identities, tab).map(|binary| {
-                        prompt_history::PromptOrigin {
+                        uze_application::PromptOrigin {
                             space_label: space.label.clone(),
                             tab_id: tab.id.0,
                             tab_label: tab.label.clone(),
@@ -2159,30 +2132,27 @@ fn pane_in_layout(layout: &uze_terminal::Layout, wanted: PaneId) -> Option<&uze_
 /// unisolated is worse than not launching it at all only if something else
 /// is already writing there, and that is the rare case against a certain
 /// failure to start.
-fn agent_launch_cwd(model: &WorkspaceModel, label: &str) -> Option<PathBuf> {
+fn agent_launch_cwd(model: &WorkspaceModel, home: &UzeHome, label: &str) -> Option<PathBuf> {
     let pane_cwd = selected_pane_cwd(model)?;
-    let Some(primary) = uze_core::worktree::primary_checkout(&pane_cwd) else {
+    let Ok(app) = tui_application(home.clone()) else {
         return Some(pane_cwd);
     };
-    if !seat_is_taken(model.session.as_ref(), &primary) {
-        return Some(primary);
-    }
-    Some(
-        uze_core::worktree::isolate(&primary, &agent_slug(label))
-            .unwrap_or_else(|_| primary.clone()),
-    )
+    Some(app.workspace().checkout_for_new_agent(
+        &pane_cwd,
+        &live_agent_cwds(model.session.as_ref()),
+        &agent_slug(label),
+    ))
 }
 
-/// Whether a live agent tab already sits in the primary checkout.
+/// The working directory of every live agent pane.
 ///
-/// Only agent tabs count: a shell is the operator's own, and the conflict
-/// this prevents is between agents. Occupancy is judged by the checkout a
-/// pane is in rather than by an exact path, so an agent that moves within
-/// the primary keeps its seat, and one working in an isolated checkout is
-/// never mistaken for holding it.
-fn seat_is_taken(session: Option<&uze_terminal::Session>, primary: &Path) -> bool {
+/// Only agent tabs: a shell is the operator's own, and the conflict the
+/// seat rule prevents is between agents. Which tabs those are is a
+/// presentation fact (the generated label), which is why the caller
+/// answers it and the application decides what it means.
+fn live_agent_cwds(session: Option<&uze_terminal::Session>) -> Vec<PathBuf> {
     let Some(session) = session else {
-        return false;
+        return Vec::new();
     };
     session
         .workspace
@@ -2190,10 +2160,8 @@ fn seat_is_taken(session: Option<&uze_terminal::Session>, primary: &Path) -> boo
         .iter()
         .flat_map(|space| space.tabs.iter())
         .filter(|tab| is_generated_agent_label(&tab.label))
-        .any(|tab| {
-            layout_panes(&tab.layout)
-                .any(|pane| uze_core::worktree::is_in_primary(primary, &pane.cwd))
-        })
+        .flat_map(|tab| layout_panes(&tab.layout).map(|pane| pane.cwd.clone()))
+        .collect()
 }
 
 fn layout_panes(
@@ -2279,8 +2247,8 @@ mod tests;
 
 #[cfg(test)]
 mod seat_tests {
-    use super::{agent_slug, seat_is_taken};
-    use std::path::{Path, PathBuf};
+    use super::{agent_slug, live_agent_cwds};
+    use std::path::PathBuf;
     use uze_terminal::{Layout, Pane, PaneId, Session, Tab, WorkspaceId};
 
     fn session_with(tabs: &[(&str, PathBuf)]) -> Session {
@@ -2292,7 +2260,7 @@ mod seat_tests {
             .expect("a new session has one space");
         space.tabs.clear();
         for (index, (label, cwd)) in tabs.iter().enumerate() {
-            let mut tab = Tab {
+            space.tabs.push(Tab {
                 id: uze_terminal::TabId(index as u64 + 1),
                 label: (*label).to_owned(),
                 layout: Layout::Pane(Pane {
@@ -2305,50 +2273,50 @@ mod seat_tests {
                 focus: uze_terminal::Focus {
                     pane: PaneId(index as u64 + 1),
                 },
-            };
-            tab.focus.pane = PaneId(index as u64 + 1);
-            space.tabs.push(tab);
+            });
         }
         session
     }
 
     #[test]
-    fn an_empty_workspace_leaves_the_seat_free() {
-        assert!(!seat_is_taken(None, Path::new("/repo")));
+    fn an_empty_workspace_reports_no_occupied_checkout() {
+        assert!(live_agent_cwds(None).is_empty());
     }
 
     #[test]
-    fn one_agent_in_the_primary_takes_the_seat() {
-        let session = session_with(&[("agent 1", PathBuf::from("/repo"))]);
-        assert!(seat_is_taken(Some(&session), Path::new("/repo")));
-    }
-
-    /// A shell is the operator's own. The conflict this prevents is between
-    /// agents, so a terminal tab must never push an agent out of the seat.
-    #[test]
-    fn a_shell_tab_does_not_take_the_seat() {
-        let session = session_with(&[("shell 1", PathBuf::from("/repo"))]);
-        assert!(!seat_is_taken(Some(&session), Path::new("/repo")));
-    }
-
-    #[test]
-    fn an_agent_in_an_isolated_checkout_leaves_the_seat_free() {
-        let session = session_with(&[("agent 1", PathBuf::from("/repo/.worktrees/agent-1"))]);
-        assert!(!seat_is_taken(Some(&session), Path::new("/repo")));
-    }
-
-    /// The pane's directory is probed live, so an agent that moves inside
-    /// the repository must keep its seat rather than appear to have left.
-    #[test]
-    fn an_agent_that_moves_within_the_primary_keeps_the_seat() {
+    fn a_live_agent_reports_the_directory_it_is_in() {
         let session = session_with(&[("agent 1", PathBuf::from("/repo/crates/core"))]);
-        assert!(seat_is_taken(Some(&session), Path::new("/repo")));
+        assert_eq!(
+            live_agent_cwds(Some(&session)),
+            vec![PathBuf::from("/repo/crates/core")]
+        );
+    }
+
+    /// A shell is the operator's own. The conflict the seat rule prevents
+    /// is between agents, so a terminal tab must never be reported as
+    /// occupying anything.
+    #[test]
+    fn a_shell_tab_occupies_nothing() {
+        let session = session_with(&[("shell 1", PathBuf::from("/repo"))]);
+        assert!(live_agent_cwds(Some(&session)).is_empty());
     }
 
     #[test]
-    fn an_agent_in_another_repository_does_not_take_this_seat() {
-        let session = session_with(&[("agent 1", PathBuf::from("/other"))]);
-        assert!(!seat_is_taken(Some(&session), Path::new("/repo")));
+    fn every_live_agent_is_reported_including_isolated_ones() {
+        let session = session_with(&[
+            ("agent 1", PathBuf::from("/repo")),
+            ("shell 1", PathBuf::from("/repo")),
+            ("agent 2", PathBuf::from("/repo/.worktrees/agent-2")),
+        ]);
+        assert_eq!(
+            live_agent_cwds(Some(&session)),
+            vec![
+                PathBuf::from("/repo"),
+                PathBuf::from("/repo/.worktrees/agent-2")
+            ],
+            "what occupancy *means* is the application's rule; this only \
+             reports where the agents are"
+        );
     }
 
     #[test]

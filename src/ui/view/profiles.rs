@@ -10,7 +10,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
-use uze_core::preference::{Autonomy, ModelPreference, PreferenceApplyOutcome, SandboxScope};
+use uze_application::{Autonomy, ModelPreference, PreferenceApplyOutcome, SandboxScope};
 
 use super::super::content_area;
 use super::super::hit::Hit;

@@ -335,6 +335,9 @@ impl Health<'_> {
 mod tests {
     use std::{fs, path::PathBuf};
 
+    use crate::UzeApplication;
+    use uze_core::UzeHome;
+
     use uze_core::{
         PackageSource,
         integration::{AttachmentReceipt, ManagedArtifact},

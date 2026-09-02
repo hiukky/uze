@@ -44,19 +44,13 @@ const RULES: &[Rule] = &[
         // which is the same work this rule exists to drive.
         sanctioned: &[],
         budget: &[
-            // Documented transitional re-export: this crate exists to
-            // "preserve the established public imports while application,
-            // integrations, and presentation complete their own
-            // extraction" (see its module doc). Debt with a stated end,
-            // not architecture.
+            // The last one. A documented transitional re-export: this crate
+            // exists to "preserve the established public imports while
+            // application, integrations, and presentation complete their
+            // own extraction" (see its module doc). Deleting it is what
+            // lets the binary drop its `uze-core` dependency, after which
+            // rustc enforces this rule and it can be removed.
             ("src/lib.rs", 2),
-            ("src/main.rs", 1),
-            ("src/ui/agent_support.rs", 1),
-            ("src/ui/model.rs", 3),
-            ("src/ui/orchestrator.rs", 5),
-            ("src/ui/orchestrator/render.rs", 2),
-            ("src/ui/view/profiles.rs", 1),
-            ("src/ui/worker.rs", 4),
         ],
     },
     Rule {
@@ -80,7 +74,7 @@ const RULES: &[Rule] = &[
                 "tooling, likewise named in AGENTS.md as a registry consumer",
             ),
         ],
-        budget: &[("src/lib.rs", 1), ("src/ui/orchestrator.rs", 1)],
+        budget: &[("src/lib.rs", 1)],
     },
     Rule {
         name: "an extension never touches UZE's own state",

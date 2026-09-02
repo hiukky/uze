@@ -7,7 +7,7 @@ use std::{
 };
 
 use ratatui::layout::Rect;
-use uze_core::preference::{Autonomy, ModelPreference, SandboxScope};
+use uze_application::{Autonomy, ModelPreference, SandboxScope};
 use uze_extensions::registry::BuiltinExtension;
 
 use crate::application::{
@@ -231,7 +231,7 @@ pub(crate) struct RefreshData {
     /// The Overview's workspace-aware read model — present from the very
     /// first refresh onward (there is always a kind, even `NoWorkspace`).
     pub(crate) workspace: Option<OverviewWorkspaceSummary>,
-    pub(crate) prompt_history: Vec<uze_core::prompt_history::PromptEntry>,
+    pub(crate) prompt_history: Vec<uze_application::PromptEntry>,
     /// Qualified ids of the plugins the startup worker updated on its own
     /// this session. Only ever non-empty on the one startup refresh; every
     /// later refresh reports nothing, so badges already raised are never
@@ -341,7 +341,7 @@ pub(crate) struct TuiModel {
 
     /// Recent prompts for the detected workspace, newest first. Read-only
     /// here: the workspace client owns writing them.
-    pub(crate) prompt_history: Vec<uze_core::prompt_history::PromptEntry>,
+    pub(crate) prompt_history: Vec<uze_application::PromptEntry>,
     pub(crate) overview_prompt_selected: usize,
     pub(crate) overview_prompt_hovered: Option<usize>,
 
