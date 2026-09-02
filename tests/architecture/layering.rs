@@ -87,6 +87,33 @@ const RULES: &[Rule] = &[
         budget: &[("src/main.rs", 1)],
     },
     Rule {
+        name: "only the two declared owners spawn Git",
+        scope: "crates",
+        forbidden: "Command::new(\"git\")",
+        reason: "how Git is spawned is a contract — the environment it inherits, and \
+                 what a non-zero exit means. Two callers with two conventions is what \
+                 `uze-git` replaced, and a repository write lock cannot be complete \
+                 while a module spawns Git around it.",
+        remedy: "use `uze_git::read` or `uze_git::write`. If you need the hardened \
+                 profile for untrusted remote content, that belongs beside the \
+                 acquisition one, not in a third place.",
+        sanctioned: &[
+            (
+                "crates/uze-git/src/lib.rs",
+                "the transport itself — this is the one place the spawn is defined",
+            ),
+            (
+                "crates/uze-core/src/package/acquisition/git.rs",
+                "a deliberately different contract, not a second convention: this clones \
+             *untrusted remote* repositories, so it strips the environment \
+             (`env_clear`, `GIT_CONFIG_NOSYSTEM`, hooks disabled, no credential \
+             prompt) — the opposite of `uze-git`, which drives the operator's own \
+             checkout and must let their configuration apply",
+            ),
+        ],
+        budget: &[],
+    },
+    Rule {
         name: "an extension never touches UZE's own state",
         scope: "crates/uze-extensions/src",
         forbidden: "uze_application",

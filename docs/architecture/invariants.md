@@ -597,6 +597,16 @@ and so a status view never blocks behind one.
 
 > `crates/uze-git/src/lib.rs::a_non_zero_exit_is_reported_not_flattened_into_an_error`
 
+### Git is spawned in exactly two places, for two different threat models
+
+`uze-git` drives the operator's own checkout, so their configuration
+applies. `acquisition::git` clones untrusted remote repositories, so it
+strips the environment instead — `env_clear`, `GIT_CONFIG_NOSYSTEM`, hooks
+disabled, no credential prompt. Merging them would be wrong in both
+directions; a third spawn is what the rule prevents.
+
+> `tests/architecture/layering.rs::architecture_rules_hold`
+
 ## Decisions deliberately *not* taken
 
 Recorded because absence is a decision, and because each one has been proposed

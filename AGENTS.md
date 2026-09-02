@@ -198,7 +198,11 @@ reads; see the ADR in
 **Speak to Git through `uze-git`.** Never spawn `git` directly: two callers
 with two exit-code conventions is what this replaced, and a repository
 write lock cannot be complete if a module spawns Git around it. Reads go
-through `read`, writes through `write`.
+through `read`, writes through `write`. The one exception is
+`acquisition::git`, which clones *untrusted remote* repositories and
+therefore strips the environment rather than inheriting it — a different
+threat model, not a second convention. Both are sanctioned by name in the
+architecture suite; a third spawn fails it.
 
 `uze-core` production code never names a specific harness (Claude/Codex/
 OpenCode/Antigravity) — enforced by
