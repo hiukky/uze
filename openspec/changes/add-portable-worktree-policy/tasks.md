@@ -52,10 +52,10 @@ green. Tests run against real repositories through `uze_testkit::git`.
 
 ## 8. Slots and adoption
 
-- [ ] 8.1 Add `project/checkout`: generated slot identifiers, acquire (free slot first: switch to `agent/<id>` from the base, reset, clean without `-x`; create only when none is free), release (free or parked), the optional cap.
-- [ ] 8.2 Reconcile at space start: adopt checkouts without a task (parked when holding work, free otherwise), mark tasks without a checkout from where their branch stands, adopt legacy `agent/<name>` checkouts without renaming branches, prune last.
-- [ ] 8.3 Safe removal: prune branches fully reachable from the target; remove the directory of a clean slot idle beyond the declared age, keeping its branch.
-- [ ] 8.4 Cover slots: ignored artifacts survive reuse, a previous task's edits never reach the next, a dirty orphan is parked and every file preserved, an unintegrated branch outlives its directory, a new directory appears only when none is free, prune runs after adoption.
+- [x] 8.1 Add `project/checkout`: generated slot identifiers, acquire (free slot first: switch to `agent/<id>` from the base, reset, clean without `-x`; create only when none is free), release (free or parked), the optional cap.
+- [x] 8.2 Reconcile at space start: adopt checkouts without a task (parked when holding work, free otherwise), mark tasks without a checkout from where their branch stands, adopt legacy `agent/<name>` checkouts without renaming branches, prune last.
+- [x] 8.3 Safe removal: prune branches fully reachable from the target; remove the directory of a clean slot idle beyond the declared age, keeping its branch.
+- [x] 8.4 Cover slots: ignored artifacts survive reuse, a previous task's edits never reach the next, a dirty orphan is parked and every file preserved, an unintegrated branch outlives its directory, a new directory appears only when none is free, prune runs after adoption.
 - [ ] 8.5 Absorb the existing `worktree` module: keep primary resolution, ignore-file maintenance and the projected text; drop the seat.
 
 ## 9. Every agent is isolated

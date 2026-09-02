@@ -409,7 +409,9 @@ mod tests {
         let root = PathBuf::from(root);
         let mut store = TaskStore::default();
         let mut task = task("seed");
-        for round in 0u64.. {
+        let mut round = 0u64;
+        loop {
+            round += 1;
             task.label = round.to_string();
             store.upsert(task.clone());
             save(&home, &root, &store).unwrap();
