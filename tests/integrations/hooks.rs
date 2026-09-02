@@ -155,8 +155,11 @@ fn compatibility_is_semantic_and_never_fabricates_a_stop_equivalence() {
     );
 }
 
+/// `transform` needs a channel for the handler to answer on, which the
+/// exit-code contract does not have; it is deferred to its own change and
+/// must degrade everywhere until then rather than attach as an observation.
 #[test]
-fn transform_is_adaptable_through_the_bridge_and_degraded_on_claude() {
+fn transform_degrades_on_every_harness_while_it_has_no_answer_channel() {
     let (_root, resources) = hook_package(
         "compat-transform",
         &manifest_with(
@@ -178,8 +181,8 @@ fn transform_is_adaptable_through_the_bridge_and_degraded_on_claude() {
     );
     assert_eq!(
         opencode.exposure_plan(sandbox).route,
-        CompatibilityRoute::Adaptable,
-        "the bridge rewrites output.args"
+        CompatibilityRoute::Degraded,
+        "a rewrite the delivered plugin cannot carry must degrade, never attach silently"
     );
 }
 
@@ -628,7 +631,7 @@ fn opencode_bridge_lifecycle_preserves_foreign_plugins_in_the_directory() {
     let protect = hook_resource(&resources, "watch");
     let integration = opencode(&root);
     let config = root.join("config/opencode.json");
-    let bridge = root.join("config/plugins/uze-hooks-hook-demo@local.ts");
+    let bridge = root.join("config/plugins/hooks-hook-demo@local.ts");
     // A foreign plugin file already lives in the harness's global plugin
     // directory; the config itself is never touched by hook delivery.
     fs::create_dir_all(config.parent().unwrap().join("plugins")).unwrap();
@@ -735,7 +738,7 @@ fn opencode_bridge_is_package_scoped_and_regenerates_across_groups() {
     let first = hook_resource(&resources, "observe-first").clone();
     let second = hook_resource(&resources, "observe-second").clone();
     let integration = opencode(&_root);
-    let bridge = _root.join("config/plugins/uze-hooks-hook-demo@local.ts");
+    let bridge = _root.join("config/plugins/hooks-hook-demo@local.ts");
 
     let receipt_first = integration.attach_receipt(&first).unwrap().unwrap();
     // Production records each receipt right after its attach, so the next

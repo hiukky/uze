@@ -100,26 +100,23 @@ pub(crate) fn antigravity_capabilities() -> HookCapabilities {
     }
 }
 
-/// OpenCode's plugin API supplies mutable pre/post tool callbacks where a
-/// thrown error blocks the intercepted tool; there is no declarative hook
-/// file, so UZE generates an owned, rebuildable TypeScript bridge. `Stop`
-/// has no OpenCode equivalent and is never claimed; `ask` cannot be
-/// expressed (an error is a hard denial), so an `Ask` hook routes
-/// Unsupported rather than silently degrading.
+/// OpenCode's plugin API supplies pre/post tool callbacks that see the tool
+/// input but cannot block it; there is no declarative hook file, so UZE
+/// generates an owned, rebuildable plugin instead. `Stop` has no OpenCode
+/// equivalent and is never claimed. `deny`/`ask` live only on
+/// `permission.evaluate`, which carries the action and its resources rather
+/// than the tool input, so they are Unsupported until the Lab proves
+/// otherwise. `transform` needs a channel for the handler to answer on,
+/// which the exit-code contract does not have.
 pub(crate) fn opencode_capabilities() -> HookCapabilities {
     HookCapabilities {
         events: [HookEvent::PreToolUse, HookEvent::PostToolUse]
             .into_iter()
             .collect(),
-        effects: [
-            HookEffect::Observe,
-            HookEffect::Allow,
-            HookEffect::Transform,
-        ]
-        .into_iter()
-        .collect(),
+        effects: [HookEffect::Observe, HookEffect::Allow]
+            .into_iter()
+            .collect(),
         supports_native_matchers: true,
-        supports_input_transform: true,
         executes_handlers_in_order: true,
         ..HookCapabilities::default()
     }
@@ -1236,23 +1233,23 @@ fn blocked(reason: &str) -> AttachmentInspection {
 // OpenCode bridge (generated TypeScript, no author toolchain)
 // ============================================================================
 
-/// The owned bridge file path: `<config root>/plugins/uze-hooks-<package>.ts`.
+/// The delivered plugin's path: `<config root>/plugins/hooks-<package>.ts`.
 /// `<config root>/plugins/` is OpenCode's documented global plugin directory
-/// (`~/.config/opencode/plugins/`), auto-discovered at startup — the bridge
-/// is therefore the single, self-contained load source: no `plugin` entry
-/// in `opencode.json` exists to duplicate it. (Verified against the real
+/// (`~/.config/opencode/plugins/`), auto-discovered at startup — the file is
+/// therefore the single, self-contained load source: no `plugin` entry in
+/// `opencode.json` exists to duplicate it. (Verified against the real
 /// harness: the legacy `.opencode/plugins/` path is project-scoped and NOT
 /// auto-discovered under the global config directory.)
 pub(crate) fn opencode_bridge_path(config_root: &Path, package_id: &str) -> PathBuf {
     config_root
         .join("plugins")
-        .join(format!("uze-hooks-{package_id}.ts"))
+        .join(format!("hooks-{package_id}.ts"))
 }
 
-/// Serializes the group list for embedding in the bridge: translated
+/// The package's groups as data for the generated plugin: translated
 /// matchers (matched against the runtime native tool name), abi event name,
-/// effect, and the authored handlers verbatim.
-fn bridge_hooks(hooks: &[&PortableHook]) -> serde_json::Value {
+/// effect, and the authored handlers with `${PLUGIN_ROOT}` resolved.
+fn bridge_hooks(hooks: &[&PortableHook], package_root: &Path) -> serde_json::Value {
     serde_json::Value::Array(
         hooks
             .iter()
@@ -1263,7 +1260,10 @@ fn bridge_hooks(hooks: &[&PortableHook]) -> serde_json::Value {
                     "effect": hook.effect.abi_name(),
                     "matchers": hook.matchers.iter().map(|m| tool_name("opencode", m)).collect::<Vec<_>>(),
                     "handlers": hook.handlers.iter().map(|handler| serde_json::json!({
-                        "command": handler.command,
+                        "command": handler.command.replace(
+                            "${PLUGIN_ROOT}",
+                            &package_root.display().to_string(),
+                        ),
                         "timeout": handler.timeout,
                     })).collect::<Vec<_>>(),
                 })
@@ -1272,126 +1272,152 @@ fn bridge_hooks(hooks: &[&PortableHook]) -> serde_json::Value {
     )
 }
 
-/// Generates the OpenCode bridge source for one package. JavaScript valid as
-/// TypeScript (no compilation step), deterministic, no dependencies: it
-/// spawns each authored command sequentially against the portable ABI,
-/// injects `PLUGIN_ROOT`, bounds stdout at 64 KiB, honors per-handler
-/// timeouts, maps a denied decision (or a failure of a non-observational
-/// group) to a thrown error that blocks the intercepted tool, and rewrites
-/// `output.args` for a transform. Observational failure stays open, exactly
-/// like every other adapter.
+/// The alias table this harness's plugin reads, generated from the one
+/// vocabulary: native tool name → portable alias plus the portable field
+/// values, each read from that harness's own input field.
+fn bridge_alias_table() -> String {
+    let mut rows = Vec::new();
+    for (native, binding) in vocabulary("opencode").native_names() {
+        let fields = binding
+            .fields
+            .iter()
+            .map(|(portable, native_field)| {
+                format!(
+                    "{}: String(input.{native_field} ?? \"\")",
+                    uze_core::hook::hook_field_variable(portable)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        rows.push(format!(
+            "  {native}: {{ tool: \"{}\", fields: (input) => ({{ {fields} }}) }},",
+            binding.alias
+        ));
+    }
+    rows.join("\n")
+}
+
+/// The generated OpenCode plugin for one package. OpenCode has no
+/// declarative hook file, so the plugin *is* the wrapper: the same contract
+/// the `sh` wrapper implements on the other harnesses, with this package's
+/// groups as data. JavaScript valid as TypeScript (no build step), no
+/// dependencies, deterministic — and naming nothing but the hook contract.
+///
+/// The V2 tool hooks see the tool input but cannot block, and the only
+/// decision point (`permission.evaluate`) carries the action and its
+/// resources rather than the tool input; deny/ask are therefore diagnosed
+/// before attach and never fabricated here.
 pub(crate) fn opencode_bridge(
     hooks: &[&PortableHook],
     plugin_root: &Path,
     package_id: &str,
 ) -> String {
     let root = plugin_root.display().to_string();
-    let hooks = bridge_hooks(hooks);
-    let hooks = serde_json::to_string(&hooks).expect("bridge hooks serialize");
+    let groups = serde_json::to_string(&bridge_hooks(hooks, plugin_root))
+        .expect("generated groups serialize");
+    let aliases = bridge_alias_table();
     format!(
-        r#"// Generated by UZE (ADR-033). Do not edit. Rebuild with `uze plugin install`.
-// OpenCode V2 plugin API (opencode.ai/v2/docs/build/plugins): plugins are
-// defined with Plugin.define and register runtime hooks on the plugin
-// context. Pre-tool handlers run sequentially through Bun.spawn on the Bun
-// runtime OpenCode embeds (the plugin context exposes the Bun shell API as
-// `$`); the V2 tool hooks offer input replacement but no input-based block
-// signal — the only action-level deny/ask is the permission hook, which
-// carries no tool input — so deny/ask effects are degraded by capability
-// assessment (ADR-033) and a runtime deny is logged, never fabricated.
+        r#"// Generated from hooks.json — do not edit; regenerate instead.
+// OpenCode V2 (opencode.ai/v2/docs/build/plugins) has no hooks.json: the
+// plugin is both the registration and the runner. Only GROUPS changes
+// between packages; everything below it is the same runtime every time.
+//
+// Handler contract: the hook context arrives as HOOK_* environment and the
+// decision leaves as an exit code — 0 allows, 3 denies with the reason on
+// stderr, anything else is a failure that follows the group's effect
+// (fail-closed for deny/ask, fail-open for observe/allow).
 import {{ Plugin }} from "@opencode-ai/plugin";
 
 const ROOT = {root:?};
-const HOOKS = {hooks};
+const GROUPS = {groups};
 
-function abi(event, tool, input) {{
+// native tool name -> portable alias and its portable fields
+const ALIASES = {{
+{aliases}
+}};
+
+const closed = (effect) => effect === "deny" || effect === "ask";
+
+function environment(group, native, input) {{
+  const alias = ALIASES[native];
   return {{
-    version: 1,
-    event,
-    tool: {{ portable: null, native: tool }},
-    input: input ?? {{}},
-    context: {{ cwd: process.cwd() }},
+    ...process.env,
+    PLUGIN_ROOT: ROOT,
+    HOOK_HARNESS: "opencode",
+    HOOK_EVENT: group.event,
+    HOOK_TOOL: alias?.tool ?? "",
+    HOOK_TOOL_NATIVE: native,
+    HOOK_CWD: process.cwd(),
+    HOOK_INPUT: JSON.stringify(input ?? {{}}),
+    ...(alias ? alias.fields(input ?? {{}}) : {{}}),
   }};
 }}
 
-async function run(command, message, timeout) {{
-  const proc = Bun.spawn(["/bin/sh", "-c", command], {{
-    cwd: ROOT,
-    env: {{ ...process.env, PLUGIN_ROOT: ROOT }},
-    stdin: "pipe",
-    stdout: "pipe",
-    stderr: "pipe",
-  }});
-  proc.stdin.write(JSON.stringify(message) + "\n");
-  proc.stdin.end();
-  const decoder = new TextDecoder();
-  let stdout = "";
-  let overflow = false;
-  const timer = setTimeout(() => {{ proc.kill(); }}, timeout * 1000);
+// One handler: null when it allowed, otherwise the reason it answered with.
+async function handler(command, timeout, env) {{
+  let proc;
   try {{
-    for await (const chunk of proc.stdout) {{
-      stdout += decoder.decode(chunk);
-      if (stdout.length > 65536) {{
-        overflow = true;
-        proc.kill();
-        break;
-      }}
-    }}
+    proc = Bun.spawn(["/bin/sh", "-c", command], {{
+      cwd: ROOT,
+      env,
+      stdin: "ignore",
+      stdout: "ignore",
+      stderr: "pipe",
+    }});
+  }} catch (error) {{
+    return {{ failed: true, reason: `handler failed to start: ${{command}} — ${{error.message}}` }};
+  }}
+  const timer = setTimeout(() => proc.kill(), timeout * 1000);
+  let stderr = "";
+  try {{
+    stderr = (await new Response(proc.stderr).text()).trim();
   }} finally {{
     clearTimeout(timer);
   }}
   const code = await proc.exited;
-  if (overflow) throw new Error("UZE hook output exceeded 64 KiB");
-  if (code && code !== 3) throw new Error(`UZE hook failed (exit ${{code}})`);
-  if (!stdout) return {{}};
-  try {{ return JSON.parse(stdout); }}
-  catch (error) {{ throw new Error(`UZE hook wrote invalid JSON: ${{error.message}}`); }}
+  if (code === 0) return null;
+  if (code === 3) return {{ failed: false, reason: stderr || `${{command}} denied the operation` }};
+  return {{ failed: true, reason: `handler failed (exit ${{code}}): ${{command}}${{stderr ? " — " + stderr : ""}}` }};
+}}
+
+// Handlers in manifest order; the first denial stops the rest. A failure
+// denies for a fail-closed group and is reported for the others.
+async function run(group, native, input) {{
+  const env = environment(group, native, input);
+  for (const entry of group.handlers) {{
+    const answer = await handler(entry.command, entry.timeout, env);
+    if (answer === null) continue;
+    if (answer.failed && !closed(group.effect)) {{
+      console.error(`[hooks:${{group.id}}]`, answer.reason);
+      continue;
+    }}
+    return answer.reason;
+  }}
+  return null;
+}}
+
+function matches(group, event, native) {{
+  return (
+    group.event === event &&
+    (group.matchers.length === 0 || group.matchers.includes(native))
+  );
 }}
 
 export default Plugin.define({{
-  id: "uze-hooks-{package_id}",
+  id: "hooks-{package_id}",
   async setup(ctx) {{
     await ctx.tool.hook("execute.before", async (event) => {{
-      for (const hook of HOOKS) {{
-        if (hook.event !== "pre_tool_use") continue;
-        if (hook.matchers.length && !hook.matchers.includes(event.tool)) continue;
-        let input = event.input;
-        let replaced = false;
-        for (const handler of hook.handlers) {{
-          let result;
-          try {{
-            result = await run(handler.command, abi("pre_tool_use", event.tool, input), handler.timeout);
-          }} catch (error) {{
-            if (hook.effect === "deny" || hook.effect === "ask") throw error;
-            console.error(`[uze-hooks:${{hook.id}}]`, error.message);
-            continue;
-          }}
-          if (hook.effect === "deny" || hook.effect === "ask") {{
-            // V2 exposes no input-based block (permission hooks carry no
-            // tool input); a deny/ask decision is recorded, never faked.
-            if (result.decision) {{
-              console.error(`[uze-hooks:${{hook.id}}]`, `V2 cannot enforce ${{result.decision}} (no input-based block): ${{result.reason ?? ""}}`);
-            }}
-            continue;
-          }}
-          if (result.input) {{
-            input = result.input;
-            replaced = true;
-          }}
-        }}
-        if (replaced) event.input = input;
+      for (const group of GROUPS) {{
+        if (!matches(group, "pre_tool_use", event.tool)) continue;
+        const reason = await run(group, event.tool, event.input);
+        if (reason) console.error(`[hooks:${{group.id}}]`, reason);
       }}
     }});
     await ctx.tool.hook("execute.after", async (event) => {{
-      for (const hook of HOOKS) {{
-        if (hook.event !== "post_tool_use") continue;
-        if (hook.matchers.length && !hook.matchers.includes(event.tool)) continue;
-        for (const handler of hook.handlers) {{
-          try {{
-            await run(handler.command, abi("post_tool_use", event.tool, event.input), handler.timeout);
-          }} catch (error) {{
-            console.error(`[uze-hooks:${{hook.id}}]`, error.message);
-          }}
-        }}
+      for (const group of GROUPS) {{
+        if (!matches(group, "post_tool_use", event.tool)) continue;
+        const reason = await run(group, event.tool, event.input);
+        if (reason) console.error(`[hooks:${{group.id}}]`, reason);
       }}
     }});
   }},
@@ -2248,38 +2274,42 @@ mod tests {
     }
 
     #[test]
-    fn opencode_bridge_embeds_matchers_abi_and_effect_guards() {
-        let bridge = opencode_bridge(&[&hook()], Path::new("/tmp/plugin root"), "hook-demo");
+    fn the_opencode_plugin_is_the_wrapper_with_the_packages_groups_as_data() {
+        let plugin = opencode_bridge(&[&hook()], Path::new("/tmp/plugin root"), "hook-demo");
         // V2 plugin API (spec: opencode.ai/v2/docs/build/plugins) — a
         // Plugin.define module registering ctx.tool.hook callbacks.
-        assert!(bridge.contains("import { Plugin } from \"@opencode-ai/plugin\""));
-        assert!(bridge.contains("Plugin.define"));
-        assert!(bridge.contains("ctx.tool.hook(\"execute.before\""));
-        assert!(bridge.contains("ctx.tool.hook(\"execute.after\""));
+        assert!(plugin.contains("import { Plugin } from \"@opencode-ai/plugin\""));
+        assert!(plugin.contains("Plugin.define"));
+        assert!(plugin.contains("id: \"hooks-hook-demo\""));
+        assert!(plugin.contains("ctx.tool.hook(\"execute.before\""));
+        assert!(plugin.contains("ctx.tool.hook(\"execute.after\""));
         assert!(
-            bridge.contains("Bun.spawn"),
+            plugin.contains("Bun.spawn"),
             "the harness's embedded Bun runtime executes handlers"
         );
-        assert!(bridge.contains("PLUGIN_ROOT"));
-        assert!(bridge.contains("\"event\":\"pre_tool_use\""));
-        assert!(bridge.contains("\"matchers\":[\"bash\",\"Write\"]"));
-        assert!(bridge.contains("\"effect\":\"deny\""));
-        assert!(bridge.contains("65536"));
+        assert!(plugin.contains("\"event\":\"pre_tool_use\""));
+        assert!(plugin.contains("\"matchers\":[\"bash\",\"Write\"]"));
+        assert!(plugin.contains("\"effect\":\"deny\""));
         assert!(
-            bridge.contains("code !== 3"),
-            "the canonical deny exit is not a failure"
+            plugin.contains("bash: { tool: \"shell\", fields: (input) => ({ HOOK_COMMAND:"),
+            "the alias table comes from the one vocabulary"
         );
         assert!(
-            bridge.contains("hook.effect === \"deny\" || hook.effect === \"ask\""),
-            "a deny/ask handler on V2 records its decision without fabricating a block"
+            plugin.contains("code === 3"),
+            "the decision channel is the exit code"
         );
         assert!(
-            bridge.contains("event.input"),
-            "transform rewrites event.input"
-        );
-        assert!(
-            !bridge.contains("Stop"),
+            !plugin.contains("Stop"),
             "no stop surface is ever claimed for OpenCode"
+        );
+        assert!(
+            !plugin.to_lowercase().contains("uze"),
+            "nothing in the delivered artifact names the packager"
+        );
+        assert_eq!(
+            plugin,
+            opencode_bridge(&[&hook()], Path::new("/tmp/plugin root"), "hook-demo"),
+            "generation is deterministic"
         );
     }
 
@@ -2428,7 +2458,7 @@ mod tests {
         let bridge = opencode_bridge_path(&root, "demo");
         assert_eq!(
             bridge,
-            root.join("plugins/uze-hooks-demo.ts"),
+            root.join("plugins/hooks-demo.ts"),
             "the single load source is the harness's global plugin directory"
         );
         assert!(
@@ -2441,7 +2471,7 @@ mod tests {
     #[test]
     fn bridge_file_cleanup_removes_only_uzes_files() {
         let root = uze_testkit::temp::scratch("hooks-cleanup");
-        let bridge = root.join("plugins/uze-hooks-demo.ts");
+        let bridge = root.join("plugins/hooks-demo.ts");
         fs::create_dir_all(bridge.parent().unwrap()).unwrap();
         fs::write(&bridge, "// generated").unwrap();
         remove_bridge_file(&bridge).unwrap();
@@ -2827,5 +2857,121 @@ mod wrapper_tests {
                 let _ = fs::remove_dir_all(root);
             }
         }
+    }
+}
+
+/// The generated OpenCode plugin against the real Bun runtime, driven with a
+/// V2-shaped plugin context. Skipped where Bun is absent: the plugin is a
+/// delivered artifact for a harness that embeds Bun, and the goldens above
+/// keep its bytes honest without it.
+#[cfg(all(test, unix))]
+mod opencode_runtime_tests {
+    use super::*;
+    use std::{os::unix::fs::PermissionsExt, process::Command};
+    use uze_core::hook::{CommandHandlerType, HookEvent};
+
+    fn bun_available() -> bool {
+        Command::new("bun")
+            .arg("--version")
+            .output()
+            .is_ok_and(|output| output.status.success())
+    }
+
+    #[test]
+    fn the_plugin_runs_the_handlers_on_the_harnesss_own_runtime() {
+        if !bun_available() {
+            eprintln!("bun is not installed; the OpenCode plugin runtime check is skipped");
+            return;
+        }
+        let root = uze_testkit::temp::scratch("opencode-runtime");
+        let scripts = root.join("scripts");
+        fs::create_dir_all(&scripts).unwrap();
+        for (name, body) in [
+            (
+                "guard",
+                "case \"$HOOK_COMMAND\" in\n  *.env*)\n    echo \"blocked: $HOOK_COMMAND\" >&2\n    exit 3 ;;\nesac\nexit 0",
+            ),
+            (
+                "audit",
+                "printf '%s|%s|%s\\n' \"$HOOK_HARNESS\" \"$HOOK_TOOL\" \"$HOOK_COMMAND\" \
+                 >> \"$PLUGIN_ROOT/audit.log\"\nexit 0",
+            ),
+        ] {
+            let path = scripts.join(name);
+            fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let hook = PortableHook {
+            id: "protect-env".into(),
+            event: HookEvent::PreToolUse,
+            matchers: vec![HookMatcher::Portable("shell".into())],
+            handlers: ["guard", "audit"]
+                .into_iter()
+                .map(|name| CommandHook {
+                    handler_type: CommandHandlerType::Command,
+                    command: format!("${{PLUGIN_ROOT}}/scripts/{name}"),
+                    timeout: 10,
+                })
+                .collect(),
+            effect: HookEffect::Observe,
+            order: 0,
+        };
+        let plugin = root.join("hooks-demo.ts");
+        fs::write(&plugin, opencode_bridge(&[&hook], &root, "demo")).unwrap();
+
+        // The harness supplies this module; outside it, a stub that hands
+        // the definition straight back is enough to drive the plugin.
+        let stub = root
+            .join("node_modules")
+            .join("@opencode-ai")
+            .join("plugin");
+        fs::create_dir_all(&stub).unwrap();
+        fs::write(
+            stub.join("index.ts"),
+            "export const Plugin = { define: (definition) => definition };\n",
+        )
+        .unwrap();
+
+        fs::write(
+            root.join("drive.ts"),
+            r#"import plugin from "./hooks-demo.ts";
+const hooks = {};
+await plugin.setup({ tool: { hook: async (name, fn) => { hooks[name] = fn; } } });
+const errors = [];
+console.error = (...parts) => errors.push(parts.join(" "));
+await hooks["execute.before"]({ tool: "bash", input: { command: "cat .env" } });
+await hooks["execute.before"]({ tool: "bash", input: { command: "ls -la" } });
+await hooks["execute.before"]({ tool: "read", input: { filePath: "/x" } });
+console.log(JSON.stringify(errors));
+"#,
+        )
+        .unwrap();
+
+        let output = Command::new("bun")
+            .arg("run")
+            .arg("drive.ts")
+            .current_dir(&root)
+            .output()
+            .expect("bun runs the driver");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "the plugin must load and run: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let reported: Vec<String> = serde_json::from_str(stdout.trim()).unwrap();
+        assert!(
+            reported
+                .iter()
+                .any(|line| line.contains("blocked: cat .env")),
+            "the denial reason is reported: {reported:?}"
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("audit.log")).unwrap(),
+            "opencode|shell|ls -la\n",
+            "the second handler ran only for the allowed call, with the portable context"
+        );
+        let _ = fs::remove_dir_all(root);
     }
 }

@@ -26,9 +26,10 @@
 
 ## 4. OpenCode plugin
 
-- [ ] 4.1 Regenerate the OpenCode bridge as `hooks-<package>.ts`: the runtime once (spawn handlers with `HOOK_*` environment, exit-code decision, order, first-deny-wins, fail-closed by effect) and the package's groups as data; no packager reference in the file
-- [ ] 4.2 `observe`/`allow` on `tool.hook("execute.before")` and `execute.after`; `deny`/`ask` on `permission.hook("evaluate")` only if task 6.3 confirms `resources` carries the input — otherwise keep them declared unsupported
-- [ ] 4.3 Golden test for the generated plugin and a runtime test under Bun with a fake plugin context (port `.labs/native-hooks/exercise-opencode.ts`)
+- [x] 4.1 Regenerate the OpenCode bridge as `hooks-<package>.ts`: the runtime once (spawn handlers with `HOOK_*` environment, exit-code decision, order, first-deny-wins, fail-closed by effect) and the package's groups as data; no packager reference in the file
+- [x] 4.2 `observe`/`allow` on `tool.hook("execute.before")` and `execute.after`; `deny`/`ask` on `permission.hook("evaluate")` only if task 6.3 confirms `resources` carries the input — otherwise keep them declared unsupported
+  - Kept declared unsupported: task 6.3's measurement is not in yet. `transform` also leaves OpenCode's effect set — the exit-code contract has no channel for a handler to answer a rewrite on, so a `transform` group now degrades on every harness rather than attaching as an observation.
+- [x] 4.3 Golden test for the generated plugin and a runtime test under Bun with a fake plugin context (port `.labs/native-hooks/exercise-opencode.ts`)
 
 ## 5. Routing, fallback and diagnostics
 
