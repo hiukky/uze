@@ -315,6 +315,17 @@ def phase_hooks(cfg, prov_ip, kind):
 
     Evidence = what the REAL harness relayed: hook marker presence/absence
     in the provider-observed conversation plus the TUI denial surface.
+
+    Known state, 2026-09-02 (needs its own change): Claude Code rejects the
+    scripted `Bash` tool_use before any hook runs — the TUI renders
+    `⎿ Invalid tool parameters` and the tool_result it sends back carries
+    no hook marker. Observed on 2.1.252 (CI run 33463936487) and 2.1.258
+    (CI run 33584691903, and locally), for deny, allow and order alike.
+    Until the scripted call matches what this channel accepts, no hook
+    executes here at all; `hooks-*-denial-relayed` fails on purpose rather
+    than letting the absence checks pass for a turn no hook ever saw, and
+    `hooks-allow-tool-executed` is satisfied by that error result, not by
+    an execution. The earlier green runs were this vacuity, not evidence.
     """
     scenarios = {
         "deny": {

@@ -304,6 +304,16 @@ def phase_hooks(cfg, prov_ip, kind):
 
     Evidence = what the REAL harness relayed: hook marker presence/absence
     in the provider-observed conversation plus the TUI denial surface.
+
+    Known state, 2026-09-02 (needs its own change): on AGY 1.1.24 the
+    scripted `run_command` functionCall produces no functionResponse and no
+    hook marker in any provider request (CI run 33584691903: two requests
+    per deny/order turn, neither carrying a response; locally the same),
+    while the provider still serves UZE_CONFORMANCE_PASS on any follow-up
+    request, so the turn "settles". No hook is observed executing here;
+    `hooks-*-denial-relayed` fails on purpose rather than letting the
+    absence checks pass for a turn no hook ever saw. The earlier green runs
+    were this vacuity, not evidence.
     """
     scenarios = {
         "deny": {
