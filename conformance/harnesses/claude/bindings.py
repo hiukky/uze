@@ -37,6 +37,14 @@ class ClaudeBindings(Bindings):
         """Claude names a Skill by its namespaced invocation label."""
         return f"flow:{skill}" in catalog.replace(" ", "")
 
+    def mcp_inventory(self, tui):
+        """`/mcp` lists every configured server and its connection state."""
+        tui.type("/mcp")
+        time.sleep(1)
+        tui.submit()
+        inventory, _ = tui.until(["uze-conformance", "MCP"], tries=8)
+        return inventory
+
     def unsupported(self, prop):
         """Claude Code exposes `disable-model-invocation` — which UZE uses to
         honour `invoke.model: false` — but no verified inverse that hides a

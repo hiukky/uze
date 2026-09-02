@@ -51,3 +51,13 @@ class AntigravityBindings(Bindings):
     def lists(self, catalog, skill):
         """Antigravity names a Skill by its namespaced invocation label."""
         return f"flow:{skill}" in catalog.replace(" ", "")
+
+    def mcp_inventory(self, tui):
+        """`/mcp` lists every configured server and enumerates its tools."""
+        tui.child.send("/")
+        time.sleep(1.2)
+        tui.type("mcp", per_char=0.15)
+        time.sleep(1.2)
+        tui.submit()
+        inventory, _ = tui.until(["Tools: uze_conformance", "uze-conformance"], tries=8)
+        return inventory

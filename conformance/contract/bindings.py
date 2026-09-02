@@ -58,6 +58,20 @@ class Bindings:
         """
         raise NotImplementedError
 
+    def mcp_inventory(self, tui):
+        """Opens this harness's MCP surface and returns the screen text."""
+        raise NotImplementedError
+
+    def names_server(self, inventory, server):
+        """Whether `inventory` shows the MCP server `server` as present.
+
+        Same split as `lists`: only the harness knows how its own surface
+        spells a server — an id on one, a display name on another, a
+        connection row on a third. The contract decides what the answer
+        means, never how to read it.
+        """
+        return server in inventory.replace(" ", "")
+
     def invoke_skill(self, tui, label):
         """Invokes `label` the way a person would here, returning the turn's
         screen text."""

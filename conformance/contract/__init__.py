@@ -20,10 +20,10 @@ for months survived because the assertion lived in one vertical and nothing
 contradicted it.
 """
 
-from . import skill
+from . import mcp, skill
 
 #: Every capability contract, in the order a run exercises them.
-CONTRACTS = (skill,)
+CONTRACTS = (skill, mcp)
 
 
 def run(cfg, prov_ip, bindings):

@@ -35,6 +35,19 @@ class OpenCodeBindings(Bindings):
         """OpenCode names a Skill by its qualified invocation label."""
         return f"flow:{skill}" in catalog.replace(" ", "")
 
+    def mcp_inventory(self, tui):
+        """`/mcps` — plural here — opens the MCP toggle surface.
+
+        The warmup applies to every surface, not just the first: each
+        contract opens its own session, so each pays the same wait before
+        the surfaces behind the prompt have loaded.
+        """
+        time.sleep(self.warmup)
+        tui.type("/mcps")
+        time.sleep(1)
+        tui.submit()
+        return tui.collect(reads=6)
+
     def unsupported(self, prop):
         """OpenCode's skill surface offers every delivered Skill to the user;
         no documented control hides one from explicit invocation.
@@ -48,3 +61,15 @@ class OpenCodeBindings(Bindings):
                 "explicit invocation; the product routes its Skills as Adaptable"
             )
         return None
+
+    def names_server(self, inventory, server):
+        """OpenCode's `/mcps` surface is a toggle list showing connection
+        state; it was not observed to print the server id.
+
+        So presence is read from the connected row rather than the name. A
+        weaker signal than an id, and recorded as such in
+        `conformance/DECISIONS.md` — the surface is the vendor's, and
+        asserting an id it does not render would be asserting fiction.
+        """
+        squeezed = inventory.replace(" ", "")
+        return "Connected" in inventory or "disconnectspace" in squeezed

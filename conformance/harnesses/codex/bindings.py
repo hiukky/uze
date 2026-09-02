@@ -45,6 +45,14 @@ class CodexBindings(Bindings):
         squeezed = catalog.replace(" ", "")
         return f"{skill}(flow)" in squeezed or f"flow:{skill}" in squeezed
 
+    def mcp_inventory(self, tui):
+        """`/mcp` lists every configured server."""
+        tui.type("/mcp")
+        time.sleep(1)
+        tui.submit()
+        inventory, _ = tui.until(["uze-conformance", "MCP"], tries=8)
+        return inventory
+
     def unsupported(self, prop):
         """Codex documents no way to disable explicit `$skill` invocation, so
         a canonical `user: false` cannot be enforced here.

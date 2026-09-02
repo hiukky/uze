@@ -114,3 +114,25 @@ inverse of `disable-model-invocation` exists, this is a bug in the Claude
 integration, not a harness limitation.
 
 Out of scope here — the contract's job was to make it visible, and it did.
+
+---
+
+## OpenCode's MCP presence is read from connection state, not a name
+
+**Context.** The contract asks whether the harness shows the delivered
+server in its MCP inventory. Three harnesses print `uze-conformance`.
+OpenCode's `/mcps` is a toggle surface: the captured screen carries
+`Connected` but was not observed to carry the server id.
+
+**Chosen.** `names_server` is a binding, like `lists` — the harness says how
+its surface spells a server. OpenCode answers from the connected row, the
+same signal its own vertical already trusted.
+
+**Discarded.** Asserting the id anyway (asserting fiction about a vendor's
+surface); weakening the contract for everyone to accept a bare "Connected"
+(three harnesses can prove more, and a contract should ask for the most any
+of them can give).
+
+**Weaker than the others, on purpose.** A connection row proves a server is
+attached, not *which*. If OpenCode grows a surface that names it, this
+binding should tighten.
