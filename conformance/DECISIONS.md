@@ -83,3 +83,25 @@ pre-prompt flow overrides `prepare()` to drive it.
 
 **Discarded.** Keeping a loose marker with a longer warmup (hides the
 problem behind a sleep).
+
+---
+
+## Two harnesses cannot enforce `user: false` — recorded, not hidden
+
+**Context.** Asking every harness the same question surfaced that Codex
+*and* OpenCode both offer a model-only Skill to the user. Neither vertical
+asked before, so this was invisible.
+
+**Chosen.** Both declare it through `unsupported`, with reasons grounded in
+what the product already reports — Codex routes model-only as `Degraded`,
+OpenCode routes every Skill as `Adaptable`. The run records an adapted
+result carrying the reason.
+
+**Discarded.** Failing both (the product does not claim to enforce it, so
+the suite would be asserting something never promised); staying silent (the
+old behaviour, and the reason this went unnoticed).
+
+**Worth a second look.** This means `invoke.user: false` is enforced on at
+most two of four harnesses. That is a product-level fact the contract made
+visible, and it belongs in a conversation about whether the canonical policy
+is deliverable as specified — not in this change.

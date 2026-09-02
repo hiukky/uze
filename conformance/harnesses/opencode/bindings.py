@@ -34,3 +34,17 @@ class OpenCodeBindings(Bindings):
     def lists(self, catalog, skill):
         """OpenCode names a Skill by its qualified invocation label."""
         return f"flow:{skill}" in catalog.replace(" ", "")
+
+    def unsupported(self, prop):
+        """OpenCode's skill surface offers every delivered Skill to the user;
+        no documented control hides one from explicit invocation.
+
+        Consistent with what the product already reports: `uze plugin
+        inspect` routes every OpenCode Skill as `Adaptable`, never `Native`.
+        """
+        if prop == "model-only-is-not-user-invocable":
+            return (
+                "OpenCode has no documented control that hides a Skill from "
+                "explicit invocation; the product routes its Skills as Adaptable"
+            )
+        return None
