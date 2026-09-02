@@ -17,7 +17,10 @@ import time
 import pexpect
 
 PROVIDER_IMG = "python:3.12-slim"
-HARNESS_IMAGE = "conformance-harness:latest"
+# `UZE_LAB_IMAGE` pins an older build of the image — the way to tell a
+# vendor regression from a lab change is to run the same scenario against
+# the harness version that last passed.
+HARNESS_IMAGE = os.environ.get("UZE_LAB_IMAGE", "conformance-harness:latest")
 
 HARNESS_HOSTS = {
     "claude": [
@@ -65,6 +68,10 @@ class Config:
         self.cert_dir = os.path.join(self.outdir, "certs")
         self.mcp_proof = "UZE_MCP_CONFORMANCE_PROOF_1"
         self.mcp_fixture_bin = "/usr/local/bin/uze-mcp-conformance-fixture"
+        # Run-wide provider switches, set by the entry point and honoured by
+        # every provider start in the run.
+        self.discovery = False
+        self.variation = None
         os.makedirs(self.outdir, exist_ok=True)
 
 
@@ -338,6 +345,12 @@ def start_provider(cfg, mode, extra_env=None):
     (TLS 443, Anthropic hosts); codex: fake_openai (TLS 443, api.openai.com).
     `extra_env` adds `-e K=V` pairs (e.g. the hook-scenario tool name/args).
     """
+    # A vertical restarts the provider per phase; the run-wide switches
+    # (raw capture, adversarial variation) must reach every restart, not
+    # only the first, and a capture must be pulled before its container
+    # is replaced or the earlier phases' requests are gone.
+    if cfg.discovery:
+        pull_captures(cfg)
     subprocess.run(["docker", "rm", "-f", cfg.prov_name], capture_output=True)
     env = [
         "-e",
@@ -347,6 +360,10 @@ def start_provider(cfg, mode, extra_env=None):
         "-e",
         f"MCP_PROOF={cfg.mcp_proof}",
     ]
+    if cfg.discovery:
+        env += ["-e", "DISCOVERY=1"]
+    if cfg.variation:
+        env += ["-e", f"VARIATION={cfg.variation}"]
     for name, value in (extra_env or {}).items():
         env += ["-e", f"{name}={value}"]
 
@@ -533,24 +550,33 @@ def provider_struct(cfg):
 
 
 def pull_captures(cfg):
-    """Pulls the provider's raw request log (--discovery) beside the run
-    evidence. Absent log / provider already gone = no-op — captures are best
-    effort by design; raw captures never enter the repository."""
+    """Appends the current provider's raw request log (--discovery) to the
+    run's `raw-requests.log`. Absent log / provider already gone = no-op —
+    captures are best effort by design; raw captures never enter the
+    repository."""
     try:
         r = subprocess.run(
-            [
-                "docker",
-                "cp",
-                f"{cfg.prov_name}:/app/raw-requests.log",
-                os.path.join(cfg.outdir, "raw-requests.log"),
-            ],
+            ["docker", "cp", f"{cfg.prov_name}:/app/raw-requests.log", "-"],
             capture_output=True,
-            text=True,
             timeout=30,
         )
-        return r.returncode == 0
+        if r.returncode != 0:
+            return False
+        with open(os.path.join(cfg.outdir, "raw-requests.log"), "ab") as f:
+            f.write(untar_single_file(r.stdout))
+        return True
     except Exception:
         return False
+
+
+def untar_single_file(archive: bytes) -> bytes:
+    """`docker cp <container>:<file> -` streams a tar with that one member."""
+    import io
+    import tarfile
+
+    with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
+        member = next(m for m in tar.getmembers() if m.isfile())
+        return tar.extractfile(member).read()
 
 
 # ============================================================================

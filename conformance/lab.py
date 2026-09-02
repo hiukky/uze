@@ -157,12 +157,9 @@ def run_once(cfg, scenario, variation=None, discovery=False):
     crash (never an assertion failure — those are verdict entries)."""
     provision(cfg)
     started_at = time.strftime("%Y-%m-%dT%H:%M:%S%z")
-    extra_env = {}
-    if variation:
-        extra_env["VARIATION"] = variation
-    if discovery:
-        extra_env["DISCOVERY"] = "1"
-    prov_ip = common.start_provider(cfg, "static", extra_env or None)
+    cfg.variation = variation
+    cfg.discovery = discovery
+    prov_ip = common.start_provider(cfg, "static")
     common.reset_results()
     crash = None
     try:
@@ -288,9 +285,8 @@ def run_sandbox(cfg, scenario, args, argv):
     if getattr(args, "trailing", None):
         command = args.trailing
     provision(cfg)
-    prov_ip = common.start_provider(
-        cfg, "static", {"DISCOVERY": "1"} if args.discovery else None
-    )
+    cfg.discovery = args.discovery
+    prov_ip = common.start_provider(cfg, "static")
     print(
         f"=== sandbox: harness={cfg.harness} network={cfg.net} provider={prov_ip} "
         f"outdir={cfg.outdir} ===",
@@ -305,10 +301,13 @@ def run_sandbox(cfg, scenario, args, argv):
                 f"uze market add /work/market >/dev/null 2>&1\n" + " ".join(command)
             )
             with open(log, "wb") as f:
+                # A probe may print bytes that are not UTF-8 (a vendor's
+                # state file); that must never take the lab down with it.
                 r = subprocess.run(
                     docker_shell_cmd(cfg, prov_ip, full),
                     capture_output=True,
                     text=True,
+                    errors="replace",
                     timeout=300,
                 )
                 f.write(r.stdout.encode())
@@ -430,12 +429,9 @@ def run_experiment(cfg, vendor, name, variation, discovery=False):
         flush=True,
     )
     provision(experiment_cfg)
-    extra_env = {}
-    if variation:
-        extra_env["VARIATION"] = variation
-    if discovery:
-        extra_env["DISCOVERY"] = "1"
-    prov_ip = common.start_provider(experiment_cfg, "static", extra_env or None)
+    experiment_cfg.variation = variation
+    experiment_cfg.discovery = discovery
+    prov_ip = common.start_provider(experiment_cfg, "static")
     common.reset_results()
     module.run(experiment_cfg, prov_ip)
     results = list(common.results)

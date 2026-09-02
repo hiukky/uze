@@ -14,19 +14,26 @@ from __future__ import annotations
 import os
 
 
-def capture(handler) -> None:
-    """Appends one raw request to the provider's capture log. No-op unless
-    the lab enabled `DISCOVERY=1`; OSError is swallowed (a capture failure
-    must never break the provider serving a harness)."""
+def read_body(handler) -> bytes:
+    """Reads the request body once, appending the raw request to the
+    provider's capture log when the lab enabled `DISCOVERY=1`.
+
+    The body is a stream: whoever reads it owns it. Capturing and serving
+    used to read it twice, and the second read blocked on a socket with
+    nothing left — every discovery run hung on its first model call. An
+    OSError on the log is swallowed: a capture failure must never break
+    the provider serving a harness.
+    """
+    length = int(handler.headers.get("Content-Length", "0") or 0)
+    body = handler.rfile.read(length) if length else b""
     if not os.environ.get("DISCOVERY"):
-        return
+        return body
     try:
         with open("/app/raw-requests.log", "ab") as f:
             f.write(f"### {handler.command} {handler.path}\n".encode())
             for key, value in handler.headers.items():
                 f.write(f"{key}: {value}\n".encode())
-            length = int(handler.headers.get("Content-Length", "0") or 0)
-            if length:
-                f.write(handler.rfile.read(length) + b"\n\n")
+            f.write(body + b"\n\n")
     except OSError:
         pass
+    return body

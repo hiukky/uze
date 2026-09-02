@@ -397,9 +397,7 @@ class H(BaseHTTPRequestHandler):
 
     def _handle(self):
 
-        capture.capture(self)
-        ln = int(self.headers.get("Content-Length", 0) or 0)
-        body = self.rfile.read(ln).decode("utf-8", "replace") if ln else ""
+        body = capture.read_body(self).decode("utf-8", "replace")
         record(body, self.path, self.command)
 
         if self.headers.get("Upgrade", "").lower() == "websocket":

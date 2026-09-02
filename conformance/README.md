@@ -169,7 +169,12 @@ the same real-harness + synthetic-world topology, made interactive:
 - **`--discovery`** captures every raw request the harness sends to the
   provider (provider-side, no proxy topology) beside the run evidence as
   `raw-requests.log` — raw captures never enter the repository. Works on
-  sandbox, experiment, and canonical runs.
+  sandbox, experiment, and canonical runs, across every per-phase provider
+  restart.
+
+- **`UZE_LAB_IMAGE=<image>`** runs any mode against an older build of the
+  Lab image — the way to tell a vendor regression from a Lab change is to
+  run the same scenario against the harness version that last passed.
 
 ## How each harness's synthetic world hooks in
 
