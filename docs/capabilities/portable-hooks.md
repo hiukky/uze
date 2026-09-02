@@ -118,13 +118,14 @@ declare to the model, captured with the Lab's `--discovery` mode. A
 |---|---|---|
 | Claude Code | one merged entry per group in `~/.claude/settings.json`, `command` = the generated `hooks/exec` with the group's arguments (exec form: no shell parsing) | native |
 | Codex | one merged entry per group in `~/.codex/hooks.json`, one quoted shell line invoking the same wrapper | native |
-| Antigravity CLI | named entries at the document root of the generated plugin's `hooks.json` — grouped (`matcher` + `hooks`) for the tool events, a flat handler list for `Stop` — with `hooks/exec` vendored inside the plugin | native (package-level); two vendor gates, both measured live by the Lab: execution needs a signed-in session (`hooks > vendor`, open — an API-key session runs no hook at all, #893), and the harness must read a plugin's `hooks.json` (`hooks > delivery`, shut on 1.1.24) |
+| Antigravity CLI | one named entry per group merged into the shared `~/.gemini/config/hooks.json` (the document root *is* the named-hook map), keyed `<package>:<group-id>` — grouped (`matcher` + `hooks`) for the tool events, a flat handler list for `Stop` — whose command is the shared `hooks/exec` wrapper by absolute path | native (shared vendor file); execution needs a signed-in session — an API-key session runs no hook at all (#893). The Lab measures both the vendor's execution gate (`hooks > vendor`) and whether the harness loads what UZE delivered (`hooks > delivery`) live, every run |
 | OpenCode | one generated `Plugin.define` plugin, `<config root>/plugins/hooks-<package>.ts`, auto-discovered — the plugin *is* the wrapper, with the package's groups as data | adapted (`observe`/`allow` only; `deny`/`ask` unsupported, `Stop` never claimed) |
 
 The `sh` wrapper is one file per harness, byte-identical for every package,
-and depends on `sh` and `jq`. Claude and Codex share one copy under
-`$UZE_HOME/state/attachments/<harness>/hooks/exec`; Antigravity carries its
-own inside the generated plugin.
+and depends on `sh` and `jq`. Claude, Codex and Antigravity each keep one
+copy under `$UZE_HOME/state/attachments/<harness>/hooks/exec` — a shared
+vendor config file has no plugin root to resolve against, so every entry
+names the wrapper by absolute path.
 
 Compatibility is semantic, per event and effect. A `Stop` hook is never
 represented as a tool callback: on OpenCode it is Degraded with the reason
@@ -146,12 +147,13 @@ stated) · **—** = not expressible.
 | exec form (no shell parsing) | yes (`command` + `args`) | no (shell line) | no (shell line) | n/a |
 | matcher | native, regex on the tool name | native | native, regex (`"*"` matches all) | in-plugin |
 | a group's handlers | run **in parallel** natively → sequential inside `exec` | sequential inside `exec` | sequential inside `exec` | sequential inside the plugin |
-| `PreToolUse` observe/allow | native | native | native (gated) | native (`execute.before`) |
-| `PreToolUse` deny | native (JSON + exit 2) | native (JSON + exit 2) | native (`decision: deny`) — gated | — |
-| `PreToolUse` ask | native (`permissionDecision: ask`) | rendered as a denial | native (gated) | — |
+| `PreToolUse` observe/allow | native | native | native (signed-in session) | native (`execute.before`) |
+| `PreToolUse` deny | native (JSON + exit 2) | native (JSON + exit 2) | native (`decision: deny`, signed-in session) | — |
+| `PreToolUse` ask | native (`permissionDecision: ask`) | rendered as a denial | native (signed-in session) | — |
 | `PreToolUse` transform | — (needs a stdout convention) | — | — | — |
-| `PostToolUse` | native, observe only | native, observe only | native (`{}`), gated | native (`execute.after`) |
-| `Stop` | native (exit 2 prevents the stop) | native (must print `{}`) | native, gated | — |
+| `PostToolUse` | native, observe only | native, observe only | native (`{}`), signed-in session | native (`execute.after`) |
+| `Stop` | native (exit 2 prevents the stop) | native (must print `{}`) | native, signed-in session | — |
+| a denial's exit status | 2 (the documented block signal) | 2 | **0** — the decision is the stdout document, and any non-zero exit is logged as a *failed* hook | n/a |
 | fail-closed on handler failure | via `exec` (natively, exit ≠ 2 **runs the tool**) | via `exec` | via `exec` | via the plugin |
 | handler context | `HOOK_*` environment | `HOOK_*` environment | `HOOK_*` environment | `HOOK_*` environment |
 
@@ -205,18 +207,17 @@ stated) · **—** = not expressible.
   — a vendor-format deny hook at the shared path denies the command — while
   one declared check keeps the API-key mode on the report until #893 is
   fixed.
-- **Antigravity does not load a plugin's `hooks.json` (1.1.24).** With the
-  signed-in gate open, a second one is still shut: the harness reads
-  `hooks.json` from its shared customization roots but not from a plugin
-  directory, which is where UZE delivers Antigravity's hooks. `agy plugin
-  validate` counts the generated plugin's hooks, the plugin is listed with a
-  `hooks` component and enabled in `config.json`, and the session reports
-  `loaded 0 named hooks from 0 hooks.json file(s)` — the file is never
-  opened. The vendor's own shipped plugin guide documents the opposite
-  ("Hooks defined in `plugins/<name>/hooks.json` are registered and run
-  during the agent's lifecycle"). Until that is true, UZE's hook checks on
-  this harness are declared, not asserted, and the Lab measures the gate
-  live each run (`hooks > delivery`).
+- **Antigravity does not load a plugin's `hooks.json` (1.1.24)**, which is
+  why UZE delivers its hooks into the shared `~/.gemini/config/hooks.json`
+  instead. The harness reads `hooks.json` from its shared customization
+  roots but never from a plugin directory: `agy plugin validate` counts a
+  plugin's hooks, the plugin is listed with a `hooks` component and enabled
+  in `config.json`, and the session still reports `loaded 0 named hooks from
+  0 hooks.json file(s)` — the file is never opened. The vendor's own shipped
+  plugin guide documents the opposite ("Hooks defined in
+  `plugins/<name>/hooks.json` are registered and run during the agent's
+  lifecycle"). The Lab measures it live each run (`hooks > delivery`), so if
+  a later build starts reading plugin hooks the delivery can move back.
 - **OpenCode V2 cannot block.** Its tool hooks carry the input but no block
   signal; `deny`/`ask` are diagnosed before attach.
 - **Antigravity's two entry shapes are not interchangeable.** Its docs

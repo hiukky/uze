@@ -9,9 +9,13 @@ The Antigravity vertical SHALL run the real harness in its signed-in mode agains
 - **AND** `hooks > vendor` passes, so the mode in which the vendor executes hooks is proven rather than assumed
 
 #### Scenario: Delivery is a second live precondition
-- **WHEN** the vertical starts a session with UZE's generated hook plugin installed
+- **WHEN** the vertical starts a session with UZE's hook package installed
 - **THEN** it records from the harness's own log how many `hooks.json` files the harness read
 - **AND** `hooks > delivery` passes only if the harness loaded the hooks UZE delivered; while it does not, the UZE hook checks are declared against that measurement, never against a stale reason and never silently dropped
+
+#### Scenario: UZE's own hooks are asserted
+- **WHEN** the vertical scripts the intercepted tool against UZE's delivered hook groups in the signed-in session
+- **THEN** the denial reason reaches the conversation, the intercepted tool never executes, the handler's portable vocabulary (`tool=shell`) is relayed from the harness's own payload, a second handler after a denial never runs, and an allowed call executes
 
 #### Scenario: Model calls go through the signed-in protocol
 - **WHEN** the harness sends `v1internal:streamGenerateContent`

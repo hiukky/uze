@@ -45,6 +45,18 @@ own; the file itself is a constant per harness, byte-identical for every
 package. OpenCode, which has no command hooks, receives a generated plugin
 that is the same runtime with the package's groups as data.
 
+`<plugin-root>` names the package's own root, not a delivered directory, so
+the wrapper's location is free: it lives wherever the harness's entries can
+name it. Claude, Codex and Antigravity therefore each keep one copy under
+`$UZE_HOME/state/attachments/<harness>/hooks/exec`, referenced by absolute
+path. Antigravity's entries used to be written into its generated plugin
+with the wrapper vendored beside them; they are not, since 1.1.24 was
+measured to read no `hooks.json` from a plugin directory (Conformance Lab,
+`hooks > delivery`) — its hooks are merged into the shared
+`~/.gemini/config/hooks.json` instead. A file the vendor never opens is not
+a delivery; where the entry goes is a per-harness fact, and the compiled
+artifact is unchanged by it.
+
 The handler contract becomes environment in, exit code out. A handler
 receives `HOOK_HARNESS`, `HOOK_EVENT`, `HOOK_TOOL`, `HOOK_TOOL_NATIVE`,
 `HOOK_CWD`, `HOOK_INPUT`, `PLUGIN_ROOT` and the portable fields of the
