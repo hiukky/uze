@@ -501,11 +501,13 @@ mod tests {
     #[test]
     fn a_missing_or_non_directory_source_is_rejected() {
         let root = temporary("missing");
+        // `temporary` creates the directory it hands back, so the absent
+        // path has to be one below it — asking about the scratch root
+        // itself only ever proves that it exists.
         assert!(matches!(
-            acquire(&PackageSource::local(&root)),
+            acquire(&PackageSource::local(root.join("absent"))),
             Err(UzeError::MissingPath(_))
         ));
-        fs::create_dir_all(&root).unwrap();
         let file = root.join("file");
         fs::write(&file, b"x").unwrap();
         assert!(matches!(

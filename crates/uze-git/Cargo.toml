@@ -1,18 +1,14 @@
 [package]
-name = "uze-extensions"
+name = "uze-git"
 version.workspace = true
 edition = "2024"
 rust-version = "1.97"
-description = "Built-in TUI extensions for the uze workspace client"
+description = "One transport for speaking to the Git binary"
 license.workspace = true
 authors.workspace = true
 publish = false
 
 [dependencies]
-uze-git = { path = "../uze-git" }
-ratatui = "0.30"
-crossterm = "0.29"
-syntect = "5"
 
 [dev-dependencies]
 uze-testkit = { path = "../uze-testkit" }

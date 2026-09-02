@@ -2464,6 +2464,7 @@ dependencies = [
  "uze-application",
  "uze-core",
  "uze-extensions",
+ "uze-git",
  "uze-integrations",
  "uze-terminal",
  "uze-testkit",
@@ -2489,6 +2490,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.20",
+ "uze-git",
  "uze-testkit",
 ]
 
@@ -2499,6 +2501,14 @@ dependencies = [
  "crossterm",
  "ratatui",
  "syntect",
+ "uze-git",
+ "uze-testkit",
+]
+
+[[package]]
+name = "uze-git"
+version = "0.0.0-alpha.0"
+dependencies = [
  "uze-testkit",
 ]
 

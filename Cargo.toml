@@ -19,6 +19,7 @@ members = [
   "crates/uze-integrations",
   "crates/uze-application",
   "crates/uze-extensions",
+  "crates/uze-git",
   "crates/uze-testkit",
   "crates/uze-terminal",
 ]
@@ -43,6 +44,7 @@ uze-core = { path = "crates/uze-core" }
 uze-integrations = { path = "crates/uze-integrations" }
 uze-application = { path = "crates/uze-application" }
 uze-extensions = { path = "crates/uze-extensions" }
+uze-git = { path = "crates/uze-git" }
 uze-terminal = { path = "crates/uze-terminal" }
 clap = { version = "4.6", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }

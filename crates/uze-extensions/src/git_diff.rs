@@ -24,9 +24,7 @@
 
 use std::{
     collections::BTreeMap,
-    io,
     path::{Path, PathBuf},
-    process::Command,
     sync::OnceLock,
     time::{Duration, Instant},
 };
@@ -349,16 +347,10 @@ impl GitView {
 /// non-repository `cwd` fails this with git's own "not a git repository"
 /// message on stderr, which becomes `GitView::error` verbatim.
 fn repository_root(cwd: &Path) -> Result<PathBuf, String> {
-    let output = git_command(cwd, &["rev-parse", "--show-toplevel"])
-        .output()
-        .map_err(describe_spawn_failure)?;
-    if output.status.success() {
-        Ok(PathBuf::from(
-            String::from_utf8_lossy(&output.stdout).trim(),
-        ))
-    } else {
-        Err(String::from_utf8_lossy(&output.stderr).trim().to_owned())
-    }
+    uze_git::read(cwd, &["rev-parse", "--show-toplevel"])
+        .map_err(|error| error.to_string())?
+        .successful()
+        .map(|stdout| PathBuf::from(stdout.trim()))
 }
 
 /// The branch [`GitView::root`] is on, for the overlay's title. Answers
@@ -371,17 +363,18 @@ fn current_branch(root: &Path) -> String {
     }
 }
 
-/// Runs `git -C <root> <args>`, treating exit `0` *or* `1` as success —
-/// `git diff` (with or without `--no-index`) exits `1` whenever there's a
-/// diff to show, which is the ordinary case here, never a failure.
+/// Every command this view runs is an observation, so they all go through
+/// the transport's read path — which also keeps the overlay from taking
+/// Git's optional index lock while an agent is writing in a sibling
+/// checkout of the same repository.
+///
+/// Exit `1` is an answer rather than a failure here: `git diff` uses it for
+/// "there are differences", which is the ordinary case for a view whose
+/// whole job is showing them.
 fn run_git(root: &Path, args: &[&str]) -> Result<String, String> {
-    let output = git_command(root, args)
-        .output()
-        .map_err(describe_spawn_failure)?;
-    match output.status.code() {
-        Some(0) | Some(1) => Ok(String::from_utf8_lossy(&output.stdout).into_owned()),
-        _ => Err(String::from_utf8_lossy(&output.stderr).trim().to_owned()),
-    }
+    uze_git::read(root, args)
+        .map_err(|error| error.to_string())?
+        .or_exit(1)
 }
 
 /// Totals Git's tab-separated `--numstat` output. Binary entries use `-`
@@ -410,20 +403,6 @@ fn untracked_line_count(path: &Path) -> u32 {
         0
     } else {
         contents.lines().count().max(1) as u32
-    }
-}
-
-fn git_command(root: &Path, args: &[&str]) -> Command {
-    let mut command = Command::new("git");
-    command.arg("-C").arg(root).args(args);
-    command
-}
-
-fn describe_spawn_failure(error: io::Error) -> String {
-    if error.kind() == io::ErrorKind::NotFound {
-        "git is not installed or not on PATH".to_owned()
-    } else {
-        format!("could not run git: {error}")
     }
 }
 
@@ -1290,13 +1269,10 @@ mod tests {
         let root = uze_testkit::temp::scratch("git-diff-test");
         std::fs::create_dir_all(&root).unwrap();
         let git = |args: &[&str]| {
-            let status = Command::new("git")
-                .arg("-C")
-                .arg(&root)
-                .args(args)
-                .status()
-                .expect("git must be on PATH for this test");
-            assert!(status.success(), "git {args:?} failed");
+            uze_git::write(&root, args)
+                .expect("git must be on PATH for this test")
+                .successful()
+                .unwrap_or_else(|error| panic!("git {args:?} failed: {error}"));
         };
         git(&["init", "--quiet"]);
         git(&["config", "user.email", "test@example.com"]);
@@ -1369,13 +1345,10 @@ mod tests {
         let linked = root.join(".worktrees").join("feature");
         std::fs::create_dir_all(&root).unwrap();
         let git = |directory: &Path, args: &[&str]| {
-            let status = Command::new("git")
-                .arg("-C")
-                .arg(directory)
-                .args(args)
-                .status()
-                .expect("git must be on PATH for this test");
-            assert!(status.success(), "git {args:?} failed");
+            uze_git::write(directory, args)
+                .expect("git must be on PATH for this test")
+                .successful()
+                .unwrap_or_else(|error| panic!("git {args:?} failed: {error}"));
         };
         git(&root, &["init", "--quiet"]);
         git(&root, &["config", "user.email", "test@example.com"]);

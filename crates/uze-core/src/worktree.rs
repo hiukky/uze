@@ -20,10 +20,7 @@
 //! of instruction, and would isolate a second time on top of the checkout
 //! UZE already placed it in.
 
-use std::{
-    path::{Path, PathBuf},
-    process::Command,
-};
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -192,16 +189,16 @@ pub fn discover_linked_worktrees(project_root: &Path) -> Vec<PathBuf> {
 /// stable answer to "which repository is this", which is what the seat and
 /// the worktree layout are both scoped to.
 pub fn primary_checkout(cwd: &Path) -> Option<PathBuf> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(cwd)
-        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let common = PathBuf::from(String::from_utf8(output.stdout).ok()?.trim());
+    let common = PathBuf::from(
+        uze_git::read(
+            cwd,
+            &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        )
+        .ok()?
+        .successful()
+        .ok()?
+        .trim(),
+    );
     // `<primary>/.git` for an ordinary checkout; a bare repository has no
     // working tree to seat anyone in.
     common
@@ -300,7 +297,7 @@ pub fn isolate(primary: &Path, slug: &str) -> Result<PathBuf, String> {
 fn available_name(primary: &Path, slug: &str) -> String {
     let taken = |name: &str| {
         primary.join(WORKTREES_DIRECTORY).join(name).exists()
-            || git(
+            || uze_git::read(
                 primary,
                 &[
                     "rev-parse",
@@ -309,7 +306,7 @@ fn available_name(primary: &Path, slug: &str) -> String {
                     &format!("refs/heads/{BRANCH_PREFIX}{name}"),
                 ],
             )
-            .is_ok()
+            .is_ok_and(|output| output.is_success())
     };
     if !taken(slug) {
         return slug.to_owned();
@@ -341,24 +338,14 @@ fn ignore_worktrees_directory(primary: &Path) -> Result<(), String> {
     std::fs::write(&ignore, next).map_err(|error| format!("could not update .gitignore: {error}"))
 }
 
+/// A Git command that changes the repository, with stdout trimmed — every
+/// answer this module reads is a single line (a path, a branch name), never
+/// content whose whitespace carries meaning.
 fn git(root: &Path, args: &[&str]) -> Result<String, String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(args)
-        .output()
-        .map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                "git is not installed or not on PATH".to_owned()
-            } else {
-                format!("could not run git: {error}")
-            }
-        })?;
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
-    } else {
-        Err(String::from_utf8_lossy(&output.stderr).trim().to_owned())
-    }
+    uze_git::write(root, args)
+        .map_err(|error| error.to_string())?
+        .successful()
+        .map(|stdout| stdout.trim().to_owned())
 }
 
 #[cfg(test)]
