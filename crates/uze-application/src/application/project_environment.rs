@@ -20,11 +20,12 @@ use uze_core::{
     trust::{self, TrustAuthority},
 };
 
+use super::services::Project;
 use super::*;
 
-impl UzeApplication {
+impl Project<'_> {
     /// Read-only: observes the project's current state (lock + diagnostics).
-    pub fn project_environment(&self, root: &Path) -> Result<ProjectEnvironment> {
+    pub fn environment(&self, root: &Path) -> Result<ProjectEnvironment> {
         let canonical = project_root::resolve_project_root(root)?;
         let _lock_path = project_lock::lock_path_for(&canonical);
         let lock = project_lock::load_lock(&canonical)?;
@@ -39,7 +40,7 @@ impl UzeApplication {
                     }
                     MarketplaceSource::Git { .. } | MarketplaceSource::Path { .. } => {
                         // Check if global registry has this marketplace.
-                        let global = uze_core::state::marketplace_get(&self.home, name)?;
+                        let global = uze_core::state::marketplace_get(&self.0.home, name)?;
                         if global.is_none() {
                             diagnostics.push(format!(
                                 "marketplace `{name}` in lock but not in global registry (will be resolved from lock source on install)"
@@ -78,8 +79,8 @@ impl UzeApplication {
     /// installing it — a real feature this pass does not implement. Left
     /// as future work rather than reported as done; see
     /// `openspec/changes/project-agent-environment/tasks.md`.
-    pub fn plan_project_environment(&self, root: &Path) -> Result<ProjectEnvironmentPlan> {
-        let env = self.project_environment(root)?;
+    pub fn plan(&self, root: &Path) -> Result<ProjectEnvironmentPlan> {
+        let env = self.environment(root)?;
         let lock = match env.lock {
             Some(lock) => lock,
             None => {
@@ -101,7 +102,9 @@ impl UzeApplication {
         let installed: Vec<String> = lock
             .plugins
             .iter()
-            .filter(|(name, locked)| installed_ids.contains(&Self::locked_plugin_id(name, locked)))
+            .filter(|(name, locked)| {
+                installed_ids.contains(&UzeApplication::locked_plugin_id(name, locked))
+            })
             .map(|(name, _)| name.clone())
             .collect();
         let missing: Vec<LockedPlugin> = Self::missing_locked_plugins(&lock, &installed_ids)
@@ -136,7 +139,8 @@ impl UzeApplication {
     }
 
     fn installed_plugin_ids(&self) -> BTreeSet<String> {
-        self.installed_packages()
+        self.0
+            .installed_packages()
             .into_iter()
             .map(|p| p.id.as_str().to_owned())
             .collect()
@@ -153,16 +157,11 @@ impl UzeApplication {
     ) -> Vec<(&'lock str, &'lock LockedPlugin)> {
         lock.plugins
             .iter()
-            .filter(|(name, locked)| !installed_ids.contains(&Self::locked_plugin_id(name, locked)))
+            .filter(|(name, locked)| {
+                !installed_ids.contains(&UzeApplication::locked_plugin_id(name, locked))
+            })
             .map(|(name, locked)| (name.as_str(), locked))
             .collect()
-    }
-
-    pub(crate) fn locked_plugin_id(name: &str, locked: &LockedPlugin) -> String {
-        match &locked.source {
-            PluginSource::Marketplace { marketplace, .. } => format!("{name}@{marketplace}"),
-            PluginSource::Git { .. } => format!("{name}@local"),
-        }
     }
 
     /// Resolves a locked plugin's source into an acquirable `PackageSource`.
@@ -188,7 +187,7 @@ impl UzeApplication {
                 })?;
                 let marketplace_source = PackageSource::from(locked_mp.source.clone());
                 let (marketplace_root, manifest) =
-                    Self::load_marketplace_manifest(&marketplace_source)?;
+                    UzeApplication::load_marketplace_manifest(&marketplace_source)?;
                 let plugin_path = uze_core::acquisition::marketplace::resolve_plugin_source(
                     &manifest,
                     marketplace_plugin,
@@ -209,7 +208,7 @@ impl UzeApplication {
     }
 
     /// Adds a plugin to the project lock and ensures it's in the Store.
-    pub fn add_project_plugin(
+    pub fn add_plugin(
         &self,
         plugin: &str,
         marketplace: &str,
@@ -233,7 +232,7 @@ impl UzeApplication {
         } else {
             // Check global registry.
             let global =
-                uze_core::state::marketplace_get(&self.home, marketplace)?.ok_or_else(|| {
+                uze_core::state::marketplace_get(&self.0.home, marketplace)?.ok_or_else(|| {
                     UzeError::UnknownPackage(format!("marketplace `{marketplace}` not found"))
                 })?;
             let source = MarketplaceSource::from(global.source);
@@ -284,9 +283,9 @@ impl UzeApplication {
         let package_source = Self::resolve_locked_plugin_source(&lock, plugin, &plugin_source)?;
 
         // Acquire and ingest (reuses existing lifecycle).
-        let _mutation = uze_core::persistence::MutationLock::acquire(&self.home)?;
-        let materialized = self.acquire(&package_source)?;
-        let report = self.install_materialized_from_marketplace(
+        let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
+        let materialized = self.0.acquire(&package_source)?;
+        let report = self.0.install_materialized_from_marketplace(
             materialized,
             marketplace,
             authority,
@@ -299,7 +298,11 @@ impl UzeApplication {
         // — read back from the Store rather than trusting the request,
         // the same discipline `Provenance` itself exists to enforce.
         let resolved = ResolvedPlugin::from_resolved_source(
-            &self.package_by_name(&report.plugin.id)?.provenance.resolved,
+            &self
+                .0
+                .package_by_name(&report.plugin.id)?
+                .provenance
+                .resolved,
         );
 
         lock.plugins.insert(
@@ -316,11 +319,7 @@ impl UzeApplication {
     }
 
     /// Removes a plugin from the project lock (does NOT remove from Store).
-    pub fn remove_project_plugin(
-        &self,
-        plugin: &str,
-        root: &Path,
-    ) -> Result<RemoveProjectPluginReport> {
+    pub fn remove_plugin(&self, plugin: &str, root: &Path) -> Result<RemoveProjectPluginReport> {
         let canonical = project_root::resolve_project_root(root)?;
         let mut lock = match project_lock::load_lock(&canonical)? {
             Some(lock) => lock,
@@ -361,11 +360,7 @@ impl UzeApplication {
     /// rolled back on a later failure, matching `add_project_plugin`'s own
     /// no-transaction model (the Store has no all-or-nothing multi-package
     /// primitive to build one on).
-    pub fn install_project_environment(
-        &self,
-        root: &Path,
-        authority: &dyn TrustAuthority,
-    ) -> Result<InstallReport> {
+    pub fn install(&self, root: &Path, authority: &dyn TrustAuthority) -> Result<InstallReport> {
         let canonical = project_root::resolve_project_root(root)?;
         let lock = match project_lock::load_lock(&canonical)? {
             Some(lock) => lock,
@@ -382,7 +377,7 @@ impl UzeApplication {
             return Ok(InstallReport::NoChanges);
         }
 
-        let _mutation = uze_core::persistence::MutationLock::acquire(&self.home)?;
+        let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
         let mut installed_plugins = Vec::new();
         for (name, locked) in missing {
             // A fresh machine reproducing a cloned `agents.lock` has never
@@ -399,18 +394,18 @@ impl UzeApplication {
                 && let Some(locked_mp) = lock.marketplaces.get(marketplace)
             {
                 uze_core::state::marketplace_add(
-                    &self.home,
+                    &self.0.home,
                     marketplace,
                     PackageSource::from(locked_mp.source.clone()),
                 )?;
             }
             let package_source = Self::resolve_locked_plugin_source(&lock, &name, &locked.source)?;
-            let materialized = self.acquire(&package_source)?;
+            let materialized = self.0.acquire(&package_source)?;
             let marketplace = match &locked.source {
                 PluginSource::Marketplace { marketplace, .. } => marketplace.as_str(),
                 PluginSource::Git { .. } => "local",
             };
-            self.install_materialized_from_marketplace(
+            self.0.install_materialized_from_marketplace(
                 materialized,
                 marketplace,
                 authority,
@@ -431,7 +426,7 @@ impl UzeApplication {
     /// is `Malformed` rather than failing `status` itself, since `status`
     /// is meant to diagnose exactly this kind of problem, not refuse to
     /// run because of it.
-    pub fn project_lock_status(&self, root: &Path) -> ProjectLockStatus {
+    pub fn lock_status(&self, root: &Path) -> ProjectLockStatus {
         let canonical = match project_root::resolve_project_root(root) {
             Ok(canonical) => canonical,
             Err(_) => return ProjectLockStatus::Absent,
@@ -451,7 +446,7 @@ impl UzeApplication {
             .iter()
             .map(|(name, locked)| ProjectPluginHealth {
                 plugin: name.clone(),
-                installed: installed_ids.contains(&Self::locked_plugin_id(name, locked)),
+                installed: installed_ids.contains(&UzeApplication::locked_plugin_id(name, locked)),
             })
             .collect();
         ProjectLockStatus::Present { plugins }
@@ -512,4 +507,15 @@ pub enum InstallReport {
     /// At least one previously-missing locked plugin was acquired and
     /// installed.
     Installed { plugins: Vec<String> },
+}
+
+/// Read by both the project environment and the workspace overview, so it
+/// belongs to the type that owns the state rather than to either view.
+impl UzeApplication {
+    pub(crate) fn locked_plugin_id(name: &str, locked: &LockedPlugin) -> String {
+        match &locked.source {
+            PluginSource::Marketplace { marketplace, .. } => format!("{name}@{marketplace}"),
+            PluginSource::Git { .. } => format!("{name}@local"),
+        }
+    }
 }

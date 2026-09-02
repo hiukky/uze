@@ -45,7 +45,7 @@ fn reconcile_projects_the_declaration_into_the_shared_baseline() {
     let application = app(&root);
     let project = project_with_policy(&root, POLICY_LOCK);
 
-    let report = application.context_reconcile(&project).unwrap();
+    let report = application.context().reconcile(&project).unwrap();
     let region = report
         .worktree_region
         .expect("a declared policy is reconciled");
@@ -61,7 +61,7 @@ fn reconcile_projects_the_declaration_into_the_shared_baseline() {
 
     // Idempotent: a second pass changes nothing and stays matched.
     let before = agents_md.clone();
-    application.context_reconcile(&project).unwrap();
+    application.context().reconcile(&project).unwrap();
     assert_eq!(
         fs::read_to_string(project.join("AGENTS.md")).unwrap(),
         before
@@ -78,7 +78,7 @@ fn the_projection_never_triggers_a_harnesss_own_isolation() {
     let root = temp("worktree-no-double-isolation");
     let application = app(&root);
     let project = project_with_policy(&root, POLICY_LOCK);
-    application.context_reconcile(&project).unwrap();
+    application.context().reconcile(&project).unwrap();
 
     let agents_md = fs::read_to_string(project.join("AGENTS.md"))
         .unwrap()
@@ -98,9 +98,9 @@ fn a_project_declaring_nothing_gets_no_region() {
     let application = app(&root);
     let project = project_with_policy(&root, "version: 1\n");
 
-    let report = application.context_reconcile(&project).unwrap();
+    let report = application.context().reconcile(&project).unwrap();
     assert!(report.worktree_region.is_none());
-    let status = application.context_inspect(&project).unwrap();
+    let status = application.context().inspect(&project).unwrap();
     assert!(status.worktrees.is_none());
 
     if let Ok(agents_md) = fs::read_to_string(project.join("AGENTS.md")) {
@@ -115,13 +115,13 @@ fn the_declared_completion_behavior_is_what_reaches_the_baseline() {
     let application = app(&root);
     let project = project_with_policy(&root, "version: 1\nworktrees:\n  completion: merge\n");
 
-    application.context_reconcile(&project).unwrap();
+    application.context().reconcile(&project).unwrap();
     let agents_md = fs::read_to_string(project.join("AGENTS.md")).unwrap();
 
     assert!(agents_md.contains(CompletionBehavior::Merge.instruction_clause()));
     assert!(!agents_md.contains(CompletionBehavior::Handoff.instruction_clause()));
 
-    let status = application.context_inspect(&project).unwrap();
+    let status = application.context().inspect(&project).unwrap();
     assert_eq!(
         status.worktrees.unwrap().completion,
         CompletionBehavior::Merge
@@ -138,7 +138,7 @@ fn an_edited_region_is_blocked_not_overwritten() {
     let root = temp("worktree-drift");
     let application = app(&root);
     let project = project_with_policy(&root, POLICY_LOCK);
-    application.context_reconcile(&project).unwrap();
+    application.context().reconcile(&project).unwrap();
 
     let agents_md = project.join("AGENTS.md");
     let tampered = fs::read_to_string(&agents_md)
@@ -146,7 +146,7 @@ fn an_edited_region_is_blocked_not_overwritten() {
         .replace(worktree::WORKTREES_DIRECTORY, "somewhere-else");
     fs::write(&agents_md, &tampered).unwrap();
 
-    let report = application.context_reconcile(&project).unwrap();
+    let report = application.context().reconcile(&project).unwrap();
     assert_eq!(
         report.worktree_region.unwrap().state,
         AttachmentState::Drifted
@@ -168,7 +168,7 @@ fn editing_the_declaration_replaces_its_region_rather_than_drifting() {
     let root = temp("worktree-edit");
     let application = app(&root);
     let project = project_with_policy(&root, POLICY_LOCK);
-    application.context_reconcile(&project).unwrap();
+    application.context().reconcile(&project).unwrap();
 
     fs::write(
         project.join("agents.lock"),
@@ -176,12 +176,12 @@ fn editing_the_declaration_replaces_its_region_rather_than_drifting() {
     )
     .unwrap();
 
-    let plan = application.context_plan(&project).unwrap();
+    let plan = application.context().plan(&project).unwrap();
     let planned = plan.worktree_region.as_ref().unwrap();
     assert_eq!(planned.superseded.len(), 1, "{planned:?}");
     assert!(plan.has_changes(), "a declaration edit is a pending change");
 
-    let report = application.context_reconcile(&project).unwrap();
+    let report = application.context().reconcile(&project).unwrap();
     let region = report.worktree_region.unwrap();
     assert_eq!(region.state, AttachmentState::Matched);
     assert_eq!(region.removed_superseded.len(), 1);

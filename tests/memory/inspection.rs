@@ -29,7 +29,7 @@ fn status_reports_healthy_with_zero_issues_once_reconciled() {
     install(&application, fixture_a());
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();
-    application.context_reconcile(&project).unwrap();
+    application.context().reconcile(&project).unwrap();
 
     let status = application.health().status(&project).unwrap();
     assert!(matches!(status.portability, Portability::Portable));
@@ -64,7 +64,7 @@ fn status_distinguishes_installed_from_contributing_here() {
     );
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();
-    application.context_reconcile(&project).unwrap();
+    application.context().reconcile(&project).unwrap();
 
     let status = application.health().status(&project).unwrap();
     assert_eq!(status.packages_installed, 2);
@@ -186,10 +186,10 @@ fn context_inspect_never_writes_anything_in_a_populated_project() {
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();
     // Reconcile once so there's real managed state to inspect.
-    application.context_reconcile(&project).unwrap();
+    application.context().reconcile(&project).unwrap();
 
     let before = snapshot(&project);
-    let status = application.context_inspect(&project).unwrap();
+    let status = application.context().inspect(&project).unwrap();
     let after = snapshot(&project);
     assert_eq!(
         before, after,
@@ -209,7 +209,7 @@ fn context_plan_never_writes_anything() {
     // Before any reconcile at all — the state with the most "would create"
     // actions, and therefore the state most tempting to accidentally write.
     let before = snapshot(&project);
-    let plan = application.context_plan(&project).unwrap();
+    let plan = application.context().plan(&project).unwrap();
     let after = snapshot(&project);
     assert_eq!(
         before, after,
@@ -229,7 +229,7 @@ fn a_project_with_only_claude_md_is_vendor_locked() {
     fs::write(project.join("CLAUDE.md"), "# My Claude-only instructions\n").unwrap();
 
     let before = snapshot(&project);
-    let status = application.context_inspect(&project).unwrap();
+    let status = application.context().inspect(&project).unwrap();
     assert_eq!(snapshot(&project), before, "inspect must not write");
 
     assert!(matches!(
@@ -248,9 +248,9 @@ fn agents_md_plus_a_bridging_claude_md_is_portable() {
     install(&application, fixture_a());
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();
-    application.context_reconcile(&project).unwrap();
+    application.context().reconcile(&project).unwrap();
 
-    let status = application.context_inspect(&project).unwrap();
+    let status = application.context().inspect(&project).unwrap();
     assert!(matches!(status.portability, Portability::Portable));
     assert!(matches!(
         harness_delivery(&status, "claude-code"),
@@ -268,9 +268,9 @@ fn an_absent_bridge_harness_shows_not_detected_not_a_gap() {
     install(&application, fixture_a());
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();
-    application.context_reconcile(&project).unwrap();
+    application.context().reconcile(&project).unwrap();
 
-    let status = application.context_inspect(&project).unwrap();
+    let status = application.context().inspect(&project).unwrap();
     assert!(matches!(
         harness_delivery(&status, "claude-code"),
         HarnessContextDelivery::NotDetected
@@ -295,10 +295,10 @@ fn scenario_a_manual_claude_md_survives_untouched() {
     .unwrap();
 
     let before = fs::read(project.join("CLAUDE.md")).unwrap();
-    application.context_inspect(&project).unwrap();
+    application.context().inspect(&project).unwrap();
     assert_eq!(fs::read(project.join("CLAUDE.md")).unwrap(), before);
 
-    let status = application.context_inspect(&project).unwrap();
+    let status = application.context().inspect(&project).unwrap();
     let claude_source = status
         .sources
         .iter()
@@ -323,8 +323,8 @@ fn scenario_c_unrecognized_vendor_file_survives_untouched() {
     .unwrap();
 
     let before = snapshot(&project);
-    application.context_inspect(&project).unwrap();
-    application.context_plan(&project).unwrap();
+    application.context().inspect(&project).unwrap();
+    application.context().plan(&project).unwrap();
     assert_eq!(snapshot(&project), before);
 }
 
@@ -338,7 +338,7 @@ fn scenario_d_manual_agents_md_with_no_packages_is_left_alone() {
     fs::write(project.join("AGENTS.md"), "My own project conventions.\n").unwrap();
 
     let before = fs::read(project.join("AGENTS.md")).unwrap();
-    let status = application.context_inspect(&project).unwrap();
+    let status = application.context().inspect(&project).unwrap();
     assert_eq!(fs::read(project.join("AGENTS.md")).unwrap(), before);
     let agents_source = status
         .sources
@@ -350,7 +350,7 @@ fn scenario_d_manual_agents_md_with_no_packages_is_left_alone() {
     assert!(status.contributions.is_empty());
 
     // Reconcile must also leave it alone: no packages means nothing to add.
-    application.context_reconcile(&project).unwrap();
+    application.context().reconcile(&project).unwrap();
     assert_eq!(fs::read(project.join("AGENTS.md")).unwrap(), before);
 }
 
@@ -368,12 +368,12 @@ fn scenario_e_manual_agents_md_plus_uze_region_coexist() {
     )
     .unwrap();
 
-    application.context_reconcile(&project).unwrap();
+    application.context().reconcile(&project).unwrap();
     let content = fs::read_to_string(project.join("AGENTS.md")).unwrap();
     assert!(content.starts_with("# My own conventions\n\nAlways write tests.\n"));
     assert!(content.contains("uze-instructions-fixture-a"));
 
-    let status = application.context_inspect(&project).unwrap();
+    let status = application.context().inspect(&project).unwrap();
     let agents_source = status
         .sources
         .iter()
@@ -400,12 +400,12 @@ fn scenario_f_manual_claude_md_content_plus_bridge_coexist() {
     )
     .unwrap();
 
-    application.context_reconcile(&project).unwrap();
+    application.context().reconcile(&project).unwrap();
     let content = fs::read_to_string(project.join("CLAUDE.md")).unwrap();
     assert!(content.starts_with("## My personal Claude workflow notes\n"));
     assert!(content.contains("@AGENTS.md"));
 
-    let status = application.context_inspect(&project).unwrap();
+    let status = application.context().inspect(&project).unwrap();
     let claude_source = status
         .sources
         .iter()
@@ -438,8 +438,8 @@ fn all_recognized_files_together_are_fully_portable() {
     fs::create_dir_all(&project).unwrap();
     fs::write(project.join("CLAUDE.md"), "## My Claude workflow notes\n").unwrap();
 
-    application.context_reconcile(&project).unwrap();
-    let status = application.context_inspect(&project).unwrap();
+    application.context().reconcile(&project).unwrap();
+    let status = application.context().inspect(&project).unwrap();
 
     assert!(matches!(status.portability, Portability::Portable));
     for file_name in ["AGENTS.md", "CLAUDE.md"] {
@@ -471,9 +471,9 @@ fn context_operations_never_alter_the_installed_package_set() {
     fs::create_dir_all(&project).unwrap();
 
     let before = application.list_plugins().unwrap();
-    application.context_inspect(&project).unwrap();
-    application.context_plan(&project).unwrap();
-    application.context_reconcile(&project).unwrap();
+    application.context().inspect(&project).unwrap();
+    application.context().plan(&project).unwrap();
+    application.context().reconcile(&project).unwrap();
     let after = application.list_plugins().unwrap();
     assert_eq!(before.len(), after.len());
     assert_eq!(before[0].id, after[0].id);

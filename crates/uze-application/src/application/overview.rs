@@ -103,7 +103,8 @@ impl Workspace<'_> {
         let agents_md = root.join("AGENTS.md").is_file();
         let portability = self
             .0
-            .context_inspect(root)
+            .context()
+            .inspect(root)
             .ok()
             .map(|status| status.portability);
         ProjectOverview {

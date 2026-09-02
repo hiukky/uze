@@ -62,3 +62,27 @@ impl UzeApplication {
         Health(self)
     }
 }
+
+/// A project's portable instruction context — `AGENTS.md` and the bridges
+/// projected from it.
+///
+/// Separate from [`Project`] because the CLI grammar already draws that
+/// line (ADR-019): `uze context …` is its own command group, scoped to a
+/// directory, and it never touches the machine-scoped environment.
+pub struct Context<'a>(pub(super) &'a UzeApplication);
+
+/// A project's declared agent environment — `agents.lock` and what it
+/// takes to satisfy it.
+pub struct Project<'a>(pub(super) &'a UzeApplication);
+
+impl UzeApplication {
+    /// Instruction context: inspect, plan, reconcile.
+    pub fn context(&self) -> Context<'_> {
+        Context(self)
+    }
+
+    /// The project environment a directory declares.
+    pub fn project(&self) -> Project<'_> {
+        Project(self)
+    }
+}

@@ -135,7 +135,7 @@ fn a_single_package_composes_agents_md_and_bridges_only_present_harnesses() {
     assert!(!project.join("CLAUDE.md").exists());
 
     // B/C: decomposition + attach.
-    let report = application.context_reconcile(&project).unwrap();
+    let report = application.context().reconcile(&project).unwrap();
     assert_eq!(report.packages.len(), 1);
     assert_eq!(report.packages[0].state, AttachmentState::Matched);
     assert!(report.removed_orphans.is_empty());
@@ -169,7 +169,7 @@ fn an_absent_bridge_harness_receives_no_bridge_file_at_all() {
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();
 
-    let _report = application.context_reconcile(&project).unwrap();
+    let _report = application.context().reconcile(&project).unwrap();
     assert!(
         !project.join("CLAUDE.md").exists(),
         "an absent harness must never receive a bridge file"
@@ -186,7 +186,7 @@ fn editing_outside_the_managed_region_stays_matched_editing_inside_becomes_drift
     install(&application, fixture_a());
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();
-    application.context_reconcile(&project).unwrap();
+    application.context().reconcile(&project).unwrap();
 
     // F: user prose appended around the managed region.
     let agents_md = project.join("AGENTS.md");
@@ -194,7 +194,7 @@ fn editing_outside_the_managed_region_stays_matched_editing_inside_becomes_drift
     content = format!("# My project\n\n{content}\nMore of my own notes.\n");
     fs::write(&agents_md, &content).unwrap();
 
-    let report = application.context_reconcile(&project).unwrap();
+    let report = application.context().reconcile(&project).unwrap();
     assert_eq!(
         report.packages[0].state,
         AttachmentState::Matched,
@@ -213,7 +213,7 @@ fn editing_outside_the_managed_region_stays_matched_editing_inside_becomes_drift
     );
     fs::write(&agents_md, &tampered).unwrap();
 
-    let report = application.context_reconcile(&project).unwrap();
+    let report = application.context().reconcile(&project).unwrap();
     assert_eq!(report.packages[0].state, AttachmentState::Drifted);
     // Reconcile must not have overwritten the user's edit.
     assert_eq!(fs::read_to_string(&agents_md).unwrap(), tampered);
@@ -231,7 +231,7 @@ fn a_matched_region_can_be_cleanly_removed_preserving_user_content() {
     fs::create_dir_all(&project).unwrap();
     let agents_md = project.join("AGENTS.md");
     fs::write(&agents_md, "user text A\n").unwrap();
-    application.context_reconcile(&project).unwrap();
+    application.context().reconcile(&project).unwrap();
     let mut content = fs::read_to_string(&agents_md).unwrap();
     content.push_str("user text B\n");
     fs::write(&agents_md, &content).unwrap();
@@ -242,7 +242,7 @@ fn a_matched_region_can_be_cleanly_removed_preserving_user_content() {
     application
         .remove_plugin("uze-instructions-fixture-a")
         .unwrap();
-    let report = application.context_reconcile(&project).unwrap();
+    let report = application.context().reconcile(&project).unwrap();
     assert!(report.packages.is_empty());
     assert_eq!(report.removed_orphans.len(), 1);
     assert_eq!(
@@ -262,7 +262,7 @@ fn a_still_installed_packages_drifted_region_is_reported_and_never_rewritten() {
     install(&application, fixture_a());
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();
-    application.context_reconcile(&project).unwrap();
+    application.context().reconcile(&project).unwrap();
 
     let agents_md = project.join("AGENTS.md");
     let tampered = fs::read_to_string(&agents_md)
@@ -270,7 +270,7 @@ fn a_still_installed_packages_drifted_region_is_reported_and_never_rewritten() {
         .replace("Fixture A conformance marker", "TAMPERED");
     fs::write(&agents_md, &tampered).unwrap();
 
-    let report = application.context_reconcile(&project).unwrap();
+    let report = application.context().reconcile(&project).unwrap();
     assert_eq!(report.packages[0].state, AttachmentState::Drifted);
     assert_eq!(fs::read_to_string(&agents_md).unwrap(), tampered);
     fs::remove_dir_all(root).unwrap();
@@ -290,7 +290,7 @@ fn an_orphaned_regions_cleanup_is_structural_not_content_verified_but_still_refu
     install(&application, fixture_a());
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();
-    application.context_reconcile(&project).unwrap();
+    application.context().reconcile(&project).unwrap();
 
     // Even content edited post-hoc inside an about-to-be-orphaned region is
     // removed along with it: once the owning package is gone, there is
@@ -304,7 +304,7 @@ fn an_orphaned_regions_cleanup_is_structural_not_content_verified_but_still_refu
     application
         .remove_plugin("uze-instructions-fixture-a")
         .unwrap();
-    let report = application.context_reconcile(&project).unwrap();
+    let report = application.context().reconcile(&project).unwrap();
     assert_eq!(report.removed_orphans.len(), 1);
     assert!(report.blocked_orphans.is_empty());
     assert!(
@@ -328,7 +328,7 @@ fn a_drifted_bridge_line_blocks_its_own_removal_even_after_the_last_package_is_g
     install(&application, fixture_a());
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();
-    application.context_reconcile(&project).unwrap();
+    application.context().reconcile(&project).unwrap();
 
     let claude_md = project.join("CLAUDE.md");
     let tampered_bridge = fs::read_to_string(&claude_md)
@@ -339,7 +339,7 @@ fn a_drifted_bridge_line_blocks_its_own_removal_even_after_the_last_package_is_g
     application
         .remove_plugin("uze-instructions-fixture-a")
         .unwrap();
-    let report = application.context_reconcile(&project).unwrap();
+    let report = application.context().reconcile(&project).unwrap();
     assert_eq!(
         bridge(&report, "claude-code").state,
         AttachmentState::Drifted
@@ -359,7 +359,7 @@ fn two_packages_share_one_agents_md_and_exactly_one_bridge_per_harness() {
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();
 
-    let report = application.context_reconcile(&project).unwrap();
+    let report = application.context().reconcile(&project).unwrap();
     assert_eq!(report.packages.len(), 2);
     assert!(
         report
@@ -380,7 +380,7 @@ fn two_packages_share_one_agents_md_and_exactly_one_bridge_per_harness() {
     application
         .remove_plugin("uze-instructions-fixture-a")
         .unwrap();
-    let report = application.context_reconcile(&project).unwrap();
+    let report = application.context().reconcile(&project).unwrap();
     assert_eq!(report.packages.len(), 1);
     assert_eq!(
         report.packages[0].package_id,
@@ -410,7 +410,7 @@ fn two_packages_share_one_agents_md_and_exactly_one_bridge_per_harness() {
     application
         .remove_plugin("uze-instructions-fixture-b")
         .unwrap();
-    let report = application.context_reconcile(&project).unwrap();
+    let report = application.context().reconcile(&project).unwrap();
     assert!(report.packages.is_empty());
     assert_eq!(report.removed_orphans.len(), 1);
     assert_eq!(
@@ -435,12 +435,12 @@ fn reconciling_repeatedly_never_duplicates_regions_or_bridges() {
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();
 
-    application.context_reconcile(&project).unwrap();
+    application.context().reconcile(&project).unwrap();
     let after_first = fs::read_to_string(project.join("AGENTS.md")).unwrap();
     let bridge_after_first = fs::read_to_string(project.join("CLAUDE.md")).unwrap();
 
-    application.context_reconcile(&project).unwrap();
-    application.context_reconcile(&project).unwrap();
+    application.context().reconcile(&project).unwrap();
+    application.context().reconcile(&project).unwrap();
     let after_repeat = fs::read_to_string(project.join("AGENTS.md")).unwrap();
     let bridge_after_repeat = fs::read_to_string(project.join("CLAUDE.md")).unwrap();
 
@@ -460,7 +460,8 @@ fn a_project_root_that_does_not_exist_is_a_clean_error_not_a_write() {
     let root = temp("missing-project");
     let application = app(&root, false);
     let error = application
-        .context_reconcile(&root.join("does-not-exist"))
+        .context()
+        .reconcile(&root.join("does-not-exist"))
         .unwrap_err();
     assert!(matches!(error, UzeError::NotDirectory(_)));
 }
@@ -473,7 +474,7 @@ fn reconcile_never_touches_the_project_when_no_package_provides_instructions() {
     fs::create_dir_all(&project).unwrap();
     fs::write(project.join("AGENTS.md"), "just my own notes\n").unwrap();
 
-    let report = application.context_reconcile(&project).unwrap();
+    let report = application.context().reconcile(&project).unwrap();
     assert!(report.packages.is_empty());
     assert_eq!(
         fs::read_to_string(project.join("AGENTS.md")).unwrap(),
@@ -501,7 +502,7 @@ fn a_foreign_looking_managed_region_outside_our_naming_shape_is_left_untouched()
     )
     .unwrap();
 
-    let report = application.context_reconcile(&project).unwrap();
+    let report = application.context().reconcile(&project).unwrap();
     assert!(report.removed_orphans.is_empty());
     assert!(report.blocked_orphans.is_empty());
     assert_eq!(

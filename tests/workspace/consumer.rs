@@ -93,7 +93,8 @@ fn add_project_plugin_creates_a_deterministic_lock() {
     fx.add_marketplace_to_global_registry();
     let app = fx.app();
 
-    app.add_project_plugin("flow", "test-market", &fx.project_root, &AlwaysTrust)
+    app.project()
+        .add_plugin("flow", "test-market", &fx.project_root, &AlwaysTrust)
         .unwrap();
 
     let lock_path = project_lock::lock_path_for(&fx.project_root);
@@ -107,7 +108,8 @@ fn add_project_plugin_creates_a_deterministic_lock() {
     // Re-adding the same plugin from the same marketplace must succeed
     // (install_materialized's own same-origin idempotency) and produce a
     // byte-identical lock — determinism, not just "doesn't crash".
-    app.add_project_plugin("flow", "test-market", &fx.project_root, &AlwaysTrust)
+    app.project()
+        .add_plugin("flow", "test-market", &fx.project_root, &AlwaysTrust)
         .unwrap();
     let second_bytes = fs::read(&lock_path).unwrap();
     assert_eq!(
@@ -125,7 +127,8 @@ fn add_project_plugin_populates_resolved_revision_for_a_local_marketplace_plugin
     let fx = Fixture::new("resolved-revision");
     fx.add_marketplace_to_global_registry();
     let app = fx.app();
-    app.add_project_plugin("flow", "test-market", &fx.project_root, &AlwaysTrust)
+    app.project()
+        .add_plugin("flow", "test-market", &fx.project_root, &AlwaysTrust)
         .unwrap();
     let lock = project_lock::load_lock(&fx.project_root).unwrap().unwrap();
     assert_eq!(lock.plugins["flow"].resolved.revision, None);
@@ -138,7 +141,8 @@ fn install_project_environment_reproduces_a_lock_on_a_fresh_machine() {
 
     // "Machine A": adds the plugin, produces agents.lock.
     fx.app()
-        .add_project_plugin("flow", "test-market", &fx.project_root, &AlwaysTrust)
+        .project()
+        .add_plugin("flow", "test-market", &fx.project_root, &AlwaysTrust)
         .unwrap();
 
     // "Machine B": same UZE_HOME layout path but a fresh Store directory,
@@ -163,7 +167,8 @@ fn install_project_environment_reproduces_a_lock_on_a_fresh_machine() {
     );
 
     let report = fresh_app
-        .install_project_environment(&fx.project_root, &AlwaysTrust)
+        .project()
+        .install(&fx.project_root, &AlwaysTrust)
         .unwrap();
     match report {
         InstallReport::Installed { plugins } => {
@@ -199,7 +204,7 @@ fn install_project_environment_reproduces_a_lock_on_a_fresh_machine() {
     // matches a real Store id and would make `uze status` report a
     // marketplace-sourced plugin as permanently missing even right after a
     // successful install.
-    match fresh_app.project_lock_status(&fx.project_root) {
+    match fresh_app.project().lock_status(&fx.project_root) {
         ProjectLockStatus::Present { plugins } => {
             assert!(
                 plugins.iter().any(|p| p.plugin == "flow" && p.installed),
@@ -215,11 +220,13 @@ fn install_project_environment_is_a_no_op_once_everything_is_installed() {
     let fx = Fixture::new("no-changes");
     fx.add_marketplace_to_global_registry();
     let app = fx.app();
-    app.add_project_plugin("flow", "test-market", &fx.project_root, &AlwaysTrust)
+    app.project()
+        .add_plugin("flow", "test-market", &fx.project_root, &AlwaysTrust)
         .unwrap();
 
     let report = app
-        .install_project_environment(&fx.project_root, &AlwaysTrust)
+        .project()
+        .install(&fx.project_root, &AlwaysTrust)
         .unwrap();
     assert!(matches!(report, InstallReport::NoChanges));
 }
@@ -229,7 +236,8 @@ fn install_project_environment_with_no_lock_is_a_no_op() {
     let fx = Fixture::new("no-lock");
     let report = fx
         .app()
-        .install_project_environment(&fx.project_root, &AlwaysTrust)
+        .project()
+        .install(&fx.project_root, &AlwaysTrust)
         .unwrap();
     assert!(matches!(report, InstallReport::NoChanges));
 }
@@ -239,10 +247,14 @@ fn remove_project_plugin_removes_from_lock_but_not_from_the_store() {
     let fx = Fixture::new("remove-lock-only");
     fx.add_marketplace_to_global_registry();
     let app = fx.app();
-    app.add_project_plugin("flow", "test-market", &fx.project_root, &AlwaysTrust)
+    app.project()
+        .add_plugin("flow", "test-market", &fx.project_root, &AlwaysTrust)
         .unwrap();
 
-    let report = app.remove_project_plugin("flow", &fx.project_root).unwrap();
+    let report = app
+        .project()
+        .remove_plugin("flow", &fx.project_root)
+        .unwrap();
     assert!(matches!(report, RemoveProjectPluginReport::Removed { .. }));
 
     let lock = project_lock::load_lock(&fx.project_root).unwrap().unwrap();
@@ -264,14 +276,19 @@ fn remove_project_plugin_reports_no_lock_and_not_in_lock_distinctly() {
     let fx = Fixture::new("remove-reports");
     let app = fx.app();
 
-    let no_lock = app.remove_project_plugin("flow", &fx.project_root).unwrap();
+    let no_lock = app
+        .project()
+        .remove_plugin("flow", &fx.project_root)
+        .unwrap();
     assert!(matches!(no_lock, RemoveProjectPluginReport::NoLock));
 
     fx.add_marketplace_to_global_registry();
-    app.add_project_plugin("flow", "test-market", &fx.project_root, &AlwaysTrust)
+    app.project()
+        .add_plugin("flow", "test-market", &fx.project_root, &AlwaysTrust)
         .unwrap();
     let not_in_lock = app
-        .remove_project_plugin("does-not-exist", &fx.project_root)
+        .project()
+        .remove_plugin("does-not-exist", &fx.project_root)
         .unwrap();
     assert!(matches!(
         not_in_lock,
@@ -381,17 +398,18 @@ fn malformed_lock_is_reported_not_panicked_on() {
     .unwrap();
 
     let app = fx.app();
-    assert!(app.project_environment(&fx.project_root).is_err());
-    assert!(app.plan_project_environment(&fx.project_root).is_err());
+    assert!(app.project().environment(&fx.project_root).is_err());
+    assert!(app.project().plan(&fx.project_root).is_err());
     assert!(
-        app.install_project_environment(&fx.project_root, &AlwaysTrust)
+        app.project()
+            .install(&fx.project_root, &AlwaysTrust)
             .is_err()
     );
 
     // `uze status`'s view degrades to a reported Malformed state instead
     // of propagating the error -- status must never refuse to run because
     // of the exact problem it exists to diagnose.
-    match app.project_lock_status(&fx.project_root) {
+    match app.project().lock_status(&fx.project_root) {
         ProjectLockStatus::Malformed { .. } => {}
         other => panic!("expected Malformed, got {other:?}"),
     }
@@ -406,7 +424,7 @@ fn unsupported_lock_version_is_reported_not_panicked_on() {
     )
     .unwrap();
     let app = fx.app();
-    assert!(app.project_environment(&fx.project_root).is_err());
+    assert!(app.project().environment(&fx.project_root).is_err());
 }
 
 #[test]
@@ -429,7 +447,8 @@ fn project_root_resolution_is_deterministic_from_a_subdirectory() {
     let fx = Fixture::new("root-resolution");
     fx.add_marketplace_to_global_registry();
     fx.app()
-        .add_project_plugin("flow", "test-market", &fx.project_root, &AlwaysTrust)
+        .project()
+        .add_plugin("flow", "test-market", &fx.project_root, &AlwaysTrust)
         .unwrap();
 
     let nested = fx.project_root.join("a/b/c");

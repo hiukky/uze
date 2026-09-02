@@ -12,11 +12,12 @@ use uze_core::{
     worktree::{self, WorktreePolicy},
 };
 
+use super::services::Context;
 use super::*;
-use super::{INSTRUCTION_BRIDGE_CONTENT, INSTRUCTION_BRIDGE_IDENTITY, UzeApplication};
+use super::{INSTRUCTION_BRIDGE_CONTENT, INSTRUCTION_BRIDGE_IDENTITY};
 
-impl UzeApplication {
-    pub fn context_inspect(&self, project_root: &std::path::Path) -> Result<ProjectContextStatus> {
+impl Context<'_> {
+    pub fn inspect(&self, project_root: &std::path::Path) -> Result<ProjectContextStatus> {
         if !project_root.is_dir() {
             return Err(UzeError::NotDirectory(project_root.to_path_buf()));
         }
@@ -39,7 +40,7 @@ impl UzeApplication {
         // `context_delivery` (its bridge file or additional native files) —
         // never an Application-owned list of filenames.
         let mut source_names = vec!["AGENTS.md"];
-        for integration in &self.integrations {
+        for integration in &self.0.integrations {
             match integration.context_delivery() {
                 ContextDelivery::Bridge { file_name } => source_names.push(file_name),
                 ContextDelivery::Native { files } => source_names.extend(files),
@@ -75,7 +76,7 @@ impl UzeApplication {
             .collect();
 
         let mut harnesses = Vec::new();
-        for integration in &self.integrations {
+        for integration in &self.0.integrations {
             let id = integration.id();
             let delivery = integration.context_delivery();
             if matches!(delivery, ContextDelivery::None) {
@@ -84,7 +85,7 @@ impl UzeApplication {
                 // reported as a gap it was never claimed to close.
                 continue;
             }
-            if !self.detect_cached(integration.as_ref()).present {
+            if !self.0.detect_cached(integration.as_ref()).present {
                 harnesses.push(HarnessContextStatus {
                     integration: id.to_owned(),
                     display_name: integration.display_name().to_owned(),
@@ -150,7 +151,7 @@ impl UzeApplication {
         })
     }
 
-    pub fn context_plan(&self, project_root: &std::path::Path) -> Result<ContextPlan> {
+    pub fn plan(&self, project_root: &std::path::Path) -> Result<ContextPlan> {
         if !project_root.is_dir() {
             return Err(UzeError::NotDirectory(project_root.to_path_buf()));
         }
@@ -172,13 +173,14 @@ impl UzeApplication {
         }) || observation.has_any_matched_contribution();
 
         let bridges = self
+            .0
             .integrations
             .iter()
             .filter_map(|integration| {
                 let ContextDelivery::Bridge { file_name } = integration.context_delivery() else {
                     return None;
                 };
-                if !self.detect_cached(integration.as_ref()).present {
+                if !self.0.detect_cached(integration.as_ref()).present {
                     return None;
                 }
                 let bridge_file = canonical.join(file_name);
@@ -218,10 +220,7 @@ impl UzeApplication {
         })
     }
 
-    pub fn context_reconcile(
-        &self,
-        project_root: &std::path::Path,
-    ) -> Result<ContextReconciliationReport> {
+    pub fn reconcile(&self, project_root: &std::path::Path) -> Result<ContextReconciliationReport> {
         if !project_root.is_dir() {
             return Err(UzeError::NotDirectory(project_root.to_path_buf()));
         }
@@ -268,13 +267,14 @@ impl UzeApplication {
         });
 
         let bridges = self
+            .0
             .integrations
             .iter()
             .filter_map(|integration| {
                 let ContextDelivery::Bridge { file_name } = integration.context_delivery() else {
                     return None;
                 };
-                if !self.detect_cached(integration.as_ref()).present {
+                if !self.0.detect_cached(integration.as_ref()).present {
                     return None;
                 }
                 let bridge_file = canonical.join(file_name);
@@ -341,8 +341,8 @@ impl UzeApplication {
 
     fn instruction_contributions(&self) -> Result<Vec<InstructionContribution>> {
         let mut contributions = Vec::new();
-        for package_id in self.store.package_ids()? {
-            let package = self.store.package(&package_id)?;
+        for package_id in self.0.store.package_ids()? {
+            let package = self.0.store.package(&package_id)?;
             let resources = uze_core::engine::package_resources_at(&package_id, &package.root)?;
             for resource in resources {
                 if resource.capability.kind != CapabilityKind::Instruction {

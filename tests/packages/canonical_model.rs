@@ -180,11 +180,11 @@ fn status_context_inspect_and_context_plan_produce_valid_json() {
     assert!(status_json.get("portability").is_some());
     assert!(status_json.get("harnesses").is_some());
 
-    let inspection = application.context_inspect(&project).unwrap();
+    let inspection = application.context().inspect(&project).unwrap();
     let inspection_json = serde_json::to_value(&inspection).unwrap();
     assert!(inspection_json.get("sources").is_some());
 
-    let plan = application.context_plan(&project).unwrap();
+    let plan = application.context().plan(&project).unwrap();
     let plan_json = serde_json::to_value(&plan).unwrap();
     assert!(plan_json.get("agents_md_plan").is_some());
     fs::remove_dir_all(root).unwrap();
@@ -204,7 +204,7 @@ fn installing_the_skill_package_never_touches_managed_regions_of_other_packages(
         .unwrap();
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();
-    application.context_reconcile(&project).unwrap();
+    application.context().reconcile(&project).unwrap();
     let before = fs::read_to_string(project.join("AGENTS.md")).unwrap();
 
     // Installing an unrelated Skill-only package (the official uze skill
@@ -223,7 +223,7 @@ fn installing_the_skill_package_never_touches_managed_regions_of_other_packages(
 
     // Reconciling again picks up nothing new from the skill package (it has
     // no AGENTS.md contribution) and still respects the existing region.
-    let report = application.context_reconcile(&project).unwrap();
+    let report = application.context().reconcile(&project).unwrap();
     assert_eq!(report.packages.len(), 1);
     assert_eq!(report.packages[0].state, AttachmentState::Matched);
     fs::remove_dir_all(root).unwrap();
@@ -247,7 +247,7 @@ fn drift_is_still_blocked_with_the_skill_package_also_installed() {
         .unwrap();
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();
-    application.context_reconcile(&project).unwrap();
+    application.context().reconcile(&project).unwrap();
 
     let agents_md = project.join("AGENTS.md");
     let tampered = fs::read_to_string(&agents_md)
@@ -255,7 +255,7 @@ fn drift_is_still_blocked_with_the_skill_package_also_installed() {
         .replace("Fixture A conformance marker", "TAMPERED");
     fs::write(&agents_md, &tampered).unwrap();
 
-    let report = application.context_reconcile(&project).unwrap();
+    let report = application.context().reconcile(&project).unwrap();
     assert_eq!(report.packages[0].state, AttachmentState::Drifted);
     assert_eq!(fs::read_to_string(&agents_md).unwrap(), tampered);
     fs::remove_dir_all(root).unwrap();

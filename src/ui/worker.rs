@@ -240,8 +240,8 @@ pub(crate) fn dispatch(
             let (home, sender) = (home.clone(), sender.clone());
             thread::spawn(move || {
                 let result = tui_application(home).and_then(|app| {
-                    let status = app.context_inspect(&root)?;
-                    let plan = app.context_plan(&root)?;
+                    let status = app.context().inspect(&root)?;
+                    let plan = app.context().plan(&root)?;
                     Ok((status, plan))
                 });
                 let _ = sender.send(WorkerResult::ContextAnalyzed(
@@ -258,7 +258,8 @@ pub(crate) fn dispatch(
                 move |app| {
                     // Same use case and same default (no trust flag) as the
                     // CLI's `uze install`; the TUI adds no install logic.
-                    app.install_project_environment(&root, &crate::trust::NoTrustAuthority)
+                    app.project()
+                        .install(&root, &crate::trust::NoTrustAuthority)
                         .map(|report| match report {
                             InstallReport::NoChanges => {
                                 "Project environment already up to date".to_owned()
@@ -277,7 +278,7 @@ pub(crate) fn dispatch(
             let (home, sender) = (home.clone(), sender.clone());
             thread::spawn(move || {
                 let result = tui_application(home)
-                    .and_then(|app| app.context_reconcile(&root))
+                    .and_then(|app| app.context().reconcile(&root))
                     .map(|report| ("Context reconciled".to_owned(), report))
                     .map_err(|error| error.to_string());
                 let _ = sender.send(WorkerResult::ContextApplied(result));
@@ -422,7 +423,7 @@ fn load_refresh_data(home: UzeHome, context_root: &std::path::Path) -> Result<Re
         .as_ref()
         .map(|workspace| workspace.root.as_path())
         .unwrap_or(context_root);
-    let context_status = app.context_inspect(status_root).ok();
+    let context_status = app.context().inspect(status_root).ok();
     // Resolved from the raw `context_root`, deliberately not `status_root`:
     // `agent_context` applies the one project-root rule itself, and going
     // through a second, differently-resolved root is exactly how the two

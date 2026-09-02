@@ -585,7 +585,10 @@ fn run(cli: Cli) -> Result<()> {
         } => {
             let authority = trust_authority(trust);
             let spinner = progress::spinner("Installing project environment...");
-            match app.install_project_environment(&context_path(path), authority.as_ref()) {
+            match app
+                .project()
+                .install(&context_path(path), authority.as_ref())
+            {
                 Ok(report) => {
                     let message = match &report {
                         uze::application::InstallReport::NoChanges => "Already up to date",
@@ -612,7 +615,7 @@ fn run(cli: Cli) -> Result<()> {
                 source,
             })?;
             let spinner = progress::spinner(&format!("Removing {plugin} from this project..."));
-            let report = match app.remove_project_plugin(&plugin, &current_dir) {
+            let report = match app.project().remove_plugin(&plugin, &current_dir) {
                 Ok(report) => report,
                 Err(e) => {
                     spinner.finish_and_clear();
@@ -656,21 +659,21 @@ fn run(cli: Cli) -> Result<()> {
         }
         Command::Context { action } => match action {
             ContextAction::Inspect { path, format } => {
-                let status = app.context_inspect(&context_path(path))?;
+                let status = app.context().inspect(&context_path(path))?;
                 match format {
                     OutputFormat::Text => print!("{}", render_context_status(&status)),
                     OutputFormat::Json => print_json(&status),
                 }
             }
             ContextAction::Plan { path, format } => {
-                let plan = app.context_plan(&context_path(path))?;
+                let plan = app.context().plan(&context_path(path))?;
                 match format {
                     OutputFormat::Text => print!("{}", render_context_plan(&plan, &app)),
                     OutputFormat::Json => print_json(&plan),
                 }
             }
             ContextAction::Reconcile { path, format } => {
-                let report = app.context_reconcile(&context_path(path))?;
+                let report = app.context().reconcile(&context_path(path))?;
                 match format {
                     OutputFormat::Text => {
                         print!("{}", render_context_reconciliation(&report, &app));
@@ -1487,7 +1490,9 @@ fn run_shorthand(app: &UzeApplication, args: Vec<String>, verbose: bool) -> Resu
         source,
     })?;
     let authority = trust_authority(shorthand.trust);
-    let report = app.add_project_plugin(&plugin, &marketplace, &current_dir, authority.as_ref())?;
+    let report =
+        app.project()
+            .add_plugin(&plugin, &marketplace, &current_dir, authority.as_ref())?;
 
     match shorthand.format {
         OutputFormat::Text => {

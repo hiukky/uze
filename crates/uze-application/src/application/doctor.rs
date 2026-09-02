@@ -234,7 +234,7 @@ impl Health<'_> {
     }
 
     pub fn status(&self, project_root: &std::path::Path) -> Result<StatusReport> {
-        let context = self.0.context_inspect(project_root)?;
+        let context = self.0.context().inspect(project_root)?;
         let installed = self.0.store.package_ids()?.len();
         let contributing = context.contributions.len();
         let issues: Vec<String> = context
@@ -269,7 +269,7 @@ impl Health<'_> {
             harnesses: context.harnesses,
             packages_installed: installed,
             packages_contributing_here: contributing,
-            project_lock: self.0.project_lock_status(project_root),
+            project_lock: self.0.project().lock_status(project_root),
             issues,
         })
     }
