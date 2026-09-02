@@ -80,6 +80,9 @@ jobs:
           tool: ruff
       - run: ruff format --check conformance/
       - run: ruff check conformance/
+      - run: python3 -m pip install --user pexpect
+      - name: Conformance unit tests (no Docker, no harness)
+        run: for t in conformance/tests/test_*.py; do python3 "$t" || exit 1; done
 
   coverage:
     name: Coverage
