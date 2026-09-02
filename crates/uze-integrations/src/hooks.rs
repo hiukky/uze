@@ -285,9 +285,16 @@ const fn hook_event_name(event: HookEvent) -> &'static str {
     }
 }
 
-/// The generated plugin `hooks.json` for Antigravity CLI: named entries
-/// (`{"hooks": {"<id>": {"<Event>": [<group>]}}}`), each group carrying the
-/// translated matcher and the hook-exec wrapper. Deterministic per package.
+/// The generated plugin `hooks.json` for Antigravity CLI: named entries at
+/// the document root (`{"<id>": {"<Event>": [<group>]}}`), each group
+/// carrying the translated matcher and the hook-exec wrapper. Deterministic
+/// per package.
+///
+/// The root is the hook map itself, never a `hooks` wrapper: the vendor
+/// reads every root key as one named hook, so a wrapper registers a single
+/// hook called `hooks` whose "events" are our ids — and no handler ever
+/// runs (AGY 1.1.24: `plugin validate` reports 1 hook processed instead of
+/// one per group, and the loader fires nothing).
 pub(crate) fn agy_hook_document(
     hooks: &[&PortableHook],
     executable: &Path,
@@ -307,10 +314,9 @@ pub(crate) fn agy_hook_document(
             serde_json::json!({ hook_event_name(hook.event): [entry] }),
         );
     }
-    let document = serde_json::json!({ "hooks": named });
     format!(
         "{}\n",
-        serde_json::to_string_pretty(&document).expect("generated hooks.json serializes")
+        serde_json::to_string_pretty(&named).expect("generated hooks.json serializes")
     )
 }
 
@@ -1320,8 +1326,12 @@ mod tests {
         let document = agy_hook_document(&[&hook()], &executable(), Path::new("/pkg"));
         let value: serde_json::Value = serde_json::from_str(&document).unwrap();
         assert_eq!(
-            value["hooks"]["protect-env"]["PreToolUse"][0]["matcher"],
+            value["protect-env"]["PreToolUse"][0]["matcher"],
             "run_command|Write"
+        );
+        assert!(
+            value.get("hooks").is_none(),
+            "a `hooks` wrapper would register one dead hook named `hooks`"
         );
         assert!(document.contains("--adapter 'antigravity'"));
         let again = agy_hook_document(&[&hook()], &executable(), Path::new("/pkg"));

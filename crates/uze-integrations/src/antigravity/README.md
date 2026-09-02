@@ -59,9 +59,16 @@ it become authoritative.
 
 ## Not yet implemented (documented, never faked)
 
-- Subagents (`agents/` — vendor format is JSON `agent.json`) and hooks
-  (`hooks.json`) are supported by the native plugin
-  format but are future UZE surfaces, exactly as with every other harness.
+- Subagents (`agents/` — vendor format is JSON `agent.json`) are supported
+  by the native plugin format but are a future UZE surface, exactly as
+  with every other harness. Hooks are delivered (ADR-033: the generated
+  plugin's `hooks.json`, named entries at the document root, each group's
+  matcher translated and its handlers wrapped by `uze hook-exec`); note
+  that AGY executes `hooks.json` hooks only when its server-delivered
+  feature provider enables `CustomizationConfig.enable_json_hooks` — the
+  offline conformance Lab observes them loaded and listed but never run
+  (1.1.22, 1.1.24), which the Antigravity vertical measures with a
+  vendor-format control hook before judging UZE's.
 - Workspace-level `.agents/mcp_config.json` discovery is a project-scope
   concern outside UZE's machine-scope integration; it was not observable
   headlessly (`agy mcp list` shows global only). `.agents/skills/` is a

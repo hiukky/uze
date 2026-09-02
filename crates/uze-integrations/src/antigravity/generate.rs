@@ -581,7 +581,11 @@ mod generated_native_tests {
         );
         let hooks: serde_json::Value =
             serde_json::from_slice(&fs::read(dir.join("hooks.json")).unwrap()).unwrap();
-        let protect = &hooks["hooks"]["protect-env"]["PreToolUse"][0];
+        assert!(
+            hooks.get("hooks").is_none(),
+            "named entries sit at the document root — a `hooks` wrapper is one dead hook to AGY"
+        );
+        let protect = &hooks["protect-env"]["PreToolUse"][0];
         assert_eq!(
             protect["matcher"], "run_command",
             "portable aliases translate to AGY tool names"
@@ -595,7 +599,7 @@ mod generated_native_tests {
         assert!(command.contains("--command '${PLUGIN_ROOT}/check'"));
         // The unnamed Stop group gets its deterministic derived id and
         // carries no matcher (match-all).
-        assert_eq!(hooks["hooks"]["stop-0"]["Stop"][0].get("matcher"), None);
+        assert_eq!(hooks["stop-0"]["Stop"][0].get("matcher"), None);
         let _ = fs::remove_dir_all(root);
     }
 

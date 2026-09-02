@@ -92,7 +92,7 @@ stdout is either empty (observe/allow) or one JSON object:
 |---|---|---|
 | Claude Code | merged `hooks` entries in `~/.claude/settings.json` (plugin `hooks/hooks.json` group form) | native |
 | Codex | merged entries in `~/.codex/hooks.json` | native |
-| Antigravity CLI | named-entry `hooks.json` inside the UZE-generated native plugin | native (package-level) |
+| Antigravity CLI | named-entry `hooks.json` (entries at the document root) inside the UZE-generated native plugin | native (package-level); execution is gated by the vendor's server-delivered `enable_json_hooks`, which the offline Lab measures (`hooks > vendor`) rather than assumes |
 | OpenCode | owned, regenerable V2 plugin (`Plugin.define` + `ctx.tool.hook`) at the global plugin directory `<config root>/plugins/uze-hooks-<package>.ts` — auto-discovered, no `plugin` config entry | adapted (bridge: observe/allow/transform only; deny/ask Unsupported, stop degraded) |
 
 Compatibility is semantic, per event and effect. A `Stop` hook is never
