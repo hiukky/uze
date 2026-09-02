@@ -1816,7 +1816,7 @@ pub(crate) fn claude_render_output(
                 outcome
                     .reason
                     .clone()
-                    .unwrap_or_else(|| "Denied by UZE hook".to_owned()),
+                    .unwrap_or_else(|| "the hook denied the operation".to_owned()),
             ),
             exit_code: NATIVE_BLOCK_EXIT,
         })
@@ -1867,7 +1867,7 @@ pub(crate) fn codex_render_output(
                 outcome
                     .reason
                     .clone()
-                    .unwrap_or_else(|| "Denied by UZE hook".to_owned()),
+                    .unwrap_or_else(|| "the hook denied the operation".to_owned()),
             ),
             exit_code: NATIVE_BLOCK_EXIT,
         })
@@ -1923,7 +1923,7 @@ pub(crate) fn antigravity_render_output(
                 outcome
                     .reason
                     .clone()
-                    .unwrap_or_else(|| "Denied by UZE hook".to_owned()),
+                    .unwrap_or_else(|| "the hook denied the operation".to_owned()),
             ),
             exit_code: NATIVE_BLOCK_EXIT,
         })
