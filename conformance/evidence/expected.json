@@ -1,5 +1,5 @@
 {
-  "_comment": "Adaptive-result registry (ADR-035): every check that may legitimately record ADAPTED. An ADAPTED verdict without an entry fails the run; a registered entry that starts passing fails (escalate) until promoted. `versions` pins observed harness versions; `*` covers any (bootstrap state \u2014 pin after the first probed runs). Update `observed_at` on any touch.",
+  "_comment": "Adaptive-result registry (ADR-035): every check that may legitimately record ADAPTED. An ADAPTED verdict without an entry fails the run; a registered entry that starts passing fails (escalate) until promoted. `versions` pins observed harness versions; `*` covers any (bootstrap state — pin after the first probed runs). Update `observed_at` on any touch.",
   "adaptive": [
     {
       "harness": "antigravity",
@@ -13,11 +13,20 @@
     },
     {
       "harness": "antigravity",
-      "check": "hooks-vendor-hook-executes",
-      "suite": "hooks > vendor",
-      "reason": "AGY executes no hooks.json hook in the Lab session even with the gate's flag served: `json-hooks-enabled` is delivered from the Lab's own Unleash listener and consumed by the harness (provider log), and dropping its `ide IN [jetski]` constraint changes nothing. The executor reads `enable_json_hooks`, field 17 of `exa.cortex_pb.CustomizationConfig`, which arrives only over the CloudCode `v1internal` backend the CLI speaks when signed in to a Google account; the Lab runs it in Gemini API-key mode and never receives that config. A vendor-format deny hook at ~/.gemini/config/hooks.json is loaded (hooks_manager: loaded 1 named hooks) and listed (/hooks) but never runs, for any event (1.1.22 and 1.1.24 alike; experiments antigravity/hook-print, antigravity/hook-tui). Vendor bug google-antigravity/antigravity-cli#893: hooks never execute under GEMINI_API_KEY; OAuth mode executes them.",
+      "check": "hooks-delivered-hooks-loaded",
+      "suite": "hooks > delivery",
+      "reason": "Antigravity executes `hooks.json` hooks only when signed in, and the vertical now runs signed in: `hooks-vendor-hook-executes` passes there, with a vendor-format deny hook at ~/.gemini/config/hooks.json denying run_command in the same session. What is still unobservable is UZE's own delivery: the harness reads no hooks.json from a plugin directory. `agy plugin validate` counts the generated plugin's three hooks, the plugin is listed with a `hooks` component and enabled in config.json, and the session still reports `loaded 0 named hooks from 0 hooks.json file(s)` — it never opens the file. The vendor's own shipped plugin guide documents the opposite (\"Hooks defined in `plugins/<name>/hooks.json` are registered and run during the agent's lifecycle\"). Measured live each run by `hooks-delivered-hooks-loaded`.",
       "versions": [
-        "1.1.22",
+        "1.1.24"
+      ],
+      "observed_at": "2026-09-02"
+    },
+    {
+      "harness": "antigravity",
+      "check": "hooks-api-key-mode-runs-no-hook",
+      "suite": "hooks > api-key",
+      "reason": "The same vendor-format control hook that fires in the vertical's signed-in session runs nothing under GEMINI_API_KEY: the harness loads it (hooks_manager: loaded 1 named hooks) and the command reaches the permission prompt instead. The executor reads `enable_json_hooks`, field 17 of `exa.cortex_pb.CustomizationConfig`, which arrives only over the CloudCode `v1internal` backend the signed-in CLI speaks; serving `json-hooks-enabled` alone does not open the gate. Vendor bug google-antigravity/antigravity-cli#893 (open 2026-08-28); #78 records that Google does not support the Gemini API-key path at all. The declaration fails the day the hook fires under an API key.",
+      "versions": [
         "1.1.24"
       ],
       "observed_at": "2026-09-02"
@@ -26,9 +35,8 @@
       "harness": "antigravity",
       "check": "hooks-deny-denial-relayed",
       "suite": "hooks > deny",
-      "reason": "Declared while hooks-vendor-hook-executes is ADAPTED: the UZE plugin hook cannot be observed where the vendor runs no hook at all. The gate's flag is served by the Lab and consumed by the harness; what is missing is the CloudCode-mode config that carries `enable_json_hooks` (see that entry). Vendor bug google-antigravity/antigravity-cli#893: hooks never execute under GEMINI_API_KEY; OAuth mode executes them.",
+      "reason": "Declared while hooks-delivered-hooks-loaded is ADAPTED: the harness runs hooks.json hooks in this signed-in session (hooks-vendor-hook-executes passes) but reads none from a plugin directory, which is how UZE delivers them, so nothing of UZE's reaches the session to be observed. See that entry for the measurement.",
       "versions": [
-        "1.1.22",
         "1.1.24"
       ],
       "observed_at": "2026-09-02"
@@ -37,9 +45,8 @@
       "harness": "antigravity",
       "check": "hooks-deny-denial-blocks-tool",
       "suite": "hooks > deny",
-      "reason": "Declared while hooks-vendor-hook-executes is ADAPTED: the UZE plugin hook cannot be observed where the vendor runs no hook at all. The gate's flag is served by the Lab and consumed by the harness; what is missing is the CloudCode-mode config that carries `enable_json_hooks` (see that entry). Vendor bug google-antigravity/antigravity-cli#893: hooks never execute under GEMINI_API_KEY; OAuth mode executes them.",
+      "reason": "Declared while hooks-delivered-hooks-loaded is ADAPTED: the harness runs hooks.json hooks in this signed-in session (hooks-vendor-hook-executes passes) but reads none from a plugin directory, which is how UZE delivers them, so nothing of UZE's reaches the session to be observed. See that entry for the measurement.",
       "versions": [
-        "1.1.22",
         "1.1.24"
       ],
       "observed_at": "2026-09-02"
@@ -48,9 +55,8 @@
       "harness": "antigravity",
       "check": "hooks-deny-marker-absent-second-handler-reached",
       "suite": "hooks > deny",
-      "reason": "Declared while hooks-vendor-hook-executes is ADAPTED: the UZE plugin hook cannot be observed where the vendor runs no hook at all. The gate's flag is served by the Lab and consumed by the harness; what is missing is the CloudCode-mode config that carries `enable_json_hooks` (see that entry). Vendor bug google-antigravity/antigravity-cli#893: hooks never execute under GEMINI_API_KEY; OAuth mode executes them.",
+      "reason": "Declared while hooks-delivered-hooks-loaded is ADAPTED: the harness runs hooks.json hooks in this signed-in session (hooks-vendor-hook-executes passes) but reads none from a plugin directory, which is how UZE delivers them, so nothing of UZE's reaches the session to be observed. See that entry for the measurement.",
       "versions": [
-        "1.1.22",
         "1.1.24"
       ],
       "observed_at": "2026-09-02"
@@ -59,9 +65,8 @@
       "harness": "antigravity",
       "check": "hooks-allow-marker-absent-blocked by protect-env",
       "suite": "hooks > allow",
-      "reason": "Declared while hooks-vendor-hook-executes is ADAPTED: the UZE plugin hook cannot be observed where the vendor runs no hook at all. The gate's flag is served by the Lab and consumed by the harness; what is missing is the CloudCode-mode config that carries `enable_json_hooks` (see that entry). Vendor bug google-antigravity/antigravity-cli#893: hooks never execute under GEMINI_API_KEY; OAuth mode executes them.",
+      "reason": "Declared while hooks-delivered-hooks-loaded is ADAPTED: the harness runs hooks.json hooks in this signed-in session (hooks-vendor-hook-executes passes) but reads none from a plugin directory, which is how UZE delivers them, so nothing of UZE's reaches the session to be observed. See that entry for the measurement.",
       "versions": [
-        "1.1.22",
         "1.1.24"
       ],
       "observed_at": "2026-09-02"
@@ -70,9 +75,8 @@
       "harness": "antigravity",
       "check": "hooks-allow-tool-executed",
       "suite": "hooks > allow",
-      "reason": "Declared while hooks-vendor-hook-executes is ADAPTED: the UZE plugin hook cannot be observed where the vendor runs no hook at all. The gate's flag is served by the Lab and consumed by the harness; what is missing is the CloudCode-mode config that carries `enable_json_hooks` (see that entry). Vendor bug google-antigravity/antigravity-cli#893: hooks never execute under GEMINI_API_KEY; OAuth mode executes them.",
+      "reason": "Declared while hooks-delivered-hooks-loaded is ADAPTED: the harness runs hooks.json hooks in this signed-in session (hooks-vendor-hook-executes passes) but reads none from a plugin directory, which is how UZE delivers them, so nothing of UZE's reaches the session to be observed. See that entry for the measurement.",
       "versions": [
-        "1.1.22",
         "1.1.24"
       ],
       "observed_at": "2026-09-02"
@@ -81,9 +85,8 @@
       "harness": "antigravity",
       "check": "hooks-order-denial-relayed",
       "suite": "hooks > order",
-      "reason": "Declared while hooks-vendor-hook-executes is ADAPTED: the UZE plugin hook cannot be observed where the vendor runs no hook at all. The gate's flag is served by the Lab and consumed by the harness; what is missing is the CloudCode-mode config that carries `enable_json_hooks` (see that entry). Vendor bug google-antigravity/antigravity-cli#893: hooks never execute under GEMINI_API_KEY; OAuth mode executes them.",
+      "reason": "Declared while hooks-delivered-hooks-loaded is ADAPTED: the harness runs hooks.json hooks in this signed-in session (hooks-vendor-hook-executes passes) but reads none from a plugin directory, which is how UZE delivers them, so nothing of UZE's reaches the session to be observed. See that entry for the measurement.",
       "versions": [
-        "1.1.22",
         "1.1.24"
       ],
       "observed_at": "2026-09-02"
@@ -92,9 +95,8 @@
       "harness": "antigravity",
       "check": "hooks-order-denial-blocks-tool",
       "suite": "hooks > order",
-      "reason": "Declared while hooks-vendor-hook-executes is ADAPTED: the UZE plugin hook cannot be observed where the vendor runs no hook at all. The gate's flag is served by the Lab and consumed by the harness; what is missing is the CloudCode-mode config that carries `enable_json_hooks` (see that entry). Vendor bug google-antigravity/antigravity-cli#893: hooks never execute under GEMINI_API_KEY; OAuth mode executes them.",
+      "reason": "Declared while hooks-delivered-hooks-loaded is ADAPTED: the harness runs hooks.json hooks in this signed-in session (hooks-vendor-hook-executes passes) but reads none from a plugin directory, which is how UZE delivers them, so nothing of UZE's reaches the session to be observed. See that entry for the measurement.",
       "versions": [
-        "1.1.22",
         "1.1.24"
       ],
       "observed_at": "2026-09-02"
@@ -103,9 +105,8 @@
       "harness": "antigravity",
       "check": "hooks-order-marker-absent-second-handler-ran",
       "suite": "hooks > order",
-      "reason": "Declared while hooks-vendor-hook-executes is ADAPTED: the UZE plugin hook cannot be observed where the vendor runs no hook at all. The gate's flag is served by the Lab and consumed by the harness; what is missing is the CloudCode-mode config that carries `enable_json_hooks` (see that entry). Vendor bug google-antigravity/antigravity-cli#893: hooks never execute under GEMINI_API_KEY; OAuth mode executes them.",
+      "reason": "Declared while hooks-delivered-hooks-loaded is ADAPTED: the harness runs hooks.json hooks in this signed-in session (hooks-vendor-hook-executes passes) but reads none from a plugin directory, which is how UZE delivers them, so nothing of UZE's reaches the session to be observed. See that entry for the measurement.",
       "versions": [
-        "1.1.22",
         "1.1.24"
       ],
       "observed_at": "2026-09-02"
@@ -114,7 +115,7 @@
       "harness": "opencode",
       "check": "mcp-tool-executed-in-tui",
       "suite": "mcp",
-      "reason": "OpenCode V2 beta: the real runtime answers a scripted call to the delivered tool name with `Unknown tool` \u2014 the tool message exists but the MCP server never ran.",
+      "reason": "OpenCode V2 beta: the real runtime answers a scripted call to the delivered tool name with `Unknown tool` — the tool message exists but the MCP server never ran.",
       "versions": [
         "*"
       ],
@@ -144,7 +145,7 @@
       "harness": "opencode",
       "check": "hooks-deny-tool-executed",
       "suite": "hooks > deny",
-      "reason": "The delivered MCP tool is not exposed on this channel, so handler execution through the bridge is not observable \u2014 the turn and marker semantics are the real harness evidence.",
+      "reason": "The delivered MCP tool is not exposed on this channel, so handler execution through the bridge is not observable — the turn and marker semantics are the real harness evidence.",
       "versions": [
         "*"
       ],
@@ -154,7 +155,7 @@
       "harness": "opencode",
       "check": "hooks-order-tool-executed",
       "suite": "hooks > order",
-      "reason": "The delivered MCP tool is not exposed on this channel, so handler execution through the bridge is not observable \u2014 the turn and marker semantics are the real harness evidence.",
+      "reason": "The delivered MCP tool is not exposed on this channel, so handler execution through the bridge is not observable — the turn and marker semantics are the real harness evidence.",
       "versions": [
         "*"
       ],
@@ -164,7 +165,7 @@
       "harness": "opencode",
       "check": "hooks-allow-tool-executed",
       "suite": "hooks > allow",
-      "reason": "The scripted call is answered `Unknown tool` by the runtime (the delivered MCP tool is not exposed at execution time on this channel), so handler execution through the bridge is not observable \u2014 the turn and marker semantics are the real harness evidence. Observed after the model-exposed escalation (the tool reached the request, execution did not).",
+      "reason": "The scripted call is answered `Unknown tool` by the runtime (the delivered MCP tool is not exposed at execution time on this channel), so handler execution through the bridge is not observable — the turn and marker semantics are the real harness evidence. Observed after the model-exposed escalation (the tool reached the request, execution did not).",
       "versions": [
         "*"
       ],

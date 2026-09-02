@@ -21,6 +21,11 @@ Switches (environment):
   HOOK_TUI_ROOT=workspace  put the file at `/work/.agents/hooks.json`.
   HOOK_TUI_AGENT=<name>    launch with `--agent <name>`.
 
+This experiment pins the **API-key** mode it was written against
+(`auth="apikey"`), so its recording stays reproducible now that the vertical
+runs signed in; `antigravity/signed-in` is the probe for that mode, and it
+is where the same control hook does fire.
+
 Finding (2026-09-02, 1.1.22 and 1.1.24 — pin the image with
 `UZE_LAB_IMAGE`): every variant loads the hook (`hooks_manager: loaded 1
 named hooks`, both processes) and executes nothing — no file for any
@@ -128,6 +133,7 @@ def run(cfg, prov_ip):
         include_mcp=False,
         final_cmd=final_script(),
         plugins="flow hook-plugin",
+        auth="apikey",
     )
     cmd = common.docker_base(cfg, prov_ip, setup)
     # Named so the vendor's log can be read from outside while the session
