@@ -25,7 +25,7 @@ cargo build --locked --release --bin uze                 # release build
 cargo install --path . --bin uze --locked --force         # install into ~/.cargo/bin (force-rebuild, no version bump)
 cargo run --quiet --bin uze -- --version
 
-cargo test --no-fail-fast                                 # full workspace suite
+cargo test --workspace --no-fail-fast                     # full workspace suite (default-members is the root crate only)
 cargo test -p uze-core some_test_name                      # single crate / targeted test during iteration
 cargo test --test package_containment                       # one top-level integration test file (tests/*.rs)
 

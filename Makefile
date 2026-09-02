@@ -32,7 +32,7 @@ run: build ## Run the debug binary; pass arguments with `ARGS="doctor"`.
 	$(UZE_BIN) $(ARGS)
 
 test: ## Run the default Rust unit and contract suite.
-	$(CARGO) test --no-fail-fast
+	$(CARGO) test --workspace --no-fail-fast
 
 test-acceptance: ## Run the L3 acceptance suite (the release signal).
 	$(CARGO) test -p uze --test acceptance
