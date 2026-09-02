@@ -136,3 +136,75 @@ of them can give).
 **Weaker than the others, on purpose.** A connection row proves a server is
 attached, not *which*. If OpenCode grows a surface that names it, this
 binding should tighten.
+
+---
+
+## UZE's own vertical asserts the bridge only for a contributing project
+
+**Context.** `uze context reconcile` in a project with a hand-written
+`AGENTS.md` and no installed plugins reports the Claude bridge as `Missing`
+and writes nothing. The code gates the bridge on a *package contribution*
+(`plan_action_for_region(would_have_contribution, …)`), so with no packages
+there is nothing to bridge.
+
+`AGENTS.md`'s own description reads more broadly — "`CLAUDE.md` is the one
+generated bridge (`@AGENTS.md`) produced by `uze context reconcile`" — with
+no mention of that condition.
+
+**Chosen.** The phase asserts that `reconcile` *names* the bridge and its
+state for a harness it detected — which it does, reliably. Asserting the
+bridge **file** needs a fixture that contributes instructions to
+`AGENTS.md`, and none of the Lab's fixtures do: `flow` carries agents and
+skills only. Adding one touches every vertical's shared fixture set, which
+is more than this change should absorb.
+
+**Discarded.** Asserting a bridge for a package-less project (would fail
+against behaviour that may well be correct, on a reading of a doc sentence);
+asserting the `Missing` report as correct (would freeze a behaviour nobody
+confirmed was intended).
+
+**Open question.** A project with a hand-written `AGENTS.md` and no plugins
+gets no `CLAUDE.md`, so Claude Code does not receive that project's context
+through UZE. If that is intended, `AGENTS.md`'s sentence should say so. If
+not, it is a product gap this vertical is now positioned to catch.
+
+---
+
+## No Hook contract yet
+
+**Context.** The task list calls for a `hook` contract beside `skill` and
+`mcp`. The investigation that preceded this change established that Claude
+Code's scripted tool call has been rejected before any hook runs since at
+least 2.1.252, and that Antigravity 1.1.24 produces no `functionResponse`
+at all. Both verticals fail their hook phases honestly today, and each was
+recorded as needing its own change.
+
+**Chosen.** No hook contract. Writing one now would encode the current
+broken state as the shared expectation, and a contract that two of four
+harnesses cannot even reach is not a contract — it is a pending bug with
+extra ceremony.
+
+**Discarded.** Writing it and letting two harnesses declare `unsupported`
+(that mechanism exists for a *harness limitation*, not for an unfixed
+scenario — using it here would launder a bug into a documented gap, which
+is the exact failure this whole change was made to stop).
+
+**Unblocked by.** Whatever the Claude and Antigravity hook changes discover
+about how each harness actually accepts a scripted tool call. That
+knowledge is what the contract must be written against.
+
+---
+
+## No Agent contract yet
+
+**Context.** Two verticals assert `agent-visible-in-tui`; two do not. The
+canonical Agent capability is delivered on all four.
+
+**Chosen.** Deferred. `skill` and `mcp` establish the seam and prove it
+across four harnesses; a third capability adds coverage but no new
+structure, and the remaining budget was better spent proving the seam works
+than widening it.
+
+**Discarded.** A partial Agent contract covering only the two harnesses
+that already assert it — that is the per-vertical divergence this change
+exists to remove.

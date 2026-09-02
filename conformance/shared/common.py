@@ -35,6 +35,10 @@ HARNESS_SANS = {
     "DNS:*.claude.com,DNS:console.anthropic.com,DNS:statsig.anthropic.com,"
     "DNS:api.statsig.com,DNS:sentry.io,DNS:telemetry.anthropic.com",
     "codex": "DNS:api.openai.com,DNS:*.openai.com",
+    # UZE's own vertical drives no vendor endpoint — it exercises the
+    # client and the CLI, never a provider — so it needs only a SAN the
+    # certificate generator will accept.
+    "uze": "DNS:api.example.com",
 }
 
 
@@ -535,6 +539,7 @@ VERSION_PROBES = {
     # as uze-integrations' resolve_opencode_binary.
     "opencode": ["opencode2", "--version"],
     "antigravity": ["agy", "--version"],
+    "uze": ["uze", "--version"],
 }
 
 

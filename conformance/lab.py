@@ -55,7 +55,7 @@ def parse_args(argv):
     parser.add_argument(
         "--harness",
         default="antigravity",
-        choices=("antigravity", "claude", "codex", "opencode"),
+        choices=("antigravity", "claude", "codex", "opencode", "uze"),
     )
     parser.add_argument(
         "run_index",
