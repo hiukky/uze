@@ -409,7 +409,7 @@ fn load_refresh_data(home: UzeHome, context_root: &std::path::Path) -> Result<Re
     // Full health on every refresh: the inspection cache makes the
     // per-receipt vendor probing milliseconds in steady state, so every
     // screen sees real attachment state (never a masked "unknown").
-    let doctor = app.doctor();
+    let doctor = app.health().report();
     let marketplace_count = app.marketplace().list()?.len();
     let marketplace_plugins = app.marketplace().plugins()?;
     let profiles = app.profiles().list()?;

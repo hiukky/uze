@@ -175,7 +175,7 @@ fn status_context_inspect_and_context_plan_produce_valid_json() {
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();
 
-    let status = application.status(&project).unwrap();
+    let status = application.health().status(&project).unwrap();
     let status_json = serde_json::to_value(&status).unwrap();
     assert!(status_json.get("portability").is_some());
     assert!(status_json.get("harnesses").is_some());

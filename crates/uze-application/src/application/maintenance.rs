@@ -15,7 +15,7 @@ use uze_core::{
     state,
 };
 
-use super::*;
+use super::services::Health;
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "outcome", rename_all = "SCREAMING_SNAKE_CASE")]
@@ -73,12 +73,12 @@ impl MaintenanceReport {
     }
 }
 
-impl UzeApplication {
+impl Health<'_> {
     /// Bounded, local maintenance used by health presenters. It only repairs
     /// receipt-proven missing artifacts and stale derived views. Every other
     /// state remains evidence for a person to decide on.
-    pub fn maintain_environment(&self) -> MaintenanceReport {
-        let Ok(_mutation) = MutationLock::acquire(&self.home) else {
+    pub fn maintain(&self) -> MaintenanceReport {
+        let Ok(_mutation) = MutationLock::acquire(&self.0.home) else {
             return MaintenanceReport {
                 outcomes: vec![MaintenanceOutcome::Unavailable {
                     integration: "environment".to_owned(),
@@ -93,9 +93,9 @@ impl UzeApplication {
         // more — first, so `installed_packages` below never treats a
         // ghost registration as real.
         report.outcomes.extend(self.reconcile_orphaned_receipts());
-        let packages = self.installed_packages();
+        let packages = self.0.installed_packages();
 
-        for integration in &self.integrations {
+        for integration in &self.0.integrations {
             if let PublicationStatus::Unpublished(_) = integration.publication(&packages)
                 && let Err(error) = integration.republish_packages(&packages)
             {
@@ -108,6 +108,7 @@ impl UzeApplication {
 
         for package in &packages {
             if self
+                .0
                 .plugin_summary(package)
                 .ok()
                 .and_then(|summary| summary.update_available)
@@ -118,7 +119,7 @@ impl UzeApplication {
                 });
             }
 
-            let entries = match state::receipts(&self.home, Some(package.id.as_str())) {
+            let entries = match state::receipts(&self.0.home, Some(package.id.as_str())) {
                 Ok(entries) => entries,
                 Err(error) => {
                     report.outcomes.push(MaintenanceOutcome::NeedsHumanAction {
@@ -144,6 +145,7 @@ impl UzeApplication {
                 )
             }) {
                 let Some(integration) = self
+                    .0
                     .integrations
                     .iter()
                     .find(|candidate| candidate.id() == receipt.integration)
@@ -210,7 +212,7 @@ impl UzeApplication {
         }
 
         if report.repaired_count() > 0 {
-            self.inspection_cache.invalidate();
+            self.0.inspection_cache.invalidate();
         }
         report
     }
@@ -237,18 +239,19 @@ impl UzeApplication {
         let mut outcomes = Vec::new();
         // A registry entry is the Store's sole claim that a package is
         // installed; prune false claims before anything below asks it.
-        if let Ok(pruned) = self.store.prune_ghost_registrations()
+        if let Ok(pruned) = self.0.store.prune_ghost_registrations()
             && !pruned.is_empty()
         {
-            self.inspection_cache.invalidate();
+            self.0.inspection_cache.invalidate();
         }
         let known_ids: BTreeSet<String> = self
+            .0
             .installed_packages()
             .into_iter()
             .map(|package| package.id.as_str().to_owned())
             .collect();
 
-        let Ok(all_receipts) = state::receipts(&self.home, None) else {
+        let Ok(all_receipts) = state::receipts(&self.0.home, None) else {
             // The ledger-read failure is already surfaced elsewhere in the
             // report this feeds into; nothing new to say about it here.
             return outcomes;
@@ -260,7 +263,7 @@ impl UzeApplication {
             .collect();
 
         for package_id in orphan_ids {
-            let report = self.reconcile(&package_id);
+            let report = self.0.reconcile(&package_id);
             if !matches!(plan_remove(&report), PackageRemovalPlan::Safe { .. }) {
                 outcomes.push(MaintenanceOutcome::NeedsHumanAction {
                     plugin: package_id,
@@ -279,6 +282,7 @@ impl UzeApplication {
                     continue;
                 }
                 let Some(integration) = self
+                    .0
                     .integrations
                     .iter()
                     .find(|integration| integration.id() == reconciled.receipt.integration)
@@ -297,7 +301,7 @@ impl UzeApplication {
             // Re-reconcile after detaching, exactly like `detach_and_remove`:
             // the ledger is only ever forgotten against a fresh, live-verified
             // Missing state, never the pre-detach snapshot.
-            let final_report = self.reconcile(&package_id);
+            let final_report = self.0.reconcile(&package_id);
             if blocked || !matches!(plan_remove(&final_report), PackageRemovalPlan::Safe { .. }) {
                 outcomes.push(MaintenanceOutcome::NeedsHumanAction {
                     plugin: package_id,
@@ -312,7 +316,7 @@ impl UzeApplication {
                 .receipts
                 .iter()
                 .filter(|reconciled| {
-                    state::forget_receipt(&self.home, &reconciled.ledger_key).is_ok()
+                    state::forget_receipt(&self.0.home, &reconciled.ledger_key).is_ok()
                 })
                 .map(|reconciled| reconciled.ledger_key.clone())
                 .collect();
@@ -373,7 +377,7 @@ mod tests {
             },
         )
         .unwrap();
-        let report = app.maintain_environment();
+        let report = app.health().maintain();
         assert!(report.outcomes.iter().any(|outcome| matches!(
             outcome,
             MaintenanceOutcome::Repaired { receipt, .. } if receipt == "fixture:receipt"
@@ -419,7 +423,7 @@ mod tests {
         )
         .unwrap();
 
-        let report = app.maintain_environment();
+        let report = app.health().maintain();
         assert!(report.outcomes.iter().any(|outcome| matches!(
             outcome,
             MaintenanceOutcome::NeedsHumanAction {
@@ -465,7 +469,7 @@ mod tests {
         )
         .unwrap();
 
-        let report = app.maintain_environment();
+        let report = app.health().maintain();
         assert!(
             report.outcomes.iter().any(|outcome| matches!(
                 outcome,

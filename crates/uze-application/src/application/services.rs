@@ -51,3 +51,14 @@ impl UzeApplication {
         Marketplace(self)
     }
 }
+
+/// Whether this machine's UZE installation is sound, and the work to make
+/// it so.
+pub struct Health<'a>(pub(super) &'a UzeApplication);
+
+impl UzeApplication {
+    /// Diagnostics, harness presence, and bounded environment maintenance.
+    pub fn health(&self) -> Health<'_> {
+        Health(self)
+    }
+}

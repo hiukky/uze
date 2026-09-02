@@ -648,7 +648,7 @@ fn run(cli: Cli) -> Result<()> {
             }
         }
         Command::Status { path, format } => {
-            let report = app.status(&context_path(path))?;
+            let report = app.health().status(&context_path(path))?;
             match format {
                 OutputFormat::Text => print!("{}", render_status(&report)),
                 OutputFormat::Json => print_json(&report),
@@ -770,7 +770,8 @@ fn run(cli: Cli) -> Result<()> {
                                     if let Some(error) = &publication.error {
                                         progress::warn(&format!(
                                             "{} could not publish: {error}",
-                                            app.integration_label(&publication.integration)
+                                            app.health()
+                                                .integration_label(&publication.integration)
                                         ));
                                     }
                                 }
@@ -850,7 +851,7 @@ fn run(cli: Cli) -> Result<()> {
         },
         Command::Doctor { format } => {
             let spinner = progress::spinner("Running diagnostics...");
-            let report = app.doctor();
+            let report = app.health().report();
             spinner.finish_with_message("Diagnostics complete");
             match format {
                 OutputFormat::Text => print!("{}", render_doctor(&report)),
@@ -961,11 +962,11 @@ fn run_setup_command(
     match arguments {
         [] => run_setup(app, home, arguments, verbose),
         [command] if command == "list" => {
-            print!("{}", render_harness_list(&app.harness_list()));
+            print!("{}", render_harness_list(&app.health().harnesses()));
             Ok(())
         }
         [command, name] if command == "inspect" => {
-            print!("{}", render_harness_detail(&app.harness_inspect(name)?));
+            print!("{}", render_harness_detail(&app.health().harness(name)?));
             Ok(())
         }
         [command] if command == "inspect" => {
@@ -1036,7 +1037,8 @@ fn run_setup(
     verbose: bool,
 ) -> Result<()> {
     let targets: Vec<String> = if harnesses.is_empty() {
-        app.harness_list()
+        app.health()
+            .harnesses()
             .into_iter()
             .map(|h| h.integration)
             .collect()
@@ -1708,7 +1710,7 @@ fn render_add_report(report: &AddPluginReport, verbose: bool, app: &UzeApplicati
             .unwrap_or_default();
         out.push_str(&format!(
             "  {}: {route}{attached}\n",
-            app.integration_label(harness)
+            app.health().integration_label(harness)
         ));
         if verbose {
             out.push_str(&format!("    {}\n", plan.evidence));
@@ -1724,7 +1726,7 @@ fn render_add_report(report: &AddPluginReport, verbose: bool, app: &UzeApplicati
         {
             out.push_str(&format!(
                 "  {}: attached at {}\n",
-                app.integration_label(&attachment.integration),
+                app.health().integration_label(&attachment.integration),
                 attachment.location.display()
             ));
         }
@@ -2307,7 +2309,7 @@ fn render_context_plan(plan: &ContextPlan, app: &UzeApplication) -> String {
         for bridge in &plan.bridges {
             text.push_str(&format!(
                 "  {}  {}  {}\n",
-                app.integration_label(&bridge.integration),
+                app.health().integration_label(&bridge.integration),
                 bridge.file.display(),
                 render_action(&bridge.action)
             ));
@@ -2370,7 +2372,7 @@ fn render_context_reconciliation(
         for bridge in &report.bridges {
             text.push_str(&format!(
                 "  {}  {}  {:?}\n",
-                app.integration_label(&bridge.integration),
+                app.health().integration_label(&bridge.integration),
                 bridge.file.display(),
                 bridge.state
             ));

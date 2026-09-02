@@ -31,7 +31,7 @@ fn status_reports_healthy_with_zero_issues_once_reconciled() {
     fs::create_dir_all(&project).unwrap();
     application.context_reconcile(&project).unwrap();
 
-    let status = application.status(&project).unwrap();
+    let status = application.health().status(&project).unwrap();
     assert!(matches!(status.portability, Portability::Portable));
     assert_eq!(status.packages_installed, 1);
     assert_eq!(status.packages_contributing_here, 1);
@@ -46,7 +46,7 @@ fn status_surfaces_a_missing_bridge_as_an_issue_before_reconcile() {
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();
 
-    let status = application.status(&project).unwrap();
+    let status = application.health().status(&project).unwrap();
     assert!(!status.issues.is_empty());
     assert!(status.issues.iter().any(|issue| issue.contains("Missing")));
 }
@@ -66,7 +66,7 @@ fn status_distinguishes_installed_from_contributing_here() {
     fs::create_dir_all(&project).unwrap();
     application.context_reconcile(&project).unwrap();
 
-    let status = application.status(&project).unwrap();
+    let status = application.health().status(&project).unwrap();
     assert_eq!(status.packages_installed, 2);
     assert_eq!(status.packages_contributing_here, 1);
 }

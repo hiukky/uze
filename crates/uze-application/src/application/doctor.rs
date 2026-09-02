@@ -4,9 +4,10 @@
 
 use uze_core::{Result, integration::AttachmentState, state};
 
+use super::services::Health;
 use super::*;
 
-impl UzeApplication {
+impl Health<'_> {
     /// Full machine diagnostics: Store/state errors, harness detection,
     /// plugin summaries, and per-receipt attachment inspection. The
     /// inspection half is backed by:
@@ -21,14 +22,14 @@ impl UzeApplication {
     /// The only slow path is a cold cache (one vendor-CLI probe per
     /// receipt), which is exactly the honest cost of the first evidence —
     /// paid once per TTL window, not on every screen.
-    pub fn doctor(&self) -> DoctorReport {
-        let maintenance = self.maintain_environment();
+    pub fn report(&self) -> DoctorReport {
+        let maintenance = self.maintain();
         let mut report = self.doctor_shell();
         let attachments = report
             .plugins
             .iter()
             .map(|plugin: &PluginSummary| {
-                let reconciliation = self.reconcile_cached_report(&plugin.id);
+                let reconciliation = self.0.reconcile_cached_report(&plugin.id);
                 PackageManagedState {
                     plugin: plugin.id.clone(),
                     state: managed_state(&reconciliation),
@@ -55,7 +56,7 @@ impl UzeApplication {
         ) else {
             return Vec::new();
         };
-        let Ok(environment) = self.engine().compose(std::slice::from_ref(&id)) else {
+        let Ok(environment) = self.0.engine().compose(std::slice::from_ref(&id)) else {
             return Vec::new();
         };
         let mut rows = Vec::new();
@@ -69,7 +70,7 @@ impl UzeApplication {
                 continue;
             };
             let identity = resource.identity();
-            for integration in &self.integrations {
+            for integration in &self.0.integrations {
                 let plan = integration.exposure_plan(resource);
                 let attached = reconciliation.receipts.iter().find(|entry| {
                     entry.receipt.integration == integration.id()
@@ -106,12 +107,12 @@ impl UzeApplication {
     /// attachment inspection (`attachments` left empty). Shared by
     /// [`doctor`](Self::doctor), which adds the (cached) inspection layer.
     fn doctor_shell(&self) -> DoctorReport {
-        let package_ids = self.store.package_ids();
+        let package_ids = self.0.store.package_ids();
         let (store, plugins) = match package_ids {
             Ok(ids) => {
                 let packages = ids
                     .into_iter()
-                    .filter_map(|id| self.store.package(&id).ok())
+                    .filter_map(|id| self.0.store.package(&id).ok())
                     .collect::<Vec<_>>();
                 let inconsistencies = packages
                     .iter()
@@ -126,24 +127,27 @@ impl UzeApplication {
                     health,
                     packages
                         .iter()
-                        .filter_map(|package| self.plugin_summary(package).ok())
+                        .filter_map(|package| self.0.plugin_summary(package).ok())
                         .collect(),
                 )
             }
             Err(error) => (StoreHealth::Blocked(error.to_string()), Vec::new()),
         };
         let harnesses = self.harness_health();
-        let ledger_error = state::receipts(&self.home, None)
+        let ledger_error = state::receipts(&self.0.home, None)
             .err()
             .map(|error| error.to_string());
-        let integration_state_error = state::load(&self.home).err().map(|error| error.to_string());
+        let integration_state_error = state::load(&self.0.home)
+            .err()
+            .map(|error| error.to_string());
         let provisioning_state_error = self
+            .0
             .integrations
             .iter()
-            .find_map(|integration| state::provisioning(&self.home, integration.id()).err())
+            .find_map(|integration| state::provisioning(&self.0.home, integration.id()).err())
             .map(|error| error.to_string());
         DoctorReport {
-            uze_home: self.home.root().to_path_buf(),
+            uze_home: self.0.home.root().to_path_buf(),
             store,
             plugins,
             harnesses,
@@ -160,20 +164,21 @@ impl UzeApplication {
     /// (the machine-level `harness` namespace's thin read models, which
     /// slice this same computation rather than adding a second one).
     fn harness_health(&self) -> Vec<HarnessHealth> {
-        let installed = self.installed_packages();
-        self.integrations
+        let installed = self.0.installed_packages();
+        self.0
+            .integrations
             .iter()
             .map(|integration| HarnessHealth {
                 integration: integration.id().to_owned(),
                 display_name: integration.display_name().to_owned(),
                 description: integration.description().to_owned(),
-                detection: self.detect_cached(integration.as_ref()),
-                setup: integration_status(integration.status(&self.home)),
-                strategy: state::get(&self.home, integration.id())
+                detection: self.0.detect_cached(integration.as_ref()),
+                setup: integration_status(integration.status(&self.0.home)),
+                strategy: state::get(&self.0.home, integration.id())
                     .ok()
                     .flatten()
                     .map(|record| record.strategy),
-                provisioning: state::provisioning(&self.home, integration.id())
+                provisioning: state::provisioning(&self.0.home, integration.id())
                     .ok()
                     .flatten(),
                 // Observed, not remembered. A package can be installed and
@@ -181,30 +186,12 @@ impl UzeApplication {
                 // exactly the state this field exists to surface.
                 publication: integration.publication(&installed),
                 capabilities: integration.capabilities(),
-                runtime_shim_active: self.runtime_shim_is_active(integration.as_ref()),
+                runtime_shim_active: self.0.runtime_shim_is_active(integration.as_ref()),
             })
             .collect()
     }
 
-    pub(super) fn runtime_shim_is_active(&self, integration: &dyn IntegrationPort) -> bool {
-        if !integration.supports_runtime_integration() {
-            return true;
-        }
-        let expected = self.home.shims_dir().join(integration.shim_name());
-        std::env::var_os("PATH")
-            .and_then(|path| {
-                std::env::split_paths(&path)
-                    .map(|directory| directory.join(integration.shim_name()))
-                    .find(|candidate| candidate.is_file())
-            })
-            // Canonicalized comparison: a PATH entry that reaches the shim
-            // through a symlinked directory (or a shim file that is itself
-            // a symlink into the UZE install — the normal `~/.uze/shims`
-            // case) must count as active, not merely byte-equal paths.
-            .is_some_and(|resolved| resolved.canonicalize().ok() == expected.canonicalize().ok())
-    }
-
-    pub fn harness_list(&self) -> Vec<HarnessHealth> {
+    pub fn harnesses(&self) -> Vec<HarnessHealth> {
         self.harness_health()
     }
 
@@ -212,8 +199,9 @@ impl UzeApplication {
     /// people actually type (`claude`), or the display label doctor shows
     /// back (`Claude Code`) — the same names `uze setup` accepts plus what
     /// `uze doctor`/the TUI print.
-    pub fn harness_inspect(&self, name: &str) -> Result<HarnessHealth> {
+    pub fn harness(&self, name: &str) -> Result<HarnessHealth> {
         let id = self
+            .0
             .integrations
             .iter()
             .find(|integration| {
@@ -235,7 +223,8 @@ impl UzeApplication {
     /// An id that belongs to no registered integration renders as itself —
     /// a label lookup must never fail a display.
     pub fn integration_label(&self, integration: &str) -> String {
-        self.integrations
+        self.0
+            .integrations
             .iter()
             .find(|candidate| candidate.id() == integration)
             .map_or_else(
@@ -245,8 +234,8 @@ impl UzeApplication {
     }
 
     pub fn status(&self, project_root: &std::path::Path) -> Result<StatusReport> {
-        let context = self.context_inspect(project_root)?;
-        let installed = self.store.package_ids()?.len();
+        let context = self.0.context_inspect(project_root)?;
+        let installed = self.0.store.package_ids()?.len();
         let contributing = context.contributions.len();
         let issues: Vec<String> = context
             .contributions
@@ -280,7 +269,7 @@ impl UzeApplication {
             harnesses: context.harnesses,
             packages_installed: installed,
             packages_contributing_here: contributing,
-            project_lock: self.project_lock_status(project_root),
+            project_lock: self.0.project_lock_status(project_root),
             issues,
         })
     }
@@ -428,18 +417,18 @@ mod tests {
         )
         .unwrap();
 
-        let first = app.doctor();
+        let first = app.health().report();
         assert_eq!(first.attachments.len(), 1);
         assert_eq!(inspected.load(Ordering::SeqCst), 1, "one cold inspection");
 
         // Same instance: the in-process tier serves the verdict.
-        let _ = app.doctor();
+        let _ = app.health().report();
         assert_eq!(inspected.load(Ordering::SeqCst), 1);
 
         // A fresh instance (e.g. the next TUI refresh): the on-disk tier
         // serves it — no vendor CLI re-spawned.
         let fresh = app_with_counter(&home, &inspected, AttachmentState::Matched);
-        let _ = fresh.doctor();
+        let _ = fresh.health().report();
         assert_eq!(
             inspected.load(Ordering::SeqCst),
             1,
@@ -482,10 +471,10 @@ mod tests {
         )
         .unwrap();
 
-        let report = app.doctor();
+        let report = app.health().report();
         assert_eq!(report.attachments[0].state.drifted, 1);
         assert_eq!(inspected.load(Ordering::SeqCst), 1);
-        let _ = app.doctor();
+        let _ = app.health().report();
         assert_eq!(
             inspected.load(Ordering::SeqCst),
             2,
@@ -493,7 +482,7 @@ mod tests {
         );
         // And it never persisted: a fresh instance re-inspects too.
         let fresh = app_with_counter(&home, &inspected, AttachmentState::Drifted);
-        let _ = fresh.doctor();
+        let _ = fresh.health().report();
         assert_eq!(inspected.load(Ordering::SeqCst), 3);
         fs::remove_dir_all(&base).ok();
     }
@@ -532,7 +521,7 @@ mod tests {
         )
         .unwrap();
 
-        let _ = app.doctor();
+        let _ = app.health().report();
         assert_eq!(inspected.load(Ordering::SeqCst), 1);
 
         // Installing another package is a mutation: cached verdicts must
@@ -545,12 +534,32 @@ mod tests {
             &AlwaysTrust,
         )
         .unwrap();
-        let _ = app.doctor();
+        let _ = app.health().report();
         assert_eq!(
             inspected.load(Ordering::SeqCst),
             2,
             "a mutation must invalidate cached inspection verdicts"
         );
         fs::remove_dir_all(&base).ok();
+    }
+}
+
+impl UzeApplication {
+    pub(super) fn runtime_shim_is_active(&self, integration: &dyn IntegrationPort) -> bool {
+        if !integration.supports_runtime_integration() {
+            return true;
+        }
+        let expected = self.home.shims_dir().join(integration.shim_name());
+        std::env::var_os("PATH")
+            .and_then(|path| {
+                std::env::split_paths(&path)
+                    .map(|directory| directory.join(integration.shim_name()))
+                    .find(|candidate| candidate.is_file())
+            })
+            // Canonicalized comparison: a PATH entry that reaches the shim
+            // through a symlinked directory (or a shim file that is itself
+            // a symlink into the UZE install — the normal `~/.uze/shims`
+            // case) must count as active, not merely byte-equal paths.
+            .is_some_and(|resolved| resolved.canonicalize().ok() == expected.canonicalize().ok())
     }
 }

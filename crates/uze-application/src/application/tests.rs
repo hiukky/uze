@@ -579,7 +579,7 @@ pub(crate) fn doctor_reports_corrupt_ledger_without_destructive_work() {
     fs::write(home.state_dir().join("attachments.json"), "bad").unwrap();
     fs::write(home.integrations_state_path(), "bad").unwrap();
     let app = UzeApplication::new(home, vec![Box::new(SymlinkIntegration)]);
-    let report = app.doctor();
+    let report = app.health().report();
     assert!(report.ledger_error.is_some());
     assert!(report.integration_state_error.is_some());
     fs::remove_dir_all(root).unwrap();
@@ -622,18 +622,18 @@ pub(crate) fn harness_inspect_finds_by_id_or_display_name_and_errors_on_unknown(
         UzeHome::at(&root),
         vec![Box::new(SymlinkIntegration), Box::new(NamedIntegration)],
     );
-    let by_id = app.harness_inspect("test").unwrap();
+    let by_id = app.health().harness("test").unwrap();
     assert_eq!(by_id.integration, "test");
-    assert!(app.harness_inspect("does-not-exist").is_err());
+    assert!(app.health().harness("does-not-exist").is_err());
     // Aliases (what `uze setup` accepts) and the display label (what
     // doctor shows back) both resolve to the same harness as the id.
-    let by_alias = app.harness_inspect("n").unwrap();
+    let by_alias = app.health().harness("n").unwrap();
     assert_eq!(by_alias.integration, "named");
-    let by_label = app.harness_inspect("Named Tool").unwrap();
+    let by_label = app.health().harness("Named Tool").unwrap();
     assert_eq!(by_label.integration, "named");
     // `harness_list` must return exactly the same data `harness_inspect`
     // filters down to one entry from — same underlying computation.
-    let listed = app.harness_list();
+    let listed = app.health().harnesses();
     assert_eq!(listed.len(), 2);
     assert_eq!(listed[0].integration, by_id.integration);
     fs::remove_dir_all(root).unwrap();
@@ -673,7 +673,7 @@ pub(crate) fn add_failure_after_a_confirmed_attachment_leaves_reconcilable_ledge
     );
     let receipts = state::receipts(&home, Some("multi-mcp-plugin@local")).unwrap();
     assert_eq!(receipts.len(), 1);
-    assert_eq!(app.doctor().attachments[0].state.matched, 1);
+    assert_eq!(app.health().report().attachments[0].state.matched, 1);
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -807,7 +807,7 @@ pub(crate) fn read_only_bootstrap_leaves_store_state_byte_identical_on_repeat() 
 
     app.ensure_default_plugins().unwrap();
     app.list_plugins().unwrap();
-    app.doctor();
+    app.health().report();
 
     assert_eq!(fs::read(home.registry_path()).unwrap(), packages_before);
     assert_eq!(fs::read(&attachments_path).ok(), attachments_before);

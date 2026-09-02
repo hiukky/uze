@@ -205,7 +205,7 @@ fn republish_is_a_noop_for_an_integration_that_publishes_nothing() {
         )
         .expect("install succeeds with an integration that publishes nothing");
 
-    let report = application.doctor();
+    let report = application.health().report();
     let quiet = &report.harnesses[0];
     assert_eq!(quiet.publication, PublicationStatus::NotApplicable);
 
@@ -239,7 +239,7 @@ fn a_derived_view_is_rebuilt_from_the_package_set_alone() {
     // observes it — there is no separate "still broken" moment to catch.
     fs::write(&catalogue, "garbage").unwrap();
     assert_eq!(
-        application.doctor().harnesses[0].publication,
+        application.health().report().harnesses[0].publication,
         PublicationStatus::Published,
         "doctor's own maintenance pass must have rebuilt the corrupted view"
     );
@@ -307,7 +307,7 @@ fn a_failed_publication_leaves_the_package_installed_and_says_so() {
     assert_eq!(failed, vec!["fake-native"]);
 
     // Doctor observes it independently of what add_plugin reported.
-    let doctor = application.doctor();
+    let doctor = application.health().report();
     let publishing = doctor
         .harnesses
         .iter()
