@@ -37,6 +37,11 @@ const RULES: &[Rule] = &[
         remedy: "add what you need to uze-application (a read model, or a method on \
                  the facade) and call that. If it is genuinely architecture rather \
                  than debt, move the file to `sanctioned` with the reason.",
+        // Known blind spot: `src/lib.rs` re-exports `uze_core::*`, so a
+        // reach written as `crate::UzeHome` resolves to the domain without
+        // naming it here. That facade is itself budgeted above, and its own
+        // doc calls it transitional — deleting it is what closes the hole,
+        // which is the same work this rule exists to drive.
         sanctioned: &[],
         budget: &[
             // Documented transitional re-export: this crate exists to

@@ -689,10 +689,11 @@ fn no_source_special_cases_the_official_uze_package_or_skill_name() {
 #[test]
 fn store_engine_router_and_integrations_stay_marketplace_neutral() {
     let scan_roots = [
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("crates/uze-core/src/store.rs"),
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("crates/uze-core/src/engine.rs"),
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("crates/uze-core/src/router.rs"),
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("crates/uze-core/src/integration.rs"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("crates/uze-core/src/package/store.rs"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("crates/uze-core/src/delivery/engine.rs"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("crates/uze-core/src/delivery/router.rs"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("crates/uze-core/src/delivery/integration.rs"),
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("crates/uze-integrations/src"),
     ];
     let forbidden = [
@@ -708,9 +709,11 @@ fn store_engine_router_and_integrations_stay_marketplace_neutral() {
             vec![root]
         };
         for entry in files {
-            let Ok(content) = fs::read_to_string(&entry) else {
-                continue;
-            };
+            // Loudly, not `continue`: a structural guard whose target moved
+            // keeps passing while checking nothing, which is worse than no
+            // guard at all — it reads as evidence.
+            let content = fs::read_to_string(&entry)
+                .unwrap_or_else(|error| panic!("{} is readable: {error}", entry.display()));
             for pattern in forbidden {
                 if content.contains(pattern) {
                     offenders.push(format!("{}: {pattern}", entry.display()));

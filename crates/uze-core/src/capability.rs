@@ -1,4 +1,14 @@
 //! Canonical capability identities and preserved representations.
+//!
+//! # What lives under `capability/`
+//!
+//! One module per *canonical capability* — a thing a plugin declares once,
+//! portably, which UZE then translates into each harness's own encoding.
+//! [`skill`] is the canonical capability; [`hook`] is the portable Hook
+//! surface (ADR-033). Neither is a harness's own mechanism: they are the
+//! vendor-neutral statement of intent that `delivery` projects outward.
+pub mod hook;
+pub mod skill;
 
 use std::path::{Path, PathBuf};
 

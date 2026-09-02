@@ -1,43 +1,66 @@
 //! Harness-agnostic UZE domain, persistence, planning, and integration
 //! contracts. Concrete vendor integrations and presentation layers depend on
 //! this crate; it never depends on them.
+//!
+//! # How to read this crate
+//!
+//! Five concerns, each with its own module documenting what belongs in it.
+//! Read the concern before the module: the answer to "what kind of thing is
+//! `hook`?" is that it sits under [`capability`], which is a different
+//! question from where its file happens to be.
+//!
+//! | concern | what it owns |
+//! |---|---|
+//! | [`package`] | where a package's bytes come from, and where they live |
+//! | [`capability`] | what a plugin declares, portably |
+//! | [`delivery`] | how a capability reaches a harness |
+//! | [`project`] | what a project declares, and what UZE writes into it |
+//! | [`machine`] | the local environment outside UZE's own state |
+//!
+//! The public paths below are flat and unchanged — `uze_core::store`, not
+//! `uze_core::package::store`. The grouping says how the crate reads from
+//! the inside; renaming 581 call sites across the workspace would have
+//! bought nothing but a diff nobody can review. Removing a re-export later
+//! lets the compiler drive that migration one module at a time, if it ever
+//! earns its keep.
 
-pub mod acquisition;
-pub mod bundle;
 pub mod capability;
-pub mod context;
-pub mod detection_cache;
+pub mod delivery;
+pub mod machine;
+pub mod package;
+pub mod project;
+
+/// Content identity, shared by everything that needs a stable name for
+/// some bytes — a managed region, a store entry, a project cache
+/// directory. Deliberately not under a concern: it is a primitive, and
+/// filing it under one of them would imply the others should not use it.
 pub mod digest;
-pub mod engine;
 pub mod error;
-pub mod exposure;
-pub mod harness_runtime;
-pub mod home;
-pub mod hook;
-pub mod importer;
-pub mod importers;
-pub mod integration;
-pub mod naming;
-pub mod persistence;
+
+/// Universal user preferences and their per-harness translation. A product
+/// feature (Profiles) rather than part of the portable model — kept at the
+/// root, visibly, rather than filed under a concern it does not belong to.
 pub mod preference;
 pub mod profile_state;
-pub mod project;
-pub mod project_context;
-pub mod project_lock;
-pub mod project_root;
+
+/// Per-workspace prompt log for agent tabs. Borderline: only the TUI reads
+/// it, which argued for evicting it — but it is UZE-owned state under
+/// `UzeHome`, like [`profile_state`], and the crate that would host it
+/// (`uze-terminal`) depends on nothing here today, which is a property
+/// worth more than this module's tidiness. Left at the root, named, rather
+/// than filed under a concern it does not belong to.
 pub mod prompt_history;
-pub mod provisioning;
-pub mod reconciliation;
-pub mod router;
-pub mod shell_path;
-pub mod skill;
-pub mod state;
-pub mod store;
-pub mod subprocess;
-pub mod text_region;
-pub mod trust;
-pub mod workspace;
-pub mod worktree;
+
+// Flat public API. Each line also says which concern the module belongs to,
+// which is the second reason for keeping them: the crate root is where a
+// reader looks first.
+pub use capability::{hook, skill};
+pub use delivery::{engine, exposure, integration, persistence, reconciliation, router, state};
+pub use machine::{detection_cache, harness_runtime, home, provisioning, shell_path, subprocess};
+pub use package::{acquisition, bundle, importer, importers, naming, store, trust};
+pub use project::{
+    context, project_context, project_lock, project_root, text_region, workspace, worktree,
+};
 
 pub use acquisition::{MaterializedPackage, PackageSource, Provenance, ResolvedSource};
 pub use engine::UzeEngine;

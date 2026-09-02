@@ -89,10 +89,24 @@ need to).
 - `.` (binary crate `uze`) — CLI parsing (`src/main.rs`), the terminal UI
   (`src/ui.rs`, `src/ui/`), the runtime PATH shim (`src/shim.rs`), and
   `src/command_performance.rs`.
-- `crates/uze-core` — harness-agnostic domain: package/capability model,
-  Store, Engine, Router, exposure planning, reconciliation, acquisition,
-  provisioning, trust. Depends on nothing harness-specific and must stay
-  that way (see Architecture below).
+- `crates/uze-core` — harness-agnostic domain, organized into five
+  concerns, each a module whose own doc says what belongs in it. Read the
+  concern before the module: `hook` is a *capability*, and that is a
+  different question from where its file sits.
+  - `package/` — where a package's bytes come from and where they live:
+    acquisition, trust, importers, bundle, naming, store.
+  - `capability/` — what a plugin declares, portably: skill, hook.
+  - `delivery/` — how a capability reaches a harness: integration,
+    router, exposure, engine, state, persistence, reconciliation.
+  - `project/` — what a project declares and what UZE writes into it:
+    project_lock, worktree policy, context, text_region, workspace roots.
+  - `machine/` — the local environment outside UZE's own state: home,
+    detection cache, provisioning, subprocess, shell PATH, harness runtime.
+
+  Public paths stay flat (`uze_core::store`, not `uze_core::package::store`)
+  via re-exports at the crate root, which is also where a reader sees which
+  concern each module belongs to. Depends on nothing harness-specific and
+  must stay that way (see Architecture below).
 - `crates/uze-application` — the product-facing facade
   (`UzeApplication`) that orchestrates Core + Integrations into
   install/remove/update/context lifecycle operations. `src/application.rs`
