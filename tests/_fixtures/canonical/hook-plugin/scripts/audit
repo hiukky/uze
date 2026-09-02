@@ -1,5 +1,5 @@
 #!/bin/sh
-# Conformance fixture: observational audit that appends to the plugin log.
-set -e
-read -r payload
-printf '%s\n' "$payload" >> "${PLUGIN_ROOT}/audit.log"
+# Observational fixture handler: records the tool and its portable command.
+printf '%s\t%s\t%s\n' "$HOOK_HARNESS" "$HOOK_TOOL_NATIVE" "$HOOK_COMMAND" \
+  >> "${PLUGIN_ROOT}/audit.log"
+exit 0

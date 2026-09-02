@@ -2,7 +2,6 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    io::Write,
     path::Path,
     process::{Command, Stdio},
     thread,
@@ -20,14 +19,15 @@ use crate::{
 pub const HOOKS_FILE_NAME: &str = "hooks.json";
 pub const DEFAULT_TIMEOUT_SECONDS: u16 = 30;
 pub const MAX_TIMEOUT_SECONDS: u16 = 300;
-pub const MAX_HANDLER_STDOUT_BYTES: usize = 64 * 1024;
+/// A denying handler's reason is read from its stderr; the cap keeps a
+/// runaway handler from filling memory. Its stdout carries nothing — the
+/// contract has no output channel — so nothing bounds it.
 pub const MAX_HANDLER_STDERR_BYTES: usize = 64 * 1024;
 
-/// Canonical exit code a command handler may use to signal a hard deny when
-/// its stdout is not a reliable channel. Distinct from `0` (no decision),
-/// from JSON `{"decision":"deny"}` (decision via stdout), and from any other
-/// non-zero exit (a run failure whose effect depends on the declared hook
-/// effect — see `dispatch_handlers`).
+/// The handler's decision channel is its exit code: `0` allows, this one
+/// denies with the reason on stderr, and every other code (or a timeout, or
+/// a handler that cannot start) is a failure whose outcome follows the
+/// group's declared effect — see [`dispatch_handlers`].
 pub const DENY_EXIT_CODE: i32 = 3;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -303,36 +303,72 @@ impl HarnessToolVocabulary {
     }
 }
 
+/// The hook context one handler is run with. Not a wire format: it is the
+/// set of `HOOK_*` environment variables the handler reads (see
+/// [`HookCommandInput::environment`]). An adapter fills it from its own
+/// harness's payload.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct HookCommandInput {
-    pub version: u8,
+    /// The delivering harness's stable id, verbatim in `HOOK_HARNESS`.
+    pub harness: String,
     pub event: String,
     pub tool: Option<HookTool>,
     pub input: serde_json::Value,
     pub context: HookContext,
 }
 
+impl HookCommandInput {
+    /// The `HOOK_*` environment a handler receives. `PLUGIN_ROOT` is added
+    /// by the runner, which is the only party that knows the package root.
+    pub fn environment(&self) -> Vec<(String, String)> {
+        let mut variables = vec![
+            ("HOOK_HARNESS".to_owned(), self.harness.clone()),
+            ("HOOK_EVENT".to_owned(), self.event.clone()),
+            (
+                "HOOK_TOOL".to_owned(),
+                self.tool
+                    .as_ref()
+                    .and_then(|tool| tool.portable.clone())
+                    .unwrap_or_default(),
+            ),
+            (
+                "HOOK_TOOL_NATIVE".to_owned(),
+                self.tool
+                    .as_ref()
+                    .map(|tool| tool.native.clone())
+                    .unwrap_or_default(),
+            ),
+            (
+                "HOOK_CWD".to_owned(),
+                self.context.cwd.clone().unwrap_or_default(),
+            ),
+            (
+                "HOOK_INPUT".to_owned(),
+                serde_json::to_string(&self.input).unwrap_or_else(|_| "{}".to_owned()),
+            ),
+        ];
+        for (field, value) in self.tool.iter().flat_map(|tool| tool.fields.iter()) {
+            variables.push((hook_field_variable(field), value.clone()));
+        }
+        variables
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct HookTool {
     pub portable: Option<String>,
     pub native: String,
+    /// The matched alias's portable fields, already read from this
+    /// harness's own native input field names. Empty for a `native:` tool
+    /// and for a tool the harness's vocabulary does not bind.
+    #[serde(default)]
+    pub fields: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct HookContext {
     pub cwd: Option<String>,
     pub session_id: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct HookCommandOutput {
-    #[serde(default)]
-    pub decision: Option<HookDecision>,
-    #[serde(default)]
-    pub reason: Option<String>,
-    #[serde(default)]
-    pub input: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -515,10 +551,8 @@ fn invalid<T>(path: &Path, reason: &str) -> Result<T> {
 pub struct HookDispatchOutcome {
     pub decision: Option<HookDecision>,
     pub reason: Option<String>,
-    /// A pre-tool input replacement requested by a `transform` handler.
-    pub input_override: Option<serde_json::Value>,
     /// Non-null when at least one handler could not run to completion
-    /// (launch failure, timeout, oversized output, non-zero exit) — the
+    /// (launch failure, timeout, an unexpected exit code) — the
     /// failure reason, preserved for diagnostics even when the declared
     /// effect forced a fail-closed decision.
     pub failure: Option<String>,
@@ -541,20 +575,19 @@ pub struct HookNativeOutput {
 struct HandlerResult {
     decision: Option<HookDecision>,
     reason: Option<String>,
-    input_override: Option<serde_json::Value>,
     failure: Option<String>,
 }
 
 /// Runs one group's handlers sequentially and aggregates their decisions.
 ///
-/// Contract (ADR-033): every handler receives the same normalized ABI input
-/// on stdin and may answer with one bounded JSON object on stdout. Handlers
-/// run in manifest order; the first deny stops later handlers. Launch
-/// failure, timeout, oversized output, and a non-zero exit other than
-/// [`DENY_EXIT_CODE`] are fail-open for observational (`Observe`/`Allow`)
-/// hooks and fail-closed (a deny) for a declared `Deny`/`Ask`/`Transform`
-/// pre-tool effect — a safety hook is never silently weakened into a
-/// no-op observation.
+/// Contract: every handler receives the hook context as `HOOK_*`
+/// environment variables and answers with its exit code — `0` allows, `3`
+/// denies with the reason on stderr. Handlers run in manifest order and the
+/// first denial stops the rest. A handler that cannot start, exits with any
+/// other code, or exceeds its timeout is a *failure*: fail-open for
+/// observational (`Observe`/`Allow`) groups, fail-closed (a denial) for a
+/// declared `Deny`/`Ask`/`Transform` pre-tool effect — a safety hook is
+/// never silently weakened into a no-op observation.
 pub fn dispatch_handlers(
     hook: &PortableHook,
     input: &HookCommandInput,
@@ -566,24 +599,10 @@ pub fn dispatch_handlers(
         if let Some(failure) = &result.failure {
             outcome.failure = Some(failure.clone());
         }
-        match result.decision {
-            // The first deny wins and stops later handlers (spec scenario
-            // "First deny wins in deterministic order").
-            Some(HookDecision::Deny) => {
-                outcome.decision = Some(HookDecision::Deny);
-                outcome.reason = result.reason;
-                return Ok(outcome);
-            }
-            // A softer decision only fills an empty slot; a later deny still
-            // overrides it by returning above.
-            Some(decision) if outcome.decision.is_none() => {
-                outcome.decision = Some(decision);
-                outcome.reason = result.reason;
-            }
-            _ => {}
-        }
-        if outcome.input_override.is_none() {
-            outcome.input_override = result.input_override;
+        if result.decision == Some(HookDecision::Deny) {
+            outcome.decision = Some(HookDecision::Deny);
+            outcome.reason = result.reason;
+            return Ok(outcome);
         }
     }
     Ok(outcome)
@@ -622,9 +641,15 @@ fn run_handler(
     } else {
         invocation.arg("-c").arg(&command);
     }
+    for (name, value) in input.environment() {
+        invocation.env(name, value);
+    }
     let mut child = with_process_group(invocation)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
+        .stdin(Stdio::null())
+        // A handler's stdout is not a channel: the runner's own stdout is
+        // the harness's decision surface, so anything the handler prints
+        // there must never reach it.
+        .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .current_dir(package_root)
         .env("PLUGIN_ROOT", package_root)
@@ -634,20 +659,9 @@ fn run_handler(
             source,
         })?;
 
-    let mut stdin = child.stdin.take().expect("hook stdin was piped");
-    writeln!(
-        stdin,
-        "{}",
-        serde_json::to_string(input).expect("normalized hook input always serializes")
-    )
-    .ok();
-    drop(stdin);
-
-    let stdout = child.stdout.take().expect("hook stdout was piped");
     let stderr = child.stderr.take().expect("hook stderr was piped");
-    // Readers run on threads so a chatty handler cannot block on a full
-    // pipe while the wait loop is polling; `read_bounded` caps each stream.
-    let stdout_reader = thread::spawn(move || read_bounded(stdout, MAX_HANDLER_STDOUT_BYTES));
+    // The reader runs on a thread so a chatty handler cannot block on a
+    // full pipe while the wait loop is polling; `read_bounded` caps it.
     let stderr_reader = thread::spawn(move || read_bounded(stderr, MAX_HANDLER_STDERR_BYTES));
 
     let (status, timed_out) =
@@ -657,53 +671,34 @@ fn run_handler(
                 source,
             },
         )?;
-    let (stdout_bytes, stdout_overflow) = if timed_out {
+    let stderr = if timed_out {
         // The handler was killed past its deadline; a descendant may still
-        // hold the pipes open, so joining the readers could hang for the
+        // hold the pipe open, so joining the reader could hang for the
         // descendant's whole lifetime. The timeout verdict already decided
-        // the outcome — detach the readers and discard their output.
-        drop(stdout_reader);
+        // the outcome — detach the reader and discard its output.
         drop(stderr_reader);
-        (Vec::new(), false)
+        String::new()
     } else {
-        let bytes = stdout_reader.join().unwrap_or_else(|_| (Vec::new(), true));
-        drop(stderr_reader);
-        bytes
+        let (bytes, _) = stderr_reader.join().unwrap_or_default();
+        String::from_utf8_lossy(&bytes).trim().to_owned()
     };
 
     let mut decision = None;
     let mut reason = None;
-    let mut input_override = None;
-
-    // The canonical deny exit is a decision, not a failure: an author may
-    // signal a hard deny through the exit channel when stdout is unreliable.
-    let denied_by_exit = status.code() == Some(DENY_EXIT_CODE);
-    if denied_by_exit {
-        decision = Some(HookDecision::Deny);
-        if let Ok(output) = serde_json::from_slice::<HookCommandOutput>(&stdout_bytes) {
-            reason = output.reason;
-        }
-    }
-
     let failure = if timed_out {
         Some(format!("`{command}` timed out after {}s", handler.timeout))
-    } else if stdout_overflow {
-        Some(format!(
-            "`{command}` stdout exceeded the {MAX_HANDLER_STDOUT_BYTES} byte cap"
-        ))
-    } else if !denied_by_exit && !stdout_bytes.is_empty() {
-        match serde_json::from_slice::<HookCommandOutput>(&stdout_bytes) {
-            Ok(output) => {
-                decision = output.decision;
-                reason = output.reason;
-                input_override = output.input;
-                None
-            }
-            Err(_) => Some(format!("`{command}` wrote invalid JSON on stdout")),
-        }
-    } else if !denied_by_exit {
+    } else {
         match status.code() {
             Some(0) => None,
+            Some(DENY_EXIT_CODE) => {
+                decision = Some(HookDecision::Deny);
+                reason = Some(if stderr.is_empty() {
+                    format!("`{command}` denied the operation")
+                } else {
+                    stderr.clone()
+                });
+                None
+            }
             // A script without the executable bit: distinguish it from a
             // generic failure so the author gets an actionable diagnostic
             // (the canonical manifest runs commands through the shell, so
@@ -711,19 +706,22 @@ fn run_handler(
             Some(126) => Some(format!(
                 "`{command}` is not executable (exit 126); chmod +x the script or invoke it as `sh {command}`"
             )),
-            Some(code) => Some(format!("`{command}` exited with code {code}")),
+            Some(code) => Some(format!(
+                "`{command}` exited with code {code}{}",
+                if stderr.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {stderr}")
+                }
+            )),
             None => Some(format!("`{command}` was terminated by a signal")),
         }
-    } else {
-        None
     };
 
     // Failure semantics depend on the declared effect: observational hooks
     // fail open (their purpose is diagnostic); a declared pre-tool
     // deny/ask/transform effect fails closed so the intercepted operation
-    // cannot proceed on an unverifiable verdict (spec: "fail-open for
-    // observational hooks but fail-closed for a declared pre-tool
-    // deny/ask effect").
+    // cannot proceed on an unverifiable verdict.
     if let Some(failure) = &failure
         && matches!(
             effect,
@@ -744,13 +742,13 @@ fn run_handler(
     Ok(HandlerResult {
         decision,
         reason,
-        input_override,
         failure,
     })
 }
 
-/// A hook adapter translates one harness's native hook stdin/stdout contract
-/// to and from the portable command ABI (ADR-033). The Core defines the
+/// A hook adapter translates one harness's native hook payload into the
+/// portable hook context, and the aggregated outcome back into that
+/// harness's own decision contract (ADR-033). The Core defines the
 /// contract; each integration owns its vendor mapping table. `hook-exec`
 /// resolves adapters through the integration registry by id, so no layer
 /// above the integrations ever names a harness.
@@ -840,11 +838,31 @@ mod tests {
     }
 
     #[test]
-    fn command_abi_round_trips_allow_and_input() {
-        let output: HookCommandOutput =
-            serde_json::from_str(r#"{"decision":"allow","input":{"path":"x"}}"#).unwrap();
-        assert_eq!(output.decision, Some(HookDecision::Allow));
-        assert_eq!(output.input.unwrap()["path"], "x");
+    fn the_hook_context_becomes_the_handlers_environment() {
+        let input = HookCommandInput {
+            harness: "fake-harness".to_owned(),
+            event: "pre_tool_use".to_owned(),
+            tool: Some(HookTool {
+                portable: Some("shell".to_owned()),
+                native: "RunShell".to_owned(),
+                fields: [("command".to_owned(), "cat .env".to_owned())]
+                    .into_iter()
+                    .collect(),
+            }),
+            input: serde_json::json!({"cmd": "cat .env"}),
+            context: HookContext {
+                cwd: Some("/repo".to_owned()),
+                session_id: None,
+            },
+        };
+        let environment: BTreeMap<String, String> = input.environment().into_iter().collect();
+        assert_eq!(environment["HOOK_HARNESS"], "fake-harness");
+        assert_eq!(environment["HOOK_EVENT"], "pre_tool_use");
+        assert_eq!(environment["HOOK_TOOL"], "shell");
+        assert_eq!(environment["HOOK_TOOL_NATIVE"], "RunShell");
+        assert_eq!(environment["HOOK_CWD"], "/repo");
+        assert_eq!(environment["HOOK_INPUT"], r#"{"cmd":"cat .env"}"#);
+        assert_eq!(environment["HOOK_COMMAND"], "cat .env");
     }
 
     #[test]
@@ -901,9 +919,9 @@ mod tests {
     }
 }
 
-/// End-to-end dispatcher behavior against real `sh` scripts: ABI stdin,
-/// bounded reads, per-handler timeouts, the canonical deny exit, and the
-/// fail-open/fail-closed effect semantics (ADR-033 §ABI).
+/// End-to-end dispatcher behavior against real `sh` scripts: the `HOOK_*`
+/// environment, the exit-code decision, per-handler timeouts, and the
+/// fail-open/fail-closed effect semantics.
 #[cfg(all(test, unix))]
 mod dispatch_tests {
     use super::*;
@@ -919,11 +937,14 @@ mod dispatch_tests {
 
     fn input() -> HookCommandInput {
         HookCommandInput {
-            version: 1,
+            harness: "fake-harness".to_owned(),
             event: "pre_tool_use".to_owned(),
             tool: Some(HookTool {
                 portable: Some("shell".to_owned()),
-                native: "Bash".to_owned(),
+                native: "RunShell".to_owned(),
+                fields: [("command".to_owned(), "ls".to_owned())]
+                    .into_iter()
+                    .collect(),
             }),
             input: serde_json::json!({"command": "ls"}),
             context: HookContext {
@@ -956,7 +977,7 @@ mod dispatch_tests {
     // so every handler body below uses shell builtins or `/bin/` paths.
 
     #[test]
-    fn empty_stdout_is_an_observation() {
+    fn exit_zero_is_an_allowance() {
         let root = uze_testkit::temp::scratch("observe");
         let script = script(&root, "observe.sh", ":");
         let outcome =
@@ -967,75 +988,55 @@ mod dispatch_tests {
     }
 
     #[test]
-    fn allow_deny_and_transform_decisions_are_parsed_from_stdout() {
-        let root = uze_testkit::temp::scratch("decisions");
-        let allow = script(
-            &root,
-            "allow.sh",
-            "read -r _; printf '{\"decision\":\"allow\",\"reason\":\"ok\"}'",
-        );
-        let deny = script(
-            &root,
-            "deny.sh",
-            "read -r _; printf '{\"decision\":\"deny\",\"reason\":\"blocked\"}'",
-        );
-        let transform = script(
-            &root,
-            "transform.sh",
-            "read -r _; printf '{\"decision\":\"allow\",\"input\":{\"path\":\"/safe\"}}'",
-        );
-        assert_eq!(
-            dispatch_handlers(&hook(vec![&allow], HookEffect::Observe), &input(), &root)
-                .unwrap()
-                .decision,
-            Some(HookDecision::Allow)
-        );
-        let denied =
-            dispatch_handlers(&hook(vec![&deny], HookEffect::Observe), &input(), &root).unwrap();
-        assert_eq!(denied.decision, Some(HookDecision::Deny));
-        assert_eq!(denied.reason.as_deref(), Some("blocked"));
-        assert_eq!(
-            dispatch_handlers(
-                &hook(vec![&transform], HookEffect::Transform),
-                &input(),
-                &root
-            )
-            .unwrap()
-            .input_override,
-            Some(serde_json::json!({"path": "/safe"}))
-        );
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn native_payload_round_trips_through_abi_stdin() {
-        let root = uze_testkit::temp::scratch("abi");
+    fn the_handler_reads_the_context_from_its_environment() {
+        let root = uze_testkit::temp::scratch("env");
         let probe = script(
             &root,
             "probe.sh",
-            "/bin/cat > \"${PLUGIN_ROOT}/abi-input.json\"",
+            "printf '%s|%s|%s|%s|%s|%s' \"$HOOK_HARNESS\" \"$HOOK_EVENT\" \"$HOOK_TOOL\" \
+             \"$HOOK_TOOL_NATIVE\" \"$HOOK_COMMAND\" \"$HOOK_INPUT\" \
+             > \"${PLUGIN_ROOT}/seen.txt\"",
         );
         let outcome =
             dispatch_handlers(&hook(vec![&probe], HookEffect::Observe), &input(), &root).unwrap();
         assert_eq!(outcome.decision, None);
-        let seen: HookCommandInput =
-            serde_json::from_slice(&fs::read(root.join("abi-input.json")).unwrap()).unwrap();
         assert_eq!(
-            seen,
-            input(),
-            "the handler must receive the normalized ABI input verbatim"
+            fs::read_to_string(root.join("seen.txt")).unwrap(),
+            r#"fake-harness|pre_tool_use|shell|RunShell|ls|{"command":"ls"}"#,
+            "the handler must never have to parse a harness payload"
         );
         let _ = fs::remove_dir_all(root);
     }
 
     #[test]
-    fn canonical_deny_exit_is_a_decision_not_a_failure() {
+    fn a_handlers_stdout_never_reaches_the_decision_surface() {
+        let root = uze_testkit::temp::scratch("stdout");
+        let chatty = script(&root, "chatty.sh", "echo '{\"decision\":\"deny\"}'");
+        let outcome =
+            dispatch_handlers(&hook(vec![&chatty], HookEffect::Deny), &input(), &root).unwrap();
+        assert_eq!(
+            outcome.decision, None,
+            "stdout is not a channel: only the exit code decides"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn the_deny_exit_carries_its_reason_from_stderr() {
         let root = uze_testkit::temp::scratch("deny-exit");
-        let script = script(&root, "deny.sh", "read -r _; exit 3");
+        let script = script(
+            &root,
+            "deny.sh",
+            "echo 'blocked by protect-env' >&2; exit 3",
+        );
         let outcome =
             dispatch_handlers(&hook(vec![&script], HookEffect::Deny), &input(), &root).unwrap();
         assert_eq!(outcome.decision, Some(HookDecision::Deny));
-        assert_eq!(outcome.failure, None);
+        assert_eq!(outcome.reason.as_deref(), Some("blocked by protect-env"));
+        assert_eq!(
+            outcome.failure, None,
+            "a denial is a decision, not a failure"
+        );
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1051,10 +1052,7 @@ mod dispatch_tests {
         let deny = script(
             &root,
             "deny.sh",
-            &format!(
-                "echo deny >> \"{}\"; printf '{{\"decision\":\"deny\"}}'",
-                order_file.display()
-            ),
+            &format!("echo deny >> \"{}\"; exit 3", order_file.display()),
         );
         let second = script(
             &root,
@@ -1062,23 +1060,14 @@ mod dispatch_tests {
             &format!("echo second >> \"{}\"", order_file.display()),
         );
         let hook = PortableHook {
-            handlers: vec![
-                CommandHook {
+            handlers: [first, deny, second]
+                .into_iter()
+                .map(|command| CommandHook {
                     handler_type: CommandHandlerType::Command,
-                    command: first,
+                    command,
                     timeout: 30,
-                },
-                CommandHook {
-                    handler_type: CommandHandlerType::Command,
-                    command: deny,
-                    timeout: 30,
-                },
-                CommandHook {
-                    handler_type: CommandHandlerType::Command,
-                    command: second,
-                    timeout: 30,
-                },
-            ],
+                })
+                .collect(),
             ..hook(vec![], HookEffect::Observe)
         };
         let outcome = dispatch_handlers(&hook, &input(), &root).unwrap();
@@ -1091,7 +1080,7 @@ mod dispatch_tests {
     #[test]
     fn observation_fails_open_but_a_declared_deny_effect_fails_closed() {
         let root = uze_testkit::temp::scratch("fail");
-        let script = script(&root, "fail.sh", "read -r _; exit 7");
+        let script = script(&root, "fail.sh", "exit 7");
         let observed =
             dispatch_handlers(&hook(vec![&script], HookEffect::Observe), &input(), &root).unwrap();
         assert_eq!(
@@ -1110,13 +1099,17 @@ mod dispatch_tests {
     }
 
     #[test]
-    fn malformed_stdout_is_a_failure_not_a_decision() {
-        let root = uze_testkit::temp::scratch("bad-json");
-        let script = script(&root, "bad.sh", "read -r _; printf 'not json'");
-        let outcome =
-            dispatch_handlers(&hook(vec![&script], HookEffect::Deny), &input(), &root).unwrap();
-        assert_eq!(outcome.decision, Some(HookDecision::Deny));
-        assert!(outcome.reason.unwrap().contains("invalid JSON"));
+    fn a_handler_that_cannot_start_denies_for_a_deny_group() {
+        let root = uze_testkit::temp::scratch("absent");
+        fs::create_dir_all(&root).unwrap();
+        let missing = root.join("absent.sh").to_string_lossy().into_owned();
+        let denied =
+            dispatch_handlers(&hook(vec![&missing], HookEffect::Deny), &input(), &root).unwrap();
+        assert_eq!(denied.decision, Some(HookDecision::Deny));
+        let observed =
+            dispatch_handlers(&hook(vec![&missing], HookEffect::Observe), &input(), &root).unwrap();
+        assert_eq!(observed.decision, None);
+        assert!(observed.failure.is_some());
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1140,21 +1133,6 @@ mod dispatch_tests {
         );
         assert_eq!(outcome.decision, Some(HookDecision::Deny));
         assert!(outcome.reason.unwrap().contains("timed out after 1s"));
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn oversized_stdout_is_capped_and_treated_as_a_failure() {
-        let root = uze_testkit::temp::scratch("oversize");
-        let script = script(
-            &root,
-            "big.sh",
-            "read -r _; i=0; while [ $i -lt 1200 ]; do printf 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'; i=$((i + 1)); done",
-        );
-        let outcome =
-            dispatch_handlers(&hook(vec![&script], HookEffect::Observe), &input(), &root).unwrap();
-        assert_eq!(outcome.decision, None);
-        assert!(outcome.failure.unwrap().contains("byte cap"));
         let _ = fs::remove_dir_all(root);
     }
 

@@ -1,9 +1,11 @@
 #!/bin/sh
 # Denies every shell invocation that mentions `secrets`; allows everything
-# else. The reason string is the conformance evidence marker.
-set -e
-read -r payload || exit 0
-case "$payload" in
-  *secrets*) printf '{"decision":"deny","reason":"blocked by protect-env"}' ;;
-  *) printf '{"decision":"allow"}' ;;
+# else. The reason carries the vocabulary row the harness delivered, so the
+# relayed denial is evidence of HOOK_TOOL/HOOK_COMMAND/HOOK_CWD — not only
+# of the block.
+case "$HOOK_COMMAND$HOOK_INPUT" in
+  *secrets*)
+    echo "blocked by protect-env [tool=$HOOK_TOOL native=$HOOK_TOOL_NATIVE cwd=${HOOK_CWD:-none}] command=$HOOK_COMMAND" >&2
+    exit 3 ;;
 esac
+exit 0

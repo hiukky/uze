@@ -379,16 +379,6 @@ pub(crate) fn tool_name(target: &str, matcher: &HookMatcher) -> String {
     }
 }
 
-/// Inverse of [`tool_name`]: the portable alias for a native tool name, used
-/// by the runtime adapters to normalize native payloads. `None` for a tool
-/// this target table does not recognize — the ABI then carries no alias
-/// rather than a fabricated one.
-pub(crate) fn portable_name(target: &str, native: &str) -> Option<String> {
-    vocabulary(target)
-        .binding_for_native(native)
-        .map(|binding| binding.alias.to_owned())
-}
-
 /// Translates every matcher of a group for one target; `None` for an
 /// unmatch-all group (the entry then omits the matcher key).
 pub(crate) fn matcher(target: &str, hook: &PortableHook) -> Option<String> {
@@ -1118,6 +1108,37 @@ fn unsupported_plan(resource: &Resource, rationale: &str) -> ExposurePlan {
 /// block signal; every other non-zero exit is a non-blocking error there).
 const NATIVE_BLOCK_EXIT: i32 = 2;
 
+/// The matched tool as a handler sees it: the portable alias (when this
+/// harness's vocabulary knows the native name) and the alias's portable
+/// fields, each read from the native input field the vocabulary names. A
+/// tool the table does not bind carries its native name and nothing else.
+fn matched_tool(target: &str, native: &str, input: &serde_json::Value) -> HookTool {
+    let binding = vocabulary(target).binding_for_native(native);
+    HookTool {
+        portable: binding.map(|entry| entry.alias.to_owned()),
+        native: native.to_owned(),
+        fields: binding
+            .into_iter()
+            .flat_map(|entry| entry.fields.iter())
+            .filter_map(|(portable, native_field)| {
+                input
+                    .get(native_field)
+                    .map(|value| ((*portable).to_owned(), scalar(value)))
+            })
+            .collect(),
+    }
+}
+
+/// A native input field rendered for the environment: a string verbatim,
+/// anything else as its JSON text, so a handler always reads a value and
+/// never a Rust debug rendering.
+fn scalar(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(text) => text.clone(),
+        other => other.to_string(),
+    }
+}
+
 /// Extracts `tool_name`/`tool_input` shaped payload fields (Claude and
 /// Codex both document this shape for tool events) and the common
 /// `cwd`/`session_id` context keys, sticky across the two vendors' field
@@ -1132,21 +1153,21 @@ fn normalize_tool_payload(
     session_key: &str,
 ) -> std::result::Result<HookCommandInput, String> {
     let tool_name = native.get(tool_key).and_then(serde_json::Value::as_str);
+    let input = native
+        .get(input_key)
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
     let tool = match (tool_name, event) {
-        (Some(name), HookEvent::PreToolUse | HookEvent::PostToolUse) => Some(HookTool {
-            portable: portable_name(target, name),
-            native: name.to_owned(),
-        }),
+        (Some(name), HookEvent::PreToolUse | HookEvent::PostToolUse) => {
+            Some(matched_tool(target, name, &input))
+        }
         _ => None,
     };
     Ok(HookCommandInput {
-        version: 1,
+        harness: target.to_owned(),
         event: event.abi_name().to_owned(),
         tool,
-        input: native
-            .get(input_key)
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!({})),
+        input,
         context: HookContext {
             cwd: native
                 .get(cwd_key)
@@ -1227,21 +1248,20 @@ pub(crate) fn antigravity_normalize_input(
         .and_then(serde_json::Value::as_object)
         .and_then(|call| call.get("name"))
         .and_then(serde_json::Value::as_str);
-    let tool = match (tool_name, event) {
-        (Some(name), HookEvent::PreToolUse | HookEvent::PostToolUse) => Some(HookTool {
-            portable: portable_name("antigravity", name),
-            native: name.to_owned(),
-        }),
-        _ => None,
-    };
     let input = native
         .get("toolCall")
         .and_then(serde_json::Value::as_object)
         .and_then(|call| call.get("args"))
         .cloned()
         .unwrap_or_else(|| serde_json::json!({}));
+    let tool = match (tool_name, event) {
+        (Some(name), HookEvent::PreToolUse | HookEvent::PostToolUse) => {
+            Some(matched_tool("antigravity", name, &input))
+        }
+        _ => None,
+    };
     Ok(HookCommandInput {
-        version: 1,
+        harness: "antigravity".to_owned(),
         event: event.abi_name().to_owned(),
         tool,
         input,
@@ -1301,11 +1321,6 @@ pub(crate) fn claude_render_output(
         "permissionDecisionReason".to_owned(),
         serde_json::Value::String(outcome.reason.clone().unwrap_or_default()),
     );
-    if event == HookEvent::PreToolUse
-        && let Some(input) = &outcome.input_override
-    {
-        hook_specific.insert("updatedInput".to_owned(), input.clone());
-    }
     let document = serde_json::json!({ "hookSpecificOutput": hook_specific });
     let stdout = Some(serde_json::to_vec(&document).expect("hook output serializes"));
     if decision == HookDecision::Deny {
@@ -1477,7 +1492,9 @@ mod tests {
             "Write"
         );
         assert_eq!(
-            portable_name("claude", "Bash").as_deref(),
+            vocabulary("claude")
+                .binding_for_native("Bash")
+                .map(|binding| binding.alias),
             Some("shell"),
             "the reverse table must round-trip the forward one"
         );
@@ -1518,7 +1535,11 @@ mod tests {
             tool_name("claude", &HookMatcher::Native("Write".into())),
             "Write"
         );
-        assert_eq!(portable_name("claude", "SomeVendorOnlyTool"), None);
+        assert!(
+            matched_tool("claude", "SomeVendorOnlyTool", &serde_json::json!({"x": 1}))
+                .fields
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1537,11 +1558,13 @@ mod tests {
 
     #[test]
     fn a_renamed_vendor_tool_still_normalizes_to_its_alias() {
-        assert_eq!(
-            portable_name("codex", "exec_command").as_deref(),
-            Some("shell")
-        );
-        assert_eq!(portable_name("codex", "Bash").as_deref(), Some("shell"));
+        let alias = |native| {
+            vocabulary("codex")
+                .binding_for_native(native)
+                .map(|binding| binding.alias)
+        };
+        assert_eq!(alias("exec_command"), Some("shell"));
+        assert_eq!(alias("Bash"), Some("shell"));
         assert_eq!(
             tool_name("codex", &HookMatcher::Portable("shell".into())),
             "exec_command",
@@ -1908,32 +1931,39 @@ mod tests {
     }
 
     #[test]
-    fn stop_payloads_carry_no_tool_and_transform_survives_rendering() {
+    fn stop_payloads_carry_no_tool_and_a_matched_tool_carries_its_portable_fields() {
         let stop = serde_json::json!({"stop_hook_active": true});
         let input = claude_normalize_input(&stop, HookEvent::Stop).unwrap();
         assert!(input.tool.is_none());
-        let transform = HookDispatchOutcome {
-            decision: Some(HookDecision::Allow),
-            input_override: Some(serde_json::json!({"path": "/safe"})),
-            reason: Some("rewritten".to_owned()),
-            ..HookDispatchOutcome::default()
-        };
-        let output: serde_json::Value = serde_json::from_slice(
-            &claude_render_output(&transform, HookEvent::PreToolUse)
+
+        let call = serde_json::json!({
+            "tool_name": "Bash",
+            "tool_input": {"command": "cat .env"},
+            "cwd": "/repo",
+        });
+        let input = claude_normalize_input(&call, HookEvent::PreToolUse).unwrap();
+        let environment: std::collections::BTreeMap<String, String> =
+            input.environment().into_iter().collect();
+        assert_eq!(environment["HOOK_HARNESS"], "claude");
+        assert_eq!(environment["HOOK_TOOL"], "shell");
+        assert_eq!(environment["HOOK_TOOL_NATIVE"], "Bash");
+        assert_eq!(environment["HOOK_COMMAND"], "cat .env");
+        assert_eq!(environment["HOOK_CWD"], "/repo");
+        assert_eq!(environment["HOOK_INPUT"], r#"{"command":"cat .env"}"#);
+
+        let raw = serde_json::json!({
+            "tool_name": "SomeVendorOnlyTool",
+            "tool_input": {"anything": 1},
+        });
+        let environment: std::collections::BTreeMap<String, String> =
+            claude_normalize_input(&raw, HookEvent::PreToolUse)
                 .unwrap()
-                .stdout
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(
-            output["hookSpecificOutput"]["updatedInput"]["path"], "/safe",
-            "the current Claude contract rewrites via updatedInput"
-        );
-        assert_eq!(
-            transform_pair(transform.clone()).exit_code,
-            0,
-            "a rewrite is not a block"
-        );
+                .environment()
+                .into_iter()
+                .collect();
+        assert_eq!(environment["HOOK_TOOL"], "");
+        assert_eq!(environment["HOOK_TOOL_NATIVE"], "SomeVendorOnlyTool");
+        assert!(!environment.contains_key("HOOK_COMMAND"));
     }
 
     fn transform_pair(outcome: HookDispatchOutcome) -> HookNativeOutput {
