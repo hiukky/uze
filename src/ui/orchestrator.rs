@@ -1210,7 +1210,7 @@ struct AgentSupportDropdown {
 }
 
 /// Open state of the isolation tip — the full path behind a sidebar
-/// caption row's `⋔`. Keyed by the tab rather than by the path it will
+/// caption row's mark. Keyed by the tab rather than by the path it will
 /// show, so the tip tracks a `cd` in that pane the same way the caption
 /// row it hangs off already does.
 struct IsolationTip {

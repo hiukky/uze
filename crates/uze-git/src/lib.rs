@@ -1,7 +1,16 @@
 //! One transport for speaking to the Git binary.
 //!
 //! Not a domain: nothing here knows what a worktree, a checkout, or a diff
-//! view is. What it owns is the part every caller was reinventing — how the
+//! view is.
+//!
+//! # Why a crate rather than a module in `uze-core`
+//!
+//! Not because Git is peripheral — it is essential — but because of which
+//! way the dependencies run. Three crates need it, and two of them cannot
+//! depend on the domain: `uze-extensions` is forbidden to by an enforced
+//! rule (an extension never names the domain crate), and `uze-testkit`
+//! would form a cycle, since `uze-core` dev-depends on it. A leaf with no
+//! dependencies of its own is the only position all three can share. What it owns is the part every caller was reinventing — how the
 //! process is spawned, what environment it inherits, and what a non-zero
 //! exit means.
 //!
