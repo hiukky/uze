@@ -167,17 +167,140 @@ impl HookMatcher {
     }
 }
 
-pub fn portable_tool_aliases() -> &'static [&'static str] {
+/// One portable tool alias and the portable fields a matched handler is
+/// guaranteed to receive, whichever harness delivered the hook. The field
+/// names are the vocabulary's own — never a harness's — and each becomes a
+/// `HOOK_<FIELD>` environment variable (see [`hook_field_variable`]).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ToolAlias {
+    pub alias: &'static str,
+    pub fields: &'static [&'static str],
+}
+
+/// The portable tool vocabulary: the single source of the alias set and of
+/// what each alias promises a handler. Which native tool and which native
+/// input field an alias reads from is a harness fact and therefore lives
+/// with the harness (see [`HarnessToolVocabulary`]), not here — this crate
+/// names no vendor.
+pub fn portable_tool_vocabulary() -> &'static [ToolAlias] {
     &[
-        "shell",
-        "file.read",
-        "file.write",
-        "file.edit",
-        "search.files",
-        "search.web",
-        "agent.spawn",
-        "agent.message",
+        ToolAlias {
+            alias: "shell",
+            fields: &["command"],
+        },
+        ToolAlias {
+            alias: "file.read",
+            fields: &["path"],
+        },
+        ToolAlias {
+            alias: "file.write",
+            fields: &["path"],
+        },
+        ToolAlias {
+            alias: "file.edit",
+            fields: &["path"],
+        },
+        ToolAlias {
+            alias: "search.files",
+            fields: &["query"],
+        },
+        ToolAlias {
+            alias: "search.web",
+            fields: &["query"],
+        },
+        ToolAlias {
+            alias: "agent.spawn",
+            fields: &[],
+        },
+        ToolAlias {
+            alias: "agent.message",
+            fields: &[],
+        },
     ]
+}
+
+pub fn portable_tool_aliases() -> &'static [&'static str] {
+    static ALIASES: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
+    ALIASES.get_or_init(|| {
+        portable_tool_vocabulary()
+            .iter()
+            .map(|entry| entry.alias)
+            .collect()
+    })
+}
+
+/// The portable fields one alias guarantees; empty for an alias the
+/// vocabulary carries without a portable payload, and for `native:` tools.
+pub fn alias_fields(alias: &str) -> &'static [&'static str] {
+    portable_tool_vocabulary()
+        .iter()
+        .find(|entry| entry.alias == alias)
+        .map_or(&[][..], |entry| entry.fields)
+}
+
+/// The environment variable one portable field is delivered in:
+/// `command` -> `HOOK_COMMAND`, `path` -> `HOOK_PATH`.
+pub fn hook_field_variable(field: &str) -> String {
+    format!(
+        "HOOK_{}",
+        field.to_ascii_uppercase().replace(['.', '-'], "_")
+    )
+}
+
+/// One harness's binding of a portable alias: the native tool the alias is
+/// matched as, any further native tool names that normalize back to it, and
+/// the native input field each portable field is read from.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ToolBinding {
+    pub alias: &'static str,
+    /// `None` when the harness exposes no tool for this alias. The matcher
+    /// then falls back to the alias literal, which matches nothing — an
+    /// honest no-op rather than a fabricated tool name.
+    pub native_tool: Option<&'static str>,
+    /// Additional native names that resolve to this alias when a payload is
+    /// normalized (a vendor renaming its shell tool, an older build). Never
+    /// emitted into a matcher.
+    pub also_matches: &'static [&'static str],
+    /// `(portable field, native input field)` pairs, one per field the
+    /// alias promises.
+    pub fields: &'static [(&'static str, &'static str)],
+}
+
+/// One harness's whole binding table. Supplied by that harness's
+/// integration — this crate owns the shape, the integration owns the names.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HarnessToolVocabulary {
+    pub bindings: &'static [ToolBinding],
+}
+
+impl HarnessToolVocabulary {
+    pub fn binding(&self, alias: &str) -> Option<&'static ToolBinding> {
+        self.bindings.iter().find(|entry| entry.alias == alias)
+    }
+
+    /// The alias a native tool name normalizes to, or `None` when this
+    /// harness's table does not know the tool — the handler then receives
+    /// `HOOK_TOOL_NATIVE` and `HOOK_INPUT` alone.
+    pub fn binding_for_native(&self, native: &str) -> Option<&'static ToolBinding> {
+        self.bindings
+            .iter()
+            .find(|entry| entry.native_tool == Some(native) || entry.also_matches.contains(&native))
+    }
+
+    /// Every native tool name that resolves to an alias, paired with its
+    /// binding — the order the generated wrapper's dispatch table follows.
+    pub fn native_names(&self) -> Vec<(&'static str, &'static ToolBinding)> {
+        self.bindings
+            .iter()
+            .flat_map(|entry| {
+                entry
+                    .native_tool
+                    .into_iter()
+                    .chain(entry.also_matches.iter().copied())
+                    .map(move |native| (native, entry))
+            })
+            .collect()
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -699,6 +822,21 @@ mod tests {
             parse_manifest(Path::new("hooks.json"), bytes),
             Err(UzeError::InvalidHookManifest { .. })
         ));
+    }
+
+    #[test]
+    fn the_vocabulary_is_the_single_source_of_the_alias_set_and_its_fields() {
+        let aliases: Vec<&str> = portable_tool_vocabulary()
+            .iter()
+            .map(|entry| entry.alias)
+            .collect();
+        assert_eq!(aliases, portable_tool_aliases().to_vec());
+        assert_eq!(alias_fields("shell"), ["command"]);
+        assert_eq!(alias_fields("file.write"), ["path"]);
+        assert_eq!(alias_fields("agent.spawn"), [] as [&str; 0]);
+        assert_eq!(alias_fields("native:Write"), [] as [&str; 0]);
+        assert_eq!(hook_field_variable("command"), "HOOK_COMMAND");
+        assert_eq!(hook_field_variable("path"), "HOOK_PATH");
     }
 
     #[test]

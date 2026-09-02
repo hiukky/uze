@@ -1,8 +1,9 @@
 ## 1. Vocabulary (single source in uze-core)
 
-- [ ] 1.1 Extend the portable alias table in `uze-core::hook` with, per alias, its portable fields and per harness the native tool name and native field names (`shell.command` → `command` / `CommandLine`; `file.*.path` → `file_path` / `TargetFile` / `filePath`; …); capture Antigravity and OpenCode native field names from the schemas the harnesses declare (`--discovery`), not from memory
-- [ ] 1.2 Replace the hand-written `tool_name()` matcher translation in `uze-integrations::hooks` with a lookup on the vocabulary; keep `native:<name>` as pass-through
-- [ ] 1.3 Unit tests: every alias row resolves on every harness; a `native:` matcher yields no portable fields; the table is exhaustive for the aliases `portable_tool_aliases()` lists
+- [x] 1.1 Extend the portable alias table in `uze-core::hook` with, per alias, its portable fields and per harness the native tool name and native field names (`shell.command` → `command` / `CommandLine`; `file.*.path` → `file_path` / `TargetFile` / `filePath`; …); capture Antigravity and OpenCode native field names from the schemas the harnesses declare (`--discovery`), not from memory
+  - Core owns the alias set and its portable fields (`portable_tool_vocabulary`, `alias_fields`, `hook_field_variable`); the per-harness native tool/field bindings live in `uze-integrations::hooks` (`vocabulary(target)`) because `uze-core` may name no vendor (`core_never_names_a_vendor_harness`). Core owns the shape (`ToolBinding`/`HarnessToolVocabulary`), the integration owns the names — the same split `HookCapabilities` already uses.
+- [x] 1.2 Replace the hand-written `tool_name()` matcher translation in `uze-integrations::hooks` with a lookup on the vocabulary; keep `native:<name>` as pass-through
+- [x] 1.3 Unit tests: every alias row resolves on every harness; a `native:` matcher yields no portable fields; the table is exhaustive for the aliases `portable_tool_aliases()` lists
 
 ## 2. Handler contract in the reference runtime
 

@@ -16,9 +16,9 @@ use uze_core::{
     exposure::{ExposureMechanism, ExposurePlan},
     home::UzeHome,
     hook::{
-        CommandHook, HOOKS_FILE_NAME, HookCapabilities, HookCommandInput, HookContext,
-        HookDecision, HookDispatchOutcome, HookEffect, HookEvent, HookMatcher, HookNativeOutput,
-        HookTool, PortableHook,
+        CommandHook, HOOKS_FILE_NAME, HarnessToolVocabulary, HookCapabilities, HookCommandInput,
+        HookContext, HookDecision, HookDispatchOutcome, HookEffect, HookEvent, HookMatcher,
+        HookNativeOutput, HookTool, PortableHook, ToolBinding,
     },
     integration::{AttachmentInspection, AttachmentState},
     persistence::write_atomic,
@@ -129,64 +129,281 @@ pub(crate) fn opencode_capabilities() -> HookCapabilities {
 // Matcher translation
 // ============================================================================
 
-/// The portable tool alias → native tool name table for the targets UZE
-/// projects to. `native:<name>` matchers pass through unchanged.
+/// Every harness's binding of the portable tool vocabulary: per alias, the
+/// native tool it is matched as and the native input field each portable
+/// field is read from. This table is the single source the matchers, the
+/// generated wrappers and the runtime adapters all read — nothing here is
+/// hand-written twice.
+///
+/// The names come from what each harness declares to the model, captured
+/// with the Lab's `--discovery` mode, not from memory: Antigravity's
+/// `run_command`/`CommandLine`+`Cwd`, `write_to_file`/`TargetFile`,
+/// `view_file`/`AbsolutePath`, `grep_search`/`Query` and `search_web`/
+/// `query` are read off its own `parametersJsonSchema`; Codex's shell tool
+/// is `exec_command` with a `cmd` argument (0.150.1 onwards — `Bash` stays
+/// in `also_matches` so an older payload still normalizes). OpenCode's
+/// field names follow its documented tool schema; a `--discovery` capture
+/// of that harness has not been taken yet.
+pub(crate) fn vocabulary(target: &str) -> HarnessToolVocabulary {
+    HarnessToolVocabulary {
+        bindings: match target {
+            "claude" => CLAUDE_TOOLS,
+            "codex" => CODEX_TOOLS,
+            "antigravity" => ANTIGRAVITY_TOOLS,
+            "opencode" => OPENCODE_TOOLS,
+            _ => &[],
+        },
+    }
+}
+
+/// An alias no harness tool answers to. Kept in every table so the
+/// vocabulary is exhaustive by construction: absence of a native name is
+/// stated, never left to a missing row.
+const UNBOUND: Option<&'static str> = None;
+
+const CLAUDE_TOOLS: &[ToolBinding] = &[
+    ToolBinding {
+        alias: "shell",
+        native_tool: Some("Bash"),
+        also_matches: &[],
+        fields: &[("command", "command")],
+    },
+    ToolBinding {
+        alias: "file.read",
+        native_tool: Some("Read"),
+        also_matches: &[],
+        fields: &[("path", "file_path")],
+    },
+    ToolBinding {
+        alias: "file.write",
+        native_tool: Some("Write"),
+        also_matches: &[],
+        fields: &[("path", "file_path")],
+    },
+    ToolBinding {
+        alias: "file.edit",
+        native_tool: Some("MultiEdit"),
+        also_matches: &["Edit"],
+        fields: &[("path", "file_path")],
+    },
+    ToolBinding {
+        alias: "search.files",
+        native_tool: Some("Grep"),
+        also_matches: &[],
+        fields: &[("query", "pattern")],
+    },
+    ToolBinding {
+        alias: "search.web",
+        native_tool: Some("WebSearch"),
+        also_matches: &[],
+        fields: &[("query", "query")],
+    },
+    ToolBinding {
+        alias: "agent.spawn",
+        native_tool: Some("Task"),
+        also_matches: &[],
+        fields: &[],
+    },
+    ToolBinding {
+        alias: "agent.message",
+        native_tool: UNBOUND,
+        also_matches: &[],
+        fields: &[],
+    },
+];
+
+const CODEX_TOOLS: &[ToolBinding] = &[
+    ToolBinding {
+        alias: "shell",
+        native_tool: Some("exec_command"),
+        also_matches: &["Bash", "shell"],
+        fields: &[("command", "cmd")],
+    },
+    ToolBinding {
+        alias: "file.read",
+        native_tool: Some("Read"),
+        also_matches: &[],
+        fields: &[("path", "file_path")],
+    },
+    ToolBinding {
+        alias: "file.write",
+        native_tool: Some("Write"),
+        also_matches: &[],
+        fields: &[("path", "file_path")],
+    },
+    ToolBinding {
+        alias: "file.edit",
+        native_tool: Some("Edit"),
+        also_matches: &[],
+        fields: &[("path", "file_path")],
+    },
+    ToolBinding {
+        alias: "search.files",
+        native_tool: Some("Grep"),
+        also_matches: &[],
+        fields: &[("query", "pattern")],
+    },
+    ToolBinding {
+        alias: "search.web",
+        native_tool: Some("WebSearch"),
+        also_matches: &[],
+        fields: &[("query", "query")],
+    },
+    ToolBinding {
+        alias: "agent.spawn",
+        native_tool: UNBOUND,
+        also_matches: &[],
+        fields: &[],
+    },
+    ToolBinding {
+        alias: "agent.message",
+        native_tool: UNBOUND,
+        also_matches: &[],
+        fields: &[],
+    },
+];
+
+const ANTIGRAVITY_TOOLS: &[ToolBinding] = &[
+    ToolBinding {
+        alias: "shell",
+        native_tool: Some("run_command"),
+        also_matches: &[],
+        fields: &[("command", "CommandLine")],
+    },
+    ToolBinding {
+        alias: "file.read",
+        native_tool: Some("view_file"),
+        also_matches: &[],
+        fields: &[("path", "AbsolutePath")],
+    },
+    ToolBinding {
+        alias: "file.write",
+        native_tool: Some("write_to_file"),
+        also_matches: &[],
+        fields: &[("path", "TargetFile")],
+    },
+    ToolBinding {
+        alias: "file.edit",
+        native_tool: Some("replace_file_content"),
+        also_matches: &[],
+        fields: &[("path", "TargetFile")],
+    },
+    ToolBinding {
+        alias: "search.files",
+        native_tool: Some("grep_search"),
+        also_matches: &[],
+        fields: &[("query", "Query")],
+    },
+    ToolBinding {
+        alias: "search.web",
+        native_tool: Some("search_web"),
+        also_matches: &[],
+        fields: &[("query", "query")],
+    },
+    ToolBinding {
+        alias: "agent.spawn",
+        native_tool: UNBOUND,
+        also_matches: &[],
+        fields: &[],
+    },
+    ToolBinding {
+        alias: "agent.message",
+        native_tool: UNBOUND,
+        also_matches: &[],
+        fields: &[],
+    },
+];
+
+const OPENCODE_TOOLS: &[ToolBinding] = &[
+    ToolBinding {
+        alias: "shell",
+        native_tool: Some("bash"),
+        also_matches: &[],
+        fields: &[("command", "command")],
+    },
+    ToolBinding {
+        alias: "file.read",
+        native_tool: Some("read"),
+        also_matches: &[],
+        fields: &[("path", "filePath")],
+    },
+    ToolBinding {
+        alias: "file.write",
+        native_tool: Some("write"),
+        also_matches: &[],
+        fields: &[("path", "filePath")],
+    },
+    ToolBinding {
+        alias: "file.edit",
+        native_tool: Some("edit"),
+        also_matches: &[],
+        fields: &[("path", "filePath")],
+    },
+    ToolBinding {
+        alias: "search.files",
+        native_tool: Some("grep"),
+        also_matches: &[],
+        fields: &[("query", "pattern")],
+    },
+    ToolBinding {
+        alias: "search.web",
+        native_tool: Some("web_search"),
+        also_matches: &[],
+        fields: &[("query", "query")],
+    },
+    ToolBinding {
+        alias: "agent.spawn",
+        native_tool: Some("task"),
+        also_matches: &[],
+        fields: &[],
+    },
+    ToolBinding {
+        alias: "agent.message",
+        native_tool: UNBOUND,
+        also_matches: &[],
+        fields: &[],
+    },
+];
+
+/// The native tool name a matcher becomes on one target. `native:<name>`
+/// passes through unchanged; an alias this harness binds to no tool falls
+/// back to the alias literal, which matches nothing.
 pub(crate) fn tool_name(target: &str, matcher: &HookMatcher) -> String {
     match matcher {
         HookMatcher::Native(name) => name.clone(),
-        HookMatcher::Portable(alias) => match (target, alias.as_str()) {
-            ("claude", "shell") => "Bash".into(),
-            ("claude", "file.write") => "Write".into(),
-            ("claude", "file.edit") => "MultiEdit".into(),
-            ("claude", "file.read") => "Read".into(),
-            ("claude", "search.files") => "Grep".into(),
-            ("claude", "search.web") => "WebSearch".into(),
-            ("codex", "shell") => "Bash".into(),
-            ("codex", "file.write") => "Write".into(),
-            ("codex", "file.edit") => "Edit".into(),
-            ("codex", "file.read") => "Read".into(),
-            ("codex", "search.files") => "Grep".into(),
-            ("codex", "search.web") => "WebSearch".into(),
-            ("antigravity", "shell") => "run_command".into(),
-            ("antigravity", "file.write") => "write_to_file".into(),
-            ("antigravity", "file.edit") => "replace_file_content".into(),
-            ("antigravity", "file.read") => "view_file".into(),
-            ("antigravity", "search.files") => "grep_search".into(),
-            ("antigravity", "search.web") => "search_web".into(),
-            ("opencode", "shell") => "bash".into(),
-            ("opencode", "file.write") => "write".into(),
-            ("opencode", "file.edit") => "edit".into(),
-            ("opencode", "file.read") => "read".into(),
-            ("opencode", "search.files") => "grep".into(),
-            ("opencode", "search.web") => "web_search".into(),
-            (_, value) => value.to_owned(),
-        },
+        HookMatcher::Portable(alias) => vocabulary(target)
+            .binding(alias)
+            .and_then(|binding| binding.native_tool)
+            .unwrap_or(alias.as_str())
+            .to_owned(),
     }
 }
 
 /// Inverse of [`tool_name`]: the portable alias for a native tool name, used
 /// by the runtime adapters to normalize native payloads. `None` for a tool
-/// this target table does not recognize — the ABI then carries `portable:
-/// null` rather than a fabricated alias.
+/// this target table does not recognize — the ABI then carries no alias
+/// rather than a fabricated one.
 pub(crate) fn portable_name(target: &str, native: &str) -> Option<String> {
-    for alias in uze_core::hook::portable_tool_aliases() {
-        let matcher = HookMatcher::Portable((*alias).to_owned());
-        if tool_name(target, &matcher) == native {
-            return Some((*alias).to_owned());
-        }
-    }
-    None
+    vocabulary(target)
+        .binding_for_native(native)
+        .map(|binding| binding.alias.to_owned())
 }
 
 /// Translates every matcher of a group for one target; `None` for an
 /// unmatch-all group (the entry then omits the matcher key).
 pub(crate) fn matcher(target: &str, hook: &PortableHook) -> Option<String> {
     (!hook.matchers.is_empty()).then(|| {
-        hook.matchers
-            .iter()
-            .map(|entry| tool_name(target, entry))
-            .collect::<Vec<_>>()
-            .join("|")
+        // Two authored matchers can translate to one native tool (a
+        // portable alias plus the `native:` name it already resolves to);
+        // the entry names it once.
+        let mut names: Vec<String> = Vec::new();
+        for entry in &hook.matchers {
+            let name = tool_name(target, entry);
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+        names.join("|")
     })
 }
 
@@ -1263,6 +1480,72 @@ mod tests {
             portable_name("claude", "Bash").as_deref(),
             Some("shell"),
             "the reverse table must round-trip the forward one"
+        );
+    }
+
+    const TARGETS: [&str; 4] = ["claude", "codex", "antigravity", "opencode"];
+
+    #[test]
+    fn every_alias_is_bound_on_every_harness_and_carries_its_portable_fields() {
+        for target in TARGETS {
+            let table = vocabulary(target);
+            for alias in uze_core::hook::portable_tool_aliases() {
+                let binding = table
+                    .binding(alias)
+                    .unwrap_or_else(|| panic!("{target} has no row for alias `{alias}`"));
+                let promised = uze_core::hook::alias_fields(alias);
+                let bound: Vec<&str> = binding.fields.iter().map(|(name, _)| *name).collect();
+                assert_eq!(
+                    bound, promised,
+                    "{target}/{alias} must read exactly the fields the vocabulary promises"
+                );
+                if let Some(native) = binding.native_tool {
+                    assert_eq!(
+                        table.binding_for_native(native).map(|entry| entry.alias),
+                        Some(binding.alias),
+                        "{target}/{alias} must round-trip through its native name"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_native_matcher_yields_no_portable_fields() {
+        let table = vocabulary("claude");
+        assert!(table.binding_for_native("SomeVendorOnlyTool").is_none());
+        assert_eq!(
+            tool_name("claude", &HookMatcher::Native("Write".into())),
+            "Write"
+        );
+        assert_eq!(portable_name("claude", "SomeVendorOnlyTool"), None);
+    }
+
+    #[test]
+    fn the_shell_alias_reads_each_harnesss_own_command_field() {
+        let field = |target: &str| {
+            vocabulary(target)
+                .binding("shell")
+                .and_then(|binding| binding.fields.first())
+                .map(|(_, native)| *native)
+        };
+        assert_eq!(field("claude"), Some("command"));
+        assert_eq!(field("codex"), Some("cmd"));
+        assert_eq!(field("antigravity"), Some("CommandLine"));
+        assert_eq!(field("opencode"), Some("command"));
+    }
+
+    #[test]
+    fn a_renamed_vendor_tool_still_normalizes_to_its_alias() {
+        assert_eq!(
+            portable_name("codex", "exec_command").as_deref(),
+            Some("shell")
+        );
+        assert_eq!(portable_name("codex", "Bash").as_deref(), Some("shell"));
+        assert_eq!(
+            tool_name("codex", &HookMatcher::Portable("shell".into())),
+            "exec_command",
+            "the matcher names the tool the harness actually offers today"
         );
     }
 
