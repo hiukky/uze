@@ -28,7 +28,7 @@ use uze_core::{
     project_context, text_region,
 };
 
-use super::{INSTRUCTION_BRIDGE_CONTENT, INSTRUCTION_BRIDGE_IDENTITY, UzeApplication};
+use super::{INSTRUCTION_BRIDGE_CONTENT, INSTRUCTION_BRIDGE_IDENTITY, services::Workspace};
 
 /// The mechanism actually carrying one portable resource into one harness.
 /// Every variant names a mechanism or a specific reason there is none —
@@ -92,7 +92,7 @@ pub struct AgentContextStatus {
     pub agents_directory: ResourceDelivery,
 }
 
-impl UzeApplication {
+impl Workspace<'_> {
     /// Resolves how every registered harness receives `cwd`'s project
     /// context. `cwd` is a real working directory — an agent pane's own,
     /// typically — never a pre-resolved root: resolving it here is the
@@ -100,7 +100,8 @@ impl UzeApplication {
     /// disagree about which project it belongs to.
     pub fn agent_context(&self, cwd: &Path) -> Vec<AgentContextStatus> {
         let context = project_context::resolve(cwd);
-        self.integrations
+        self.0
+            .integrations
             .iter()
             .map(|integration| self.resolve_agent_context(integration.as_ref(), cwd, &context))
             .collect()
@@ -115,6 +116,7 @@ impl UzeApplication {
         cwd: &Path,
     ) -> Result<AgentContextStatus> {
         let integration = self
+            .0
             .integrations
             .iter()
             .find(|integration| integration.id() == integration_id)
@@ -131,18 +133,18 @@ impl UzeApplication {
         cwd: &Path,
         context: &project_context::ProjectContext,
     ) -> AgentContextStatus {
-        let present = self.detect_cached(integration).present;
+        let present = self.0.detect_cached(integration).present;
         // Asked at the caller's `cwd`, not at the resolved root: this is
         // the same question the shim answers when it actually execs the
         // harness from that directory, so the status can never claim a
         // projection the next real launch would not perform.
-        let shim_active = self.runtime_shim_is_active(integration);
+        let shim_active = self.0.runtime_shim_is_active(integration);
         let projection_active = present
             && shim_active
             && integration.supports_runtime_integration()
             && integration.runtime_contribution_would_activate(&RuntimeContext {
                 cwd,
-                home: &self.home,
+                home: &self.0.home,
             });
         // Only a harness that opted into the runtime shim can be shadowed
         // on PATH; for every other one `runtime_shim_is_active` is

@@ -34,16 +34,16 @@ use uze_core::{
     workspace::{self, WorkspaceKind},
 };
 
-use super::*;
+use super::{services::Workspace, *};
 
-impl UzeApplication {
+impl Workspace<'_> {
     /// What kind of UZE workspace `cwd` is inside, and the semantic state
     /// of its project/marketplace halves. Total for workspace-shaped
     /// inputs: a malformed `agents.lock` or `marketplace.json` is reported as a
     /// state (`Invalid`/`InvalidManifest`), never an error — the Overview
     /// exists to show exactly that, not to refuse to run because of it.
     /// The only `Err` is an unresolvable cwd.
-    pub fn overview_workspace(&self, cwd: &Path) -> Result<OverviewWorkspaceSummary> {
+    pub fn summary(&self, cwd: &Path) -> Result<OverviewWorkspaceSummary> {
         let resolved = workspace::resolve_workspace(cwd)?;
         let root = resolved.root.clone();
         let has_lock = matches!(
@@ -71,6 +71,7 @@ impl UzeApplication {
         let (environment, declared, installed, missing) = match loaded {
             Some(Ok(Some(lock))) => {
                 let installed_ids: BTreeSet<String> = self
+                    .0
                     .installed_packages()
                     .into_iter()
                     .map(|package| package.id.as_str().to_owned())
@@ -80,7 +81,7 @@ impl UzeApplication {
                     .plugins
                     .iter()
                     .filter(|(name, locked)| {
-                        !installed_ids.contains(&Self::locked_plugin_id(name, locked))
+                        !installed_ids.contains(&UzeApplication::locked_plugin_id(name, locked))
                     })
                     .map(|(name, _)| name.clone())
                     .collect();
@@ -101,6 +102,7 @@ impl UzeApplication {
         };
         let agents_md = root.join("AGENTS.md").is_file();
         let portability = self
+            .0
             .context_inspect(root)
             .ok()
             .map(|status| status.portability);
@@ -114,7 +116,7 @@ impl UzeApplication {
     }
 
     fn marketplace_overview(root: &Path) -> OverviewMarketplace {
-        match Self::load_marketplace_manifest(&PackageSource::Local {
+        match UzeApplication::load_marketplace_manifest(&PackageSource::Local {
             path: root.to_path_buf(),
         }) {
             Ok((_, manifest)) => {
@@ -344,7 +346,7 @@ mod tests {
         }
 
         fn project(&self, cwd: &Path) -> ProjectOverview {
-            self.app.overview_workspace(cwd).unwrap().project
+            self.app.workspace().summary(cwd).unwrap().project
         }
     }
 
@@ -556,7 +558,7 @@ mod tests {
         write_plugin(&root, "flow");
         write_plugin(&root, "std");
 
-        let summary = fx.app.overview_workspace(&root).unwrap();
+        let summary = fx.app.workspace().summary(&root).unwrap();
         assert_eq!(summary.kind, WorkspaceKind::Marketplace);
         let market = summary.marketplace.as_ref().unwrap();
         assert_eq!(market.state, MarketplaceState::Valid);
@@ -572,7 +574,7 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         fs::write(root.join(workspace::MARKETPLACE_MANIFEST_NAME), "not json").unwrap();
 
-        let summary = fx.app.overview_workspace(&root).unwrap();
+        let summary = fx.app.workspace().summary(&root).unwrap();
         assert_eq!(summary.kind, WorkspaceKind::Marketplace);
         let market = summary.marketplace.as_ref().unwrap();
         assert_eq!(market.state, MarketplaceState::InvalidManifest);
@@ -590,7 +592,8 @@ mod tests {
 
         let market = fx
             .app
-            .overview_workspace(&root)
+            .workspace()
+            .summary(&root)
             .unwrap()
             .marketplace
             .unwrap();
@@ -611,7 +614,7 @@ mod tests {
         write_plugin(&root, "flow");
         write_plugin(&root, "std");
 
-        let summary = fx.app.overview_workspace(&root).unwrap();
+        let summary = fx.app.workspace().summary(&root).unwrap();
         assert_eq!(summary.kind, WorkspaceKind::Hybrid);
         assert!(summary.project.environment != ProjectEnvironmentState::Ready);
         assert_eq!(
@@ -630,7 +633,7 @@ mod tests {
         write_manifest(&outer, "acme", &[]);
         write_lock(&inner, &["flow"], "test");
 
-        let summary = fx.app.overview_workspace(&inner.join("src")).unwrap();
+        let summary = fx.app.workspace().summary(&inner.join("src")).unwrap();
         assert_eq!(summary.kind, WorkspaceKind::Consumer);
         assert_eq!(summary.root, inner.canonicalize().unwrap());
         assert_eq!(

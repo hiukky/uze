@@ -48,6 +48,7 @@ mod overview;
 mod profile;
 mod project_environment;
 mod read_models;
+pub mod services;
 
 pub use agent_context::{AgentContextStatus, ResourceDelivery, UndeliveredReason};
 pub use profile::{ProfileApplyResult, ProfileSummary};

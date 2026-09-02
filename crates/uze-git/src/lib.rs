@@ -134,6 +134,10 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
+    /// Every test here spawns Git, which resolves through the process-global
+    /// `PATH` — including the one test that empties it. Reading ambient env
+    /// is exactly what `env::scope` serializes, so a test that only reads it
+    /// must still take the lock or it races the one that writes.
     fn repository(label: &str) -> PathBuf {
         let root = uze_testkit::temp::scratch(label);
         for args in [
@@ -157,6 +161,7 @@ mod tests {
     /// transport reports it instead of deciding.
     #[test]
     fn a_non_zero_exit_is_reported_not_flattened_into_an_error() {
+        let _environment = uze_testkit::env::scope();
         let root = repository("git-exit-codes");
         std::fs::write(root.join("file"), b"changed").unwrap();
 
@@ -189,6 +194,7 @@ mod tests {
 
     #[test]
     fn stdout_and_stderr_are_both_kept() {
+        let _environment = uze_testkit::env::scope();
         let root = repository("git-streams");
         let output = read(&root, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap();
         assert_eq!(output.stdout.trim(), "main");
@@ -214,6 +220,7 @@ mod tests {
 
     #[test]
     fn a_directory_outside_a_repository_answers_rather_than_failing_to_spawn() {
+        let _environment = uze_testkit::env::scope();
         let root = uze_testkit::temp::scratch("git-norepo");
         let output = read(&root, &["rev-parse", "--show-toplevel"]).unwrap();
         assert!(!output.is_success());

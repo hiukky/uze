@@ -413,7 +413,7 @@ fn load_refresh_data(home: UzeHome, context_root: &std::path::Path) -> Result<Re
     // deep inside a subdirectory get the workspace's own AGENTS.md/bridge
     // state, not a cwd-scoped one that misses it. Best-effort — a summary
     // is always producible, but a refresh must not fail over it.
-    let workspace = app.overview_workspace(context_root).ok();
+    let workspace = app.workspace().summary(context_root).ok();
     let status_root = workspace
         .as_ref()
         .map(|workspace| workspace.root.as_path())
@@ -423,7 +423,7 @@ fn load_refresh_data(home: UzeHome, context_root: &std::path::Path) -> Result<Re
     // `agent_context` applies the one project-root rule itself, and going
     // through a second, differently-resolved root is exactly how the two
     // screens used to end up describing different projects.
-    let agent_context = app.agent_context(context_root);
+    let agent_context = app.workspace().agent_context(context_root);
     // Same root the workspace client records against, so a uze launched
     // from a subdirectory still reads back its own history.
     let prompt_history =

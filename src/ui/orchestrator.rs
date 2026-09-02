@@ -141,7 +141,7 @@ fn spawn_support_refresh(home: &UzeHome, key: SupportKey, sender: mpsc::Sender<S
     let support_home = home.clone();
     thread::spawn(move || {
         let support = super::tui_application(support_home).ok().and_then(|app| {
-            let context = app.agent_context_for(&key.0, &key.1).ok()?;
+            let context = app.workspace().agent_context_for(&key.0, &key.1).ok()?;
             let health = app.harness_inspect(&key.0).ok()?;
             let profiles = app.list_profiles().unwrap_or_default();
             let active_profile = profiles.iter().find(|profile| profile.active);
