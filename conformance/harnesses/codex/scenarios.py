@@ -217,12 +217,10 @@ def phase_tui(cfg, prov_ip):
     with open(f"{cfg.outdir}/04_provider_struct.json", "w") as f:
         json.dump(struct, f, indent=1)
     if struct:
-        markers = {}
-        has_catalog = False
-        for r in struct:
-            s = r.get("summary", {})
-            markers.update(s.get("skill_markers", {}))
-            has_catalog = has_catalog or bool(s.get("has_available_skills"))
+        markers = common.observed_markers(struct, "skill_markers")
+        has_catalog = any(
+            r.get("summary", {}).get("has_available_skills") for r in struct
+        )
         check(
             "provider-request-captured", bool(struct), "requests structurally recorded"
         )
@@ -430,14 +428,8 @@ def phase_hooks(cfg, prov_ip, kind):
         if struct or m3 is not None
         else p3[-160:].replace("\n", " "),
     )
-    markers = {}
-    has_call = False
-    has_output = False
-    for r in struct:
-        s = r.get("summary", {})
-        markers.update(s.get("hook_markers", {}))
-        has_output = has_output or bool(s.get("hook_markers", {}).get("plain output"))
-        has_call = has_call or bool(s.get("has_function_call"))
+    markers = common.observed_markers(struct, "hook_markers")
+    has_output = bool(markers.get("plain output"))
     if spec["deny_present"]:
         # The denial reason in the function_call_output is the evidence that
         # the hook ran and Codex relayed its decision instead of the tool's

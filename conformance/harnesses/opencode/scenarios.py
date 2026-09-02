@@ -193,12 +193,10 @@ def phase_tui(cfg, prov_ip):
     with open(f"{cfg.outdir}/04_provider_struct.json", "w") as f:
         json.dump(struct, f, indent=1)
     if struct:
-        markers = {}
-        has_catalog = False
-        for r in struct:
-            s = r.get("summary", {})
-            markers.update(s.get("skill_markers", {}))
-            has_catalog = has_catalog or bool(s.get("has_available_skills"))
+        markers = common.observed_markers(struct, "skill_markers")
+        has_catalog = any(
+            r.get("summary", {}).get("has_available_skills") for r in struct
+        )
         check(
             "provider-request-captured", bool(struct), "requests structurally recorded"
         )
@@ -462,14 +460,9 @@ def phase_hooks(cfg, prov_ip, kind):
     struct = provider_struct(cfg)
     with open(f"{cfg.outdir}/hooks_{kind}_struct.json", "w") as f:
         json.dump(struct, f, indent=1)
-    markers = {}
-    has_result = False
-    proof_returned = False
-    for r in struct:
-        s = r.get("summary", {})
-        markers.update(s.get("hook_markers", {}))
-        has_result = has_result or bool(s.get("has_tool_result"))
-        proof_returned = proof_returned or bool(s.get("mcp_proof_present"))
+    markers = common.observed_markers(struct, "hook_markers")
+    has_result = any(r.get("summary", {}).get("has_tool_result") for r in struct)
+    proof_returned = any(r.get("summary", {}).get("mcp_proof_present") for r in struct)
     if spec["deny_present"]:
         check(
             f"hooks-{kind}-denial-reason-relayed",

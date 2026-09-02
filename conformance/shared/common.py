@@ -505,6 +505,21 @@ def start_provider(cfg, mode, extra_env=None):
     ).strip()
 
 
+def observed_markers(struct, field):
+    """Whether each marker reached the provider in *any* request of a turn.
+
+    A turn is several requests — the model call, then settings polls and
+    telemetry batches — and only their union answers "did this ever reach
+    the model". Last-write-wins let a marker-free trailing request erase
+    the one model call that carried a hook's denial.
+    """
+    seen = {}
+    for r in struct:
+        for marker, present in r.get("summary", {}).get(field, {}).items():
+            seen[marker] = seen.get(marker, False) or bool(present)
+    return seen
+
+
 def provider_struct(cfg):
     try:
         out = subprocess.run(

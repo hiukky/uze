@@ -267,9 +267,7 @@ def phase_tui(cfg, prov_ip):
             r for r in struct if "Skill" in r.get("summary", {}).get("tools", [])
         ]
         base = primary or struct
-        markers = {}
-        for r in base:
-            markers.update(r.get("summary", {}).get("skill_markers", {}))
+        markers = common.observed_markers(base, "skill_markers")
         check(
             "model-visible-skill-present",
             any(markers.get(m) for m in ("flow:commit", "commit")),
@@ -316,16 +314,13 @@ def phase_hooks(cfg, prov_ip, kind):
     Evidence = what the REAL harness relayed: hook marker presence/absence
     in the provider-observed conversation plus the TUI denial surface.
 
-    Known state, 2026-09-02 (needs its own change): Claude Code rejects the
-    scripted `Bash` tool_use before any hook runs — the TUI renders
-    `⎿ Invalid tool parameters` and the tool_result it sends back carries
-    no hook marker. Observed on 2.1.252 (CI run 33463936487) and 2.1.258
-    (CI run 33584691903, and locally), for deny, allow and order alike.
-    Until the scripted call matches what this channel accepts, no hook
-    executes here at all; `hooks-*-denial-relayed` fails on purpose rather
-    than letting the absence checks pass for a turn no hook ever saw, and
-    `hooks-allow-tool-executed` is satisfied by that error result, not by
-    an execution. The earlier green runs were this vacuity, not evidence.
+    Two vacuities hid here until 2026-09-02, and both are why the presence
+    check `hooks-*-denial-relayed` gates the absence checks: the provider
+    once put the tool input on `content_block_start`, which Claude Code
+    ignores in favour of `input_json_delta`, so every scripted `Bash` call
+    was rejected as `Invalid tool parameters` before a hook ran; and the
+    marker aggregation was last-write-wins over every provider request, so
+    a trailing telemetry batch erased the denial the model call carried.
     """
     scenarios = {
         "deny": {
@@ -401,16 +396,9 @@ def phase_hooks(cfg, prov_ip, kind):
     struct = provider_struct(cfg)
     with open(f"{cfg.outdir}/hooks_{kind}_struct.json", "w") as f:
         json.dump(struct, f, indent=1)
-    markers = {}
-    has_result = False
-    has_output = False
-    has_tool_result = False
-    for r in struct:
-        s = r.get("summary", {})
-        markers.update(s.get("hook_markers", {}))
-        has_output = has_output or bool(s.get("hook_markers", {}).get("plain output"))
-        has_result = has_result or bool(s.get("has_tool_result"))
-        has_tool_result = has_tool_result or bool(s.get("has_tool_result"))
+    markers = common.observed_markers(struct, "hook_markers")
+    has_output = bool(markers.get("plain output"))
+    has_tool_result = any(r.get("summary", {}).get("has_tool_result") for r in struct)
     if spec["deny_present"]:
         # The denial reason relayed to the model is the evidence that the
         # hook ran and Claude honored it. Without it the absence checks
@@ -439,12 +427,17 @@ def phase_hooks(cfg, prov_ip, kind):
             f"`{absent}` never reached the conversation (first-deny-wins)",
         )
     if kind == "allow":
+        # A tool_result alone is not execution: a rejected call or a hook
+        # error answers with one too. Only the command's own stdout marker
+        # in the conversation proves Bash ran.
         check(
             "hooks-allow-tool-executed",
-            has_tool_result,
+            has_output,
             "the Bash tool actually executed after the hook allowed it"
-            if has_tool_result
-            else "no tool_result observed",
+            if has_output
+            else "no tool_result observed"
+            if not has_tool_result
+            else "a tool_result arrived without the command's stdout",
         )
     child.send("\x03")
     time.sleep(0.6)

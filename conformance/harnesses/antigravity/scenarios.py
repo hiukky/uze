@@ -429,14 +429,8 @@ def phase_hooks(cfg, prov_ip, kind):
     struct = provider_struct(cfg)
     with open(f"{cfg.outdir}/hooks_{kind}_struct.json", "w") as f:
         json.dump(struct, f, indent=1)
-    markers = {}
-    has_response = False
-    has_output = False
-    for r in struct:
-        s = r.get("summary", {})
-        markers.update(s.get("hook_markers", {}))
-        has_output = has_output or bool(s.get("hook_markers", {}).get("plain output"))
-        has_response = has_response or bool(s.get("has_function_response"))
+    markers = common.observed_markers(struct, "hook_markers")
+    has_output = bool(markers.get("plain output"))
     if spec["deny_present"]:
         # The denial reason relayed to the model is the evidence that the
         # hook ran and AGY honored it. Without it the absence checks below

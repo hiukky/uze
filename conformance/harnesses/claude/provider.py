@@ -154,6 +154,11 @@ def tool_use_events():
                 },
             },
         ),
+        # The real Messages API opens a tool_use block with an empty input
+        # and streams the arguments as `input_json_delta`; the harness
+        # accumulates only those deltas, so an input placed on the start
+        # event is silently dropped and any tool with required parameters
+        # is rejected as "Invalid tool parameters" before a hook can run.
         (
             "content_block_start",
             {
@@ -163,7 +168,18 @@ def tool_use_events():
                     "type": "tool_use",
                     "id": "toolu_1",
                     "name": TOOL_NAME,
-                    "input": TOOL_ARGS,
+                    "input": {},
+                },
+            },
+        ),
+        (
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {
+                    "type": "input_json_delta",
+                    "partial_json": json.dumps(TOOL_ARGS),
                 },
             },
         ),
