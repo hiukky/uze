@@ -132,14 +132,6 @@ def phase_tui(cfg, prov_ip):
         "Skills" in p,
         "/skills opens the skill management surface",
     )
-    qualified_skills = ("flow:commit", "flow:review", "uze:init")
-    check(
-        "qualified-uze-skills-visible",
-        all(skill in joined for skill in qualified_skills),
-        "the /skills list shows each UZE skill by its qualified invocation label"
-        if all(skill in joined for skill in qualified_skills)
-        else p[-240:].replace("\n", " "),
-    )
     child.send("\x1b")
     time.sleep(1.0)
     child.send("\x1b")

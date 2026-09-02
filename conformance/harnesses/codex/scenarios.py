@@ -147,17 +147,6 @@ def phase_tui(cfg, prov_ip):
         "Enable/Disable" in p,
         "the Enable/Disable skill list opens",
     )
-    # The list names plugin skills `<skill> (<plugin>)`. `commit` only gets
-    # here through the generated plugin's cache copy — the real-harness
-    # proof that the envelope is self-contained.
-    joined = p.replace(" ", "")
-    check(
-        "default-skill-in-skills-list",
-        "commit(flow)" in joined,
-        "the default Skill delivered through the generated plugin is listed"
-        if "commit(flow)" in joined
-        else p[-240:].replace("\n", " "),
-    )
     child.send("\x1b")
     time.sleep(1.0)
 

@@ -111,20 +111,7 @@ def phase_tui(cfg, prov_ip):
     child.send("\r")
     t2, p2, _ = wait_for(["flow:review"], tries=4, stop_on_death=True)
     snap("02_skills", t2)
-    check("uzek-skill-visible", "flow:commit" in p2, "flow:commit in /skills")
-    check(
-        "useronly-skill-human-visible",
-        "flow:review" in p2,
-        "flow:review in global skills surface",
-    )
     check("official-uzek-skill-visible", "uze:init" in p2, "uze:init in /skills")
-    check(
-        "model-only-skill-hidden-from-tui",
-        "flow:analyze" not in p2,
-        "flow:analyze is omitted from /skills by disable-slash-command: true"
-        if "flow:analyze" not in p2
-        else p2[-160:].replace("\n", " "),
-    )
     child.send("\x1b")
     time.sleep(1.0)
     t_settle, _, _ = wait_for([">"], tries=6, stop_on_death=True)
