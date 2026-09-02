@@ -11,14 +11,13 @@
 - [ ] 2.3 `uze plugin list` shows requirement status per package; `uze doctor` re-verifies every installed package's effective set and reports unmet/drifted requirements and orphaned UZE-installed tools
 - [ ] 2.4 Tests with a fake `PATH` (present, absent, too old); classify any new CLI leaf in `command_performance.rs`
 
-## 3. Plan, confirmation, install
+## 3. Suggestion and surfaces
 
-- [ ] 3.1 Installer selection in `uze-core::machine`: preference order (user-level manager in use → `brew` → system manager → `winget`), executable → package-name table per installer, manual-fallback message when none applies
-- [ ] 3.2 `RequirementPlan` read model from install/update: missing and too-old requirements with purpose, installer and command line
-- [ ] 3.3 CLI: show the plan and ask `y/N`; `--yes` accepts; non-interactive without `--yes` declines and names the flag; run the installer through the process runner and report success/failure per requirement
-- [ ] 3.4 TUI: render the plan as a view (extension host, no domain reach) with one confirmation; same outcome reporting
-- [ ] 3.5 Receipts: a UZE-installed executable gets a receipt (executable, installer, requiring package); an already-present one is recorded as observed; package removal drops records and never removes an executable
-- [ ] 3.6 Tests: plan rendering; decline keeps the package installed with the gap reported; `--yes` path with a fake installer; receipts written and dropped; architecture suite still zero-debt (no `uze_core::` reach from `src/`)
+- [ ] 3.1 Suggestion in `uze-core::machine`: package-manager detection in preference order (user-level manager in use → `brew` → system manager → `winget`), executable → package-name table per manager, rendered command with `sudo` where the manager needs it, manual-fallback text when no row applies; nothing is executed
+- [ ] 3.2 Requirement report read model from install/update/doctor: per package, each requirement met / too old / missing with purpose and suggested command
+- [ ] 3.3 CLI: print the report after `plugin install`/`update` (gaps only), in `plugin list` and in `doctor`
+- [ ] 3.4 TUI: show unmet requirements as an issue on the package in the manage view; "open in shell" opens a terminal tab through the terminal runtime with the command pre-filled and not executed; re-check on tab close/refresh and clear the issue when the executable is found
+- [ ] 3.5 Tests: suggestion table per manager; report rendering; install completes with the gap reported; TUI view/handoff through the extension host with no domain reach (architecture suite stays zero-debt)
 
 ## 4. Integrations contribute their requirements
 
