@@ -6,3 +6,6 @@
 /.playwright-mcp/
 lcov.info
 .worktrees/
+
+# Local exploration labs — never committed
+.labs/
