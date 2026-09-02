@@ -63,7 +63,10 @@ use uze_core::{
     exposure::{ExposureMechanism, ExposurePlan, PackageExposurePlan},
     harness_runtime::resolve_real_executable,
     home::UzeHome,
-    hook::{HookAdapterPort, HookCommandInput, HookDispatchOutcome, HookEvent, HookNativeOutput},
+    hook::{
+        HOOKS_FILE_NAME, HookAdapterPort, HookCommandInput, HookDispatchOutcome, HookEvent,
+        HookNativeOutput,
+    },
     integration::{
         AttachmentInspection, AttachmentReceipt, AttachmentState, ContextDelivery,
         HarnessDetection, IntegrationPort, ManagedArtifact, default_exposure_name_candidates,
@@ -86,7 +89,7 @@ mod skills;
 
 use crate::hooks as hook_projection;
 use crate::shared::provision::provision_cli;
-use generate::{canonical_hook_groups, remove_generated_plugin_by_id};
+use generate::remove_generated_plugin_by_id;
 use mcp::attach_mcp_entry;
 use plugin::{
     GENERATED_PLUGIN_KIND, PLUGIN_KIND, attach_explicit_plugin, attach_generated_plugin,
@@ -149,6 +152,26 @@ impl AntigravityIntegration {
     pub fn from_env(uze_home: UzeHome) -> Result<Self> {
         let home = std::env::var_os("HOME").ok_or(UzeError::MissingHomeDirectory)?;
         Ok(Self::new(PathBuf::from(home).join(".agents"), uze_home))
+    }
+
+    /// The UZE-managed `hooks.json` at Antigravity's shared customization
+    /// root — the only place this harness actually reads hooks from
+    /// (`~/.gemini/config/hooks.json`). Its document root *is* the named-hook
+    /// map, and UZE owns exactly the keys it namespaces; every foreign named
+    /// hook in the same file is left untouched.
+    ///
+    /// Not the generated plugin's `hooks.json`: the vendor's plugin guide
+    /// says a plugin's hooks are "registered and run during the agent's
+    /// lifecycle", and on 1.1.24 they are not — `agy plugin validate` counts
+    /// them while the session reports `loaded 0 named hooks from 0
+    /// hooks.json file(s)` and never opens the file (measured in the
+    /// Conformance Lab, `hooks > delivery`). A file the vendor never reads
+    /// is not a delivery.
+    fn hooks_config_path(&self) -> PathBuf {
+        self.command_home
+            .join(".gemini")
+            .join("config")
+            .join(HOOKS_FILE_NAME)
     }
 
     /// `~/.gemini/antigravity-cli/settings.json` — same directory as
@@ -346,7 +369,7 @@ impl IntegrationPort for AntigravityIntegration {
             CapabilityKind::AgentSkill => self.skill_exposure_plan(resource),
             CapabilityKind::Mcp => self.mcp_exposure_plan(resource),
             CapabilityKind::Agent => self.agent_exposure_plan(resource),
-            CapabilityKind::Hook => self.hook_fallback_plan(resource),
+            CapabilityKind::Hook => self.hook_exposure_plan(resource),
             _ => unsupported(
                 resource,
                 "Antigravity attachment is only modeled for Agent Skills, Agents, MCP servers, and portable Hooks.",
@@ -386,14 +409,14 @@ impl IntegrationPort for AntigravityIntegration {
         }
         let canonical_mcp = generate::canonical_mcp_servers(package);
         let author_mcp = plugin::author_mcp_config_servers(package);
-        if (canonical_mcp.is_some() && author_mcp.is_empty()) || canonical_hook_groups(package) {
+        if canonical_mcp.is_some() && author_mcp.is_empty() {
             let provided = generate::generated_exact_coverage(package, resources);
             return Some(PackageExposurePlan {
                 package_id: package.id.clone(),
                 route: CompatibilityRoute::Native,
                 verification: VerificationStatus::Unverified,
                 provided_resource_identities: provided,
-                evidence: "The canonical package's own plugin.json is a valid Antigravity plugin manifest, but its MCP servers live in canonical mcp.json (which the plugin system does not read) and/or its hooks live in canonical portable form (the plugin reads named-entry hooks.json). UZE synthesizes a deterministic plugin (plugin.json + translated mcp_config.json + translated named hooks.json + symlinked skills/) into a UZE-owned derived directory and installs that — never the Store."
+                evidence: "The canonical package's own plugin.json is a valid Antigravity plugin manifest, but its MCP servers live in canonical mcp.json, which the plugin system does not read. UZE synthesizes a deterministic plugin (plugin.json + translated mcp_config.json + symlinked skills/) into a UZE-owned derived directory and installs that — never the Store. Hooks are not part of a plugin: the harness never reads a plugin's hooks.json, so they are merged into the shared ~/.gemini/config/hooks.json as receipt-owned named entries."
                     .to_owned(),
             });
         }
@@ -419,7 +442,7 @@ impl IntegrationPort for AntigravityIntegration {
         _plan: &PackageExposurePlan,
     ) -> Result<Option<AttachmentReceipt>> {
         let executable = self.provisioning_executable();
-        if generate::canonical_mcp_servers(package).is_some() || canonical_hook_groups(package) {
+        if generate::canonical_mcp_servers(package).is_some() {
             attach_generated_plugin(&executable, self, package)
         } else {
             attach_explicit_plugin(&executable, self, package)
@@ -452,6 +475,32 @@ impl IntegrationPort for AntigravityIntegration {
                 command,
                 args,
             ),
+            ExposureMechanism::ManagedHookConfig {
+                config_file,
+                entry_name,
+                expected,
+                wrapper,
+                ..
+            } => {
+                // The wrapper is what the harness actually runs, so it lands
+                // before the entry that names it.
+                if let Some(path) = wrapper
+                    && let Some(source) =
+                        hook_projection::wrapper_source(hook_projection::ANTIGRAVITY_TARGET)
+                {
+                    hook_projection::materialize_wrapper(path, &source)?;
+                }
+                let entry: serde_json::Value =
+                    serde_json::from_str(expected).map_err(|source| UzeError::Json {
+                        path: config_file.clone(),
+                        source,
+                    })?;
+                Ok(Some(hook_projection::merge_named_entry(
+                    config_file,
+                    entry_name,
+                    &entry,
+                )?))
+            }
             _ => Ok(None),
         }
     }
@@ -495,6 +544,20 @@ impl IntegrationPort for AntigravityIntegration {
                 environment,
                 *enabled,
             ),
+            ManagedArtifact::HookConfigEntry {
+                config_file,
+                entry_name,
+                expected,
+                wrapper,
+                ..
+            } => hook_projection::inspect_named_entry(
+                config_file,
+                entry_name,
+                expected,
+                wrapper
+                    .as_deref()
+                    .map(|path| (hook_projection::ANTIGRAVITY_TARGET, path)),
+            ),
             _ => inspect_standard_receipt(receipt),
         }
     }
@@ -530,6 +593,28 @@ impl IntegrationPort for AntigravityIntegration {
                     &["mcp", "remove", entry_name],
                     "agy mcp remove",
                 )?;
+            }
+            ManagedArtifact::HookConfigEntry {
+                config_file,
+                entry_name,
+                expected,
+                wrapper,
+                ..
+            } => {
+                let detached = hook_projection::remove_named_entry(
+                    config_file,
+                    entry_name,
+                    expected,
+                    wrapper
+                        .as_deref()
+                        .map(|path| (hook_projection::ANTIGRAVITY_TARGET, path)),
+                )?;
+                hook_projection::prune_shared_wrapper(
+                    &self.uze_home,
+                    self.id(),
+                    hook_projection::ANTIGRAVITY_TARGET,
+                );
+                return Ok(detached);
             }
             _ => {
                 let detached = detach_standard_receipt(receipt)?;
@@ -592,20 +677,17 @@ impl AntigravityIntegration {
         }
     }
 
-    /// The capability-level fallback for a Hook resource. Antigravity
-    /// exposes hooks only through its native Plugin surface — a global
-    /// hook config is not part of the documented model — so a hook is
-    /// always delivered at package level through the UZE-generated plugin
-    /// (see the package exposure plan); this plan exists to state that
-    /// honestly if a resource ever surfaces outside package coverage.
-    fn hook_fallback_plan(&self, resource: &Resource) -> ExposurePlan {
-        let mut plan = unsupported(
+    /// A Hook resource's delivery: one named entry merged into the shared
+    /// `~/.gemini/config/hooks.json`, the same shape UZE already uses for
+    /// Codex's shared `hooks.json`. Native, and receipt-owned by content.
+    fn hook_exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+        hook_projection::antigravity_hook_exposure_plan(
+            &self.uze_home,
             resource,
-            "Antigravity carries hooks only inside its native Plugin: this package's hooks are delivered through the UZE-generated named-entry plugin at package level (see Plugin inspection).",
-        );
-        plan.route = CompatibilityRoute::Native;
-        plan.verification = VerificationStatus::Unverified;
-        plan
+            &self.hook_capabilities(),
+            self.hooks_config_path(),
+            self.id(),
+        )
     }
 }
 

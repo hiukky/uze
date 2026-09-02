@@ -896,51 +896,105 @@ fn opencode_unmatch_all_groups_carry_no_matcher_and_stop_is_never_bridged() {
 }
 
 // ============================================================================
-// Antigravity: hooks only inside the generated native plugin
+// Antigravity: hooks merged into the shared `~/.gemini/config/hooks.json`
 // ============================================================================
 
+/// The vendor reads named hooks from its shared customization root and
+/// never from a plugin directory (measured on 1.1.24 in the Conformance
+/// Lab, `hooks > delivery`, against the vendor's own plugin guide). So the
+/// hook is a capability-level delivery — one named entry in a shared file —
+/// and the package plan claims nothing about it.
 #[test]
-fn antigravity_plans_hooks_through_the_generated_named_plugin() {
+fn antigravity_delivers_hooks_as_named_entries_in_the_shared_config() {
     let (_root, resources) = hook_package("agy-hooks", deny_group());
     let protect = hook_resource(&resources, "protect-env");
     let home = UzeHome::at(_root.join("uze"));
     let antigravity = AntigravityIntegration::new(_root.join("agents"), home);
 
-    let plan = antigravity
-        .package_exposure_plan(
-            &uze_core::store::StoredPackage {
-                id: PackageId::from_plugin_name("hook-demo", &_root.join("pkg/plugin.json"))
-                    .unwrap(),
-                active_name: "hook-demo".to_owned(),
-                root: _root.join("pkg"),
-                manifest: _root.join("pkg/plugin.json"),
-                provenance: uze_core::acquisition::Provenance {
-                    requested: uze_core::acquisition::PackageSource::Local {
-                        path: _root.join("pkg"),
-                    },
-                    resolved: uze_core::acquisition::ResolvedSource::Local {
-                        path: _root.join("pkg"),
-                    },
-                },
-            },
-            &resources.iter().collect::<Vec<_>>(),
-        )
-        .expect("canonical hooks take the generated plugin route");
+    let plan = antigravity.exposure_plan(protect);
     assert_eq!(plan.route, CompatibilityRoute::Native);
+    let uze_core::exposure::ExposureMechanism::ManagedHookConfig {
+        config_file,
+        entry_name,
+        expected,
+        wrapper,
+        ..
+    } = &plan.mechanism
+    else {
+        panic!("an Antigravity hook is delivered as a managed hook config entry");
+    };
     assert!(
-        plan.provided_resource_identities
-            .contains(&protect.identity()),
-        "the generated plugin covers the package's hooks"
+        config_file.ends_with(".gemini/config/hooks.json"),
+        "hooks go where the harness actually reads them: {}",
+        config_file.display()
     );
-    assert!(plan.evidence.contains("named"));
+    assert!(
+        entry_name.ends_with(":protect-env") && entry_name.contains("hook-demo"),
+        "the key is namespaced `<package>:<group-id>`, which agy accepts verbatim: {entry_name}"
+    );
+    let entry: serde_json::Value = serde_json::from_str(expected).unwrap();
+    assert!(
+        entry.get("PreToolUse").is_some(),
+        "the named key holds the event map directly: {entry}"
+    );
+    let wrapper = wrapper.as_ref().expect("the entry names a wrapper");
+    assert!(
+        wrapper.ends_with("state/attachments/antigravity/hooks/exec"),
+        "a shared config file has no plugin root, so the wrapper lives under UZE state: {}",
+        wrapper.display()
+    );
+    assert!(
+        expected.contains(&wrapper.display().to_string()),
+        "the entry's command is an absolute path to that wrapper: {expected}"
+    );
+    let _ = fs::remove_dir_all(_root);
+}
 
-    // Command-level fallback is honest about the package-only surface.
-    let fallback = antigravity.exposure_plan(protect);
-    assert_eq!(fallback.route, CompatibilityRoute::Native);
-    assert!(matches!(
-        fallback.mechanism,
-        uze_core::exposure::ExposureMechanism::Unsupported { .. }
-    ));
+/// Attach, inspect and detach against a `hooks.json` that already holds a
+/// hand-written hook: UZE owns exactly its own named key.
+#[test]
+fn antigravity_hook_delivery_never_touches_a_foreign_named_hook() {
+    let (_root, resources) = hook_package("agy-hooks-merge", deny_group());
+    let protect = hook_resource(&resources, "protect-env");
+    let home = UzeHome::at(_root.join("uze"));
+    let antigravity = AntigravityIntegration::new(_root.join("agents"), home);
+    let config = _root.join(".gemini/config/hooks.json");
+    fs::create_dir_all(config.parent().unwrap()).unwrap();
+    fs::write(
+        &config,
+        r#"{"my-own-guard":{"PreToolUse":[{"matcher":"run_command","hooks":[{"type":"command","command":"mine"}]}]}}"#,
+    )
+    .unwrap();
+
+    let attached = antigravity.attach(protect).unwrap().expect("hook attaches");
+    assert_eq!(attached, config);
+    let receipt = antigravity.attach_receipt(protect).unwrap().unwrap();
+    assert_eq!(
+        antigravity.inspect_receipt(&receipt).state,
+        AttachmentState::Matched
+    );
+
+    let document: serde_json::Value = serde_json::from_slice(&fs::read(&config).unwrap()).unwrap();
+    assert_eq!(
+        document["my-own-guard"]["PreToolUse"][0]["hooks"][0]["command"],
+        "mine"
+    );
+
+    let detached = antigravity.detach_receipt(&receipt).unwrap();
+    assert_eq!(detached.state, AttachmentState::Missing);
+    let survivors: serde_json::Value = serde_json::from_slice(&fs::read(&config).unwrap()).unwrap();
+    assert!(
+        survivors
+            .as_object()
+            .expect("root is an object")
+            .keys()
+            .all(|key| !key.ends_with(":protect-env")),
+        "UZE's own entry is gone"
+    );
+    assert_eq!(
+        survivors["my-own-guard"]["PreToolUse"][0]["hooks"][0]["command"], "mine",
+        "the user's own named hook survives untouched: {survivors}"
+    );
     let _ = fs::remove_dir_all(_root);
 }
 

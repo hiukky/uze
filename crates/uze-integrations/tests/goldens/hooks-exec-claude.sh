@@ -27,7 +27,7 @@ deny_native() {                                  # $1 reason, plain text
     *) name=Stop ;;
   esac
   printf '{"hookSpecificOutput":{"hookEventName":"%s","permissionDecision":"deny","permissionDecisionReason":%s}}' "$name" "$reason_json"
-  exit 2                                          # the harness's block signal
+  exit 2                                # this harness's block signal
 }
 
 allow_native() {

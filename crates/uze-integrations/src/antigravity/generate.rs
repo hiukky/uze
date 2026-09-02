@@ -23,8 +23,6 @@ use uze_core::{
     store::{StoredPackage, is_valid_qualified_id},
 };
 
-use crate::hooks as hook_projection;
-
 /// Root of every package's generated plugin directory. Lives under
 /// `$UZE_HOME/state/attachments/antigravity/plugins/` — the same convention
 /// every other integration's generated envelopes use, never under the Store.
@@ -70,14 +68,6 @@ pub(super) fn canonical_mcp_servers(package: &StoredPackage) -> Option<BTreeSet<
     (!entries.is_empty()).then_some(entries)
 }
 
-/// Whether the package declares canonical portable hooks: a root
-/// `hooks.json` that parses. The Antigravity plugin system reads `hooks.json`
-/// in its own named-entry form — never the canonical shape — so any such
-/// package must take the generated route rather than being installed whole.
-pub(super) fn canonical_hook_groups(package: &StoredPackage) -> bool {
-    hook_projection::package_hook_groups(&package.root).is_ok_and(|groups| !groups.is_empty())
-}
-
 /// The intersection ADR-013 §2 requires, computed against the SEMANTIC
 /// surface a generated plugin preserves: canonical `skills/` are carried
 /// verbatim, and the MCP servers declared in canonical `mcp.json` are
@@ -93,7 +83,6 @@ pub(super) fn generated_exact_coverage(
     resources: &[&Resource],
 ) -> BTreeSet<String> {
     let declared_mcp = canonical_mcp_servers(package).unwrap_or_default();
-    let has_hooks = canonical_hook_groups(package);
     let mut provided = BTreeSet::new();
     for resource in resources {
         match resource.capability.kind {
@@ -111,11 +100,10 @@ pub(super) fn generated_exact_coverage(
                     provided.insert(resource.identity());
                 }
             }
-            uze_core::capability::CapabilityKind::Hook
-                if has_hooks && resource.capability.path == package.root.join("hooks.json") =>
-            {
-                provided.insert(resource.identity());
-            }
+            // Hooks are deliberately absent: the plugin carries no
+            // `hooks.json` any more, because the vendor never reads one from
+            // a plugin directory. They are delivered capability-level, as
+            // named entries merged into the shared `~/.gemini/config/hooks.json`.
             _ => {}
         }
     }
@@ -240,24 +228,14 @@ pub(super) fn materialize_generated_plugin(
             source,
         })?;
     }
-    if canonical_hook_groups(package) {
-        // The plugin system reads `hooks.json` in its own named-entry form,
-        // never the canonical shape, so the canonical groups are translated
-        // into the named document (ADR-033). The wrapper the entries run is
-        // vendored here, inside the plugin: what executes at hook time is
-        // `sh` reading the payload, never the UZE binary.
-        let groups = hook_projection::package_hook_groups(&package.root)?;
-        let references: Vec<&uze_core::hook::PortableHook> = groups.iter().collect();
-        let wrapper = dir.join(hook_projection::WRAPPER_RELATIVE_PATH);
-        if let Some(source) = hook_projection::wrapper_source(hook_projection::ANTIGRAVITY_TARGET) {
-            hook_projection::materialize_wrapper(&wrapper, &source)?;
-        }
-        let document = hook_projection::agy_hook_document(&references, &wrapper, &package.root);
-        fs::write(dir.join("hooks.json"), document).map_err(|source| UzeError::Write {
-            path: dir.join("hooks.json"),
-            source,
-        })?;
-    }
+    // No `hooks.json` is written here. AGY 1.1.24 reads hooks from its
+    // shared customization roots and never opens a plugin's `hooks.json`,
+    // whatever its own plugin guide says (measured in the Conformance Lab:
+    // `agy plugin validate` counts the file's hooks while the session
+    // reports `loaded 0 named hooks from 0 hooks.json file(s)`). A file the
+    // vendor never reads is not a delivery, so hooks go to
+    // `~/.gemini/config/hooks.json` as receipt-owned named entries instead
+    // (see `AntigravityIntegration::hook_exposure_plan`).
     Ok(dir)
 }
 
@@ -536,100 +514,45 @@ mod generated_native_tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    /// The vendor's plugin guide says a plugin's `hooks.json` is
+    /// "registered and run during the agent's lifecycle". On 1.1.24 it is
+    /// not: `agy plugin validate` counts the file's hooks while the session
+    /// reports `loaded 0 named hooks from 0 hooks.json file(s)` and never
+    /// opens it (Conformance Lab, `hooks > delivery`). So the generated
+    /// plugin writes none, and hooks are delivered capability-level into the
+    /// shared `~/.gemini/config/hooks.json` instead.
     #[test]
-    fn canonical_hooks_are_detected_only_for_a_parsable_manifest() {
-        let (root, pkg) = make_package_with_hooks("canonical-hooks");
-        assert!(canonical_hook_groups(&pkg));
-        fs::write(pkg.root.join("hooks.json"), "{not json").unwrap();
-        assert!(
-            !canonical_hook_groups(&pkg),
-            "malformed hooks are not translated"
-        );
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn package_with_hooks_takes_the_generated_named_route() {
-        let (root, pkg) = make_package_with_hooks("plan-hooks");
-        let resources = uze_core::engine::package_resources_at(&pkg.id, &pkg.root).unwrap();
-        let references: Vec<&Resource> = resources.iter().collect();
-        let uze_home = UzeHome::at(root.join("uze"));
-        let integration = AntigravityIntegration::new(root.join("agents"), uze_home.clone());
-        let plan = integration
-            .package_exposure_plan(&pkg, &references)
-            .expect("generated route applies");
-        assert_eq!(plan.route, uze_core::router::CompatibilityRoute::Native);
-        assert_eq!(
-            plan.provided_resource_identities,
-            references
-                .iter()
-                .map(|resource| resource.identity())
-                .collect(),
-            "every canonical hook group is covered by the generated plugin"
-        );
-        assert!(
-            !generated_root(&uze_home).join(pkg.id.as_str()).exists(),
-            "planning must stay read-only"
-        );
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn materialize_translates_canonical_hooks_into_named_entries() {
-        let (root, pkg) = make_package_with_hooks("materialize-hooks");
+    fn the_generated_plugin_carries_no_hooks_and_claims_none() {
+        let (root, pkg) = make_package_with_hooks("plugin-hooks");
         let uze_home = UzeHome::at(root.join("uze"));
         let dir = materialize_generated_plugin(&uze_home, &pkg).unwrap();
+        assert!(
+            !dir.join("hooks.json").exists(),
+            "a file the harness never reads is not a delivery"
+        );
+        assert!(
+            !dir.join("hooks").exists(),
+            "no wrapper is vendored where nothing would run it"
+        );
         assert!(
             pkg.root.join("hooks.json").is_file(),
             "Store bytes stay untouched"
         );
-        let hooks: serde_json::Value =
-            serde_json::from_slice(&fs::read(dir.join("hooks.json")).unwrap()).unwrap();
-        assert!(
-            hooks.get("hooks").is_none(),
-            "named entries sit at the document root — a `hooks` wrapper is one dead hook to AGY"
-        );
-        // A tool event keeps the grouped form: a matcher, and the handlers
-        // under `hooks`.
-        let protect = &hooks["protect-env"]["PreToolUse"][0];
-        assert_eq!(
-            protect["matcher"], "run_command",
-            "portable aliases translate to AGY tool names"
-        );
-        let command = protect["hooks"][0]["command"].as_str().unwrap();
-        assert!(
-            command.contains("/hooks/exec"),
-            "the entry runs the wrapper vendored in the plugin: {command}"
-        );
-        assert!(
-            !command.contains("hook-exec"),
-            "no UZE binary may sit on the hook's execution path"
-        );
-        assert!(
-            dir.join("hooks").join("exec").is_file(),
-            "the wrapper the entry names is vendored inside the plugin"
-        );
-        assert!(
-            command.contains(&pkg.root.join("check").display().to_string()),
-            "the authored handler is resolved against the package root: {command}"
-        );
 
-        // Stop is flat: the handler object sits directly under the event
-        // key, never wrapped in a group (antigravity-cli#925).
-        let stop = &hooks["stop-0"]["Stop"][0];
-        assert_eq!(
-            stop["type"], "command",
-            "a flat entry is the handler itself"
-        );
+        let resources = uze_core::engine::package_resources_at(&pkg.id, &pkg.root).unwrap();
+        let references: Vec<&Resource> = resources.iter().collect();
+        let hook_identities: BTreeSet<String> = references
+            .iter()
+            .filter(|resource| {
+                resource.capability.kind == uze_core::capability::CapabilityKind::Hook
+            })
+            .map(|resource| resource.identity())
+            .collect();
+        assert!(!hook_identities.is_empty(), "the fixture declares hooks");
+        let covered = generated_exact_coverage(&pkg, &references);
         assert!(
-            stop.get("hooks").is_none() && stop.get("matcher").is_none(),
-            "a grouped Stop is parsed as invalid and silently dropped: {stop}"
-        );
-        assert!(
-            stop["command"]
-                .as_str()
-                .is_some_and(|command| command.contains("/hooks/exec")),
-            "the flat entry still runs the wrapper"
+            hook_identities.is_disjoint(&covered),
+            "package-level coverage must not claim a hook the plugin does not carry"
         );
         let _ = fs::remove_dir_all(root);
     }

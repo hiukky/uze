@@ -607,38 +607,124 @@ const fn agy_event_is_grouped(event: HookEvent) -> bool {
     matches!(event, HookEvent::PreToolUse | HookEvent::PostToolUse)
 }
 
-/// The generated plugin `hooks.json` for Antigravity CLI: named entries at
-/// the document root (`{"<id>": {"<Event>": <entries>}}`), each carrying
-/// the wrapper invocation — grouped with the translated matcher for a tool
-/// event, flat for `Stop`. Deterministic per package.
+/// One named hook as Antigravity CLI's shared `hooks.json` holds it: the
+/// value under a root key, `{"<Event>": <entries>}` — grouped with the
+/// translated matcher for a tool event, flat for `Stop` (the vendor parses
+/// a grouped `Stop` as invalid and drops it silently, antigravity-cli#925).
 ///
-/// The root is the hook map itself, never a `hooks` wrapper: the vendor
-/// reads every root key as one named hook, so a wrapper registers a single
-/// hook called `hooks` whose "events" are our ids — and no handler ever
-/// runs (AGY 1.1.24: `plugin validate` reports 1 hook processed instead of
-/// one per group, and the loader fires nothing).
-pub(crate) fn agy_hook_document(
-    hooks: &[&PortableHook],
+/// The document root *is* the named-hook map: the vendor reads every root
+/// key as one named hook, so a `hooks` wrapper key registers a single hook
+/// called `hooks` whose "events" are our ids, and no handler ever runs
+/// (1.1.24: `plugin validate` reports 1 hook processed instead of one per
+/// group, and the loader fires nothing).
+pub(crate) fn agy_named_entry(
+    hook: &PortableHook,
     wrapper: &Path,
     package_root: &Path,
-) -> String {
-    let mut named = serde_json::Map::new();
-    for hook in hooks {
-        let invocation = HookInvocation::Line(wrapper_command_line(wrapper, hook, package_root));
-        let entries = if agy_event_is_grouped(hook.event) {
-            vec![group_entry(ANTIGRAVITY_TARGET, hook, &invocation)]
-        } else {
-            vec![handler_entry(hook, &invocation)]
-        };
-        named.insert(
-            hook.id.clone(),
-            serde_json::json!({ hook_event_name(hook.event): entries }),
-        );
+) -> serde_json::Value {
+    let invocation = HookInvocation::Line(wrapper_command_line(wrapper, hook, package_root));
+    let entries = if agy_event_is_grouped(hook.event) {
+        vec![group_entry(ANTIGRAVITY_TARGET, hook, &invocation)]
+    } else {
+        vec![handler_entry(hook, &invocation)]
+    };
+    serde_json::json!({ hook_event_name(hook.event): entries })
+}
+
+/// Antigravity's shared `hooks.json` is a map of named hooks, not an event
+/// array, so its merge is by *key*: this integration owns exactly the keys
+/// it namespaces (`<package>:<group-id>`), and every other root key —
+/// a hand-written hook, another tool's — is left byte-identical.
+pub(crate) fn merge_named_entry(
+    config_path: &Path,
+    entry_name: &str,
+    entry: &serde_json::Value,
+) -> Result<PathBuf> {
+    let mut config = read_config_object(config_path).map_err(|reason| {
+        UzeError::ExposureUnavailable(format!("cannot merge hook entry: {reason}"))
+    })?;
+    config
+        .as_object_mut()
+        .expect("read_config_object returns an object")
+        .insert(entry_name.to_owned(), entry.clone());
+    write_config(config_path, &config)?;
+    Ok(config_path.to_path_buf())
+}
+
+/// Content identity for one named hook: the key must exist and hold exactly
+/// what the receipt recorded, and the wrapper it names must be the one UZE
+/// writes. Anything else is drift, and drift blocks removal.
+pub(crate) fn inspect_named_entry(
+    config_path: &Path,
+    entry_name: &str,
+    expected: &str,
+    wrapper: Option<(&str, &Path)>,
+) -> AttachmentInspection {
+    if let Some(inspection) = inspect_wrapper(wrapper) {
+        return inspection;
     }
-    format!(
-        "{}\n",
-        serde_json::to_string_pretty(&named).expect("generated hooks.json serializes")
-    )
+    let Ok(config) = read_config_object(config_path) else {
+        return blocked("hook config is missing or unreadable");
+    };
+    let Ok(expected) = serde_json::from_str::<serde_json::Value>(expected) else {
+        return blocked("receipt carries an unreadable expected hook entry");
+    };
+    match config.get(entry_name) {
+        Some(actual) if actual == &expected => AttachmentInspection {
+            state: AttachmentState::Matched,
+            reason: "managed hook entry matches the receipt".to_owned(),
+        },
+        Some(_) => AttachmentInspection {
+            state: AttachmentState::Drifted,
+            reason: "the managed hook entry differs from the receipt".to_owned(),
+        },
+        None => AttachmentInspection {
+            state: AttachmentState::Missing,
+            reason: "the managed hook entry is absent".to_owned(),
+        },
+    }
+}
+
+/// Removes exactly the one named key this receipt owns, and the file itself
+/// only when nothing else is left in it. A non-matched receipt blocks
+/// removal; a foreign named hook is never touched.
+pub(crate) fn remove_named_entry(
+    config_path: &Path,
+    entry_name: &str,
+    expected: &str,
+    wrapper: Option<(&str, &Path)>,
+) -> Result<AttachmentInspection> {
+    let inspection = inspect_named_entry(config_path, entry_name, expected, wrapper);
+    if inspection.state != AttachmentState::Matched {
+        return Ok(inspection);
+    }
+    let mut config = read_config_object(config_path).map_err(|reason| {
+        UzeError::ExposureUnavailable(format!("cannot detach hook entry: {reason}"))
+    })?;
+    config
+        .as_object_mut()
+        .expect("read_config_object returns an object")
+        .remove(entry_name);
+    // A file that now holds nothing was created by UZE and is safe to
+    // remove entirely; anything else stays exactly as the user left it.
+    if config.as_object().is_some_and(|root| root.is_empty()) {
+        match fs::remove_file(config_path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(source) => {
+                return Err(UzeError::Write {
+                    path: config_path.to_path_buf(),
+                    source,
+                });
+            }
+        }
+    } else {
+        write_config(config_path, &config)?;
+    }
+    Ok(AttachmentInspection {
+        state: AttachmentState::Missing,
+        reason: "managed hook entry detached".to_owned(),
+    })
 }
 
 /// The vocabulary/dialect key for Antigravity CLI, shared by its matcher
@@ -666,6 +752,13 @@ struct WrapperDialect {
     /// The `sh` body that writes what this harness expects when nothing is
     /// denied, with `$1` holding the ABI event name.
     allow_document: &'static str,
+    /// The status the wrapper exits with after writing a denial. Claude and
+    /// Codex document exit 2 as the block signal and read the decision only
+    /// alongside it; Antigravity reads the decision from stdout and treats
+    /// *any* non-zero exit as a failed hook — "pre-tool hook failed", the
+    /// permission prompt, and the command runs anyway (measured on 1.1.24,
+    /// `command_hook_executor.go`). So the code is a per-harness fact.
+    deny_exit: &'static str,
 }
 
 fn wrapper_dialect(target: &str) -> Option<WrapperDialect> {
@@ -686,6 +779,7 @@ fn wrapper_dialect(target: &str) -> Option<WrapperDialect> {
                 "  printf '{\"hookSpecificOutput\":{\"hookEventName\":\"%s\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":%s}}' \"$name\" \"$reason_json\"",
             ),
             allow_document: ":",
+            deny_exit: "2",
         }),
         "codex" => Some(WrapperDialect {
             harness: "codex",
@@ -696,6 +790,7 @@ fn wrapper_dialect(target: &str) -> Option<WrapperDialect> {
             // Stop is the one event whose stdout must parse as JSON even
             // when nothing was decided.
             allow_document: "[ \"$HOOK_EVENT\" = stop ] && printf '{}'",
+            deny_exit: "2",
         }),
         "antigravity" => Some(WrapperDialect {
             harness: "antigravity",
@@ -706,6 +801,9 @@ fn wrapper_dialect(target: &str) -> Option<WrapperDialect> {
             // Only the pre-tool event carries a decision; the others answer
             // with the empty object the vendor's contract requires.
             allow_document: "[ \"$HOOK_EVENT\" = pre_tool_use ] || printf '{}'",
+            // The decision is the stdout document; a non-zero exit is a
+            // failed hook here, not a block.
+            deny_exit: "0",
         }),
         _ => None,
     }
@@ -775,6 +873,7 @@ pub(crate) fn wrapper_source(target: &str) -> Option<String> {
         cwd_filter,
         deny_document,
         allow_document,
+        deny_exit,
     } = dialect;
     Some(format!(
         r#"#!/bin/sh
@@ -801,7 +900,7 @@ deny_native() {{                                  # $1 reason, plain text
   printf '%s\n' "$1" >&2
   reason_json=$(json_string "$1")
   {deny_document}
-  exit 2                                          # the harness's block signal
+  exit {deny_exit}                                # this harness's block signal
 }}
 
 allow_native() {{
@@ -1147,26 +1246,8 @@ pub(crate) fn inspect_event_entry(
     expected: &str,
     wrapper: Option<(&str, &Path)>,
 ) -> AttachmentInspection {
-    // The wrapper is the other half of the delivery: an entry pointing at a
-    // missing or edited wrapper is drift, not a match.
-    if let Some((target, path)) = wrapper {
-        match fs::read_to_string(path) {
-            Err(_) => {
-                return AttachmentInspection {
-                    state: AttachmentState::Missing,
-                    reason: "the generated hook wrapper is absent".to_owned(),
-                };
-            }
-            Ok(current) => {
-                if wrapper_source(target).is_none_or(|expected| expected != current) {
-                    return AttachmentInspection {
-                        state: AttachmentState::Drifted,
-                        reason: "the generated hook wrapper does not match what UZE writes"
-                            .to_owned(),
-                    };
-                }
-            }
-        }
+    if let Some(inspection) = inspect_wrapper(wrapper) {
+        return inspection;
     }
     let Ok(config) = read_config_object(config_path) else {
         return blocked("hook config is missing or unreadable");
@@ -1260,6 +1341,26 @@ pub(crate) fn remove_event_entry(
         state: AttachmentState::Missing,
         reason: "managed hook entry detached".to_owned(),
     })
+}
+
+/// The wrapper is the other half of every merged delivery: an entry
+/// pointing at a missing or edited wrapper is drift, not a match. `None`
+/// when the wrapper is what UZE writes (or when there is none to check).
+fn inspect_wrapper(wrapper: Option<(&str, &Path)>) -> Option<AttachmentInspection> {
+    let (target, path) = wrapper?;
+    match fs::read_to_string(path) {
+        Err(_) => Some(AttachmentInspection {
+            state: AttachmentState::Missing,
+            reason: "the generated hook wrapper is absent".to_owned(),
+        }),
+        Ok(current) if wrapper_source(target).is_none_or(|expected| expected != current) => {
+            Some(AttachmentInspection {
+                state: AttachmentState::Drifted,
+                reason: "the generated hook wrapper does not match what UZE writes".to_owned(),
+            })
+        }
+        Ok(_) => None,
+    }
 }
 
 fn blocked(reason: &str) -> AttachmentInspection {
@@ -1587,6 +1688,69 @@ pub(crate) fn hook_exposure_plan(
     }
 }
 
+/// Antigravity's hook plan: the same assessment and the same wrapper as
+/// every merged delivery, but the entry is one *named* value
+/// (`{"<Event>": <entries>}`) rather than a member of an event array,
+/// because this harness's shared `hooks.json` is a map of named hooks.
+///
+/// The wrapper lives under UZE's own state (`$UZE_HOME/state/attachments/
+/// antigravity/hooks/exec`), not inside a plugin: a shared config file has
+/// no plugin root to resolve against, and the harness runs a hook with its
+/// cwd set to the directory holding `hooks.json`, so every path in the
+/// entry is absolute.
+pub(crate) fn antigravity_hook_exposure_plan(
+    uze_home: &UzeHome,
+    resource: &Resource,
+    capabilities: &HookCapabilities,
+    config_file: PathBuf,
+    adapter_id: &str,
+) -> ExposurePlan {
+    const EVIDENCE: &str = "Antigravity CLI reads named hooks from its shared `~/.gemini/config/hooks.json`: UZE merges one named entry per canonical hook (`<package>:<group-id>`, matcher and timeout preserved, grouped for the tool events and flat for Stop) whose command is the generated `hooks/exec` wrapper — the handlers run against the portable HOOK_* contract with no UZE binary on the execution path — and keeps that exact entry receipt-owned. The generated plugin carries no hooks.json: the harness never reads one from a plugin directory (Conformance Lab, `hooks > delivery`).";
+    let Ok(hook) = serde_json::from_slice::<PortableHook>(&resource.capability.payload) else {
+        return unsupported_plan(
+            resource,
+            "hook resource payload is not a valid portable hook group",
+        );
+    };
+    let compatibility = uze_core::hook::assess(&hook, capabilities, false);
+    let mechanism = match compatibility.route {
+        CompatibilityRoute::Unsupported | CompatibilityRoute::Degraded => {
+            ExposureMechanism::Unsupported {
+                rationale: compatibility
+                    .reason
+                    .clone()
+                    .unwrap_or_else(|| "no compatible hook route".to_owned()),
+            }
+        }
+        _ => {
+            let package_root = resource
+                .package_root()
+                .expect("hook exposure_plan is only reached for packages");
+            let wrapper = shared_wrapper_path(uze_home, ANTIGRAVITY_TARGET);
+            let entry = agy_named_entry(&hook, &wrapper, package_root);
+            ExposureMechanism::ManagedHookConfig {
+                config_file,
+                entry_name: hook_entry_name(resource, &hook),
+                event: Some(hook.event),
+                expected: serde_json::to_string(&entry).expect("hook entry serializes"),
+                wrapper: Some(wrapper),
+            }
+        }
+    };
+    let _ = adapter_id;
+    let evidence = match &compatibility.reason {
+        Some(reason) => format!("{EVIDENCE} Compatibility: {reason}"),
+        None => EVIDENCE.to_owned(),
+    };
+    ExposurePlan {
+        representation: resource.capability.representation,
+        route: compatibility.route,
+        verification: VerificationStatus::Unverified,
+        mechanism,
+        evidence,
+    }
+}
+
 /// The stable UZE identity for one hook group entry, mirroring the
 /// qualified-capability naming policy (ADR-026): `<package>:<hook-id>`.
 pub(crate) fn hook_entry_name(resource: &Resource, hook: &PortableHook) -> String {
@@ -1906,8 +2070,9 @@ pub(crate) fn codex_render_output(
 }
 
 /// Antigravity CLI's hook stdout contract: native `allow`/`ask`/`deny`
-/// decisions with a reason (official contract), plus the documented
-/// blocking exit code 2 for a PreToolUse deny. Other events return 0.
+/// decisions with a reason (official contract). Unlike its peers the
+/// decision travels on stdout *alone*: a non-zero exit is a failed hook
+/// here, so every answer exits 0. Other events return `{}`.
 pub(crate) fn antigravity_render_output(
     outcome: &HookDispatchOutcome,
     event: HookEvent,
@@ -1950,7 +2115,13 @@ pub(crate) fn antigravity_render_output(
                     .clone()
                     .unwrap_or_else(|| "the hook denied the operation".to_owned()),
             ),
-            exit_code: NATIVE_BLOCK_EXIT,
+            // Exit 0, not the block code its peers use: this harness reads
+            // the decision from stdout and treats any non-zero exit as a
+            // *failed* hook — it logs "pre-tool hook failed", falls through
+            // to the permission prompt, and the command runs (measured on
+            // 1.1.24). The denial is the document; the status must not
+            // contradict it.
+            exit_code: 0,
         })
     } else {
         Ok(HookNativeOutput {
@@ -2198,12 +2369,18 @@ mod tests {
             effect: HookEffect::Observe,
             ..hook()
         };
-        let document = agy_hook_document(
-            &[&hook(), &stop],
-            Path::new("/state/hooks/exec"),
-            Path::new("/pkg"),
-        );
-        let value: serde_json::Value = serde_json::from_str(&document).unwrap();
+        let value = serde_json::json!({
+            "protect-env": agy_named_entry(
+                &hook(),
+                Path::new("/state/hooks/exec"),
+                Path::new("/pkg"),
+            ),
+            "archive": agy_named_entry(
+                &stop,
+                Path::new("/state/hooks/exec"),
+                Path::new("/pkg"),
+            ),
+        });
 
         let grouped = &value["protect-env"]["PreToolUse"][0];
         assert_eq!(grouped["matcher"], "run_command|Write");
@@ -2229,35 +2406,122 @@ mod tests {
     }
 
     #[test]
-    fn agy_document_is_named_per_group_and_deterministic() {
-        let document = agy_hook_document(
-            &[&hook()],
-            Path::new("/state/hooks/exec"),
-            Path::new("/pkg"),
-        );
-        let value: serde_json::Value = serde_json::from_str(&document).unwrap();
-        assert_eq!(
-            value["protect-env"]["PreToolUse"][0]["matcher"],
-            "run_command|Write"
-        );
+    fn agy_named_entry_carries_the_wrapper_and_is_deterministic() {
+        let entry = agy_named_entry(&hook(), Path::new("/state/hooks/exec"), Path::new("/pkg"));
+        let document = serde_json::to_string(&entry).unwrap();
+        assert_eq!(entry["PreToolUse"][0]["matcher"], "run_command|Write");
         assert!(
-            value.get("hooks").is_none(),
-            "a `hooks` wrapper would register one dead hook named `hooks`"
+            entry.get("hooks").is_none(),
+            "the named key holds the event map directly; a `hooks` wrapper is one dead hook"
         );
         assert!(
             document.contains("'/state/hooks/exec' '/pkg' 'pre_tool_use' 'deny'"),
-            "the entry runs the vendored wrapper with the group's own arguments: {document}"
+            "the entry runs the shared wrapper with the group's own arguments: {document}"
         );
         assert!(
             !document.contains("hook-exec"),
             "nothing on the execution path may be the packager"
         );
-        let again = agy_hook_document(
-            &[&hook()],
-            Path::new("/state/hooks/exec"),
-            Path::new("/pkg"),
+        assert_eq!(
+            entry,
+            agy_named_entry(&hook(), Path::new("/state/hooks/exec"), Path::new("/pkg")),
         );
-        assert_eq!(document, again);
+    }
+
+    /// Antigravity's shared `hooks.json` is a map of *named* hooks, so UZE
+    /// owns keys, not array members: a hand-written hook beside ours — and
+    /// any unrelated key — must survive attach, inspect and detach untouched.
+    #[test]
+    fn a_named_merge_leaves_every_foreign_hook_intact() {
+        let root = uze_testkit::temp::scratch("hooks-named-merge");
+        fs::create_dir_all(&root).unwrap();
+        let config = root.join("hooks.json");
+        fs::write(
+            &config,
+            r#"{"my-own-guard":{"PreToolUse":[{"matcher":"run_command","hooks":[{"type":"command","command":"mine"}]}]},"notes":"kept"}"#,
+        )
+        .unwrap();
+        let name = "pkg@market:protect-env";
+        let entry = agy_named_entry(&hook(), Path::new("/state/hooks/exec"), Path::new("/pkg"));
+        let expected = serde_json::to_string(&entry).unwrap();
+
+        merge_named_entry(&config, name, &entry).unwrap();
+        assert_eq!(
+            inspect_named_entry(&config, name, &expected, None).state,
+            AttachmentState::Matched
+        );
+        // Merging the same entry again changes nothing (idempotence).
+        merge_named_entry(&config, name, &entry).unwrap();
+
+        let after: serde_json::Value = serde_json::from_slice(&fs::read(&config).unwrap()).unwrap();
+        assert_eq!(
+            after["my-own-guard"]["PreToolUse"][0]["hooks"][0]["command"],
+            "mine"
+        );
+        assert_eq!(after["notes"], "kept");
+        assert_eq!(after[name], entry);
+
+        let detached = remove_named_entry(&config, name, &expected, None).unwrap();
+        assert_eq!(detached.state, AttachmentState::Missing);
+        let survivors: serde_json::Value =
+            serde_json::from_slice(&fs::read(&config).unwrap()).unwrap();
+        assert!(survivors.get(name).is_none(), "UZE's own key is gone");
+        assert_eq!(
+            survivors["my-own-guard"]["PreToolUse"][0]["hooks"][0]["command"], "mine",
+            "the foreign named hook is byte-identical: {survivors}"
+        );
+        assert_eq!(survivors["notes"], "kept");
+    }
+
+    /// Drift blocks removal: an edited entry is never silently rewritten,
+    /// and a file UZE cannot parse is never mutated at all.
+    #[test]
+    fn a_drifted_or_unreadable_named_entry_is_never_removed() {
+        let root = uze_testkit::temp::scratch("hooks-named-drift");
+        fs::create_dir_all(&root).unwrap();
+        let config = root.join("hooks.json");
+        let name = "pkg@market:protect-env";
+        let entry = agy_named_entry(&hook(), Path::new("/state/hooks/exec"), Path::new("/pkg"));
+        let expected = serde_json::to_string(&entry).unwrap();
+        merge_named_entry(&config, name, &entry).unwrap();
+
+        let mut edited: serde_json::Value =
+            serde_json::from_slice(&fs::read(&config).unwrap()).unwrap();
+        edited[name]["PreToolUse"][0]["matcher"] = serde_json::json!("something-else");
+        fs::write(&config, serde_json::to_vec_pretty(&edited).unwrap()).unwrap();
+        assert_eq!(
+            inspect_named_entry(&config, name, &expected, None).state,
+            AttachmentState::Drifted
+        );
+        assert_eq!(
+            remove_named_entry(&config, name, &expected, None)
+                .unwrap()
+                .state,
+            AttachmentState::Drifted,
+            "a drifted entry is reported, never removed"
+        );
+
+        fs::write(&config, "{not json").unwrap();
+        assert_eq!(
+            inspect_named_entry(&config, name, &expected, None).state,
+            AttachmentState::Blocked
+        );
+        assert_eq!(fs::read_to_string(&config).unwrap(), "{not json");
+    }
+
+    /// A file that held nothing but UZE's own entry was created by UZE and
+    /// goes away with it; one holding anything else stays.
+    #[test]
+    fn a_named_config_that_uze_created_is_removed_with_its_last_entry() {
+        let root = uze_testkit::temp::scratch("hooks-named-empty");
+        fs::create_dir_all(&root).unwrap();
+        let config = root.join("hooks.json");
+        let name = "pkg@market:protect-env";
+        let entry = agy_named_entry(&hook(), Path::new("/state/hooks/exec"), Path::new("/pkg"));
+        let expected = serde_json::to_string(&entry).unwrap();
+        merge_named_entry(&config, name, &entry).unwrap();
+        remove_named_entry(&config, name, &expected, None).unwrap();
+        assert!(!config.exists(), "UZE removes the file it alone created");
     }
 
     #[test]
@@ -2475,9 +2739,12 @@ mod tests {
         assert_eq!(input.context.cwd.as_deref(), Some("/work"));
         assert_eq!(input.context.session_id.as_deref(), Some("c2"));
 
-        // Deny: native JSON decision AND the harness's blocking exit code 2,
-        // with the reason on stderr (the fed-back channel). Internal
-        // canonical exit codes never leak outward.
+        // Deny: the native JSON decision, with the reason on stderr (the
+        // fed-back channel), and each harness's own block signal — exit 2
+        // where the harness reads the decision alongside it, exit 0 on
+        // Antigravity, which reads the decision from stdout and treats any
+        // non-zero exit as a *failed* hook. Internal canonical exit codes
+        // never leak outward.
         let deny = HookDispatchOutcome {
             decision: Some(HookDecision::Deny),
             reason: Some("blocked by policy".to_owned()),
@@ -2499,7 +2766,10 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&codex_out.stdout.unwrap()).unwrap();
         assert_eq!(json["hookSpecificOutput"]["permissionDecision"], "deny");
         let agy_out = antigravity_render_output(&deny, HookEvent::PreToolUse).unwrap();
-        assert_eq!(agy_out.exit_code, 2);
+        assert_eq!(
+            agy_out.exit_code, 0,
+            "a non-zero exit is a failed hook here, not a block"
+        );
         let json: serde_json::Value = serde_json::from_slice(&agy_out.stdout.unwrap()).unwrap();
         assert_eq!(json["decision"], "deny");
         assert_eq!(json["reason"], "blocked by policy");
@@ -2756,6 +3026,14 @@ mod wrapper_tests {
         }
     }
 
+    /// What a denial exits with, per harness. Claude and Codex document
+    /// exit 2 as the block signal; Antigravity reads the decision from
+    /// stdout and logs any non-zero exit as a *failed* hook, so a denial
+    /// there exits 0 (measured on 1.1.24).
+    fn block_exit(target: &str) -> i32 {
+        if target == ANTIGRAVITY_TARGET { 0 } else { 2 }
+    }
+
     #[test]
     #[ignore = "regenerates the goldens; run with --ignored after changing the template"]
     fn regenerate_goldens() {
@@ -2798,7 +3076,11 @@ mod wrapper_tests {
             let root = package(&format!("wrapper-deny-{target}"));
             let hook = group(&root, HookEffect::Deny, &["guard", "audit"]);
             let answer = run_wrapper(target, &root, &hook, &payload(target, "cat .env"), None);
-            assert_eq!(answer.exit, 2, "{target}: a denial uses the block signal");
+            assert_eq!(
+                answer.exit,
+                block_exit(target),
+                "{target}: a denial uses this harness's block signal"
+            );
             assert!(
                 answer.stderr.contains("blocked: cat .env"),
                 "{target}: the reason reaches stderr"
@@ -2848,7 +3130,11 @@ mod wrapper_tests {
             let root = package(&format!("wrapper-fail-{target}"));
             let closed = group(&root, HookEffect::Deny, &["absent"]);
             let answer = run_wrapper(target, &root, &closed, &payload(target, "ls"), None);
-            assert_eq!(answer.exit, 2, "{target}: a deny group fails closed");
+            assert_eq!(
+                answer.exit,
+                block_exit(target),
+                "{target}: a deny group fails closed"
+            );
             assert!(answer.stderr.contains("handler failed"));
 
             let open = group(&root, HookEffect::Observe, &["absent"]);
@@ -2871,7 +3157,11 @@ mod wrapper_tests {
                 &payload(target, "ls"),
                 Some("/nonexistent/jq"),
             );
-            assert_eq!(answer.exit, 2, "{target}: a deny group denies without jq");
+            assert_eq!(
+                answer.exit,
+                block_exit(target),
+                "{target}: a deny group denies without jq"
+            );
             assert!(answer.stderr.contains("jq is not installed"));
 
             let open = group(&root, HookEffect::Observe, &["guard"]);
@@ -2983,7 +3273,8 @@ mod wrapper_tests {
                 }
                 assert_eq!(
                     outcome.decision == Some(HookDecision::Deny),
-                    through_wrapper.exit == 2,
+                    through_wrapper.exit == block_exit(target)
+                        && !through_wrapper.stdout.trim().is_empty(),
                     "{target}/{command}: a denial is a denial on both routes"
                 );
                 let _ = fs::remove_dir_all(root);

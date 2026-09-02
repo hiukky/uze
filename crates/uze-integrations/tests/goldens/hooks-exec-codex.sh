@@ -22,7 +22,7 @@ deny_native() {                                  # $1 reason, plain text
   printf '%s\n' "$1" >&2
   reason_json=$(json_string "$1")
   printf '{"hookSpecificOutput":{"permissionDecision":"deny","permissionDecisionReason":%s}}' "$reason_json"
-  exit 2                                          # the harness's block signal
+  exit 2                                # this harness's block signal
 }
 
 allow_native() {
