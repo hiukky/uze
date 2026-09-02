@@ -1098,21 +1098,23 @@ mod tests {
     fn discovers_main_and_configured_linked_worktrees() {
         let repository = uze_testkit::git::Repository::new("worktree-test");
         let root = repository.root().to_path_buf();
-        // The isolation directory is fixed layout, under the primary
-        // checkout — the same place UZE creates agent checkouts in.
-        let worktrees = root.join(uze_core::worktree::WORKTREES_DIRECTORY);
-        let feature = worktrees.join("feature");
-        std::fs::create_dir_all(&worktrees).unwrap();
+        // Ignored the way `worktree::isolate` ignores it, so the primary's
+        // own status is not dominated by the checkouts hanging off it.
+        repository.commit_file(".gitignore", ".worktrees/\n");
+        // Mirrors where UZE isolates agents. Spelled out rather than taken
+        // from the domain constant: this crate does not depend on the
+        // domain, and the scoping under test is by checkout rather than by
+        // that layout — it holds for any worktree, however created.
+        let linked = root.join(".worktrees").join("feature");
+        std::fs::create_dir_all(linked.parent().unwrap()).unwrap();
         repository.git(&[
             "worktree",
             "add",
             "--quiet",
             "-b",
             "feature",
-            feature.to_str().unwrap(),
+            linked.to_str().unwrap(),
         ]);
-        std::fs::write(root.join("agents.lock"), "version: 1\nworktrees: {}\n").unwrap();
-
         std::fs::write(root.join("primary-only.rs"), "fn primary() {}\n").unwrap();
         std::fs::write(linked.join("agent-only.rs"), "fn agent() {}\n").unwrap();
 
