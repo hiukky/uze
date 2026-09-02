@@ -51,6 +51,23 @@ harnesses untouched, and the failure observable through `doctor`.
 
 > `tests/vendor_neutral_core.rs::a_failed_publication_leaves_the_package_installed_and_says_so`
 
+### The Codex generated envelope is self-contained
+
+Codex stages a plugin into its own cache without following symlinks, so a
+generated Codex envelope carries real bytes: every default-policy Skill and
+the `.mcp.json` are mirrored from the Store, a symlink the package keeps
+inside itself is resolved to the file it names, and a link that escapes the
+package is refused by name rather than dropped. The envelope is still a
+Derived Artifact (ADR-013 §5, amended): rebuilt wholesale from the Store on
+every materialization, never authoritative.
+
+> `crates/uze-integrations/src/codex/generate.rs::generated_native_tests::materialize_generated_package_never_writes_into_the_store_package`
+> `crates/uze-integrations/src/codex/generate.rs::generated_native_tests::envelope_mirrors_supporting_files_and_resolves_in_package_symlinks`
+> `crates/uze-integrations/src/codex/generate.rs::generated_native_tests::envelope_refuses_a_symlink_that_escapes_the_package`
+> Real-harness proof: `conformance/harnesses/codex/scenarios.py`, phase
+> `skill-invocation-policy` (`default-skill-offered` through Codex's own
+> plugin cache) and the `/mcp` inventory check in phase `tui`.
+
 ### `uze-core` production logic never names a specific harness
 
 No line of `uze-core`'s production code (outside its own test fixtures)

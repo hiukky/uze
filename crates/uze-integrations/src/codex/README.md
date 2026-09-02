@@ -52,8 +52,10 @@ Store package (no explicit envelope, but skills/ dir and/or root mcp.json presen
         │
         ▼
 $UZE_HOME/state/attachments/codex/generated/<id>/.codex-plugin/plugin.json
-   (UZE-synthesized: skills="./skills/" symlinked from the Store,
-    mcpServers="./.mcp.json" symlinked to the package's own root mcp.json)
+   (UZE-synthesized: skills="./skills/" and mcpServers="./.mcp.json",
+    both mirrored as real bytes from the Store — `codex plugin add` stages
+    the envelope into ~/.codex/plugins/cache without following symlinks,
+    verified 0.149.0–0.152.1, so a symlinked entry would never reach Codex)
         │
         ▼
 $UZE_HOME/.../generated/.agents/plugins/marketplace.json  ("uze-store",

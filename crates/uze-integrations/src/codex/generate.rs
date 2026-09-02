@@ -188,9 +188,17 @@ fn read_name_fields(package: &StoredPackage) -> (String, String) {
 /// Materializes (or refreshes) one package's generated envelope directory.
 /// Idempotent and deterministic: recreated wholesale from the Store package
 /// on every call, never incrementally patched — the directory is entirely
-/// UZE-owned and non-authoritative (ADR-013 §5). `skills/` and `.mcp.json`
-/// are symlinked to the Store's own bytes, never copied, so they can never
-/// drift from the Store and a `.mcp.json` never duplicates content.
+/// UZE-owned and non-authoritative (ADR-013 §5).
+///
+/// The envelope carries real bytes, never symlinks into the Store. `codex
+/// plugin add` stages its own copy of the envelope under
+/// `~/.codex/plugins/cache/` and that copy does not follow symlinks: a
+/// symlinked skill directory or `.mcp.json` is simply absent from the cache,
+/// so the skill never reaches the model and the server never reaches
+/// `codex mcp list` (verified against codex-cli 0.149.0 through 0.152.1).
+/// Rebuilding wholesale from the Store on every materialization is what
+/// keeps the envelope non-authoritative; `codex plugin add` re-stages the
+/// cache from it even for an unchanged version (verified against 0.152.1).
 pub(super) fn materialize_generated_package(
     uze_home: &UzeHome,
     package: &StoredPackage,
@@ -217,23 +225,31 @@ pub(super) fn materialize_generated_package(
         source,
     })?;
 
-    materialize_generated_skills(package, &dir)?;
+    let package_root = fs::canonicalize(&package.root).map_err(|source| UzeError::Read {
+        path: package.root.clone(),
+        source,
+    })?;
+    materialize_generated_skills(package, &package_root, &dir)?;
     let mcp_source = package.root.join("mcp.json");
     if mcp_source.is_file() {
-        symlink(&mcp_source, &dir.join(".mcp.json"))?;
+        mirror_file(&mcp_source, &dir.join(".mcp.json"))?;
     }
     Ok(dir)
 }
 
 /// Materializes the generated envelope's `skills/` surface (ADR-030 §13).
-/// Default-policy skills stay byte-preserving whole-directory symlinks; a
-/// user-only Skill gets its own UZE-owned directory with a materialized
-/// SKILL.md (canonical name/description/body) plus Codex's
-/// `agents/openai.yaml` invocation-policy sidecar — the same Derived
-/// Artifact discipline as the capability-level wrapper, applied at package
-/// level. Invalid or model-only Skills are never materialized here and are
-/// excluded from coverage.
-fn materialize_generated_skills(package: &StoredPackage, envelope_dir: &Path) -> Result<()> {
+/// A default-policy Skill is mirrored byte for byte; a user-only Skill gets
+/// its own UZE-owned directory with a materialized SKILL.md (canonical
+/// name/description/body) plus Codex's `agents/openai.yaml`
+/// invocation-policy sidecar — the same Derived Artifact discipline as the
+/// capability-level wrapper, applied at package level. Invalid or
+/// model-only Skills are never materialized here and are excluded from
+/// coverage.
+fn materialize_generated_skills(
+    package: &StoredPackage,
+    package_root: &Path,
+    envelope_dir: &Path,
+) -> Result<()> {
     if !package.root.join("skills").is_dir() {
         return Ok(());
     }
@@ -254,76 +270,31 @@ fn materialize_generated_skills(package: &StoredPackage, envelope_dir: &Path) ->
             .logical_capability_name()
             .unwrap_or_else(|| resource.name());
         let target_dir = envelope_dir.join("skills").join(&skill_name);
-        fs::create_dir_all(target_dir.parent().expect("skill dir has a parent")).map_err(
-            |source_error| UzeError::Write {
-                path: target_dir
-                    .parent()
-                    .expect("skill dir has a parent")
-                    .to_path_buf(),
-                source: source_error,
-            },
-        )?;
         if policy.is_default() {
-            match fs::symlink_metadata(&target_dir) {
-                Ok(metadata) if metadata.file_type().is_symlink() => {
-                    let current =
-                        fs::read_link(&target_dir).map_err(|source_error| UzeError::Read {
-                            path: target_dir.clone(),
-                            source: source_error,
-                        })?;
-                    if current != canonical_dir {
-                        fs::remove_dir_all(&target_dir).map_err(|source_error| {
-                            UzeError::Write {
-                                path: target_dir.clone(),
-                                source: source_error,
-                            }
-                        })?;
-                        symlink(canonical_dir, &target_dir)?;
-                    }
-                }
-                Ok(_) => return Err(UzeError::ManagedEntryConflict(target_dir)),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    symlink(canonical_dir, &target_dir)?;
-                }
-                Err(error) => {
-                    return Err(UzeError::Read {
-                        path: target_dir,
-                        source: error,
-                    });
-                }
-            }
+            mirror_tree(canonical_dir, &target_dir, package_root)?;
             continue;
         }
-        materialize_user_only_skill_dir(&target_dir, canonical_dir, &skill_name, &policy)?;
+        materialize_user_only_skill_dir(
+            &target_dir,
+            canonical_dir,
+            package_root,
+            &skill_name,
+            &policy,
+        )?;
     }
     Ok(())
 }
 
 /// Writes one materialized user-only Skill directory: SKILL.md with the
 /// canonical identity/description/body plus Codex's policy sidecar, with
-/// every other canonical file still referenced.
+/// every other canonical file mirrored beside it.
 fn materialize_user_only_skill_dir(
     target_dir: &Path,
     canonical_dir: &Path,
+    package_root: &Path,
     skill_name: &str,
     policy: &uze_core::skill::SkillInvocationPolicy,
 ) -> Result<()> {
-    match fs::symlink_metadata(target_dir) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            fs::remove_file(target_dir).map_err(|source_error| UzeError::Write {
-                path: target_dir.to_path_buf(),
-                source: source_error,
-            })?;
-        }
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(UzeError::Read {
-                path: target_dir.to_path_buf(),
-                source: error,
-            });
-        }
-    }
     fs::create_dir_all(target_dir).map_err(|source_error| UzeError::Write {
         path: target_dir.to_path_buf(),
         source: source_error,
@@ -365,25 +336,97 @@ fn materialize_user_only_skill_dir(
             },
         )?;
     }
-    for entry in fs::read_dir(canonical_dir).map_err(|error| UzeError::Read {
-        path: canonical_dir.to_path_buf(),
-        source: error,
-    })? {
-        let entry = entry.map_err(|error| UzeError::Read {
-            path: canonical_dir.to_path_buf(),
-            source: error,
-        })?;
+    for entry in sorted_entries(canonical_dir)? {
         let name = entry.file_name();
         if name == "SKILL.md" {
             continue;
         }
-        let source = entry.path();
-        let target = target_dir.join(&name);
-        if !target.exists() && !target.is_symlink() {
-            symlink(&source, &target)?;
-        }
+        mirror_entry(&entry.path(), &target_dir.join(&name), package_root)?;
     }
     Ok(())
+}
+
+/// Mirrors one canonical directory into the envelope as real files and
+/// directories. A symlink inside the package is resolved to the bytes it
+/// names when it stays inside the package root; a symlinked directory is
+/// left out, exactly as package discovery never descends into one (the
+/// containment invariant), and a link that escapes the package or dangles
+/// is refused by name rather than silently dropped — a silent drop is the
+/// failure this mirror exists to prevent.
+fn mirror_tree(source: &Path, destination: &Path, package_root: &Path) -> Result<()> {
+    fs::create_dir_all(destination).map_err(|source_error| UzeError::Write {
+        path: destination.to_path_buf(),
+        source: source_error,
+    })?;
+    for entry in sorted_entries(source)? {
+        mirror_entry(
+            &entry.path(),
+            &destination.join(entry.file_name()),
+            package_root,
+        )?;
+    }
+    Ok(())
+}
+
+fn mirror_entry(source: &Path, destination: &Path, package_root: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(source).map_err(|source_error| UzeError::Read {
+        path: source.to_path_buf(),
+        source: source_error,
+    })?;
+    if metadata.is_dir() {
+        return mirror_tree(source, destination, package_root);
+    }
+    if metadata.is_file() {
+        return mirror_file(source, destination);
+    }
+    if !metadata.file_type().is_symlink() {
+        return Err(UzeError::ExposureUnavailable(format!(
+            "the Codex envelope cannot carry special filesystem entry `{}`",
+            source.display()
+        )));
+    }
+    let resolved = fs::canonicalize(source).map_err(|source_error| UzeError::Read {
+        path: source.to_path_buf(),
+        source: source_error,
+    })?;
+    if !resolved.starts_with(package_root) {
+        return Err(UzeError::ExposureUnavailable(format!(
+            "the Codex envelope refuses symlink `{}`: it resolves outside the package",
+            source.display()
+        )));
+    }
+    if resolved.is_dir() {
+        return Ok(());
+    }
+    mirror_file(&resolved, destination)
+}
+
+/// `fs::copy` carries the permission bits, so a skill's helper script stays
+/// executable in the envelope.
+fn mirror_file(source: &Path, destination: &Path) -> Result<()> {
+    fs::copy(source, destination)
+        .map(|_| ())
+        .map_err(|source_error| UzeError::Write {
+            path: destination.to_path_buf(),
+            source: source_error,
+        })
+}
+
+/// Sorted so the envelope is written in one deterministic order on every
+/// rebuild.
+fn sorted_entries(dir: &Path) -> Result<Vec<fs::DirEntry>> {
+    let mut entries = fs::read_dir(dir)
+        .map_err(|source_error| UzeError::Read {
+            path: dir.to_path_buf(),
+            source: source_error,
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|source_error| UzeError::Read {
+            path: dir.to_path_buf(),
+            source: source_error,
+        })?;
+    entries.sort_by_key(fs::DirEntry::file_name);
+    Ok(entries)
 }
 
 /// Removes one package's generated envelope directory by id alone — used at
@@ -517,19 +560,6 @@ pub(super) fn generated_package_receipt(
             .collect(),
         },
     }
-}
-
-#[cfg(unix)]
-fn symlink(source: &Path, target: &Path) -> Result<()> {
-    std::os::unix::fs::symlink(source, target).map_err(|source_error| UzeError::Write {
-        path: target.to_path_buf(),
-        source: source_error,
-    })
-}
-
-#[cfg(not(unix))]
-fn symlink(_source: &Path, target: &Path) -> Result<()> {
-    Err(UzeError::UnsupportedRuntimeProjection(target.to_path_buf()))
 }
 
 #[cfg(test)]
@@ -728,17 +758,21 @@ mod generated_native_tests {
         );
         assert!(dir.starts_with(uze_home.state_dir()));
         assert!(dir.join(".codex-plugin/plugin.json").is_file());
-        // Default-policy skills stay byte-preserving whole-directory
-        // symlinks; `skills/` itself is now a real envelope subdirectory.
-        assert!(dir.join("skills/commit").is_symlink());
+        // Codex stages the envelope into its plugin cache without following
+        // symlinks, so a default-policy Skill and the MCP file are real
+        // bytes — byte-identical to the Store's.
         assert_eq!(
-            fs::read_link(dir.join("skills/commit")).unwrap(),
-            pkg.root.join("skills/commit")
+            fs::read(dir.join("skills/commit/SKILL.md")).unwrap(),
+            fs::read(pkg.root.join("skills/commit/SKILL.md")).unwrap()
         );
-        assert!(dir.join(".mcp.json").is_symlink());
         assert_eq!(
-            fs::read_link(dir.join(".mcp.json")).unwrap(),
-            pkg.root.join("mcp.json")
+            fs::read(dir.join(".mcp.json")).unwrap(),
+            fs::read(pkg.root.join("mcp.json")).unwrap()
+        );
+        assert!(
+            symlinks_under(&dir).is_empty(),
+            "the envelope must be self-contained: {:?}",
+            symlinks_under(&dir)
         );
         let manifest: serde_json::Value =
             serde_json::from_slice(&fs::read(dir.join(".codex-plugin/plugin.json")).unwrap())
@@ -746,6 +780,80 @@ mod generated_native_tests {
         assert_eq!(manifest["skills"], "./skills/");
         assert_eq!(manifest["mcpServers"], "./.mcp.json");
         let _ = fs::remove_dir_all(_root);
+    }
+
+    /// The envelope mirrors a Skill's supporting files too, keeping a helper
+    /// script executable, and resolves a file symlink the package keeps
+    /// inside itself to the bytes it names — Codex's cache copy would drop
+    /// the link.
+    #[test]
+    fn envelope_mirrors_supporting_files_and_resolves_in_package_symlinks() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_root, pkg) = make_plain_package("mirror-support", false);
+        let scripts = pkg.root.join("skills/commit/scripts");
+        fs::create_dir_all(&scripts).unwrap();
+        fs::write(scripts.join("run.sh"), "#!/bin/sh\necho run\n").unwrap();
+        fs::set_permissions(scripts.join("run.sh"), fs::Permissions::from_mode(0o755)).unwrap();
+        fs::write(pkg.root.join("shared.txt"), "shared bytes").unwrap();
+        std::os::unix::fs::symlink(
+            pkg.root.join("shared.txt"),
+            pkg.root.join("skills/commit/shared.txt"),
+        )
+        .unwrap();
+        let uze_home = UzeHome::at(_root.join("uze"));
+        let dir = materialize_generated_package(&uze_home, &pkg).unwrap();
+        let script = dir.join("skills/commit/scripts/run.sh");
+        assert_eq!(
+            fs::read_to_string(&script).unwrap(),
+            "#!/bin/sh\necho run\n"
+        );
+        assert_ne!(
+            fs::metadata(&script).unwrap().permissions().mode() & 0o111,
+            0,
+            "a helper script stays executable in the envelope"
+        );
+        let shared = dir.join("skills/commit/shared.txt");
+        assert!(!shared.is_symlink());
+        assert_eq!(fs::read_to_string(&shared).unwrap(), "shared bytes");
+        assert!(symlinks_under(&dir).is_empty());
+        let _ = fs::remove_dir_all(_root);
+    }
+
+    /// A symlink that escapes the package is refused by name — never
+    /// followed into foreign bytes, never silently dropped.
+    #[test]
+    fn envelope_refuses_a_symlink_that_escapes_the_package() {
+        let (_root, pkg) = make_plain_package("mirror-escape", false);
+        fs::write(_root.join("outside.txt"), "not package bytes").unwrap();
+        std::os::unix::fs::symlink(
+            _root.join("outside.txt"),
+            pkg.root.join("skills/commit/outside.txt"),
+        )
+        .unwrap();
+        let uze_home = UzeHome::at(_root.join("uze"));
+        let error = materialize_generated_package(&uze_home, &pkg).unwrap_err();
+        assert!(
+            error.to_string().contains("outside.txt"),
+            "the refusal names the link: {error}"
+        );
+        let _ = fs::remove_dir_all(_root);
+    }
+
+    fn symlinks_under(dir: &Path) -> Vec<PathBuf> {
+        let mut found = Vec::new();
+        let mut stack = vec![dir.to_path_buf()];
+        while let Some(current) = stack.pop() {
+            for entry in fs::read_dir(&current).unwrap().flatten() {
+                let path = entry.path();
+                let metadata = fs::symlink_metadata(&path).unwrap();
+                if metadata.file_type().is_symlink() {
+                    found.push(path);
+                } else if metadata.is_dir() {
+                    stack.push(path);
+                }
+            }
+        }
+        found
     }
 
     #[test]
