@@ -11,6 +11,7 @@ import contextlib
 import json
 import os
 import subprocess
+import sys
 import time
 
 import pexpect
@@ -133,6 +134,26 @@ def settle_and_quiet(screen, quiet=None, budget=None):
     return False
 
 
+VERDICT_SYMBOL = {"PASS": "✅", "ADAPTED": "🟡", "FAIL": "❌"}
+VERDICT_COLOR = {"PASS": "\033[32m", "ADAPTED": "\033[33m", "FAIL": "\033[31m"}
+VERDICT_LABEL_WIDTH = max(len(tag) for tag in VERDICT_SYMBOL) + len("[]")
+
+
+def print_verdict(tag, name, detail=""):
+    """One live-log line per verdict, aligned on the widest tag.
+
+    Colour is a terminal courtesy only: a redirected log (CI, `tee`, an
+    evidence capture) must stay byte-clean, so escapes are emitted solely
+    for a TTY and suppressed under NO_COLOR.
+    """
+    label = f"[{tag}]".ljust(VERDICT_LABEL_WIDTH)
+    if sys.stdout.isatty() and "NO_COLOR" not in os.environ:
+        label = f"{VERDICT_COLOR[tag]}{label}\033[0m"
+    indent = "  " * len(SUITE_STACK)
+    suffix = f"  ({detail})" if detail else ""
+    print(f"{indent}{VERDICT_SYMBOL[tag]} {label} {name}{suffix}", flush=True)
+
+
 def check_absence(name, ok, settled, detail=""):
     """Absence assertion under the settled-turn contract (ADR-035).
 
@@ -141,7 +162,6 @@ def check_absence(name, ok, settled, detail=""):
     with that reason recorded — it can never pass by accident.
     """
     suite = suite_path(name)
-    indent = "  " * len(SUITE_STACK)
     if not settled:
         detail = f"turn never settled — absence not proven ({detail})"
         results.append(
@@ -154,14 +174,13 @@ def check_absence(name, ok, settled, detail=""):
                 "harness": CURRENT_HARNESS,
             }
         )
-        print(f"{indent}❌ [FAIL   ] {name}  ({detail})", flush=True)
+        print_verdict("FAIL", name, detail)
         return
     check(name, ok, detail)
 
 
 def check(name, ok, detail="", kind="assert"):
     suite = suite_path(name)
-    indent = "  " * len(SUITE_STACK)
     results.append(
         {
             "check": name,
@@ -175,11 +194,7 @@ def check(name, ok, detail="", kind="assert"):
     tag = "PASS" if ok else "FAIL"
     if ok and kind == "adapted":
         tag = "ADAPTED"
-    symbol = {"PASS": "✅", "ADAPTED": "🟡", "FAIL": "❌"}[tag]
-    print(
-        f"{indent}{symbol} [{tag:7s}] {name}" + (f"  ({detail})" if detail else ""),
-        flush=True,
-    )
+    print_verdict(tag, name, detail)
 
 
 def sh(*args, ok=(0,)):
