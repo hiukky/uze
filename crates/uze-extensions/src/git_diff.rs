@@ -38,7 +38,7 @@ use crate::view::{
     ScrollTarget, Size, Span, View, ViewHit,
 };
 
-use crate::display_project_path;
+use crate::Host;
 
 /// What to do after a key/mouse event reaches an open [`GitView`] —
 /// `orchestrator`'s event loop only needs to know whether to keep the
@@ -75,9 +75,10 @@ pub struct GitChangeSummary {
 /// Returns a summary only when `cwd` resolves to a git repository with
 /// changes. `None` covers a non-repository, a missing/unusable `git`, and a
 /// clean worktree alike, which lets the caller omit its badge entirely.
-pub fn change_summary(cwd: &Path) -> Option<GitChangeSummary> {
-    let root = repository_root(cwd).ok()?;
+pub fn change_summary(host: &dyn Host, cwd: &Path) -> Option<GitChangeSummary> {
+    let root = repository_root(host, cwd).ok()?;
     let status = run_git(
+        host,
         &root,
         &["status", "--porcelain=v1", "--untracked-files=all"],
     )
@@ -95,7 +96,7 @@ pub fn change_summary(cwd: &Path) -> Option<GitChangeSummary> {
         ["diff", "--numstat"].as_slice(),
         ["diff", "--cached", "--numstat"].as_slice(),
     ] {
-        let output = run_git(&root, args).ok()?;
+        let output = run_git(host, &root, args).ok()?;
         let (additions, deletions) = parse_numstat(&output);
         summary.additions += additions;
         summary.deletions += deletions;
@@ -104,7 +105,7 @@ pub fn change_summary(cwd: &Path) -> Option<GitChangeSummary> {
         .iter()
         .filter(|file| file.status == FileStatus::Untracked)
     {
-        summary.additions += untracked_line_count(&file.path);
+        summary.additions += untracked_line_count(host, &file.path);
     }
     Some(summary)
 }
@@ -236,12 +237,13 @@ impl GitView {
     /// that worktree's own root, which is exactly the scope wanted here:
     /// the tab's checkout, never the primary it hangs off and never a
     /// sibling agent's.
-    pub fn open(cwd: PathBuf) -> Self {
-        let root = match repository_root(&cwd) {
+    pub fn open(host: &dyn Host, cwd: PathBuf) -> Self {
+        let root = match repository_root(host, &cwd) {
             Ok(root) => root,
             Err(message) => return Self::with_error(cwd, message),
         };
         let status = match run_git(
+            host,
             &root,
             &["status", "--porcelain=v1", "--untracked-files=all"],
         ) {
@@ -249,7 +251,7 @@ impl GitView {
             Err(message) => return Self::with_error(root, message),
         };
         let mut view = Self {
-            branch: current_branch(&root),
+            branch: current_branch(host, &root),
             files: parse_porcelain_status(&status, &root),
             root,
             selected: 0,
@@ -259,7 +261,7 @@ impl GitView {
             focus: GitViewFocus::Files,
             refreshed_at: Instant::now(),
         };
-        view.load_selected_diff();
+        view.load_selected_diff(host);
         view
     }
 
@@ -280,37 +282,37 @@ impl GitView {
     /// Selects `index` (clamped to the file list) and reloads its diff —
     /// the one place both keyboard navigation and a file-row click funnel
     /// through, so the two can never disagree about what "selected" means.
-    fn select(&mut self, index: usize) {
+    fn select(&mut self, host: &dyn Host, index: usize) {
         if self.files.is_empty() {
             return;
         }
         self.selected = index.min(self.files.len() - 1);
         self.scroll = 0;
-        self.load_selected_diff();
+        self.load_selected_diff(host);
     }
 
     pub fn refresh_due(&self) -> bool {
         self.refreshed_at.elapsed() >= REFRESH_INTERVAL
     }
 
-    pub fn refresh(&mut self) {
+    pub fn refresh(&mut self, host: &dyn Host) {
         let selected_path = self.files.get(self.selected).map(|file| file.path.clone());
         let focus = self.focus;
         let scroll = self.scroll;
-        let mut refreshed = Self::open(self.root.clone());
+        let mut refreshed = Self::open(host, self.root.clone());
         refreshed.focus = focus;
         refreshed.scroll = scroll;
         if let Some(path) = selected_path
             && let Some(file) = refreshed.files.iter().position(|file| file.path == path)
         {
             refreshed.selected = file;
-            refreshed.load_selected_diff();
+            refreshed.load_selected_diff(host);
         }
         refreshed.refreshed_at = Instant::now();
         *self = refreshed;
     }
 
-    fn load_selected_diff(&mut self) {
+    fn load_selected_diff(&mut self, host: &dyn Host) {
         let Some(file) = self.files.get(self.selected) else {
             self.diff = Vec::new();
             return;
@@ -320,6 +322,7 @@ impl GitView {
         let root = self.root.clone();
         let raw = if status == FileStatus::Untracked {
             run_git(
+                host,
                 &root,
                 &[
                     "diff",
@@ -330,7 +333,11 @@ impl GitView {
                 ],
             )
         } else {
-            run_git(&root, &["diff", "HEAD", "--", &path.to_string_lossy()])
+            run_git(
+                host,
+                &root,
+                &["diff", "HEAD", "--", &path.to_string_lossy()],
+            )
         };
         self.diff = match raw {
             Ok(output) => {
@@ -348,35 +355,26 @@ impl GitView {
 /// inside a git repository" check the added spec scenario needs: a
 /// non-repository `cwd` fails this with git's own "not a git repository"
 /// message on stderr, which becomes `GitView::error` verbatim.
-fn repository_root(cwd: &Path) -> Result<PathBuf, String> {
-    uze_git::read(cwd, &["rev-parse", "--show-toplevel"])
-        .map_err(|error| error.to_string())?
-        .successful()
+fn repository_root(host: &dyn Host, cwd: &Path) -> Result<PathBuf, String> {
+    host.git(cwd, &["rev-parse", "--show-toplevel"])
         .map(|stdout| PathBuf::from(stdout.trim()))
 }
 
 /// The branch [`GitView::root`] is on, for the overlay's title. Answers
 /// `detached HEAD` for a checkout with no branch, the same wording
 /// `git worktree list` used to supply here.
-fn current_branch(root: &Path) -> String {
-    match run_git(root, &["rev-parse", "--abbrev-ref", "HEAD"]) {
+fn current_branch(host: &dyn Host, root: &Path) -> String {
+    match run_git(host, root, &["rev-parse", "--abbrev-ref", "HEAD"]) {
         Ok(name) if !name.trim().is_empty() && name.trim() != "HEAD" => name.trim().to_owned(),
         _ => "detached HEAD".to_owned(),
     }
 }
 
-/// Every command this view runs is an observation, so they all go through
-/// the transport's read path — which also keeps the overlay from taking
-/// Git's optional index lock while an agent is writing in a sibling
-/// checkout of the same repository.
-///
-/// Exit `1` is an answer rather than a failure here: `git diff` uses it for
-/// "there are differences", which is the ordinary case for a view whose
-/// whole job is showing them.
-fn run_git(root: &Path, args: &[&str]) -> Result<String, String> {
-    uze_git::read(root, args)
-        .map_err(|error| error.to_string())?
-        .or_exit(1)
+/// Every command this view runs is an observation, and it reaches Git
+/// through the host rather than spawning anything itself — see
+/// [`crate::Host`].
+fn run_git(host: &dyn Host, root: &Path, args: &[&str]) -> Result<String, String> {
+    host.git(root, args)
 }
 
 /// Totals Git's tab-separated `--numstat` output. Binary entries use `-`
@@ -397,8 +395,8 @@ fn parse_numstat(output: &str) -> (u32, u32) {
 /// `git diff` excludes untracked files, but the overlay presents them via
 /// `--no-index`; count their visible lines as additions so the badge and the
 /// overlay agree that they are changes.
-fn untracked_line_count(path: &Path) -> u32 {
-    let Ok(contents) = std::fs::read_to_string(path) else {
+fn untracked_line_count(host: &dyn Host, path: &Path) -> u32 {
+    let Some(contents) = host.read_file(path) else {
         return 0;
     };
     if contents.is_empty() {
@@ -637,7 +635,7 @@ fn highlight_one_line(
         .collect()
 }
 
-pub fn handle_key(view: &mut GitView, key: KeyEvent) -> GitViewOutcome {
+pub fn handle_key(host: &dyn Host, view: &mut GitView, key: KeyEvent) -> GitViewOutcome {
     if key.code == KeyCode::Esc
         || (key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('g'))
     {
@@ -651,11 +649,11 @@ pub fn handle_key(view: &mut GitView, key: KeyEvent) -> GitViewOutcome {
             };
         }
         KeyCode::Up => match view.focus {
-            GitViewFocus::Files => view.select(view.selected.saturating_sub(1)),
+            GitViewFocus::Files => view.select(host, view.selected.saturating_sub(1)),
             GitViewFocus::Diff => view.scroll = view.scroll.saturating_sub(1),
         },
         KeyCode::Down => match view.focus {
-            GitViewFocus::Files => view.select(view.selected + 1),
+            GitViewFocus::Files => view.select(host, view.selected + 1),
             GitViewFocus::Diff => view.scroll = view.scroll.saturating_add(1),
         },
         KeyCode::Enter if view.focus == GitViewFocus::Files => {
@@ -670,9 +668,9 @@ pub fn handle_key(view: &mut GitView, key: KeyEvent) -> GitViewOutcome {
     GitViewOutcome::Stay
 }
 
-pub fn handle_mouse(view: &mut GitView, hit: Option<ViewHit>) -> GitViewOutcome {
+pub fn handle_mouse(host: &dyn Host, view: &mut GitView, hit: Option<ViewHit>) -> GitViewOutcome {
     match hit {
-        Some(ViewHit::SelectItem(index)) => view.select(index),
+        Some(ViewHit::SelectItem(index)) => view.select(host, index),
         Some(ViewHit::Close) => return GitViewOutcome::Close,
         _ => {}
     }
@@ -688,15 +686,20 @@ pub fn handle_mouse(view: &mut GitView, hit: Option<ViewHit>) -> GitViewOutcome 
 /// *Where* is resolved by the host, which owns the layout — this used to
 /// re-derive the columns from the frame rectangle, which meant two sides
 /// computing the same geometry and only one of them being authoritative.
-pub fn handle_scroll(view: &mut GitView, target: ScrollTarget, direction: ScrollDirection) {
+pub fn handle_scroll(
+    host: &dyn Host,
+    view: &mut GitView,
+    target: ScrollTarget,
+    direction: ScrollDirection,
+) {
     if view.error.is_some() || view.files.is_empty() {
         return;
     }
     match (target, direction) {
         (ScrollTarget::Navigator, ScrollDirection::Up) => {
-            view.select(view.selected.saturating_sub(1));
+            view.select(host, view.selected.saturating_sub(1));
         }
-        (ScrollTarget::Navigator, ScrollDirection::Down) => view.select(view.selected + 1),
+        (ScrollTarget::Navigator, ScrollDirection::Down) => view.select(host, view.selected + 1),
         (ScrollTarget::Content, ScrollDirection::Up) => {
             view.scroll = view.scroll.saturating_sub(3);
         }
@@ -711,10 +714,10 @@ pub fn handle_scroll(view: &mut GitView, target: ScrollTarget, direction: Scroll
 ///
 /// `space` is advisory: it bounds how much content is worth producing,
 /// never where any of it goes.
-pub fn view(git: &GitView, space: Size) -> View {
+pub fn view(host: &dyn Host, git: &GitView, space: Size) -> View {
     let title = format!(
         " git changes — {}{} ",
-        display_project_path(&git.root),
+        host.display_path(&git.root),
         if git.branch.is_empty() {
             String::new()
         } else {
@@ -753,7 +756,7 @@ pub fn view(git: &GitView, space: Size) -> View {
                     .get(git.selected)
                     .and_then(|file| file.path.strip_prefix(&git.root).ok())
                     .map(|path| path.display().to_string())
-                    .unwrap_or_else(|| display_project_path(&git.root))
+                    .unwrap_or_else(|| host.display_path(&git.root))
             ),
             scroll: git.scroll,
             // Bounded by the space plus what is scrolled past, not by the
@@ -918,6 +921,27 @@ fn unified_lines(rows: &[DiffRow]) -> Vec<&DiffCell> {
 mod tests {
     use super::*;
 
+    /// The same grant the workspace client makes, so these exercise the
+    /// real path rather than a stub. A fake would be the right tool for
+    /// testing *the view*; this file tests what the view reads.
+    struct TestHost;
+
+    impl Host for TestHost {
+        fn git(&self, root: &Path, args: &[&str]) -> Result<String, String> {
+            uze_git::read(root, args)
+                .map_err(|error| error.to_string())?
+                .or_exit(1)
+        }
+
+        fn read_file(&self, path: &Path) -> Option<String> {
+            std::fs::read_to_string(path).ok()
+        }
+
+        fn display_path(&self, path: &Path) -> String {
+            path.display().to_string()
+        }
+    }
+
     #[test]
     fn parses_ordinary_status_codes() {
         let root = Path::new("/repo");
@@ -1041,14 +1065,14 @@ mod tests {
         let root = repository.root().to_path_buf();
         repository.commit_file("tracked.rs", "fn one() {}\n");
 
-        assert_eq!(change_summary(&root), None);
+        assert_eq!(change_summary(&TestHost, &root), None);
 
         std::fs::write(root.join("tracked.rs"), "fn one() {}\nfn two() {}\n").unwrap();
         std::fs::write(root.join("staged.rs"), "fn staged() {}\n").unwrap();
         repository.git(&["add", "staged.rs"]);
         std::fs::write(root.join("new.rs"), "fn brand_new() {}\n").unwrap();
 
-        let mut view = GitView::open(root.clone());
+        let mut view = GitView::open(&TestHost, root.clone());
         assert!(view.error.is_none(), "unexpected error: {:?}", view.error);
         assert_eq!(
             view.files.len(),
@@ -1064,7 +1088,7 @@ mod tests {
         assert!(statuses.contains(&FileStatus::Added));
         assert!(statuses.contains(&FileStatus::Untracked));
         assert_eq!(
-            change_summary(&root),
+            change_summary(&TestHost, &root),
             Some(GitChangeSummary {
                 additions: 3,
                 deletions: 0,
@@ -1077,7 +1101,7 @@ mod tests {
         );
 
         std::fs::write(root.join("later.rs"), "fn later() {}\n").unwrap();
-        view.refresh();
+        view.refresh(&TestHost);
         assert!(
             view.files
                 .iter()
@@ -1118,7 +1142,7 @@ mod tests {
         std::fs::write(root.join("primary-only.rs"), "fn primary() {}\n").unwrap();
         std::fs::write(linked.join("agent-only.rs"), "fn agent() {}\n").unwrap();
 
-        let from_agent = GitView::open(linked.clone());
+        let from_agent = GitView::open(&TestHost, linked.clone());
         assert!(from_agent.error.is_none(), "{:?}", from_agent.error);
         assert_eq!(from_agent.branch, "feature");
         assert_eq!(
@@ -1131,7 +1155,7 @@ mod tests {
             "an isolated agent sees its own checkout and nothing else"
         );
 
-        let from_primary = GitView::open(root.clone());
+        let from_primary = GitView::open(&TestHost, root.clone());
         assert!(from_primary.error.is_none(), "{:?}", from_primary.error);
         assert_eq!(
             from_primary
@@ -1210,6 +1234,22 @@ mod tests {
 mod view_tests {
     use super::*;
 
+    struct TestHost;
+
+    impl Host for TestHost {
+        fn git(&self, _root: &Path, _args: &[&str]) -> Result<String, String> {
+            unreachable!("building a view reads nothing: it renders what is already in memory")
+        }
+
+        fn read_file(&self, _path: &Path) -> Option<String> {
+            unreachable!("building a view reads nothing")
+        }
+
+        fn display_path(&self, path: &Path) -> String {
+            path.display().to_string()
+        }
+    }
+
     fn fixture() -> GitView {
         let root = PathBuf::from("/repo");
         GitView {
@@ -1251,7 +1291,7 @@ mod view_tests {
     /// chrome colour is decided.
     #[test]
     fn the_view_names_meaning_rather_than_colour() {
-        let view = view(&fixture(), space());
+        let view = view(&TestHost, &fixture(), space());
         let navigator = view.navigator.expect("files to navigate");
         assert_eq!(navigator.badge, "2");
         assert!(navigator.focused);
@@ -1272,7 +1312,7 @@ mod view_tests {
     /// from a theme the extension ships, and a role would throw it away.
     #[test]
     fn syntax_colour_survives_as_the_extensions_own_data() {
-        let view = view(&fixture(), space());
+        let view = view(&TestHost, &fixture(), space());
         let Content::Lines { lines, .. } = view.content else {
             panic!("a selected file has a diff");
         };
@@ -1290,6 +1330,7 @@ mod view_tests {
     #[test]
     fn an_unreadable_checkout_has_nothing_to_navigate() {
         let view = view(
+            &TestHost,
             &GitView::with_error(PathBuf::from("/nope"), "boom".to_owned()),
             space(),
         );

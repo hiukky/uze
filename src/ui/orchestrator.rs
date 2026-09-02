@@ -6,6 +6,7 @@
 //! contexts with Ctrl+O reads as one product, not two.
 
 use super::tui_application;
+use crate::ui::extension_host::WorkspaceHost;
 use crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
@@ -315,7 +316,7 @@ pub(crate) fn attach_workspace(
         if let Some(view) = model.git_view.as_mut()
             && view.refresh_due()
         {
-            view.refresh();
+            view.refresh(&WorkspaceHost);
             model.dirty = true;
         }
         if model.expire_agent_activity(Instant::now()) {
@@ -478,7 +479,7 @@ pub(crate) fn attach_workspace(
                 Event::Key(key) if model.git_view.is_some() => {
                     if let Some(view) = model.git_view.as_mut()
                         && matches!(
-                            git_diff::handle_key(view, key),
+                            git_diff::handle_key(&WorkspaceHost, view, key),
                             git_diff::GitViewOutcome::Close
                         )
                     {
@@ -779,7 +780,7 @@ pub(crate) fn attach_workspace(
                         model.dragging_git_tree = true;
                     } else if let Some(view) = model.git_view.as_mut()
                         && matches!(
-                            git_diff::handle_mouse(view, view_hit),
+                            git_diff::handle_mouse(&WorkspaceHost, view, view_hit),
                             git_diff::GitViewOutcome::Close
                         )
                     {
@@ -821,6 +822,7 @@ pub(crate) fn attach_workspace(
                         )
                     {
                         git_diff::handle_scroll(
+                            &WorkspaceHost,
                             view,
                             target,
                             if mouse.kind == MouseEventKind::ScrollUp {
@@ -1929,7 +1931,7 @@ impl WorkspaceModel {
             return;
         }
         self.git_badge = cwd.map(|cwd| GitBadge {
-            summary: git_diff::change_summary(&cwd),
+            summary: git_diff::change_summary(&WorkspaceHost, &cwd),
             cwd,
             checked_at: now,
         });
@@ -2228,7 +2230,7 @@ fn open_git_view(model: &mut WorkspaceModel) {
     let Some(pane) = pane_in_layout(&tab.layout, tab.focus.pane) else {
         return;
     };
-    model.git_view = Some(git_diff::GitView::open(pane.cwd.clone()));
+    model.git_view = Some(git_diff::GitView::open(&WorkspaceHost, pane.cwd.clone()));
     model.dirty = true;
 }
 

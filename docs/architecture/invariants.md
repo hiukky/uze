@@ -573,13 +573,19 @@ rather than from the host's design system.
 > `src/ui/extension_view.rs::chrome_uses_the_hosts_palette_and_content_keeps_its_own`
 > `crates/uze-extensions/src/git_diff.rs::the_view_names_meaning_rather_than_colour`
 
-### An extension never touches UZE's own state
+### An extension reaches nothing it was not handed
 
-No `UzeHome`, no Store, no receipts, no `uze-application`. An extension is
-code UZE runs in its own process, which is a different trust class from
-plugin bytes a harness reads; keeping it a pure function of what it is
-handed is what makes that tractable. A transport crate — speaking to a
-foreign binary — is not UZE state and is allowed.
+No `UzeHome`, no Store, no receipts, no `uze-application` — and no process,
+no filesystem, no environment. Everything outside the extension's own
+memory arrives through `uze_extensions::Host`, which the workspace client
+implements in one named place.
+
+An extension is code UZE runs in its own process, a different trust class
+from plugin bytes a harness reads. Being a pure function of what it is
+handed is what makes that tractable: a capability the host never granted is
+one it can withhold, and a sandbox is a property of the loading mechanism
+rather than something added afterwards. A `&mut Frame` could not cross a
+process boundary; neither can a `fork()`.
 
 > `tests/architecture/layering.rs::architecture_rules_hold`
 

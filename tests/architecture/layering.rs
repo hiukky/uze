@@ -124,6 +124,32 @@ const RULES: &[Rule] = &[
         budget: &[],
     },
     Rule {
+        name: "an extension holds no machine access of its own",
+        scope: "crates/uze-extensions/src",
+        forbidden: "std::process",
+        reason: "an extension is code UZE runs in its own process, and the only \
+                 answer to \"what can it reach\" that survives someone else \
+                 authoring one is: whatever it was handed. Spawning a process is \
+                 the reach that makes a sandbox impossible later — a `&mut Frame` \
+                 could not cross a process boundary, and neither can a fork().",
+        remedy: "ask for it through `uze_extensions::Host`, which the workspace \
+                 client implements in `src/ui/extension_host.rs`. Widen that trait \
+                 if the capability is genuinely new.",
+        sanctioned: &[],
+        budget: &[],
+    },
+    Rule {
+        name: "an extension does not read the filesystem behind the host's back",
+        scope: "crates/uze-extensions/src",
+        forbidden: "std::fs",
+        reason: "same argument as spawning: a capability the host did not grant is \
+                 one it cannot withhold.",
+        remedy: "`Host::read_file`. Test fixtures may write to their own scratch \
+                 directory — that is test code, which this scan already excludes.",
+        sanctioned: &[],
+        budget: &[],
+    },
+    Rule {
         name: "an extension never names the domain crate",
         scope: "crates/uze-extensions/src",
         forbidden: "uze_core",

@@ -9,9 +9,9 @@ authors.workspace = true
 publish = false
 
 [dependencies]
-uze-git = { path = "../uze-git" }
 crossterm = "0.29"
 syntect = "5"
 
 [dev-dependencies]
+uze-git = { path = "../uze-git" }
 uze-testkit = { path = "../uze-testkit" }

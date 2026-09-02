@@ -53,6 +53,7 @@ use uze_application::{
 };
 
 mod agent_support;
+mod extension_host;
 mod extension_view;
 mod hit;
 mod input;
@@ -246,7 +247,7 @@ fn io_error(source: io::Error) -> uze_application::UzeError {
 
 /// `~/relative/path` when `root` is under the user's home directory, else
 /// the path as-is — mirrors what a shell prompt usually shows.
-fn display_project_path(root: &std::path::Path) -> String {
+pub(crate) fn display_project_path(root: &std::path::Path) -> String {
     if let Some(home) = std::env::var_os("HOME")
         && let Ok(relative) = root.strip_prefix(&home)
     {

@@ -127,6 +127,7 @@ pub(super) fn render(
         let mut view_hits = Vec::new();
         let area = frame.area();
         let view = git_diff::view(
+            &crate::ui::extension_host::WorkspaceHost,
             git,
             crate::ui::extension_view::content_space(area, model.git_tree_width),
         );

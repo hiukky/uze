@@ -192,10 +192,13 @@ and legitimately name the domain. Making `rustc` the enforcer would mean
 giving them crates of their own — a decision about what the `uze` binary
 is, not a tidy-up.
 
-**An extension never draws and never touches UZE's own state.** It returns
-a `view::View`; the host owns rendering, geometry, hit-testing and the
-palette. It may use `uze-git` (a transport) but never `uze-core` or
-`uze-application` — same test. An extension is code UZE runs in its own
+**An extension never draws, and reaches nothing it was not handed.** It
+returns a `view::View` — the host owns rendering, geometry, hit-testing and
+the palette — and every other capability (running Git, reading a file,
+resolving `$HOME`) arrives through `uze_extensions::Host`, implemented in
+`src/ui/extension_host.rs`. `uze-extensions` depends on no UZE crate at
+all, and names no process, filesystem or environment API; the architecture
+suite fails on each. An extension is code UZE runs in its own
 process, which is a different trust class from plugin bytes a harness
 reads; see the ADR in
 `openspec/changes/enforce-architecture-seams/adr/`.
