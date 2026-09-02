@@ -24,6 +24,11 @@ pub const MAX_TIMEOUT_SECONDS: u16 = 300;
 /// contract has no output channel — so nothing bounds it.
 pub const MAX_HANDLER_STDERR_BYTES: usize = 64 * 1024;
 
+/// The system program a generated shell wrapper needs to read the harness's
+/// payload. Named here so a diagnostic can check for it without knowing how
+/// any particular wrapper is written.
+pub const WRAPPER_DEPENDENCY: &str = "jq";
+
 /// The handler's decision channel is its exit code: `0` allows, this one
 /// denies with the reason on stderr, and every other code (or a timeout, or
 /// a handler that cannot start) is a failure whose outcome follows the

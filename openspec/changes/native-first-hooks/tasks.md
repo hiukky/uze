@@ -33,10 +33,11 @@
 
 ## 5. Routing, fallback and diagnostics
 
-- [ ] 5.1 Compatibility assessment reports the route per hook: `native` (wrapper), `adapted` (fallback `uze hook-exec` with the reason: platform without template, `transform`), `unsupported`
-- [ ] 5.2 Fallback route: on platforms without a template, the native entry invokes `uze hook-exec` with the new contract; test that both routes satisfy the same fixtures
-- [ ] 5.3 `uze doctor`: reports a delivered wrapper whose dependency (`jq`) is missing, and hooks delivered through the fallback
-- [ ] 5.4 Re-projection: installing/updating a package with hooks replaces the previous `hook-exec` entries (receipt-owned) with the wrapper form; test that a foreign entry beside them is untouched
+- [x] 5.1 Compatibility assessment reports the route per hook: `native` (wrapper), `adapted` (fallback `uze hook-exec` with the reason: platform without template, `transform`), `unsupported`
+  - `transform` is not one of the fallback's reasons: the exit-code contract has no channel for a handler to answer a rewrite on, so a `transform` group degrades rather than routing anywhere (its own change lifts this).
+- [x] 5.2 Fallback route: on platforms without a template, the native entry invokes `uze hook-exec` with the new contract; test that both routes satisfy the same fixtures
+- [x] 5.3 `uze doctor`: reports a delivered wrapper whose dependency (`jq`) is missing, and hooks delivered through the fallback
+- [x] 5.4 Re-projection: installing/updating a package with hooks replaces the previous `hook-exec` entries (receipt-owned) with the wrapper form; test that a foreign entry beside them is untouched
 
 ## 6. Conformance Lab
 

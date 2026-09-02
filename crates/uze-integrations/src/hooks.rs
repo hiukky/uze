@@ -2079,6 +2079,54 @@ mod tests {
     }
 
     #[test]
+    fn a_platform_without_a_wrapper_template_falls_back_to_the_packager_runtime() {
+        let home = UzeHome::at(Path::new("/tmp/uze-home"));
+        let native = hook_delivery(
+            &home,
+            "claude",
+            "claude-code",
+            &hook(),
+            Path::new("/pkg"),
+            Some(PathBuf::from("/state/hooks/exec")),
+            true,
+        );
+        assert_eq!(native.adapted_reason, None);
+        assert_eq!(
+            native.wrapper.as_deref(),
+            Some(Path::new("/state/hooks/exec"))
+        );
+        assert_eq!(native.entry["hooks"][0]["command"], "/state/hooks/exec");
+
+        // `None` is what a platform the POSIX template does not cover
+        // yields; the hook still reaches the harness, through the runtime
+        // that is the contract's reference implementation.
+        let fallback = hook_delivery(
+            &home,
+            "claude",
+            "claude-code",
+            &hook(),
+            Path::new("/pkg"),
+            None,
+            true,
+        );
+        assert!(fallback.wrapper.is_none());
+        assert!(
+            fallback
+                .adapted_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("no wrapper template")),
+            "the fallback states why it was taken"
+        );
+        let command = fallback.entry["hooks"][0]["command"].as_str().unwrap();
+        assert!(command.contains("hook-exec"));
+        assert!(command.contains("--effect deny"));
+        assert_eq!(
+            fallback.entry["matcher"], native.entry["matcher"],
+            "both routes intercept exactly the same tools"
+        );
+    }
+
+    #[test]
     fn group_entry_omits_matcher_for_unmatch_all_and_reserves_native_timeout() {
         let mut hook = hook();
         let entry = group_entry("claude", &hook, &invocation(&hook));

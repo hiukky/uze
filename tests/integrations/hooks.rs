@@ -468,6 +468,74 @@ fn an_update_replaces_the_previous_version_of_the_samed_group() {
     let _ = fs::remove_dir_all(_root2);
 }
 
+/// Re-projection: an install from before the wrapper existed left a
+/// `hook-exec` entry in the shared file. The receipt names that exact
+/// content, so re-attaching replaces it with the wrapper form — and a
+/// foreign entry beside it is not touched.
+#[test]
+fn reinstalling_replaces_a_previous_packager_entry_and_leaves_foreign_ones() {
+    let (root, resources) = hook_package("claude-reproject", deny_group());
+    let protect = hook_resource(&resources, "protect-env");
+    let home = UzeHome::at(root.join("uze"));
+    let claude = ClaudeIntegration::new(root.join("claude"), home.clone());
+    let settings = event_configuration(&root);
+
+    let previous = serde_json::json!({
+        "matcher": "Bash",
+        "hooks": [{
+            "type": "command",
+            "command": "/opt/uze/bin/uze hook-exec --adapter 'claude' --event pre_tool_use",
+            "timeout": 11,
+        }],
+    });
+    let foreign = serde_json::json!({
+        "matcher": "Write",
+        "hooks": [{"type": "command", "command": "someone-elses-hook"}],
+    });
+    fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    fs::write(
+        &settings,
+        serde_json::json!({"hooks": {"PreToolUse": [foreign.clone(), previous.clone()]}})
+            .to_string(),
+    )
+    .unwrap();
+    state::record_receipt(
+        &home,
+        "claude-reproject-1".to_owned(),
+        AttachmentReceipt {
+            package_id: "hook-demo@local".to_owned(),
+            resource_identity: Some(protect.identity()),
+            integration: "claude-code".to_owned(),
+            strategy: "ManagedHookConfig".to_owned(),
+            artifact: ManagedArtifact::HookConfigEntry {
+                config_file: settings.clone(),
+                entry_name: "hook-demo@local:protect-env".to_owned(),
+                event: Some(HookEvent::PreToolUse),
+                expected: previous.to_string(),
+                wrapper: None,
+            },
+        },
+    )
+    .unwrap();
+
+    claude.attach_receipt(protect).expect("attach succeeds");
+    let document: serde_json::Value =
+        serde_json::from_slice(&fs::read(&settings).unwrap()).unwrap();
+    let groups = document["hooks"]["PreToolUse"].as_array().unwrap();
+    assert_eq!(
+        groups.len(),
+        2,
+        "the old UZE entry was replaced, not added to"
+    );
+    assert_eq!(groups[0], foreign, "the foreign entry is untouched");
+    let command = groups[1]["hooks"][0]["command"].as_str().unwrap();
+    assert!(
+        command.ends_with("/hooks/exec") && !command.contains("hook-exec"),
+        "the entry now runs the generated wrapper: {command}"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
 // ============================================================================
 // Codex: its own hooks.json command form
 // ============================================================================

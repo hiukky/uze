@@ -1884,10 +1884,15 @@ fn render_doctor(report: &DoctorReport) -> String {
                 .as_deref()
                 .map(|loss| format!(" | weakened: {loss}"))
                 .unwrap_or_default();
+            let delivery = hook
+                .delivery
+                .as_deref()
+                .map(|note| format!(" | delivery: {note}"))
+                .unwrap_or_default();
             // Hook rows key on the stable id; render the label doctor
             // already carries for the harness.
             text.push_str(&format!(
-                "    hook {} [{}] on {}: {verdict}{attached}{weakened}\n",
+                "    hook {} [{}] on {}: {verdict}{attached}{weakened}{delivery}\n",
                 hook.hook,
                 hook.event,
                 harness_label_of(report, &hook.harness)

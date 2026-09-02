@@ -549,6 +549,11 @@ pub struct HookHealth {
     pub harness: String,
     pub route: CompatibilityRoute,
     pub weakened: Option<String>,
+    /// Something about how the hook is delivered that a person should know:
+    /// the packager runtime carrying it instead of a generated wrapper, or
+    /// a wrapper whose system dependency is not installed. `None` when the
+    /// delivery is native and everything it needs is present.
+    pub delivery: Option<String>,
     pub artifact: Option<PathBuf>,
     pub state: Option<AttachmentState>,
 }
