@@ -1,0 +1,5 @@
+schema: adr-driven
+created: 2026-09-02
+# No behaviour changes: the domain gains a shape, the facade gains a
+# surface, and presentation stops reaching past it.
+skip_specs: true
