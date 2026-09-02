@@ -182,7 +182,9 @@ fn parse_lock_str(text: &str, path: &Path) -> Result<ProjectLock> {
         return Err(UzeError::MalformedLock {
             path: path.to_path_buf(),
             reason: format!(
-                "`{REPLACED_DIRECTORY_KEY}` was replaced by the `worktrees` policy block;                  write `worktrees:` with a `directory:` entry instead"
+                "`{REPLACED_DIRECTORY_KEY}` was replaced by the `worktrees` policy block; write a \
+                 `worktrees:` block with a `completion:` entry instead, as the checkout layout is \
+                 now fixed infrastructure rather than something a project declares"
             ),
         });
     }
@@ -405,6 +407,39 @@ mod tests {
         let UzeError::MalformedLock { reason, .. } = err else {
             panic!("a replaced key must be reported as a malformed lock");
         };
-        assert!(reason.contains("worktrees"), "{reason}");
+        assert!(reason.contains(REPLACED_DIRECTORY_KEY), "{reason}");
+        assert!(
+            reason.contains("completion:"),
+            "the operator must be told what to write instead: {reason}"
+        );
+    }
+
+    /// The policy block is a closed vocabulary, unlike the lock around it: a
+    /// key nobody recognizes there is a mistake, and reading past it would
+    /// report a policy as honored that was never applied.
+    #[test]
+    fn an_unknown_key_inside_the_policy_block_is_refused_by_name() {
+        let err = parse_lock_str(
+            "version: 1\nworktrees:\n  completion: merge\n  directory: ./.worktrees\n",
+            &PathBuf::from("agents.lock"),
+        )
+        .unwrap_err();
+        let UzeError::MalformedLock { reason, .. } = err else {
+            panic!("an unknown policy key must be reported as a malformed lock");
+        };
+        assert!(reason.contains("directory"), "{reason}");
+    }
+
+    /// The complement, and the reason the check above is scoped to the
+    /// policy: a lock written by a newer UZE must still load on an older
+    /// one, so the top level tolerates keys it does not know.
+    #[test]
+    fn an_unknown_key_at_the_top_level_is_tolerated() {
+        let lock = parse_lock_str(
+            "version: 1\nsomething_from_a_newer_uze: true\n",
+            &PathBuf::from("agents.lock"),
+        )
+        .expect("the lock stays forward-compatible");
+        assert_eq!(lock.version, SUPPORTED_LOCK_VERSION);
     }
 }

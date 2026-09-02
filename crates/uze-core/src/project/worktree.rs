@@ -82,7 +82,13 @@ impl CompletionBehavior {
 /// A project's declaration. One field today, and a struct rather than a bare
 /// enum because this is the shape `agents.lock` carries and the shape a
 /// second axis would extend without breaking existing locks.
+///
+/// A closed vocabulary, unlike the lock that carries it: everything a
+/// project may declare about isolation is named here, so an unrecognized key
+/// is a mistake to report rather than a field from a future version to
+/// tolerate. Silently ignoring one would read as a policy honored.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct WorktreePolicy {
     #[serde(default)]
     pub completion: CompletionBehavior,

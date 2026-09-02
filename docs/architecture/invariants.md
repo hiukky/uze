@@ -532,11 +532,17 @@ whose agent is long gone — inside a tab that owns exactly one of them.
 
 ### A replaced lock field is rejected, never silently dropped
 
-`ProjectLock` does not deny unknown fields, so the superseded
-worktree-directory key is refused by name — a declared policy can never
-become no policy in silence.
+The top level of `ProjectLock` stays open, so a lock written by a newer UZE
+still loads on an older one; the superseded worktree-directory key is
+therefore refused by name in the parser rather than by serde. `WorktreePolicy`
+is the opposite: a closed vocabulary that denies unknown fields, because
+everything a project may declare about isolation is already named there. Both
+halves say the same thing — a declared policy can never become no policy in
+silence.
 
 > `crates/uze-core/src/project_lock.rs::the_replaced_directory_key_is_rejected_rather_than_silently_dropped`
+> `crates/uze-core/src/project_lock.rs::an_unknown_key_at_the_top_level_is_tolerated`
+> `crates/uze-core/src/project_lock.rs::an_unknown_key_inside_the_policy_block_is_refused_by_name`
 
 ---
 
