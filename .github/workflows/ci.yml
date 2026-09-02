@@ -132,6 +132,10 @@ jobs:
             label: Codex
           - harness: opencode
             label: OpenCode
+          # UZE's own client, not a vendor's — the Lab drove four
+          # harness TUIs and never the one an operator lives in.
+          - harness: uze
+            label: UZE
     steps:
       - uses: actions/checkout@v7
       # The Lab image bakes the real harness binaries (channel-latest),
