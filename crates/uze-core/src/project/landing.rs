@@ -17,14 +17,12 @@
 use std::{
     fmt,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
-    thread,
     time::Duration,
 };
 
 use crate::{
     checkout::{self, commits_ahead, is_dirty},
-    subprocess::{read_bounded, wait_with_timeout, with_process_group},
+    subprocess::run_shell_bounded,
     task::{Task, TaskState},
     worktree::{CompletionBehavior, WORKTREES_DIRECTORY},
 };
@@ -32,7 +30,6 @@ use crate::{
 /// A gate that has not finished in this long is a hung gate.
 pub const GATE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const FORGE_TIMEOUT: Duration = Duration::from_secs(120);
-const MAX_OUTPUT_BYTES: usize = 64 * 1024;
 const REMOTE: &str = "origin";
 
 /// What the task's checkout says about the task.
@@ -200,7 +197,7 @@ fn deliver_locked(
     let tip = target_tip(primary, task, policy.completion)?;
     rebase_in_slot(primary, &slot, task, &tip)?;
     if let Some(gate) = policy.gate {
-        let (passed, output) = run_bounded(&slot, gate, GATE_TIMEOUT);
+        let (passed, output) = run_shell_bounded(&slot, gate, GATE_TIMEOUT);
         if !passed {
             task.state = TaskState::GateFailed;
             return Err(DeliveryFailure::GateFailed { output });
@@ -461,7 +458,7 @@ fn publish(primary: &Path, task: &mut Task) -> Result<Delivered, DeliveryFailure
             body = shell_quote(&body),
         ),
     };
-    let (created, output) = run_bounded(&slot, &command, FORGE_TIMEOUT);
+    let (created, output) = run_shell_bounded(&slot, &command, FORGE_TIMEOUT);
     let request = output
         .lines()
         .map(str::trim)
@@ -524,56 +521,6 @@ fn is_ancestor(root: &Path, ancestor: &str, descendant: &str) -> bool {
 
 fn has_remote(root: &Path) -> bool {
     uze_git::read(root, &["remote", "get-url", REMOTE]).is_ok_and(|output| output.is_success())
-}
-
-/// Runs a shell command in `cwd`, bounded in time and output. Returns
-/// whether it exited zero, and its combined output.
-fn run_bounded(cwd: &Path, command: &str, timeout: Duration) -> (bool, String) {
-    let shell = if Path::new("/bin/sh").exists() {
-        "/bin/sh"
-    } else {
-        "sh"
-    };
-    let mut invocation = Command::new(shell);
-    invocation.arg("-c").arg(command);
-    let child = with_process_group(invocation)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .current_dir(cwd)
-        .spawn();
-    let mut child = match child {
-        Ok(child) => child,
-        Err(error) => return (false, format!("could not run `{command}`: {error}")),
-    };
-    let stdout = child.stdout.take().expect("piped");
-    let stderr = child.stderr.take().expect("piped");
-    let reader = thread::spawn(move || {
-        let (out, _) = read_bounded(stdout, MAX_OUTPUT_BYTES);
-        let (err, _) = read_bounded(stderr, MAX_OUTPUT_BYTES);
-        let mut combined = String::from_utf8_lossy(&out).into_owned();
-        let err = String::from_utf8_lossy(&err);
-        if !err.trim().is_empty() {
-            if !combined.is_empty() && !combined.ends_with('\n') {
-                combined.push('\n');
-            }
-            combined.push_str(&err);
-        }
-        combined
-    });
-    let (status, timed_out) = match wait_with_timeout(&mut child, timeout) {
-        Ok(outcome) => outcome,
-        Err(error) => return (false, format!("`{command}` failed: {error}")),
-    };
-    if timed_out {
-        drop(reader);
-        return (
-            false,
-            format!("`{command}` timed out after {}s", timeout.as_secs()),
-        );
-    }
-    let output = reader.join().unwrap_or_default();
-    (status.success(), output.trim().to_owned())
 }
 
 fn git(root: &Path, args: &[&str]) -> Result<String, String> {

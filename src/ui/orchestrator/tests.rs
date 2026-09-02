@@ -10,13 +10,16 @@ mod workspace_tests {
     use super::WorkspaceHit;
     use super::{
         AGENT_BUSY_REPAINTS, AGENT_ECHO_GRACE, AGENT_PASTE_GRACE, AgentIdentity, AgentTabStatus,
-        WorkspaceModel, agent_identity_for_tab, blank_pane, can_close_tab_from_menu, encode_mouse,
-        forward_paste, forward_scroll, next_agent_label, pane_relative, render::render_sidebar,
+        PreservedOverlay, TaskStateView, TaskView, WorkspaceModel, agent_identity_for_tab,
+        blank_pane, can_close_tab_from_menu, encode_mouse, forward_paste, forward_scroll,
+        next_agent_label, pane_relative,
+        render::{render_preserved, render_sidebar, render_tab_strip},
         selected_pane_cwd, tab_needs_replacement_shell, workspace_has_active_agent_operation,
     };
     use crossterm::event::{MouseButton, MouseEventKind};
     use ratatui::layout::Rect;
     use ratatui::{Terminal, backend::TestBackend};
+    use std::path::{Path, PathBuf};
     use std::time::{Duration, Instant};
     use uze_terminal::{
         CellAttributes, ClientEvent, ClientRequest, Cursor, Focus, Layout, MouseMode, Pane,
@@ -124,6 +127,182 @@ mod workspace_tests {
         };
         assert_eq!(glyphs("\u{25cf}"), 1, "one selected agent, sidebar-wide");
         assert_eq!(glyphs("\u{25cb}"), 1, "the other space's agent reads idle");
+    }
+
+    /// A task view as the application would answer it for the slot at
+    /// `checkout`, in `state`.
+    fn task_in(checkout: &str, label: &str, state: TaskStateView, ahead: usize) -> TaskView {
+        TaskView {
+            id: "t1".into(),
+            label: label.into(),
+            branch: "agent/t1".into(),
+            target: "main".into(),
+            checkout: Some(PathBuf::from(checkout)),
+            state,
+            ahead,
+            published_as: None,
+            created_at_unix: 1,
+        }
+    }
+
+    /// A one-agent session in the slot `/repo/.worktrees/ai`, whose task is
+    /// in `state`.
+    fn agent_with_task(state: TaskStateView, ahead: usize) -> WorkspaceModel {
+        let mut model = agent_session_in("/repo/.worktrees/ai");
+        model.tasks.insert(
+            PathBuf::from("/repo"),
+            vec![task_in(
+                "/repo/.worktrees/ai",
+                "fix-auth-redirect",
+                state,
+                ahead,
+            )],
+        );
+        model
+    }
+
+    /// The tab strip as text and hits.
+    fn tab_strip(model: &WorkspaceModel) -> (Vec<String>, Vec<(Rect, WorkspaceHit)>) {
+        let mut terminal = Terminal::new(TestBackend::new(80, 3)).unwrap();
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| render_tab_strip(frame, frame.area(), model, &IDENTITIES, &mut hits))
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let rows = (0..buffer.area.height)
+            .map(|row| {
+                (0..buffer.area.width)
+                    .map(|column| buffer[(column, row)].symbol())
+                    .collect()
+            })
+            .collect();
+        (rows, hits)
+    }
+
+    #[test]
+    fn a_ready_task_names_its_row_marks_it_and_offers_delivery() {
+        let model = agent_with_task(TaskStateView::Ready, 3);
+        let rows = sidebar_rows(&model, &mut Vec::new());
+        let name_row = rows
+            .iter()
+            .find(|row| row.contains("fix-auth-redirect"))
+            .expect("the task's label names the row, not the tab's generated label: {rows:?}");
+        assert!(
+            name_row.contains('\u{2713}'),
+            "ready reads as a check: {name_row}"
+        );
+
+        let (rows, hits) = tab_strip(&model);
+        assert!(rows.iter().any(|row| row.contains("⇧3")), "{rows:?}");
+        assert!(
+            hits.iter()
+                .any(|(_, hit)| matches!(hit, WorkspaceHit::Deliver(_))),
+            "the button is a hit"
+        );
+    }
+
+    #[test]
+    fn a_running_task_offers_no_delivery_and_carries_no_mark() {
+        let model = agent_with_task(TaskStateView::Running, 0);
+        let rows = sidebar_rows(&model, &mut Vec::new());
+        let name_row = rows
+            .iter()
+            .find(|row| row.contains("fix-auth-redirect"))
+            .unwrap();
+        assert!(
+            !name_row.contains('\u{2713}') && !name_row.contains('\u{26a0}'),
+            "{name_row}"
+        );
+        let (rows, hits) = tab_strip(&model);
+        assert!(!rows.iter().any(|row| row.contains('⇧')), "{rows:?}");
+        assert!(
+            !hits
+                .iter()
+                .any(|(_, hit)| matches!(hit, WorkspaceHit::Deliver(_)))
+        );
+    }
+
+    #[test]
+    fn a_conflicted_task_is_marked_and_reported_but_not_a_button() {
+        let model = agent_with_task(
+            TaskStateView::Conflicted {
+                files: vec![PathBuf::from("src/lib.rs")],
+            },
+            2,
+        );
+        let rows = sidebar_rows(&model, &mut Vec::new());
+        let name_row = rows
+            .iter()
+            .find(|row| row.contains("fix-auth-redirect"))
+            .unwrap();
+        assert!(name_row.contains('\u{26a0}'), "{name_row}");
+        let (rows, hits) = tab_strip(&model);
+        assert!(rows.iter().any(|row| row.contains("conflict")), "{rows:?}");
+        assert!(
+            !hits
+                .iter()
+                .any(|(_, hit)| matches!(hit, WorkspaceHit::Deliver(_)))
+        );
+    }
+
+    #[test]
+    fn preserved_work_lists_tasks_without_a_live_tab_and_nothing_else() {
+        let mut model = agent_with_task(TaskStateView::Ready, 1);
+        let mut parked = task_in(
+            "/repo/.worktrees/old",
+            "yesterday",
+            TaskStateView::Parked,
+            0,
+        );
+        parked.id = "t2".into();
+        let mut delivered = task_in(
+            "/repo/.worktrees/gone",
+            "shipped",
+            TaskStateView::Integrated,
+            0,
+        );
+        delivered.id = "t3".into();
+        model
+            .tasks
+            .get_mut(Path::new("/repo"))
+            .unwrap()
+            .extend([parked, delivered]);
+
+        let preserved = model.preserved_tasks();
+        assert_eq!(preserved.len(), 1, "{preserved:?}");
+        assert_eq!(preserved[0].1.label, "yesterday");
+
+        model.preserved = Some(PreservedOverlay {
+            selected: 0,
+            confirm_discard: false,
+        });
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        terminal
+            .draw(|frame| {
+                render_preserved(
+                    frame,
+                    frame.area(),
+                    &model,
+                    model.preserved.as_ref().unwrap(),
+                )
+            })
+            .unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol().to_owned())
+            .collect();
+        assert!(
+            text.contains("yesterday") && text.contains("uncommitted changes"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("shipped"),
+            "delivered work is not preserved work"
+        );
+        assert!(text.contains("[d] discard"));
     }
 
     /// A one-agent session whose only tab runs in `cwd`.

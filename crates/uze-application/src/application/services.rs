@@ -18,9 +18,12 @@
 use std::path::{Path, PathBuf};
 
 use uze_core::{
-    Result, UzeError, checkout, hook, prompt_history,
-    task::{self, Base, Task, TaskId},
-    workspace, worktree,
+    Result, UzeError, checkout, hook,
+    landing::{self, Delivered, DeliveryFailure, Readiness},
+    project_lock, prompt_history,
+    task::{self, Base, Task, TaskId, TaskState, TaskStore},
+    workspace,
+    worktree::{self, CompletionBehavior, WorktreePolicy},
 };
 
 use super::UzeApplication;
@@ -181,15 +184,24 @@ impl Workspace<'_> {
     /// Where a newly created agent starts, decided before its harness does.
     ///
     /// Every agent isolates: a slot is acquired for a new task in the
-    /// repository `pane_cwd` belongs to, and the primary checkout is never
-    /// assigned to an agent. Where isolation is impossible — no
-    /// repository, no branch, no commit to branch from, Git refusing — the
-    /// agent starts in place and the placement says why, so the tab can.
+    /// repository `pane_cwd` belongs to, prepared as the project's policy
+    /// says, and the primary checkout is never assigned to an agent. Where
+    /// isolation is impossible — no repository, no branch, no commit to
+    /// branch from, Git refusing — the agent starts in place and the
+    /// placement says why, so the tab can.
     pub fn place_new_agent(&self, pane_cwd: &Path) -> AgentPlacement {
         let Some(primary) = worktree::primary_checkout(pane_cwd) else {
             return AgentPlacement::unisolated(pane_cwd, "not inside a Git working tree");
         };
-        let Some(target) = checkout::current_branch(&primary) else {
+        let policy = match self.policy(&primary) {
+            Ok(policy) => policy,
+            Err(error) => return AgentPlacement::unisolated(&primary, &error.to_string()),
+        };
+        let Some(target) = policy
+            .target
+            .clone()
+            .or_else(|| checkout::current_branch(&primary))
+        else {
             return AgentPlacement::unisolated(&primary, "the primary checkout is not on a branch");
         };
         let base_tip = checkout::tip_of(&primary, &target);
@@ -207,11 +219,17 @@ impl Workspace<'_> {
         };
         checkout::reconcile(&primary, &mut store, &target);
         let mut task = Task::new(None, Base::Ref(target.clone()), base_tip.clone(), target);
-        match checkout::acquire(&primary, &store, &task, &base_tip, None) {
+        match checkout::acquire(&primary, &store, &task, &base_tip, policy.slots) {
             Ok(acquired) => {
                 task.checkout = Some(acquired.id.clone());
                 store.upsert(task.clone());
                 let _ = task::save(&self.0.home, &primary, &store);
+                let warnings = checkout::materialize(
+                    &primary,
+                    &acquired.path,
+                    &policy.link,
+                    policy.setup.as_deref(),
+                );
                 AgentPlacement {
                     cwd: acquired.path,
                     isolation: Isolation::Slot {
@@ -220,11 +238,361 @@ impl Workspace<'_> {
                         branch: acquired.branch,
                         reused: !acquired.created,
                     },
+                    warnings,
                 }
             }
             Err(error) => AgentPlacement::unisolated(&primary, &error.to_string()),
         }
     }
+
+    /// The project's declared policy, or the defaults when the lock declares
+    /// none. A malformed lock is an error rather than a silent default.
+    fn policy(&self, primary: &Path) -> Result<WorktreePolicy> {
+        Ok(project_lock::load_lock(primary)?
+            .and_then(|lock| lock.worktrees)
+            .unwrap_or_default())
+    }
+
+    /// The repository `cwd` belongs to, with its policy and recorded tasks.
+    fn repository(&self, cwd: &Path) -> Option<Repository> {
+        let primary = worktree::primary_checkout(cwd)?;
+        let policy = self.policy(&primary).ok()?;
+        let store = task::load(&self.0.home, &primary).ok()?;
+        Some(Repository {
+            primary,
+            policy,
+            store,
+        })
+    }
+
+    /// The primary checkout `cwd` belongs to — the key every task view
+    /// hangs off — or `None` outside a Git working tree.
+    pub fn primary_of(&self, cwd: &Path) -> Option<PathBuf> {
+        worktree::primary_checkout(cwd)
+    }
+
+    /// Every task recorded for `cwd`'s repository, as last evaluated.
+    pub fn tasks(&self, cwd: &Path) -> Vec<TaskView> {
+        self.repository(cwd)
+            .map(|repository| repository.views())
+            .unwrap_or_default()
+    }
+
+    /// The project's say in delivery, for a header to name what `deliver`
+    /// will do.
+    pub fn delivery_policy(&self, cwd: &Path) -> Option<DeliveryPolicyView> {
+        let repository = self.repository(cwd)?;
+        Some(DeliveryPolicyView {
+            completion: repository.policy.completion.abi_name(),
+            target: repository
+                .policy
+                .target
+                .clone()
+                .or_else(|| checkout::current_branch(&repository.primary)),
+            gate: repository.policy.gate.clone(),
+        })
+    }
+
+    /// Re-reads every live task's state from its checkout — what the
+    /// sidebar shows after an agent's pane goes quiet — and lets a clean,
+    /// live task follow a target that moved. A conflict that produces
+    /// returns to the owning agent as a notice for its pane.
+    pub fn evaluate_tasks(&self, cwd: &Path) -> Evaluation {
+        let Some(mut repository) = self.repository(cwd) else {
+            return Evaluation::default();
+        };
+        let target = repository.target();
+        checkout::reconcile(&repository.primary, &mut repository.store, &target);
+        let mut notices = Vec::new();
+        let primary = repository.primary.clone();
+        let completion = repository.policy.completion;
+        for task in &mut repository.store.tasks {
+            if !checkout::is_live(&task.state) || task.state == TaskState::Integrating {
+                continue;
+            }
+            match landing::readiness(&primary, task) {
+                Readiness::Running => task.state = TaskState::Running,
+                Readiness::Uncommitted => task.state = TaskState::Uncommitted,
+                Readiness::Rebasing { files } => task.state = TaskState::Conflicted { files },
+                Readiness::Ready { base, .. } => {
+                    task.base_commit = base;
+                    if task.state != TaskState::GateFailed {
+                        task.state = TaskState::Ready;
+                    }
+                }
+            }
+            // Following a moved target costs a clean task nothing and a
+            // dirty one its work in progress, which `refresh` refuses. A
+            // published target is followed at delivery, where the fetch
+            // is already paid for.
+            if completion != CompletionBehavior::Pr
+                && matches!(task.state, TaskState::Running | TaskState::Ready)
+                && let Err(DeliveryFailure::Conflict {
+                    files,
+                    target_moved,
+                }) = landing::refresh(&primary, task, completion)
+                && let Some(slot) = landing::slot_path(&primary, task)
+            {
+                notices.push(AgentNotice {
+                    task: task.id.as_str().to_owned(),
+                    checkout: slot,
+                    message: landing::conflict_message(task, &files, target_moved),
+                });
+            }
+        }
+        let _ = task::save(&self.0.home, &primary, &repository.store);
+        Evaluation {
+            tasks: repository.views(),
+            notices,
+        }
+    }
+
+    /// Delivers one task the way the project's completion says, one task
+    /// at a time under the repository write lock.
+    pub fn deliver_task(&self, cwd: &Path, task_id: &str) -> Option<DeliveryReport> {
+        let mut repository = self.repository(cwd)?;
+        let report = repository.deliver(task_id)?;
+        let _ = task::save(&self.0.home, &repository.primary, &repository.store);
+        Some(report)
+    }
+
+    /// Delivers every ready task, oldest first; the second sees the first.
+    pub fn deliver_ready(&self, cwd: &Path) -> Vec<DeliveryReport> {
+        let Some(mut repository) = self.repository(cwd) else {
+            return Vec::new();
+        };
+        let mut ready: Vec<(u64, String)> = repository
+            .store
+            .tasks
+            .iter()
+            .filter(|task| task.state == TaskState::Ready)
+            .map(|task| (task.created_at_unix, task.id.as_str().to_owned()))
+            .collect();
+        ready.sort();
+        let reports = ready
+            .into_iter()
+            .filter_map(|(_, id)| repository.deliver(&id))
+            .collect();
+        let _ = task::save(&self.0.home, &repository.primary, &repository.store);
+        reports
+    }
+
+    /// The operator declares a handed-off task done: its slot is free and
+    /// its branch stays.
+    pub fn finish_task(&self, cwd: &Path, task_id: &str) -> Result<()> {
+        let mut repository = self
+            .repository(cwd)
+            .ok_or_else(|| UzeError::UnknownTask(task_id.to_owned()))?;
+        let task = repository
+            .task_mut(task_id)
+            .ok_or_else(|| UzeError::UnknownTask(task_id.to_owned()))?;
+        task.state = TaskState::Integrated;
+        task::save(&self.0.home, &repository.primary, &repository.store)
+    }
+
+    /// The one path that deletes work, taken only by the operator on a
+    /// named task: the checkout and the branch go, the record goes with them.
+    pub fn discard_task(&self, cwd: &Path, task_id: &str) -> Result<()> {
+        let mut repository = self
+            .repository(cwd)
+            .ok_or_else(|| UzeError::UnknownTask(task_id.to_owned()))?;
+        let task = repository
+            .task_mut(task_id)
+            .ok_or_else(|| UzeError::UnknownTask(task_id.to_owned()))?
+            .clone();
+        checkout::discard(&repository.primary, &task).map_err(UzeError::Discard)?;
+        repository
+            .store
+            .tasks
+            .retain(|recorded| recorded.id.as_str() != task_id);
+        task::save(&self.0.home, &repository.primary, &repository.store)
+    }
+}
+
+/// A repository as the task operations see it: its primary checkout, the
+/// project's policy, and the recorded tasks.
+struct Repository {
+    primary: PathBuf,
+    policy: WorktreePolicy,
+    store: TaskStore,
+}
+
+impl Repository {
+    fn target(&self) -> String {
+        self.policy
+            .target
+            .clone()
+            .or_else(|| checkout::current_branch(&self.primary))
+            .unwrap_or_else(|| "HEAD".to_owned())
+    }
+
+    fn task_mut(&mut self, id: &str) -> Option<&mut Task> {
+        self.store
+            .tasks
+            .iter_mut()
+            .find(|task| task.id.as_str() == id)
+    }
+
+    fn views(&self) -> Vec<TaskView> {
+        self.store
+            .tasks
+            .iter()
+            .map(|task| TaskView::from_task(&self.primary, task))
+            .collect()
+    }
+
+    fn deliver(&mut self, task_id: &str) -> Option<DeliveryReport> {
+        let completion = self.policy.completion;
+        let gate = self.policy.gate.clone();
+        let policy = landing::Policy {
+            completion,
+            gate: gate.as_deref(),
+        };
+        let primary = self.primary.clone();
+        let task = self.task_mut(task_id)?;
+        let outcome = match landing::deliver(&primary, task, &policy) {
+            Ok(Delivered::Handoff) => DeliveryOutcome::Handoff,
+            Ok(Delivered::Merged { .. }) => DeliveryOutcome::Merged,
+            Ok(Delivered::Published { branch, request }) => {
+                DeliveryOutcome::Published { branch, request }
+            }
+            Err(DeliveryFailure::Conflict {
+                files,
+                target_moved,
+            }) => DeliveryOutcome::ReturnedToAgent(AgentNotice {
+                task: task.id.as_str().to_owned(),
+                checkout: landing::slot_path(&primary, task).unwrap_or_default(),
+                message: landing::conflict_message(task, &files, target_moved),
+            }),
+            Err(DeliveryFailure::GateFailed { output }) => {
+                DeliveryOutcome::ReturnedToAgent(AgentNotice {
+                    task: task.id.as_str().to_owned(),
+                    checkout: landing::slot_path(&primary, task).unwrap_or_default(),
+                    message: landing::gate_failure_message(task, &output),
+                })
+            }
+            Err(other) => DeliveryOutcome::Refused(other.to_string()),
+        };
+        Some(DeliveryReport {
+            task: TaskView::from_task(&primary, task),
+            outcome,
+        })
+    }
+}
+
+/// One task as presentation sees it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TaskView {
+    pub id: String,
+    pub label: String,
+    pub branch: String,
+    pub target: String,
+    /// The slot's directory, when the task has one.
+    pub checkout: Option<PathBuf>,
+    pub state: TaskStateView,
+    /// Commits the branch has beyond its base — what a delivery would land.
+    pub ahead: usize,
+    pub published_as: Option<String>,
+    pub created_at_unix: u64,
+}
+
+impl TaskView {
+    fn from_task(primary: &Path, task: &Task) -> Self {
+        Self {
+            id: task.id.as_str().to_owned(),
+            label: task.label.clone(),
+            branch: task.branch.clone(),
+            target: task.target.clone(),
+            checkout: landing::slot_path(primary, task),
+            state: TaskStateView::from(&task.state),
+            ahead: checkout::commits_ahead(primary, &task.base_commit, &task.branch),
+            published_as: task.published_as.clone(),
+            created_at_unix: task.created_at_unix,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TaskStateView {
+    Running,
+    Uncommitted,
+    Ready,
+    Integrating,
+    Conflicted { files: Vec<PathBuf> },
+    GateFailed,
+    Integrated,
+    Parked,
+}
+
+impl TaskStateView {
+    /// Whether delivery may be offered for a task in this state.
+    pub fn is_deliverable(&self) -> bool {
+        matches!(self, Self::Ready | Self::GateFailed)
+    }
+
+    /// Whether the task still has an agent's work in front of it.
+    pub fn is_live(&self) -> bool {
+        !matches!(self, Self::Integrated | Self::Parked)
+    }
+}
+
+impl From<&TaskState> for TaskStateView {
+    fn from(state: &TaskState) -> Self {
+        match state {
+            TaskState::Running => Self::Running,
+            TaskState::Uncommitted => Self::Uncommitted,
+            TaskState::Ready => Self::Ready,
+            TaskState::Integrating => Self::Integrating,
+            TaskState::Conflicted { files } => Self::Conflicted {
+                files: files.clone(),
+            },
+            TaskState::GateFailed => Self::GateFailed,
+            TaskState::Integrated => Self::Integrated,
+            TaskState::Parked => Self::Parked,
+        }
+    }
+}
+
+/// A message for the pane of the agent that owns `task`, running in
+/// `checkout`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AgentNotice {
+    pub task: String,
+    pub checkout: PathBuf,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Evaluation {
+    pub tasks: Vec<TaskView>,
+    pub notices: Vec<AgentNotice>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DeliveryOutcome {
+    Handoff,
+    Merged,
+    Published {
+        branch: String,
+        request: Option<String>,
+    },
+    /// Nothing was written; the reason names why.
+    Refused(String),
+    /// The target is untouched and the owning agent has been told what to do.
+    ReturnedToAgent(AgentNotice),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeliveryReport {
+    pub task: TaskView,
+    pub outcome: DeliveryOutcome,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeliveryPolicyView {
+    pub completion: &'static str,
+    pub target: Option<String>,
+    pub gate: Option<String>,
 }
 
 /// Where an agent starts, and whether that is a slot of its own.
@@ -232,6 +600,9 @@ impl Workspace<'_> {
 pub struct AgentPlacement {
     pub cwd: PathBuf,
     pub isolation: Isolation,
+    /// What preparing the checkout could not do — a missing link target, a
+    /// failed setup — none of which stops the launch.
+    pub warnings: Vec<String>,
 }
 
 impl AgentPlacement {
@@ -241,6 +612,7 @@ impl AgentPlacement {
             isolation: Isolation::Unisolated {
                 reason: reason.to_owned(),
             },
+            warnings: Vec::new(),
         }
     }
 }
@@ -443,5 +815,260 @@ mod placement_tests {
             second.isolation,
             Isolation::Slot { reused: true, .. }
         ));
+    }
+}
+
+#[cfg(test)]
+mod task_service_tests {
+    use super::*;
+    use uze_core::UzeHome;
+
+    fn repository(label: &str) -> uze_testkit::git::Repository {
+        let repository = uze_testkit::git::Repository::new(label);
+        repository.commit_file(".gitignore", ".env\ntarget/\n");
+        repository
+    }
+
+    fn application(label: &str) -> UzeApplication {
+        UzeApplication::new(UzeHome::at(uze_testkit::temp::scratch(label)), Vec::new())
+    }
+
+    fn lock(repository: &uze_testkit::git::Repository, policy: &str) {
+        std::fs::write(
+            repository.root().join("agents.lock"),
+            format!("version: 1\nworktrees:\n{policy}"),
+        )
+        .unwrap();
+    }
+
+    fn launched(app: &UzeApplication, root: &Path) -> (String, PathBuf) {
+        let placement = app.workspace().place_new_agent(root);
+        match placement.isolation {
+            Isolation::Slot { task, .. } => (task.as_str().to_owned(), placement.cwd),
+            Isolation::Unisolated { reason } => panic!("{reason}"),
+        }
+    }
+
+    fn agent_commits(
+        repository: &uze_testkit::git::Repository,
+        slot: &Path,
+        file: &str,
+        contents: &str,
+    ) {
+        std::fs::write(slot.join(file), contents).unwrap();
+        repository.git_in(slot, &["add", "--", file]);
+        repository.git_in(slot, &["commit", "-qm", file]);
+    }
+
+    fn state_of(app: &UzeApplication, root: &Path, id: &str) -> TaskStateView {
+        app.workspace()
+            .tasks(root)
+            .into_iter()
+            .find(|task| task.id == id)
+            .map(|task| task.state)
+            .expect("the task is recorded")
+    }
+
+    #[test]
+    fn evaluation_reads_the_checkout_and_merge_delivers() {
+        let repository = repository("svc-merge");
+        lock(&repository, "  completion: merge\n");
+        let root = repository.root().to_path_buf();
+        let app = application("svc-merge-home");
+        let (id, slot) = launched(&app, &root);
+        assert_eq!(state_of(&app, &root, &id), TaskStateView::Running);
+
+        std::fs::write(slot.join("draft.rs"), "").unwrap();
+        assert_eq!(
+            app.workspace().evaluate_tasks(&root).tasks[0].state,
+            TaskStateView::Uncommitted
+        );
+        agent_commits(&repository, &slot, "draft.rs", "fn done() {}");
+        let evaluation = app.workspace().evaluate_tasks(&root);
+        assert_eq!(evaluation.tasks[0].state, TaskStateView::Ready);
+        assert!(evaluation.notices.is_empty());
+
+        let report = app.workspace().deliver_task(&root, &id).unwrap();
+        assert_eq!(report.outcome, DeliveryOutcome::Merged);
+        assert_eq!(state_of(&app, &root, &id), TaskStateView::Integrated);
+        assert!(root.join("draft.rs").is_file());
+    }
+
+    #[test]
+    fn a_conflict_returns_a_notice_addressed_to_the_slot() {
+        let repository = repository("svc-conflict");
+        lock(&repository, "  completion: merge\n");
+        let root = repository.root().to_path_buf();
+        let app = application("svc-conflict-home");
+        let (id, slot) = launched(&app, &root);
+        agent_commits(&repository, &slot, "shared.rs", "agent\n");
+        repository.commit_file("shared.rs", "operator\n");
+
+        // The clean task follows the target on evaluation, and the
+        // conflict that produces is already the agent's to resolve; a
+        // delivery asked for meanwhile is refused, never forced.
+        let evaluation = app.workspace().evaluate_tasks(&root);
+        assert_eq!(evaluation.notices.len(), 1, "{evaluation:?}");
+        let notice = &evaluation.notices[0];
+        assert_eq!(notice.checkout, slot);
+        assert!(notice.message.contains("shared.rs"));
+        let report = app.workspace().deliver_task(&root, &id).unwrap();
+        assert!(
+            matches!(report.outcome, DeliveryOutcome::Refused(_)),
+            "{:?}",
+            report.outcome
+        );
+        assert!(matches!(
+            state_of(&app, &root, &id),
+            TaskStateView::Conflicted { .. }
+        ));
+    }
+
+    /// A clean live task follows the target on evaluation; a conflict there
+    /// is also a notice.
+    #[test]
+    fn evaluation_lets_a_clean_task_follow_the_target() {
+        let repository = repository("svc-follow");
+        lock(&repository, "  completion: merge\n");
+        let root = repository.root().to_path_buf();
+        let app = application("svc-follow-home");
+        let (_, slot) = launched(&app, &root);
+        agent_commits(&repository, &slot, "mine.rs", "agent's mine\n");
+        repository.commit_file("theirs.rs", "");
+        let evaluation = app.workspace().evaluate_tasks(&root);
+        assert!(evaluation.notices.is_empty());
+        assert!(
+            slot.join("theirs.rs").is_file(),
+            "rebased onto the moved target"
+        );
+
+        repository.commit_file("mine.rs", "operator's mine\n");
+        let evaluation = app.workspace().evaluate_tasks(&root);
+        assert_eq!(evaluation.notices.len(), 1);
+        assert_eq!(evaluation.notices[0].checkout, slot);
+    }
+
+    #[test]
+    fn the_locks_gate_refuses_and_a_passing_gate_lets_it_through() {
+        let repository = repository("svc-gate");
+        lock(
+            &repository,
+            "  completion: merge\n  gate: test -f must-exist\n",
+        );
+        let root = repository.root().to_path_buf();
+        let app = application("svc-gate-home");
+        let (id, slot) = launched(&app, &root);
+        agent_commits(&repository, &slot, "a.rs", "");
+        app.workspace().evaluate_tasks(&root);
+
+        let report = app.workspace().deliver_task(&root, &id).unwrap();
+        assert!(
+            matches!(report.outcome, DeliveryOutcome::ReturnedToAgent(_)),
+            "{:?}",
+            report.outcome
+        );
+        assert_eq!(state_of(&app, &root, &id), TaskStateView::GateFailed);
+
+        agent_commits(&repository, &slot, "must-exist", "");
+        app.workspace().evaluate_tasks(&root);
+        let report = app.workspace().deliver_task(&root, &id).unwrap();
+        assert_eq!(report.outcome, DeliveryOutcome::Merged);
+    }
+
+    #[test]
+    fn deliver_ready_takes_them_in_order_and_the_second_sees_the_first() {
+        let repository = repository("svc-ready");
+        lock(&repository, "  completion: merge\n");
+        let root = repository.root().to_path_buf();
+        let app = application("svc-ready-home");
+        let (_, first) = launched(&app, &root);
+        let (_, second) = launched(&app, &root);
+        agent_commits(&repository, &first, "first.rs", "");
+        agent_commits(&repository, &second, "second.rs", "");
+        app.workspace().evaluate_tasks(&root);
+
+        let reports = app.workspace().deliver_ready(&root);
+        assert_eq!(reports.len(), 2);
+        assert!(
+            reports
+                .iter()
+                .all(|report| report.outcome == DeliveryOutcome::Merged),
+            "{reports:?}"
+        );
+        assert!(root.join("first.rs").is_file() && root.join("second.rs").is_file());
+    }
+
+    #[test]
+    fn handoff_is_finished_by_the_operator_and_discard_is_the_only_deletion() {
+        let repository = repository("svc-finish-discard");
+        let root = repository.root().to_path_buf();
+        let app = application("svc-finish-discard-home");
+        let (id, slot) = launched(&app, &root);
+        agent_commits(&repository, &slot, "a.rs", "");
+        app.workspace().evaluate_tasks(&root);
+        let report = app.workspace().deliver_task(&root, &id).unwrap();
+        assert_eq!(report.outcome, DeliveryOutcome::Handoff);
+        assert_eq!(state_of(&app, &root, &id), TaskStateView::Ready);
+        let branch = report.task.branch.clone();
+
+        app.workspace().finish_task(&root, &id).unwrap();
+        assert_eq!(state_of(&app, &root, &id), TaskStateView::Integrated);
+        assert!(
+            slot.is_dir()
+                && repository
+                    .git(&["branch", "--list", &branch])
+                    .contains(&branch)
+        );
+
+        app.workspace().discard_task(&root, &id).unwrap();
+        assert!(!slot.exists());
+        assert!(repository.git(&["branch", "--list", &branch]).is_empty());
+        assert!(
+            app.workspace()
+                .tasks(&root)
+                .iter()
+                .all(|task| task.id != id)
+        );
+    }
+
+    #[test]
+    fn the_locks_target_cap_links_and_setup_shape_the_launch() {
+        let repository = repository("svc-lock-launch");
+        repository.git(&["branch", "develop"]);
+        std::fs::write(repository.root().join(".env"), "KEY=1\n").unwrap();
+        lock(
+            &repository,
+            "  target: develop\n  slots: 1\n  link: [.env]\n  setup: touch prepared\n",
+        );
+        let root = repository.root().to_path_buf();
+        let app = application("svc-lock-launch-home");
+
+        let placement = app.workspace().place_new_agent(&root);
+        let Isolation::Slot { branch, .. } = &placement.isolation else {
+            panic!("{placement:?}");
+        };
+        assert!(placement.warnings.is_empty(), "{:?}", placement.warnings);
+        assert!(
+            placement.cwd.join("prepared").is_file(),
+            "setup ran in the slot"
+        );
+        assert!(
+            std::fs::symlink_metadata(placement.cwd.join(".env"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            app.workspace().tasks(&root)[0].target,
+            "develop",
+            "the declared target, not the primary's branch"
+        );
+        let _ = branch;
+
+        let second = app.workspace().place_new_agent(&root);
+        assert!(
+            matches!(&second.isolation, Isolation::Unisolated { reason } if reason.contains("1 declared")),
+            "{second:?}"
+        );
     }
 }

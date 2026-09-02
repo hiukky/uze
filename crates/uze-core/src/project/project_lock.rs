@@ -159,7 +159,55 @@ pub fn load_lock(root: &Path) -> Result<Option<ProjectLock>> {
         path: path.clone(),
         reason: "agents.lock is not valid UTF-8".to_owned(),
     })?;
-    parse_lock_str(&text, &path).map(Some)
+    let lock = parse_lock_str(&text, &path)?;
+    if let Some(policy) = &lock.worktrees {
+        reject_unignored_links(root, &path, policy)?;
+    }
+    Ok(Some(lock))
+}
+
+/// A linked file must be ignored by the repository: a tracked file linked
+/// into a checkout would land in the agent's commits as a symlink. Asked
+/// of Git only when a lock declares links, so a lock that declares none
+/// costs no subprocess to read.
+fn reject_unignored_links(
+    root: &Path,
+    path: &Path,
+    policy: &crate::worktree::WorktreePolicy,
+) -> Result<()> {
+    for link in &policy.link {
+        let spelled = link.to_string_lossy();
+        let answer =
+            uze_git::read(root, &["check-ignore", "--quiet", "--", &spelled]).map_err(|error| {
+                UzeError::MalformedLock {
+                    path: path.to_path_buf(),
+                    reason: format!("`worktrees.link` names `{spelled}`, but {error}"),
+                }
+            })?;
+        match answer.code {
+            Some(0) => {}
+            Some(1) => {
+                return Err(UzeError::MalformedLock {
+                    path: path.to_path_buf(),
+                    reason: format!(
+                        "`worktrees.link` names `{spelled}`, which the repository does not \
+                         ignore; a linked file must be ignored, or it would be committed as a \
+                         symlink from an agent's checkout"
+                    ),
+                });
+            }
+            _ => {
+                return Err(UzeError::MalformedLock {
+                    path: path.to_path_buf(),
+                    reason: format!(
+                        "`worktrees.link` names `{spelled}`, but this directory is not a Git \
+                         repository that could ignore it"
+                    ),
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The superseded spelling of the isolation policy: a bare directory, with
@@ -193,6 +241,18 @@ fn parse_lock_str(text: &str, path: &Path) -> Result<ProjectLock> {
         path: path.to_path_buf(),
         reason: e.to_string(),
     })?;
+    if let Some(policy) = &lock.worktrees
+        && let Some((link, why)) = policy.misplaced_links().into_iter().next()
+    {
+        return Err(UzeError::MalformedLock {
+            path: path.to_path_buf(),
+            reason: format!(
+                "`worktrees.link` names `{}`, which is {why}; a link is a relative path inside \
+                 the repository",
+                link.display()
+            ),
+        });
+    }
     if lock.version != SUPPORTED_LOCK_VERSION {
         return Err(UzeError::UnsupportedLockVersion {
             found: lock.version,
@@ -203,6 +263,18 @@ fn parse_lock_str(text: &str, path: &Path) -> Result<ProjectLock> {
 }
 
 pub fn save_lock(root: &Path, lock: &ProjectLock) -> Result<()> {
+    if let Some(policy) = &lock.worktrees
+        && let Some((link, why)) = policy.misplaced_links().into_iter().next()
+    {
+        return Err(UzeError::MalformedLock {
+            path: lock_path_for(root),
+            reason: format!(
+                "`worktrees.link` names `{}`, which is {why}; a link is a relative path inside \
+                 the repository",
+                link.display()
+            ),
+        });
+    }
     if lock.version != SUPPORTED_LOCK_VERSION {
         return Err(UzeError::UnsupportedLockVersion {
             found: lock.version,
@@ -441,5 +513,87 @@ mod tests {
         )
         .expect("the lock stays forward-compatible");
         assert_eq!(lock.version, SUPPORTED_LOCK_VERSION);
+    }
+
+    #[test]
+    fn the_policy_round_trips_with_every_field() {
+        let lock = parse_lock_str(
+            "version: 1\nworktrees:\n  target: develop\n  completion: pr\n  link: [.env, .env.local]\n  setup: pnpm install\n  gate: cargo test\n  slots: 3\n",
+            &PathBuf::from("agents.lock"),
+        )
+        .unwrap();
+        let policy = lock.worktrees.clone().unwrap();
+        assert_eq!(policy.target.as_deref(), Some("develop"));
+        assert_eq!(policy.completion, crate::worktree::CompletionBehavior::Pr);
+        assert_eq!(
+            policy.link,
+            vec![PathBuf::from(".env"), PathBuf::from(".env.local")]
+        );
+        assert_eq!(policy.setup.as_deref(), Some("pnpm install"));
+        assert_eq!(policy.gate.as_deref(), Some("cargo test"));
+        assert_eq!(policy.slots, Some(3));
+        let text = serde_yaml::to_string(&lock).unwrap();
+        let again = parse_lock_str(&text, &PathBuf::from("agents.lock")).unwrap();
+        assert_eq!(again, lock);
+    }
+
+    #[test]
+    fn a_policy_block_declaring_nothing_has_safe_defaults() {
+        let lock =
+            parse_lock_str("version: 1\nworktrees: {}\n", &PathBuf::from("agents.lock")).unwrap();
+        let policy = lock.worktrees.unwrap();
+        assert_eq!(policy.target, None);
+        assert_eq!(
+            policy.completion,
+            crate::worktree::CompletionBehavior::Handoff
+        );
+        assert!(policy.link.is_empty() && policy.setup.is_none() && policy.gate.is_none());
+        assert_eq!(policy.slots, None);
+    }
+
+    #[test]
+    fn a_link_escaping_the_repository_is_rejected_at_read_time() {
+        for link in ["/etc/passwd", "../sibling/.env", "config/../../.env"] {
+            let err = parse_lock_str(
+                &format!("version: 1\nworktrees:\n  link: ['{link}']\n"),
+                &PathBuf::from("agents.lock"),
+            )
+            .unwrap_err();
+            let UzeError::MalformedLock { reason, .. } = err else {
+                panic!("{link}: a misplaced link must be a malformed lock");
+            };
+            assert!(reason.contains(link), "{reason}");
+        }
+    }
+
+    /// Against a real repository: an ignored link loads, a tracked one is
+    /// refused by name and reason.
+    #[test]
+    fn a_link_to_a_tracked_file_is_rejected_and_an_ignored_one_loads() {
+        let repository = uze_testkit::git::Repository::new("lock-links");
+        repository.commit_file(".gitignore", ".env\n");
+        let root = repository.root();
+
+        fs::write(
+            root.join(LOCK_FILE_NAME),
+            "version: 1\nworktrees:\n  link: [.env]\n",
+        )
+        .unwrap();
+        let lock = load_lock(root).unwrap().unwrap();
+        assert_eq!(lock.worktrees.unwrap().link, vec![PathBuf::from(".env")]);
+
+        fs::write(
+            root.join(LOCK_FILE_NAME),
+            "version: 1\nworktrees:\n  link: [README.md]\n",
+        )
+        .unwrap();
+        let err = load_lock(root).unwrap_err();
+        let UzeError::MalformedLock { reason, .. } = err else {
+            panic!("a tracked link must be a malformed lock");
+        };
+        assert!(
+            reason.contains("README.md") && reason.contains("ignore"),
+            "{reason}"
+        );
     }
 }

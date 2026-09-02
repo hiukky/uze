@@ -160,10 +160,14 @@ stays tolerant so a lock from a newer UZE still loads.
   an agent and UZE could touch the same slot, and UZE stays out of it.
 - **`merge` writes into the operator's tree.** The overlap rule keeps this
   from destroying anything, but it is a surprise the first time.
-- **`setup` runs project-declared code on first launch.** Remote executable
-  capabilities cross an explicit consent boundary in this project. Whether
-  the lock's `setup` inherits that boundary is decided during
-  implementation and recorded in the invariants.
+- **`setup` and `gate` run project-declared code.** Decided: no consent
+  boundary of their own. The consent boundary guards executable
+  capabilities that arrive *with a package* from elsewhere; `agents.lock`
+  is the project's own file, in the same trust class as its Makefile or
+  its CI script, and an operator who opens agents in a repository has
+  already decided to run what it declares. Both commands run through the
+  bounded subprocess helper, in the task's checkout, with their output
+  captured and shown.
 - **Two spaces on one repository share one slot pool.** Correct by design;
   the state file needs its own lock for it to be safe.
 

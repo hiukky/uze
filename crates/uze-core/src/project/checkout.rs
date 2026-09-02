@@ -199,6 +199,66 @@ fn create(primary: &Path, branch: &str, base_tip: &str) -> Result<Acquired, Acqu
     })
 }
 
+/// A checkout's preparation, in order: links from the primary, then the
+/// declared setup command. Every problem is a warning — a checkout without
+/// its `.env` or its dependencies is still better than no agent — and the
+/// warnings are what the tab shows.
+pub const SETUP_TIMEOUT: Duration = Duration::from_secs(20 * 60);
+
+pub fn materialize(
+    primary: &Path,
+    slot: &Path,
+    links: &[PathBuf],
+    setup: Option<&str>,
+) -> Vec<String> {
+    let mut warnings = Vec::new();
+    for link in links {
+        let source = primary.join(link);
+        let destination = slot.join(link);
+        if !source.exists() {
+            warnings.push(format!(
+                "`{}` is not in the primary checkout; not linked",
+                link.display()
+            ));
+            continue;
+        }
+        if destination.exists() || fs::symlink_metadata(&destination).is_ok() {
+            continue;
+        }
+        if let Some(parent) = destination.parent()
+            && let Err(error) = fs::create_dir_all(parent)
+        {
+            warnings.push(format!("could not prepare `{}`: {error}", link.display()));
+            continue;
+        }
+        if let Err(error) = symlink(&source, &destination) {
+            warnings.push(format!("could not link `{}`: {error}", link.display()));
+        }
+    }
+    if let Some(setup) = setup {
+        let (passed, output) = crate::subprocess::run_shell_bounded(slot, setup, SETUP_TIMEOUT);
+        if !passed {
+            let tail = output.lines().last().unwrap_or("").to_owned();
+            warnings.push(format!("setup `{setup}` failed: {tail}"));
+        }
+    }
+    warnings
+}
+
+#[cfg(unix)]
+fn symlink(source: &Path, destination: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(source, destination)
+}
+
+#[cfg(not(unix))]
+fn symlink(source: &Path, destination: &Path) -> std::io::Result<()> {
+    if source.is_dir() {
+        std::os::windows::fs::symlink_dir(source, destination)
+    } else {
+        std::os::windows::fs::symlink_file(source, destination)
+    }
+}
+
 /// What reconciling the isolation directory against `store` found.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Reconciliation {
@@ -326,6 +386,28 @@ pub fn remove_idle_slots(primary: &Path, store: &TaskStore, age: Duration) -> Ve
         }
     }
     removed
+}
+
+/// The one removal that loses work, and therefore the one only an operator
+/// takes on a named task: the checkout directory, forced, and the branch.
+pub fn discard(primary: &Path, task: &Task) -> Result<(), String> {
+    uze_git::locked(primary, uze_git::DEFAULT_WRITE_TIMEOUT, || {
+        if let Some(checkout) = &task.checkout {
+            let path = primary.join(WORKTREES_DIRECTORY).join(checkout.as_str());
+            if path.is_dir() {
+                git(
+                    primary,
+                    &["worktree", "remove", "--force", &path.to_string_lossy()],
+                )
+                .map_err(|error| error.to_string())?;
+            }
+        }
+        if branch_exists(primary, &task.branch) {
+            git(primary, &["branch", "-D", &task.branch]).map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    })
+    .map_err(|error| error.to_string())?
 }
 
 /// Whether `state` means an agent may still be writing.
@@ -849,5 +931,56 @@ mod tests {
         let store = TaskStore::default();
         let error = acquire(repository.root(), &store, &task("x"), "HEAD", None).unwrap_err();
         assert!(matches!(error, AcquireError::Git(_)), "{error}");
+    }
+
+    #[test]
+    fn a_linked_file_is_a_symlink_and_a_missing_target_only_warns() {
+        let repository = repository("slots-materialize");
+        let primary = repository.root();
+        fs::write(primary.join(".env"), "SECRET=1\n").unwrap();
+        let mut store = TaskStore::default();
+        let (_, slot) = launch(&repository, &mut store, "materialize");
+
+        let warnings = materialize(
+            primary,
+            &slot.path,
+            &[PathBuf::from(".env"), PathBuf::from(".env.local")],
+            None,
+        );
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains(".env.local"));
+        let linked = slot.path.join(".env");
+        assert!(
+            fs::symlink_metadata(&linked)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(fs::read_to_string(&linked).unwrap(), "SECRET=1\n");
+        assert!(
+            materialize(primary, &slot.path, &[PathBuf::from(".env")], None).is_empty(),
+            "idempotent"
+        );
+    }
+
+    #[test]
+    fn a_failing_setup_warns_with_its_last_line_and_a_passing_one_is_silent() {
+        let repository = repository("slots-setup");
+        let primary = repository.root();
+        let mut store = TaskStore::default();
+        let (_, slot) = launch(&repository, &mut store, "setup");
+        let warnings = materialize(
+            primary,
+            &slot.path,
+            &[],
+            Some("echo preparing; echo 'no such tool: pnpm' >&2; exit 3"),
+        );
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("no such tool: pnpm"), "{warnings:?}");
+        assert!(materialize(primary, &slot.path, &[], Some("touch prepared")).is_empty());
+        assert!(
+            slot.path.join("prepared").exists(),
+            "setup runs in the checkout"
+        );
     }
 }

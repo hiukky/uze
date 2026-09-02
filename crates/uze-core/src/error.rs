@@ -77,6 +77,10 @@ pub enum UzeError {
     UnknownPackage(String),
     #[error("unsupported agents.lock version {found}; expected {expected}")]
     UnsupportedLockVersion { found: u32, expected: u32 },
+    #[error("no task `{0}` is recorded for this repository")]
+    UnknownTask(String),
+    #[error("could not discard the task: {0}")]
+    Discard(String),
     #[error("unsupported state schema {found} in {path}; this uze writes {expected}")]
     UnsupportedStateSchema {
         path: PathBuf,

@@ -580,6 +580,63 @@ left by a dead process is reclaimed.
 > `crates/uze-git/src/lib.rs::a_busy_lock_is_reported_by_name_after_the_timeout_and_reads_never_wait`
 > `crates/uze-git/src/lib.rs::a_lock_held_by_a_dead_process_is_reclaimed`
 
+### Readiness is a Git fact, never an announcement
+
+A task is ready when its checkout has commits ahead of the base on a clean
+tree. That is read from the checkout when the pane goes quiet or on demand,
+and never from anything the agent says; a paused rebase reads as exactly
+that.
+
+> `crates/uze-core/src/project/landing.rs::readiness_is_read_from_the_checkout`
+> `crates/uze-core/src/project/landing.rs::a_task_without_commits_is_not_delivered`
+> `crates/uze-application/src/application/services.rs::task_service_tests::evaluation_reads_the_checkout_and_merge_delivers`
+
+### The target is written only in deliver, and only by UZE
+
+Delivery rebases the task's branch inside its own checkout, runs the declared
+gate on the rebased commits, and only then advances the target by
+fast-forward. A conflict or a failed gate leaves the target untouched and
+returns the task to the agent that owns it, with the rebase paused in its
+checkout. `handoff` never touches the target; `pr` publishes against the
+remote's tip and never pulls the operator's local branch.
+
+> `crates/uze-core/src/project/landing.rs::handoff_never_touches_the_target`
+> `crates/uze-core/src/project/landing.rs::merge_advances_the_target_linearly_after_the_gate`
+> `crates/uze-core/src/project/landing.rs::the_gate_runs_after_the_rebase_not_before`
+> `crates/uze-core/src/project/landing.rs::a_gate_failure_leaves_the_target_untouched_and_returns_to_the_owner`
+> `crates/uze-core/src/project/landing.rs::a_conflict_leaves_the_rebase_paused_and_the_target_untouched`
+> `crates/uze-core/src/project/landing.rs::pr_pushes_under_the_readable_name_and_opens_the_request`
+
+### A delivery never collides with the operator's own edits
+
+A fast-forward into the checked-out target updates the operator's working
+tree, so a task touching a file the operator has uncommitted changes to is
+refused before anything is written.
+
+> `crates/uze-core/src/project/landing.rs::overlap_with_the_operators_uncommitted_work_refuses_and_writes_nothing`
+
+### Sibling tasks share work only through the target
+
+The second task delivered is rebased onto a target that already contains the
+first; a live, clean task follows a moved target on its own, and one mid-edit
+is never rebased under its agent. No task's branch ever carries another
+task's commits directly.
+
+> `crates/uze-core/src/project/landing.rs::the_second_task_sees_the_first`
+> `crates/uze-core/src/project/landing.rs::a_live_task_follows_the_target_when_clean_and_is_left_alone_when_dirty`
+> `crates/uze-application/src/application/services.rs::task_service_tests::evaluation_lets_a_clean_task_follow_the_target`
+
+### A linked file is ignored by the repository
+
+A path in `worktrees.link` must be relative, stay inside the repository and
+be ignored by it; a violation is a malformed lock at read time, not a
+surprise at launch. Linked or not, a failed `setup` warns and never blocks a
+launch.
+
+> `crates/uze-core/src/project/project_lock.rs::a_link_escaping_the_repository_is_rejected_at_read_time`
+> `crates/uze-core/src/project/project_lock.rs::a_link_to_a_tracked_file_is_rejected_and_an_ignored_one_loads`
+> `crates/uze-core/src/project/checkout.rs::a_failing_setup_warns_with_its_last_line_and_a_passing_one_is_silent`
+
 ### The projection never triggers a harness's own isolation
 
 The text projected into the shared baseline states where the reader already

@@ -68,22 +68,22 @@ green. Tests run against real repositories through `uze_testkit::git`.
 
 ## 10. Readiness and delivery
 
-- [ ] 10.1 Evaluate readiness from Git (commits ahead of the base, clean tree) when a managed agent's pane goes quiet — the activity signal behind today's `Completed` status — and on demand; no harness signal required. An end-of-turn hook may trigger the same evaluation later, as an optional sharpening.
-- [ ] 10.2 Add `project/landing`: one task at a time under the write lock — rebase in the task's checkout, gate on the rebased commits, deliver by `completion` (`handoff` marks ready; `merge` fast-forwards the target, refusing on overlap with the operator's uncommitted changes; `pr` pushes under the readable name and opens the pull request with the available forge CLI, whose absence is a lock read-time error).
-- [ ] 10.3 On conflict or gate failure: leave the rebase paused, write the files and the target's range into the owning agent's pane, keep the target untouched, re-evaluate on the next quiet or on demand.
-- [ ] 10.4 Application surface: task list read model with state, one delivery service, the preserved-work list at space start; TUI: sidebar label and state, `i`/`I`, the preserved-work list with resume, deliver and discard.
-- [ ] 10.5 Cover delivery: handoff never touches the target, merge advances it linearly after the gate, gate runs after the rebase, a gate failure and a conflict both leave the target untouched and return to the owner, the second task sees the first, overlap with the operator's dirty primary refuses, pr pushes and opens the request against a fake forge CLI, only the operator discards.
+- [x] 10.1 Evaluate readiness from Git (commits ahead of the base, clean tree) when a managed agent's pane goes quiet — the activity signal behind today's `Completed` status — and on demand; no harness signal required. An end-of-turn hook may trigger the same evaluation later, as an optional sharpening.
+- [x] 10.2 Add `project/landing`: one task at a time under the write lock — rebase in the task's checkout, gate on the rebased commits, deliver by `completion` (`handoff` marks ready; `merge` fast-forwards the target, refusing on overlap with the operator's uncommitted changes; `pr` pushes under the readable name and opens the pull request with the available forge CLI, whose absence is a lock read-time error).
+- [x] 10.3 On conflict or gate failure: leave the rebase paused, write the files and the target's range into the owning agent's pane, keep the target untouched, re-evaluate on the next quiet or on demand.
+- [x] 10.4 Application surface: task list read model with state, one delivery service, the preserved-work list at space start; TUI: sidebar label and state, `i`/`I`, the preserved-work list with resume, deliver and discard.
+- [x] 10.5 Cover delivery: handoff never touches the target, merge advances it linearly after the gate, gate runs after the rebase, a gate failure and a conflict both leave the target untouched and return to the owner, the second task sees the first, overlap with the operator's dirty primary refuses, pr pushes and opens the request against a fake forge CLI, only the operator discards.
 
-- [ ] 10.6 Rebase a live task onto the target automatically when the target has moved and the task's pane is quiet with a clean tree, through the same path as delivery's rebase; never under a dirty tree. No manual mode.
+- [x] 10.6 Rebase a live task onto the target automatically when the target has moved and the task's pane is quiet with a clean tree, through the same path as delivery's rebase; never under a dirty tree. No manual mode.
 
-- [ ] 10.7 In pr mode, resolve the target's tip from the remote-tracking branch after a fetch under the lock, and take "integrated" from the forge (request merged) rather than from reachability, so a squash merge still closes the task and prunes its branch; the operator's local target is never pulled.
+- [x] 10.7 In pr mode, resolve the target's tip from the remote-tracking branch after a fetch under the lock, and take "integrated" from the forge (request merged) rather than from reachability, so a squash merge still closes the task and prunes its branch; the operator's local target is never pulled.
 
 ## 11. Materialisation
 
-- [ ] 11.1 Grow the lock's `worktrees` block: `completion` gains `pr`; add `target` (default: the primary's checked-out branch at task creation), `link`, `setup`, `gate`, `slots`, all optional; `link` validated at read time (relative, inside the repository, ignored); unknown policy fields rejected by name, top level still tolerant.
-- [ ] 11.2 Materialise on acquire: link, then setup through the bounded subprocess helper with the transcript capturing output; a missing link target warns; a setup failure warns and launches.
-- [ ] 11.3 Decide and record whether `setup` inherits the consent boundary of remote executable capabilities.
-- [ ] 11.4 Cover the lock and materialisation: round-trip, no block still loads, escaping and tracked links rejected at read time, linked file is a symlink, missing target warns but launches, setup failure surfaced but not fatal.
+- [x] 11.1 Grow the lock's `worktrees` block: `completion` gains `pr`; add `target` (default: the primary's checked-out branch at task creation), `link`, `setup`, `gate`, `slots`, all optional; `link` validated at read time (relative, inside the repository, ignored); unknown policy fields rejected by name, top level still tolerant.
+- [x] 11.2 Materialise on acquire: link, then setup through the bounded subprocess helper with the transcript capturing output; a missing link target warns; a setup failure warns and launches.
+- [x] 11.3 Decide and record whether `setup` inherits the consent boundary of remote executable capabilities. Decided: it does not — `agents.lock` is the project's own file, in the trust class of its Makefile; recorded in `design.md`.
+- [x] 11.4 Cover the lock and materialisation: round-trip, no block still loads, escaping and tracked links rejected at read time, linked file is a symlink, missing target warns but launches, setup failure surfaced but not fatal.
 
 ## 12. Projection, Skill, invariants, dogfood
 

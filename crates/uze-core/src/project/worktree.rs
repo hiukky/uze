@@ -87,19 +87,66 @@ impl CompletionBehavior {
     }
 }
 
-/// A project's declaration. One field today, and a struct rather than a bare
-/// enum because this is the shape `agents.lock` carries and the shape a
-/// second axis would extend without breaking existing locks.
+/// A project's declaration: which branch finished work targets, what
+/// happens to it, what a fresh checkout needs, what gates delivery, and how
+/// many checkouts may exist at once. Every field is optional with a safe
+/// default, so a lock declaring nothing still loads.
 ///
 /// A closed vocabulary, unlike the lock that carries it: everything a
 /// project may declare about isolation is named here, so an unrecognized key
 /// is a mistake to report rather than a field from a future version to
 /// tolerate. Silently ignoring one would read as a policy honored.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorktreePolicy {
+    /// The branch finished work targets. Undeclared, it is the branch the
+    /// primary checkout is on when a task is created.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
     #[serde(default)]
     pub completion: CompletionBehavior,
+    /// Ignored files a fresh checkout links from the primary checkout —
+    /// `.env` and friends. Relative, inside the repository, and ignored by
+    /// it: a symlink the agent writes through reaches the primary, so only
+    /// what the agent reads belongs here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub link: Vec<PathBuf>,
+    /// A shell command that prepares a checkout, run in it after linking.
+    /// Its failure warns and never blocks a launch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup: Option<String>,
+    /// A shell command run in the task's checkout on the rebased commits;
+    /// a non-zero exit refuses delivery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gate: Option<String>,
+    /// The most checkouts that may exist at once. Undeclared, peak
+    /// concurrency is the only bound.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slots: Option<usize>,
+}
+
+impl WorktreePolicy {
+    /// The links that are not relative paths staying inside the
+    /// repository — each with the reason. Pure, so it runs at parse time.
+    pub fn misplaced_links(&self) -> Vec<(PathBuf, &'static str)> {
+        self.link
+            .iter()
+            .filter_map(|link| {
+                if link.is_absolute() {
+                    Some((link.clone(), "an absolute path"))
+                } else if link
+                    .components()
+                    .any(|component| matches!(component, std::path::Component::ParentDir))
+                {
+                    Some((link.clone(), "a path leaving the repository"))
+                } else if link.as_os_str().is_empty() {
+                    Some((link.clone(), "an empty path"))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
 }
 
 impl WorktreePolicy {
@@ -258,6 +305,7 @@ mod tests {
 
         let merging = WorktreePolicy {
             completion: CompletionBehavior::Merge,
+            ..WorktreePolicy::default()
         };
         let text = merging.instructions();
         assert!(text.contains(CompletionBehavior::Merge.instruction_clause()));
@@ -279,6 +327,7 @@ mod tests {
         let handoff = WorktreePolicy::default();
         let merge = WorktreePolicy {
             completion: CompletionBehavior::Merge,
+            ..WorktreePolicy::default()
         };
         assert_ne!(handoff.region_identity(), merge.region_identity());
         assert!(WorktreePolicy::owns_region(&handoff.region_identity()));

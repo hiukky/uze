@@ -26,6 +26,7 @@ use std::{
     time::{Duration, Instant},
 };
 use uze_application::AgentIdentity;
+use uze_application::{DeliveryOutcome, DeliveryReport, Evaluation, TaskStateView, TaskView};
 use uze_application::{Result, UzeError, UzeHome};
 use uze_extensions::{
     ExtensionHit, git_diff,
@@ -156,6 +157,94 @@ fn spawn_support_refresh(home: &UzeHome, key: SupportKey, sender: mpsc::Sender<S
     });
 }
 
+/// How often every visible repository's tasks are re-read even when no
+/// pane went quiet — a task delivered from another client, a branch
+/// integrated by hand, a checkout removed.
+const TASK_REFRESH: Duration = Duration::from_secs(20);
+/// How long a one-line notice stays on screen.
+const NOTICE_TTL: Duration = Duration::from_secs(6);
+
+/// What a background evaluation answered, keyed by the primary checkout
+/// it is about.
+struct TaskResolution {
+    primary: PathBuf,
+    evaluation: Evaluation,
+}
+
+/// What a background delivery answered.
+struct DeliveryResolution {
+    cwd: PathBuf,
+    reports: Vec<DeliveryReport>,
+}
+
+/// Open state of the preserved-work list: tasks holding work that no live
+/// tab is in front of.
+struct PreservedOverlay {
+    selected: usize,
+    /// A discard was asked for and waits for its confirmation.
+    confirm_discard: bool,
+}
+
+/// Re-reads the tasks of the repository `cwd` belongs to, off the UI
+/// thread: every evaluation asks Git, and a delivery may run a gate.
+fn spawn_task_evaluation(home: &UzeHome, cwd: PathBuf, sender: mpsc::Sender<TaskResolution>) {
+    let home = home.clone();
+    thread::spawn(move || {
+        let Ok(app) = tui_application(home) else {
+            return;
+        };
+        let Some(primary) = app.workspace().primary_of(&cwd) else {
+            return;
+        };
+        let evaluation = app.workspace().evaluate_tasks(&cwd);
+        let _ = sender.send(TaskResolution {
+            primary,
+            evaluation,
+        });
+    });
+}
+
+/// Delivers one task, or every ready one when `task` is `None`.
+fn spawn_delivery(
+    home: &UzeHome,
+    cwd: PathBuf,
+    task: Option<String>,
+    sender: mpsc::Sender<DeliveryResolution>,
+) {
+    let home = home.clone();
+    thread::spawn(move || {
+        let Ok(app) = tui_application(home) else {
+            return;
+        };
+        let reports = match task {
+            Some(task) => app
+                .workspace()
+                .deliver_task(&cwd, &task)
+                .into_iter()
+                .collect(),
+            None => app.workspace().deliver_ready(&cwd),
+        };
+        let _ = sender.send(DeliveryResolution { cwd, reports });
+    });
+}
+
+/// The one line a delivery leaves on screen.
+fn describe_delivery(report: &DeliveryReport) -> String {
+    let label = &report.task.label;
+    match &report.outcome {
+        DeliveryOutcome::Handoff => format!("{label}: ready on {}", report.task.branch),
+        DeliveryOutcome::Merged => format!("{label}: merged into {}", report.task.target),
+        DeliveryOutcome::Published { branch, request } => match request {
+            Some(url) => format!("{label}: {url}"),
+            None => format!("{label}: pushed as {branch}"),
+        },
+        DeliveryOutcome::Refused(reason) => format!("{label}: not delivered — {reason}"),
+        DeliveryOutcome::ReturnedToAgent(_) => {
+            format!("{label}: returned to its agent to resolve")
+        }
+    }
+}
+
 pub(crate) fn attach_workspace(
     terminal: &mut super::TerminalSession,
     root: &Path,
@@ -247,6 +336,8 @@ pub(crate) fn attach_workspace(
     // the selection names an agent whose answer is not already in hand —
     // the same moment the "✦" badge appears.
     let (support_sender, support_receiver) = mpsc::channel::<SupportResolution>();
+    let (task_sender, task_receiver) = mpsc::channel::<TaskResolution>();
+    let (delivery_sender, delivery_receiver) = mpsc::channel::<DeliveryResolution>();
     let activity_spinner = ProgressBar::new_spinner();
     activity_spinner.set_draw_target(ProgressDrawTarget::hidden());
     activity_spinner
@@ -296,6 +387,68 @@ pub(crate) fn attach_workspace(
                 model.agent_support_pending = None;
             }
             model.agent_support = Some(resolution);
+            model.dirty = true;
+        }
+        while let Ok(resolution) = task_receiver.try_recv() {
+            model.task_eval_pending.remove(&resolution.primary);
+            model
+                .tasks
+                .insert(resolution.primary, resolution.evaluation.tasks);
+            // A conflict found while a clean task followed the target is
+            // the agent's to resolve: the message goes into its pane, as
+            // one submission.
+            for notice in resolution.evaluation.notices {
+                if let Some(pane) = model.pane_for_checkout(&notice.checkout) {
+                    let mut bytes = notice.message.into_bytes();
+                    bytes.push(b'\r');
+                    let _ = send_request(&mut stream, &ClientRequest::Input { pane, bytes });
+                }
+            }
+            model.dirty = true;
+        }
+        while let Ok(resolution) = delivery_receiver.try_recv() {
+            for report in &resolution.reports {
+                model.delivery_pending.remove(&report.task.id);
+                model.set_notice(describe_delivery(report));
+                if let DeliveryOutcome::ReturnedToAgent(notice) = &report.outcome
+                    && let Some(pane) = model.pane_for_checkout(&notice.checkout)
+                {
+                    let mut bytes = notice.message.clone().into_bytes();
+                    bytes.push(b'\r');
+                    let _ = send_request(&mut stream, &ClientRequest::Input { pane, bytes });
+                }
+            }
+            if resolution.reports.is_empty() {
+                model.set_notice("nothing ready to deliver".to_owned());
+            }
+            model.schedule_evaluation(home, resolution.cwd, &task_sender);
+            model.dirty = true;
+        }
+        // Readiness is a Git fact, read when a pane goes quiet and, less
+        // often, on a clock — never told by the agent.
+        let quiet_panes = std::mem::take(&mut model.recently_quiet);
+        let quiet: Vec<PathBuf> = quiet_panes
+            .into_iter()
+            .filter_map(|pane| model.pane_cwd(pane))
+            .collect();
+        for cwd in quiet {
+            model.schedule_evaluation(home, cwd, &task_sender);
+        }
+        if model
+            .last_task_refresh
+            .is_none_or(|last| last.elapsed() >= TASK_REFRESH)
+        {
+            model.last_task_refresh = Some(Instant::now());
+            if let Some(cwd) = selected_pane_cwd(&model) {
+                model.schedule_evaluation(home, cwd, &task_sender);
+            }
+        }
+        if model
+            .notice
+            .as_ref()
+            .is_some_and(|(_, since)| since.elapsed() >= NOTICE_TTL)
+        {
+            model.notice = None;
             model.dirty = true;
         }
         // Contextual resolution: whatever the selection currently is, that
@@ -415,10 +568,17 @@ pub(crate) fn attach_workspace(
                                 && let Some(option) = picker.options.get(picker.selected)
                             {
                                 let label = next_agent_label(&model);
+                                let cwd = picker
+                                    .cwd
+                                    .clone()
+                                    .or_else(|| agent_launch_cwd(&model, home));
+                                if let Some(cwd) = cwd.clone() {
+                                    model.schedule_evaluation(home, cwd, &task_sender);
+                                }
                                 let _ = send_request(
                                     &mut stream,
                                     &ClientRequest::CreateTab {
-                                        cwd: agent_launch_cwd(&model, home),
+                                        cwd,
                                         label,
                                         columns,
                                         rows,
@@ -434,8 +594,103 @@ pub(crate) fn attach_workspace(
                     }
                     model.dirty = true;
                 }
+                Event::Key(key) if model.preserved.is_some() => {
+                    let preserved = model.preserved_tasks();
+                    let overlay = model.preserved.as_mut().expect("guarded");
+                    match key.code {
+                        KeyCode::Esc => model.preserved = None,
+                        KeyCode::Up => {
+                            overlay.selected = overlay.selected.saturating_sub(1);
+                            overlay.confirm_discard = false;
+                        }
+                        KeyCode::Down => {
+                            overlay.selected =
+                                (overlay.selected + 1).min(preserved.len().saturating_sub(1));
+                            overlay.confirm_discard = false;
+                        }
+                        KeyCode::Char('i') => {
+                            if let Some((cwd, task)) = preserved.get(overlay.selected) {
+                                model.delivery_pending.insert(task.id.clone());
+                                spawn_delivery(
+                                    home,
+                                    cwd.clone(),
+                                    Some(task.id.clone()),
+                                    delivery_sender.clone(),
+                                );
+                            }
+                        }
+                        KeyCode::Char('f') => {
+                            if let Some((cwd, task)) = preserved.get(overlay.selected)
+                                && let Ok(app) = tui_application(home.clone())
+                            {
+                                let _ = app.workspace().finish_task(cwd, &task.id);
+                                model.schedule_evaluation(home, cwd.clone(), &task_sender);
+                            }
+                        }
+                        KeyCode::Char('r') => {
+                            if let Some((_, task)) = preserved.get(overlay.selected)
+                                && let Some(checkout) = task.checkout.clone()
+                            {
+                                model.preserved = None;
+                                model.agent_picker = Some(AgentPicker {
+                                    options: agent_options(home),
+                                    selected: 0,
+                                    anchor: Rect::default(),
+                                    cwd: Some(checkout),
+                                });
+                            }
+                        }
+                        // Discard is the one action that deletes work, so
+                        // it is the one that asks twice.
+                        KeyCode::Char('d') => overlay.confirm_discard = true,
+                        KeyCode::Char('y') if overlay.confirm_discard => {
+                            overlay.confirm_discard = false;
+                            if let Some((cwd, task)) = preserved.get(overlay.selected)
+                                && let Ok(app) = tui_application(home.clone())
+                            {
+                                match app.workspace().discard_task(cwd, &task.id) {
+                                    Ok(()) => {
+                                        model.set_notice(format!("{}: discarded", task.label));
+                                    }
+                                    Err(error) => model.set_notice(error.to_string()),
+                                }
+                                model.schedule_evaluation(home, cwd.clone(), &task_sender);
+                            }
+                        }
+                        _ => overlay.confirm_discard = false,
+                    }
+                    model.dirty = true;
+                }
                 Event::Key(_) if model.support_dropdown.is_some() => {
                     model.support_dropdown = None;
+                    model.dirty = true;
+                }
+                Event::Key(key)
+                    if key.modifiers.contains(KeyModifiers::ALT)
+                        && key.code == KeyCode::Char('i') =>
+                {
+                    deliver_selected_tab(&mut model, home, &delivery_sender);
+                }
+                Event::Key(key)
+                    if key.modifiers.contains(KeyModifiers::ALT)
+                        && key.code == KeyCode::Char('I') =>
+                {
+                    if let Some(cwd) = selected_pane_cwd(&model) {
+                        spawn_delivery(home, cwd, None, delivery_sender.clone());
+                        model.set_notice("delivering every ready task…".to_owned());
+                    }
+                }
+                Event::Key(key)
+                    if key.modifiers.contains(KeyModifiers::ALT)
+                        && key.code == KeyCode::Char('p') =>
+                {
+                    model.preserved = match model.preserved {
+                        Some(_) => None,
+                        None => Some(PreservedOverlay {
+                            selected: 0,
+                            confirm_discard: false,
+                        }),
+                    };
                     model.dirty = true;
                 }
                 Event::Key(key) if model.context_menu.is_some() => {
@@ -615,10 +870,17 @@ pub(crate) fn attach_workspace(
                                 && let Some(option) = picker.options.get(index)
                             {
                                 let label = next_agent_label(&model);
+                                let cwd = picker
+                                    .cwd
+                                    .clone()
+                                    .or_else(|| agent_launch_cwd(&model, home));
+                                if let Some(cwd) = cwd.clone() {
+                                    model.schedule_evaluation(home, cwd, &task_sender);
+                                }
                                 let _ = send_request(
                                     &mut stream,
                                     &ClientRequest::CreateTab {
-                                        cwd: agent_launch_cwd(&model, home),
+                                        cwd,
                                         label,
                                         columns,
                                         rows,
@@ -892,6 +1154,7 @@ pub(crate) fn attach_workspace(
                                 options: agent_options(home),
                                 selected: 0,
                                 anchor: hit_rect,
+                                cwd: None,
                             });
                             // Unlike every other arm here, this is a purely
                             // local state change with no server round trip
@@ -954,6 +1217,9 @@ pub(crate) fn attach_workspace(
                         }
                         WorkspaceHit::OpenGitView => {
                             open_git_view(&mut model);
+                        }
+                        WorkspaceHit::Deliver(_) => {
+                            deliver_selected_tab(&mut model, home, &delivery_sender);
                         }
                         WorkspaceHit::OpenAgentSupport(anchor) => {
                             model.support_dropdown = selected_agent_context(&model, &identities)
@@ -1133,6 +1399,10 @@ pub(super) enum WorkspaceHit {
     OpenGitView,
     /// Opens contextual support details for the selected agent tab.
     OpenAgentSupport(Rect),
+    /// The tab strip's delivery button — delivers the selected tab's task
+    /// the way the project's completion says. Present only when the task
+    /// is deliverable.
+    Deliver(TabId),
     /// A hit the open extension's own render pass produced (a file row, a
     /// worktree header, its tree/diff resize handle, its close button —
     /// see `uze_extensions::ExtensionHit`), wrapped instead of given its
@@ -1175,6 +1445,9 @@ struct AgentPicker {
     /// The tab strip's "✦" button's own rect — the popup anchors just
     /// under it.
     anchor: Rect,
+    /// A directory the new agent must start in — a preserved task's own
+    /// slot, when resuming it. `None` lets placement acquire a slot.
+    cwd: Option<PathBuf>,
 }
 
 /// Open state for the informational support dropdown in an active agent
@@ -1515,6 +1788,22 @@ struct WorkspaceModel {
     /// the default, so tests exercise the submission path without writing
     /// to a real UZE home.
     prompt_recorder: Option<mpsc::Sender<(uze_application::PromptOrigin, String)>>,
+    /// Every repository's tasks as last evaluated, keyed by its primary
+    /// checkout. Display state: the truth is Git and the task store.
+    tasks: BTreeMap<PathBuf, Vec<TaskView>>,
+    /// Repositories an evaluation is in flight for, so a quiet pane and
+    /// the clock cannot queue the same read twice.
+    task_eval_pending: BTreeSet<PathBuf>,
+    last_task_refresh: Option<Instant>,
+    /// Agent panes that went quiet since the last tick — the moment
+    /// readiness is re-read.
+    recently_quiet: Vec<PaneId>,
+    /// Tasks a delivery is in flight for.
+    delivery_pending: BTreeSet<String>,
+    /// A one-line message and when it appeared.
+    notice: Option<(String, Instant)>,
+    /// Open state of the preserved-work list; `None` when closed.
+    preserved: Option<PreservedOverlay>,
 }
 
 /// Client-side reconstruction of what the user typed into a pane before
@@ -1655,6 +1944,7 @@ impl WorkspaceModel {
         self.renaming.is_none()
             && self.agent_picker.is_none()
             && self.support_dropdown.is_none()
+            && self.preserved.is_none()
             && self.context_menu.is_none()
             && self.git_view.is_none()
     }
@@ -1814,6 +2104,7 @@ impl WorkspaceModel {
                 self.completed_agent_panes.insert(*pane);
             }
         }
+        self.recently_quiet.extend(expired.iter().copied());
         // A closed echo window, and a pane holding neither a deadline nor
         // recent repaints, have nothing left to say about themselves —
         // dropping them keeps this tick's early exit reachable.
@@ -1859,6 +2150,90 @@ impl WorkspaceModel {
     /// not over), and both outrank Selected — a spinner or a check on the
     /// tab you are already on still carries information the plain dot does
     /// not.
+    /// The task whose slot `cwd` sits in, as last evaluated. Lexical: the
+    /// slot's name is its identifier, and the primary it hangs off keys
+    /// the repository's tasks.
+    fn task_for_cwd(&self, cwd: &Path) -> Option<&TaskView> {
+        let checkout = uze_application::isolated_checkout(cwd)?;
+        self.tasks.get(checkout.primary)?.iter().find(|task| {
+            task.checkout
+                .as_deref()
+                .and_then(Path::file_name)
+                .is_some_and(|name| name == checkout.name)
+        })
+    }
+
+    pub(super) fn tab_task(&self, tab: TabId) -> Option<&TaskView> {
+        let cwd = tab_cwd(self, tab)?;
+        self.task_for_cwd(&cwd)
+    }
+
+    fn pane_cwd(&self, pane: PaneId) -> Option<PathBuf> {
+        let session = self.session.as_ref()?;
+        session
+            .workspace
+            .spaces
+            .iter()
+            .flat_map(|space| &space.tabs)
+            .find_map(|tab| pane_in_layout(&tab.layout, pane).map(|pane| pane.cwd.clone()))
+    }
+
+    /// The pane of the tab running in `checkout` — where a message for
+    /// that task's agent goes, and what makes the task "in front of
+    /// someone". Any tab counts: a shell the operator opened in a slot is
+    /// as much in front of it as the agent was.
+    fn pane_for_checkout(&self, checkout: &Path) -> Option<PaneId> {
+        let session = self.session.as_ref()?;
+        session
+            .workspace
+            .spaces
+            .iter()
+            .flat_map(|space| &space.tabs)
+            .find_map(|tab| {
+                let pane = pane_in_layout(&tab.layout, tab.focus.pane)?;
+                pane.cwd.starts_with(checkout).then_some(pane.id)
+            })
+    }
+
+    /// Tasks holding work that no live agent tab is in front of, with the
+    /// repository each belongs to — what "preserved from yesterday" lists.
+    pub(super) fn preserved_tasks(&self) -> Vec<(PathBuf, TaskView)> {
+        let mut preserved: Vec<(PathBuf, TaskView)> = self
+            .tasks
+            .iter()
+            .flat_map(|(primary, tasks)| tasks.iter().map(move |task| (primary, task)))
+            .filter(|(_, task)| task.state != TaskStateView::Integrated)
+            .filter(|(_, task)| {
+                task.checkout
+                    .as_deref()
+                    .is_none_or(|checkout| self.pane_for_checkout(checkout).is_none())
+            })
+            .map(|(primary, task)| (primary.clone(), task.clone()))
+            .collect();
+        preserved.sort_by_key(|(_, task)| task.created_at_unix);
+        preserved
+    }
+
+    fn schedule_evaluation(
+        &mut self,
+        home: &UzeHome,
+        cwd: PathBuf,
+        sender: &mpsc::Sender<TaskResolution>,
+    ) {
+        let key = uze_application::isolated_checkout(&cwd)
+            .map(|checkout| checkout.primary.to_path_buf())
+            .unwrap_or_else(|| cwd.clone());
+        if !self.task_eval_pending.insert(key) {
+            return;
+        }
+        spawn_task_evaluation(home, cwd, sender.clone());
+    }
+
+    fn set_notice(&mut self, text: String) {
+        self.notice = Some((text, Instant::now()));
+        self.dirty = true;
+    }
+
     fn agent_tab_status(&self, pane: PaneId, selected: bool) -> AgentTabStatus {
         if self.agent_is_working(pane) {
             AgentTabStatus::Working
@@ -2078,6 +2453,46 @@ fn pane_in_layout(layout: &uze_terminal::Layout, wanted: PaneId) -> Option<&uze_
             pane_in_layout(first, wanted).or_else(|| pane_in_layout(second, wanted))
         }
     }
+}
+
+/// Delivers the selected tab's task, the way the project's completion says.
+/// Nothing to deliver is said, never silently ignored.
+fn deliver_selected_tab(
+    model: &mut WorkspaceModel,
+    home: &UzeHome,
+    sender: &mpsc::Sender<DeliveryResolution>,
+) {
+    let Some(tab) = model.selected_tab() else {
+        return;
+    };
+    let Some(task) = model.tab_task(tab).cloned() else {
+        model.set_notice("this tab has no task to deliver".to_owned());
+        return;
+    };
+    if !task.state.is_deliverable() {
+        model.set_notice(format!(
+            "{}: {}",
+            task.label,
+            match &task.state {
+                TaskStateView::Running => "nothing committed yet",
+                TaskStateView::Uncommitted => "uncommitted changes in its checkout",
+                TaskStateView::Conflicted { .. } => "a rebase is paused; the agent is on it",
+                TaskStateView::Integrating => "already being delivered",
+                TaskStateView::Integrated => "already delivered",
+                TaskStateView::Parked | TaskStateView::Ready | TaskStateView::GateFailed =>
+                    "not deliverable",
+            }
+        ));
+        return;
+    }
+    if !model.delivery_pending.insert(task.id.clone()) {
+        return;
+    }
+    let Some(cwd) = tab_cwd(model, tab) else {
+        return;
+    };
+    model.set_notice(format!("{}: delivering…", task.label));
+    spawn_delivery(home, cwd, Some(task.id), sender.clone());
 }
 
 /// Where a newly created agent starts: the slot the application acquired

@@ -7,9 +7,12 @@
 //! Not part of the public contract; workspace-internal process plumbing.
 
 use std::io::{self, Read};
-use std::process::{Child, Command, ExitStatus};
+use std::path::Path;
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
+
+const MAX_SHELL_OUTPUT_BYTES: usize = 64 * 1024;
 
 /// Runs `command` in its own process group so a timeout can kill the whole
 /// tree (the process AND its descendants), never just the direct child.
@@ -182,6 +185,58 @@ fn is_executable(path: &std::path::Path) -> bool {
 #[cfg(not(unix))]
 fn is_executable(_path: &std::path::Path) -> bool {
     true
+}
+
+/// Runs a shell command in `cwd`, bounded in time and output. Returns
+/// whether it exited zero, and its combined stdout and stderr — for the
+/// project-declared commands (a checkout's setup, a delivery's gate, a
+/// forge CLI) whose output is what the operator or the agent is told.
+pub fn run_shell_bounded(cwd: &Path, command: &str, timeout: Duration) -> (bool, String) {
+    let shell = if Path::new("/bin/sh").exists() {
+        "/bin/sh"
+    } else {
+        "sh"
+    };
+    let mut invocation = Command::new(shell);
+    invocation.arg("-c").arg(command);
+    let child = with_process_group(invocation)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .current_dir(cwd)
+        .spawn();
+    let mut child = match child {
+        Ok(child) => child,
+        Err(error) => return (false, format!("could not run `{command}`: {error}")),
+    };
+    let stdout = child.stdout.take().expect("piped");
+    let stderr = child.stderr.take().expect("piped");
+    let reader = thread::spawn(move || {
+        let (out, _) = read_bounded(stdout, MAX_SHELL_OUTPUT_BYTES);
+        let (err, _) = read_bounded(stderr, MAX_SHELL_OUTPUT_BYTES);
+        let mut combined = String::from_utf8_lossy(&out).into_owned();
+        let err = String::from_utf8_lossy(&err);
+        if !err.trim().is_empty() {
+            if !combined.is_empty() && !combined.ends_with('\n') {
+                combined.push('\n');
+            }
+            combined.push_str(&err);
+        }
+        combined
+    });
+    let (status, timed_out) = match wait_with_timeout(&mut child, timeout) {
+        Ok(outcome) => outcome,
+        Err(error) => return (false, format!("`{command}` failed: {error}")),
+    };
+    if timed_out {
+        drop(reader);
+        return (
+            false,
+            format!("`{command}` timed out after {}s", timeout.as_secs()),
+        );
+    }
+    let output = reader.join().unwrap_or_default();
+    (status.success(), output.trim().to_owned())
 }
 
 #[cfg(test)]

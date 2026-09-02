@@ -160,6 +160,12 @@ pub(super) fn render(
     // `picker.anchor` (the "✦" button's own rect) rather than centered on
     // the whole frame — a dropdown hanging off the thing you clicked, not a
     // modal interrupting the screen.
+    if let Some((text, _)) = &model.notice {
+        render_notice(frame, layout.pane, text);
+    }
+    if let Some(overlay) = &model.preserved {
+        render_preserved(frame, frame.area(), model, overlay);
+    }
     if let Some(picker) = &model.agent_picker {
         render_agent_picker(frame, frame.area(), picker.anchor, picker, hits);
     }
@@ -567,13 +573,25 @@ pub(super) fn render_sidebar(
                         .fg(crate::ui::TEXT_BRIGHT)
                         .add_modifier(Modifier::BOLD),
                 ),
-                None => Span::styled(tab.label.clone(), label_style),
+                None => Span::styled(
+                    model
+                        .tab_task(tab.id)
+                        .map(|task| task.label.clone())
+                        .unwrap_or_else(|| tab.label.clone()),
+                    label_style,
+                ),
             };
             let mut spans = vec![
                 connector_span,
                 Span::styled(indicator, Style::default().fg(indicator_fg)),
                 label,
             ];
+            if let Some((mark, hue)) = model
+                .tab_task(tab.id)
+                .and_then(|task| task_mark(&task.state))
+            {
+                spans.push(Span::styled(format!(" {mark}"), Style::default().fg(hue)));
+            }
             push_unisolated_marker(&mut spans, &cwd);
             if is_active_space {
                 fill_row_bg(&mut spans, label_rect.width, crate::ui::SURFACE_OVERLAY);
@@ -687,6 +705,149 @@ pub(super) fn render_space_header(
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), rect);
     hits.push((rect, WorkspaceHit::SelectSpace(space.id)));
+}
+
+/// The mark a task's state puts after its label, and its hue: agent state
+/// (`AgentTabStatus`) owns the column in front of the name, so what the
+/// *task* is doing follows it.
+pub(super) fn task_mark(state: &TaskStateView) -> Option<(&'static str, Color)> {
+    match state {
+        TaskStateView::Running => None,
+        TaskStateView::Uncommitted => Some(("✎", crate::ui::TEXT_DIM)),
+        TaskStateView::Ready => Some(("✓", crate::ui::ACCENT)),
+        TaskStateView::Integrating => Some(("…", crate::ui::MUTED)),
+        TaskStateView::Conflicted { .. } | TaskStateView::GateFailed => {
+            Some(("⚠", crate::ui::WARNING))
+        }
+        TaskStateView::Integrated => Some(("↑", crate::ui::TEXT_DIM)),
+        TaskStateView::Parked => Some(("⏸", crate::ui::TEXT_DIM)),
+    }
+}
+
+/// The header's delivery button for a task: text, hue, and whether it is a
+/// button at all rather than a state the header only reports.
+fn deliver_button(task: &TaskView) -> Option<(String, Color, bool)> {
+    match &task.state {
+        TaskStateView::Ready => Some((format!("⇧{}", task.ahead), crate::ui::ACCENT, true)),
+        TaskStateView::GateFailed => Some(("⇧ retry".to_owned(), crate::ui::WARNING, true)),
+        TaskStateView::Conflicted { .. } => {
+            Some(("⚠ conflict".to_owned(), crate::ui::WARNING, false))
+        }
+        TaskStateView::Integrating => Some(("… delivering".to_owned(), crate::ui::MUTED, false)),
+        _ => None,
+    }
+}
+
+/// One line over the pane's bottom row: what the last delivery did.
+fn render_notice(frame: &mut ratatui::Frame<'_>, pane: Rect, text: &str) {
+    if pane.height == 0 {
+        return;
+    }
+    let row = Rect::new(pane.x, pane.bottom().saturating_sub(1), pane.width, 1);
+    let mut spans = vec![Span::styled(
+        format!(" {text}"),
+        Style::default().fg(crate::ui::TEXT_BRIGHT),
+    )];
+    fill_row_bg(&mut spans, row.width, crate::ui::SURFACE_OVERLAY_BRIGHT);
+    frame.render_widget(Clear, row);
+    frame.render_widget(Paragraph::new(Line::from(spans)), row);
+}
+
+/// The preserved-work list: every task holding work that no live tab is in
+/// front of, with the keys that move it on. Discard asks twice.
+pub(super) fn render_preserved(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    model: &WorkspaceModel,
+    overlay: &PreservedOverlay,
+) {
+    const H_PAD: u16 = 2;
+    let preserved = model.preserved_tasks();
+    let mut lines = vec![Line::from(Span::styled(
+        "PRESERVED WORK",
+        Style::default().fg(crate::ui::MUTED),
+    ))];
+    if preserved.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "nothing preserved — every task is either live or delivered",
+            Style::default().fg(crate::ui::TEXT_SECONDARY),
+        )));
+    }
+    for (index, (_, task)) in preserved.iter().enumerate() {
+        let selected = index == overlay.selected;
+        let (mark, hue) = task_mark(&task.state).unwrap_or(("·", crate::ui::TEXT_DIM));
+        let what = match &task.state {
+            TaskStateView::Ready => format!(
+                "{} commit{}, not delivered",
+                task.ahead,
+                if task.ahead == 1 { "" } else { "s" }
+            ),
+            TaskStateView::Uncommitted | TaskStateView::Parked => "uncommitted changes".to_owned(),
+            TaskStateView::Conflicted { files } => format!(
+                "conflict in {} file{}",
+                files.len(),
+                if files.len() == 1 { "" } else { "s" }
+            ),
+            TaskStateView::GateFailed => "checks failed".to_owned(),
+            TaskStateView::Running => "no commits yet".to_owned(),
+            TaskStateView::Integrating => "delivering".to_owned(),
+            TaskStateView::Integrated => "delivered".to_owned(),
+        };
+        let mut spans = vec![
+            Span::styled(
+                if selected { "▸ " } else { "  " },
+                Style::default().fg(crate::ui::ACCENT),
+            ),
+            Span::styled(format!("{mark} "), Style::default().fg(hue)),
+            Span::styled(
+                task.label.clone(),
+                Style::default().fg(if selected {
+                    crate::ui::TEXT_BRIGHT
+                } else {
+                    crate::ui::TEXT_PRIMARY
+                }),
+            ),
+            Span::styled(
+                format!("  {what}"),
+                Style::default().fg(crate::ui::TEXT_SECONDARY),
+            ),
+        ];
+        if selected {
+            fill_row_bg(&mut spans, area.width, crate::ui::SELECTED_BG);
+        }
+        lines.push(Line::from(spans));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        if overlay.confirm_discard {
+            "discard this task and its branch?  [y] yes   [any other key] no"
+        } else {
+            "[r] resume   [i] deliver   [f] mark done   [d] discard   [esc] close"
+        },
+        Style::default().fg(if overlay.confirm_discard {
+            crate::ui::WARNING
+        } else {
+            crate::ui::MUTED
+        }),
+    )));
+    let content = lines.iter().map(Line::width).max().unwrap_or(0) as u16;
+    let width = (content + 2 + 2 * H_PAD).min(area.width).max(1);
+    let height = (lines.len() as u16 + 2).min(area.height).max(1);
+    let popup = Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 3,
+        width,
+        height,
+    );
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(crate::ui::BORDER))
+        .style(Style::default().bg(crate::ui::BASE))
+        .padding(Padding::new(H_PAD, H_PAD, 0, 0));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 pub(super) fn agent_activity_frame(tick: usize) -> &'static str {
@@ -924,6 +1085,30 @@ pub(super) fn render_tab_strip(
         );
         frame.render_widget(Paragraph::new(Line::from(button)), button_rect);
         hits.push((button_rect, WorkspaceHit::OpenAgentSupport(button_rect)));
+        trailing_right = button_rect.x.saturating_sub(1);
+    }
+    // One verb — deliver — whose ending is the project's completion, not a
+    // choice made here. Conditioned, not disabled: when the task cannot be
+    // delivered the button is absent, and the sidebar mark says why.
+    if let Some(tab) = model.selected_tab()
+        && let Some(task) = model.tab_task(tab)
+        && let Some((text, hue, clickable)) = deliver_button(task)
+    {
+        let button = vec![Span::styled(
+            text,
+            Style::default().fg(hue).add_modifier(Modifier::BOLD),
+        )];
+        let button_width = button.iter().map(Span::width).sum::<usize>() as u16;
+        let button_rect = Rect::new(
+            trailing_right.saturating_sub(button_width),
+            inner.y,
+            button_width,
+            1,
+        );
+        frame.render_widget(Paragraph::new(Line::from(button)), button_rect);
+        if clickable {
+            hits.push((button_rect, WorkspaceHit::Deliver(tab)));
+        }
         trailing_right = button_rect.x.saturating_sub(1);
     }
     if let Some(summary) = model.git_badge.as_ref().and_then(|badge| badge.summary) {
