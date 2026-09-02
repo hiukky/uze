@@ -1,0 +1,5 @@
+schema: adr-driven
+created: 2026-09-01
+# No behaviour changes: layering enforcement, one Git transport, and an
+# extension contract that stops handing out the host's frame.
+skip_specs: true
