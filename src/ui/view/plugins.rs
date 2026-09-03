@@ -33,7 +33,7 @@ use super::super::{
     ACCENT, BLUE, BORDER, MUTED, SELECTED_BG, SURFACE_SUBTLE, TEXT_BRIGHT, TEXT_DIM, TEXT_FAINT,
     TEXT_PRIMARY, TEXT_SECONDARY, WARNING, route_style,
 };
-use super::super::{content_area, render_screen_header};
+use super::super::{content_area, render_screen_header, side_panel_area};
 use super::{render_status_line, resource_summary};
 
 /// Both status labels are 9 characters (`Installed`/`Available`), but that's
@@ -438,13 +438,7 @@ fn render_plugin_drawer(
     plugin: &MarketplacePluginSummary,
     hits: &mut Vec<(Rect, Hit)>,
 ) {
-    let width = width.min(area.width);
-    let drawer = Rect::new(
-        area.x + area.width - width,
-        area.y - 1,
-        width,
-        area.height + 1,
-    );
+    let drawer = side_panel_area(area, width);
     frame.render_widget(Clear, drawer);
     frame.render_widget(
         Block::default()

@@ -12,13 +12,13 @@ use ratatui::{
 };
 use uze_application::{Autonomy, ModelPreference, PreferenceApplyOutcome, SandboxScope};
 
-use super::super::content_area;
 use super::super::hit::Hit;
 use super::super::model::{ProfilePanel, ResizablePanel, TuiModel};
 use super::super::{
     ACCENT, BASE, BLUE, BORDER, DANGER, MUTED, SURFACE_OVERLAY, SURFACE_SUBTLE, TEXT_BRIGHT,
     TEXT_SECONDARY, TEXT_TERTIARY, WARNING,
 };
+use super::super::{content_area, side_panel_area};
 
 pub(crate) fn render_profiles(
     frame: &mut ratatui::Frame<'_>,
@@ -43,12 +43,7 @@ pub(crate) fn render_profiles(
         columns[0].width,
         columns[0].height.saturating_add(1),
     );
-    let harnesses_area = Rect::new(
-        columns[1].x,
-        columns[1].y.saturating_sub(1),
-        columns[1].width,
-        columns[1].height.saturating_add(1),
-    );
+    let harnesses_area = side_panel_area(content, columns[1].width);
     render_profile_tree(frame, left_area, model, hits);
     render_harnesses(frame, harnesses_area, model, hits);
     let divider = Rect::new(
@@ -134,10 +129,13 @@ fn render_profile_tree(
 ) {
     let block = panel(false, BASE);
     let panel_inner = block.inner(area);
+    // The panel reaches one row above the content inset so its edge meets
+    // the frame; the text inside starts where every other screen's
+    // header does — the content inset itself, no padding of its own.
     let inner = Rect::new(
-        panel_inner.x.saturating_add(2),
+        panel_inner.x,
         panel_inner.y.saturating_add(1),
-        panel_inner.width.saturating_sub(3),
+        panel_inner.width.saturating_sub(1),
         panel_inner.height.saturating_sub(2),
     );
     frame.render_widget(block, area);

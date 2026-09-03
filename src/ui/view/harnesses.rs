@@ -23,7 +23,7 @@ use super::super::{
     ACCENT, BORDER, DANGER, MUTED, SELECTED_BG, SURFACE_SUBTLE, TEXT_BRIGHT, TEXT_DIM,
     TEXT_PRIMARY, TEXT_SECONDARY, TEXT_TERTIARY, WARNING,
 };
-use super::super::{content_area, render_screen_header};
+use super::super::{content_area, render_screen_header, side_panel_area};
 
 /// A harness's state collapses onto exactly one of three buckets for this
 /// list — `HarnessHealth` itself tracks a finer distinction (whether the
@@ -378,13 +378,7 @@ fn render_harness_drawer(
     let status = HarnessStatus::from(harness);
     // Receives the exact width already used by `render_harnesses`, so the
     // list and drawer always agree about the draggable boundary.
-    let width = width.min(area.width);
-    let drawer = Rect::new(
-        area.x + area.width - width,
-        area.y - 1,
-        width,
-        area.height + 1,
-    );
+    let drawer = side_panel_area(area, width);
     frame.render_widget(Clear, drawer);
     frame.render_widget(
         Block::default()

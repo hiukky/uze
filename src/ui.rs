@@ -420,15 +420,39 @@ fn hint_spans(hint: &str) -> Vec<Span<'static>> {
     spans
 }
 
+/// The inset [`content_area`] keeps on each side of a screen's content.
+const CONTENT_INSET_LEFT: u16 = 2;
+const CONTENT_INSET_RIGHT: u16 = 2;
+const CONTENT_INSET_TOP: u16 = 1;
+
 /// Every content screen's outer inset — the design's `padding: 36px 44px`
 /// on each route's root div, translated to terminal cells. No border, no
 /// background: content just sits indented on the shared backdrop.
 pub(crate) fn content_area(area: Rect) -> Rect {
     Rect::new(
-        area.x + 2,
-        area.y + 1,
-        area.width.saturating_sub(4),
-        area.height.saturating_sub(1),
+        area.x + CONTENT_INSET_LEFT,
+        area.y + CONTENT_INSET_TOP,
+        area.width
+            .saturating_sub(CONTENT_INSET_LEFT + CONTENT_INSET_RIGHT),
+        area.height.saturating_sub(CONTENT_INSET_TOP),
+    )
+}
+
+/// A panel that opens off the right of a content area — a drawer, or a
+/// permanent right-hand column — drawn flush against the frame's own top
+/// and right edges instead of stopping at the content inset: text sitting
+/// two columns in reads as a margin, a filled slab ending two columns
+/// short of the border reads as misaligned. `width` is how much of the
+/// content area the panel takes; the inset it swallows on the right comes
+/// on top of that, so whatever lays out to its left is unaffected, and
+/// the panel's own inner padding keeps its text off the edge.
+pub(crate) fn side_panel_area(content: Rect, width: u16) -> Rect {
+    let width = width.min(content.width);
+    Rect::new(
+        content.right().saturating_sub(width),
+        content.y.saturating_sub(CONTENT_INSET_TOP),
+        width + CONTENT_INSET_RIGHT,
+        content.height + CONTENT_INSET_TOP,
     )
 }
 
