@@ -721,6 +721,10 @@ pub(crate) fn attach_workspace(
                     model.support_dropdown = None;
                     model.dirty = true;
                 }
+                Event::Key(_) if model.status_catalog.is_some() => {
+                    model.status_catalog = None;
+                    model.dirty = true;
+                }
                 Event::Key(key)
                     if key.modifiers.contains(KeyModifiers::ALT)
                         && key.code == KeyCode::Char('i') =>
@@ -1031,6 +1035,15 @@ pub(crate) fn attach_workspace(
                 }
                 Event::Mouse(mouse)
                     if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+                        && model.status_catalog.is_some() =>
+                {
+                    // Informational, like the support dropdown: any click
+                    // dismisses it rather than leaking into the pane.
+                    model.status_catalog = None;
+                    model.dirty = true;
+                }
+                Event::Mouse(mouse)
+                    if mouse.kind == MouseEventKind::Down(MouseButton::Left)
                         && model.context_menu.is_some() =>
                 {
                     // `.rev()`: the popup renders last, so its own rows sit
@@ -1337,6 +1350,13 @@ pub(crate) fn attach_workspace(
                         WorkspaceHit::Deliver(_) => {
                             deliver_selected_tab(&mut model, home, &delivery_sender);
                         }
+                        WorkspaceHit::OpenStatusCatalog(anchor) => {
+                            model.status_catalog = Some(anchor);
+                            // Purely local state, no server round trip to
+                            // eventually mark the model dirty — same as
+                            // `NewAgentMenu` above.
+                            model.dirty = true;
+                        }
                         WorkspaceHit::OpenAgentSupport(anchor) => {
                             model.support_dropdown = selected_agent_context(&model, &identities)
                                 .map(|key| AgentSupportDropdown { key, anchor });
@@ -1521,6 +1541,11 @@ pub(super) enum WorkspaceHit {
     OpenGitView,
     /// Opens contextual support details for the selected agent tab.
     OpenAgentSupport(Rect),
+    /// Either status glyph on a sidebar agent row — opens the catalog of
+    /// what every glyph in both columns means, anchored to the one that
+    /// was clicked. A status column is a wordless vocabulary; this is
+    /// where it is written down.
+    OpenStatusCatalog(Rect),
     /// The tab strip's delivery button — delivers the selected tab's task
     /// the way the project's completion says. Present only when the task
     /// is deliverable.
@@ -1882,6 +1907,12 @@ struct WorkspaceModel {
     agent_picker: Option<AgentPicker>,
     /// Contextual support information for the active harness tab.
     support_dropdown: Option<AgentSupportDropdown>,
+    /// The open status catalog and the glyph it hangs off — the legend for
+    /// the two status columns a sidebar agent row carries. Informational
+    /// and anchored, like `support_dropdown`: any click or key dismisses
+    /// it. Just the anchor, since the catalog itself is generated from the
+    /// same tables the sidebar draws with and holds no state of its own.
+    status_catalog: Option<Rect>,
     /// The most recently resolved agent support answer, tagged with the
     /// `(harness, cwd)` it answers — never assumed to apply to a different
     /// selection.
@@ -2070,7 +2101,7 @@ impl WorkspaceModel {
     }
     /// None of the modal overlays that own mouse input while they're open
     /// (rename buffer, new-space root picker, agent picker, support
-    /// dropdown, isolation tip,
+    /// dropdown, status catalog, isolation tip,
     /// context menu, Git changes view) are
     /// currently up — the precondition for forwarding a drag/release/scroll
     /// that isn't already claimed by one of them straight into the focused
@@ -2080,6 +2111,7 @@ impl WorkspaceModel {
             && self.root_picker.is_none()
             && self.agent_picker.is_none()
             && self.support_dropdown.is_none()
+            && self.status_catalog.is_none()
             && self.preserved.is_none()
             && self.context_menu.is_none()
             && self.git_view.is_none()

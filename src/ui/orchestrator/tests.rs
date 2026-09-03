@@ -13,12 +13,15 @@ mod workspace_tests {
         PreservedOverlay, RootPicker, TaskStateView, TaskView, WorkspaceModel,
         agent_identity_for_tab, blank_pane, can_close_tab_from_menu, encode_mouse, forward_paste,
         forward_scroll, next_agent_label, next_shell_label, pane_relative,
-        render::{render_preserved, render_sidebar, render_tab_strip},
+        render::{
+            render_preserved, render_sidebar, render_status_catalog, render_tab_strip, task_mark,
+        },
         selected_pane_cwd, space_own_tab, tab_needs_replacement_shell,
         workspace_has_active_agent_operation,
     };
     use crossterm::event::{MouseButton, MouseEventKind};
     use ratatui::layout::Rect;
+    use ratatui::style::Color;
     use ratatui::{Terminal, backend::TestBackend};
     use std::path::{Path, PathBuf};
     use std::time::{Duration, Instant};
@@ -345,9 +348,10 @@ mod workspace_tests {
             .iter()
             .find(|row| row.contains("Agent"))
             .expect("the agent names its own row: {rows:?}");
+        let (ready, _) = task_mark(&TaskStateView::Ready).expect("ready is marked");
         assert!(
-            name_row.contains('\u{2713}'),
-            "ready reads as a check: {name_row}"
+            name_row.contains(ready),
+            "ready carries its own mark: {name_row}"
         );
         assert!(
             rows.iter().any(|row| row.contains("agent/t1")),
@@ -386,6 +390,174 @@ mod workspace_tests {
         );
     }
 
+    /// Every state a slot can be in, for the tests that have to cover the
+    /// whole table rather than one interesting case.
+    fn every_task_state() -> Vec<TaskStateView> {
+        vec![
+            TaskStateView::Running,
+            TaskStateView::Uncommitted,
+            TaskStateView::Ready,
+            TaskStateView::Integrating,
+            TaskStateView::Conflicted {
+                files: vec![PathBuf::from("src/lib.rs")],
+            },
+            TaskStateView::GateFailed,
+            TaskStateView::Integrated,
+            TaskStateView::Parked,
+        ]
+    }
+
+    /// The marks are symbols, not emoji. The line is drawn at U+2300: the
+    /// blocks from there to U+27BF (Miscellaneous Technical, Miscellaneous
+    /// Symbols, Dingbats) are where the pictographs live, and a terminal
+    /// draws those from its emoji font — a different family, a width that
+    /// varies by terminal, and a glyph that ignores the hue carrying the
+    /// meaning. `⚠`, `⏸` and `✎` all came from there.
+    #[test]
+    fn no_status_mark_is_drawn_from_the_pictographic_blocks() {
+        for state in every_task_state() {
+            let Some((mark, _)) = task_mark(&state) else {
+                continue;
+            };
+            let mut characters = mark.chars();
+            let character = characters.next().expect("a mark is not empty");
+            assert!(
+                characters.next().is_none(),
+                "{state:?}: one column, one character: {mark}"
+            );
+            assert!(
+                (character as u32) < 0x2300,
+                "{state:?}: {mark} (U+{:04X}) is a pictograph",
+                character as u32
+            );
+        }
+    }
+
+    /// Color is what tells the marks apart at a glance — three states
+    /// sharing `TEXT_DIM` meant the column read as one undifferentiated
+    /// smudge. The glyphs are distinct for the same reason, and `Ready`
+    /// specifically must not reuse the `✓` the agent column already spends
+    /// on `Completed`.
+    #[test]
+    fn each_status_mark_carries_a_glyph_and_a_hue_of_its_own() {
+        let marks: Vec<(&str, Color)> = every_task_state().iter().filter_map(task_mark).collect();
+        for (index, (mark, hue)) in marks.iter().enumerate() {
+            for (other_mark, other_hue) in &marks[index + 1..] {
+                assert_ne!(mark, other_mark, "two states share a glyph");
+                assert_ne!(
+                    hue, other_hue,
+                    "two states share a hue: {mark}/{other_mark}"
+                );
+            }
+        }
+        let agent_glyphs: Vec<String> = [
+            AgentTabStatus::Completed,
+            AgentTabStatus::Selected,
+            AgentTabStatus::Idle,
+        ]
+        .into_iter()
+        .map(|status| status.glyph(0).trim_end().to_owned())
+        .collect();
+        for (mark, _) in &marks {
+            assert!(
+                !agent_glyphs.iter().any(|glyph| glyph == mark),
+                "{mark} means something else one column to the left"
+            );
+        }
+    }
+
+    /// Both status columns are click targets, and both open the catalog:
+    /// the glyphs are the row's only wordless vocabulary, so the row has
+    /// to carry the way to look them up.
+    #[test]
+    fn either_status_column_opens_the_catalog() {
+        let model = agent_with_task(TaskStateView::Ready, 1);
+        let mut hits = Vec::new();
+        let rows = sidebar_rows(&model, &mut hits);
+        let anchors: Vec<Rect> = hits
+            .iter()
+            .filter_map(|(_, hit)| match hit {
+                WorkspaceHit::OpenStatusCatalog(anchor) => Some(*anchor),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(anchors.len(), 2, "one per column: {rows:?}");
+        // Each anchor is the glyph's own cell, not the row: a click on the
+        // name still selects the tab. Read back out of the drawn rows, so
+        // a hit that drifts off its glyph fails here rather than opening
+        // the catalog from a blank column.
+        let cell_at = |anchor: &Rect| {
+            rows[anchor.y as usize]
+                .chars()
+                .nth(anchor.x as usize)
+                .expect("the anchor is inside the row")
+                .to_string()
+        };
+        let (ready, _) = task_mark(&TaskStateView::Ready).expect("ready is marked");
+        let glyphs: Vec<String> = anchors.iter().map(cell_at).collect();
+        for anchor in &anchors {
+            assert_eq!((anchor.width, anchor.height), (1, 1));
+        }
+        assert!(
+            glyphs.iter().any(|glyph| glyph == ready),
+            "one anchor is the task mark: {glyphs:?}"
+        );
+        assert!(
+            glyphs
+                .iter()
+                .any(|glyph| glyph == AgentTabStatus::Selected.glyph(0).trim_end()),
+            "the other is the agent's own status: {glyphs:?}"
+        );
+        assert!(
+            hits.iter()
+                .any(|(rect, hit)| matches!(hit, WorkspaceHit::SelectTab(_)) && rect.width > 1),
+            "the row itself still selects the tab"
+        );
+    }
+
+    /// The catalog explains every state that has a mark, in both columns —
+    /// generated from the same tables the sidebar draws with, so it cannot
+    /// drift from the row it explains.
+    #[test]
+    fn the_catalog_names_every_status_in_both_columns() {
+        let mut terminal = Terminal::new(TestBackend::new(80, 30)).unwrap();
+        terminal
+            .draw(|frame| render_status_catalog(frame, frame.area(), Rect::new(4, 2, 1, 1), 0))
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let text: String = (0..buffer.area.height)
+            .map(|row| {
+                (0..buffer.area.width)
+                    .map(|column| buffer[(column, row)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        for name in [
+            "working",
+            "completed",
+            "here",
+            "idle",
+            "running",
+            "uncommitted",
+            "ready",
+            "delivering",
+            "conflict",
+            "checks failed",
+            "delivered",
+            "parked",
+            "unisolated",
+        ] {
+            assert!(text.contains(name), "{name} is missing from: {text}");
+        }
+        for state in every_task_state() {
+            if let Some((mark, _)) = task_mark(&state) {
+                assert!(text.contains(mark), "{mark} is missing from: {text}");
+            }
+        }
+    }
+
     #[test]
     fn a_running_task_offers_no_delivery_and_carries_no_mark() {
         let model = agent_with_task(TaskStateView::Running, 0);
@@ -414,7 +586,9 @@ mod workspace_tests {
         );
         let rows = sidebar_rows(&model, &mut Vec::new());
         let name_row = rows.iter().find(|row| row.contains("Agent")).unwrap();
-        assert!(name_row.contains('\u{26a0}'), "{name_row}");
+        let (conflict, _) = task_mark(&TaskStateView::Conflicted { files: Vec::new() })
+            .expect("a conflict is marked");
+        assert!(name_row.contains(conflict), "{name_row}");
         let (rows, hits) = tab_strip(&model);
         assert!(rows.iter().any(|row| row.contains("conflict")), "{rows:?}");
         assert!(

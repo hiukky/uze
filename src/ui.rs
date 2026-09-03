@@ -114,6 +114,14 @@ const SUCCESS: Color = ACCENT;
 const WARNING: Color = Color::Rgb(224, 181, 103); // #e0b567 (amber)
 const DANGER: Color = Color::Rgb(224, 118, 95); // #e0765f (red)
 const BLUE: Color = Color::Rgb(125, 151, 201); // #7d97c9 — badges and tags
+/// The two hues that exist only so a task's state reads by color alone
+/// (see `orchestrator::render::task_mark`): every state a slot can be in
+/// needs a hue of its own, and the five above were already spoken for by
+/// meanings that would misreport it — an in-flight delivery is not a
+/// warning, and delivered work is not a badge. Same saturation and
+/// lightness as `BLUE`, so the sidebar still reads as one palette.
+const CYAN: Color = Color::Rgb(125, 190, 194); // #7dbec2 — work in flight
+const VIOLET: Color = Color::Rgb(163, 143, 201); // #a38fc9 — work that landed
 
 /// Hairline dividers — solid approximations of the design's
 /// `rgba(255,255,255,a)` borders, pre-blended over `BASE` since ratatui has

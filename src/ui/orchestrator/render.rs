@@ -176,6 +176,9 @@ pub(super) fn render(
     {
         crate::ui::agent_support::render(frame, frame.area(), dropdown.anchor, support);
     }
+    if let Some(anchor) = model.status_catalog {
+        render_status_catalog(frame, frame.area(), anchor, model.tick);
+    }
     if let Some(menu) = &model.context_menu {
         render_context_menu(frame, frame.area(), menu, hits);
     }
@@ -660,6 +663,19 @@ pub(super) fn render_sidebar(
                 ),
                 None => Span::styled(tab.label.clone(), label_style),
             };
+            // Both status columns are their own click targets, and both
+            // open the same catalog: they are the row's only wordless
+            // vocabulary, and a glyph nobody can look up is a glyph that
+            // reads as decoration. Pushed before the row's own
+            // `SelectTab` hit below, since the click search takes the
+            // first rect it lands in — a 1-column target inside a row-wide
+            // one only ever wins by being found first.
+            let indicator_rect = Rect::new(
+                label_rect.x + connector_span.width() as u16,
+                label_rect.y,
+                1,
+                1,
+            );
             let mut spans = vec![
                 connector_span,
                 Span::styled(indicator, Style::default().fg(indicator_fg)),
@@ -669,8 +685,20 @@ pub(super) fn render_sidebar(
                 .tab_task(tab.id)
                 .and_then(|task| task_mark(&task.state))
             {
+                let mark_x =
+                    label_rect.x + spans.iter().map(|span| span.width() as u16).sum::<u16>() + 1; // the space this mark is drawn behind
                 spans.push(Span::styled(format!(" {mark}"), Style::default().fg(hue)));
+                if mark_x < label_rect.right() {
+                    hits.push((
+                        Rect::new(mark_x, label_rect.y, 1, 1),
+                        WorkspaceHit::OpenStatusCatalog(Rect::new(mark_x, label_rect.y, 1, 1)),
+                    ));
+                }
             }
+            hits.push((
+                indicator_rect,
+                WorkspaceHit::OpenStatusCatalog(indicator_rect),
+            ));
             push_unisolated_marker(&mut spans, &cwd);
             // The alias in place of the raw process name — this list only
             // ever holds tabs `agent_identity_for_tab` already resolved, so
@@ -827,19 +855,218 @@ pub(super) fn render_space_header(
 /// The mark a task's state puts after its label, and its hue: agent state
 /// (`AgentTabStatus`) owns the column in front of the name, so what the
 /// *task* is doing follows it.
+///
+/// Symbols only, never emoji: an emoji-presentation codepoint (`⚠`, `⏸`,
+/// and `✎` in most terminal fonts) is drawn from a different family than
+/// everything around it, double-width in some terminals and not others,
+/// and immune to the hue this returns — it would ignore the color that
+/// carries the meaning. Each state also gets a hue of its own rather than
+/// three sharing `TEXT_DIM`: color is what tells these apart at a glance,
+/// the glyph is what tells them apart once you look. `Ready` deliberately
+/// does *not* reuse `✓` — that is `AgentTabStatus::Completed`'s glyph one
+/// column to the left, and the same mark in the same accent meaning two
+/// different things is what made the second column read as an echo of the
+/// first. It wears the `⇧` of the delivery button it enables instead.
+/// [`render_status_catalog`] is this table's legend and must move with it.
 pub(super) fn task_mark(state: &TaskStateView) -> Option<(&'static str, Color)> {
     match state {
         TaskStateView::Running => None,
-        TaskStateView::Uncommitted => Some(("✎", crate::ui::TEXT_DIM)),
-        TaskStateView::Ready => Some(("✓", crate::ui::ACCENT)),
-        TaskStateView::Integrating => Some(("…", crate::ui::MUTED)),
-        TaskStateView::Conflicted { .. } | TaskStateView::GateFailed => {
-            Some(("⚠", crate::ui::WARNING))
-        }
-        TaskStateView::Integrated => Some(("↑", crate::ui::TEXT_DIM)),
-        TaskStateView::Parked => Some(("⏸", crate::ui::TEXT_DIM)),
+        TaskStateView::Uncommitted => Some(("±", crate::ui::BLUE)),
+        TaskStateView::Ready => Some(("⇧", crate::ui::ACCENT)),
+        TaskStateView::Integrating => Some(("…", crate::ui::CYAN)),
+        // Split, where one `⚠` used to cover both: a paused rebase wants
+        // your hands in the slot, a failed gate wants the code fixed —
+        // different work, and the sidebar was the one surface that never
+        // said which (the strip's own button already did).
+        TaskStateView::Conflicted { .. } => Some(("!", crate::ui::WARNING)),
+        TaskStateView::GateFailed => Some(("×", crate::ui::DANGER)),
+        TaskStateView::Integrated => Some(("↑", crate::ui::VIOLET)),
+        TaskStateView::Parked => Some(("‖", crate::ui::MUTED)),
     }
 }
+
+/// The legend for the two status columns an agent row carries, opened by
+/// clicking either of them (see [`WorkspaceHit::OpenStatusCatalog`]).
+///
+/// Every row is generated from the same tables the sidebar draws with —
+/// [`task_mark`] and [`AgentTabStatus::glyph`]/`color` — so a glyph or a
+/// hue can never say one thing in the row and another in its own legend.
+/// Adding a state to either enum shows up here by itself; only the
+/// sentence explaining it is written by hand.
+pub(super) fn render_status_catalog(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    anchor: Rect,
+    tick: usize,
+) {
+    // The agent column answers "what is the process doing", the task
+    // column "what does its branch hold" — two questions about the same
+    // row, which is exactly why they are two columns and why one legend
+    // has to carry both.
+    let agent_rows: Vec<(String, Color, &str, &str)> = [
+        (
+            AgentTabStatus::Working,
+            "working",
+            "producing output right now",
+        ),
+        (
+            AgentTabStatus::Completed,
+            "completed",
+            "finished while you were elsewhere",
+        ),
+        (
+            AgentTabStatus::Selected,
+            "here",
+            "the tab you are typing into",
+        ),
+        (AgentTabStatus::Idle, "idle", "quiet, and not where you are"),
+    ]
+    .into_iter()
+    .map(|(status, name, meaning)| {
+        (
+            status.glyph(tick).trim_end().to_owned(),
+            status.color(),
+            name,
+            meaning,
+        )
+    })
+    .collect();
+
+    let task_rows: Vec<(String, Color, &str, &str)> = [
+        (
+            TaskStateView::Running,
+            "running",
+            "live, with nothing observed yet",
+        ),
+        (
+            TaskStateView::Uncommitted,
+            "uncommitted",
+            "changes in the slot, not committed",
+        ),
+        (
+            TaskStateView::Ready,
+            "ready",
+            "commits ahead on a clean tree — deliverable",
+        ),
+        (
+            TaskStateView::Integrating,
+            "delivering",
+            "delivery in progress",
+        ),
+        (
+            TaskStateView::Conflicted { files: Vec::new() },
+            "conflict",
+            "the rebase stopped; resolve it in the slot",
+        ),
+        (
+            TaskStateView::GateFailed,
+            "checks failed",
+            "the gate failed on the rebased commits",
+        ),
+        (
+            TaskStateView::Integrated,
+            "delivered",
+            "the work is in the target",
+        ),
+        (
+            TaskStateView::Parked,
+            "parked",
+            "no agent left; the slot still holds work",
+        ),
+    ]
+    .into_iter()
+    .map(|(state, name, meaning)| {
+        let (mark, hue) = task_mark(&state).unwrap_or((" ", crate::ui::TEXT_FAINT));
+        (mark.to_owned(), hue, name, meaning)
+    })
+    .collect();
+
+    const H_PAD: u16 = 1;
+    const GLYPH_COLUMN: usize = 3;
+    let name_column = agent_rows
+        .iter()
+        .chain(&task_rows)
+        .map(|(_, _, name, _)| name.chars().count())
+        .max()
+        .unwrap_or(0);
+    let content_width = agent_rows
+        .iter()
+        .chain(&task_rows)
+        .map(|(_, _, _, meaning)| GLYPH_COLUMN + name_column + 2 + meaning.chars().count())
+        .max()
+        .unwrap_or(0)
+        .max(UNISOLATED_MARKER.trim().chars().count() + 2 + AGENT_IN_YOUR_TREE.chars().count())
+        as u16;
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let section =
+        |title: &str, rows: &[(String, Color, &str, &str)], lines: &mut Vec<Line<'static>>| {
+            lines.push(Line::from(Span::styled(
+                title.to_owned(),
+                Style::default().fg(crate::ui::MUTED),
+            )));
+            for (glyph, hue, name, meaning) in rows {
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("{glyph:<GLYPH_COLUMN$}"),
+                        Style::default().fg(*hue).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!("{name:<name_column$}  "),
+                        Style::default().fg(crate::ui::TEXT_PRIMARY),
+                    ),
+                    Span::styled(
+                        (*meaning).to_owned(),
+                        Style::default().fg(crate::ui::TEXT_SECONDARY),
+                    ),
+                ]));
+            }
+        };
+    section("AGENT", &agent_rows, &mut lines);
+    lines.push(Line::from(""));
+    section("TASK", &task_rows, &mut lines);
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled(
+            format!("{}  ", UNISOLATED_MARKER.trim()),
+            Style::default().fg(crate::ui::WARNING),
+        ),
+        Span::styled(
+            AGENT_IN_YOUR_TREE,
+            Style::default().fg(crate::ui::TEXT_SECONDARY),
+        ),
+    ]));
+
+    let width = (content_width + 2 * H_PAD + 2).min(area.width);
+    let height = (lines.len() as u16 + 2).min(area.height);
+    // Anchored to the glyph that was clicked, like every other dropdown
+    // here — and pulled back inside the frame when that glyph sits too
+    // close to an edge for the popup to fit beside it.
+    let popup = Rect::new(
+        anchor.x.min((area.x + area.width).saturating_sub(width)),
+        (anchor.y + anchor.height).min((area.y + area.height).saturating_sub(height)),
+        width,
+        height,
+    );
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .title(" status ")
+        .title_style(
+            Style::default()
+                .fg(crate::ui::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(crate::ui::BORDER))
+        .padding(Padding::new(H_PAD, H_PAD, 0, 0))
+        .style(Style::default().bg(crate::ui::BASE));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// What [`UNISOLATED_MARKER`] means, spelled out for the catalog.
+const AGENT_IN_YOUR_TREE: &str = "the agent runs in your own tree, not a slot";
 
 /// `text` shortened from the left to `width`, keeping its tail — the end
 /// of a path is what says where you are; its beginning is what you can
@@ -959,11 +1186,13 @@ fn render_root_picker(
 fn deliver_button(task: &TaskView) -> Option<(String, Color, bool)> {
     match &task.state {
         TaskStateView::Ready => Some((format!("⇧{}", task.ahead), crate::ui::ACCENT, true)),
-        TaskStateView::GateFailed => Some(("⇧ retry".to_owned(), crate::ui::WARNING, true)),
+        // The hue is the state's own (see `task_mark`), not the button's
+        // mood: one meaning, one color, wherever the state is drawn.
+        TaskStateView::GateFailed => Some(("⇧ retry".to_owned(), crate::ui::DANGER, true)),
         TaskStateView::Conflicted { .. } => {
-            Some(("⚠ conflict".to_owned(), crate::ui::WARNING, false))
+            Some(("! conflict".to_owned(), crate::ui::WARNING, false))
         }
-        TaskStateView::Integrating => Some(("… delivering".to_owned(), crate::ui::MUTED, false)),
+        TaskStateView::Integrating => Some(("… delivering".to_owned(), crate::ui::CYAN, false)),
         _ => None,
     }
 }
