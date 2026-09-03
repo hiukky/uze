@@ -295,6 +295,44 @@ fn content_navigation_and_inspect_intent() {
     );
 }
 
+/// The drawer opens by default on whichever row is selected, and the
+/// list itself lands from a background refresh — so the first selection
+/// is never "navigated to", and nothing else would ask for its detail.
+#[test]
+fn an_open_drawer_asks_for_the_detail_it_is_missing_exactly_once() {
+    let mut model = model_with_plugins(&["one", "two"]);
+    let wanted = Intent::InspectPlugin("one".to_owned());
+    assert_eq!(model.drawer_inspect_intent(), wanted, "nothing fetched yet");
+
+    model.inspection_in_flight = Some(wanted.clone());
+    assert_eq!(
+        model.drawer_inspect_intent(),
+        Intent::None,
+        "the same fetch is not queued again while it runs"
+    );
+
+    model.apply_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    assert_eq!(
+        model.drawer_inspect_intent(),
+        Intent::InspectPlugin("two".to_owned()),
+        "moving the selection wants the new row's detail even mid-flight"
+    );
+
+    model.marketplace_drawer_open = false;
+    assert_eq!(
+        model.drawer_inspect_intent(),
+        Intent::None,
+        "a closed drawer needs nothing"
+    );
+    model.marketplace_drawer_open = true;
+    model.route = Route::Overview;
+    assert_eq!(
+        model.drawer_inspect_intent(),
+        Intent::None,
+        "nor does another screen"
+    );
+}
+
 #[test]
 fn remove_confirmation_flow() {
     let mut model = model_with_plugins(&["one"]);

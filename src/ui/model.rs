@@ -280,6 +280,11 @@ pub(crate) struct TuiModel {
     /// on selection, closes on `Esc` — the list panel reclaims the full
     /// width while it's closed, mirroring the design's slide-in drawer.
     pub(crate) marketplace_drawer_open: bool,
+    /// The inspection the worker is currently answering for the drawer,
+    /// so the per-frame `drawer_inspect_intent` check cannot queue the
+    /// same fetch again while it is still running. Cleared when its
+    /// answer, success or failure, lands.
+    pub(crate) inspection_in_flight: Option<super::worker::Intent>,
     /// Live substring filter over plugin/marketplace name, typed while
     /// `filtering` is true (`/` in the Plugins route).
     pub(crate) marketplace_filter: String,
@@ -382,6 +387,7 @@ impl Default for TuiModel {
             marketplace_selected: 0,
             marketplace_detail: None,
             marketplace_drawer_open: true,
+            inspection_in_flight: None,
             marketplace_filter: String::new(),
             filtering: false,
             collapsed_marketplaces: BTreeSet::new(),
@@ -608,6 +614,23 @@ impl TuiModel {
             name: plugin.name.clone(),
             marketplace: plugin.marketplace.clone(),
         }
+    }
+
+    /// The fetch the open Plugins drawer is missing right now, or
+    /// `Intent::None`. The drawer opens by default and the list arrives
+    /// from a background refresh, so a row can be selected without any
+    /// navigation event having asked for its detail — this is checked
+    /// every frame so the drawer never sits on "loading…" waiting for a
+    /// click that would only re-request what it already needs.
+    pub(crate) fn drawer_inspect_intent(&self) -> super::worker::Intent {
+        if self.route != Route::Plugins || !self.marketplace_drawer_open {
+            return super::worker::Intent::None;
+        }
+        let intent = self.marketplace_inspect_intent();
+        if self.inspection_in_flight.as_ref() == Some(&intent) {
+            return super::worker::Intent::None;
+        }
+        intent
     }
 
     /// Expands/collapses one marketplace group and re-clamps the selection

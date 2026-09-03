@@ -132,6 +132,7 @@ pub(crate) fn dispatch(
             spawn_refresh(home.clone(), sender.clone(), model.context_root.clone());
         }
         Intent::InspectPlugin(id) => {
+            model.inspection_in_flight = Some(Intent::InspectPlugin(id.clone()));
             model.status = Status::Working(format!("Inspecting {id}…"));
             let (home, sender) = (home.clone(), sender.clone());
             thread::spawn(move || {
@@ -142,6 +143,10 @@ pub(crate) fn dispatch(
             });
         }
         Intent::InspectMarketplacePlugin { name, marketplace } => {
+            model.inspection_in_flight = Some(Intent::InspectMarketplacePlugin {
+                name: name.clone(),
+                marketplace: marketplace.clone(),
+            });
             model.status = Status::Working(format!("Inspecting {name}…"));
             let (home, sender) = (home.clone(), sender.clone());
             thread::spawn(move || {
@@ -555,10 +560,12 @@ pub(crate) fn drain_worker_results(
             }
             WorkerResult::PluginInspected(Ok(inspection)) => {
                 model.plugin_detail = Some(inspection);
+                model.inspection_in_flight = None;
                 model.status = Status::Idle;
             }
             WorkerResult::MarketplaceInspected(Ok(detail)) => {
                 model.marketplace_detail = Some(detail);
+                model.inspection_in_flight = None;
                 model.status = Status::Idle;
             }
             WorkerResult::Mutated(Ok((message, data))) => {
@@ -598,9 +605,14 @@ pub(crate) fn drain_worker_results(
                 model.maintenance_in_flight = false;
                 model.status = Status::Error(error);
             }
+            // A failed inspection stays failed until the selection moves:
+            // clearing the in-flight marker here would have the per-frame
+            // check retry it forever, error after error.
             WorkerResult::PluginInspected(Err(error))
-            | WorkerResult::MarketplaceInspected(Err(error))
-            | WorkerResult::Mutated(Err(error))
+            | WorkerResult::MarketplaceInspected(Err(error)) => {
+                model.status = Status::Error(error);
+            }
+            WorkerResult::Mutated(Err(error))
             | WorkerResult::ContextAnalyzed(Err(error))
             | WorkerResult::ContextApplied(Err(error))
             | WorkerResult::ProfileApplied(Err(error)) => model.status = Status::Error(error),
