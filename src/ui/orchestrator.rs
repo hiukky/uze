@@ -1317,6 +1317,11 @@ pub(crate) fn attach_workspace(
                                 begin_rename(&mut model, MenuTarget::Space(space));
                                 model.dirty = true;
                             }
+                            // Two quick clicks on the toggle are two
+                            // toggles, not a gesture of their own.
+                            WorkspaceHit::ToggleSpaceRoot(space) => {
+                                toggle_space_root(&mut model, space);
+                            }
                             _ => {}
                         }
                         continue;
@@ -1469,6 +1474,9 @@ pub(crate) fn attach_workspace(
                         }
                         WorkspaceHit::Deliver(_) => {
                             deliver_selected_tab(&mut model, home, &delivery_sender);
+                        }
+                        WorkspaceHit::ToggleSpaceRoot(space) => {
+                            toggle_space_root(&mut model, space);
                         }
                         WorkspaceHit::OpenStatusCatalog(anchor) => {
                             model.status_catalog = Some(anchor);
@@ -1700,6 +1708,9 @@ pub(super) enum WorkspaceHit {
     /// A space's header row in the sidebar — click selects it (switching
     /// which space's tabs the tab strip and pane show).
     SelectSpace(SpaceId),
+    /// The `⇄` behind a space's name — flips that header between its label
+    /// and its root (see `WorkspaceModel::roots_shown`).
+    ToggleSpaceRoot(SpaceId),
     /// One row of the open [`ContextMenu`], by index into its `items` —
     /// generic over whatever action that row is, same pattern
     /// [`WorkspaceHit::PickAgent`] uses for the agent picker.
@@ -2191,6 +2202,7 @@ struct Remembered {
     pane_checkouts: BTreeMap<PaneId, PathBuf>,
     occupied_checkouts: BTreeSet<PathBuf>,
     slots_swept: bool,
+    roots_shown: BTreeSet<SpaceId>,
 }
 
 impl WorkspaceModel {
@@ -2214,6 +2226,7 @@ impl WorkspaceModel {
             pane_checkouts,
             occupied_checkouts,
             slots_swept,
+            roots_shown,
         } = remembered;
         Self {
             agent_activity,
@@ -2233,6 +2246,7 @@ impl WorkspaceModel {
             pane_checkouts,
             occupied_checkouts,
             slots_swept,
+            roots_shown,
             ..Self::default()
         }
     }
@@ -2257,6 +2271,7 @@ impl WorkspaceModel {
             pane_checkouts: self.pane_checkouts,
             occupied_checkouts: self.occupied_checkouts,
             slots_swept: self.slots_swept,
+            roots_shown: self.roots_shown,
         }
     }
 }
@@ -2393,6 +2408,13 @@ struct WorkspaceModel {
     occupied_checkouts: BTreeSet<PathBuf>,
     /// Whether the sweep for tasks nobody's session restored has run.
     slots_swept: bool,
+    /// The spaces whose header row shows its root instead of its label —
+    /// flipped by the `⇄` behind the name (see
+    /// [`WorkspaceHit::ToggleSpaceRoot`]). Never both at once: the row is
+    /// one line wide and a path is the one thing on it that can be any
+    /// length. Remembered across attaches like any other sidebar
+    /// resolution, so a Ctrl+O round trip does not flip it back.
+    roots_shown: BTreeSet<SpaceId>,
 }
 
 /// Client-side reconstruction of what the user typed into a pane before
@@ -3599,6 +3621,16 @@ fn tab_cwd(model: &WorkspaceModel, tab: TabId) -> Option<PathBuf> {
         .iter()
         .find_map(|space| space.tabs.iter().find(|candidate| candidate.id == tab))?;
     pane_in_layout(&tab.layout, tab.focus.pane).map(|pane| pane.cwd.clone())
+}
+
+/// Flips one space's header between its label and its root. Purely local
+/// state, no server round trip to eventually mark the model dirty — same
+/// as `OpenStatusCatalog`.
+fn toggle_space_root(model: &mut WorkspaceModel, space: SpaceId) {
+    if !model.roots_shown.remove(&space) {
+        model.roots_shown.insert(space);
+    }
+    model.dirty = true;
 }
 
 /// Opens the git changes overlay scoped to the *currently selected tab's*

@@ -900,6 +900,59 @@ mod workspace_tests {
         );
     }
 
+    /// A space header says one thing at a time — its name, or where its
+    /// work lives — and the `⇄` behind the text is the one way between
+    /// them: a click on the name itself still selects the space.
+    #[test]
+    fn the_root_toggle_flips_a_space_header_between_label_and_root() {
+        let mut model = agent_session_in("/repo");
+        // A name the root does not contain, so each reads as itself alone.
+        let label = "workbench".to_owned();
+        let space = {
+            let session = model.session.as_mut().unwrap();
+            let id = session.workspace.selected_space;
+            session.workspace.spaces[0].label = label.clone();
+            id
+        };
+        let header_row = |rows: &[String]| {
+            rows.iter()
+                .find(|row| row.contains(&label) || row.contains("/repo"))
+                .cloned()
+                .expect("the space header is drawn")
+        };
+
+        let mut hits = Vec::new();
+        let rows = sidebar_rows(&model, &mut hits);
+        let row = header_row(&rows);
+        assert!(row.contains(&label) && !row.contains("/repo"), "{row}");
+        let toggles: Vec<Rect> = hits
+            .iter()
+            .filter_map(|(rect, hit)| match hit {
+                WorkspaceHit::ToggleSpaceRoot(id) if *id == space => Some(*rect),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(toggles.len(), 1, "one toggle per header: {rows:?}");
+        let toggle = toggles[0];
+        assert_eq!((toggle.width, toggle.height), (1, 1));
+        let glyph = rows[toggle.y as usize]
+            .chars()
+            .nth(toggle.x as usize)
+            .expect("the toggle is inside the row");
+        assert_eq!(glyph, '⇄', "the hit is the toggle glyph: {rows:?}");
+        assert!(
+            hits.iter().any(|(rect, hit)| {
+                matches!(hit, WorkspaceHit::SelectSpace(id) if *id == space) && rect.width > 1
+            }),
+            "the row itself still selects the space"
+        );
+
+        model.roots_shown.insert(space);
+        let rows = sidebar_rows(&model, &mut Vec::new());
+        let row = header_row(&rows);
+        assert!(row.contains("/repo") && !row.contains(&label), "{row}");
+    }
+
     /// A scheduled evaluation is released under the key it reserved, not
     /// under one recomputed from the answer.
     ///

@@ -846,7 +846,9 @@ pub(super) fn render_sidebar(
     }
 }
 
-/// One space's header row in the sidebar tree — dim for every space,
+/// One space's header row in the sidebar tree — its label, or its root once
+/// the `⇄` behind it is clicked (never both: see
+/// `WorkspaceModel::roots_shown`) — dim for every space,
 /// active one included: the space is a container, not the thing the
 /// operator is looking at, so bold is reserved for the agent tab actually
 /// receiving keystrokes (see `render_sidebar`'s agent-row `label_style`).
@@ -882,35 +884,69 @@ pub(super) fn render_space_header(
     // stays out of the way of the agent name bolded underneath it.
     let label_style = Style::default().fg(crate::ui::NAV_INACTIVE);
     let mut spans = vec![Span::raw(" ")];
-    spans.push(match renaming_this {
-        Some(buffer) => Span::styled(
+    match renaming_this {
+        Some(buffer) => spans.push(Span::styled(
             format!("{buffer}▏"),
             Style::default()
                 .fg(crate::ui::TEXT_BRIGHT)
                 .add_modifier(Modifier::BOLD),
-        ),
-        None => Span::styled(space.label.clone(), label_style),
-    });
-    // Where this space's work lives — the root is what the space *is*, and
-    // what every agent created here starts from. Parenthesized and in its
-    // own hue (`BLUE`, the badge/tag color) rather than the label's dim
-    // supporting text: a directory tag, not a caption. Trailing the name
-    // rather than pinned to the row's far edge — a fixed-width column
-    // isn't the point here, just a tag riding right after what it
-    // describes. Hidden while renaming — the buffer being typed is the
-    // only thing that row should say.
-    if renaming_this.is_none() {
-        let root = crate::ui::display_project_path(&space.root);
-        spans.push(Span::styled(
-            format!(" ({root})"),
-            Style::default().fg(crate::ui::BLUE),
-        ));
+        )),
+        None => {
+            // The label is what the space is called; the root is where its
+            // work lives. One of them at a time — the row is one line wide
+            // and a path is the one thing on it that can be any length —
+            // with the toggle behind the text as the way to the other. The
+            // root in the dimmest text, no brackets: it only says where.
+            // Not while renaming: the buffer being typed is the only thing
+            // that row should say.
+            if model.roots_shown.contains(&space.id) {
+                spans.push(Span::styled(
+                    crate::ui::display_project_path(&space.root),
+                    Style::default().fg(crate::ui::TEXT_DIM),
+                ));
+            } else {
+                spans.push(Span::styled(space.label.clone(), label_style));
+            }
+            push_root_toggle(&mut spans, hits, rect, space.id);
+        }
     }
     if selected {
         fill_row_bg(&mut spans, rect.width, crate::ui::SURFACE_OVERLAY);
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), rect);
     hits.push((rect, WorkspaceHit::SelectSpace(space.id)));
+}
+
+/// Appends the `⇄` to a space header, pinned to the row's right edge — the
+/// same column the agent rows below pin their harness alias to (see
+/// `render_sidebar`'s `TRAILING_PAD`), so the sidebar's right-hand column
+/// stays one column — and makes that one cell the click target flipping
+/// the row between label and root. Readable, not faint: it is a control,
+/// not a tree-prefix glyph. Pushed before the row's own `SelectSpace` hit,
+/// since the click search takes the first rect it lands in (same rule as
+/// [`push_trailing_mark`]).
+fn push_root_toggle(
+    spans: &mut Vec<Span<'_>>,
+    hits: &mut Vec<(Rect, WorkspaceHit)>,
+    rect: Rect,
+    space: SpaceId,
+) {
+    const TRAILING_PAD: u16 = 1;
+    let used: u16 = spans.iter().map(|span| span.width() as u16).sum::<u16>() + 1 + TRAILING_PAD;
+    let Some(gap) = rect.width.checked_sub(used) else {
+        return;
+    };
+    let toggle_x = rect.right() - 1 - TRAILING_PAD;
+    spans.push(Span::raw(" ".repeat(gap as usize)));
+    spans.push(Span::styled(
+        "⇄",
+        Style::default().fg(crate::ui::TEXT_SECONDARY),
+    ));
+    spans.push(Span::raw(" ".repeat(TRAILING_PAD as usize)));
+    hits.push((
+        Rect::new(toggle_x, rect.y, 1, 1),
+        WorkspaceHit::ToggleSpaceRoot(space),
+    ));
 }
 
 /// The mark a task's state puts after its label, and its hue: agent state
