@@ -1718,10 +1718,9 @@ pub(super) enum WorkspaceHit {
     OpenGitView,
     /// Opens contextual support details for the selected agent tab.
     OpenAgentSupport(Rect),
-    /// Either status glyph on a sidebar agent row — opens the catalog of
-    /// what every glyph in both columns means, anchored to the one that
-    /// was clicked. A status column is a wordless vocabulary; this is
-    /// where it is written down.
+    /// The task mark on a sidebar agent row — opens the catalog of what
+    /// every glyph in both columns means, anchored to the mark. A status
+    /// column is a wordless vocabulary; this is where it is written down.
     OpenStatusCatalog(Rect),
     /// The tab strip's delivery button — delivers the selected tab's task
     /// the way the project's completion says. Present only when the task

@@ -863,11 +863,12 @@ mod workspace_tests {
         }
     }
 
-    /// Both status columns are click targets, and both open the catalog:
-    /// the glyphs are the row's only wordless vocabulary, so the row has
-    /// to carry the way to look them up.
+    /// The task mark is the one click target that opens the catalog: the
+    /// glyphs are the row's only wordless vocabulary, so the row has to
+    /// carry the way to look them up — once. The agent's own status glyph
+    /// in front of the name is not a second door to the same popup.
     #[test]
-    fn either_status_column_opens_the_catalog() {
+    fn only_the_task_mark_opens_the_catalog() {
         let model = agent_with_task(TaskStateView::Ready, 1);
         let mut hits = Vec::new();
         let rows = sidebar_rows(&model, &mut hits);
@@ -878,33 +879,20 @@ mod workspace_tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(anchors.len(), 2, "one per column: {rows:?}");
-        // Each anchor is the glyph's own cell, not the row: a click on the
+        assert_eq!(anchors.len(), 1, "one door, the task mark: {rows:?}");
+        // The anchor is the glyph's own cell, not the row: a click on the
         // name still selects the tab. Read back out of the drawn rows, so
         // a hit that drifts off its glyph fails here rather than opening
         // the catalog from a blank column.
-        let cell_at = |anchor: &Rect| {
-            rows[anchor.y as usize]
-                .chars()
-                .nth(anchor.x as usize)
-                .expect("the anchor is inside the row")
-                .to_string()
-        };
+        let anchor = anchors[0];
+        assert_eq!((anchor.width, anchor.height), (1, 1));
+        let glyph = rows[anchor.y as usize]
+            .chars()
+            .nth(anchor.x as usize)
+            .expect("the anchor is inside the row")
+            .to_string();
         let (ready, _) = task_mark(&TaskStateView::Ready).expect("ready is marked");
-        let glyphs: Vec<String> = anchors.iter().map(cell_at).collect();
-        for anchor in &anchors {
-            assert_eq!((anchor.width, anchor.height), (1, 1));
-        }
-        assert!(
-            glyphs.iter().any(|glyph| glyph == ready),
-            "one anchor is the task mark: {glyphs:?}"
-        );
-        assert!(
-            glyphs
-                .iter()
-                .any(|glyph| glyph == AgentTabStatus::Selected.glyph(0).trim_end()),
-            "the other is the agent's own status: {glyphs:?}"
-        );
+        assert_eq!(glyph, ready, "the anchor is the task mark: {rows:?}");
         assert!(
             hits.iter()
                 .any(|(rect, hit)| matches!(hit, WorkspaceHit::SelectTab(_)) && rect.width > 1),

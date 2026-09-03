@@ -689,19 +689,13 @@ pub(super) fn render_sidebar(
                 ),
                 None => Span::styled(tab.label.clone(), label_style),
             };
-            // Both status columns are their own click targets, and both
-            // open the same catalog: they are the row's only wordless
-            // vocabulary, and a glyph nobody can look up is a glyph that
-            // reads as decoration. Pushed before the row's own
-            // `SelectTab` hit below, since the click search takes the
-            // first rect it lands in — a 1-column target inside a row-wide
-            // one only ever wins by being found first.
-            let indicator_rect = Rect::new(
-                label_rect.x + connector_span.width() as u16,
-                label_rect.y,
-                1,
-                1,
-            );
+            // The task mark behind the label is the one click target that
+            // opens the catalog (see `push_trailing_mark`): the status glyph
+            // in front of the name is not, so the row's leading column
+            // stays a plain part of selecting the tab. Pushed before the
+            // row's own `SelectTab` hit below, since the click search takes
+            // the first rect it lands in — a 1-column target inside a
+            // row-wide one only ever wins by being found first.
             let mut spans = vec![
                 connector_span,
                 Span::styled(indicator, Style::default().fg(indicator_fg)),
@@ -713,10 +707,6 @@ pub(super) fn render_sidebar(
             {
                 push_trailing_mark(&mut spans, hits, label_rect, mark, hue);
             }
-            hits.push((
-                indicator_rect,
-                WorkspaceHit::OpenStatusCatalog(indicator_rect),
-            ));
             // The alias in place of the raw process name — this list only
             // ever holds tabs `agent_identity_for_tab` already resolved, so
             // it never falls back to showing something like a bare version
@@ -961,7 +951,7 @@ pub(super) fn task_mark(state: &TaskStateView) -> Option<(&'static str, Color)> 
 }
 
 /// The legend for the two status columns an agent row carries, opened by
-/// clicking either of them (see [`WorkspaceHit::OpenStatusCatalog`]).
+/// clicking the task mark (see [`WorkspaceHit::OpenStatusCatalog`]).
 ///
 /// Every row is generated from the same tables the sidebar draws with —
 /// [`task_mark`] and [`AgentTabStatus::glyph`]/`color` — so a glyph or a
