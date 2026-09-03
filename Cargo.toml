@@ -59,8 +59,8 @@ indicatif = "0.18"
 # dialoguer replaces raw `stdin().read_line()` prompts with proper
 # confirm/select/input widgets; comfy-table replaces hand-padded columns.
 anstyle = "1"
-dialoguer = "0.11"
-comfy-table = "7"
+dialoguer = "0.12"
+comfy-table = "8"
 
 # MCP fixtures and the local playground server are test/development support;
 # neither is linked into UZE's application/core crates.
@@ -74,7 +74,7 @@ schemars = "1"
 uze-testkit = { path = "crates/uze-testkit" }
 # Decodes the terminal runtime's wire frames in orchestrator.rs tests —
 # see uze-terminal's own bincode dependency for why the wire uses it.
-bincode = "1.3"
+bincode = "3.0"
 
 [[bin]]
 name = "uze-mcp-conformance-fixture"
