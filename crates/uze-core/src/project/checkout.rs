@@ -303,10 +303,13 @@ pub fn reconcile(primary: &Path, store: &mut TaskStore, target: &str) -> Reconci
         task.label = label;
         task.branch = branch.clone().unwrap_or_else(|| task.id.branch());
         task.checkout = Some(id);
+        // Nobody recorded this checkout, so nobody recorded a delivery
+        // from it either: empty means it ended with nothing, not that its
+        // work reached the target.
         task.state = if holds_work {
             TaskState::Parked
         } else {
-            TaskState::Integrated
+            TaskState::Closed
         };
         report.adopted.push(task.id.clone());
         store.upsert(task);
@@ -323,13 +326,14 @@ pub fn reconcile(primary: &Path, store: &mut TaskStore, target: &str) -> Reconci
             continue;
         }
         task.checkout = None;
-        task.state = if branch_exists(primary, &task.branch)
-            && commits_ahead(primary, target, &task.branch) > 0
+        // A delivery already recorded stays recorded: its branch has
+        // nothing of its own left precisely because the target has it all.
+        if branch_exists(primary, &task.branch) && commits_ahead(primary, target, &task.branch) > 0
         {
-            TaskState::Parked
-        } else {
-            TaskState::Integrated
-        };
+            task.state = TaskState::Parked;
+        } else if task.state != TaskState::Integrated {
+            task.state = TaskState::Closed;
+        }
         report.orphaned.push(task.id.clone());
     }
 
@@ -431,7 +435,7 @@ pub fn release(primary: &Path, task: &mut Task, target: &str) -> SlotState {
         task.state = if holds_work {
             TaskState::Parked
         } else {
-            TaskState::Integrated
+            TaskState::Closed
         };
     }
     // A task the operator declared done keeps its branch and frees its
@@ -468,7 +472,10 @@ pub fn discard(primary: &Path, task: &Task) -> Result<(), String> {
 
 /// Whether `state` means an agent may still be writing.
 pub fn is_live(state: &TaskState) -> bool {
-    !matches!(state, TaskState::Integrated | TaskState::Parked)
+    !matches!(
+        state,
+        TaskState::Integrated | TaskState::Parked | TaskState::Closed
+    )
 }
 
 /// The branch checked out in `root`, or `None` for a detached `HEAD`.
@@ -727,6 +734,11 @@ mod tests {
             &target,
         );
         assert_eq!(state, SlotState::Free);
+        assert_eq!(
+            store.get(&first.id).unwrap().state,
+            TaskState::Closed,
+            "it ended with nothing; nothing of it reached the target"
+        );
         assert_eq!(
             slots(repository.root(), &store)[0].state,
             SlotState::Free,
@@ -1013,8 +1025,8 @@ mod tests {
         assert_eq!(adopted.checkout, Some(CheckoutId::adopted("agent-2")));
         assert_eq!(
             adopted.state,
-            TaskState::Integrated,
-            "clean and nothing ahead: free to reuse"
+            TaskState::Closed,
+            "clean and nothing ahead: free to reuse, and no delivery to claim"
         );
         assert_eq!(slots(primary, &store)[0].state, SlotState::Free);
     }

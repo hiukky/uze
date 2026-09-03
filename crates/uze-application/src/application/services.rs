@@ -589,10 +589,14 @@ pub enum TaskStateView {
     Uncommitted,
     Ready,
     Integrating,
-    Conflicted { files: Vec<PathBuf> },
+    Conflicted {
+        files: Vec<PathBuf>,
+    },
     GateFailed,
     Integrated,
     Parked,
+    /// The agent is gone and its branch held nothing to deliver.
+    Closed,
 }
 
 impl TaskStateView {
@@ -603,7 +607,7 @@ impl TaskStateView {
 
     /// Whether the task still has an agent's work in front of it.
     pub fn is_live(&self) -> bool {
-        !matches!(self, Self::Integrated | Self::Parked)
+        !matches!(self, Self::Integrated | Self::Parked | Self::Closed)
     }
 }
 
@@ -620,6 +624,7 @@ impl From<&TaskState> for TaskStateView {
             TaskState::GateFailed => Self::GateFailed,
             TaskState::Integrated => Self::Integrated,
             TaskState::Parked => Self::Parked,
+            TaskState::Closed => Self::Closed,
         }
     }
 }

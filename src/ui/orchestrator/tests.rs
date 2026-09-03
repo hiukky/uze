@@ -367,6 +367,55 @@ mod workspace_tests {
         );
     }
 
+    /// A slot outlives the tasks that run in it, and a task that ended
+    /// keeps naming the slot it ran in — so a reused directory is named by
+    /// two tasks at once. The row belongs to whoever is in it now; reading
+    /// the first match handed the new agent the previous one's branch and
+    /// its delivered arrow.
+    #[test]
+    fn a_reused_slot_reads_the_task_in_it_now_not_the_one_before() {
+        let mut model = agent_session_in("/repo/.worktrees/ai");
+        let before = TaskView {
+            id: "before".into(),
+            branch: "agent/before".into(),
+            created_at_unix: 1,
+            ..task_in(
+                "/repo/.worktrees/ai",
+                "before",
+                TaskStateView::Integrated,
+                2,
+            )
+        };
+        let now = TaskView {
+            id: "now".into(),
+            branch: "agent/now".into(),
+            created_at_unix: 2,
+            ..task_in("/repo/.worktrees/ai", "now", TaskStateView::Running, 0)
+        };
+        model
+            .tasks
+            .insert(PathBuf::from("/repo"), vec![before, now]);
+
+        let rows = sidebar_rows(&model, &mut Vec::new());
+        assert!(
+            rows.iter().any(|row| row.contains("agent/now")),
+            "the branch under the row is the one being written on: {rows:?}"
+        );
+        assert!(
+            !rows.iter().any(|row| row.contains("agent/before")),
+            "and never the branch of the task that ended here: {rows:?}"
+        );
+        let (delivered, _) = task_mark(&TaskStateView::Integrated).expect("integrated is marked");
+        let name_row = rows
+            .iter()
+            .find(|row| row.contains("Agent"))
+            .expect("the agent names its own row");
+        assert!(
+            !name_row.contains(delivered),
+            "a new agent delivered nothing: {name_row}"
+        );
+    }
+
     /// The sidebar and the strip name the same agent the same way — the
     /// tab's own label, the one renaming edits — however its task is
     /// labelled. The strip used to prefer the task's label, so a renamed

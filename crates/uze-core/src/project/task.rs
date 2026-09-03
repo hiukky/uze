@@ -117,6 +117,11 @@ pub enum TaskState {
     Integrated,
     /// The agent is gone and the checkout still holds work.
     Parked,
+    /// The agent is gone and its branch held nothing to deliver. Ended,
+    /// like `Integrated` and `Parked`, but the only one of the three that
+    /// never had work: saying "delivered" of it would claim a delivery
+    /// nobody made.
+    Closed,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

@@ -437,7 +437,11 @@ fn a_closed_agent_gives_its_slot_back_and_one_holding_work_keeps_it() {
         .release_abandoned_tasks(&project, &occupied);
     assert_eq!(released.len(), 1, "{released:?}");
     assert!(!released[0].parked, "the checkout held nothing");
-    assert_eq!(engine.state_of(&empty), TaskStateView::Integrated);
+    assert_eq!(
+        engine.state_of(&empty),
+        TaskStateView::Closed,
+        "it ended holding nothing, which is not the same as delivered"
+    );
 
     let (_, reused) = engine.launch("true\n");
     assert_eq!(

@@ -870,7 +870,11 @@ pub(super) fn render_space_header(
 /// [`render_status_catalog`] is this table's legend and must move with it.
 pub(super) fn task_mark(state: &TaskStateView) -> Option<(&'static str, Color)> {
     match state {
-        TaskStateView::Running => None,
+        // Nothing to report, and for the same reason: a task that has not
+        // committed yet and one whose agent left with nothing both hold
+        // no work. `Closed` in particular must not wear `Integrated`'s
+        // arrow — that arrow claims a delivery.
+        TaskStateView::Running | TaskStateView::Closed => None,
         TaskStateView::Uncommitted => Some(("±", crate::ui::BLUE)),
         TaskStateView::Ready => Some(("⇧", crate::ui::ACCENT)),
         TaskStateView::Integrating => Some(("…", crate::ui::CYAN)),
@@ -1253,6 +1257,7 @@ pub(super) fn render_preserved(
             TaskStateView::Running => "no commits yet".to_owned(),
             TaskStateView::Integrating => "delivering".to_owned(),
             TaskStateView::Integrated => "delivered".to_owned(),
+            TaskStateView::Closed => "nothing to deliver".to_owned(),
         };
         let mut spans = vec![
             Span::styled(

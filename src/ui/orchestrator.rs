@@ -2366,14 +2366,25 @@ impl WorkspaceModel {
     /// The task whose slot `cwd` sits in, as last evaluated. Lexical: the
     /// slot's name is its identifier, and the primary it hangs off keys
     /// the repository's tasks.
+    ///
+    /// A slot outlives the tasks that run in it, and a task that ended
+    /// keeps naming the slot it ran in, so more than one task can point at
+    /// the same directory. The newest is the one running there — the same
+    /// rule `checkout::slot_state` reads occupancy by. Taking the first
+    /// match instead handed a new agent the previous occupant's branch and
+    /// its status mark.
     fn task_for_cwd(&self, cwd: &Path) -> Option<&TaskView> {
         let checkout = uze_application::isolated_checkout(cwd)?;
-        self.tasks.get(checkout.primary)?.iter().find(|task| {
-            task.checkout
-                .as_deref()
-                .and_then(Path::file_name)
-                .is_some_and(|name| name == checkout.name)
-        })
+        self.tasks
+            .get(checkout.primary)?
+            .iter()
+            .filter(|task| {
+                task.checkout
+                    .as_deref()
+                    .and_then(Path::file_name)
+                    .is_some_and(|name| name == checkout.name)
+            })
+            .max_by_key(|task| task.created_at_unix)
     }
 
     pub(super) fn tab_task(&self, tab: TabId) -> Option<&TaskView> {
@@ -2415,7 +2426,12 @@ impl WorkspaceModel {
             .tasks
             .iter()
             .flat_map(|(primary, tasks)| tasks.iter().map(move |task| (primary, task)))
-            .filter(|(_, task)| task.state != TaskStateView::Integrated)
+            .filter(|(_, task)| {
+                !matches!(
+                    task.state,
+                    TaskStateView::Integrated | TaskStateView::Closed
+                )
+            })
             .filter(|(_, task)| {
                 task.checkout
                     .as_deref()
@@ -2757,6 +2773,7 @@ fn deliver_selected_tab(
                 TaskStateView::Conflicted { .. } => "a rebase is paused; the agent is on it",
                 TaskStateView::Integrating => "already being delivered",
                 TaskStateView::Integrated => "already delivered",
+                TaskStateView::Closed => "its branch holds nothing",
                 TaskStateView::Parked | TaskStateView::Ready | TaskStateView::GateFailed =>
                     "not deliverable",
             }
