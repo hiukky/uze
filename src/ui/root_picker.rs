@@ -94,6 +94,11 @@ impl RootPicker {
     }
 
     pub(super) fn typed(&mut self, character: char) {
+        // A separator on top of a separator names nothing more: the
+        // directory is already the one being listed.
+        if character == '/' && self.input.ends_with('/') {
+            return;
+        }
         self.input.push(character);
         self.refresh();
     }
@@ -176,17 +181,26 @@ impl RootPicker {
 /// Splits the input into the directory to list and the segment to match
 /// inside it: everything up to the last separator is the directory, so a
 /// trailing separator means "everything in here, unfiltered".
-fn split(input: &str) -> (PathBuf, &str) {
-    let (directory, needle) = match input.rsplit_once('/') {
-        Some(("", needle)) => ("/", needle),
-        Some((directory, needle)) => (directory, needle),
-        // A lone `~` names the home directory itself; every other bare
-        // word is a name to match inside it (`expand_home`'s own rule for
-        // a relative path).
-        None if input == "~" => ("~", ""),
-        None => ("~", input),
-    };
-    (expand_home(directory), needle)
+fn split(input: &str) -> (PathBuf, String) {
+    match input.rsplit_once('/') {
+        Some(("", needle)) => (PathBuf::from("/"), needle.to_owned()),
+        Some((directory, needle)) => (expand_home(directory), needle.to_owned()),
+        // A lone `~` is the home directory with its separator deleted, and
+        // that is how a directory is picked: as its own name matched inside
+        // its parent, the rule every other segment follows.
+        None if input == "~" => {
+            let home = expand_home("~");
+            match (home.parent(), home.file_name()) {
+                (Some(parent), Some(name)) => {
+                    (parent.to_path_buf(), name.to_string_lossy().into_owned())
+                }
+                _ => (home, String::new()),
+            }
+        }
+        // Every other bare word is a name to match inside the home
+        // directory (`expand_home`'s own rule for a relative path).
+        None => (expand_home("~"), input.to_owned()),
+    }
 }
 
 fn read_directories(directory: &Path) -> Vec<Candidate> {

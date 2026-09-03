@@ -83,6 +83,36 @@ fn a_hidden_directory_appears_only_once_it_is_asked_for_by_name() {
     assert_eq!(names(&picker), [".worktrees"]);
 }
 
+/// `~//` names nothing `~/` does not: the second separator is dropped
+/// rather than drawn, so the prompt never shows a path no directory has.
+#[test]
+fn a_separator_typed_over_a_separator_changes_nothing() {
+    let (_root, mut picker) = picker_over("root-picker-double-separator", &["alpha"]);
+    let before = picker.input().to_owned();
+
+    picker.typed('/');
+
+    assert_eq!(picker.input(), before);
+    assert_eq!(names(&picker), ["alpha"]);
+}
+
+/// A lone `~` is the home directory with its separator deleted, and that
+/// is how a directory is picked — so it lists the home directory's parent,
+/// matching the home directory's own name, rather than the home directory
+/// itself (which would leave no row to land on for it).
+#[test]
+fn a_lone_tilde_is_the_home_directory_matched_inside_its_parent() {
+    let home = expand_home("~");
+    let (Some(parent), Some(name)) = (home.parent(), home.file_name()) else {
+        return;
+    };
+
+    let (directory, needle) = split("~");
+
+    assert_eq!(directory, parent);
+    assert_eq!(needle, name.to_string_lossy());
+}
+
 #[test]
 fn backspacing_past_the_filter_brings_the_whole_listing_back() {
     let (_root, mut picker) = picker_over("root-picker-backspace", &["alpha", "second"]);

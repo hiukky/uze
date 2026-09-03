@@ -1492,6 +1492,56 @@ mod workspace_tests {
         );
     }
 
+    /// The prompt is choosing where the next space goes, so it stands
+    /// exactly where the first space's header stood, and the directories
+    /// sit directly under it the way a space's tabs sit under theirs —
+    /// no blank row wedged between the two.
+    #[test]
+    fn the_prompt_stands_where_the_first_space_header_stood() {
+        let root = uze_testkit::temp::TempDir::new("sidebar-root-place");
+        std::fs::create_dir_all(root.join("engine")).unwrap();
+        let mut model = agent_session_in("/repo");
+        let rows = sidebar_rows(&model, &mut Vec::new());
+        let header_row = rows
+            .iter()
+            .position(|row| row.contains("repo"))
+            .expect("the space header is drawn");
+
+        model.root_picker = Some(RootPicker::opened_in(&root.path().display().to_string()));
+        let rows = sidebar_rows(&model, &mut Vec::new());
+        let prompt_row = rows
+            .iter()
+            .position(|row| row.contains(" at "))
+            .expect("the prompt row is drawn");
+
+        assert_eq!(prompt_row, header_row, "{rows:?}");
+        assert!(
+            rows[prompt_row + 1].contains("engine"),
+            "the listing starts right under the prompt: {rows:?}"
+        );
+    }
+
+    /// The filesystem root is a directory like any other, and `/` alone is
+    /// how it is named — so the prompt shows the separator that was typed
+    /// rather than an empty query listing the root behind the user's back.
+    #[test]
+    fn a_lone_separator_is_drawn_as_the_root_it_names() {
+        let mut model = agent_session_in("/repo");
+        let mut picker = RootPicker::opened_in("~");
+        for _ in 0..2 {
+            picker.backspace();
+        }
+        picker.typed('/');
+        model.root_picker = Some(picker);
+
+        let rows = sidebar_rows(&model, &mut Vec::new());
+        let prompt = rows
+            .iter()
+            .find(|row| row.contains(" at "))
+            .expect("the prompt row is drawn");
+        assert!(prompt.contains(" at /\u{258f}"), "{prompt}");
+    }
+
     /// Two trees in one column — directories and spaces — would leave no
     /// telling which one is being chosen from, so the picker takes the
     /// column while it is open and gives it straight back when it closes.

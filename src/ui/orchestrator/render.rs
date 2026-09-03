@@ -580,6 +580,7 @@ pub(super) fn render_sidebar(
             WorkspaceHit::NewSpace,
         ));
     }
+    rows.gap();
     // While the root picker is open it owns the column: the listing it
     // draws is a tree of directories, and side by side with the tree of
     // spaces neither would read as the one being chosen from. Closing it
@@ -588,7 +589,6 @@ pub(super) fn render_sidebar(
         render_root_picker(frame, picker, &mut rows, hits);
         return;
     }
-    rows.gap();
 
     for space in &session.workspace.spaces {
         let is_active_space = space.id == session.workspace.selected_space;
@@ -1206,7 +1206,9 @@ fn elide_head(text: &str, width: usize) -> String {
 
 /// The "+ new" prompt and the directories it currently matches, drawn as
 /// rows of the sidebar itself rather than a floating popup: the prompt is
-/// choosing where the next space in this very list goes.
+/// choosing where the next space in this very list goes. It stands where
+/// the first space's header stands, with the listing directly under it the
+/// way a space's tabs sit under theirs.
 fn render_root_picker(
     frame: &mut ratatui::Frame<'_>,
     picker: &RootPicker,
@@ -1217,15 +1219,12 @@ fn render_root_picker(
         // The typed segment is what the listing below is matching on, so
         // it reads as the query it is — bright against the dim directory
         // it is searching.
-        let (typed_directory, needle) = picker
+        let (directory, needle) = picker
             .input()
-            .rsplit_once('/')
-            .map_or(("", picker.input()), |(head, needle)| (head, needle));
-        let directory = if typed_directory.is_empty() {
-            String::new()
-        } else {
-            format!("{typed_directory}/")
-        };
+            .rfind('/')
+            .map_or(("", picker.input()), |separator| {
+                picker.input().split_at(separator + 1)
+            });
         let mut spans = vec![
             Span::styled(" at ", Style::default().fg(crate::ui::MUTED)),
             Span::styled(
@@ -1233,7 +1232,7 @@ fn render_root_picker(
                 // narrow, so the directory in front of it is the part that
                 // gives way.
                 elide_head(
-                    &directory,
+                    directory,
                     (rect.width as usize).saturating_sub(" at ".len() + needle.chars().count() + 1),
                 ),
                 Style::default().fg(crate::ui::TEXT_DIM),
@@ -1248,7 +1247,6 @@ fn render_root_picker(
         fill_row_bg(&mut spans, rect.width, crate::ui::SURFACE_OVERLAY);
         frame.render_widget(Paragraph::new(Line::from(spans)), rect);
     }
-    rows.gap();
     if picker.match_count() == 0 {
         if let Some(rect) = rows.next(1) {
             frame.render_widget(
