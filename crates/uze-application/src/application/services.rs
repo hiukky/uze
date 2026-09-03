@@ -15,6 +15,7 @@
 //! those files were drawn deliberately, and redrawing them in the same
 //! change would have made the diff argue two things at once.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use uze_core::{
@@ -306,11 +307,28 @@ impl Workspace<'_> {
         let mut notices = Vec::new();
         let primary = repository.primary.clone();
         let completion = repository.policy.completion;
+        let owners = slot_owners(&repository.store);
         for task in &mut repository.store.tasks {
-            if !checkout::is_live(&task.state) || task.state == TaskState::Integrating {
+            // A delivered task is still looked at while it owns its slot:
+            // the agent that delivered usually keeps working in the same
+            // checkout, and skipping every non-live task froze that row on
+            // `delivered` for the rest of the session however much the
+            // slot changed. Only the *current* owner is reconsidered — a
+            // freed slot handed to a new agent belongs to that agent's
+            // task, not to the one that used to sit there. `Parked` is
+            // nobody's turn by definition and stays put.
+            let revivable =
+                task.state == TaskState::Integrated && owners.contains(task.id.as_str());
+            if task.state == TaskState::Integrating
+                || (!checkout::is_live(&task.state) && !revivable)
+            {
                 continue;
             }
             match landing::readiness(&primary, task) {
+                // Nothing new since delivery leaves the delivery standing:
+                // `↑` is the last thing that happened to this task, and
+                // saying `running` instead would erase it on the next tick.
+                Readiness::Running if revivable => {}
                 Readiness::Running => task.state = TaskState::Running,
                 Readiness::Uncommitted => task.state = TaskState::Uncommitted,
                 Readiness::Rebasing { files } => task.state = TaskState::Conflicted { files },
@@ -539,6 +557,34 @@ impl Repository {
             outcome,
         })
     }
+}
+
+/// The task currently answering for each occupied slot, by id.
+///
+/// A checkout id can be named by more than one task over its life — a slot
+/// goes back to the pool and the next agent takes it — and the newest one
+/// is the owner, which is the rule `checkout::slot_state` already reads
+/// slots by. Anything older is history and must not be revived by what the
+/// directory now holds, because what it holds is somebody else's work.
+fn slot_owners(store: &TaskStore) -> BTreeSet<String> {
+    let mut newest: BTreeMap<&str, &Task> = BTreeMap::new();
+    for task in &store.tasks {
+        let Some(checkout) = &task.checkout else {
+            continue;
+        };
+        newest
+            .entry(checkout.as_str())
+            .and_modify(|held| {
+                if task.created_at_unix >= held.created_at_unix {
+                    *held = task;
+                }
+            })
+            .or_insert(task);
+    }
+    newest
+        .into_values()
+        .map(|task| task.id.as_str().to_owned())
+        .collect()
 }
 
 /// A task ended because its agent is gone, and what became of its slot.
@@ -1052,6 +1098,77 @@ mod task_service_tests {
         assert_eq!(report.outcome, DeliveryOutcome::Merged);
         assert_eq!(state_of(&app, &root, &id), TaskStateView::Integrated);
         assert!(root.join("draft.rs").is_file());
+    }
+
+    /// An agent almost never stops at its first delivery: it keeps working
+    /// in the same slot. Skipping every task that was not live froze that
+    /// row on `delivered` for the rest of the session, however much the
+    /// checkout changed underneath it.
+    #[test]
+    fn a_delivered_task_still_in_its_slot_is_read_again() {
+        let repository = repository("svc-redeliver");
+        lock(&repository, "  completion: merge\n");
+        let root = repository.root().to_path_buf();
+        let app = application("svc-redeliver-home");
+        let (id, slot) = launched(&app, &root);
+
+        agent_commits(&repository, &slot, "first.rs", "fn first() {}");
+        app.workspace().deliver_task(&root, &id).unwrap();
+        assert_eq!(state_of(&app, &root, &id), TaskStateView::Integrated);
+
+        // Nothing new: the delivery is the last thing that happened, and
+        // an evaluation must not talk it back down to `running`.
+        app.workspace().evaluate_tasks(&root);
+        assert_eq!(state_of(&app, &root, &id), TaskStateView::Integrated);
+
+        // The same agent carries on in the same checkout.
+        std::fs::write(slot.join("second.rs"), "fn second() {}").unwrap();
+        app.workspace().evaluate_tasks(&root);
+        assert_eq!(
+            state_of(&app, &root, &id),
+            TaskStateView::Uncommitted,
+            "changes in the slot are seen after a delivery, not only before one"
+        );
+
+        agent_commits(&repository, &slot, "second.rs", "fn second() {}");
+        app.workspace().evaluate_tasks(&root);
+        assert_eq!(
+            state_of(&app, &root, &id),
+            TaskStateView::Ready,
+            "and it becomes deliverable a second time"
+        );
+    }
+
+    /// A slot outlives the task that used to sit in it. What the directory
+    /// holds now answers for whoever holds it now.
+    #[test]
+    fn a_delivered_task_whose_slot_moved_on_is_left_alone() {
+        let repository = repository("svc-handover");
+        lock(&repository, "  completion: merge\n");
+        let root = repository.root().to_path_buf();
+        let app = application("svc-handover-home");
+
+        let (first, slot) = launched(&app, &root);
+        agent_commits(&repository, &slot, "first.rs", "fn first() {}");
+        app.workspace().deliver_task(&root, &first).unwrap();
+        assert_eq!(state_of(&app, &root, &first), TaskStateView::Integrated);
+
+        // The freed slot goes to the next agent, who dirties it.
+        let (second, reused) = launched(&app, &root);
+        assert_eq!(reused, slot, "the delivered slot was free to reuse");
+        std::fs::write(reused.join("draft.rs"), "in progress").unwrap();
+
+        app.workspace().evaluate_tasks(&root);
+        assert_eq!(
+            state_of(&app, &root, &second),
+            TaskStateView::Uncommitted,
+            "the work in the slot belongs to the agent sitting in it"
+        );
+        assert_eq!(
+            state_of(&app, &root, &first),
+            TaskStateView::Integrated,
+            "and never revives the task that handed the slot over"
+        );
     }
 
     #[test]
