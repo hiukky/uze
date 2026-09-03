@@ -167,6 +167,7 @@ impl Engine {
             &mut self.stream,
             &ClientRequest::CreateTab {
                 label,
+                agent: None,
                 columns: 80,
                 rows: 24,
                 cwd: Some(slot.clone()),

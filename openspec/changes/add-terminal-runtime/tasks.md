@@ -65,3 +65,9 @@
 - [x] 6.4 Stamp every pane with `UZE_PANE`; a `uze` started with it asks the server for a space at its workspace root and exits reporting it.
 - [x] 6.5 TUI: `+ new` prompts for the root in place, prefilled with the selected space's; the space header shows its root; prompt history keys on the space's root.
 - [x] 6.6 Prove it end to end in `tests/acceptance/engine.rs`: two clients on one server keep their own focus, a second directory becomes a second space, a nested launch opens a space without stealing focus; and in `uze-terminal`, that a client's view overlays its selection and heals a stale one.
+
+## 7. Choosing a root, and one agent at a time
+
+- [x] 7.1 TUI: `+ new` chooses the root from the directories that exist — the input names a directory to list and a segment to match inside it, the listing narrows on every keystroke, `Tab` descends, `Enter` creates, and the picker has the sidebar to itself while open.
+- [x] 7.2 A tab belongs with the agent it was born from: `Tab` carries it, `CreateTab` names it, the snapshot persists it by position, and closing an agent hands its shells to the space instead of leaving them dangling. Protocol bumped.
+- [x] 7.3 TUI: the tab strip shows one context — the agent leads it, the shells opened alongside it follow, no other agent's appear; a shell opened by hand starts in the agent's own directory; a space's own row lands on a shell belonging to no agent.

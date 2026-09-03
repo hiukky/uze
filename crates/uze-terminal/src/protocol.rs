@@ -29,11 +29,17 @@ use crate::{PaneId, Session, SpaceId, TabId, WorkspaceId};
 ///
 /// Bumped again for terminal-owned scrollback requests.
 ///
+/// Bumped again for a tab belonging with an agent: `Tab` carries the agent
+/// tab a shell was born from and `CreateTab` names it, which changes both
+/// a request shape and the pushed `Session` — see the paragraph above for
+/// why the pushed half is what makes the bump mandatory rather than
+/// merely tidy.
+///
 /// Bumped again for one server per user: a `Space` carries its `root`,
 /// `Workspace` no longer does, `Attach` names the root the client wants a
 /// space for, `CreateSpace` names the new space's root, and the selection
 /// a `Session` carries is the receiving client's own.
-pub const PROTOCOL_VERSION: u16 = 8;
+pub const PROTOCOL_VERSION: u16 = 9;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ClientRequest {
@@ -69,6 +75,11 @@ pub enum ClientRequest {
     },
     CreateTab {
         label: String,
+        /// The agent tab this one is opened alongside — a shell the person
+        /// asked for while that agent was in front of them, which is shown
+        /// with it and starts in its directory. `None` opens a tab of the
+        /// space itself. Ignored when it names a tab of another space.
+        agent: Option<TabId>,
         columns: u16,
         rows: u16,
         /// Optional directory for the pane's first process. A missing value

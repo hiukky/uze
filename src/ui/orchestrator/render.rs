@@ -1145,21 +1145,30 @@ pub(super) fn render_tab_strip(
     // which shells this strip shows, the actual "don't mix projects"
     // payoff of spaces existing at all.
     let space = session.selected_space();
+    // …and, within it, to one context: the agent in front of the person
+    // followed by the shells opened alongside it, never another agent's.
+    // A `None` context is the space's own — its bootstrap shell and
+    // anything opened with no agent selected.
+    let context = context_agent(model, identities);
+    let strip: Vec<&Tab> = context
+        .and_then(|agent| space.tabs.iter().find(|tab| tab.id == agent))
+        .into_iter()
+        .chain(space.tabs.iter().filter(|tab| {
+            agent_identity_for_tab(identities, tab).is_none() && tab.agent == context
+        }))
+        .collect();
     // Closability is a per-space rule (the server refuses to remove a
     // space's only tab — see `Session::remove_tab`), so it's judged
-    // against every tab in the selected space, not just the shell ones
-    // this strip goes on to show.
+    // against every tab in the selected space, not just the ones this
+    // strip goes on to show.
     let can_close = space.tabs.len() > 1;
     let mut spans = Vec::new();
     let mut x = inner.x;
-    for tab in space
-        .tabs
-        .iter()
-        .filter(|tab| agent_identity_for_tab(identities, tab).is_none())
-    {
+    for tab in strip {
         if x >= inner.right() {
             break;
         }
+        let is_agent = Some(tab.id) == context;
         let selected = tab.id == space.selected_tab;
         let marker_fg = if selected {
             crate::ui::ACCENT
@@ -1174,8 +1183,19 @@ pub(super) fn render_tab_strip(
             Style::default().fg(crate::ui::NAV_INACTIVE)
         };
         let marker = Span::styled(
-            if selected { "● " } else { "○ " },
-            Style::default().fg(marker_fg),
+            // The agent leading the strip wears the same "✦" the button
+            // that creates one does, so the first chip reads as the agent
+            // this context is about rather than another shell.
+            match (is_agent, selected) {
+                (true, _) => "✦ ",
+                (false, true) => "● ",
+                (false, false) => "○ ",
+            },
+            Style::default().fg(if is_agent && !selected {
+                crate::ui::NAV_INACTIVE
+            } else {
+                marker_fg
+            }),
         );
         let renaming_this = model
             .renaming
@@ -1189,9 +1209,22 @@ pub(super) fn render_tab_strip(
                     .fg(crate::ui::TEXT_BRIGHT)
                     .add_modifier(Modifier::BOLD),
             ),
-            None => Span::styled(tab.label.clone(), label_style),
+            None => Span::styled(
+                match model.tab_task(tab.id) {
+                    // One name per agent across the whole frame: the
+                    // sidebar already renames a working agent after the
+                    // task it is on, and two names for one tab reads as
+                    // two tabs.
+                    Some(task) if is_agent => task.label.clone(),
+                    _ => tab.label.clone(),
+                },
+                label_style,
+            ),
         };
-        let show_close = renaming_this.is_none() && can_close;
+        // An agent is never closed by a stray click — that stays a
+        // right-click and a confirmation in the sidebar (see `ContextMenu`),
+        // the same rule that keeps the sidebar's own agent rows unclosable.
+        let show_close = renaming_this.is_none() && can_close && !is_agent;
         let content_width =
             marker.width() as u16 + tab_label.width() as u16 + if show_close { 2 } else { 0 }; // " ×"
         // 1 column of padding on each side, reserved whether or not this

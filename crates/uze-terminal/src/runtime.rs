@@ -240,6 +240,11 @@ struct PersistedSpace {
 struct PersistedTab {
     label: String,
     cwd: PathBuf,
+    /// The tab this one belongs with, by index into its own space's tabs
+    /// (see [`crate::TabSeed::agent`]). Absent in a file written
+    /// before tabs belonged with anything, which reads back as `None`.
+    #[serde(default)]
+    agent: Option<usize>,
     /// The `argv` this tab's pane was last spawned with (see
     /// [`PaneRuntime::spawn_command`]) — `None` for a plain shell, `Some`
     /// for whatever agent it was running, so restoring relaunches the same
@@ -444,6 +449,7 @@ impl Server {
                             .map(|tab| TabSeed {
                                 label: tab.label.clone(),
                                 cwd: tab.cwd.clone(),
+                                agent: tab.agent,
                             })
                             .collect(),
                     })
@@ -539,6 +545,12 @@ impl Server {
                         .tabs
                         .iter()
                         .filter_map(|tab| {
+                            // By position, since a restored tab is minted a
+                            // fresh id — and against this same list, which
+                            // is the one `Session::restore` will rebuild.
+                            let agent = tab.agent.and_then(|agent| {
+                                space.tabs.iter().position(|other| other.id == agent)
+                            });
                             let pane = find_in_layout(&tab.layout, tab.focus.pane)?;
                             // A tab spawned plain but with something other
                             // than a shell now running in it (someone typed
@@ -554,6 +566,7 @@ impl Server {
                             Some(PersistedTab {
                                 label: tab.label.clone(),
                                 cwd: pane.cwd,
+                                agent,
                                 command,
                             })
                         })
@@ -653,6 +666,7 @@ impl Server {
                 } => self.resize_pane(pane, columns, rows),
                 ClientRequest::CreateTab {
                     label,
+                    agent,
                     columns,
                     rows,
                     cwd,
@@ -671,7 +685,7 @@ impl Server {
                                 .map(|space| space.root.clone())
                                 .unwrap_or_else(|| PathBuf::from("."))
                         });
-                        let pane = session.add_tab(space, label, columns, rows, cwd);
+                        let pane = session.add_tab(space, label, agent, columns, rows, cwd);
                         let tab = session
                             .space(space)
                             .expect("the space the tab was added to")
@@ -1615,7 +1629,7 @@ mod tests {
         let first_space = session.workspace.selected_space;
         session.add_space("b".into(), "/tmp/b".into(), 80, 24);
         let second_space = session.workspace.selected_space;
-        session.add_tab(second_space, "extra".into(), 80, 24, "/tmp/b".into());
+        session.add_tab(second_space, "extra".into(), None, 80, 24, "/tmp/b".into());
         let extra_tab = session.selected_tab().id;
         let first_tab_of_second = session.space(second_space).unwrap().tabs[0].id;
 
@@ -2208,6 +2222,42 @@ mod tests {
     /// been uninstalled or renamed since. That must degrade to a plain
     /// shell in that one tab, never take the whole restored workspace down
     /// with it.
+    /// Which tab belongs with which has to survive the process, and a
+    /// `TabId` does not — the snapshot names the agent by its position in
+    /// the very list `Session::restore` rebuilds.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_snapshot_names_a_tabs_agent_by_position() {
+        let scratch = uze_testkit::temp::scratch("terminal-persist-agent");
+        let uze_home = scratch.join("home");
+        let project = scratch.join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&uze_home).unwrap();
+        let mut env = uze_testkit::env::scope();
+        env.set("UZE_HOME", &uze_home);
+
+        let endpoint = Endpoint::global().unwrap();
+        let (server, _damage) = Server::new(project.clone(), endpoint).expect("server");
+        {
+            let mut session = server.session.lock().expect("session poisoned");
+            let space = session.workspace.selected_space;
+            session.add_tab(space, "agent".into(), None, 80, 24, project.clone());
+            let agent = session.selected_tab().id;
+            session.add_tab(space, "shell".into(), Some(agent), 80, 24, project.clone());
+        }
+        server.persist();
+
+        let written: PersistedWorkspace =
+            serde_json::from_slice(&std::fs::read(persisted_state_path()).unwrap()).unwrap();
+        let tabs = &written.spaces[0].tabs;
+        assert_eq!(tabs.len(), 3, "the bootstrap shell, the agent, its shell");
+        assert_eq!(tabs[2].agent, Some(1), "the shell belongs with the agent");
+        assert_eq!(tabs[1].agent, None);
+
+        server.stop_panes();
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn a_persisted_command_that_no_longer_resolves_falls_back_to_a_plain_shell() {
@@ -2228,6 +2278,7 @@ mod tests {
                 tabs: vec![PersistedTab {
                     label: "shell".into(),
                     cwd: project.clone(),
+                    agent: None,
                     command: Some(vec!["definitely-not-a-real-binary-xyz".to_owned()]),
                 }],
             }],

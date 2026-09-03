@@ -635,6 +635,7 @@ pub(crate) fn attach_workspace(
                                     &ClientRequest::CreateTab {
                                         cwd,
                                         label,
+                                        agent: None,
                                         columns,
                                         rows,
                                         command: Some(option.command.clone()),
@@ -814,10 +815,11 @@ pub(crate) fn attach_workspace(
                     let _ = send_request(
                         &mut stream,
                         &ClientRequest::CreateTab {
-                            label: next_shell_label(&model),
+                            label: next_shell_label(&model, &identities),
+                            agent: context_agent(&model, &identities),
                             columns,
                             rows,
-                            cwd: selected_pane_cwd(&model),
+                            cwd: new_shell_cwd(&model, &identities),
                             command: None,
                         },
                     );
@@ -979,6 +981,7 @@ pub(crate) fn attach_workspace(
                                     &ClientRequest::CreateTab {
                                         cwd,
                                         label,
+                                        agent: None,
                                         columns,
                                         rows,
                                         command: Some(option.command.clone()),
@@ -1238,10 +1241,11 @@ pub(crate) fn attach_workspace(
                             let _ = send_request(
                                 &mut stream,
                                 &ClientRequest::CreateTab {
-                                    label: next_shell_label(&model),
+                                    label: next_shell_label(&model, &identities),
+                                    agent: context_agent(&model, &identities),
                                     columns,
                                     rows,
-                                    cwd: selected_pane_cwd(&model),
+                                    cwd: new_shell_cwd(&model, &identities),
                                     command: None,
                                 },
                             );
@@ -1268,31 +1272,40 @@ pub(crate) fn attach_workspace(
                             // no-op.
                         }
                         WorkspaceHit::SelectSpace(space) => {
-                            if let Some(tab) = model.session.as_ref().and_then(|session| {
-                                session
+                            // A space's own row is its own context: it
+                            // lands on a shell belonging to no agent, the
+                            // way each agent row lands on that agent. That
+                            // is the whole way back to the space's shells
+                            // once an agent is what the strip is showing.
+                            // A space of nothing but agents has no such
+                            // tab, and the click stays a plain switch.
+                            let landing = model.session.as_ref().and_then(|session| {
+                                let space = session
                                     .workspace
                                     .spaces
                                     .iter()
-                                    .find(|candidate| candidate.id == space)
-                                    .map(|candidate| candidate.selected_tab)
-                            }) {
-                                model.acknowledge_completed_agent_tab(tab);
+                                    .find(|candidate| candidate.id == space)?;
+                                Some((space.selected_tab, space_own_tab(space, &identities)))
+                            });
+                            if let Some((selected, own)) = landing {
+                                model.acknowledge_completed_agent_tab(own.unwrap_or(selected));
                             }
-                            let _ =
-                                send_request(&mut stream, &ClientRequest::SelectSpace { space });
+                            let _ = match landing.and_then(|(_, own)| own) {
+                                Some(tab) => {
+                                    send_request(&mut stream, &ClientRequest::SelectTab { tab })
+                                }
+                                None => {
+                                    send_request(&mut stream, &ClientRequest::SelectSpace { space })
+                                }
+                            };
                             // Resize the pane the same way `SelectTab` does
                             // — switching spaces switches which tab (and so
                             // which pane) is focused, same as switching
                             // tabs within one space already does.
-                            if let Some(pane) = model.session.as_ref().and_then(|session| {
-                                session
-                                    .workspace
-                                    .spaces
-                                    .iter()
-                                    .find(|s| s.id == space)
-                                    .map(|s| s.selected_tab)
-                                    .and_then(|tab| model.pane_for_tab(tab))
-                            }) {
+                            if let Some(pane) = landing
+                                .map(|(selected, own)| own.unwrap_or(selected))
+                                .and_then(|tab| model.pane_for_tab(tab))
+                            {
                                 resize_pane(&mut stream, &mut model, pane, columns, rows);
                             }
                         }
@@ -2422,12 +2435,69 @@ impl WorkspaceModel {
 /// space's current tab count (shells are per-space, same as everything
 /// else in the tab strip) so opening several in a row reads as "shell 2",
 /// "shell 3", … instead of every one showing the identical generic "shell".
-fn next_shell_label(model: &WorkspaceModel) -> String {
-    let count = model
-        .session
-        .as_ref()
-        .map_or(0, |session| session.selected_space().tabs.len());
+/// Numbered within the context it opens in — the shells shown beside one
+/// agent count from one, rather than inheriting a number from every other
+/// tab of the space, which is what made a fresh agent's first shell read
+/// as "shell 4".
+fn next_shell_label(model: &WorkspaceModel, identities: &[AgentIdentity]) -> String {
+    let count = model.session.as_ref().map_or(0, |session| {
+        let context = context_agent(model, identities);
+        session
+            .selected_space()
+            .tabs
+            .iter()
+            .filter(|tab| tab.agent == context && agent_identity_for_tab(identities, tab).is_none())
+            .count()
+    });
     format!("shell {}", count + 1)
+}
+
+/// The agent the workspace is currently *about*: the selected tab when it
+/// is an agent, otherwise the agent that tab was opened alongside. `None`
+/// is the space's own context — its bootstrap shell, and anything opened
+/// with no agent in front of the person.
+///
+/// This is what makes the tab strip contextual: one agent and the shells
+/// that belong with it at a time, never another agent's.
+fn context_agent(model: &WorkspaceModel, identities: &[AgentIdentity]) -> Option<TabId> {
+    let space = model.session.as_ref()?.selected_space();
+    let selected = space.tabs.iter().find(|tab| tab.id == space.selected_tab)?;
+    let agent = match agent_identity_for_tab(identities, selected) {
+        Some(_) => selected.id,
+        None => selected.agent?,
+    };
+    // The tab a shell points at can have stopped being an agent under it
+    // (the harness exited, leaving a plain shell behind); the space is the
+    // honest context then, not a tab that no longer runs anything.
+    space
+        .tabs
+        .iter()
+        .find(|tab| tab.id == agent && agent_identity_for_tab(identities, tab).is_some())
+        .map(|tab| tab.id)
+}
+
+/// Where a shell opened by hand starts: the context agent's own directory,
+/// so every shell in an agent's group opens on the work that agent is
+/// doing — its slot, not wherever the previous shell was left.
+fn new_shell_cwd(model: &WorkspaceModel, identities: &[AgentIdentity]) -> Option<PathBuf> {
+    context_agent(model, identities)
+        .and_then(|agent| tab_cwd(model, agent))
+        .or_else(|| selected_pane_cwd(model))
+}
+
+/// The tab a click on a space's own row lands on: the space's own context
+/// (a shell belonging to no agent), keeping the current selection when it
+/// already is one. `None` means the space has nothing but agents, and the
+/// click stays a plain space switch.
+fn space_own_tab(space: &Space, identities: &[AgentIdentity]) -> Option<TabId> {
+    let own = |tab: &&Tab| tab.agent.is_none() && agent_identity_for_tab(identities, tab).is_none();
+    space
+        .tabs
+        .iter()
+        .find(|tab| tab.id == space.selected_tab)
+        .filter(own)
+        .or_else(|| space.tabs.iter().find(own))
+        .map(|tab| tab.id)
 }
 
 /// The label a new agent tab opens with. Agent labels are deliberately
@@ -2514,6 +2584,9 @@ fn dispatch_menu_action<W: io::Write>(
                         stream,
                         &ClientRequest::CreateTab {
                             label: next_shell_label_for_tab(model, tab),
+                            // It stands in for the agent rather than
+                            // beside it: the agent is on its way out.
+                            agent: None,
                             columns,
                             rows,
                             cwd: tab_cwd(model, tab),

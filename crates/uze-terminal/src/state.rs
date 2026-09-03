@@ -70,6 +70,13 @@ pub fn space_label(root: &Path) -> String {
 pub struct Tab {
     pub id: TabId,
     pub label: String,
+    /// The agent tab this one was born from — a shell opened while an agent
+    /// was in front of the person, which therefore starts in that agent's
+    /// own directory and is shown with it. `None` is a tab that belongs to
+    /// the space itself: its bootstrap shell, a shell opened with no agent
+    /// selected, and every agent tab (an agent *is* a context; it does not
+    /// sit inside one).
+    pub agent: Option<TabId>,
     pub layout: Layout,
     pub focus: Focus,
 }
@@ -126,6 +133,11 @@ pub struct SpaceSeed {
 pub struct TabSeed {
     pub label: String,
     pub cwd: PathBuf,
+    /// Which tab of this same space this one belongs with, by index into
+    /// `SpaceSeed::tabs` — a seed cannot name a [`TabId`], since restoring
+    /// mints fresh ones. Out of range, or pointing at itself, restores as
+    /// `None`.
+    pub agent: Option<usize>,
 }
 
 impl Session {
@@ -140,6 +152,7 @@ impl Session {
         let tab = Tab {
             id: TabId(1),
             label: "shell".to_owned(),
+            agent: None,
             layout: Layout::Pane(pane),
             focus: Focus { pane: PaneId(1) },
         };
@@ -186,8 +199,13 @@ impl Session {
             }
             let space_id = SpaceId(next_space_id);
             next_space_id += 1;
+            // Every tab of this space gets its id before any `agent` is
+            // resolved: a seed names its agent by position, and the tab at
+            // that position may not have been minted yet.
+            let first_tab_id = next_tab_id;
+            let seeded = seed.tabs.len();
             let mut tabs = Vec::new();
-            for tab_seed in seed.tabs {
+            for (index, tab_seed) in seed.tabs.into_iter().enumerate() {
                 let tab_id = TabId(next_tab_id);
                 let pane_id = PaneId(next_pane_id);
                 next_tab_id += 1;
@@ -195,6 +213,10 @@ impl Session {
                 tabs.push(Tab {
                     id: tab_id,
                     label: tab_seed.label,
+                    agent: tab_seed
+                        .agent
+                        .filter(|agent| *agent != index && *agent < seeded)
+                        .map(|agent| TabId(first_tab_id + agent as u64)),
                     layout: Layout::Pane(Pane {
                         id: pane_id,
                         cwd: tab_seed.cwd,
@@ -283,6 +305,7 @@ impl Session {
             tabs: vec![Tab {
                 id: tab_id,
                 label: "shell".to_owned(),
+                agent: None,
                 layout: Layout::Pane(Pane {
                     id: pane_id,
                     cwd: root.clone(),
@@ -360,6 +383,7 @@ impl Session {
         &mut self,
         space: SpaceId,
         label: String,
+        agent: Option<TabId>,
         columns: u16,
         rows: u16,
         cwd: PathBuf,
@@ -377,9 +401,14 @@ impl Session {
             .or_else(|| self.workspace.spaces.iter().position(|s| s.id == default))
             .expect("session selected space is always present");
         let space = &mut self.workspace.spaces[index];
+        // A tab can only belong with an agent of its own space — a client
+        // naming one from elsewhere (or one that has since been closed)
+        // gets a tab of the space itself rather than a dangling reference.
+        let agent = agent.filter(|agent| space.tabs.iter().any(|tab| tab.id == *agent));
         space.tabs.push(Tab {
             id: tab_id,
             label,
+            agent,
             layout: Layout::Pane(Pane {
                 id: pane_id,
                 cwd,
@@ -429,6 +458,12 @@ impl Session {
         if space.selected_tab == tab {
             let next = index.min(space.tabs.len() - 1);
             space.selected_tab = space.tabs[next].id;
+        }
+        // Closing an agent never closes the shells opened alongside it —
+        // they carry a person's work and outlive the agent. They become
+        // the space's own instead of pointing at a tab that is gone.
+        for orphan in space.tabs.iter_mut().filter(|t| t.agent == Some(tab)) {
+            orphan.agent = None;
         }
         Some(panes_in_layout(&removed.layout))
     }
@@ -520,6 +555,7 @@ mod tests {
             session.add_tab(
                 session.workspace.selected_space,
                 "agent".into(),
+                None,
                 100,
                 30,
                 PathBuf::from("/tmp/agent")
@@ -548,6 +584,7 @@ mod tests {
         let second_pane = session.add_tab(
             session.workspace.selected_space,
             "agent".into(),
+            None,
             80,
             24,
             PathBuf::from("/tmp/a"),
@@ -571,6 +608,7 @@ mod tests {
         session.add_tab(
             session.workspace.selected_space,
             "two".into(),
+            None,
             80,
             24,
             PathBuf::from("/tmp/a"),
@@ -578,6 +616,7 @@ mod tests {
         session.add_tab(
             session.workspace.selected_space,
             "three".into(),
+            None,
             80,
             24,
             PathBuf::from("/tmp/a"),
@@ -654,6 +693,7 @@ mod tests {
         session.add_tab(
             session.workspace.selected_space,
             "extra".into(),
+            None,
             80,
             24,
             PathBuf::from("/tmp/a"),
@@ -703,6 +743,80 @@ mod tests {
         assert_eq!(session.workspace.selected_space, first_space);
     }
 
+    /// A shell opened alongside an agent belongs with it, and only an
+    /// agent of its own space can be named — a tab from elsewhere leaves
+    /// the new one belonging to the space itself rather than dangling.
+    #[test]
+    fn a_tab_belongs_only_with_an_agent_of_its_own_space() {
+        let mut session = Session::new(
+            WorkspaceId("workspace-a".into()),
+            PathBuf::from("/tmp/a"),
+            80,
+            24,
+        );
+        let first_space = session.workspace.selected_space;
+        let agent = session.selected_tab().id;
+        session.add_tab(
+            first_space,
+            "shell".into(),
+            Some(agent),
+            80,
+            24,
+            PathBuf::from("/tmp/a"),
+        );
+        assert_eq!(session.selected_tab().agent, Some(agent));
+
+        session.add_space("frontend".into(), PathBuf::from("/tmp/frontend"), 80, 24);
+        let elsewhere = session.workspace.selected_space;
+        session.add_tab(
+            elsewhere,
+            "shell".into(),
+            Some(agent),
+            80,
+            24,
+            PathBuf::from("/tmp/frontend"),
+        );
+        assert_eq!(
+            session.selected_tab().agent,
+            None,
+            "an agent of another space is no context of this one"
+        );
+    }
+
+    /// A shell holds a person's own work and outlives the agent it was
+    /// opened next to — closing the agent hands it to the space rather
+    /// than leaving it pointing at a tab that is gone.
+    #[test]
+    fn closing_an_agent_hands_its_shells_back_to_the_space() {
+        let mut session = Session::new(
+            WorkspaceId("workspace-a".into()),
+            PathBuf::from("/tmp/a"),
+            80,
+            24,
+        );
+        let space = session.workspace.selected_space;
+        session.add_tab(space, "agent".into(), None, 80, 24, PathBuf::from("/tmp/a"));
+        let agent = session.selected_tab().id;
+        session.add_tab(
+            space,
+            "shell".into(),
+            Some(agent),
+            80,
+            24,
+            PathBuf::from("/tmp/a"),
+        );
+        let shell = session.selected_tab().id;
+
+        session.remove_tab(agent).expect("the agent is removable");
+
+        let space = session.selected_space();
+        assert!(space.tabs.iter().any(|tab| tab.id == shell), "it survives");
+        assert!(
+            space.tabs.iter().all(|tab| tab.agent.is_none()),
+            "and belongs to the space now"
+        );
+    }
+
     /// The one genuinely new invariant this layer introduces: tab lookups
     /// (`rename_tab`/`update_pane_status`) must find a tab that lives in a
     /// space other than the currently selected one, not just search the
@@ -741,6 +855,46 @@ mod tests {
     }
 
     #[test]
+    /// A seed names its agent by position because restoring mints fresh
+    /// ids; what must survive a server restart is which tab belongs with
+    /// which, not the numbers they happened to carry.
+    #[test]
+    fn restoring_rebuilds_which_tab_belongs_with_which() {
+        let session = Session::restore(
+            WorkspaceId("workspace-a".into()),
+            PathBuf::from("/tmp/a"),
+            80,
+            24,
+            vec![SpaceSeed {
+                label: "frontend".into(),
+                root: PathBuf::from("/tmp/seed"),
+                tabs: vec![
+                    TabSeed {
+                        label: "claude".into(),
+                        cwd: PathBuf::from("/tmp/a/web"),
+                        agent: None,
+                    },
+                    TabSeed {
+                        label: "shell".into(),
+                        cwd: PathBuf::from("/tmp/a/web"),
+                        agent: Some(0),
+                    },
+                    TabSeed {
+                        label: "loose".into(),
+                        cwd: PathBuf::from("/tmp/a"),
+                        agent: Some(7),
+                    },
+                ],
+            }],
+        );
+
+        let tabs = &session.workspace.spaces[0].tabs;
+        assert_eq!(tabs[1].agent, Some(tabs[0].id));
+        assert_eq!(tabs[0].agent, None, "an agent belongs with nothing");
+        assert_eq!(tabs[2].agent, None, "an index off the end is nobody");
+    }
+
+    #[test]
     fn restore_rebuilds_the_seeded_shape_with_sequential_ids() {
         let session = Session::restore(
             WorkspaceId("workspace-a".into()),
@@ -755,10 +909,12 @@ mod tests {
                         TabSeed {
                             label: "claude".into(),
                             cwd: PathBuf::from("/tmp/a/web"),
+                            agent: None,
                         },
                         TabSeed {
                             label: "shell".into(),
                             cwd: PathBuf::from("/tmp/a"),
+                            agent: None,
                         },
                     ],
                 },
@@ -768,6 +924,7 @@ mod tests {
                     tabs: vec![TabSeed {
                         label: "codex".into(),
                         cwd: PathBuf::from("/tmp/a/api"),
+                        agent: None,
                     }],
                 },
             ],

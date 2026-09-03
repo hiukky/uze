@@ -12,9 +12,10 @@ mod workspace_tests {
         AGENT_BUSY_REPAINTS, AGENT_ECHO_GRACE, AGENT_PASTE_GRACE, AgentIdentity, AgentTabStatus,
         PreservedOverlay, RootPicker, TaskStateView, TaskView, WorkspaceModel,
         agent_identity_for_tab, blank_pane, can_close_tab_from_menu, encode_mouse, forward_paste,
-        forward_scroll, next_agent_label, pane_relative,
+        forward_scroll, next_agent_label, next_shell_label, pane_relative,
         render::{render_preserved, render_sidebar, render_tab_strip},
-        selected_pane_cwd, tab_needs_replacement_shell, workspace_has_active_agent_operation,
+        selected_pane_cwd, space_own_tab, tab_needs_replacement_shell,
+        workspace_has_active_agent_operation,
     };
     use crossterm::event::{MouseButton, MouseEventKind};
     use ratatui::layout::Rect;
@@ -177,6 +178,163 @@ mod workspace_tests {
             })
             .collect();
         (rows, hits)
+    }
+
+    /// A space holding two agents, each with one shell of its own, plus
+    /// the shell the space was born with. Returns the model and the two
+    /// agent tabs, in creation order.
+    fn two_agents_with_shells() -> (WorkspaceModel, TabId, TabId) {
+        let mut session = Session::new(WorkspaceId("workspace".into()), "/repo".into(), 80, 24);
+        let space = session.workspace.selected_space;
+        let agent = |session: &mut Session, label: &str, cwd: &str| {
+            let pane = session.add_tab(space, label.into(), None, 80, 24, cwd.into());
+            let id = session.selected_space().selected_tab;
+            // What makes a tab an agent is what is running in its pane —
+            // the same live probe `agent_identity_for_tab` reads.
+            session.update_pane_status(pane, cwd.into(), "agent".into());
+            session.add_tab(
+                space,
+                format!("{label} shell"),
+                Some(id),
+                80,
+                24,
+                cwd.into(),
+            );
+            id
+        };
+        let first = agent(&mut session, "Agent one", "/repo/.worktrees/a");
+        let second = agent(&mut session, "Agent two", "/repo/.worktrees/b");
+        let model = WorkspaceModel {
+            session: Some(session),
+            ..WorkspaceModel::default()
+        };
+        (model, first, second)
+    }
+
+    /// The strip is about one agent at a time: the agent leads it, its own
+    /// shells follow, and another agent's shells are simply elsewhere.
+    #[test]
+    fn the_strip_shows_the_selected_agent_and_only_its_own_shells() {
+        let (mut model, first, second) = two_agents_with_shells();
+        model.session.as_mut().expect("session").select_tab(first);
+
+        let (rows, _) = tab_strip(&model);
+        let strip = rows.join(" ");
+        assert!(strip.contains("Agent one"), "the agent leads: {strip}");
+        assert!(strip.contains("Agent one shell"), "its own shell: {strip}");
+        assert!(
+            !strip.contains("Agent two"),
+            "and nothing of the other agent: {strip}"
+        );
+        assert!(
+            !strip.contains("○ shell"),
+            "not the space's own bootstrap shell either: {strip}"
+        );
+
+        model.session.as_mut().expect("session").select_tab(second);
+        let (rows, _) = tab_strip(&model);
+        let strip = rows.join(" ");
+        assert!(strip.contains("Agent two shell"), "{strip}");
+        assert!(!strip.contains("Agent one"), "{strip}");
+    }
+
+    /// Selecting one of an agent's shells keeps the strip on that agent —
+    /// the context is the agent, not whichever tab is selected.
+    #[test]
+    fn a_shell_keeps_the_strip_on_the_agent_it_belongs_with() {
+        let (mut model, first, _) = two_agents_with_shells();
+        let shell = model
+            .session
+            .as_ref()
+            .expect("session")
+            .selected_space()
+            .tabs
+            .iter()
+            .find(|tab| tab.agent == Some(first))
+            .expect("the agent's own shell")
+            .id;
+        model.session.as_mut().expect("session").select_tab(shell);
+
+        let (rows, _) = tab_strip(&model);
+        let strip = rows.join(" ");
+        assert!(strip.contains("Agent one"), "{strip}");
+        assert!(strip.contains("Agent one shell"), "{strip}");
+    }
+
+    /// The space's own shells are its own context, reached from its row in
+    /// the sidebar — no agent leads the strip there.
+    #[test]
+    fn the_spaces_own_shell_is_a_context_of_its_own() {
+        let (mut model, _, _) = two_agents_with_shells();
+        let own = model.session.as_ref().expect("session").workspace.spaces[0].tabs[0].id;
+        model.session.as_mut().expect("session").select_tab(own);
+
+        let (rows, _) = tab_strip(&model);
+        let strip = rows.join(" ");
+        assert!(strip.contains("shell"), "{strip}");
+        assert!(!strip.contains("Agent"), "{strip}");
+    }
+
+    /// A shell is numbered within the group it joins, so an agent's first
+    /// shell is "shell 1" however many tabs the space already holds.
+    #[test]
+    fn a_shells_number_counts_only_its_own_group() {
+        let (mut model, first, _) = two_agents_with_shells();
+        model.session.as_mut().expect("session").select_tab(first);
+
+        assert_eq!(next_shell_label(&model, &IDENTITIES), "shell 2");
+
+        let own = model.session.as_ref().expect("session").workspace.spaces[0].tabs[0].id;
+        model.session.as_mut().expect("session").select_tab(own);
+        assert_eq!(
+            next_shell_label(&model, &IDENTITIES),
+            "shell 2",
+            "the space's own group counts neither agent"
+        );
+    }
+
+    /// The space's row in the sidebar is the way back to the space's own
+    /// shells: it lands on one, and stays put when you are already there.
+    #[test]
+    fn a_spaces_row_lands_on_a_shell_of_its_own() {
+        let (mut model, first, _) = two_agents_with_shells();
+        let session = model.session.as_mut().expect("session");
+        let own = session.workspace.spaces[0].tabs[0].id;
+
+        session.select_tab(first);
+        assert_eq!(
+            space_own_tab(&session.workspace.spaces[0], &IDENTITIES),
+            Some(own),
+            "from an agent, back to the space's own shell"
+        );
+
+        session.select_tab(own);
+        assert_eq!(
+            space_own_tab(&session.workspace.spaces[0], &IDENTITIES),
+            Some(own),
+            "and it stays where it already is"
+        );
+    }
+
+    /// An agent leaves the strip only through the sidebar's confirmation,
+    /// so its chip offers no × for a stray click to land on.
+    #[test]
+    fn the_agent_chip_carries_no_close_button() {
+        let (mut model, first, _) = two_agents_with_shells();
+        model.session.as_mut().expect("session").select_tab(first);
+
+        let (_, hits) = tab_strip(&model);
+        assert!(
+            !hits
+                .iter()
+                .any(|(_, hit)| matches!(hit, WorkspaceHit::CloseTab(tab) if *tab == first)),
+            "no close hit for the agent"
+        );
+        assert!(
+            hits.iter()
+                .any(|(_, hit)| matches!(hit, WorkspaceHit::CloseTab(_))),
+            "its shell still closes"
+        );
     }
 
     #[test]
@@ -755,6 +913,7 @@ mod workspace_tests {
         let agent_pane = session.add_tab(
             session.workspace.selected_space,
             "Agent".into(),
+            None,
             80,
             24,
             "/tmp".into(),
@@ -789,6 +948,7 @@ mod workspace_tests {
         let agent_pane = session.add_tab(
             session.workspace.selected_space,
             "Agent".into(),
+            None,
             80,
             24,
             "/tmp".into(),
@@ -822,6 +982,7 @@ mod workspace_tests {
         let agent_pane = session.add_tab(
             session.workspace.selected_space,
             "Agent".into(),
+            None,
             80,
             24,
             "/tmp".into(),
@@ -953,6 +1114,7 @@ mod workspace_tests {
         Tab {
             id: TabId(1),
             label: label.to_owned(),
+            agent: None,
             layout: Layout::Pane(pane),
             focus: Focus { pane: PaneId(1) },
         }
@@ -979,6 +1141,7 @@ mod workspace_tests {
         session.add_tab(
             session.workspace.selected_space,
             "agent 1".into(),
+            None,
             80,
             24,
             "/tmp".into(),

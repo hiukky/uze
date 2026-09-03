@@ -102,6 +102,41 @@ with the selected space's.
 - **WHEN** a user creates a space and confirms a root
 - **THEN** the space's first shell opens in that root and agents created in it start from it
 
+### Requirement: A new space's root is chosen, not typed
+Creating a space SHALL offer the directories that exist rather than accept a
+path typed blind: the prompt SHALL name a directory to list and a segment to
+match inside it, SHALL narrow the offered directories as that segment is
+typed, and SHALL create the space at the directory the person lands on.
+
+#### Scenario: The listing narrows as the root is typed
+- **WHEN** a user opens the new-space prompt and types part of a directory's name
+- **THEN** only the directories of the listed directory whose names match are offered
+
+#### Scenario: The chosen directory becomes the root
+- **WHEN** a user confirms one of the offered directories
+- **THEN** a space rooted at that directory is created
+
+### Requirement: A tab belongs with the agent it was born from
+A shell opened while an agent is in front of the person SHALL belong with
+that agent and SHALL start in that agent's own directory. The tab strip
+SHALL show one context at a time — that agent followed by the shells that
+belong with it, and no other agent's. A shell belonging to no agent SHALL
+belong to the space, reachable from the space's own row. Closing an agent
+SHALL hand the shells opened alongside it to the space rather than closing
+them, and SHALL remain a confirmed action, never a click on the strip.
+
+#### Scenario: Switching agents switches the strip
+- **WHEN** a user selects a different agent
+- **THEN** the strip shows that agent and the shells that belong with it, and none of the previous agent's
+
+#### Scenario: A shell opens on the agent's work
+- **WHEN** a user opens a shell while an agent is selected
+- **THEN** the shell starts in that agent's directory and appears with it
+
+#### Scenario: An agent's shells outlive it
+- **WHEN** an agent is closed
+- **THEN** the shells opened alongside it remain, as shells of the space
+
 ### Requirement: Focus is per client
 The system SHALL keep which space and which tab each attached client is
 looking at per client. Selecting a space or a tab in one client SHALL NOT
