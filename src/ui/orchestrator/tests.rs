@@ -10,9 +10,9 @@ mod workspace_tests {
     use super::WorkspaceHit;
     use super::{
         AGENT_BUSY_REPAINTS, AGENT_ECHO_GRACE, AGENT_PASTE_GRACE, AgentIdentity, AgentTabStatus,
-        PreservedOverlay, RootPicker, TaskStateView, TaskView, WorkspaceModel,
-        agent_identity_for_tab, blank_pane, can_close_tab_from_menu, encode_mouse, forward_paste,
-        forward_scroll, next_agent_label, next_shell_label, pane_relative,
+        PreservedOverlay, RootPicker, TaskResolution, TaskStateView, TaskView, WorkspaceModel,
+        agent_identity_for_tab, blank_pane, can_close_tab_from_menu, encode_mouse, evaluation_key,
+        forward_paste, forward_scroll, next_agent_label, next_shell_label, pane_relative,
         render::{
             render_preserved, render_sidebar, render_status_catalog, render_tab_strip, task_mark,
         },
@@ -515,9 +515,50 @@ mod workspace_tests {
         );
     }
 
+    /// A scheduled evaluation is released under the key it reserved, not
+    /// under one recomputed from the answer.
+    ///
+    /// The two ends resolve a repository differently — the scheduler
+    /// lexically, off the path it already holds; the evaluation by asking
+    /// Git — and for anything that is not a slot the two disagree. A
+    /// removal under the second spelling never matched the insertion under
+    /// the first, so the directory stayed reserved for the life of the
+    /// session and `schedule_evaluation` returned early forever after:
+    /// the row kept showing whatever state it last read, however much the
+    /// checkout changed underneath it.
+    #[test]
+    fn an_evaluation_is_released_under_the_key_it_reserved() {
+        let primary = PathBuf::from("/repo");
+
+        // Every slot of a repository answers that repository, which is what
+        // keeps a sidebar full of agents to one evaluation.
+        let slot = primary.join(".worktrees").join("9k5vwm");
+        assert_eq!(evaluation_key(&slot), primary);
+
+        // Anything else answers itself — never the repository root Git
+        // would name for it. This is the disagreement the key travels to
+        // avoid.
+        let nested = primary.join("crates").join("uze-core");
+        assert_eq!(evaluation_key(&nested), nested);
+        assert_ne!(evaluation_key(&nested), primary);
+
+        // And an evaluation that found no working tree still answers, so
+        // the reservation is released rather than left standing.
+        let resolution = TaskResolution {
+            key: evaluation_key(&nested),
+            answered: None,
+        };
+        let mut pending = std::collections::BTreeSet::new();
+        pending.insert(evaluation_key(&nested));
+        pending.remove(&resolution.key);
+        assert!(pending.is_empty());
+    }
+
     /// The catalog explains every state that has a mark, in both columns —
     /// generated from the same tables the sidebar draws with, so it cannot
-    /// drift from the row it explains.
+    /// drift from the row it explains. A state with no mark is *not*
+    /// listed: `Running` draws nothing, and the agent column already says
+    /// the process is alive.
     #[test]
     fn the_catalog_names_every_status_in_both_columns() {
         let mut terminal = Terminal::new(TestBackend::new(80, 30)).unwrap();
@@ -539,7 +580,6 @@ mod workspace_tests {
             "completed",
             "here",
             "idle",
-            "running",
             "uncommitted",
             "ready",
             "delivering",
@@ -556,6 +596,14 @@ mod workspace_tests {
                 assert!(text.contains(mark), "{mark} is missing from: {text}");
             }
         }
+        assert!(
+            task_mark(&TaskStateView::Running).is_none(),
+            "the assertion below is only meaningful while Running is markless"
+        );
+        assert!(
+            !text.contains("running"),
+            "a state that draws no mark has no row in a legend of marks: {text}"
+        );
     }
 
     #[test]

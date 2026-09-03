@@ -165,11 +165,20 @@ const TASK_REFRESH: Duration = Duration::from_secs(20);
 /// How long a one-line notice stays on screen.
 const NOTICE_TTL: Duration = Duration::from_secs(6);
 
-/// What a background evaluation answered, keyed by the primary checkout
-/// it is about.
+/// What a background evaluation answered.
 struct TaskResolution {
-    primary: PathBuf,
-    evaluation: Evaluation,
+    /// The key [`WorkspaceModel::schedule_evaluation`] reserved, released
+    /// on arrival whatever the answer was. It travels with the request
+    /// because the two ends resolve a repository differently — the
+    /// scheduler lexically, off the path it already holds, the evaluation
+    /// by asking Git — and a key removed under the second spelling never
+    /// matches the one inserted under the first, which leaves that
+    /// directory reserved for the life of the session and its status
+    /// frozen at whatever it last read.
+    key: PathBuf,
+    /// The repository the tasks belong to and what it now holds, or `None`
+    /// when the directory turned out not to be a Git working tree.
+    answered: Option<(PathBuf, Evaluation)>,
 }
 
 /// What a background delivery answered.
@@ -186,22 +195,39 @@ struct PreservedOverlay {
     confirm_discard: bool,
 }
 
+/// What an evaluation of `cwd` is reserved under, so two panes of one
+/// repository do not both pay for the same answer.
+///
+/// Lexical on purpose: this runs on the UI thread, and the repository a
+/// path belongs to is only knowable for certain by asking Git — which is
+/// the work being deferred. Every slot of a repository resolves to that
+/// repository, which is the case the sidebar is full of; a directory that
+/// is not a slot answers itself, so two subdirectories of one primary pay
+/// twice. Coarse, never wrong.
+fn evaluation_key(cwd: &Path) -> PathBuf {
+    uze_application::isolated_checkout(cwd)
+        .map(|checkout| checkout.primary.to_path_buf())
+        .unwrap_or_else(|| cwd.to_path_buf())
+}
+
 /// Re-reads the tasks of the repository `cwd` belongs to, off the UI
 /// thread: every evaluation asks Git, and a delivery may run a gate.
-fn spawn_task_evaluation(home: &UzeHome, cwd: PathBuf, sender: mpsc::Sender<TaskResolution>) {
+fn spawn_task_evaluation(
+    home: &UzeHome,
+    key: PathBuf,
+    cwd: PathBuf,
+    sender: mpsc::Sender<TaskResolution>,
+) {
     let home = home.clone();
     thread::spawn(move || {
-        let Ok(app) = tui_application(home) else {
-            return;
-        };
-        let Some(primary) = app.workspace().primary_of(&cwd) else {
-            return;
-        };
-        let evaluation = app.workspace().evaluate_tasks(&cwd);
-        let _ = sender.send(TaskResolution {
-            primary,
-            evaluation,
+        // Every path out of here answers, including the ones that found
+        // nothing: a request that returns in silence never releases its
+        // key, and the directory is then never evaluated again.
+        let answered = tui_application(home).ok().and_then(|app| {
+            let primary = app.workspace().primary_of(&cwd)?;
+            Some((primary, app.workspace().evaluate_tasks(&cwd)))
         });
+        let _ = sender.send(TaskResolution { key, answered });
     });
 }
 
@@ -388,14 +414,15 @@ pub(crate) fn attach_workspace(
             model.dirty = true;
         }
         while let Ok(resolution) = task_receiver.try_recv() {
-            model.task_eval_pending.remove(&resolution.primary);
-            model
-                .tasks
-                .insert(resolution.primary, resolution.evaluation.tasks);
+            model.task_eval_pending.remove(&resolution.key);
+            let Some((primary, evaluation)) = resolution.answered else {
+                continue;
+            };
+            model.tasks.insert(primary, evaluation.tasks);
             // A conflict found while a clean task followed the target is
             // the agent's to resolve: the message goes into its pane, as
             // one submission.
-            for notice in resolution.evaluation.notices {
+            for notice in evaluation.notices {
                 if let Some(pane) = model.pane_for_checkout(&notice.checkout) {
                     let mut bytes = notice.message.into_bytes();
                     bytes.push(b'\r');
@@ -2406,13 +2433,11 @@ impl WorkspaceModel {
         cwd: PathBuf,
         sender: &mpsc::Sender<TaskResolution>,
     ) {
-        let key = uze_application::isolated_checkout(&cwd)
-            .map(|checkout| checkout.primary.to_path_buf())
-            .unwrap_or_else(|| cwd.clone());
-        if !self.task_eval_pending.insert(key) {
+        let key = evaluation_key(&cwd);
+        if !self.task_eval_pending.insert(key.clone()) {
             return;
         }
-        spawn_task_evaluation(home, cwd, sender.clone());
+        spawn_task_evaluation(home, key, cwd, sender.clone());
     }
 
     fn set_notice(&mut self, text: String) {

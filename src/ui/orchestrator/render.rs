@@ -932,12 +932,14 @@ pub(super) fn render_status_catalog(
     })
     .collect();
 
+    // `Running` is absent on purpose: it is the state that draws no mark,
+    // because a task with a clean tree and nothing ahead has nothing to
+    // report yet — and "the agent is alive" is the other column's answer,
+    // which it gives with a spinner. A legend of marks that names a state
+    // with no mark leaves a blank glyph and two rows meaning the same
+    // thing. The `filter_map` below keeps that true for whatever is added
+    // here next.
     let task_rows: Vec<(String, Color, &str, &str)> = [
-        (
-            TaskStateView::Running,
-            "running",
-            "live, with nothing observed yet",
-        ),
         (
             TaskStateView::Uncommitted,
             "uncommitted",
@@ -975,9 +977,9 @@ pub(super) fn render_status_catalog(
         ),
     ]
     .into_iter()
-    .map(|(state, name, meaning)| {
-        let (mark, hue) = task_mark(&state).unwrap_or((" ", crate::ui::TEXT_FAINT));
-        (mark.to_owned(), hue, name, meaning)
+    .filter_map(|(state, name, meaning)| {
+        let (mark, hue) = task_mark(&state)?;
+        Some((mark.to_owned(), hue, name, meaning))
     })
     .collect();
 
