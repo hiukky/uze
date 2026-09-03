@@ -39,7 +39,10 @@ use crate::{PaneId, Session, SpaceId, TabId, WorkspaceId};
 /// `Workspace` no longer does, `Attach` names the root the client wants a
 /// space for, `CreateSpace` names the new space's root, and the selection
 /// a `Session` carries is the receiving client's own.
-pub const PROTOCOL_VERSION: u16 = 9;
+///
+/// Bumped again for `ReorderTab`, a new request moving a tab within its
+/// own space's `tabs` order.
+pub const PROTOCOL_VERSION: u16 = 10;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ClientRequest {
@@ -100,6 +103,16 @@ pub enum ClientRequest {
     RenameTab {
         tab: TabId,
         label: String,
+    },
+    /// Moves `tab` to sit immediately before `before` within its own
+    /// space's tab order (`before: None` moves it to the end) — see
+    /// `Session::reorder_tab`. Names no `space`, matching
+    /// `SelectTab`/`CloseTab`/`RenameTab`: the server locates `tab`'s own
+    /// space by searching, and `before` is only honored when it names a
+    /// tab of that same space.
+    ReorderTab {
+        tab: TabId,
+        before: Option<TabId>,
     },
     CreateSpace {
         /// `None` derives the label from the root.

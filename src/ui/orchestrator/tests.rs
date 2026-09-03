@@ -10,14 +10,16 @@ mod workspace_tests {
     use super::WorkspaceHit;
     use super::{
         AGENT_BUSY_REPAINTS, AGENT_ECHO_GRACE, AGENT_PASTE_GRACE, AgentIdentity, AgentTabStatus,
-        PreservedOverlay, RootPicker, TaskResolution, TaskStateView, TaskView, WorkspaceModel,
-        agent_identity_for_tab, blank_pane, can_close_tab_from_menu, encode_mouse, evaluation_key,
-        forward_paste, forward_scroll, next_agent_label, next_shell_label, pane_relative,
+        DraggingTab, PendingDrop, PreservedOverlay, RootPicker, TabDragGroup, TaskResolution,
+        TaskStateView, TaskView, WorkspaceModel, agent_identity_for_tab, blank_pane,
+        can_close_tab_from_menu, encode_mouse, evaluation_key, forward_paste, forward_scroll,
+        next_agent_label, next_shell_label, pane_relative, pending_tab_drop,
         render::{
-            render_preserved, render_sidebar, render_status_catalog, render_tab_strip, task_mark,
+            self, WorkspaceLayout, compute_layout, render_preserved, render_sidebar,
+            render_status_catalog, render_tab_strip, task_mark,
         },
-        selected_pane_cwd, space_own_tab, tab_needs_replacement_shell,
-        workspace_has_active_agent_operation,
+        selected_pane_cwd, space_own_tab, tab_drag_group, tab_drag_group_members,
+        tab_needs_replacement_shell, workspace_has_active_agent_operation,
     };
     use crossterm::event::{MouseButton, MouseEventKind};
     use ratatui::layout::Rect;
@@ -27,7 +29,7 @@ mod workspace_tests {
     use std::time::{Duration, Instant};
     use uze_terminal::{
         CellAttributes, ClientEvent, ClientRequest, Cursor, Focus, Layout, MouseMode, Pane,
-        PaneDamage, PaneId, RenderCell, Session, Tab, TabId, TerminalColor, WorkspaceId,
+        PaneDamage, PaneId, RenderCell, Session, SpaceId, Tab, TabId, TerminalColor, WorkspaceId,
     };
 
     const IDENTITIES: [AgentIdentity; 1] = [AgentIdentity {
@@ -337,6 +339,351 @@ mod workspace_tests {
             hits.iter()
                 .any(|(_, hit)| matches!(hit, WorkspaceHit::CloseTab(_))),
             "its shell still closes"
+        );
+    }
+
+    /// Renders the whole frame (sidebar + tab strip + pane) the way the
+    /// real workspace loop does each frame, stores the resulting hits on
+    /// `model` — mirroring `model.hits = hits;` in `attach_workspace`'s own
+    /// loop — and returns the matching layout, the pair the drag-reorder
+    /// helpers need to classify a hit's rect.
+    fn full_frame(model: &mut WorkspaceModel) -> WorkspaceLayout {
+        let area = Rect::new(0, 0, 80, 24);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| render::render(frame, model, &IDENTITIES, &mut hits))
+            .unwrap();
+        model.hits = hits;
+        compute_layout(area, model.sidebar_width)
+    }
+
+    /// A hit's rect alone says which drag group it belongs to: a sidebar
+    /// row's own agent's space, or the tab strip's own (space, context)
+    /// pair — the same tab can appear in both (its sidebar row and, when
+    /// it's the context agent, its own strip chip too), so the rect is
+    /// what tells them apart, not the tab id.
+    #[test]
+    fn tab_drag_group_classifies_by_the_region_a_rect_landed_in() {
+        let (mut model, first, _second) = two_agents_with_shells();
+        model.session.as_mut().expect("session").select_tab(first);
+        let space = model.session.as_ref().unwrap().workspace.selected_space;
+        let layout = full_frame(&mut model);
+
+        let sidebar_rect = model
+            .hits
+            .iter()
+            .find(|(rect, hit)| {
+                matches!(hit, WorkspaceHit::SelectTab(tab) if *tab == first)
+                    && rect.x < layout.sidebar.right()
+            })
+            .map(|(rect, _)| *rect)
+            .expect("the agent's own sidebar row");
+        assert_eq!(
+            tab_drag_group(&model, &IDENTITIES, &layout, sidebar_rect, first),
+            Some(TabDragGroup::Agents(space))
+        );
+
+        let strip_rect = model
+            .hits
+            .iter()
+            .find(|(rect, hit)| {
+                matches!(hit, WorkspaceHit::SelectTab(tab) if *tab == first)
+                    && rect.x >= layout.sidebar.right()
+            })
+            .map(|(rect, _)| *rect)
+            .expect("the agent's own strip chip");
+        assert_eq!(
+            tab_drag_group(&model, &IDENTITIES, &layout, strip_rect, first),
+            Some(TabDragGroup::Strip(space, Some(first))),
+            "the very same tab, but its strip chip's rect names the strip's group"
+        );
+
+        assert_eq!(
+            tab_drag_group(&model, &IDENTITIES, &layout, layout.pane, first),
+            None,
+            "the pane itself belongs to no drag group"
+        );
+    }
+
+    #[test]
+    fn tab_drag_group_members_are_sorted_along_the_groups_axis_and_scoped_to_it() {
+        let (mut model, first, second) = two_agents_with_shells();
+        model.session.as_mut().expect("session").select_tab(first);
+        let space = model.session.as_ref().unwrap().workspace.selected_space;
+        let layout = full_frame(&mut model);
+
+        let agents =
+            tab_drag_group_members(&model, &IDENTITIES, &layout, TabDragGroup::Agents(space));
+        assert_eq!(
+            agents.iter().map(|(_, tab)| *tab).collect::<Vec<_>>(),
+            vec![first, second],
+            "sidebar rows top to bottom, one entry per agent despite each pushing two hits"
+        );
+
+        let strip = tab_drag_group_members(
+            &model,
+            &IDENTITIES,
+            &layout,
+            TabDragGroup::Strip(space, Some(first)),
+        );
+        let strip_ids: Vec<TabId> = strip.iter().map(|(_, tab)| *tab).collect();
+        assert!(
+            strip_ids.contains(&first),
+            "the agent chip itself: {strip_ids:?}"
+        );
+        assert!(
+            !strip_ids.contains(&second),
+            "never the other agent's group: {strip_ids:?}"
+        );
+    }
+
+    /// Reproduces the real sidebar geometry for four agent tabs (each two
+    /// rows, a gap row between siblings) end to end, dragging the first
+    /// one: releasing on the second agent's own label row — the bold row
+    /// a click naturally lands on — has to move it, not silently do
+    /// nothing because that label row's near half used to read as "put it
+    /// back where it was".
+    #[test]
+    fn dragging_the_first_agent_onto_the_seconds_own_label_row_reorders_it() {
+        let mut session = Session::new(WorkspaceId("workspace".into()), "/repo".into(), 80, 24);
+        let space = session.workspace.selected_space;
+        let mut agent_ids = Vec::new();
+        for (label, cwd) in [
+            ("Agent one", "/repo/.worktrees/a"),
+            ("Agent two", "/repo/.worktrees/b"),
+            ("Agent three", "/repo/.worktrees/c"),
+            ("Agent four", "/repo/.worktrees/d"),
+        ] {
+            let pane = session.add_tab(space, label.into(), None, 80, 24, cwd.into());
+            session.update_pane_status(pane, cwd.into(), "agent".into());
+            agent_ids.push(session.selected_space().selected_tab);
+        }
+        let mut model = WorkspaceModel {
+            session: Some(session),
+            ..WorkspaceModel::default()
+        };
+        let layout = full_frame(&mut model);
+        let dragged = agent_ids[0];
+
+        let all = tab_drag_group_members(&model, &IDENTITIES, &layout, TabDragGroup::Agents(space));
+        let origin = all
+            .iter()
+            .find(|(_, tab)| *tab == dragged)
+            .expect("the dragged tab's own row")
+            .0
+            .y;
+        let second_label_row = all
+            .iter()
+            .find(|(_, tab)| *tab == agent_ids[1])
+            .expect("the second agent's own row")
+            .0
+            .y;
+        let members: Vec<_> = all.into_iter().filter(|(_, tab)| *tab != dragged).collect();
+
+        let pending = pending_tab_drop(
+            &members,
+            TabDragGroup::Agents(space),
+            second_label_row,
+            origin,
+        );
+        assert_eq!(
+            pending,
+            Some(PendingDrop::Before(agent_ids[2])),
+            "landing right before the third agent puts the dragged one \
+             straight after the second — releasing here must actually move it"
+        );
+
+        let PendingDrop::Before(before) = pending.expect("computed above") else {
+            unreachable!("asserted Before above");
+        };
+        let server_session = model.session.as_mut().unwrap();
+        assert!(
+            server_session.reorder_tab(dragged, Some(before)),
+            "a real move, not the no-op dropping on the immediate successor used to be"
+        );
+        let order: Vec<TabId> = server_session
+            .selected_space()
+            .tabs
+            .iter()
+            .map(|t| t.id)
+            .filter(|id| agent_ids.contains(id))
+            .collect();
+        assert_eq!(
+            order,
+            vec![agent_ids[1], agent_ids[0], agent_ids[2], agent_ids[3]],
+            "agent one now sits right after agent two: {order:?}"
+        );
+    }
+
+    #[test]
+    fn pending_tab_drop_resolves_the_nearest_half_and_end_past_the_last() {
+        let members = vec![
+            (Rect::new(0, 0, 10, 2), TabId(1)),
+            (Rect::new(0, 2, 10, 2), TabId(2)),
+            (Rect::new(0, 4, 10, 2), TabId(3)),
+        ];
+        let group = TabDragGroup::Agents(SpaceId(1));
+        // Origin past every member here — as if dragging a tab that
+        // started out below all three, so none of them is its "moot
+        // successor" and every member's own midpoint splits plainly.
+        let origin = 10;
+        assert_eq!(
+            pending_tab_drop(&members, group, 0, origin),
+            Some(PendingDrop::Before(TabId(1))),
+            "top half of the first row"
+        );
+        assert_eq!(
+            pending_tab_drop(&members, group, 1, origin),
+            Some(PendingDrop::Before(TabId(2))),
+            "past the first row's own midpoint"
+        );
+        assert_eq!(
+            pending_tab_drop(&members, group, 5, origin),
+            Some(PendingDrop::End),
+            "past every row's midpoint"
+        );
+    }
+
+    #[test]
+    fn pending_tab_drop_skips_straight_past_the_dragged_tabs_moot_successor() {
+        // Dragging the first of four; its immediate successor (TabId(2))
+        // can only ever land "before" it by reconstructing the exact slot
+        // it just left, which `Session::reorder_tab` already refuses as a
+        // no-op — so touching any part of it (not just its own back half)
+        // has to resolve straight through to "after it", not sit there as
+        // a dead, do-nothing target the way a plain per-member midpoint
+        // split would leave it.
+        let members = vec![
+            (Rect::new(0, 2, 10, 2), TabId(2)),
+            (Rect::new(0, 5, 10, 2), TabId(3)),
+            (Rect::new(0, 8, 10, 2), TabId(4)),
+        ];
+        let group = TabDragGroup::Agents(SpaceId(1));
+        let origin = 0; // TabId(1)'s own original row.
+        assert_eq!(
+            pending_tab_drop(&members, group, 1, origin),
+            Some(PendingDrop::Before(TabId(2))),
+            "still short of the moot successor: no target reached yet"
+        );
+        assert_eq!(
+            pending_tab_drop(&members, group, 2, origin),
+            Some(PendingDrop::Before(TabId(3))),
+            "the moot successor's own label row already resolves past it"
+        );
+        assert_eq!(
+            pending_tab_drop(&members, group, 3, origin),
+            Some(PendingDrop::Before(TabId(3))),
+            "and so does its detail row"
+        );
+        assert_eq!(
+            pending_tab_drop(&members, group, 6, origin),
+            Some(PendingDrop::Before(TabId(4))),
+            "a real (non-moot) member still splits by its own midpoint"
+        );
+    }
+
+    #[test]
+    fn pending_tab_drop_is_none_outside_the_groups_own_area() {
+        let members = vec![(Rect::new(0, 5, 10, 2), TabId(1))];
+        let group = TabDragGroup::Agents(SpaceId(1));
+        let origin = 10;
+        assert_eq!(
+            pending_tab_drop(&members, group, 0, origin),
+            None,
+            "well above the list, past its slack"
+        );
+        assert_eq!(
+            pending_tab_drop(&members, group, 20, origin),
+            None,
+            "well below the list, past its slack"
+        );
+        assert_eq!(
+            pending_tab_drop(&[], group, 0, origin),
+            None,
+            "nothing to drop onto at all"
+        );
+    }
+
+    #[test]
+    fn is_pending_drop_row_requires_armed_and_the_same_group() {
+        let group = TabDragGroup::Agents(SpaceId(1));
+        let dragging = DraggingTab {
+            tab: TabId(9),
+            group,
+            origin: 0,
+            armed: true,
+            pending: Some(PendingDrop::Before(TabId(2))),
+        };
+        assert!(dragging.is_pending_drop_row(group, TabId(2), false));
+        assert!(
+            !dragging.is_pending_drop_row(group, TabId(3), false),
+            "the wrong row"
+        );
+        assert!(
+            !dragging.is_pending_drop_row(TabDragGroup::Agents(SpaceId(2)), TabId(2), false),
+            "the wrong group"
+        );
+        let unarmed = DraggingTab {
+            armed: false,
+            ..dragging
+        };
+        assert!(
+            !unarmed.is_pending_drop_row(group, TabId(2), false),
+            "not armed yet — no indicator before the drag threshold"
+        );
+
+        let at_end = DraggingTab {
+            pending: Some(PendingDrop::End),
+            ..dragging
+        };
+        assert!(
+            at_end.is_pending_drop_row(group, TabId(5), true),
+            "dropping at the end lands on whichever row is last"
+        );
+        assert!(
+            !at_end.is_pending_drop_row(group, TabId(5), false),
+            "but not on a row that isn't"
+        );
+    }
+
+    /// The sidebar draws its one insertion indicator on the pending drop's
+    /// target row, and nowhere when the drag isn't armed yet — the plain
+    /// click a press-without-movement still is (see `TAB_DRAG_THRESHOLD`).
+    #[test]
+    fn sidebar_indicator_marks_the_pending_drop_row_only_once_armed() {
+        let (mut model, first, second) = two_agents_with_shells();
+        model.session.as_mut().expect("session").select_tab(first);
+        let space = model.session.as_ref().unwrap().workspace.selected_space;
+        model.dragging_tab = Some(DraggingTab {
+            tab: first,
+            group: TabDragGroup::Agents(space),
+            origin: 0,
+            armed: true,
+            pending: Some(PendingDrop::Before(second)),
+        });
+
+        let mut hits = Vec::new();
+        let rows = sidebar_rows(&model, &mut hits);
+        let second_row = hits
+            .iter()
+            .find(|(_, hit)| matches!(hit, WorkspaceHit::SelectTab(tab) if *tab == second))
+            .map(|(rect, _)| rect.y)
+            .expect("the drop target's own row");
+        assert!(
+            rows[second_row as usize].contains('▍'),
+            "indicator on the target row: {:?}",
+            rows[second_row as usize]
+        );
+
+        model.dragging_tab = model
+            .dragging_tab
+            .map(|d| DraggingTab { armed: false, ..d });
+        let mut hits = Vec::new();
+        let rows = sidebar_rows(&model, &mut hits);
+        assert!(
+            rows.iter().all(|row| !row.contains('▍')),
+            "no indicator before the drag is armed"
         );
     }
 

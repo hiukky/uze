@@ -525,6 +525,52 @@ impl Session {
         true
     }
 
+    /// Moves `tab` (found by searching every space, same as `rename_tab`)
+    /// to sit immediately before `before` within its own space's `tabs` —
+    /// `before: None` moves it to the end. Reports whether the order
+    /// actually changed, same contract as every other mutation here.
+    ///
+    /// `before` is looked up *within the space `tab` was found in*, not
+    /// searched for globally — naming a tab of a different space, or one
+    /// that no longer exists, is indistinguishable from "not found" and
+    /// simply refused, the same way `add_tab`'s `agent` is refused rather
+    /// than silently substituted. This is also what confines a reorder to
+    /// the dragged tab's own group: nothing here restricts `before` to an
+    /// agent tab or a shell tab specifically, but the client never offers
+    /// one from outside the group being dragged within in the first place
+    /// (see the workspace TUI's drag hit-testing).
+    pub fn reorder_tab(&mut self, tab: TabId, before: Option<TabId>) -> bool {
+        let Some(space) = space_containing_tab_mut(&mut self.workspace.spaces, tab) else {
+            return false;
+        };
+        let Some(from) = space.tabs.iter().position(|t| t.id == tab) else {
+            return false;
+        };
+        let insert_at = match before {
+            Some(before) if before == tab => return false,
+            Some(before) => match space.tabs.iter().position(|t| t.id == before) {
+                Some(index) => index,
+                None => return false,
+            },
+            None => space.tabs.len(),
+        };
+        // `insert_at` is an index into the vec as it stands *before* `tab`
+        // is removed; removing `tab` shifts everything after it down by
+        // one, so a target past `tab`'s own position needs the same
+        // adjustment before it says where `tab` actually lands.
+        let landing = if insert_at > from {
+            insert_at - 1
+        } else {
+            insert_at
+        };
+        if landing == from {
+            return false;
+        }
+        let moved = space.tabs.remove(from);
+        space.tabs.insert(landing, moved);
+        true
+    }
+
     /// Applies a fresh live-probe reading for `pane`'s cwd/process (found by
     /// searching every space's tabs), and reports whether anything actually
     /// changed — so the caller only broadcasts a `SessionUpdated` when the
@@ -1031,6 +1077,150 @@ mod tests {
         assert_eq!(session.next_space_id, 3);
         assert_eq!(session.next_tab_id, 4);
         assert_eq!(session.next_pane_id, 4);
+    }
+
+    #[test]
+    fn reorder_tab_moves_among_agent_tabs_and_ignores_a_no_op_move() {
+        let mut session = Session::new(
+            WorkspaceId("workspace-a".into()),
+            PathBuf::from("/tmp/a"),
+            80,
+            24,
+        );
+        let space = session.workspace.selected_space;
+        // The bootstrap tab (id 1) plus two agent tabs: [1, 2, 3].
+        session.add_tab(space, "b".into(), None, 80, 24, PathBuf::from("/tmp/a"));
+        session.add_tab(space, "c".into(), None, 80, 24, PathBuf::from("/tmp/a"));
+        let ids = |session: &Session| -> Vec<u64> {
+            session
+                .selected_space()
+                .tabs
+                .iter()
+                .map(|t| t.id.0)
+                .collect()
+        };
+        assert_eq!(ids(&session), vec![1, 2, 3]);
+
+        // Moving tab 1 before tab 2 (its immediate successor) is already
+        // the current order — a no-op.
+        assert!(!session.reorder_tab(TabId(1), Some(TabId(2))));
+        assert_eq!(ids(&session), vec![1, 2, 3]);
+
+        // Moving tab 1 before tab 3 puts it between 2 and 3.
+        assert!(session.reorder_tab(TabId(1), Some(TabId(3))));
+        assert_eq!(ids(&session), vec![2, 1, 3]);
+    }
+
+    #[test]
+    fn reorder_tab_moves_among_one_agents_shell_tabs() {
+        let mut session = Session::new(
+            WorkspaceId("workspace-a".into()),
+            PathBuf::from("/tmp/a"),
+            80,
+            24,
+        );
+        let space = session.workspace.selected_space;
+        let agent = session.selected_tab().id;
+        session.add_tab(
+            space,
+            "shell-a".into(),
+            Some(agent),
+            80,
+            24,
+            PathBuf::from("/tmp/a"),
+        );
+        session.add_tab(
+            space,
+            "shell-b".into(),
+            Some(agent),
+            80,
+            24,
+            PathBuf::from("/tmp/a"),
+        );
+        // [agent(1), shell-a(2), shell-b(3)].
+        let shell_a = TabId(2);
+        let shell_b = TabId(3);
+
+        assert!(session.reorder_tab(shell_b, Some(shell_a)));
+        let ids: Vec<u64> = session
+            .selected_space()
+            .tabs
+            .iter()
+            .map(|t| t.id.0)
+            .collect();
+        assert_eq!(ids, vec![1, 3, 2], "shell-b now sits before shell-a");
+        // Reordering never touches which agent a shell belongs with.
+        assert_eq!(session.selected_space().tabs[1].agent, Some(agent));
+        assert_eq!(session.selected_space().tabs[2].agent, Some(agent));
+    }
+
+    #[test]
+    fn reorder_tab_moves_to_the_end_when_before_is_none() {
+        let mut session = Session::new(
+            WorkspaceId("workspace-a".into()),
+            PathBuf::from("/tmp/a"),
+            80,
+            24,
+        );
+        let space = session.workspace.selected_space;
+        session.add_tab(space, "b".into(), None, 80, 24, PathBuf::from("/tmp/a"));
+        session.add_tab(space, "c".into(), None, 80, 24, PathBuf::from("/tmp/a"));
+
+        // Tab 3 is already last — moving it to the end is a no-op.
+        assert!(!session.reorder_tab(TabId(3), None));
+
+        assert!(session.reorder_tab(TabId(1), None));
+        let ids: Vec<u64> = session
+            .selected_space()
+            .tabs
+            .iter()
+            .map(|t| t.id.0)
+            .collect();
+        assert_eq!(ids, vec![2, 3, 1]);
+    }
+
+    #[test]
+    fn reorder_tab_rejects_a_target_from_a_different_space() {
+        let mut session = Session::new(
+            WorkspaceId("workspace-a".into()),
+            PathBuf::from("/tmp/a"),
+            80,
+            24,
+        );
+        let first_space_tab = session.selected_tab().id;
+        session.add_space("frontend".into(), PathBuf::from("/tmp/frontend"), 80, 24);
+        let other_space_tab = session.selected_tab().id;
+        assert_ne!(first_space_tab, other_space_tab);
+
+        assert!(!session.reorder_tab(first_space_tab, Some(other_space_tab)));
+        // Neither space's order changed.
+        assert_eq!(session.workspace.spaces[0].tabs[0].id, first_space_tab);
+        assert_eq!(session.workspace.spaces[1].tabs[0].id, other_space_tab);
+    }
+
+    #[test]
+    fn reorder_tab_rejects_missing_tabs_and_self_targeting() {
+        let mut session = Session::new(
+            WorkspaceId("workspace-a".into()),
+            PathBuf::from("/tmp/a"),
+            80,
+            24,
+        );
+        let space = session.workspace.selected_space;
+        session.add_tab(space, "b".into(), None, 80, 24, PathBuf::from("/tmp/a"));
+
+        assert!(
+            !session.reorder_tab(TabId(99), Some(TabId(1))),
+            "no such tab"
+        );
+        assert!(
+            !session.reorder_tab(TabId(1), Some(TabId(99))),
+            "no such target"
+        );
+        assert!(
+            !session.reorder_tab(TabId(1), Some(TabId(1))),
+            "before itself"
+        );
     }
 
     #[test]

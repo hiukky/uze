@@ -1271,10 +1271,48 @@ pub(crate) fn attach_workspace(
                     }
                     match hit {
                         WorkspaceHit::SelectTab(tab) => {
+                            // Whether this click landed on the tab already
+                            // holding its space's selection — read before
+                            // `SelectTab` is sent below, since the model
+                            // only updates once the server's broadcast
+                            // confirms it, not optimistically here. A drag
+                            // candidate arms only on this "second click":
+                            // the first click on a different tab just
+                            // selects it, exactly like before dragging
+                            // existed. Without this, every plain selection
+                            // click also armed a drag from that row, and
+                            // any incidental pointer motion afterward
+                            // (moving toward the next click, mouse jitter)
+                            // could cross the threshold and show the drop
+                            // indicator on a row the user never meant to
+                            // touch.
+                            let already_selected = model.session.as_ref().is_some_and(|session| {
+                                session
+                                    .workspace
+                                    .spaces
+                                    .iter()
+                                    .any(|space| space.selected_tab == tab)
+                            });
                             model.acknowledge_completed_agent_tab(tab);
                             let _ = send_request(&mut stream, &ClientRequest::SelectTab { tab });
                             if let Some(pane) = model.pane_for_tab(tab) {
                                 resize_pane(&mut stream, &mut model, pane, columns, rows);
+                            }
+                            if already_selected
+                                && let Some(group) =
+                                    tab_drag_group(&model, &identities, &layout, hit_rect, tab)
+                            {
+                                let origin = match group {
+                                    TabDragGroup::Agents(_) => mouse.row,
+                                    TabDragGroup::Strip(..) => mouse.column,
+                                };
+                                model.dragging_tab = Some(DraggingTab {
+                                    tab,
+                                    group,
+                                    origin,
+                                    armed: false,
+                                    pending: None,
+                                });
                             }
                         }
                         WorkspaceHit::CloseTab(tab) => {
@@ -1440,24 +1478,79 @@ pub(crate) fn attach_workspace(
                 }
                 Event::Mouse(mouse)
                     if mouse.kind == MouseEventKind::Drag(MouseButton::Left)
+                        && model.dragging_tab.is_some() =>
+                {
+                    let Some(mut dragging) = model.dragging_tab else {
+                        unreachable!("guarded by the match arm above");
+                    };
+                    let pointer = match dragging.group {
+                        TabDragGroup::Agents(_) => mouse.row,
+                        TabDragGroup::Strip(..) => mouse.column,
+                    };
+                    if !dragging.armed {
+                        dragging.armed = pointer.abs_diff(dragging.origin) >= TAB_DRAG_THRESHOLD;
+                    }
+                    dragging.pending = dragging
+                        .armed
+                        .then(|| {
+                            // The dragged tab's own rect stays in `hits`
+                            // (nothing about the underlying order changes
+                            // during the drag — see the design's "indicator,
+                            // not a live reorder" decision), so it has to be
+                            // excluded here or its own midpoint would offer
+                            // itself as a drop target.
+                            let members = tab_drag_group_members(
+                                &model,
+                                &identities,
+                                &layout,
+                                dragging.group,
+                            )
+                            .into_iter()
+                            .filter(|(_, tab)| *tab != dragging.tab)
+                            .collect::<Vec<_>>();
+                            pending_tab_drop(&members, dragging.group, pointer, dragging.origin)
+                        })
+                        .flatten();
+                    model.dragging_tab = Some(dragging);
+                    model.dirty = true;
+                }
+                Event::Mouse(mouse)
+                    if mouse.kind == MouseEventKind::Drag(MouseButton::Left)
                         && !model.dragging_sidebar
                         && !model.dragging_git_tree
+                        && model.dragging_tab.is_none()
                         && model.no_modal_open() =>
                 {
                     forward_mouse(&mut stream, &model, layout.pane, mouse);
                 }
                 Event::Mouse(mouse) if mouse.kind == MouseEventKind::Up(MouseButton::Left) => {
-                    // A drag this client never owned (neither flag was set,
-                    // and nothing modal was open to have owned it either) is
-                    // one it was forwarding into the pane above — the
-                    // matching release belongs there too, not just silently
-                    // dropped the way it was before pane forwarding existed.
-                    if !model.dragging_sidebar && !model.dragging_git_tree && model.no_modal_open()
+                    // A drag this client never owned (no flag was set, no
+                    // tab drag was in progress, and nothing modal was open
+                    // to have owned it either) is one it was forwarding
+                    // into the pane above — the matching release belongs
+                    // there too, not just silently dropped the way it was
+                    // before pane forwarding existed.
+                    if !model.dragging_sidebar
+                        && !model.dragging_git_tree
+                        && model.dragging_tab.is_none()
+                        && model.no_modal_open()
                     {
                         forward_mouse(&mut stream, &model, layout.pane, mouse);
                     }
+                    if let Some(dragging) = model.dragging_tab.take()
+                        && let Some(pending) = dragging.pending
+                    {
+                        let _ = send_request(
+                            &mut stream,
+                            &ClientRequest::ReorderTab {
+                                tab: dragging.tab,
+                                before: pending.as_before(),
+                            },
+                        );
+                    }
                     model.dragging_sidebar = false;
                     model.dragging_git_tree = false;
+                    model.dirty = true;
                 }
                 Event::Mouse(mouse)
                     if mouse.kind == MouseEventKind::Down(MouseButton::Right)
@@ -1601,6 +1694,83 @@ enum RenameTarget {
     Tab(TabId),
     Space(SpaceId),
 }
+
+/// Which set of tabs a drag-to-reorder gesture is confined to — the exact
+/// grouping `render.rs` already filters `Space.tabs` by to build the
+/// sidebar's agent list (`agent_tabs`) and the tab strip (`strip`). A drag
+/// never offers, nor accepts, a drop target from outside the group it
+/// began in — see `tab_drag_group`/`tab_drag_group_members`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TabDragGroup {
+    /// The agent rows of one space's sidebar list, by space id.
+    Agents(SpaceId),
+    /// The tabs of one strip: shells opened alongside one agent tab, or —
+    /// when `None` — a space's own shells with no agent selected. Matches
+    /// `Tab::agent`'s own vocabulary.
+    Strip(SpaceId, Option<TabId>),
+}
+
+/// A pending tab-reorder drop position, in exactly the shape
+/// [`ClientRequest::ReorderTab`] expects it: before a specific tab, or at
+/// the end of the group.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PendingDrop {
+    Before(TabId),
+    End,
+}
+
+impl PendingDrop {
+    fn as_before(self) -> Option<TabId> {
+        match self {
+            PendingDrop::Before(tab) => Some(tab),
+            PendingDrop::End => None,
+        }
+    }
+}
+
+/// A tab being dragged for reordering. Armed once the pointer moves past
+/// [`TAB_DRAG_THRESHOLD`] from where the press started, so a plain click —
+/// still handled immediately and unchanged on `MouseEventKind::Down` — is
+/// never mistaken for a drag. Cleared on release either way, and pruned
+/// early if the dragged tab disappears from a `Session` update received
+/// mid-drag (see `WorkspaceModel::prune_dragging_tab`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DraggingTab {
+    tab: TabId,
+    group: TabDragGroup,
+    /// Row (`Agents`) or column (`Strip`) the press started at.
+    origin: u16,
+    armed: bool,
+    /// Where `tab` would land if released right now. `None` while unarmed,
+    /// or whenever the pointer isn't currently over a valid drop position
+    /// for `group` — a release in either state is a no-op.
+    pending: Option<PendingDrop>,
+}
+
+impl DraggingTab {
+    /// Whether `tab` — the last member of `group` when `is_last` — is
+    /// where this drag's current pending drop would land. Used by the
+    /// sidebar and tab-strip renderers to place the one insertion
+    /// indicator each draws; `false` for a drag that isn't `armed`, is
+    /// over a different group than the one being rendered, or has no
+    /// pending drop right now (the pointer has left the group's area).
+    fn is_pending_drop_row(self, group: TabDragGroup, tab: TabId, is_last: bool) -> bool {
+        if !self.armed || self.group != group {
+            return false;
+        }
+        match self.pending {
+            Some(PendingDrop::Before(before)) => before == tab,
+            Some(PendingDrop::End) => is_last,
+            None => false,
+        }
+    }
+}
+
+/// How far (rows for `Agents`, columns for `Strip`) the pointer must move
+/// from a press before it's treated as a reorder drag rather than a plain
+/// click — small enough that dragging still feels immediate, large enough
+/// to rule out an ordinary click's own jitter.
+const TAB_DRAG_THRESHOLD: u16 = 2;
 
 /// A second `Down(Left)` on the same hit within this window counts as a
 /// double-click (enters tab rename); slower than this, it's just another
@@ -1984,6 +2154,10 @@ struct WorkspaceModel {
     /// session, the same way the sidebar's width survives switching tabs.
     git_tree_width: Option<u16>,
     dragging_git_tree: bool,
+    /// An in-progress tab-reorder drag; `None` when no tab is being
+    /// dragged. Client-local presentation state — nothing is sent to the
+    /// server until release (see `TabDragGroup`/`DraggingTab`).
+    dragging_tab: Option<DraggingTab>,
     /// Cached Git summary for the selected agent/shell tab's live cwd.
     /// Stored client-side because it is display chrome, not terminal session
     /// state that belongs in `uze-terminal`.
@@ -2120,6 +2294,7 @@ impl WorkspaceModel {
             }
             ClientEvent::SessionUpdated { session } => {
                 self.session = Some(session);
+                self.prune_dragging_tab();
             }
             ClientEvent::Damage(damage) => {
                 if is_incremental_repaint(&damage) {
@@ -2146,6 +2321,25 @@ impl WorkspaceModel {
             }
             ClientEvent::Error { message } => self.error = Some(message),
             ClientEvent::Detached | ClientEvent::Stopped => {}
+        }
+    }
+    /// Clears an in-progress tab drag if the tab it names no longer exists
+    /// — closed by another client, or by a concurrent `CloseTab`, while
+    /// this one was mid-drag. Called on every `SessionUpdated`; leaves an
+    /// unrelated drag (or none at all) alone.
+    fn prune_dragging_tab(&mut self) {
+        let Some(dragging) = self.dragging_tab else {
+            return;
+        };
+        let still_exists = self.session.as_ref().is_some_and(|session| {
+            session
+                .workspace
+                .spaces
+                .iter()
+                .any(|space| space.tabs.iter().any(|tab| tab.id == dragging.tab))
+        });
+        if !still_exists {
+            self.dragging_tab = None;
         }
     }
     /// None of the modal overlays that own mouse input while they're open
@@ -2616,6 +2810,150 @@ fn context_agent(model: &WorkspaceModel, identities: &[AgentIdentity]) -> Option
         .iter()
         .find(|tab| tab.id == agent && agent_identity_for_tab(identities, tab).is_some())
         .map(|tab| tab.id)
+}
+
+/// Which drag-reorder group `hit_rect` (a `WorkspaceHit::SelectTab(tab)`
+/// rect) belongs to, if any — `Agents` for a sidebar row, keyed by `tab`'s
+/// own space (found by searching, same as every other tab lookup in this
+/// module); `Strip` for a tab-strip chip, keyed by the selected space and
+/// its current context agent. Neither region test needs `tab` to already
+/// be known to be an agent or a shell — the region the rect landed in
+/// already says which grouping applies.
+fn tab_drag_group(
+    model: &WorkspaceModel,
+    identities: &[AgentIdentity],
+    layout: &WorkspaceLayout,
+    hit_rect: Rect,
+    tab: TabId,
+) -> Option<TabDragGroup> {
+    let session = model.session.as_ref()?;
+    if hit_rect.x < layout.sidebar.right() {
+        let space = session
+            .workspace
+            .spaces
+            .iter()
+            .find(|space| space.tabs.iter().any(|t| t.id == tab))?;
+        return Some(TabDragGroup::Agents(space.id));
+    }
+    if hit_rect.y >= layout.tab_strip.y && hit_rect.y < layout.tab_strip.bottom() {
+        let space = session.selected_space();
+        return Some(TabDragGroup::Strip(
+            space.id,
+            context_agent(model, identities),
+        ));
+    }
+    None
+}
+
+/// Every `SelectTab` rect currently on screen that belongs to `group`,
+/// sorted along the axis a drag within that group moves on — top-to-bottom
+/// for `Agents`, left-to-right for `Strip`. Read straight off the render
+/// pass's own `hits` (via [`tab_drag_group`], the same classifier a
+/// mousedown used to arm the drag in the first place) rather than
+/// recomputed from `Space.tabs` and the render filters a second time, so
+/// this can never disagree with what's actually drawn. A sidebar tab pushes
+/// two hits (its label and detail rows) — merged into the one rect
+/// spanning both, not collapsed to just the first. Keeping only the label
+/// row here used to leave each member exactly 1 row tall, which made its
+/// own midpoint equal its own top edge — hovering anywhere on a tab's own
+/// two rows could never register as "before this tab", only ever "before
+/// the next one" (see [`pending_tab_drop`]'s halves).
+fn tab_drag_group_members(
+    model: &WorkspaceModel,
+    identities: &[AgentIdentity],
+    layout: &WorkspaceLayout,
+    group: TabDragGroup,
+) -> Vec<(Rect, TabId)> {
+    let mut union: std::collections::BTreeMap<TabId, Rect> = std::collections::BTreeMap::new();
+    for (rect, hit) in &model.hits {
+        let WorkspaceHit::SelectTab(tab) = hit else {
+            continue;
+        };
+        if tab_drag_group(model, identities, layout, *rect, *tab) != Some(group) {
+            continue;
+        }
+        union
+            .entry(*tab)
+            .and_modify(|merged| *merged = merged.union(*rect))
+            .or_insert(*rect);
+    }
+    let mut members: Vec<(Rect, TabId)> =
+        union.into_iter().map(|(tab, rect)| (rect, tab)).collect();
+    match group {
+        TabDragGroup::Agents(_) => members.sort_by_key(|(rect, _)| rect.y),
+        TabDragGroup::Strip(..) => members.sort_by_key(|(rect, _)| rect.x),
+    }
+    members
+}
+
+/// Where a tab being dragged within `group` would land if released with
+/// the pointer at `pointer` (a row for `Agents`, a column for `Strip`),
+/// given `members` as [`tab_drag_group_members`] already sorted them (the
+/// dragged tab itself excluded) and `origin` as that dragged tab's own
+/// position before it was excluded — `None` when `pointer` isn't over the
+/// group's own area at all (a different space's rows, a different agent's
+/// strip, blank space), which is what clears the insertion indicator and
+/// makes an eventual release a no-op. Walking each member in order and
+/// stopping at the first whose own midpoint the pointer hasn't reached yet
+/// is what turns "the top half of a row" into "drop before it" and "the
+/// bottom half" into "keep looking at the next one" — falling off the end
+/// means "drop after the last one".
+///
+/// One member is special: whichever sat immediately after the dragged tab
+/// originally. Landing "before" it reconstructs the exact slot the tab
+/// just left — `Session::reorder_tab`'s own `landing == from` check
+/// already treats that as a no-op — so unlike every other member, its own
+/// near half is never offered as a distinct target; touching any part of
+/// it resolves straight through to "after it" instead. Without this, that
+/// member's top half — its own label row, the one a click naturally aims
+/// for — silently did nothing, and only entering the *next* member's own
+/// zone (one full row further down than expected) produced a visible
+/// move.
+fn pending_tab_drop(
+    members: &[(Rect, TabId)],
+    group: TabDragGroup,
+    pointer: u16,
+    origin: u16,
+) -> Option<PendingDrop> {
+    if members.is_empty() {
+        return None;
+    }
+    let position = |rect: Rect| match group {
+        TabDragGroup::Agents(_) => rect.y,
+        TabDragGroup::Strip(..) => rect.x,
+    };
+    let extent = |rect: Rect| match group {
+        TabDragGroup::Agents(_) => rect.y + rect.height,
+        TabDragGroup::Strip(..) => rect.x + rect.width,
+    };
+    // A little slack past either end: dragging just above the first row,
+    // or just past the last tab, still means "put it there" rather than
+    // needing to land exactly on a row/chip.
+    let slack: u16 = match group {
+        TabDragGroup::Agents(_) => 2,
+        TabDragGroup::Strip(..) => 4,
+    };
+    let first = position(members[0].0);
+    let last = extent(members[members.len() - 1].0);
+    if pointer + slack < first || pointer > last + slack {
+        return None;
+    }
+    let mut passed_origin = false;
+    for &(rect, tab) in members {
+        let is_moot_successor = !passed_origin && position(rect) > origin;
+        passed_origin = passed_origin || position(rect) > origin;
+        if is_moot_successor {
+            if pointer < position(rect) {
+                return Some(PendingDrop::Before(tab));
+            }
+            continue;
+        }
+        let midpoint = position(rect) + (extent(rect) - position(rect)) / 2;
+        if pointer < midpoint {
+            return Some(PendingDrop::Before(tab));
+        }
+    }
+    Some(PendingDrop::End)
 }
 
 /// Where a shell opened by hand starts: the context agent's own directory,

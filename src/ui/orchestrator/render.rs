@@ -734,6 +734,27 @@ pub(super) fn render_sidebar(
             }
             frame.render_widget(Paragraph::new(Line::from(spans)), label_rect);
             hits.push((label_rect, WorkspaceHit::SelectTab(tab.id)));
+            // A tab-reorder drag in this exact space, resolved to drop
+            // right before (or, on the last row, at the end after) this
+            // one: an accent bar down the row's own leading column, same
+            // "which row is affected" language the sidebar's other row
+            // affordances (status glyphs, the active-space tint) already
+            // use, in place of a separate line between rows that would
+            // need its own row out of an already tightly budgeted list.
+            // Drawn on both this row and the detail row below (see the
+            // second `frame.render_widget` past it) — the tab is a two-row
+            // item, not just its label, so the bar has to run the item's
+            // full height to read as "this whole item" rather than
+            // something clipped to its top row alone.
+            let show_drop_indicator = model.dragging_tab.is_some_and(|dragging| {
+                dragging.is_pending_drop_row(TabDragGroup::Agents(space.id), tab.id, is_last)
+            });
+            if show_drop_indicator {
+                frame.render_widget(
+                    Paragraph::new("▍").style(Style::default().fg(crate::ui::ACCENT)),
+                    Rect::new(label_rect.x, label_rect.y, 1, 1),
+                );
+            }
 
             if let Some(detail_rect) = rows.next(1) {
                 let continuation = if is_last { "     " } else { "  │  " };
@@ -762,6 +783,12 @@ pub(super) fn render_sidebar(
                 // item — clicking the caption line must select the tab too,
                 // not just the label text above it.
                 hits.push((detail_rect, WorkspaceHit::SelectTab(tab.id)));
+                if show_drop_indicator {
+                    frame.render_widget(
+                        Paragraph::new("▍").style(Style::default().fg(crate::ui::ACCENT)),
+                        Rect::new(detail_rect.x, detail_rect.y, 1, 1),
+                    );
+                }
             }
             // A light gap between sibling tabs. A bare blank row was tried
             // and discarded — it broke the tree's own "│" connector into
@@ -1407,10 +1434,18 @@ pub(super) fn render_tab_strip(
     let can_close = space.tabs.len() > 1;
     let mut spans = Vec::new();
     let mut x = inner.x;
-    for tab in strip {
+    let strip_len = strip.len();
+    // Where to draw the drag's insertion indicator, if anywhere — captured
+    // during the loop below but drawn only after `spans`' one accumulated
+    // `Line` covering the whole strip is painted, since that single later
+    // render would otherwise cover over a bar drawn mid-loop (unlike the
+    // sidebar's per-row renders, every chip here shares that one `Line`).
+    let mut drop_indicator: Option<Rect> = None;
+    for (strip_index, tab) in strip.into_iter().enumerate() {
         if x >= inner.right() {
             break;
         }
+        let is_last = strip_index + 1 == strip_len;
         let is_agent = Some(tab.id) == context;
         let selected = tab.id == space.selected_tab;
         let marker_fg = if selected {
@@ -1495,6 +1530,15 @@ pub(super) fn render_tab_strip(
             Rect::new(chip_start, inner.y, chip_width, 1),
             WorkspaceHit::SelectTab(tab.id),
         ));
+        // Same convention as the sidebar's own indicator two functions
+        // away: an accent bar on the target chip's own leading column —
+        // dropping at the end of the strip lands the bar on the last
+        // chip too, not on a slot past it.
+        if model.dragging_tab.is_some_and(|dragging| {
+            dragging.is_pending_drop_row(TabDragGroup::Strip(space.id, context), tab.id, is_last)
+        }) {
+            drop_indicator = Some(Rect::new(chip_start, inner.y, 1, 1));
+        }
         spans.extend(chip);
         // Just 1 column between chips, not 3 — each chip already reserves
         // its own 1-column pad on both sides (see `PAD` above), so a full
@@ -1563,6 +1607,12 @@ pub(super) fn render_tab_strip(
         spans.extend(actions);
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), inner);
+    if let Some(rect) = drop_indicator {
+        frame.render_widget(
+            Paragraph::new("▍").style(Style::default().fg(crate::ui::ACCENT)),
+            rect,
+        );
+    }
 
     // The status badge belongs to the active agent/shell tab's `cwd`, not
     // the workspace root. It is intentionally absent for a clean directory

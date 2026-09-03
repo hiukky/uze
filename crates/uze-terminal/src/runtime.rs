@@ -756,6 +756,16 @@ impl Server {
                         self.broadcast_session();
                     }
                 }
+                ClientRequest::ReorderTab { tab, before } => {
+                    let changed = self
+                        .session
+                        .lock()
+                        .expect("session poisoned")
+                        .reorder_tab(tab, before);
+                    if changed {
+                        self.broadcast_session();
+                    }
+                }
                 ClientRequest::CreateSpace {
                     label,
                     root,
