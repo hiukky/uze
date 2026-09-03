@@ -8,7 +8,10 @@
 
 #![allow(clippy::empty_line_after_doc_comments)]
 
-use uze_core::Result;
+use uze_core::{
+    Result,
+    integration::{ContextDelivery, IntegrationPort},
+};
 
 use super::services::Plugins;
 use super::*;
@@ -310,6 +313,76 @@ pub struct HarnessHealth {
     /// runtime shim. A configured harness with a shadowed shim is not ready:
     /// its runtime context projection would be bypassed.
     pub runtime_shim_active: bool,
+    /// How this harness can receive a project's portable context on this
+    /// machine — declared by the integration, like `capabilities` above,
+    /// never resolved against a project. Whether one particular directory
+    /// is actually being delivered is `AgentContextStatus`'s question.
+    pub context_support: HarnessContextSupport,
+}
+
+/// The mechanism through which one portable project resource (`AGENTS.md`,
+/// `.agents/`) reaches a harness on this machine. A property of the harness
+/// and of this environment's `PATH` — never of any project, which is why
+/// there is no "absent" variant: a machine-level row has nothing to be
+/// absent from.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ContextMechanism {
+    /// The harness's own binary reads it straight out of the project.
+    Native,
+    /// UZE's runtime PATH shim projects it into every launch, without
+    /// writing anything into the project.
+    RuntimeShim,
+    /// The shim would project it, but a real binary resolves ahead of the
+    /// shim on this process's `PATH`, so a launch from here bypasses it.
+    ShimShadowed,
+    /// A persistent bridge file in the project root, maintained by
+    /// `uze context reconcile`, carries it.
+    Bridge,
+    /// No delivery strategy exists for this harness and this resource.
+    Unsupported,
+}
+
+/// One harness's declared context support, one mechanism per portable
+/// resource — the two are answered independently because a harness may
+/// discover `.agents/` natively while needing help with `AGENTS.md`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct HarnessContextSupport {
+    pub instructions: ContextMechanism,
+    pub agents_directory: ContextMechanism,
+}
+
+impl HarnessContextSupport {
+    /// Derives the declaration from the integration's own answers plus the
+    /// one environment fact that can defeat them (`runtime_shim_active`).
+    /// Mirrors the mechanism precedence `AgentContextStatus` applies per
+    /// project: a runtime projection outranks a persistent bridge.
+    pub fn declared(integration: &dyn IntegrationPort, runtime_shim_active: bool) -> Self {
+        let projects = integration.supports_runtime_integration()
+            && integration.runtime_projects_project_context();
+        let projected = if runtime_shim_active {
+            ContextMechanism::RuntimeShim
+        } else {
+            ContextMechanism::ShimShadowed
+        };
+        let instructions = match integration.context_delivery() {
+            ContextDelivery::Native { .. } => ContextMechanism::Native,
+            ContextDelivery::Bridge { .. } if projects => projected,
+            ContextDelivery::Bridge { .. } => ContextMechanism::Bridge,
+            ContextDelivery::None => ContextMechanism::Unsupported,
+        };
+        let agents_directory = if integration.discovers_project_agents_directory() {
+            ContextMechanism::Native
+        } else if projects {
+            projected
+        } else {
+            ContextMechanism::Unsupported
+        };
+        Self {
+            instructions,
+            agents_directory,
+        }
+    }
 }
 
 /// One recognized instructions file's observed state — never whether UZE

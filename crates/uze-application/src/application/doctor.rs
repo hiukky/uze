@@ -169,25 +169,32 @@ impl Health<'_> {
         self.0
             .integrations
             .iter()
-            .map(|integration| HarnessHealth {
-                integration: integration.id().to_owned(),
-                display_name: integration.display_name().to_owned(),
-                description: integration.description().to_owned(),
-                detection: self.0.detect_cached(integration.as_ref()),
-                setup: integration_status(integration.status(&self.0.home)),
-                strategy: state::get(&self.0.home, integration.id())
-                    .ok()
-                    .flatten()
-                    .map(|record| record.strategy),
-                provisioning: state::provisioning(&self.0.home, integration.id())
-                    .ok()
-                    .flatten(),
-                // Observed, not remembered. A package can be installed and
-                // reconciled while a harness still cannot see it, and that is
-                // exactly the state this field exists to surface.
-                publication: integration.publication(&installed),
-                capabilities: integration.capabilities(),
-                runtime_shim_active: self.0.runtime_shim_is_active(integration.as_ref()),
+            .map(|integration| {
+                let runtime_shim_active = self.0.runtime_shim_is_active(integration.as_ref());
+                HarnessHealth {
+                    integration: integration.id().to_owned(),
+                    display_name: integration.display_name().to_owned(),
+                    description: integration.description().to_owned(),
+                    detection: self.0.detect_cached(integration.as_ref()),
+                    setup: integration_status(integration.status(&self.0.home)),
+                    strategy: state::get(&self.0.home, integration.id())
+                        .ok()
+                        .flatten()
+                        .map(|record| record.strategy),
+                    provisioning: state::provisioning(&self.0.home, integration.id())
+                        .ok()
+                        .flatten(),
+                    // Observed, not remembered. A package can be installed and
+                    // reconciled while a harness still cannot see it, and that is
+                    // exactly the state this field exists to surface.
+                    publication: integration.publication(&installed),
+                    capabilities: integration.capabilities(),
+                    runtime_shim_active,
+                    context_support: HarnessContextSupport::declared(
+                        integration.as_ref(),
+                        runtime_shim_active,
+                    ),
+                }
             })
             .collect()
     }

@@ -312,6 +312,10 @@ impl IntegrationPort for ClaudeIntegration {
         runtime::projection_would_activate(ctx)
     }
 
+    fn runtime_projects_project_context(&self) -> bool {
+        true
+    }
+
     fn provision(&self, runner: &dyn ProcessRunner) -> Result<ProvisioningResult> {
         let executable = self.provisioning_executable();
         provision_cli(

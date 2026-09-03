@@ -44,8 +44,9 @@ fn model_with_plugins(ids: &[&str]) -> TuiModel {
 /// nothing-loaded-yet placeholder every other test leaves in place.
 fn model_with_data() -> TuiModel {
     use uze_application::application::{
-        HarnessContextDelivery, HarnessContextStatus, HarnessHealth, ManagedStateSummary,
-        PackageManagedState, Portability, ProjectContextStatus, StoreHealth,
+        ContextMechanism, HarnessContextDelivery, HarnessContextStatus, HarnessContextSupport,
+        HarnessHealth, ManagedStateSummary, PackageManagedState, Portability, ProjectContextStatus,
+        StoreHealth,
     };
     use uze_core::integration::{AttachmentState, HarnessDetection, PublicationStatus};
     use uze_core::router::HarnessCapabilities;
@@ -87,6 +88,10 @@ fn model_with_data() -> TuiModel {
                 publication: PublicationStatus::Published,
                 capabilities: HarnessCapabilities::default(),
                 runtime_shim_active: true,
+                context_support: HarnessContextSupport {
+                    instructions: ContextMechanism::RuntimeShim,
+                    agents_directory: ContextMechanism::RuntimeShim,
+                },
             },
             HarnessHealth {
                 integration: "codex".to_owned(),
@@ -102,6 +107,10 @@ fn model_with_data() -> TuiModel {
                 publication: PublicationStatus::NotApplicable,
                 capabilities: HarnessCapabilities::default(),
                 runtime_shim_active: true,
+                context_support: HarnessContextSupport {
+                    instructions: ContextMechanism::RuntimeShim,
+                    agents_directory: ContextMechanism::RuntimeShim,
+                },
             },
         ],
         attachments: vec![PackageManagedState {

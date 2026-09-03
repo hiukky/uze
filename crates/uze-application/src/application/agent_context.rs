@@ -142,6 +142,7 @@ impl Workspace<'_> {
         let projection_active = present
             && shim_active
             && integration.supports_runtime_integration()
+            && integration.runtime_projects_project_context()
             && integration.runtime_contribution_would_activate(&RuntimeContext {
                 cwd,
                 home: &self.0.home,

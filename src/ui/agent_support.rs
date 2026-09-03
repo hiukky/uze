@@ -347,7 +347,9 @@ fn capability_label(kind: CapabilityKind) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use uze_application::application::{AgentContextStatus, HarnessHealth};
+    use uze_application::application::{
+        AgentContextStatus, ContextMechanism, HarnessContextSupport, HarnessHealth,
+    };
     use uze_core::integration::{AttachmentState, HarnessDetection, PublicationStatus};
 
     fn health(present: bool) -> HarnessHealth {
@@ -365,6 +367,10 @@ mod tests {
             publication: PublicationStatus::NotApplicable,
             capabilities: HarnessCapabilities::default(),
             runtime_shim_active: true,
+            context_support: HarnessContextSupport {
+                instructions: ContextMechanism::RuntimeShim,
+                agents_directory: ContextMechanism::RuntimeShim,
+            },
         }
     }
 

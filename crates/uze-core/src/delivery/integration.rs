@@ -231,6 +231,17 @@ pub trait IntegrationPort {
         !self.runtime_contribution(ctx).is_passthrough()
     }
 
+    /// Whether this harness's [`Self::runtime_contribution`] is the
+    /// mechanism carrying a project's portable context (`AGENTS.md`,
+    /// `.agents/`) into a launch. A declaration about the harness, not an
+    /// observation about any directory — the machine-level answer to "how
+    /// would this harness receive project context", where
+    /// [`Self::runtime_contribution_would_activate`] answers it for one
+    /// cwd. Default `false`: the passthrough contribution projects nothing.
+    fn runtime_projects_project_context(&self) -> bool {
+        false
+    }
+
     /// Whether `uze setup <harness>` should also create the PATH shim
     /// (`UzeHome::shims_dir`) for this harness, as an ordinary part of that
     /// one command — no separate flag or persisted enabled/disabled state.

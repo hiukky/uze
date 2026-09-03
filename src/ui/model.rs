@@ -11,9 +11,9 @@ use uze_application::{Autonomy, ModelPreference, SandboxScope};
 use uze_extensions::registry::BuiltinExtension;
 
 use uze_application::application::{
-    AgentContextStatus, ContextPlan, DoctorReport, HarnessHealth, MarketplacePluginDetail,
-    MarketplacePluginSummary, OverviewWorkspaceSummary, PluginInspection, PluginSummary,
-    ProfileApplyResult, ProfileSummary, ProjectContextStatus, ProjectEnvironmentState,
+    ContextPlan, DoctorReport, HarnessHealth, MarketplacePluginDetail, MarketplacePluginSummary,
+    OverviewWorkspaceSummary, PluginInspection, PluginSummary, ProfileApplyResult, ProfileSummary,
+    ProjectContextStatus, ProjectEnvironmentState,
 };
 
 use super::hit::Hit;
@@ -223,11 +223,6 @@ pub(crate) struct RefreshData {
     pub(crate) marketplace_count: usize,
     pub(crate) profiles: Vec<ProfileSummary>,
     pub(crate) context_status: Option<ProjectContextStatus>,
-    /// How each harness receives this project's portable context, resolved
-    /// against the TUI's own working directory. The same read model the
-    /// workspace's per-agent support popup uses, so the two screens can
-    /// never disagree about whether a harness is getting `AGENTS.md`.
-    pub(crate) agent_context: Vec<AgentContextStatus>,
     /// The Overview's workspace-aware read model — present from the very
     /// first refresh onward (there is always a kind, even `NoWorkspace`).
     pub(crate) workspace: Option<OverviewWorkspaceSummary>,
@@ -337,7 +332,6 @@ pub(crate) struct TuiModel {
 
     pub(crate) context_root: PathBuf,
     pub(crate) context_status: Option<ProjectContextStatus>,
-    pub(crate) agent_context: Vec<AgentContextStatus>,
     pub(crate) context_plan: Option<ContextPlan>,
 
     /// The detected UZE workspace (`agents.lock`/`marketplace.json`), loaded on
@@ -412,7 +406,6 @@ impl Default for TuiModel {
             update_badges: Vec::new(),
             context_root: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             context_status: None,
-            agent_context: Vec::new(),
             context_plan: None,
             workspace: None,
             prompt_history: Vec::new(),
@@ -911,9 +904,6 @@ impl TuiModel {
                 .map(|harness| harness.integration.clone())
                 .collect();
             self.profile_harness_defaulted = true;
-        }
-        if !data.agent_context.is_empty() {
-            self.agent_context = data.agent_context;
         }
         if data.context_status.is_some() {
             self.context_status = data.context_status;

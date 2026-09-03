@@ -19,7 +19,7 @@ use super::*;
 use uze_core::{
     capability::CapabilityKind,
     exposure::{ExposureMechanism, ExposurePlan},
-    integration::{AttachmentReceipt, HarnessDetection, ManagedArtifact},
+    integration::{AttachmentReceipt, ContextDelivery, HarnessDetection, ManagedArtifact},
     project::Resource,
     router::{CompatibilityRoute, HarnessCapabilities, VerificationStatus},
 };
@@ -1725,4 +1725,122 @@ fn shim_failure_is_reported_but_does_not_abort_setup() {
     );
 
     let _ = fs::remove_dir_all(root);
+}
+
+// `HarnessContextSupport::declared` is the Harnesses screen's whole answer
+// for the two portable resources, so it must be derivable from the
+// integration's declarations alone — no project, no cwd — and must apply
+// the same mechanism precedence `AgentContextStatus` applies per project.
+
+struct DeclaringIntegration {
+    context_delivery: ContextDelivery,
+    discovers_agents_directory: bool,
+    projects_at_runtime: bool,
+}
+
+impl IntegrationPort for DeclaringIntegration {
+    fn id(&self) -> &'static str {
+        "declaring"
+    }
+
+    fn capabilities(&self) -> HarnessCapabilities {
+        HarnessCapabilities::default()
+    }
+
+    fn detect(&self) -> HarnessDetection {
+        HarnessDetection {
+            present: true,
+            version: None,
+        }
+    }
+
+    fn exposure_plan(&self, resource: &Resource) -> ExposurePlan {
+        ExposurePlan {
+            representation: resource.capability.representation,
+            route: CompatibilityRoute::Adaptable,
+            verification: VerificationStatus::Unverified,
+            mechanism: ExposureMechanism::Unsupported {
+                rationale: "test does not attach".to_owned(),
+            },
+            evidence: "test".to_owned(),
+        }
+    }
+
+    fn context_delivery(&self) -> ContextDelivery {
+        self.context_delivery
+    }
+
+    fn discovers_project_agents_directory(&self) -> bool {
+        self.discovers_agents_directory
+    }
+
+    fn runtime_projects_project_context(&self) -> bool {
+        self.projects_at_runtime
+    }
+}
+
+#[test]
+fn a_harness_reading_the_project_itself_declares_native_context_support() {
+    let integration = DeclaringIntegration {
+        context_delivery: ContextDelivery::Native { files: &[] },
+        discovers_agents_directory: true,
+        projects_at_runtime: false,
+    };
+    let support = HarnessContextSupport::declared(&integration, true);
+    assert_eq!(support.instructions, ContextMechanism::Native);
+    assert_eq!(support.agents_directory, ContextMechanism::Native);
+}
+
+#[test]
+fn a_runtime_projection_outranks_the_persistent_bridge() {
+    let integration = DeclaringIntegration {
+        context_delivery: ContextDelivery::Bridge {
+            file_name: "BRIDGE.md",
+        },
+        discovers_agents_directory: false,
+        projects_at_runtime: true,
+    };
+    let support = HarnessContextSupport::declared(&integration, true);
+    assert_eq!(support.instructions, ContextMechanism::RuntimeShim);
+    assert_eq!(support.agents_directory, ContextMechanism::RuntimeShim);
+}
+
+#[test]
+fn a_shadowed_shim_is_reported_instead_of_the_projection_it_defeats() {
+    let integration = DeclaringIntegration {
+        context_delivery: ContextDelivery::Bridge {
+            file_name: "BRIDGE.md",
+        },
+        discovers_agents_directory: false,
+        projects_at_runtime: true,
+    };
+    let support = HarnessContextSupport::declared(&integration, false);
+    assert_eq!(support.instructions, ContextMechanism::ShimShadowed);
+    assert_eq!(support.agents_directory, ContextMechanism::ShimShadowed);
+}
+
+#[test]
+fn a_bridge_without_a_runtime_projection_stays_a_bridge() {
+    let integration = DeclaringIntegration {
+        context_delivery: ContextDelivery::Bridge {
+            file_name: "BRIDGE.md",
+        },
+        discovers_agents_directory: false,
+        projects_at_runtime: false,
+    };
+    let support = HarnessContextSupport::declared(&integration, true);
+    assert_eq!(support.instructions, ContextMechanism::Bridge);
+    assert_eq!(support.agents_directory, ContextMechanism::Unsupported);
+}
+
+#[test]
+fn a_harness_declaring_no_delivery_is_unsupported_regardless_of_the_shim() {
+    let integration = DeclaringIntegration {
+        context_delivery: ContextDelivery::None,
+        discovers_agents_directory: false,
+        projects_at_runtime: false,
+    };
+    let support = HarnessContextSupport::declared(&integration, true);
+    assert_eq!(support.instructions, ContextMechanism::Unsupported);
+    assert_eq!(support.agents_directory, ContextMechanism::Unsupported);
 }
