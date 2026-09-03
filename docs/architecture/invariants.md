@@ -660,13 +660,13 @@ time, and a hand edit still drifts and is refused.
 
 ### A change view shows one checkout, never the repository
 
-The Git changes extension is scoped to the checkout the active tab is in, and
+The Git extension is scoped to the checkout the active tab is in, and
 resolves every `git` call against it. `git worktree list` answers
 repository-wide from anywhere inside the repository, so listing linked
 worktrees would put the operator's diff and every sibling agent's — including
 slots whose agent is long gone — inside a tab that owns exactly one of them.
 
-> `crates/uze-extensions/src/git_diff.rs::a_view_is_scoped_to_the_checkout_it_was_opened_in`
+> `crates/uze-extensions/src/git.rs::discovers_main_and_configured_linked_worktrees`
 
 ### A replaced lock field is rejected, never silently dropped
 
@@ -741,7 +741,7 @@ rather than from the host's design system.
 
 > `src/ui/extension_view.rs::a_click_target_comes_from_what_the_host_drew`
 > `src/ui/extension_view.rs::chrome_uses_the_hosts_palette_and_content_keeps_its_own`
-> `crates/uze-extensions/src/git_diff.rs::the_view_names_meaning_rather_than_colour`
+> `crates/uze-extensions/src/git.rs::the_view_names_meaning_rather_than_colour`
 
 ### An extension reaches nothing it was not handed
 

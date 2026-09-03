@@ -16,7 +16,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Padding, Paragraph},
+    widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap},
 };
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -32,7 +32,7 @@ use uze_application::{
 };
 use uze_application::{Result, UzeError, UzeHome};
 use uze_extensions::{
-    ExtensionHit, git_diff,
+    ExtensionHit, git,
     view::{ScrollDirection, ViewHit},
 };
 use uze_terminal::{
@@ -53,6 +53,15 @@ const POLL: Duration = Duration::from_millis(16);
 /// enough to follow commands typed in the active pane without attaching that
 /// cost to every PTY damage redraw.
 const GIT_BADGE_REFRESH: Duration = Duration::from_millis(750);
+/// How far back the sidebar's timeline reads — the most its section can
+/// be dragged open to. The section itself never claims the column from
+/// the spaces it sits under (see `render::timeline_height`).
+const TIMELINE_COMMITS: usize = 30;
+/// How often the timeline is re-read while the tab stays put — slower
+/// than the badge: telling a delivered commit from one still ahead
+/// compares patches across the branch and its target, and history does
+/// not move at the pace a working tree does.
+const TIMELINE_REFRESH: Duration = Duration::from_secs(3);
 
 /// The same frames configure the hidden `indicatif` spinner that schedules
 /// this animation. Ratatui owns the alternate screen, so it paints the frame
@@ -194,6 +203,9 @@ struct TaskResolution {
 struct EvaluationAnswer {
     primary: PathBuf,
     branch: Option<String>,
+    /// The repository's delivery target — what the timeline measures a
+    /// commit as ahead of.
+    target: Option<String>,
     sync: Option<UpstreamSync>,
     evaluation: Evaluation,
 }
@@ -245,6 +257,9 @@ fn spawn_task_evaluation(
             Some(EvaluationAnswer {
                 primary: workspace.primary_of(&cwd)?,
                 branch: workspace.current_branch(&key),
+                target: workspace
+                    .delivery_policy(&key)
+                    .and_then(|policy| policy.target),
                 sync: workspace.target_upstream_sync(&key),
                 evaluation: workspace.evaluate_tasks(&cwd),
             })
@@ -455,6 +470,7 @@ pub(crate) fn attach_workspace(
             let Some(EvaluationAnswer {
                 primary,
                 branch,
+                target,
                 sync,
                 evaluation,
             }) = resolution.answered
@@ -464,6 +480,10 @@ pub(crate) fn attach_workspace(
             match branch {
                 Some(branch) => model.branches.insert(resolution.key.clone(), branch),
                 None => model.branches.remove(&resolution.key),
+            };
+            match target {
+                Some(target) => model.targets.insert(resolution.key.clone(), target),
+                None => model.targets.remove(&resolution.key),
             };
             match sync {
                 Some(sync) => model.upstream_syncs.insert(resolution.key, sync),
@@ -803,6 +823,10 @@ pub(crate) fn attach_workspace(
                     model.support_dropdown = None;
                     model.dirty = true;
                 }
+                Event::Key(_) if model.commit_detail.is_some() => {
+                    model.commit_detail = None;
+                    model.dirty = true;
+                }
                 Event::Key(_) if model.status_catalog.is_some() => {
                     model.status_catalog = None;
                     model.dirty = true;
@@ -872,8 +896,8 @@ pub(crate) fn attach_workspace(
                 Event::Key(key) if model.git_view.is_some() => {
                     if let Some(view) = model.git_view.as_mut()
                         && matches!(
-                            git_diff::handle_key(&WorkspaceHost, view, key),
-                            git_diff::GitViewOutcome::Close
+                            git::handle_key(&WorkspaceHost, view, key),
+                            git::GitViewOutcome::Close
                         )
                     {
                         model.git_view = None;
@@ -1117,6 +1141,15 @@ pub(crate) fn attach_workspace(
                 }
                 Event::Mouse(mouse)
                     if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+                        && model.commit_detail.is_some() =>
+                {
+                    // Informational, like the support dropdown: any click
+                    // dismisses it rather than leaking into the pane.
+                    model.commit_detail = None;
+                    model.dirty = true;
+                }
+                Event::Mouse(mouse)
+                    if mouse.kind == MouseEventKind::Down(MouseButton::Left)
                         && model.status_catalog.is_some() =>
                 {
                     // Informational, like the support dropdown: any click
@@ -1209,12 +1242,12 @@ pub(crate) fn attach_workspace(
                         })
                         .map(|(_, hit)| *hit);
                     // Mirrors `WorkspaceHit::ResizeSidebar` below: arms
-                    // dragging instead of reaching `git_diff::handle_mouse`,
+                    // dragging instead of reaching `git::handle_mouse`,
                     // which only knows about `ExtensionHit`s that are its
                     // own — the resize handle's drag lifecycle belongs to
                     // this workspace client, not the extension.
                     let view_hit = match hit {
-                        Some(WorkspaceHit::Extension(ExtensionHit::GitChanges(view_hit))) => {
+                        Some(WorkspaceHit::Extension(ExtensionHit::Git(view_hit))) => {
                             Some(view_hit)
                         }
                         _ => None,
@@ -1223,8 +1256,8 @@ pub(crate) fn attach_workspace(
                         model.dragging_git_tree = true;
                     } else if let Some(view) = model.git_view.as_mut()
                         && matches!(
-                            git_diff::handle_mouse(&WorkspaceHost, view, view_hit),
-                            git_diff::GitViewOutcome::Close
+                            git::handle_mouse(&WorkspaceHost, view, view_hit),
+                            git::GitViewOutcome::Close
                         )
                     {
                         model.git_view = None;
@@ -1264,7 +1297,7 @@ pub(crate) fn attach_workspace(
                             mouse.row,
                         )
                     {
-                        git_diff::handle_scroll(
+                        git::handle_scroll(
                             &WorkspaceHost,
                             view,
                             target,
@@ -1276,6 +1309,42 @@ pub(crate) fn attach_workspace(
                         );
                     }
                     model.dirty = true;
+                }
+                Event::Mouse(mouse)
+                    if matches!(
+                        mouse.kind,
+                        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                    ) && model.commit_detail.is_some() =>
+                {
+                    if let Some(popup) = model.commit_detail.as_mut() {
+                        let limit = render::commit_detail_layout(
+                            Rect::new(0, 0, size.width, size.height),
+                            popup,
+                        )
+                        .scroll_limit();
+                        popup.scroll = if mouse.kind == MouseEventKind::ScrollUp {
+                            popup.scroll.saturating_sub(1)
+                        } else {
+                            popup.scroll.saturating_add(1).min(limit)
+                        };
+                        model.dirty = true;
+                    }
+                }
+                Event::Mouse(mouse)
+                    if matches!(
+                        mouse.kind,
+                        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                    ) && model.no_modal_open()
+                        && model.over_timeline(mouse.column, mouse.row) =>
+                {
+                    scroll_timeline(
+                        &mut model,
+                        if mouse.kind == MouseEventKind::ScrollUp {
+                            ScrollDirection::Up
+                        } else {
+                            ScrollDirection::Down
+                        },
+                    );
                 }
                 Event::Mouse(mouse)
                     if matches!(
@@ -1321,6 +1390,9 @@ pub(crate) fn attach_workspace(
                             // toggles, not a gesture of their own.
                             WorkspaceHit::ToggleSpaceRoot(space) => {
                                 toggle_space_root(&mut model, space);
+                            }
+                            WorkspaceHit::ToggleTimeline => {
+                                toggle_timeline(&mut model);
                             }
                             _ => {}
                         }
@@ -1478,6 +1550,9 @@ pub(crate) fn attach_workspace(
                         WorkspaceHit::ToggleSpaceRoot(space) => {
                             toggle_space_root(&mut model, space);
                         }
+                        WorkspaceHit::ToggleTimeline => {
+                            toggle_timeline(&mut model);
+                        }
                         WorkspaceHit::OpenStatusCatalog(anchor) => {
                             model.status_catalog = Some(anchor);
                             // Purely local state, no server round trip to
@@ -1516,6 +1591,31 @@ pub(crate) fn attach_workspace(
                         WorkspaceHit::ResizeSidebar => {
                             model.dragging_sidebar = true;
                         }
+                        WorkspaceHit::ResizeTimeline => {
+                            model.dragging_timeline = true;
+                        }
+                        WorkspaceHit::TimelineCommit(index) => {
+                            open_commit_detail(&mut model, index, hit_rect);
+                        }
+                    }
+                }
+                Event::Mouse(mouse)
+                    if mouse.kind == MouseEventKind::Drag(MouseButton::Left)
+                        && model.dragging_timeline =>
+                {
+                    // The divider follows the pointer; what is remembered
+                    // is the commit rows that leaves under it, never fewer
+                    // than one — folding is the header's own click, not a
+                    // drag to nothing.
+                    let wanted = layout
+                        .sidebar
+                        .bottom()
+                        .saturating_sub(mouse.row)
+                        .saturating_sub(render::TIMELINE_CHROME - 1)
+                        .clamp(1, TIMELINE_COMMITS as u16);
+                    if model.timeline_rows != Some(wanted) {
+                        model.timeline_rows = Some(wanted);
+                        model.dirty = true;
                     }
                 }
                 Event::Mouse(mouse)
@@ -1578,6 +1678,7 @@ pub(crate) fn attach_workspace(
                     if mouse.kind == MouseEventKind::Drag(MouseButton::Left)
                         && !model.dragging_sidebar
                         && !model.dragging_git_tree
+                        && !model.dragging_timeline
                         && model.dragging_tab.is_none()
                         && model.no_modal_open() =>
                 {
@@ -1592,6 +1693,7 @@ pub(crate) fn attach_workspace(
                     // before pane forwarding existed.
                     if !model.dragging_sidebar
                         && !model.dragging_git_tree
+                        && !model.dragging_timeline
                         && model.dragging_tab.is_none()
                         && model.no_modal_open()
                     {
@@ -1610,6 +1712,7 @@ pub(crate) fn attach_workspace(
                     }
                     model.dragging_sidebar = false;
                     model.dragging_git_tree = false;
+                    model.dragging_timeline = false;
                     model.dirty = true;
                 }
                 Event::Mouse(mouse)
@@ -1688,7 +1791,7 @@ pub(crate) fn attach_workspace(
     outcome
 }
 
-/// `pub(super)` (not private) so `uze_extensions::git_diff` — a crate
+/// `pub(super)` (not private) so `uze_extensions::git` — a crate
 /// this one depends on, not a child module of `orchestrator` — can
 /// construct `ExtensionHit`s from its own render function; `Extension`
 /// below wraps them into the same `hits` vec every other overlay already
@@ -1711,6 +1814,18 @@ pub(super) enum WorkspaceHit {
     /// The `⇄` behind a space's name — flips that header between its label
     /// and its root (see `WorkspaceModel::roots_shown`).
     ToggleSpaceRoot(SpaceId),
+    /// The header of the sidebar's timeline section — folds the section
+    /// to that one row and back (see `WorkspaceModel::timeline_collapsed`).
+    ToggleTimeline,
+    /// The hairline above the timeline's header — dragged, it sets how
+    /// many commit rows the section shows (see
+    /// `WorkspaceModel::timeline_rows`), the way the sidebar's own border
+    /// sets its width.
+    ResizeTimeline,
+    /// One commit row of the timeline, by index into its commits — opens
+    /// that commit's popup (`WorkspaceModel::commit_detail`) beside the
+    /// row.
+    TimelineCommit(usize),
     /// One row of the open [`ContextMenu`], by index into its `items` —
     /// generic over whatever action that row is, same pattern
     /// [`WorkspaceHit::PickAgent`] uses for the agent picker.
@@ -1723,9 +1838,9 @@ pub(super) enum WorkspaceHit {
     /// — same pattern [`WorkspaceHit::PickAgent`] uses for the agent
     /// picker.
     PickSpaceRoot(usize),
-    /// The tab strip's right-corner button — opens the Git changes
-    /// extension (`WorkspaceModel::git_view`), scoped to the active tab's
-    /// live `cwd`.
+    /// The tab strip's right-corner button — opens the Git extension's
+    /// changes overlay (`WorkspaceModel::git_view`), scoped to the active
+    /// tab's live `cwd`.
     OpenGitView,
     /// Opens contextual support details for the selected agent tab.
     OpenAgentSupport(Rect),
@@ -2193,6 +2308,7 @@ struct Remembered {
     prompt_buffers: BTreeMap<PaneId, PromptBuffer>,
     tasks: BTreeMap<PathBuf, Vec<TaskView>>,
     branches: BTreeMap<PathBuf, String>,
+    targets: BTreeMap<PathBuf, String>,
     upstream_syncs: BTreeMap<PathBuf, UpstreamSync>,
     task_eval_pending: BTreeSet<PathBuf>,
     label_adoptions: BTreeMap<TabId, String>,
@@ -2203,6 +2319,8 @@ struct Remembered {
     occupied_checkouts: BTreeSet<PathBuf>,
     slots_swept: bool,
     roots_shown: BTreeSet<SpaceId>,
+    timeline_collapsed: bool,
+    timeline_rows: Option<u16>,
 }
 
 impl WorkspaceModel {
@@ -2217,6 +2335,7 @@ impl WorkspaceModel {
             prompt_buffers,
             tasks,
             branches,
+            targets,
             upstream_syncs,
             task_eval_pending,
             label_adoptions,
@@ -2227,6 +2346,8 @@ impl WorkspaceModel {
             occupied_checkouts,
             slots_swept,
             roots_shown,
+            timeline_collapsed,
+            timeline_rows,
         } = remembered;
         Self {
             agent_activity,
@@ -2237,6 +2358,7 @@ impl WorkspaceModel {
             prompt_buffers,
             tasks,
             branches,
+            targets,
             upstream_syncs,
             task_eval_pending,
             label_adoptions,
@@ -2247,6 +2369,8 @@ impl WorkspaceModel {
             occupied_checkouts,
             slots_swept,
             roots_shown,
+            timeline_collapsed,
+            timeline_rows,
             ..Self::default()
         }
     }
@@ -2262,6 +2386,7 @@ impl WorkspaceModel {
             prompt_buffers: self.prompt_buffers,
             tasks: self.tasks,
             branches: self.branches,
+            targets: self.targets,
             upstream_syncs: self.upstream_syncs,
             task_eval_pending: self.task_eval_pending,
             label_adoptions: self.label_adoptions,
@@ -2272,6 +2397,8 @@ impl WorkspaceModel {
             occupied_checkouts: self.occupied_checkouts,
             slots_swept: self.slots_swept,
             roots_shown: self.roots_shown,
+            timeline_collapsed: self.timeline_collapsed,
+            timeline_rows: self.timeline_rows,
         }
     }
 }
@@ -2344,11 +2471,11 @@ struct WorkspaceModel {
     /// Open state of the right-click close-confirmation popup; `None` when
     /// closed. Same "click outside discards" rule as `renaming`.
     context_menu: Option<ContextMenu>,
-    /// Open state of the git changes overlay; `None` when closed. Unlike
+    /// Open state of the Git changes overlay; `None` when closed. Unlike
     /// `renaming`/`agent_picker`/`context_menu` there is no "click outside
     /// discards" rule — it covers the full frame, so there is no outside;
     /// `Esc` (or the same shortcut that opened it) is the only dismissal.
-    git_view: Option<git_diff::GitView>,
+    git_view: Option<git::GitView>,
     /// User-dragged Git changes tree width; `None` falls back to its own
     /// responsive default. Mirrors `sidebar_width`/`dragging_sidebar`
     /// above, kept on the model rather than on `GitView` itself so it
@@ -2378,6 +2505,9 @@ struct WorkspaceModel {
     /// a directory's own outside any slot. Read for an agent outside any
     /// slot, whose caption has no task to take a branch from.
     branches: BTreeMap<PathBuf, String>,
+    /// The delivery target of the repository at each evaluation key —
+    /// what the timeline marks a commit as ahead of.
+    targets: BTreeMap<PathBuf, String>,
     /// How the branch in [`Self::branches`] stands against its upstream,
     /// under the same key, for the keys where that branch is the delivery
     /// target and tracks something. Read for an agent outside any slot:
@@ -2415,6 +2545,37 @@ struct WorkspaceModel {
     /// length. Remembered across attaches like any other sidebar
     /// resolution, so a Ctrl+O round trip does not flip it back.
     roots_shown: BTreeSet<SpaceId>,
+    /// Whether the sidebar's timeline section shows only its header —
+    /// folded by clicking that header (see
+    /// [`WorkspaceHit::ToggleTimeline`]). Remembered across attaches for
+    /// the same reason `roots_shown` is.
+    timeline_collapsed: bool,
+    /// How many commit rows the user dragged the timeline section to;
+    /// `None` leaves it to `render::timeline_height`'s own default.
+    /// Mirrors `sidebar_width`/`dragging_sidebar`, remembered across
+    /// attaches like `timeline_collapsed`.
+    timeline_rows: Option<u16>,
+    dragging_timeline: bool,
+    /// The first commit the timeline section shows — where the wheel has
+    /// scrolled it to. Clamped when drawn, so a history that shrank under
+    /// it still shows its tail rather than nothing.
+    timeline_scroll: usize,
+    /// The open commit popup and the timeline row it hangs off (see
+    /// [`WorkspaceHit::TimelineCommit`]). Informational and anchored like
+    /// `support_dropdown`: any click or key dismisses it.
+    commit_detail: Option<CommitDetailPopup>,
+}
+
+/// What [`WorkspaceModel::commit_detail`] holds while a commit is open —
+/// the account itself, the timeline row it was opened from, and how far
+/// its text has been scrolled.
+pub(super) struct CommitDetailPopup {
+    pub(super) detail: git::CommitDetail,
+    /// The repository's delivery target, so the popup can single its
+    /// label out among the refs standing at the commit.
+    pub(super) target: Option<String>,
+    pub(super) anchor: Rect,
+    pub(super) scroll: u16,
 }
 
 /// Client-side reconstruction of what the user typed into a pane before
@@ -2500,7 +2661,12 @@ impl PromptBuffer {
 
 struct GitBadge {
     cwd: PathBuf,
-    summary: Option<git_diff::GitChangeSummary>,
+    summary: Option<git::GitChangeSummary>,
+    /// The same checkout's recent history, for the same tab: what the
+    /// sidebar's timeline section draws. Re-read on its own, slower
+    /// cadence (`TIMELINE_REFRESH`).
+    timeline: Option<git::Timeline>,
+    timeline_checked_at: Instant,
     checked_at: Instant,
 }
 impl WorkspaceModel {
@@ -2568,7 +2734,7 @@ impl WorkspaceModel {
     /// None of the modal overlays that own mouse input while they're open
     /// (rename buffer, new-space root picker, agent picker, support
     /// dropdown, status catalog, isolation tip,
-    /// context menu, Git changes view) are
+    /// context menu, Git overlay) are
     /// currently up — the precondition for forwarding a drag/release/scroll
     /// that isn't already claimed by one of them straight into the focused
     /// pane's PTY instead of dropping it.
@@ -2581,6 +2747,42 @@ impl WorkspaceModel {
             && self.preserved.is_none()
             && self.context_menu.is_none()
             && self.git_view.is_none()
+            && self.commit_detail.is_none()
+    }
+
+    fn hit_at(&self, column: u16, row: u16) -> Option<WorkspaceHit> {
+        self.hits
+            .iter()
+            .find(|(rect, _)| {
+                rect.x <= column
+                    && column < rect.x + rect.width
+                    && rect.y <= row
+                    && row < rect.y + rect.height
+            })
+            .map(|(_, hit)| *hit)
+    }
+
+    /// Whether `(column, row)` is over the sidebar's timeline section —
+    /// any of its rows, since the wheel over a section scrolls that
+    /// section wherever inside it the pointer happens to be.
+    fn over_timeline(&self, column: u16, row: u16) -> bool {
+        matches!(
+            self.hit_at(column, row),
+            Some(
+                WorkspaceHit::ToggleTimeline
+                    | WorkspaceHit::ResizeTimeline
+                    | WorkspaceHit::TimelineCommit(_)
+            )
+        )
+    }
+
+    /// How many commit rows the timeline drew last frame — what the wheel
+    /// scrolls by pages of, read off the hits rather than re-laid-out.
+    fn timeline_rows_shown(&self) -> usize {
+        self.hits
+            .iter()
+            .filter(|(_, hit)| matches!(hit, WorkspaceHit::TimelineCommit(_)))
+            .count()
     }
     fn focused_pane(&self) -> PaneId {
         self.session
@@ -2978,8 +3180,31 @@ impl WorkspaceModel {
         }) {
             return;
         }
-        self.git_badge = cwd.map(|cwd| GitBadge {
-            summary: git_diff::change_summary(&WorkspaceHost, &cwd),
+        let Some(cwd) = cwd else {
+            self.git_badge = None;
+            return;
+        };
+        let (timeline, timeline_checked_at) = match self.git_badge.take() {
+            Some(badge)
+                if badge.cwd == cwd
+                    && now.duration_since(badge.timeline_checked_at) < TIMELINE_REFRESH =>
+            {
+                (badge.timeline, badge.timeline_checked_at)
+            }
+            _ => (
+                git::timeline(
+                    &WorkspaceHost,
+                    &cwd,
+                    TIMELINE_COMMITS,
+                    self.targets.get(&evaluation_key(&cwd)).map(String::as_str),
+                ),
+                now,
+            ),
+        };
+        self.git_badge = Some(GitBadge {
+            summary: git::change_summary(&WorkspaceHost, &cwd),
+            timeline,
+            timeline_checked_at,
             cwd,
             checked_at: now,
         });
@@ -3633,11 +3858,63 @@ fn toggle_space_root(model: &mut WorkspaceModel, space: SpaceId) {
     model.dirty = true;
 }
 
-/// Opens the git changes overlay scoped to the *currently selected tab's*
+/// Folds the sidebar's timeline section to its header, or opens it back
+/// up. Local state, same as `toggle_space_root`.
+fn toggle_timeline(model: &mut WorkspaceModel) {
+    model.timeline_collapsed = !model.timeline_collapsed;
+    model.dirty = true;
+}
+
+/// One notch of the wheel over the timeline: a row at a time, held
+/// within the history so the last page is the one that ends on the
+/// oldest commit rather than a page of nothing.
+fn scroll_timeline(model: &mut WorkspaceModel, direction: ScrollDirection) {
+    let commits = model
+        .git_badge
+        .as_ref()
+        .and_then(|badge| badge.timeline.as_ref())
+        .map_or(0, |timeline| timeline.commits.len());
+    let last_first = commits.saturating_sub(model.timeline_rows_shown().max(1));
+    model.timeline_scroll = match direction {
+        ScrollDirection::Up => model.timeline_scroll.saturating_sub(1),
+        ScrollDirection::Down => model.timeline_scroll + 1,
+    }
+    .min(last_first);
+    model.dirty = true;
+}
+
+/// Opens the popup for the timeline's `index`-th commit, beside the row
+/// it was clicked in. Read now, once: the account of a commit does not
+/// change, and the click is the one moment it is wanted.
+fn open_commit_detail(model: &mut WorkspaceModel, index: usize, anchor: Rect) {
+    let Some(badge) = model.git_badge.as_ref() else {
+        return;
+    };
+    let Some(commit) = badge
+        .timeline
+        .as_ref()
+        .and_then(|timeline| timeline.commits.get(index))
+    else {
+        return;
+    };
+    let target = model.targets.get(&evaluation_key(&badge.cwd)).cloned();
+    model.commit_detail =
+        git::commit_detail(&WorkspaceHost, &badge.cwd, &commit.hash).map(|detail| {
+            CommitDetailPopup {
+                detail,
+                target,
+                anchor,
+                scroll: 0,
+            }
+        });
+    model.dirty = true;
+}
+
+/// Opens the Git changes overlay scoped to the *currently selected tab's*
 /// live `cwd` — the hierarchy the user gave for this feature is
 /// `Workspace > Space > Agent/Shell > Git`, one level further down than
 /// the space itself. Snapshotted once here; the view doesn't track further
-/// `cd`s in that tab while it's open (see `git_diff`'s own module doc).
+/// `cd`s in that tab while it's open (see `git`'s own module doc).
 fn open_git_view(model: &mut WorkspaceModel) {
     let Some(session) = model.session.as_ref() else {
         return;
@@ -3646,7 +3923,7 @@ fn open_git_view(model: &mut WorkspaceModel) {
     let Some(pane) = pane_in_layout(&tab.layout, tab.focus.pane) else {
         return;
     };
-    model.git_view = Some(git_diff::GitView::open(&WorkspaceHost, pane.cwd.clone()));
+    model.git_view = Some(git::GitView::open(&WorkspaceHost, pane.cwd.clone()));
     model.dirty = true;
 }
 

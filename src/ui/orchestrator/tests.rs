@@ -10,16 +10,16 @@ mod workspace_tests {
     use super::WorkspaceHit;
     use super::{
         AGENT_BUSY_REPAINTS, AGENT_ECHO_GRACE, AGENT_PASTE_GRACE, AgentIdentity, AgentTabStatus,
-        DraggingTab, PendingDrop, PreservedOverlay, RootPicker, TabDragGroup, TaskResolution,
-        TaskStateView, TaskView, UpstreamSync, WorkspaceModel, adopt_agent_labels,
-        agent_identity_for_tab, blank_pane, can_close_tab_from_menu, encode_mouse, evaluation_key,
-        forward_paste, forward_scroll, next_agent_label, next_shell_label, pane_relative,
-        pending_tab_drop,
+        CommitDetailPopup, DraggingTab, GitBadge, PendingDrop, PreservedOverlay, RootPicker,
+        ScrollDirection, TabDragGroup, TaskResolution, TaskStateView, TaskView, UpstreamSync,
+        WorkspaceModel, adopt_agent_labels, agent_identity_for_tab, blank_pane,
+        can_close_tab_from_menu, encode_mouse, evaluation_key, forward_paste, forward_scroll,
+        next_agent_label, next_shell_label, pane_relative, pending_tab_drop,
         render::{
-            self, WorkspaceLayout, compute_layout, render_preserved, render_sidebar,
-            render_status_catalog, render_tab_strip, task_mark,
+            self, WorkspaceLayout, compute_layout, render_commit_detail, render_preserved,
+            render_sidebar, render_status_catalog, render_tab_strip, task_mark, timeline_height,
         },
-        selected_pane_cwd, space_own_tab, tab_drag_group, tab_drag_group_members,
+        scroll_timeline, selected_pane_cwd, space_own_tab, tab_drag_group, tab_drag_group_members,
         tab_needs_replacement_shell, workspace_has_active_agent_operation,
     };
     use crossterm::event::{MouseButton, MouseEventKind};
@@ -1155,6 +1155,471 @@ mod workspace_tests {
             session: Some(session),
             ..WorkspaceModel::default()
         }
+    }
+
+    /// A one-agent session in `/repo` whose checkout's history is
+    /// `subjects`, newest first, every commit landed `3h` ago.
+    fn session_with_timeline(subjects: &[&str]) -> WorkspaceModel {
+        let mut model = agent_session_in("/repo");
+        model.git_badge = Some(GitBadge {
+            cwd: PathBuf::from("/repo"),
+            summary: None,
+            timeline: Some(uze_extensions::git::Timeline {
+                branch: "main".to_owned(),
+                commits: subjects
+                    .iter()
+                    .enumerate()
+                    .map(|(index, subject)| uze_extensions::git::Commit {
+                        hash: format!("{index:07x}"),
+                        subject: (*subject).to_owned(),
+                        age: "3h".to_owned(),
+                        ahead: false,
+                    })
+                    .collect(),
+            }),
+            timeline_checked_at: Instant::now(),
+            checked_at: Instant::now(),
+        });
+        model
+    }
+
+    /// A sidebar row without its right-hand divider and the padding
+    /// before it.
+    fn inside(row: &str) -> &str {
+        row.trim_end_matches('│').trim_end()
+    }
+
+    fn timeline_hit(hits: &[(Rect, WorkspaceHit)]) -> Option<Rect> {
+        hits.iter()
+            .find(|(_, hit)| *hit == WorkspaceHit::ToggleTimeline)
+            .map(|(rect, _)| *rect)
+    }
+
+    fn resize_hit(hits: &[(Rect, WorkspaceHit)]) -> Option<Rect> {
+        hits.iter()
+            .find(|(_, hit)| *hit == WorkspaceHit::ResizeTimeline)
+            .map(|(rect, _)| *rect)
+    }
+
+    /// Dragged, the section shows the rows asked for — no fewer than one,
+    /// no more than the history has, and never into the tree's own
+    /// minimum — where left alone it stops at half the column.
+    #[test]
+    fn dragging_the_timeline_sets_how_many_commits_show() {
+        let subjects: Vec<String> = (0..20).map(|index| format!("commit {index}")).collect();
+        let subjects: Vec<&str> = subjects.iter().map(String::as_str).collect();
+        let mut model = session_with_timeline(&subjects);
+
+        model.timeline_rows = Some(2);
+        let rows = sidebar_rows(&model, &mut Vec::new());
+        let drawn = rows.iter().filter(|row| row.contains("commit ")).count();
+        assert_eq!(drawn, 2, "{rows:?}");
+
+        model.timeline_rows = Some(u16::MAX);
+        let rows = sidebar_rows(&model, &mut Vec::new());
+        let drawn = rows.iter().filter(|row| row.contains("commit ")).count();
+        assert!(drawn > 10, "past the half-column default: {rows:?}");
+        assert!(
+            rows.iter().any(|row| row.contains("Agent")),
+            "the tree keeps its rows: {rows:?}"
+        );
+
+        let timeline = model.git_badge.as_ref().unwrap().timeline.as_ref().unwrap();
+        assert_eq!(
+            timeline_height(timeline, false, Some(0), 24),
+            3,
+            "never fewer than one"
+        );
+        assert_eq!(
+            timeline_height(timeline, true, Some(9), 24),
+            1,
+            "folded is the header alone"
+        );
+    }
+
+    /// The wheel moves the section a row at a time and never past the
+    /// page that ends on the oldest commit; every row drawn is a target
+    /// for the commit it shows, by its place in the history.
+    #[test]
+    fn the_timeline_scrolls_by_rows_within_its_history() {
+        let subjects: Vec<String> = (0..20).map(|index| format!("commit {index}")).collect();
+        let subjects: Vec<&str> = subjects.iter().map(String::as_str).collect();
+        let mut model = session_with_timeline(&subjects);
+
+        model.timeline_scroll = 5;
+        let mut hits = Vec::new();
+        let rows = sidebar_rows(&model, &mut hits);
+        let drawn: Vec<&String> = rows.iter().filter(|row| row.contains("commit ")).collect();
+        assert!(drawn[0].contains("● commit 5"), "{rows:?}");
+        assert!(
+            rows.iter().all(|row| !row.contains('◉')),
+            "HEAD scrolled off: {rows:?}"
+        );
+        let targets: Vec<usize> = hits
+            .iter()
+            .filter_map(|(_, hit)| match hit {
+                WorkspaceHit::TimelineCommit(index) => Some(*index),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(targets[0], 5);
+        assert_eq!(targets.len(), drawn.len());
+
+        model.timeline_scroll = 100;
+        let rows = sidebar_rows(&model, &mut Vec::new());
+        assert!(rows.last().unwrap().contains("commit 19"), "{rows:?}");
+
+        model.timeline_scroll = 0;
+        model.hits = hits;
+        let shown = model.timeline_rows_shown();
+        for _ in 0..50 {
+            scroll_timeline(&mut model, ScrollDirection::Down);
+        }
+        assert_eq!(model.timeline_scroll, 20 - shown);
+        for _ in 0..50 {
+            scroll_timeline(&mut model, ScrollDirection::Up);
+        }
+        assert_eq!(model.timeline_scroll, 0);
+    }
+
+    fn commit_popup(anchor: Rect) -> CommitDetailPopup {
+        CommitDetailPopup {
+            detail: uze_extensions::git::CommitDetail {
+                hash: "0ebf3b8000000000000000000000000000000000".to_owned(),
+                short_hash: "0ebf3b8".to_owned(),
+                author: "Ada".to_owned(),
+                age: "14 minutes ago".to_owned(),
+                date: "2026-09-03 19:39".to_owned(),
+                refs: vec![
+                    "agent/task".to_owned(),
+                    "main".to_owned(),
+                    "origin/main".to_owned(),
+                ],
+                subject: "docs(openspec): archive five completed changes".to_owned(),
+                body: "Every task done.\n\nThree decisions cleared the ADR bar.".to_owned(),
+                files_changed: 8,
+                insertions: 350,
+                deletions: 4,
+            },
+            target: Some("main".to_owned()),
+            anchor,
+            scroll: 0,
+        }
+    }
+
+    fn popup_rows(width: u16, height: u16, popup: &CommitDetailPopup) -> Vec<String> {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|frame| render_commit_detail(frame, frame.area(), popup))
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..buffer.area.height)
+            .map(|row| {
+                (0..buffer.area.width)
+                    .map(|column| buffer[(column, row)].symbol())
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// The popup is the commit's account — who, when, what it said, what
+    /// it touched, and what stands at it — beside the row it opened from,
+    /// in the pane's columns.
+    #[test]
+    fn a_commit_popup_stands_beside_its_row_and_gives_its_account() {
+        let anchor = Rect::new(1, 20, 38, 1);
+        let rows = popup_rows(120, 30, &commit_popup(anchor));
+        let text = rows.join("\n");
+
+        assert!(text.contains("commit"), "{text}");
+        assert!(
+            text.contains("Ada · 14 minutes ago · 2026-09-03 19:39"),
+            "{text}"
+        );
+        assert!(
+            text.contains("docs(openspec): archive five completed changes"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Three decisions cleared the ADR bar."),
+            "{text}"
+        );
+        assert!(text.contains("8 files changed  +350  −4"), "{text}");
+        assert!(text.contains(" agent/task   main   origin/main "), "{text}");
+        assert!(text.contains("0ebf3b8"), "{text}");
+        let border_row = rows
+            .iter()
+            .position(|row| row.contains('╭') || row.contains('┌'))
+            .expect("the popup has a frame");
+        let left = rows[border_row]
+            .chars()
+            .position(|c| c == '╭' || c == '┌')
+            .unwrap();
+        assert_eq!(
+            left as u16,
+            anchor.right() + 1,
+            "beside the sidebar's divider"
+        );
+        assert!(
+            border_row <= 20,
+            "level with its row, or pulled up to fit: {border_row}"
+        );
+    }
+
+    /// Among the refs at a commit, the delivery target and its
+    /// remote-tracking twin wear the target's gold; any other branch is
+    /// blue, the way the timeline colours a commit still ahead.
+    #[test]
+    fn the_target_ref_wears_gold_and_the_others_blue() {
+        let popup = commit_popup(Rect::new(1, 2, 38, 1));
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        terminal
+            .draw(|frame| render_commit_detail(frame, frame.area(), &popup))
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let rows = popup_rows(120, 30, &popup);
+        let row = rows
+            .iter()
+            .position(|row| row.contains(" agent/task "))
+            .unwrap();
+        let bg_of = |needle: &str| {
+            let column = rows[row].find(needle).unwrap() + 1;
+            buffer[(column as u16, row as u16)].bg
+        };
+        assert_eq!(bg_of("agent/task"), crate::ui::BLUE);
+        assert_eq!(bg_of(" main "), crate::ui::WARNING);
+        assert_eq!(bg_of("origin/main"), crate::ui::WARNING);
+    }
+
+    /// A long message scrolls inside the popup rather than growing it
+    /// over the pane, and the wheel stops where the text does.
+    #[test]
+    fn a_long_commit_message_scrolls_inside_a_bounded_popup() {
+        let mut popup = commit_popup(Rect::new(1, 2, 38, 1));
+        popup.detail.body = (0..40)
+            .map(|index| format!("paragraph {index}"))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let area = Rect::new(0, 0, 120, 60);
+        let layout = render::commit_detail_layout(area, &popup);
+        assert_eq!(layout.rect.height, 20, "no taller than a hover card");
+        assert!(layout.scroll_limit() > 0);
+        assert_eq!(
+            layout.scroll_limit() + layout.inner.height,
+            layout.content_rows
+        );
+
+        let rows = popup_rows(120, 60, &popup);
+        assert!(rows.join("\n").contains("paragraph 0"));
+        assert!(!rows.join("\n").contains("paragraph 39"), "{rows:?}");
+        popup.scroll = u16::MAX;
+        let rows = popup_rows(120, 60, &popup);
+        let text = rows.join("\n");
+        assert!(
+            text.contains("0ebf3b8"),
+            "held to the end of the text: {text}"
+        );
+        assert_eq!(
+            rows.iter().filter(|row| row.contains('│')).count(),
+            18,
+            "the frame keeps its height: {rows:?}"
+        );
+    }
+
+    /// A frame with no room beside the sidebar puts the popup over the
+    /// pane, inset, rather than clipping it against the edge.
+    #[test]
+    fn a_narrow_frame_centres_the_commit_popup() {
+        let rows = popup_rows(60, 30, &commit_popup(Rect::new(1, 5, 38, 1)));
+        let border_row = rows
+            .iter()
+            .position(|row| row.contains('╭') || row.contains('┌'))
+            .expect("the popup has a frame");
+        let left = rows[border_row]
+            .chars()
+            .position(|c| c == '╭' || c == '┌')
+            .unwrap();
+        assert_eq!(left, 2, "{:?}", rows[border_row]);
+        assert!(rows.join("\n").contains("0ebf3b8"));
+    }
+
+    /// While a commit is open the wheel scrolls its text, not the pane
+    /// underneath, and any click or key puts it away.
+    #[test]
+    fn an_open_commit_is_a_modal_like_the_support_dropdown() {
+        let mut model = agent_session_in("/repo");
+        assert!(model.no_modal_open());
+        model.commit_detail = Some(commit_popup(Rect::new(1, 5, 38, 1)));
+        assert!(!model.no_modal_open());
+    }
+
+    /// A commit's dot says where it stands: blue while it is still ahead
+    /// of the base, the target's gold once it has landed there. The ring
+    /// says `HEAD`, whichever colour it wears.
+    #[test]
+    fn a_commits_dot_wears_its_standing() {
+        let mut model = session_with_timeline(&["feat: ahead", "fix: also ahead", "chore: landed"]);
+        let commits = &mut model
+            .git_badge
+            .as_mut()
+            .unwrap()
+            .timeline
+            .as_mut()
+            .unwrap()
+            .commits;
+        commits[0].ahead = true;
+        commits[1].ahead = true;
+
+        let buffer = sidebar_buffer(&model, &mut Vec::new());
+        let rows = sidebar_rows(&model, &mut Vec::new());
+        let dot_of = |needle: &str| {
+            let row = rows.iter().position(|row| row.contains(needle)).unwrap();
+            let column = rows[row]
+                .chars()
+                .position(|c| c == '◉' || c == '●')
+                .unwrap();
+            (
+                rows[row].chars().nth(column).unwrap(),
+                buffer[(column as u16, row as u16)].fg,
+            )
+        };
+        assert_eq!(dot_of("feat: ahead"), ('◉', crate::ui::BLUE));
+        assert_eq!(dot_of("fix: also ahead"), ('●', crate::ui::BLUE));
+        assert_eq!(dot_of("chore: landed"), ('●', crate::ui::WARNING));
+    }
+
+    /// The header is the section's one heading: filled and bold, where the
+    /// commit rows under it are plain.
+    #[test]
+    fn the_timeline_header_stands_out_from_its_rows() {
+        let model = session_with_timeline(&["feat: only"]);
+        let buffer = sidebar_buffer(&model, &mut Vec::new());
+        let rows = sidebar_rows(&model, &mut Vec::new());
+        let header = rows
+            .iter()
+            .position(|row| row.contains("timeline"))
+            .expect("the header is drawn");
+        let column = rows[header].chars().position(|c| c == 't').unwrap() as u16;
+
+        let cell = &buffer[(column, header as u16)];
+        assert_eq!(cell.bg, crate::ui::SURFACE_OVERLAY);
+        assert!(cell.modifier.contains(ratatui::style::Modifier::BOLD));
+        let commit = &buffer[(column, header as u16 + 2)];
+        assert_ne!(commit.bg, crate::ui::SURFACE_OVERLAY);
+    }
+
+    /// The timeline keeps the foot of the column, under the spaces, with
+    /// its header naming the branch and `HEAD` ringed at the top of the
+    /// list — wherever the tree above happens to end.
+    #[test]
+    fn the_timeline_keeps_the_foot_of_the_column() {
+        let model = session_with_timeline(&["feat: third", "fix: second", "chore: first"]);
+        let mut hits = Vec::new();
+        let rows = sidebar_rows(&model, &mut hits);
+        let last = rows.len() - 1;
+
+        assert!(rows[last].contains("● chore: first"), "{rows:?}");
+        assert!(rows[last - 1].contains("● fix: second"), "{rows:?}");
+        assert!(rows[last - 2].contains("◉ feat: third"), "{rows:?}");
+        assert!(inside(&rows[last - 2]).ends_with("3h"), "{rows:?}");
+        assert!(
+            inside(&rows[last - 3]).trim().chars().all(|c| c == '─'),
+            "a divider parts the header from its rows: {rows:?}"
+        );
+        assert_eq!(
+            resize_hit(&hits).map(|rect| rect.y),
+            Some((last - 3) as u16),
+            "the divider is the handle"
+        );
+        let header = &rows[last - 4];
+        assert!(header.contains("▾ timeline"), "{header}");
+        assert!(inside(header).ends_with("main"), "{header}");
+        let space_row = rows
+            .iter()
+            .position(|row| row.contains("Agent"))
+            .expect("the agent stays in the tree above");
+        assert!(space_row < last - 4, "{rows:?}");
+        assert_eq!(
+            timeline_hit(&hits).map(|rect| rect.y),
+            Some((last - 4) as u16)
+        );
+    }
+
+    /// Folded, the section is its header alone — still at the foot, still
+    /// the one target that opens it back up.
+    #[test]
+    fn folding_the_timeline_keeps_only_its_header() {
+        let mut model = session_with_timeline(&["feat: third", "fix: second"]);
+        model.timeline_collapsed = true;
+        let mut hits = Vec::new();
+        let rows = sidebar_rows(&model, &mut hits);
+        let last = rows.len() - 1;
+
+        assert!(rows[last].contains("▸ timeline"), "{rows:?}");
+        assert!(
+            rows.iter()
+                .all(|row| !row.contains("feat:") && !row.contains("fix:")),
+            "{rows:?}"
+        );
+        let hit = timeline_hit(&hits).expect("the header folds and unfolds");
+        assert_eq!((hit.y, hit.height), (last as u16, 1));
+        assert_eq!(resize_hit(&hits), None, "nothing to resize while folded");
+    }
+
+    /// The spaces are what the sidebar is for: however long the history,
+    /// the section takes at most half of what the column has left, and
+    /// the newest commits are the ones that fit.
+    #[test]
+    fn the_timeline_takes_at_most_half_the_column() {
+        let subjects: Vec<String> = (0..20).map(|index| format!("commit {index}")).collect();
+        let subjects: Vec<&str> = subjects.iter().map(String::as_str).collect();
+        let model = session_with_timeline(&subjects);
+        let rows = sidebar_rows(&model, &mut Vec::new());
+
+        let drawn: Vec<&String> = rows.iter().filter(|row| row.contains("commit ")).collect();
+        assert!(drawn.len() < 20, "{rows:?}");
+        assert!(drawn.len() * 2 <= rows.len(), "{rows:?}");
+        assert!(drawn[0].contains("commit 0"), "newest first: {rows:?}");
+        assert_eq!(
+            timeline_height(
+                model.git_badge.as_ref().unwrap().timeline.as_ref().unwrap(),
+                false,
+                None,
+                3
+            ),
+            0,
+            "a column too short for the header shows nothing"
+        );
+    }
+
+    /// The subject gives way before the age, so the column that says when
+    /// stays a column however long the commit message runs.
+    #[test]
+    fn a_long_subject_gives_way_before_its_age() {
+        let model = session_with_timeline(&[
+            "feat(tui): a subject long enough to run past the sidebar's width",
+        ]);
+        let rows = sidebar_rows(&model, &mut Vec::new());
+        let row = rows
+            .iter()
+            .find(|row| row.contains("◉"))
+            .expect("the commit is drawn");
+
+        assert!(row.contains('…'), "{row}");
+        assert!(inside(row).ends_with("3h"), "{row:?}");
+        assert!(row.contains("feat(tui): a subject"), "{row}");
+    }
+
+    /// No history, no section — a checkout with nothing committed, or no
+    /// checkout at all, leaves the column to the spaces.
+    #[test]
+    fn without_history_the_sidebar_ends_with_the_spaces() {
+        let model = agent_session_in("/repo");
+        let mut hits = Vec::new();
+        let rows = sidebar_rows(&model, &mut hits);
+
+        assert!(rows.iter().all(|row| !row.contains("timeline")), "{rows:?}");
+        assert_eq!(timeline_hit(&hits), None);
     }
 
     /// The sidebar as text, one string per row.

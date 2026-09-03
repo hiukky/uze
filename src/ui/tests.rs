@@ -968,8 +968,8 @@ fn extension_filter_narrows_visible_selection() {
         focus: Focus::Content,
         extensions: vec![
             BuiltinExtension {
-                id: "git-changes",
-                name: "Git Changes",
+                id: "git",
+                name: "Git",
                 description: "Review the working tree",
                 surface: "Workspace TUI",
                 usage: "Open from the tab strip",

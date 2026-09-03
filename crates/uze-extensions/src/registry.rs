@@ -7,7 +7,7 @@
 //! means one module under `crates/uze-extensions/src/` and one entry in
 //! `builtin` — nothing else in the product needs to know it exists.
 
-use crate::git_diff;
+use crate::git;
 
 /// Catalog metadata for one built-in extension — what the Extensions
 /// screen renders. Built-ins are compiled into the binary (no loading or
@@ -37,7 +37,7 @@ impl ExtensionRegistry {
     /// under.
     pub fn builtin() -> Self {
         Self {
-            extensions: vec![git_diff::CATALOG],
+            extensions: vec![git::CATALOG],
         }
     }
 
@@ -65,7 +65,7 @@ mod tests {
     fn builtin_exposes_the_whole_extension_set_in_order() {
         let registry = ExtensionRegistry::builtin();
         let ids = registry.ids();
-        assert!(!ids.is_empty(), "at least the git-changes extension ships");
+        assert!(!ids.is_empty(), "at least the git extension ships");
         assert_eq!(ids.len(), registry.all().len());
         assert!(ids.iter().all(|id| !id.is_empty()));
         assert_eq!(registry.get(ids[0]).map(|e| e.id), Some(ids[0]));

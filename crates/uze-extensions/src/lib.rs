@@ -4,11 +4,11 @@
 //! harness registry: one crate, one module per extension, one registry
 //! entry point ([`registry::ExtensionRegistry`]) naming the set.
 //!
-//! Today there's exactly one extension ([`git_diff`], the Git changes
-//! overlay); the crate is structured so a second one is another module with
-//! its own `CATALOG` entry (see `git_diff::CATALOG`), one registration in
-//! `ExtensionRegistry::builtin`, and one more [`ExtensionHit`] variant, not
-//! a new crate.
+//! Today there's exactly one extension ([`git`]: the changes overlay and
+//! the sidebar's commit timeline); the crate is structured so a second one
+//! is another module with its own `CATALOG` entry (see `git::CATALOG`),
+//! one registration in `ExtensionRegistry::builtin`, and one more
+//! [`ExtensionHit`] variant, not a new crate.
 //!
 //! # An extension holds no machine access of its own
 //!
@@ -30,7 +30,7 @@
 //! along with the two-sided "keep these in sync by eye" it required. See
 //! [`view`] for the rest of the reasoning.
 
-pub mod git_diff;
+pub mod git;
 pub mod registry;
 pub mod view;
 
@@ -43,7 +43,7 @@ pub mod view;
 /// "row 3 was clicked" is meaningless without saying whose row 3.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExtensionHit {
-    GitChanges(view::ViewHit),
+    Git(view::ViewHit),
 }
 
 /// What an extension may ask the host to do on its behalf.

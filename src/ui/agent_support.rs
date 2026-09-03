@@ -105,7 +105,10 @@ pub(super) fn render(
     let width = 40.min(area.width).max(1);
     let inner_width = width.saturating_sub(2 + 2 * H_PAD) as usize;
 
-    let mut lines = vec![title_row(inner_width), Line::default()];
+    let mut lines = vec![
+        super::title_row("support", "esc", inner_width),
+        Line::default(),
+    ];
 
     lines.push(section_header("RUNTIME"));
     lines.push(fact_line(
@@ -185,22 +188,6 @@ fn harness_state(support: &AgentSupport) -> State {
     } else {
         State::Error
     }
-}
-
-fn title_row(width: usize) -> Line<'static> {
-    let left = "support";
-    let right = "esc";
-    let gap = width.saturating_sub(left.len() + right.len()).max(1);
-    Line::from(vec![
-        Span::styled(
-            left,
-            Style::default()
-                .fg(TEXT_BRIGHT)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(" ".repeat(gap)),
-        Span::styled(right, Style::default().fg(MUTED)),
-    ])
 }
 
 fn section_header(label: &'static str) -> Line<'static> {

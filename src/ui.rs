@@ -269,6 +269,28 @@ fn io_error(source: io::Error) -> uze_application::UzeError {
 /// `n` in subscript digits (`12` -> `₁₂`): a count that sits beside a
 /// label without competing with it for weight — the route counts in the
 /// management sidebar, the pull/push counts under an agent's branch.
+/// The first row of an informational popup: its name, and the key that
+/// dismisses it pinned to the right.
+pub(crate) fn title_row(name: &str, dismiss: &str, width: usize) -> ratatui::text::Line<'static> {
+    use ratatui::{
+        style::{Modifier, Style},
+        text::{Line, Span},
+    };
+    let gap = width
+        .saturating_sub(name.chars().count() + dismiss.chars().count())
+        .max(1);
+    Line::from(vec![
+        Span::styled(
+            name.to_owned(),
+            Style::default()
+                .fg(TEXT_BRIGHT)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" ".repeat(gap)),
+        Span::styled(dismiss.to_owned(), Style::default().fg(MUTED)),
+    ])
+}
+
 pub(crate) fn small_digits(n: usize) -> String {
     n.to_string()
         .chars()
