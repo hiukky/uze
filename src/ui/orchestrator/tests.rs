@@ -11,12 +11,12 @@ mod workspace_tests {
     use super::{
         AGENT_BUSY_REPAINTS, AGENT_ECHO_GRACE, AGENT_PASTE_GRACE, AgentIdentity, AgentTabStatus,
         DraggingTab, PendingDrop, PreservedOverlay, RootPicker, TabDragGroup, TaskResolution,
-        TaskStateView, TaskView, WorkspaceModel, agent_identity_for_tab, blank_pane,
-        can_close_tab_from_menu, encode_mouse, evaluation_key, forward_paste, forward_scroll,
-        next_agent_label, next_shell_label, pane_relative, pending_tab_drop,
+        TaskStateView, TaskView, WorkspaceModel, adopt_agent_labels, agent_identity_for_tab,
+        blank_pane, can_close_tab_from_menu, encode_mouse, evaluation_key, forward_paste,
+        forward_scroll, next_agent_label, next_shell_label, pane_relative, pending_tab_drop,
         render::{
-            self, WorkspaceLayout, compute_layout, render_preserved, render_sidebar,
-            render_status_catalog, render_tab_strip, task_mark,
+            self, UNISOLATED_MARKER, WorkspaceLayout, compute_layout, render_preserved,
+            render_sidebar, render_status_catalog, render_tab_strip, task_mark,
         },
         selected_pane_cwd, space_own_tab, tab_drag_group, tab_drag_group_members,
         tab_needs_replacement_shell, workspace_has_active_agent_operation,
@@ -1143,7 +1143,7 @@ mod workspace_tests {
             .iter()
             .find(|row| row.contains("Agent"))
             .expect("the agent is named in the tree");
-        assert!(!name_row.contains("(unisolated)"), "{name_row}");
+        assert!(!name_row.contains(UNISOLATED_MARKER), "{name_row}");
 
         let caption = rows
             .iter()
@@ -1169,13 +1169,138 @@ mod workspace_tests {
         let status = name_row
             .find('\u{25cb}')
             .or_else(|| name_row.find('\u{25cf}'));
-        let marker = name_row.find("(unisolated)");
+        let marker = name_row.find(UNISOLATED_MARKER);
         assert!(status.is_some(), "the status glyph still leads: {name_row}");
         assert!(
             marker.is_some(),
             "an agent outside any slot is marked: {name_row}"
         );
         assert!(status < marker, "the mark follows the name: {name_row}");
+    }
+
+    /// An agent outside any slot has no task to take a branch from, so
+    /// its caption is the branch its own directory was evaluated on —
+    /// and, until that evaluation answers, the directory itself.
+    #[test]
+    fn an_agent_outside_any_slot_is_captioned_by_its_branch() {
+        let mut model = agent_session_in("/repo/src");
+        let before = sidebar_rows(&model, &mut Vec::new());
+        assert!(
+            before.iter().any(|row| row.contains("/repo/src")),
+            "the directory stands in until the branch is read: {before:?}"
+        );
+
+        model
+            .branches
+            .insert(PathBuf::from("/repo/src"), "feature/x".into());
+        let rows = sidebar_rows(&model, &mut Vec::new());
+        assert!(
+            rows.iter().any(|row| row.contains("feature/x")),
+            "the branch captions the agent: {rows:?}"
+        );
+        assert!(
+            !rows.iter().any(|row| row.contains("/repo/src")),
+            "the branch replaces the directory: {rows:?}"
+        );
+    }
+
+    /// Inside a slot the branch is the task's to name: the primary's own
+    /// branch, however recently read, is not what that agent delivers from.
+    #[test]
+    fn a_slot_never_borrows_the_primary_branch() {
+        let mut model = agent_session_in("/repo/.worktrees/ai");
+        model.branches.insert(PathBuf::from("/repo"), "main".into());
+        let rows = sidebar_rows(&model, &mut Vec::new());
+        assert!(
+            !rows.iter().any(|row| row.contains("main")),
+            "no task, no branch: {rows:?}"
+        );
+    }
+
+    /// A shell opened beside an agent is part of that agent's context:
+    /// typing into the shell must not unselect the agent in the tree.
+    #[test]
+    fn the_agent_stays_selected_while_one_of_its_shells_is() {
+        let mut model = agent_session_in("/repo/.worktrees/ai");
+        let session = model.session.as_mut().unwrap();
+        let agent = session.workspace.spaces[0].tabs[0].id;
+        session.add_tab(
+            SpaceId(1),
+            "shell 1".into(),
+            Some(agent),
+            80,
+            24,
+            "/repo/.worktrees/ai".into(),
+        );
+        let shell = session.workspace.spaces[0].tabs[1].id;
+        session.select_tab(shell);
+        assert_eq!(session.selected_space().selected_tab, shell);
+
+        let rows = sidebar_rows(&model, &mut Vec::new());
+        let name_row = rows
+            .iter()
+            .find(|row| row.contains("Agent"))
+            .expect("the agent is named in the tree");
+        assert!(
+            name_row.contains('\u{25cf}'),
+            "the agent still reads as selected: {name_row}"
+        );
+    }
+
+    /// A shell the user typed an agent into keeps nothing of its generated
+    /// label: it takes the `agent N` label it would have opened with. A
+    /// label the user chose stays theirs.
+    #[test]
+    fn a_shell_that_starts_running_an_agent_takes_an_agent_label() {
+        let mut model = agent_session_in("/repo");
+        let session = model.session.as_mut().unwrap();
+        session.workspace.spaces[0].tabs[0].label = "agent 1".into();
+        for label in ["shell 2", "my shell", "shell"] {
+            session.add_tab(SpaceId(1), label.into(), None, 80, 24, "/repo".into());
+        }
+        for tab in &mut session.workspace.spaces[0].tabs {
+            if let Layout::Pane(pane) = &mut tab.layout {
+                pane.process = "agent".into();
+            }
+        }
+
+        let requests = adopt_agent_labels(&mut model, &IDENTITIES);
+        assert_eq!(
+            requests,
+            vec![
+                ClientRequest::RenameTab {
+                    tab: TabId(2),
+                    label: "agent 2".into(),
+                },
+                ClientRequest::RenameTab {
+                    tab: TabId(4),
+                    label: "agent 3".into(),
+                },
+            ]
+        );
+        assert!(
+            adopt_agent_labels(&mut model, &IDENTITIES).is_empty(),
+            "each tab is asked once"
+        );
+
+        let session = model.session.as_mut().unwrap();
+        assert!(session.rename_tab(TabId(2), "agent 2".into()));
+        assert!(session.rename_tab(TabId(4), "agent 3".into()));
+        assert!(adopt_agent_labels(&mut model, &IDENTITIES).is_empty());
+        assert!(
+            model.label_adoptions.is_empty(),
+            "a confirmed rename leaves the ledger"
+        );
+    }
+
+    /// A plain shell stays a shell: nothing runs in it that could earn an
+    /// agent label.
+    #[test]
+    fn a_shell_running_no_agent_keeps_its_label() {
+        let mut model = agent_session_in("/repo");
+        let session = model.session.as_mut().unwrap();
+        session.add_tab(SpaceId(1), "shell 2".into(), None, 80, 24, "/repo".into());
+        assert!(adopt_agent_labels(&mut model, &IDENTITIES).is_empty());
     }
 
     /// Every agent has a slot, so a slot is nothing to announce; the
@@ -1185,7 +1310,7 @@ mod workspace_tests {
         let model = agent_session_in("/repo/.worktrees/ai");
         let rows = sidebar_rows(&model, &mut Vec::new());
         assert!(
-            !rows.iter().any(|row| row.contains("(unisolated)")),
+            !rows.iter().any(|row| row.contains(UNISOLATED_MARKER)),
             "nothing to mark: {rows:?}"
         );
         assert!(

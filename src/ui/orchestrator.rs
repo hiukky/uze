@@ -176,9 +176,19 @@ struct TaskResolution {
     /// directory reserved for the life of the session and its status
     /// frozen at whatever it last read.
     key: PathBuf,
-    /// The repository the tasks belong to and what it now holds, or `None`
-    /// when the directory turned out not to be a Git working tree.
-    answered: Option<(PathBuf, Evaluation)>,
+    /// What the directory's repository holds, or `None` when the
+    /// directory turned out not to be a Git working tree.
+    answered: Option<EvaluationAnswer>,
+}
+
+/// One evaluated directory: the repository its tasks hang off, the branch
+/// checked out *at that directory* (the primary's own for an agent outside
+/// any slot — the one case the sidebar has no task to read a branch from)
+/// and what the repository now holds.
+struct EvaluationAnswer {
+    primary: PathBuf,
+    branch: Option<String>,
+    evaluation: Evaluation,
 }
 
 /// What a background delivery answered.
@@ -224,8 +234,12 @@ fn spawn_task_evaluation(
         // nothing: a request that returns in silence never releases its
         // key, and the directory is then never evaluated again.
         let answered = tui_application(home).ok().and_then(|app| {
-            let primary = app.workspace().primary_of(&cwd)?;
-            Some((primary, app.workspace().evaluate_tasks(&cwd)))
+            let workspace = app.workspace();
+            Some(EvaluationAnswer {
+                primary: workspace.primary_of(&cwd)?,
+                branch: workspace.current_branch(&cwd),
+                evaluation: workspace.evaluate_tasks(&cwd),
+            })
         });
         let _ = sender.send(TaskResolution { key, answered });
     });
@@ -404,6 +418,9 @@ pub(crate) fn attach_workspace(
         while let Ok(event) = receiver.try_recv() {
             model.apply(event, &identities);
         }
+        for request in adopt_agent_labels(&mut model, &identities) {
+            let _ = send_request(&mut stream, &request);
+        }
         sync_slot_occupancy(&mut model, home, &task_sender);
         while let Ok(resolution) = support_receiver.try_recv() {
             if model.agent_support_pending.as_ref() == Some(&resolution.key) {
@@ -414,8 +431,17 @@ pub(crate) fn attach_workspace(
         }
         while let Ok(resolution) = task_receiver.try_recv() {
             model.task_eval_pending.remove(&resolution.key);
-            let Some((primary, evaluation)) = resolution.answered else {
+            let Some(EvaluationAnswer {
+                primary,
+                branch,
+                evaluation,
+            }) = resolution.answered
+            else {
                 continue;
+            };
+            match branch {
+                Some(branch) => model.branches.insert(resolution.key, branch),
+                None => model.branches.remove(&resolution.key),
             };
             model.tasks.insert(primary, evaluation.tasks);
             // A conflict found while a clean task followed the target is
@@ -2171,9 +2197,17 @@ struct WorkspaceModel {
     /// Every repository's tasks as last evaluated, keyed by its primary
     /// checkout. Display state: the truth is Git and the task store.
     tasks: BTreeMap<PathBuf, Vec<TaskView>>,
+    /// The branch checked out at each evaluated directory, keyed the way
+    /// [`evaluation_key`] keys it. Read for an agent outside any slot,
+    /// whose caption has no task to take a branch from.
+    branches: BTreeMap<PathBuf, String>,
     /// Repositories an evaluation is in flight for, so a quiet pane and
     /// the clock cannot queue the same read twice.
     task_eval_pending: BTreeSet<PathBuf>,
+    /// Shell tabs told to take an agent label, and the label each was
+    /// told, until the session confirms it — so two updates arriving
+    /// before the rename lands do not ask twice.
+    label_adoptions: BTreeMap<TabId, String>,
     last_task_refresh: Option<Instant>,
     /// Agent panes that went quiet since the last tick — the moment
     /// readiness is re-read.
@@ -2796,7 +2830,15 @@ fn next_shell_label(model: &WorkspaceModel, identities: &[AgentIdentity]) -> Str
 /// This is what makes the tab strip contextual: one agent and the shells
 /// that belong with it at a time, never another agent's.
 fn context_agent(model: &WorkspaceModel, identities: &[AgentIdentity]) -> Option<TabId> {
-    let space = model.session.as_ref()?.selected_space();
+    space_context_agent(model.session.as_ref()?.selected_space(), identities)
+}
+
+/// [`context_agent`] for any one space, whether or not it is selected:
+/// the agent `space` is currently about. The sidebar marks this agent as
+/// the selected one, so switching to one of its shells never unselects
+/// it — the shells are part of the agent's own context, not a way out
+/// of it.
+fn space_context_agent(space: &Space, identities: &[AgentIdentity]) -> Option<TabId> {
     let selected = space.tabs.iter().find(|tab| tab.id == space.selected_tab)?;
     let agent = match agent_identity_for_tab(identities, selected) {
         Some(_) => selected.id,
@@ -2996,10 +3038,72 @@ fn next_agent_label(model: &WorkspaceModel) -> String {
 }
 
 fn is_generated_agent_label(label: &str) -> bool {
+    is_generated_label(label, "agent")
+}
+
+/// A label the runtime or [`next_shell_label`] gave a plain shell — the
+/// bootstrap `shell`, or `shell N` — as opposed to one the user typed.
+fn is_generated_shell_label(label: &str) -> bool {
+    label == "shell" || is_generated_label(label, "shell")
+}
+
+fn is_generated_label(label: &str, prefix: &str) -> bool {
     label
-        .strip_prefix("agent ")
+        .strip_prefix(prefix)
+        .and_then(|rest| rest.strip_prefix(' '))
         .and_then(|value| value.parse::<usize>().ok())
         .is_some_and(|number| number > 0)
+}
+
+/// The renames owed to shells that started running an agent — one typed
+/// straight into a shell tab, which then keeps the tab's own label. A
+/// generated `shell N` label says nothing the user meant, so the tab takes
+/// the `agent N` label it would have opened with; a label the user chose
+/// is theirs and stays. Numbered per space, the same way
+/// [`next_agent_label`] numbers, and in tab order when several adopt at
+/// once. Each tab is asked once: `label_adoptions` remembers the request
+/// until the session shows the label changed, or the tab is gone.
+fn adopt_agent_labels(
+    model: &mut WorkspaceModel,
+    identities: &[AgentIdentity],
+) -> Vec<ClientRequest> {
+    let Some(session) = model.session.as_ref() else {
+        return Vec::new();
+    };
+    let tabs: Vec<&Tab> = session
+        .workspace
+        .spaces
+        .iter()
+        .flat_map(|space| &space.tabs)
+        .collect();
+    model.label_adoptions.retain(|tab, _| {
+        tabs.iter()
+            .any(|candidate| candidate.id == *tab && is_generated_shell_label(&candidate.label))
+    });
+    let mut requests = Vec::new();
+    for space in &session.workspace.spaces {
+        let mut agents = space
+            .tabs
+            .iter()
+            .filter(|tab| is_generated_agent_label(&tab.label))
+            .count();
+        for tab in &space.tabs {
+            if !is_generated_shell_label(&tab.label)
+                || agent_identity_for_tab(identities, tab).is_none()
+                || model.label_adoptions.contains_key(&tab.id)
+            {
+                continue;
+            }
+            agents += 1;
+            let label = format!("agent {agents}");
+            requests.push(ClientRequest::RenameTab {
+                tab: tab.id,
+                label: label.clone(),
+            });
+            model.label_adoptions.insert(tab.id, label);
+        }
+    }
+    requests
 }
 
 /// A sidebar action may target an agent in a background space, so its

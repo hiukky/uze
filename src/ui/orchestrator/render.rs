@@ -390,21 +390,37 @@ fn small_caps(s: &str) -> String {
 /// slot of its own — the fallback every agent tab otherwise never needs:
 /// no repository, no commit to branch from, Git absent or refusing. An
 /// agent in the operator's own tree is the one thing the operator has to
-/// know about, so it is the one thing marked, in the warning hue.
-const UNISOLATED_MARKER: &str = " (unisolated)";
+/// know about, so it is the one thing marked, in the warning hue. A house:
+/// the agent is at home in *your* checkout, not in a slot of its own. A
+/// glyph, like every other mark on the row, and looked up the same way
+/// (see [`render_status_catalog`]).
+pub(super) const UNISOLATED_MARKER: &str = "\u{2302}";
 
-/// Appends [`UNISOLATED_MARKER`] to an agent tab's label row when its pane
-/// is not inside a slot. After the label rather than before the status
-/// glyph: the column in front of the name belongs to `AgentTabStatus`
-/// alone.
-fn push_unisolated_marker(spans: &mut Vec<Span<'_>>, cwd: &Path) {
-    if uze_application::isolated_checkout(cwd).is_some() {
-        return;
+/// The mark for an agent whose pane is not inside a slot, or `None` when
+/// it is. After the label rather than before the status glyph: the column
+/// in front of the name belongs to `AgentTabStatus` alone.
+fn unisolated_mark(cwd: &Path) -> Option<(&'static str, Color)> {
+    uze_application::isolated_checkout(cwd)
+        .is_none()
+        .then_some((UNISOLATED_MARKER, crate::ui::WARNING))
+}
+
+/// Appends a one-cell mark behind a space to an agent row, and makes that
+/// cell a click target opening the status catalog: a glyph nobody can
+/// look up is a glyph that reads as decoration.
+fn push_trailing_mark(
+    spans: &mut Vec<Span<'_>>,
+    hits: &mut Vec<(Rect, WorkspaceHit)>,
+    label_rect: Rect,
+    mark: &'static str,
+    hue: Color,
+) {
+    let mark_x = label_rect.x + spans.iter().map(|span| span.width() as u16).sum::<u16>() + 1; // the space this mark is drawn behind
+    spans.push(Span::styled(format!(" {mark}"), Style::default().fg(hue)));
+    if mark_x < label_rect.right() {
+        let cell = Rect::new(mark_x, label_rect.y, 1, 1);
+        hits.push((cell, WorkspaceHit::OpenStatusCatalog(cell)));
     }
-    spans.push(Span::styled(
-        UNISOLATED_MARKER,
-        Style::default().fg(crate::ui::WARNING),
-    ));
 }
 
 /// A downward cursor over one column's rows. The sidebar lays itself out a
@@ -449,10 +465,11 @@ impl Rows {
 /// A two-level tree, one block per space the user has created (blank-line
 /// separated — see the loop below), each expanded (no collapse/accordion)
 /// into the agent tabs [`agent_identity_for_tab`] recognizes as running
-/// inside it — `●`/`○` for selected/unselected plus its label and, right-
+/// inside it — `●`/`○` for the space's context agent (see
+/// `space_context_agent`) vs. the rest, plus its label and, right-
 /// aligned on that same row, the harness alias in place of the raw process
 /// name (see [`agent_identity_for_tab`]; an agent *outside* any slot
-/// instead carries [`UNISOLATED_MARKER`] there). A dim caption line
+/// also carries [`UNISOLATED_MARKER`] behind its label). A dim caption line
 /// underneath names the task's own working branch, falling back to its
 /// pane's live cwd (as [`caption_path`] renders it, so an agent in a slot
 /// reads as its primary checkout rather than as a `.worktrees/<id>` path
@@ -628,8 +645,12 @@ pub(super) fn render_sidebar(
                 .map(|pane| pane.cwd.clone())
                 .unwrap_or_default();
 
-            let selected = tab.id == space.selected_tab;
-            // Every space names a `selected_tab`, including the ones the
+            // The agent the space is about, not its `selected_tab`: a
+            // shell opened beside an agent is part of that agent's own
+            // context, and switching into it must not unselect the agent
+            // in this tree (see `space_context_agent`).
+            let selected = Some(tab.id) == space_context_agent(space, identities);
+            // Every space names a context agent, including the ones the
             // user is not in — so `selected` alone put a `●` on one agent
             // per open space, each claiming to be the one receiving
             // keystrokes. Only the active space's selection is that agent.
@@ -689,21 +710,15 @@ pub(super) fn render_sidebar(
                 .tab_task(tab.id)
                 .and_then(|task| task_mark(&task.state))
             {
-                let mark_x =
-                    label_rect.x + spans.iter().map(|span| span.width() as u16).sum::<u16>() + 1; // the space this mark is drawn behind
-                spans.push(Span::styled(format!(" {mark}"), Style::default().fg(hue)));
-                if mark_x < label_rect.right() {
-                    hits.push((
-                        Rect::new(mark_x, label_rect.y, 1, 1),
-                        WorkspaceHit::OpenStatusCatalog(Rect::new(mark_x, label_rect.y, 1, 1)),
-                    ));
-                }
+                push_trailing_mark(&mut spans, hits, label_rect, mark, hue);
             }
             hits.push((
                 indicator_rect,
                 WorkspaceHit::OpenStatusCatalog(indicator_rect),
             ));
-            push_unisolated_marker(&mut spans, &cwd);
+            if let Some((mark, hue)) = unisolated_mark(&cwd) {
+                push_trailing_mark(&mut spans, hits, label_rect, mark, hue);
+            }
             // The alias in place of the raw process name — this list only
             // ever holds tabs `agent_identity_for_tab` already resolved, so
             // it never falls back to showing something like a bare version
@@ -759,13 +774,16 @@ pub(super) fn render_sidebar(
             if let Some(detail_rect) = rows.next(1) {
                 let continuation = if is_last { "     " } else { "  │  " };
                 // The task's own working branch in place of the cwd path —
-                // what this agent will deliver from. Falls back to the cwd
-                // (via `caption_path`) for the moment right after tab
-                // creation, before the async task association resolves and
-                // a branch exists to show.
+                // what this agent will deliver from. An agent outside any
+                // slot has no task, so its branch is the one its
+                // evaluation read at the directory itself. Either falls
+                // back to the cwd (via `caption_path`) for the moment
+                // right after tab creation, before the async evaluation
+                // resolves and a branch exists to show.
                 let detail = model
                     .tab_task(tab.id)
                     .map(|task| task.branch.clone())
+                    .or_else(|| unisolated_branch(model, &cwd))
                     .unwrap_or_else(|| caption_path(&cwd));
                 let continuation_span =
                     Span::styled(continuation, Style::default().fg(crate::ui::TEXT_FAINT));
@@ -1018,22 +1036,31 @@ pub(super) fn render_status_catalog(
     })
     .collect();
 
+    // Neither the process nor its branch: where the agent works. One row,
+    // because an agent in a slot is the rule and draws nothing.
+    let slot_rows: Vec<(String, Color, &str, &str)> = vec![(
+        UNISOLATED_MARKER.to_owned(),
+        crate::ui::WARNING,
+        "unisolated",
+        AGENT_IN_YOUR_TREE,
+    )];
+
     const H_PAD: u16 = 1;
     const GLYPH_COLUMN: usize = 3;
     let name_column = agent_rows
         .iter()
         .chain(&task_rows)
+        .chain(&slot_rows)
         .map(|(_, _, name, _)| name.chars().count())
         .max()
         .unwrap_or(0);
     let content_width = agent_rows
         .iter()
         .chain(&task_rows)
+        .chain(&slot_rows)
         .map(|(_, _, _, meaning)| GLYPH_COLUMN + name_column + 2 + meaning.chars().count())
         .max()
-        .unwrap_or(0)
-        .max(UNISOLATED_MARKER.trim().chars().count() + 2 + AGENT_IN_YOUR_TREE.chars().count())
-        as u16;
+        .unwrap_or(0) as u16;
 
     let mut lines: Vec<Line<'static>> = Vec::new();
     let section =
@@ -1063,16 +1090,7 @@ pub(super) fn render_status_catalog(
     lines.push(Line::from(""));
     section("TASK", &task_rows, &mut lines);
     lines.push(Line::from(""));
-    lines.push(Line::from(vec![
-        Span::styled(
-            format!("{}  ", UNISOLATED_MARKER.trim()),
-            Style::default().fg(crate::ui::WARNING),
-        ),
-        Span::styled(
-            AGENT_IN_YOUR_TREE,
-            Style::default().fg(crate::ui::TEXT_SECONDARY),
-        ),
-    ]));
+    section("SLOT", &slot_rows, &mut lines);
 
     let width = (content_width + 2 * H_PAD + 2).min(area.width);
     let height = (lines.len() as u16 + 2).min(area.height);
@@ -1104,6 +1122,16 @@ pub(super) fn render_status_catalog(
 
 /// What [`UNISOLATED_MARKER`] means, spelled out for the catalog.
 const AGENT_IN_YOUR_TREE: &str = "the agent runs in your own tree, not a slot";
+
+/// The branch an agent outside any slot is on, as its evaluation last
+/// read it. `None` inside a slot: the branch there belongs to the task,
+/// and the key an unslotted directory is evaluated under is its own path.
+fn unisolated_branch(model: &WorkspaceModel, cwd: &Path) -> Option<String> {
+    if uze_application::isolated_checkout(cwd).is_some() {
+        return None;
+    }
+    model.branches.get(&evaluation_key(cwd)).cloned()
+}
 
 /// `text` shortened from the left to `width`, keeping its tail — the end
 /// of a path is what says where you are; its beginning is what you can

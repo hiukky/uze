@@ -272,6 +272,13 @@ impl Workspace<'_> {
         worktree::primary_checkout(cwd)
     }
 
+    /// The branch checked out where `cwd` sits — what an agent working
+    /// outside any slot is on — or `None` for a detached `HEAD` or no
+    /// repository at all.
+    pub fn current_branch(&self, cwd: &Path) -> Option<String> {
+        checkout::current_branch(cwd)
+    }
+
     /// Every task recorded for `cwd`'s repository, as last evaluated.
     pub fn tasks(&self, cwd: &Path) -> Vec<TaskView> {
         self.repository(cwd)
