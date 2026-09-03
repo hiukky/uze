@@ -1072,6 +1072,7 @@ fn run_setup(
     let logs_dir = home.state_dir().join("logs");
     let _ = std::fs::create_dir_all(&logs_dir);
     let mut had_warning = false;
+    let mut failed_harnesses: Vec<String> = Vec::new();
     let mut shell_path_hints = Vec::new();
     let mut shell_path_shim_names = Vec::new();
 
@@ -1245,6 +1246,7 @@ fn run_setup(
                     )
                 };
                 println!("{}", summary);
+                failed_harnesses.push(result.integration.clone());
                 if let Some(err) = &result.attach_error {
                     eprintln!("  {} {}", crate::progress::warning_icon(), err.yellow());
                 }
@@ -1265,6 +1267,17 @@ fn run_setup(
         for name in &shell_path_shim_names {
             println!("  {}", format!("which {}", name).cyan().bold());
         }
+    }
+    // A harness that was not provisioned is a failed setup, not a warning:
+    // a caller that scripts `uze setup` (an image build, a bootstrap) must
+    // never read "all ready" over a missing binary.
+    if !failed_harnesses.is_empty() {
+        return Err(uze_application::UzeError::ProvisioningIncomplete(format!(
+            "{} of {} harness(es) ready; not provisioned: {} (see `uze doctor`)",
+            total - failed_harnesses.len(),
+            total,
+            failed_harnesses.join(", ")
+        )));
     }
     if had_warning {
         if is_tty {

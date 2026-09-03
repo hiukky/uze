@@ -318,10 +318,12 @@ fn add_and_inspect_use_the_same_injected_uze_home() {
 }
 
 /// Deterministic: `PATH` is cleared so no real harness binary or installer
-/// can be resolved. Explicit setup records a blocked provisioning attempt,
-/// but never creates harness-owned directories under the isolated `HOME`.
+/// can be resolved. Explicit setup records each blocked provisioning
+/// attempt, exits non-zero so a scripted caller (an image build) cannot read
+/// success over a missing binary, and never creates harness-owned
+/// directories under the isolated `HOME`.
 #[test]
-fn setup_reports_absent_harnesses_without_failing_or_writing_state() {
+fn setup_reports_absent_harnesses_as_failure_without_writing_state() {
     let home = temporary_home("cli-setup-absent");
     let output = Command::new(env!("CARGO_BIN_EXE_uze"))
         .env("UZE_HOME", &home)
@@ -331,10 +333,16 @@ fn setup_reports_absent_harnesses_without_failing_or_writing_state() {
         .output()
         .unwrap();
 
-    assert!(output.status.success());
+    assert!(!output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stdout.contains("claude-code: setup Failed"));
     assert!(stdout.contains("codex: setup Failed"));
+    assert!(!stdout.contains("harness(es) ready."), "{stdout}");
+    assert!(
+        stderr.contains("setup incomplete: 0 of") && stderr.contains("codex"),
+        "{stderr}"
+    );
     assert!(!home.join(".claude/skills").exists());
     assert!(!home.join(".agents/skills").exists());
     let _ = std::fs::remove_dir_all(home);

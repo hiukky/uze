@@ -62,6 +62,8 @@ pub enum UzeError {
     CredentialBearingUrl,
     #[error("could not acquire package: {0}")]
     AcquisitionFailed(String),
+    #[error("setup incomplete: {0}")]
+    ProvisioningIncomplete(String),
     /// The operator declined. Distinct from `TrustRequired`: a decision was
     /// made, and repeating the command unchanged should not change it.
     #[error("trust denied for `{0}`; nothing was installed")]
