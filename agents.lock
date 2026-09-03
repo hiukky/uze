@@ -1,6 +1,6 @@
 version: 1
 worktrees:
-  completion: handoff
+  completion: merge
 marketplaces:
   ai:
     source:
