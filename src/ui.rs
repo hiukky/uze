@@ -130,6 +130,12 @@ const SELECTED_BG: Color = Color::Rgb(22, 30, 26);
 /// workspace space's envelope) — not every raised surface should read as
 /// "on-brand selected", just "raised above the background".
 const SURFACE_OVERLAY: Color = Color::Rgb(32, 34, 35);
+/// A touch darker than `SURFACE_OVERLAY` — `rgba(255,255,255,0.07)` instead
+/// of `0.09`, pre-blended the same way. Fills the active space's tab/
+/// detail/cwd rows in the sidebar tree, one shade below the lighter
+/// `SURFACE_OVERLAY` its own title row keeps — so the header lifts
+/// slightly above the block it names instead of blending into it.
+const ACTIVE_SPACE_OVERLAY: Color = Color::Rgb(27, 29, 30);
 /// A subtler, darker surface — `rgba(255,255,255,0.025)` pre-blended over
 /// `BASE`. Used for unselected cards and detail drawers so `SELECTED_BG`
 /// pops with higher contrast while unselected surfaces stay distinct from

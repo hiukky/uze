@@ -342,6 +342,43 @@ fn caption_path(cwd: &Path) -> String {
     }
 }
 
+/// Renders lowercase ASCII letters as their Unicode small-capital form
+/// (`claude` -> `ᴄʟᴀᴜᴅᴇ`) — a quieter way to give a badge-like label some
+/// visual weight without full-height capitals. Unicode has no small-cap
+/// `q` or `x`, so those (and anything already non-lowercase-ASCII) pass
+/// through unchanged rather than being dropped or capitalized.
+fn small_caps(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            'a' => 'ᴀ',
+            'b' => 'ʙ',
+            'c' => 'ᴄ',
+            'd' => 'ᴅ',
+            'e' => 'ᴇ',
+            'f' => 'ꜰ',
+            'g' => 'ɢ',
+            'h' => 'ʜ',
+            'i' => 'ɪ',
+            'j' => 'ᴊ',
+            'k' => 'ᴋ',
+            'l' => 'ʟ',
+            'm' => 'ᴍ',
+            'n' => 'ɴ',
+            'o' => 'ᴏ',
+            'p' => 'ᴘ',
+            'r' => 'ʀ',
+            's' => 'ꜱ',
+            't' => 'ᴛ',
+            'u' => 'ᴜ',
+            'v' => 'ᴠ',
+            'w' => 'ᴡ',
+            'y' => 'ʏ',
+            'z' => 'ᴢ',
+            other => other,
+        })
+        .collect()
+}
+
 /// The mark an agent's label row carries when its pane does *not* run in a
 /// slot of its own — the fallback every agent tab otherwise never needs:
 /// no repository, no commit to branch from, Git absent or refusing. An
@@ -366,14 +403,15 @@ fn push_unisolated_marker(spans: &mut Vec<Span<'_>>, cwd: &Path) {
 /// A two-level tree, one block per space the user has created (blank-line
 /// separated — see the loop below), each expanded (no collapse/accordion)
 /// into the agent tabs [`agent_identity_for_tab`] recognizes as running
-/// inside it — `●`/`○` for selected/unselected plus its label, and a dim
-/// caption line underneath with its pane's live `cwd · alias` (the alias in
-/// place of the raw process name — see [`agent_identity_for_tab`]; the cwd
-/// as [`caption_path`] renders it, so an agent in a slot reads as its
-/// primary checkout rather than as a `.worktrees/<id>` path too long for
-/// the column, and an agent *outside* any slot carries
-/// [`UNISOLATED_MARKER`] on the label row above). A space
-/// with no agent tabs shows its current `cwd` alone in place of the tree,
+/// inside it — `●`/`○` for selected/unselected plus its label and, right-
+/// aligned on that same row, the harness alias in place of the raw process
+/// name (see [`agent_identity_for_tab`]; an agent *outside* any slot
+/// instead carries [`UNISOLATED_MARKER`] there). A dim caption line
+/// underneath names the task's own working branch, falling back to its
+/// pane's live cwd (as [`caption_path`] renders it, so an agent in a slot
+/// reads as its primary checkout rather than as a `.worktrees/<id>` path
+/// too long for the column) for the moment before that task association
+/// resolves. A space with no agent tabs shows its current `cwd` alone in place of the tree,
 /// so an empty space still reads as "somewhere", not blank. Plain shell
 /// tabs (and anything else not recognized as an agent) never appear here;
 /// they still exist in the tab strip above the pane (see
@@ -538,7 +576,7 @@ pub(super) fn render_sidebar(
                     Style::default().fg(crate::ui::TEXT_DIM),
                 )];
                 if is_active_space {
-                    fill_row_bg(&mut spans, cwd_rect.width, crate::ui::SURFACE_OVERLAY);
+                    fill_row_bg(&mut spans, cwd_rect.width, crate::ui::ACTIVE_SPACE_OVERLAY);
                 }
                 frame.render_widget(Paragraph::new(Line::from(spans)), cwd_rect);
                 // The header and its cwd caption read as one tree item —
@@ -572,16 +610,21 @@ pub(super) fn render_sidebar(
                 .map(|(_, buffer)| buffer.as_str());
             let indicator = status.glyph(model.tick);
             let indicator_fg = status.color();
-            // Bright but not bold — bold is the space header's own marker
-            // for "this is the active space" (see `render_space_header`);
-            // an agent tab nested under it competing for the same weight
-            // read as two different things both shouting "I'm the one".
-            // The `●` dot above already says which tab is active.
-            let label_style = Style::default().fg(if selected {
+            // Bold belongs to the agent, not the space it runs in (see
+            // `render_space_header`, which never bolds its own label) — the
+            // tab actually receiving keystrokes is the thing worth shouting
+            // about, not the container it happens to sit in. Reserved for
+            // the one tab that is both selected and in the active space
+            // (see the `status` comment above `is_active_space && selected`
+            // for why `selected` alone isn't enough).
+            let mut label_style = Style::default().fg(if selected {
                 crate::ui::TEXT_BRIGHT
             } else {
                 crate::ui::NAV_INACTIVE
             });
+            if is_active_space && selected {
+                label_style = label_style.add_modifier(Modifier::BOLD);
+            }
             let connector_span =
                 Span::styled(connector, Style::default().fg(crate::ui::TEXT_FAINT));
             let label = match renaming_this {
@@ -591,13 +634,7 @@ pub(super) fn render_sidebar(
                         .fg(crate::ui::TEXT_BRIGHT)
                         .add_modifier(Modifier::BOLD),
                 ),
-                None => Span::styled(
-                    model
-                        .tab_task(tab.id)
-                        .map(|task| task.label.clone())
-                        .unwrap_or_else(|| tab.label.clone()),
-                    label_style,
-                ),
+                None => Span::styled(tab.label.clone(), label_style),
             };
             let mut spans = vec![
                 connector_span,
@@ -611,61 +648,82 @@ pub(super) fn render_sidebar(
                 spans.push(Span::styled(format!(" {mark}"), Style::default().fg(hue)));
             }
             push_unisolated_marker(&mut spans, &cwd);
+            // The alias in place of the raw process name — this list only
+            // ever holds tabs `agent_identity_for_tab` already resolved, so
+            // it never falls back to showing something like a bare version
+            // string (see that function's doc comment). Right-aligned, not
+            // tacked onto the label behind a "·" — pinning it to the row's
+            // own right edge keeps its column stable as different labels
+            // vary in length. A 1-column trailing pad keeps it off the
+            // sidebar's own flush-right divider (see `render_sidebar`'s
+            // `Padding::new(1, 0, 0, 0)`) — that padding drop suits a
+            // button glued to the edge, not a plain text label.
+            let alias = agent_identity_for_tab(identities, tab).unwrap_or_default();
+            let alias_span =
+                Span::styled(small_caps(alias), Style::default().fg(crate::ui::TEXT_DIM));
+            const TRAILING_PAD: u16 = 1;
+            let used: u16 = spans.iter().map(|span| span.width() as u16).sum::<u16>()
+                + alias_span.width() as u16
+                + TRAILING_PAD;
+            let gap = label_rect.width.saturating_sub(used);
+            spans.push(Span::raw(" ".repeat(gap as usize)));
+            spans.push(alias_span);
+            spans.push(Span::raw(" ".repeat(TRAILING_PAD as usize)));
             if is_active_space {
-                fill_row_bg(&mut spans, label_rect.width, crate::ui::SURFACE_OVERLAY);
+                fill_row_bg(
+                    &mut spans,
+                    label_rect.width,
+                    crate::ui::ACTIVE_SPACE_OVERLAY,
+                );
             }
             frame.render_widget(Paragraph::new(Line::from(spans)), label_rect);
             hits.push((label_rect, WorkspaceHit::SelectTab(tab.id)));
 
             if let Some(detail_rect) = row(1) {
                 let continuation = if is_last { "     " } else { "  │  " };
-                // The alias in place of the raw process name — this list only
-                // ever holds tabs `agent_identity_for_tab` already resolved, so
-                // it never falls back to showing something like a bare version
-                // string (see that function's doc comment).
-                let alias = agent_identity_for_tab(identities, tab).unwrap_or_default();
+                // The task's own working branch in place of the cwd path —
+                // what this agent will deliver from. Falls back to the cwd
+                // (via `caption_path`) for the moment right after tab
+                // creation, before the async task association resolves and
+                // a branch exists to show.
+                let detail = model
+                    .tab_task(tab.id)
+                    .map(|task| task.branch.clone())
+                    .unwrap_or_else(|| caption_path(&cwd));
                 let continuation_span =
                     Span::styled(continuation, Style::default().fg(crate::ui::TEXT_FAINT));
-                let cwd_span =
-                    Span::styled(caption_path(&cwd), Style::default().fg(crate::ui::TEXT_DIM));
-                let alias_span = Span::styled(alias, Style::default().fg(crate::ui::TEXT_DIM));
-                // Right-aligned, not tacked onto the cwd behind a "·" —
-                // cwd (where this tab lives) and the running agent are two
-                // different facts, and pinning the agent to the row's own
-                // right edge keeps its column stable as different tabs'
-                // cwds vary in length, instead of drifting with the text
-                // it used to follow. A 1-column trailing pad keeps it off
-                // the sidebar's own flush-right divider (see
-                // `render_sidebar`'s `Padding::new(1, 0, 0, 0)`) — that
-                // padding drop suits a button glued to the edge, not a
-                // plain text label.
-                const TRAILING_PAD: u16 = 1;
-                let used = continuation_span.width() as u16
-                    + cwd_span.width() as u16
-                    + alias_span.width() as u16
-                    + TRAILING_PAD;
-                let gap = detail_rect.width.saturating_sub(used);
-                let mut spans = vec![
-                    continuation_span,
-                    cwd_span,
-                    Span::raw(" ".repeat(gap as usize)),
-                    alias_span,
-                    Span::raw(" ".repeat(TRAILING_PAD as usize)),
-                ];
+                let detail_span = Span::styled(detail, Style::default().fg(crate::ui::TEXT_DIM));
+                let mut spans = vec![continuation_span, detail_span];
                 if is_active_space {
-                    fill_row_bg(&mut spans, detail_rect.width, crate::ui::SURFACE_OVERLAY);
+                    fill_row_bg(
+                        &mut spans,
+                        detail_rect.width,
+                        crate::ui::ACTIVE_SPACE_OVERLAY,
+                    );
                 }
                 frame.render_widget(Paragraph::new(Line::from(spans)), detail_rect);
-                // The label and its dim cwd/process caption read as one tree
+                // The label and its dim branch/cwd caption read as one tree
                 // item — clicking the caption line must select the tab too,
                 // not just the label text above it.
                 hits.push((detail_rect, WorkspaceHit::SelectTab(tab.id)));
             }
-            // No blank row between tabs — a full row read as too much air once
-            // tried (each item is already only 2 rows tall), and the "├─"/"└─"
-            // connector on the next label is enough on its own to read as a new
-            // sibling starting, the same way `tree`/git-log-graph style output
-            // never blank-lines between nodes.
+            // A light gap between sibling tabs. A bare blank row was tried
+            // and discarded — it broke the tree's own "│" connector into
+            // two disconnected stubs. Continuing that connector through the
+            // gap row keeps the tree intact while still giving each 2-row
+            // item a little room to breathe. Skipped for the last tab: it
+            // has no sibling below to connect to, and the space loop's own
+            // blank row already separates it from whatever comes next.
+            if !is_last && let Some(gap_rect) = row(1) {
+                let mut spans = vec![Span::styled(
+                    "  │  ",
+                    Style::default().fg(crate::ui::TEXT_FAINT),
+                )];
+                if is_active_space {
+                    fill_row_bg(&mut spans, gap_rect.width, crate::ui::ACTIVE_SPACE_OVERLAY);
+                }
+                frame.render_widget(Paragraph::new(Line::from(spans)), gap_rect);
+            }
         }
         // One blank row *between* spaces (not between a tab and its own
         // detail line, which stays tight per the comment above) — each
@@ -675,17 +733,23 @@ pub(super) fn render_sidebar(
     }
 }
 
-/// One space's header row in the sidebar tree — plain label for the rest,
-/// bright/bold for the active one. The active space's whole envelope
-/// (this header plus every tab/detail/cwd row nested under it — see the
-/// `is_active_space` fill in [`render_sidebar`]) gets a neutral
-/// [`crate::ui::SURFACE_OVERLAY`] background instead of a left accent bar, so
-/// the highlight reads as "this whole block is where you are" rather than
-/// a thin per-row marker or an on-brand "selected" tint (deliberately not
-/// `SELECTED_BG` — that one borrows the accent hue for a different kind of
-/// selection). Its own small function (unlike the tab row, which stays
-/// inline in [`render_sidebar`]) purely to keep that function's now-nested
-/// loop readable — this has no reuse motivation beyond that.
+/// One space's header row in the sidebar tree — dim for every space,
+/// active one included: the space is a container, not the thing the
+/// operator is looking at, so bold is reserved for the agent tab actually
+/// receiving keystrokes (see `render_sidebar`'s agent-row `label_style`).
+/// The active space's whole envelope (this header plus every tab/detail/cwd
+/// row nested under it — see the `is_active_space` fill in
+/// [`render_sidebar`]) gets a neutral background instead of a left accent
+/// bar, so the highlight reads as "this whole block is where you are"
+/// rather than a thin per-row marker or an on-brand "selected" tint
+/// (deliberately not `SELECTED_BG` — that one borrows the accent hue for a
+/// different kind of selection). This header row itself stays at the
+/// lighter [`crate::ui::SURFACE_OVERLAY`] while the rows it anchors go one
+/// step darker, [`crate::ui::ACTIVE_SPACE_OVERLAY`] — the title lifts
+/// slightly above the block it names instead of blending into it. Its own
+/// small function (unlike the tab row, which stays inline in
+/// [`render_sidebar`]) purely to keep that function's now-nested loop
+/// readable — this has no reuse motivation beyond that.
 pub(super) fn render_space_header(
     frame: &mut ratatui::Frame<'_>,
     rect: Rect,
@@ -700,33 +764,33 @@ pub(super) fn render_space_header(
         .as_ref()
         .filter(|(target, _)| *target == RenameTarget::Space(space.id))
         .map(|(_, buffer)| buffer.as_str());
-    let mut label_style = Style::default().fg(if selected {
-        crate::ui::TEXT_BRIGHT
-    } else {
-        crate::ui::NAV_INACTIVE
-    });
-    if selected {
-        label_style = label_style.add_modifier(Modifier::BOLD);
-    }
-    let label = match renaming_this {
+    // Never bright, never bold, selected or not — the background fill
+    // below already carries "this is where you are"; the label itself
+    // stays out of the way of the agent name bolded underneath it.
+    let label_style = Style::default().fg(crate::ui::NAV_INACTIVE);
+    let mut spans = vec![Span::raw(" ")];
+    spans.push(match renaming_this {
         Some(buffer) => Span::styled(
-            format!(" {buffer}▏"),
+            format!("{buffer}▏"),
             Style::default()
                 .fg(crate::ui::TEXT_BRIGHT)
                 .add_modifier(Modifier::BOLD),
         ),
-        None => Span::styled(format!(" {}", space.label), label_style),
-    };
-    let mut spans = vec![label];
-    // Where this space's work lives, dim after the name when the column
-    // has room for both: the root is what the space *is*, and what every
-    // agent created here starts from.
-    let root = crate::ui::display_project_path(&space.root);
-    let used: u16 = spans.iter().map(|span| span.width() as u16).sum();
-    if renaming_this.is_none() && used + 2 + root.chars().count() as u16 <= rect.width {
+        None => Span::styled(space.label.clone(), label_style),
+    });
+    // Where this space's work lives — the root is what the space *is*, and
+    // what every agent created here starts from. Parenthesized and in its
+    // own hue (`BLUE`, the badge/tag color) rather than the label's dim
+    // supporting text: a directory tag, not a caption. Trailing the name
+    // rather than pinned to the row's far edge — a fixed-width column
+    // isn't the point here, just a tag riding right after what it
+    // describes. Hidden while renaming — the buffer being typed is the
+    // only thing that row should say.
+    if renaming_this.is_none() {
+        let root = crate::ui::display_project_path(&space.root);
         spans.push(Span::styled(
-            format!("  {root}"),
-            Style::default().fg(crate::ui::TEXT_DIM),
+            format!(" ({root})"),
+            Style::default().fg(crate::ui::BLUE),
         ));
     }
     if selected {
