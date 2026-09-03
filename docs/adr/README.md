@@ -83,6 +83,9 @@ naming them, and the absorbed records are listed under
 - [038 — Adopt a local terminal runtime server](038-adopt-local-terminal-runtime-server.md)
 - [039 — Adopt syntect for diff syntax highlighting](039-adopt-syntect-for-diff-syntax-highlighting.md)
 - [040 — Compile portable hooks into the delivered artifact](040-compile-portable-hooks-into-the-delivered-artifact.md)
+- [041 — Extension code is a distinct trust class from plugin bytes](041-extension-code-is-a-distinct-trust-class.md)
+- [042 — Enforce the architecture seams in the test suite, and close the layering debt](042-enforce-architecture-seams-in-the-test-suite.md)
+- [043 — Conformance asserts one outcome contract per capability; vendors bind, never assert](043-conformance-asserts-one-outcome-contract-per-capability.md)
 
 ## Consolidated records
 

@@ -4,8 +4,9 @@ Recorded because the operator was not available to arbitrate. Each is the
 most conservative, most reversible option available at the time; each names
 what was discarded so it can be revisited cheaply.
 
-See `openspec/changes/assert-one-capability-contract/` for the change these
-belong to.
+See `openspec/changes/archive/2026-09-03-assert-one-capability-contract/`
+for the change these belong to, and ADR-043 in `docs/adr/` for the decision
+it recorded.
 
 ---
 

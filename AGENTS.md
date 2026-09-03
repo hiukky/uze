@@ -206,8 +206,7 @@ resolving `$HOME`) arrives through `uze_extensions::Host`, implemented in
 all, and names no process, filesystem or environment API; the architecture
 suite fails on each. An extension is code UZE runs in its own
 process, which is a different trust class from plugin bytes a harness
-reads; see the ADR in
-`openspec/changes/enforce-architecture-seams/adr/`.
+reads; see ADR-041 in `docs/adr/`.
 
 **Speak to Git through `uze-git`.** Never spawn `git` directly: two callers
 with two exit-code conventions is what this replaced, and a repository
