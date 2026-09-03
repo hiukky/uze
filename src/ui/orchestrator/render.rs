@@ -160,8 +160,12 @@ pub(super) fn render(
     // `picker.anchor` (the "✦" button's own rect) rather than centered on
     // the whole frame — a dropdown hanging off the thing you clicked, not a
     // modal interrupting the screen.
-    if let Some((text, _)) = &model.notice {
-        render_notice(frame, layout.pane, text);
+    // A notice about the tab already on screen said its piece next to the
+    // deliver button in the header (`render_tab_strip`) — this is only the
+    // fallback for a workspace-wide message, or one about a task that is
+    // not what the operator is currently looking at.
+    if let Some(text) = model.notice_for_footer() {
+        render_notice(frame, layout.pane, &text);
     }
     if let Some(overlay) = &model.preserved {
         render_preserved(frame, frame.area(), model, overlay);
@@ -1203,7 +1207,10 @@ fn deliver_button(task: &TaskView) -> Option<(String, Color, bool)> {
     }
 }
 
-/// One line over the pane's bottom row: what the last delivery did.
+/// One line over the pane's bottom row — the fallback for a notice that
+/// cannot be pinned to the selected tab's own header (see
+/// `WorkspaceModel::notice_for_footer`): a workspace-wide message, or one
+/// about a task that is not what is currently on screen.
 fn render_notice(frame: &mut ratatui::Frame<'_>, pane: Rect, text: &str) {
     if pane.height == 0 {
         return;
@@ -1582,10 +1589,43 @@ pub(super) fn render_tab_strip(
         hits.push((button_rect, WorkspaceHit::OpenAgentSupport(button_rect)));
         trailing_right = button_rect.x.saturating_sub(1);
     }
-    // One verb — deliver — whose ending is the project's completion, not a
-    // choice made here. Conditioned, not disabled: when the task cannot be
-    // delivered the button is absent, and the sidebar mark says why.
+    // What last happened to a delivery sits right where its trigger does:
+    // the tab already says whose agent this is, so nothing here repeats
+    // the label the footer needs when the task in question is off screen
+    // (see `WorkspaceModel::notice_for_tab`/`notice_for_footer`). A fresh
+    // notice takes this spot over the button itself — the outcome is more
+    // worth the operator's eye than a button an evaluation tick hasn't
+    // caught up to retiring yet — and gives it back once the notice ages
+    // out or a new one replaces it.
     if let Some(tab) = model.selected_tab()
+        && let Some(detail) = model.notice_for_tab(tab)
+    {
+        let mut chip = vec![
+            Span::raw(" "),
+            Span::styled(
+                detail.to_owned(),
+                Style::default()
+                    .fg(crate::ui::TEXT_BRIGHT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+        ];
+        let chip_width = chip.iter().map(Span::width).sum::<usize>() as u16;
+        fill_row_bg(&mut chip, chip_width, crate::ui::SURFACE_OVERLAY_BRIGHT);
+        let chip_rect = Rect::new(
+            trailing_right.saturating_sub(chip_width),
+            inner.y,
+            chip_width,
+            1,
+        );
+        frame.render_widget(Paragraph::new(Line::from(chip)), chip_rect);
+        trailing_right = chip_rect.x.saturating_sub(1);
+    }
+    // Otherwise, one verb — deliver — whose ending is the project's
+    // completion, not a choice made here. Conditioned, not disabled: when
+    // the task cannot be delivered the button is absent, and the sidebar
+    // mark says why.
+    else if let Some(tab) = model.selected_tab()
         && let Some(task) = model.tab_task(tab)
         && let Some((text, hue, clickable)) = deliver_button(task)
     {

@@ -255,20 +255,19 @@ fn spawn_delivery(
     });
 }
 
-/// The one line a delivery leaves on screen.
+/// The one line a delivery leaves on screen — no label of its own: whoever
+/// shows it decides whether the task it is about still needs naming (see
+/// `WorkspaceModel::notice_for_tab`/`notice_for_footer`).
 fn describe_delivery(report: &DeliveryReport) -> String {
-    let label = &report.task.label;
     match &report.outcome {
-        DeliveryOutcome::Handoff => format!("{label}: ready on {}", report.task.branch),
-        DeliveryOutcome::Merged => format!("{label}: merged into {}", report.task.target),
+        DeliveryOutcome::Handoff => format!("ready on {}", report.task.branch),
+        DeliveryOutcome::Merged => format!("merged into {}", report.task.target),
         DeliveryOutcome::Published { branch, request } => match request {
-            Some(url) => format!("{label}: {url}"),
-            None => format!("{label}: pushed as {branch}"),
+            Some(url) => url.clone(),
+            None => format!("pushed as {branch}"),
         },
-        DeliveryOutcome::Refused(reason) => format!("{label}: not delivered — {reason}"),
-        DeliveryOutcome::ReturnedToAgent(_) => {
-            format!("{label}: returned to its agent to resolve")
-        }
+        DeliveryOutcome::Refused(reason) => format!("not delivered — {reason}"),
+        DeliveryOutcome::ReturnedToAgent(_) => "returned to its agent to resolve".to_owned(),
     }
 }
 
@@ -434,7 +433,11 @@ pub(crate) fn attach_workspace(
         while let Ok(resolution) = delivery_receiver.try_recv() {
             for report in &resolution.reports {
                 model.delivery_pending.remove(&report.task.id);
-                model.set_notice(describe_delivery(report));
+                model.set_task_notice(
+                    &report.task.id,
+                    &report.task.label,
+                    describe_delivery(report),
+                );
                 if let DeliveryOutcome::ReturnedToAgent(notice) = &report.outcome
                     && let Some(pane) = model.pane_for_checkout(&notice.checkout)
                 {
@@ -471,7 +474,7 @@ pub(crate) fn attach_workspace(
         if model
             .notice
             .as_ref()
-            .is_some_and(|(_, since)| since.elapsed() >= NOTICE_TTL)
+            .is_some_and(|notice| notice.since.elapsed() >= NOTICE_TTL)
         {
             model.notice = None;
             model.dirty = true;
@@ -1882,6 +1885,25 @@ fn selected_agent_context(
     Some((integration.to_owned(), cwd))
 }
 
+/// A one-line message on screen, and — for one about a single task —
+/// enough to tell whether that task is the one currently in front of the
+/// operator.
+struct Notice {
+    text: String,
+    since: Instant,
+    owner: Option<NoticeOwner>,
+}
+
+/// The task a [`Notice`] is about: its id, for matching the selected tab's
+/// own task (`WorkspaceModel::notice_for_tab`), and its label, for the
+/// footer's fallback when that task is not what is on screen
+/// (`WorkspaceModel::notice_for_footer`) — the header never needs it, since
+/// the tab it lands next to already says whose agent this is.
+struct NoticeOwner {
+    task: String,
+    label: String,
+}
+
 #[derive(Default)]
 struct WorkspaceModel {
     session: Option<Session>,
@@ -1985,7 +2007,7 @@ struct WorkspaceModel {
     /// Tasks a delivery is in flight for.
     delivery_pending: BTreeSet<String>,
     /// A one-line message and when it appeared.
-    notice: Option<(String, Instant)>,
+    notice: Option<Notice>,
     /// Open state of the preserved-work list; `None` when closed.
     preserved: Option<PreservedOverlay>,
     /// The checkout each open pane was first seen in — a pane's slot does
@@ -2457,8 +2479,55 @@ impl WorkspaceModel {
     }
 
     fn set_notice(&mut self, text: String) {
-        self.notice = Some((text, Instant::now()));
+        self.notice = Some(Notice {
+            text,
+            since: Instant::now(),
+            owner: None,
+        });
         self.dirty = true;
+    }
+
+    /// Same as `set_notice`, but attributed to one task: shown next to
+    /// that task's own tab in the header, label-free, when that tab is the
+    /// one currently in front of the operator — the footer only takes it,
+    /// labeled, when the task the message is about is not what is on
+    /// screen.
+    fn set_task_notice(&mut self, task: &str, label: &str, text: String) {
+        self.notice = Some(Notice {
+            text,
+            since: Instant::now(),
+            owner: Some(NoticeOwner {
+                task: task.to_owned(),
+                label: label.to_owned(),
+            }),
+        });
+        self.dirty = true;
+    }
+
+    /// The active notice's text, when it is about `tab`'s own task — what
+    /// the header shows next to that task's deliver button, since the tab
+    /// is already what says whose agent this is.
+    pub(super) fn notice_for_tab(&self, tab: TabId) -> Option<&str> {
+        let notice = self.notice.as_ref()?;
+        let owner = notice.owner.as_ref()?;
+        let selected = self.tab_task(tab)?;
+        (selected.id == owner.task).then_some(notice.text.as_str())
+    }
+
+    /// The active notice as the footer shows it: nothing, when it already
+    /// surfaced in the header next to the selected tab's own task; the
+    /// bare text for a workspace-wide message; `"label: text"` for one
+    /// about a task that is not what is currently on screen.
+    pub(super) fn notice_for_footer(&self) -> Option<String> {
+        let notice = self.notice.as_ref()?;
+        let Some(owner) = &notice.owner else {
+            return Some(notice.text.clone());
+        };
+        let shown_in_header = self
+            .selected_tab()
+            .and_then(|tab| self.tab_task(tab))
+            .is_some_and(|selected| selected.id == owner.task);
+        (!shown_in_header).then(|| format!("{}: {}", owner.label, notice.text))
     }
 
     fn agent_tab_status(&self, pane: PaneId, selected: bool) -> AgentTabStatus {
