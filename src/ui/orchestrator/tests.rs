@@ -2139,6 +2139,39 @@ mod workspace_tests {
         assert_eq!(payload.len(), len, "one ClientRequest frame");
         bincode::deserialize(payload).expect("one ClientRequest frame")
     }
+
+    /// A Ctrl+O round trip to management is a detach and a fresh attach.
+    /// What the client resolved on its own — the sidebar's tasks,
+    /// branches and a completion noticed while the user was elsewhere —
+    /// must come back with it, while the server's view of the session and
+    /// the presentation state of the attach that ended must not.
+    #[test]
+    fn memory_carries_what_the_client_resolved_across_attaches() {
+        let mut model = agent_with_task(TaskStateView::Ready, 1);
+        model
+            .branches
+            .insert(PathBuf::from("/repo"), "agent/ai".to_owned());
+        model.completed_agent_panes.insert(PaneId(1));
+        model.error = Some("stale".to_owned());
+        model
+            .hits
+            .push((Rect::new(0, 0, 1, 1), WorkspaceHit::NewSpace));
+
+        let model = WorkspaceModel::recall(model.remember());
+
+        assert_eq!(model.tasks[&PathBuf::from("/repo")].len(), 1);
+        assert_eq!(
+            model
+                .branches
+                .get(&PathBuf::from("/repo"))
+                .map(String::as_str),
+            Some("agent/ai")
+        );
+        assert!(model.completed_agent_panes.contains(&PaneId(1)));
+        assert!(model.session.is_none());
+        assert!(model.error.is_none());
+        assert!(model.hits.is_empty());
+    }
 }
 
 mod prompt_buffer_tests {

@@ -291,6 +291,7 @@ pub(crate) fn attach_workspace(
     terminal: &mut super::TerminalSession,
     root: &Path,
     sidebar_width: &mut Option<u16>,
+    memory: &mut WorkspaceMemory,
     home: &UzeHome,
     pending_tab: Option<TabId>,
 ) -> Result<WorkspaceExit> {
@@ -355,7 +356,7 @@ pub(crate) fn attach_workspace(
         last_size: (columns, rows),
         sidebar_width: *sidebar_width,
         prompt_recorder: Some(prompt_recorder),
-        ..WorkspaceModel::default()
+        ..WorkspaceModel::recall(std::mem::take(&mut memory.remembered))
     };
     // A registered harness set doesn't change mid-session, so this is built
     // once per attach.
@@ -373,9 +374,16 @@ pub(crate) fn attach_workspace(
     // that pane's own directory. The loop below kicks a refresh the moment
     // the selection names an agent whose answer is not already in hand —
     // the same moment the "✦" badge appears.
-    let (support_sender, support_receiver) = mpsc::channel::<SupportResolution>();
-    let (task_sender, task_receiver) = mpsc::channel::<TaskResolution>();
-    let (delivery_sender, delivery_receiver) = mpsc::channel::<DeliveryResolution>();
+    // The answer channels outlive this attach with the rest of the memory:
+    // a read still running when the user leaves for management lands after
+    // they come back, instead of vanishing with a receiver that was dropped
+    // and leaving its key reserved forever.
+    let support_sender = memory.support.sender.clone();
+    let support_receiver = &memory.support.receiver;
+    let task_sender = memory.tasks.sender.clone();
+    let task_receiver = &memory.tasks.receiver;
+    let delivery_sender = memory.deliveries.sender.clone();
+    let delivery_receiver = &memory.deliveries.receiver;
     let activity_spinner = ProgressBar::new_spinner();
     activity_spinner.set_draw_target(ProgressDrawTarget::hidden());
     activity_spinner
@@ -383,11 +391,13 @@ pub(crate) fn attach_workspace(
     let mut next_activity_tick = Instant::now();
     // The server's session/pane state is persistent — reattaching after a
     // Ctrl+O round trip to management finds the same shells exactly as they
-    // were left. But the client's own model always starts empty, so without
-    // this wait the very first frame renders before the server's initial
-    // `Attached`/`Snapshot` reply lands, flashing the "starting shell…"
-    // placeholder and repainting the whole pane a moment later — reading as
-    // a lost/reset session even though nothing server-side ever was. A
+    // were left. But the client's view of that session and its panes always
+    // starts empty (only what it resolved on its own carries over, see
+    // `WorkspaceMemory`), so without this wait the very first frame renders
+    // before the server's initial `Attached`/`Snapshot` reply lands,
+    // flashing the "starting shell…" placeholder and repainting the whole
+    // pane a moment later — reading as a lost/reset session even though
+    // nothing server-side ever was. A
     // generous timeout is still a safety net, not the expected path: this
     // is a local Unix socket round trip, normally sub-millisecond, and the
     // shared `TerminalSession` (see `super::TerminalSession`) is already
@@ -416,7 +426,10 @@ pub(crate) fn attach_workspace(
             resize_pane(&mut stream, &mut model, pane, columns, rows);
         }
     }
-    loop {
+    // Every way out of the loop — Ctrl+O, Ctrl+Q, an error — must hand the
+    // model's memory back, so the loop runs inside one call whose result is
+    // read only after that handover.
+    let outcome: Result<WorkspaceExit> = (|| loop {
         while let Ok(event) = receiver.try_recv() {
             model.apply(event, &identities);
         }
@@ -1651,7 +1664,9 @@ pub(crate) fn attach_workspace(
                 _ => {}
             }
         }
-    }
+    })();
+    memory.remembered = model.remember();
+    outcome
 }
 
 /// `pub(super)` (not private) so `uze_extensions::git_diff` — a crate
@@ -2100,6 +2115,136 @@ struct Notice {
 struct NoticeOwner {
     task: String,
     label: String,
+}
+
+/// One background read's answer channel, kept as a pair so the two ends
+/// live and die together.
+struct Answers<T> {
+    sender: mpsc::Sender<T>,
+    receiver: mpsc::Receiver<T>,
+}
+
+impl<T> Default for Answers<T> {
+    fn default() -> Self {
+        let (sender, receiver) = mpsc::channel();
+        Self { sender, receiver }
+    }
+}
+
+/// What the workspace client keeps between attaches.
+///
+/// Owned by `super::run` for the life of the process, not by one call to
+/// [`attach_workspace`]: a Ctrl+O round trip to management and back is a
+/// detach and a fresh attach, and everything this client had resolved on
+/// its own — every task, branch, badge and agent status in the sidebar —
+/// used to leave with the model that held it. The trip back then redrew
+/// every agent row from its bare working directory and filled the captions
+/// in again one answer at a time, reading as the whole workspace being
+/// resolved from scratch. What comes from the server (the session, the
+/// pane grids) is deliberately *not* here: the attach re-reads it, and a
+/// stale copy would be worse than a short wait for the real one.
+#[derive(Default)]
+pub(crate) struct WorkspaceMemory {
+    /// The model's own remembered half, taken by the attach and handed
+    /// back when it ends (see [`WorkspaceModel::recall`]/[`WorkspaceModel::remember`]).
+    remembered: Remembered,
+    /// The channels background reads answer on. Kept with the answers they
+    /// carry, so a read still running when the user leaves lands after
+    /// they come back instead of vanishing with a dropped receiver — which
+    /// would also have left its key reserved in the pending sets forever.
+    support: Answers<SupportResolution>,
+    tasks: Answers<TaskResolution>,
+    deliveries: Answers<DeliveryResolution>,
+}
+
+/// The fields of [`WorkspaceModel`] that outlive one attach — each is
+/// documented on the model, where it is read. Everything not listed here
+/// belongs to one attach: the server's view of the session, presentation
+/// state such as open overlays and drags, and per-attach transients like
+/// echo windows and hit rects.
+#[derive(Default)]
+struct Remembered {
+    agent_activity: BTreeMap<PaneId, AgentActivity>,
+    completed_agent_panes: BTreeSet<PaneId>,
+    agent_support: Option<SupportResolution>,
+    agent_support_pending: Option<SupportKey>,
+    git_badge: Option<GitBadge>,
+    prompt_buffers: BTreeMap<PaneId, PromptBuffer>,
+    tasks: BTreeMap<PathBuf, Vec<TaskView>>,
+    branches: BTreeMap<PathBuf, String>,
+    task_eval_pending: BTreeSet<PathBuf>,
+    label_adoptions: BTreeMap<TabId, String>,
+    last_task_refresh: Option<Instant>,
+    delivery_pending: BTreeSet<String>,
+    notice: Option<Notice>,
+    pane_checkouts: BTreeMap<PaneId, PathBuf>,
+    occupied_checkouts: BTreeSet<PathBuf>,
+    slots_swept: bool,
+}
+
+impl WorkspaceModel {
+    /// A model starting an attach with what the previous one remembered.
+    fn recall(remembered: Remembered) -> Self {
+        let Remembered {
+            agent_activity,
+            completed_agent_panes,
+            agent_support,
+            agent_support_pending,
+            git_badge,
+            prompt_buffers,
+            tasks,
+            branches,
+            task_eval_pending,
+            label_adoptions,
+            last_task_refresh,
+            delivery_pending,
+            notice,
+            pane_checkouts,
+            occupied_checkouts,
+            slots_swept,
+        } = remembered;
+        Self {
+            agent_activity,
+            completed_agent_panes,
+            agent_support,
+            agent_support_pending,
+            git_badge,
+            prompt_buffers,
+            tasks,
+            branches,
+            task_eval_pending,
+            label_adoptions,
+            last_task_refresh,
+            delivery_pending,
+            notice,
+            pane_checkouts,
+            occupied_checkouts,
+            slots_swept,
+            ..Self::default()
+        }
+    }
+
+    /// What this attach leaves for the next one.
+    fn remember(self) -> Remembered {
+        Remembered {
+            agent_activity: self.agent_activity,
+            completed_agent_panes: self.completed_agent_panes,
+            agent_support: self.agent_support,
+            agent_support_pending: self.agent_support_pending,
+            git_badge: self.git_badge,
+            prompt_buffers: self.prompt_buffers,
+            tasks: self.tasks,
+            branches: self.branches,
+            task_eval_pending: self.task_eval_pending,
+            label_adoptions: self.label_adoptions,
+            last_task_refresh: self.last_task_refresh,
+            delivery_pending: self.delivery_pending,
+            notice: self.notice,
+            pane_checkouts: self.pane_checkouts,
+            occupied_checkouts: self.occupied_checkouts,
+            slots_swept: self.slots_swept,
+        }
+    }
 }
 
 #[derive(Default)]

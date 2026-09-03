@@ -171,6 +171,11 @@ pub fn run(home: UzeHome) -> Result<()> {
     // width — when Ctrl+O switches to the other, not reset back to the
     // responsive default every round trip.
     let mut sidebar_width: Option<u16> = None;
+    // Likewise what the workspace client resolved for itself — the
+    // sidebar's tasks, branches and agent statuses among them — which each
+    // attach takes over from the last instead of deriving again in front
+    // of the user (see `orchestrator::WorkspaceMemory`).
+    let mut workspace_memory = orchestrator::WorkspaceMemory::default();
     // Set when management asks to return to a specific tab (activating a
     // prompt-history row); consumed by the next attach.
     let mut pending_tab: Option<uze_terminal::TabId> = None;
@@ -180,6 +185,7 @@ pub fn run(home: UzeHome) -> Result<()> {
             &mut terminal,
             &root,
             &mut sidebar_width,
+            &mut workspace_memory,
             &home,
             pending_tab.take(),
         )? {
