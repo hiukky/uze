@@ -152,6 +152,11 @@ impl Engine {
         let slot = placement.cwd.clone();
         let name = slot.file_name().unwrap().to_string_lossy().into_owned();
         fs::write(self.scripts.join(format!("{name}.start.sh")), start).unwrap();
+        // A reused slot keeps its name, and with it the marker the previous
+        // agent left: clearing it is what makes the wait below prove that
+        // *this* agent ran.
+        let started = self.scripts.join(format!("{name}.started"));
+        let _ = fs::remove_file(&started);
         let label = format!(
             "agent {}",
             self.session
@@ -170,7 +175,6 @@ impl Engine {
         )
         .unwrap();
         self.wait_for_tab_in(&slot);
-        let started = self.scripts.join(format!("{name}.started"));
         wait_until("the agent played its script", || started.exists());
         (task.as_str().to_owned(), slot)
     }
@@ -220,6 +224,43 @@ impl Engine {
                 "no tab appeared in {}",
                 slot.display()
             );
+            self.wait_for_session();
+        }
+    }
+
+    /// The checkout directories a pane still sits in — what the TUI hands
+    /// the application to say which slots are still somebody's.
+    fn occupied(&self) -> Vec<PathBuf> {
+        self.session
+            .as_ref()
+            .into_iter()
+            .flat_map(|session| &session.workspace.spaces)
+            .flat_map(|space| &space.tabs)
+            .filter_map(|tab| match &tab.layout {
+                uze_terminal::Layout::Pane(pane) => Some(pane.cwd.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Closes the tab running in `slot`, the way the operator does.
+    fn close_tab_in(&mut self, slot: &Path) {
+        let pane = self.pane_in(slot);
+        let tab = self
+            .session
+            .as_ref()
+            .unwrap()
+            .workspace
+            .spaces
+            .iter()
+            .flat_map(|space| &space.tabs)
+            .find(|tab| tab.focus.pane == pane)
+            .expect("the pane belongs to a tab")
+            .id;
+        send_request(&mut self.stream, &ClientRequest::CloseTab { tab }).unwrap();
+        let slot = slot.to_path_buf();
+        self.wait_for_session_where("the closed tab is gone", |_| true);
+        while self.find_pane_in(&slot).is_some() {
             self.wait_for_session();
         }
     }
@@ -377,6 +418,55 @@ fn three_agents_deliver_into_a_linear_target_around_the_operators_edits() {
     for id in [&a.0, &b.0, &c.0] {
         assert_eq!(engine.state_of(id), TaskStateView::Integrated);
     }
+}
+
+/// The whole point of a slot: an agent closed without delivering anything
+/// gives its checkout back, and one that left work behind does not.
+#[test]
+fn a_closed_agent_gives_its_slot_back_and_one_holding_work_keeps_it() {
+    let mut engine = Engine::start("  completion: merge\n");
+    let project = engine.project().to_path_buf();
+
+    let (empty, slot) = engine.launch("true\n");
+    engine.close_tab_in(&slot);
+    let occupied = engine.occupied();
+    let released = engine
+        .app()
+        .workspace()
+        .release_abandoned_tasks(&project, &occupied);
+    assert_eq!(released.len(), 1, "{released:?}");
+    assert!(!released[0].parked, "the checkout held nothing");
+    assert_eq!(engine.state_of(&empty), TaskStateView::Integrated);
+
+    let (_, reused) = engine.launch("true\n");
+    assert_eq!(
+        reused, slot,
+        "the freed slot is taken instead of a new working tree"
+    );
+    let occupied = engine.occupied();
+    assert!(
+        engine
+            .app()
+            .workspace()
+            .release_abandoned_tasks(&project, &occupied)
+            .is_empty(),
+        "an agent sitting in its slot is not abandoned"
+    );
+
+    let (unsaved, kept) = engine.launch("printf 'draft\\n' > draft.rs\n");
+    engine.close_tab_in(&kept);
+    let occupied = engine.occupied();
+    let released = engine
+        .app()
+        .workspace()
+        .release_abandoned_tasks(&project, &occupied);
+    assert_eq!(released.len(), 1, "{released:?}");
+    assert!(released[0].parked, "it holds uncommitted work");
+    assert_eq!(engine.state_of(&unsaved), TaskStateView::Parked);
+    assert!(kept.join("draft.rs").is_file(), "every file is preserved");
+
+    let (_, fresh) = engine.launch("true\n");
+    assert_ne!(fresh, kept, "a parked slot is never handed to a new agent");
 }
 
 #[test]

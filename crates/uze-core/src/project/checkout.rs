@@ -337,6 +337,28 @@ pub fn reconcile(primary: &Path, store: &mut TaskStore, target: &str) -> Reconci
     report
 }
 
+/// What a collection removed, so a caller can say so.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Collected {
+    pub branches: Vec<String>,
+    pub slots: Vec<CheckoutId>,
+}
+
+/// The two removals that cannot lose work, as one critical section: a
+/// branch whose every commit is in the target, and the directory of a clean
+/// slot nobody has touched for `age`, its branch kept.
+///
+/// Both are safe on their own; taking the write lock once around them is
+/// what keeps a branch from being pruned in the moment a concurrent
+/// acquisition is creating it.
+pub fn collect(primary: &Path, store: &TaskStore, target: &str, age: Duration) -> Collected {
+    uze_git::locked(primary, uze_git::DEFAULT_WRITE_TIMEOUT, || Collected {
+        branches: prune_integrated_branches(primary, store, target),
+        slots: remove_idle_slots(primary, store, age),
+    })
+    .unwrap_or_default()
+}
+
 /// Deletes every `agent/` branch whose commits are all reachable from
 /// `target` and which no live task and no checkout is using. Returns the
 /// branches removed.
@@ -386,6 +408,40 @@ pub fn remove_idle_slots(primary: &Path, store: &TaskStore, age: Duration) -> Ve
         }
     }
     removed
+}
+
+/// Ends `task` because nothing is in front of its checkout any more: the
+/// slot goes back to the pool when it holds nothing, and is parked for the
+/// operator when it holds work.
+///
+/// This is what an agent's departure means for its slot, and the only
+/// transition besides delivery that frees one. Without it a task stays live
+/// for as long as its record does — its slot occupied, its directory never
+/// reused, and every new agent paying for a working tree of its own.
+pub fn release(primary: &Path, task: &mut Task, target: &str) -> SlotState {
+    let directory = task
+        .checkout
+        .as_ref()
+        .map(|checkout| primary.join(WORKTREES_DIRECTORY).join(checkout.as_str()))
+        .filter(|path| path.is_dir());
+    let holds_work = directory.is_some_and(|path| is_dirty(&path))
+        || (branch_exists(primary, &task.branch)
+            && commits_ahead(primary, target, &task.branch) > 0);
+    if is_live(&task.state) {
+        task.state = if holds_work {
+            TaskState::Parked
+        } else {
+            TaskState::Integrated
+        };
+    }
+    // A task the operator declared done keeps its branch and frees its
+    // slot, exactly as `slot_state` reads it: the commits are not lost,
+    // they are simply nobody's turn any more.
+    if holds_work && task.state != TaskState::Integrated {
+        SlotState::Parked
+    } else {
+        SlotState::Free
+    }
 }
 
 /// The one removal that loses work, and therefore the one only an operator
@@ -654,6 +710,68 @@ mod tests {
 
     fn set_state(store: &mut TaskStore, id: &TaskId, state: TaskState) {
         store.get_mut(id).unwrap().state = state;
+    }
+
+    /// The whole reason reuse ever happens: an agent that closed without
+    /// delivering anything must not keep its slot.
+    #[test]
+    fn an_agent_that_left_an_empty_checkout_frees_its_slot_for_the_next() {
+        let repository = repository("slots-release-empty");
+        let mut store = TaskStore::default();
+
+        let (first, slot) = launch(&repository, &mut store, "first");
+        let target = TARGET.to_owned();
+        let state = release(
+            repository.root(),
+            store.get_mut(&first.id).unwrap(),
+            &target,
+        );
+        assert_eq!(state, SlotState::Free);
+        assert_eq!(
+            slots(repository.root(), &store)[0].state,
+            SlotState::Free,
+            "nothing is in front of it and it holds nothing"
+        );
+
+        let (_, reused) = launch(&repository, &mut store, "second");
+        assert!(!reused.created, "the freed slot is taken, not a new one");
+        assert_eq!(reused.path, slot.path);
+    }
+
+    #[test]
+    fn an_agent_that_left_work_behind_parks_its_slot_instead_of_freeing_it() {
+        let repository = repository("slots-release-work");
+        let mut store = TaskStore::default();
+
+        let (committed, slot) = launch(&repository, &mut store, "committed");
+        fs::write(slot.path.join("feature.rs"), b"fn f() {}").unwrap();
+        repository.git_in(&slot.path, &["add", "."]);
+        repository.git_in(&slot.path, &["commit", "-qm", "undelivered"]);
+        assert_eq!(
+            release(
+                repository.root(),
+                store.get_mut(&committed.id).unwrap(),
+                TARGET
+            ),
+            SlotState::Parked
+        );
+
+        let (dirty, other) = launch(&repository, &mut store, "dirty");
+        fs::write(other.path.join("draft.rs"), b"unsaved").unwrap();
+        assert_eq!(
+            release(repository.root(), store.get_mut(&dirty.id).unwrap(), TARGET),
+            SlotState::Parked
+        );
+
+        let (_, third) = launch(&repository, &mut store, "third");
+        assert!(
+            third.created,
+            "a parked slot is never offered to a new agent"
+        );
+        assert!(
+            other.path.join("draft.rs").is_file(),
+            "every file of a parked checkout is preserved"
+        );
     }
 
     #[test]

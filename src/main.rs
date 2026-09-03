@@ -534,8 +534,8 @@ fn run(cli: Cli) -> Result<()> {
         // inside a client is never what that means. Open a space for this
         // directory in the uze already running, and leave.
         if std::env::var_os("UZE_PANE").is_some() {
-            let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-            let root = uze_application::workspace_root_or_self(&root);
+            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            let root = uze_application::space_root(&cwd);
             let label = uze_terminal::open_space(&root)
                 .map_err(|error| uze_application::UzeError::AcquisitionFailed(error.to_string()))?;
             println!(

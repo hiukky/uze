@@ -270,7 +270,7 @@ pub(crate) fn attach_workspace(
     // space this client lands in. Resolving the workspace root *before*
     // attaching is what makes a repository and a subdirectory of it the
     // same space rather than two.
-    let workspace_root = uze_application::workspace_root_or_self(root);
+    let workspace_root = uze_application::space_root(root);
     let mut stream = attach(&workspace_root, columns, rows).map_err(runtime_error)?;
     let read_stream = stream.try_clone().map_err(io_error)?;
     send_request(
@@ -378,6 +378,7 @@ pub(crate) fn attach_workspace(
         while let Ok(event) = receiver.try_recv() {
             model.apply(event, &identities);
         }
+        sync_slot_occupancy(&mut model, home, &task_sender);
         while let Ok(resolution) = support_receiver.try_recv() {
             if model.agent_support_pending.as_ref() == Some(&resolution.key) {
                 model.agent_support_pending = None;
@@ -1813,6 +1814,14 @@ struct WorkspaceModel {
     notice: Option<(String, Instant)>,
     /// Open state of the preserved-work list; `None` when closed.
     preserved: Option<PreservedOverlay>,
+    /// The checkout each open pane was first seen in — a pane's slot does
+    /// not change when it `cd`s.
+    pane_checkouts: BTreeMap<PaneId, PathBuf>,
+    /// The slot directories a pane still holds. A checkout that leaves this
+    /// set lost its last pane, which is what ends the task running there.
+    occupied_checkouts: BTreeSet<PathBuf>,
+    /// Whether the sweep for tasks nobody's session restored has run.
+    slots_swept: bool,
 }
 
 /// Client-side reconstruction of what the user typed into a pane before
@@ -2525,6 +2534,109 @@ fn deliver_selected_tab(
     };
     model.set_notice(format!("{}: delivering…", task.label));
     spawn_delivery(home, cwd, Some(task.id), sender.clone());
+}
+
+/// Ends the tasks whose agent is gone, so their slots can be reused.
+///
+/// A slot is occupied by the pane sitting in it and by nothing else: the
+/// task record alone cannot say whether an agent is still there, and a task
+/// that stays live keeps its checkout out of the pool for good. Two things
+/// end one — a tab that closed, seen here as a checkout whose last pane is
+/// gone, and a session nobody restored, swept once before this client can
+/// place its first agent.
+///
+/// A pane is bound to the checkout it was *first seen* in rather than to
+/// wherever it currently sits: an agent that `cd`s out of its own slot has
+/// not left it, and must never have it handed to somebody else.
+fn sync_slot_occupancy(
+    model: &mut WorkspaceModel,
+    home: &UzeHome,
+    sender: &mpsc::Sender<TaskResolution>,
+) {
+    let Some(session) = model.session.as_ref() else {
+        return;
+    };
+    let live: Vec<(PaneId, PathBuf)> = session
+        .workspace
+        .spaces
+        .iter()
+        .flat_map(|space| &space.tabs)
+        .flat_map(|tab| panes_in_layout(&tab.layout))
+        .map(|pane| (pane.id, pane.cwd.clone()))
+        .collect();
+    for (pane, cwd) in &live {
+        if let Some(checkout) = uze_application::isolated_checkout(cwd) {
+            model
+                .pane_checkouts
+                .entry(*pane)
+                .or_insert_with(|| checkout.directory());
+        }
+    }
+    model
+        .pane_checkouts
+        .retain(|pane, _| live.iter().any(|(live, _)| live == pane));
+    let occupied: BTreeSet<PathBuf> = model.pane_checkouts.values().cloned().collect();
+    let vanished: Vec<PathBuf> = model
+        .occupied_checkouts
+        .difference(&occupied)
+        .cloned()
+        .collect();
+    let sweeping = !model.slots_swept;
+    model.slots_swept = true;
+    model.occupied_checkouts = occupied.clone();
+    if !sweeping && vanished.is_empty() {
+        return;
+    }
+    // A repository is named by any path inside it: the checkout a pane just
+    // left, or — for the sweep — every space's own root.
+    let mut repositories: Vec<PathBuf> = vanished;
+    if sweeping {
+        repositories.extend(
+            session
+                .workspace
+                .spaces
+                .iter()
+                .map(|space| space.root.clone()),
+        );
+    }
+    let Ok(app) = tui_application(home.clone()) else {
+        return;
+    };
+    let held: Vec<PathBuf> = occupied.into_iter().collect();
+    let mut seen = BTreeSet::new();
+    for cwd in repositories {
+        let Some(primary) = app.workspace().primary_of(&cwd) else {
+            continue;
+        };
+        if !seen.insert(primary) {
+            continue;
+        }
+        let released = app.workspace().release_abandoned_tasks(&cwd, &held);
+        if let Some(parked) = released.iter().find(|task| task.parked) {
+            model.set_notice(format!(
+                "{}: parked, its work is preserved (alt+p)",
+                parked.label
+            ));
+        }
+        if !released.is_empty() {
+            model.schedule_evaluation(home, cwd.clone(), sender);
+        }
+        // Only ever the removals that cannot lose work, and only from the
+        // path that just changed what "in use" means.
+        app.workspace().collect_slot_garbage(&cwd);
+    }
+}
+
+/// Every pane of a layout, in the order they are laid out.
+fn panes_in_layout(layout: &uze_terminal::Layout) -> Vec<&uze_terminal::Pane> {
+    match layout {
+        uze_terminal::Layout::Pane(pane) => vec![pane],
+        uze_terminal::Layout::Split { first, second, .. } => {
+            let mut panes = panes_in_layout(first);
+            panes.extend(panes_in_layout(second));
+            panes
+        }
+    }
 }
 
 /// Where a newly created agent starts: the slot the application acquired

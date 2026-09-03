@@ -259,6 +259,14 @@ pub struct IsolatedCheckout<'a> {
     pub name: &'a str,
 }
 
+impl IsolatedCheckout<'_> {
+    /// The checkout's own directory — what a slot is keyed on when a path
+    /// inside it is all the caller has.
+    pub fn directory(&self) -> PathBuf {
+        self.primary.join(WORKTREES_DIRECTORY).join(self.name)
+    }
+}
+
 /// The isolated checkout `path` sits in, or `None` for a path that is not
 /// isolated.
 ///

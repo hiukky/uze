@@ -377,6 +377,67 @@ impl Workspace<'_> {
         reports
     }
 
+    /// Ends every task no pane is in front of any more, and says what
+    /// became of each slot.
+    ///
+    /// `occupied` names the checkout directories a live pane still sits in.
+    /// A task outside that set has no agent: its slot goes back to the pool
+    /// when it holds nothing, and is parked for the operator when it holds
+    /// work. Delivery is not the only way a task ends — most end by the
+    /// operator closing the tab — and a slot nobody ever released is a slot
+    /// no new agent can reuse.
+    pub fn release_abandoned_tasks(&self, cwd: &Path, occupied: &[PathBuf]) -> Vec<ReleasedTask> {
+        let Some(mut repository) = self.repository(cwd) else {
+            return Vec::new();
+        };
+        let target = repository.target();
+        let primary = repository.primary.clone();
+        let mut released = Vec::new();
+        for task in &mut repository.store.tasks {
+            // A delivery in flight owns the task until it answers.
+            if !checkout::is_live(&task.state) || task.state == TaskState::Integrating {
+                continue;
+            }
+            if landing::slot_path(&primary, task)
+                .is_some_and(|slot| occupied.iter().any(|pane| pane.starts_with(&slot)))
+            {
+                continue;
+            }
+            let slot = checkout::release(&primary, task, &target);
+            released.push(ReleasedTask {
+                id: task.id.as_str().to_owned(),
+                label: task.label.clone(),
+                parked: slot == checkout::SlotState::Parked,
+            });
+        }
+        if !released.is_empty() {
+            let _ = task::save(&self.0.home, &primary, &repository.store);
+        }
+        released
+    }
+
+    /// Takes out the safe removals: an `agent/` branch whose every commit
+    /// is already in the target, and the directory of a clean slot nobody
+    /// has touched in a fortnight — its branch kept. Nothing holding work
+    /// is ever touched here; that is the operator's alone.
+    pub fn collect_slot_garbage(&self, cwd: &Path) -> Vec<String> {
+        let Some(repository) = self.repository(cwd) else {
+            return Vec::new();
+        };
+        let target = repository.target();
+        let collected = checkout::collect(
+            &repository.primary,
+            &repository.store,
+            &target,
+            checkout::IDLE_SLOT_AGE,
+        );
+        collected
+            .branches
+            .into_iter()
+            .chain(collected.slots.into_iter().map(|slot| slot.to_string()))
+            .collect()
+    }
+
     /// The operator declares a handed-off task done: its slot is free and
     /// its branch stays.
     pub fn finish_task(&self, cwd: &Path, task_id: &str) -> Result<()> {
@@ -478,6 +539,16 @@ impl Repository {
             outcome,
         })
     }
+}
+
+/// A task ended because its agent is gone, and what became of its slot.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReleasedTask {
+    pub id: String,
+    pub label: String,
+    /// `true` when the checkout held work and was parked for the operator
+    /// instead of going back to the pool.
+    pub parked: bool,
 }
 
 /// One task as presentation sees it.
@@ -724,6 +795,90 @@ mod placement_tests {
         );
         let task = slot(&placement);
         assert_eq!(repository.branch_of(&placement.cwd), task.branch());
+    }
+
+    /// The reuse the slot model exists for only ever happens if closing an
+    /// agent ends its task: nothing else releases a checkout.
+    #[test]
+    fn an_agent_whose_pane_is_gone_frees_its_slot_for_the_next_one() {
+        let repository = repository("release-free");
+        let root = repository.root().to_path_buf();
+        let app = application("release-free-home");
+
+        let first = app.workspace().place_new_agent(&root);
+        let abandoned_branch = repository.branch_of(&first.cwd);
+        let released = app.workspace().release_abandoned_tasks(&root, &[]);
+        assert_eq!(released.len(), 1);
+        assert!(!released[0].parked, "an empty checkout holds nothing");
+
+        let second = app.workspace().place_new_agent(&root);
+        assert_eq!(
+            second.cwd, first.cwd,
+            "the freed slot is reused instead of a new directory"
+        );
+
+        // The branch it left behind carries nothing the target lacks, so
+        // the safe collection takes it once the slot has moved off it.
+        app.workspace().collect_slot_garbage(&root);
+        assert!(
+            !repository
+                .git(&["branch", "--list", &abandoned_branch])
+                .contains(&abandoned_branch),
+            "a branch with nothing on it does not outlive its task"
+        );
+
+        // While a pane still sits in it, the slot stays that task's.
+        let third_panes = [second.cwd.join("src")];
+        assert!(
+            app.workspace()
+                .release_abandoned_tasks(&root, &third_panes)
+                .is_empty(),
+            "an agent in front of its checkout is not abandoned"
+        );
+    }
+
+    #[test]
+    fn an_agent_that_left_work_behind_parks_its_slot() {
+        let repository = repository("release-park");
+        let root = repository.root().to_path_buf();
+        let app = application("release-park-home");
+
+        let abandoned = app.workspace().place_new_agent(&root);
+        std::fs::write(abandoned.cwd.join("draft.rs"), b"unsaved").unwrap();
+        let released = app.workspace().release_abandoned_tasks(&root, &[]);
+        assert_eq!(released.len(), 1);
+        assert!(released[0].parked);
+
+        let next = app.workspace().place_new_agent(&root);
+        assert_ne!(
+            next.cwd, abandoned.cwd,
+            "a parked checkout is never offered to a new agent"
+        );
+        assert!(
+            abandoned.cwd.join("draft.rs").is_file(),
+            "the work it holds is preserved"
+        );
+    }
+
+    /// A slot carries the project's own anchor files, so resolving a space
+    /// from inside one used to answer the slot: a second space over one
+    /// repository, rooted in `.worktrees`.
+    #[test]
+    fn a_slot_belongs_to_its_repositorys_space_and_is_never_a_root_of_its_own() {
+        let repository = repository("space-root");
+        let root = repository.root().to_path_buf();
+        let app = application("space-root-home");
+        let placement = app.workspace().place_new_agent(&root);
+        assert_eq!(
+            crate::space_root(&placement.cwd),
+            crate::space_root(&root),
+            "an agent's checkout lands in the space its repository already has"
+        );
+        assert_eq!(
+            crate::space_root(&placement.cwd.join("crates")),
+            crate::space_root(&root),
+            "so does a subdirectory of it"
+        );
     }
 
     #[test]
