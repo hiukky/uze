@@ -52,7 +52,11 @@ rules:
 operations:
   archive:
     guidance:
-      - Before moving the change, check design.md's `## Candidate ADRs`
+      # Block scalars on purpose: a plain multi-line list item that
+      # contains ": " parses as an implicit key and the whole file is
+      # rejected (and silently ignored by `openspec`).
+      - >-
+        Before moving the change, check design.md's `## Candidate ADRs`
         note (if any) for decisions that are still architecturally
         significant AND hard to reverse now that implementation is done -
         a new external dependency, a technology/pattern choice with
@@ -60,7 +64,8 @@ operations:
         by what was actually built, not what was originally flagged - if
         the approach changed along the way, a flagged decision may no
         longer apply, and an unflagged one may now qualify.
-      - For each qualifying decision, write one ADR: list existing
+      - >-
+        For each qualifying decision, write one ADR: list existing
         `docs/adr/NNN-*.md` files, take the next sequential number
         (3 digits, zero-padded, continuing the existing sequence), and
         create `docs/adr/<NNN>-<kebab-title>.md` in Nygard style (Context
@@ -70,9 +75,11 @@ operations:
         change: openspec/changes/<change-name>/`. This file is the
         permanent record - it is not moved or deleted when the change is
         archived.
-      - If nothing clears the bar, create no ADR files and say so - most
+      - >-
+        If nothing clears the bar, create no ADR files and say so - most
         changes don't warrant one.
-      - If a decision here reverses or supersedes an existing ADR, do not
+      - >-
+        If a decision here reverses or supersedes an existing ADR, do not
         edit that file's Decision retroactively - write a new ADR instead
         and add `Status: Superseded by docs/adr/<NNN>-<new-title>.md` to
         the old file.
