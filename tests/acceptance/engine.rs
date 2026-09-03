@@ -474,6 +474,54 @@ fn a_closed_agent_gives_its_slot_back_and_one_holding_work_keeps_it() {
     assert_ne!(fresh, kept, "a parked slot is never handed to a new agent");
 }
 
+/// The status column is read off the checkout, every time, for as long as
+/// somebody is in it: an agent almost never stops at its first delivery,
+/// and a row that froze on `delivered` was reporting the past over a slot
+/// full of work.
+#[test]
+fn a_slots_status_follows_the_agent_through_a_delivery_and_past_it() {
+    let mut engine = Engine::start("  completion: merge\n");
+    let project = engine.project().to_path_buf();
+
+    let (id, slot) = engine.launch("printf 'draft\\n' > draft.rs\n");
+    wait_for_states(&engine, &[&id], &TaskStateView::Uncommitted);
+
+    engine.git(&slot, &["add", "draft.rs"]);
+    engine.git(&slot, &["commit", "--quiet", "-m", "draft"]);
+    wait_for_states(&engine, &[&id], &TaskStateView::Ready);
+
+    let report = engine
+        .app()
+        .workspace()
+        .deliver_task(&project, &id)
+        .unwrap();
+    assert_eq!(report.outcome, DeliveryOutcome::Merged, "{report:?}");
+    assert_eq!(engine.state_of(&id), TaskStateView::Integrated);
+
+    engine.evaluate();
+    assert_eq!(
+        engine.state_of(&id),
+        TaskStateView::Integrated,
+        "nothing new leaves the delivery standing"
+    );
+
+    // The same agent carries on in the same slot.
+    fs::write(slot.join("after.rs"), "fn after() {}\n").unwrap();
+    wait_for_states(&engine, &[&id], &TaskStateView::Uncommitted);
+
+    engine.git(&slot, &["add", "after.rs"]);
+    engine.git(&slot, &["commit", "--quiet", "-m", "after"]);
+    wait_for_states(&engine, &[&id], &TaskStateView::Ready);
+
+    let report = engine
+        .app()
+        .workspace()
+        .deliver_task(&project, &id)
+        .unwrap();
+    assert_eq!(report.outcome, DeliveryOutcome::Merged, "{report:?}");
+    assert!(project.join("after.rs").is_file(), "and the second lands");
+}
+
 #[test]
 fn a_conflict_goes_to_the_agents_pane_and_comes_back_resolved() {
     let mut engine = Engine::start("  completion: merge\n");

@@ -309,25 +309,28 @@ impl Workspace<'_> {
         let completion = repository.policy.completion;
         let owners = slot_owners(&repository.store);
         for task in &mut repository.store.tasks {
-            // A delivered task is still looked at while it owns its slot:
-            // the agent that delivered usually keeps working in the same
-            // checkout, and skipping every non-live task froze that row on
-            // `delivered` for the rest of the session however much the
-            // slot changed. Only the *current* owner is reconsidered — a
-            // freed slot handed to a new agent belongs to that agent's
-            // task, not to the one that used to sit there. `Parked` is
-            // nobody's turn by definition and stays put.
-            let revivable =
-                task.state == TaskState::Integrated && owners.contains(task.id.as_str());
+            // A task that ended is still looked at while it owns its
+            // slot: the agent that delivered usually keeps working in the
+            // same checkout, and skipping every non-live task froze that
+            // row on `delivered` for the rest of the session however much
+            // the slot changed. `Closed` is the same story with nothing
+            // delivered — the checkout it ended in can be written in
+            // again. Only the *current* owner is reconsidered: a freed
+            // slot handed to a new agent belongs to that agent's task, not
+            // to the one that used to sit there. `Parked` is nobody's turn
+            // by definition and stays put.
+            let revivable = matches!(task.state, TaskState::Integrated | TaskState::Closed)
+                && owners.contains(task.id.as_str());
             if task.state == TaskState::Integrating
                 || (!checkout::is_live(&task.state) && !revivable)
             {
                 continue;
             }
             match landing::readiness(&primary, task) {
-                // Nothing new since delivery leaves the delivery standing:
-                // `↑` is the last thing that happened to this task, and
-                // saying `running` instead would erase it on the next tick.
+                // Nothing new since it ended leaves the ending standing:
+                // the delivery is the last thing that happened to the
+                // task, and saying `running` instead would erase it on the
+                // next tick.
                 Readiness::Running if revivable => {}
                 Readiness::Running => task.state = TaskState::Running,
                 Readiness::Uncommitted => task.state = TaskState::Uncommitted,
