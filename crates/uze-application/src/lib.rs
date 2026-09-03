@@ -29,7 +29,7 @@ pub use uze_core::{
     },
     preference::{Autonomy, ModelPreference, PreferenceApplyOutcome, Preferences, SandboxScope},
     project_lock::parse_plugin_marketplace_spec,
-    prompt_history::{PromptEntry, PromptOrigin},
+    prompt_history::{PromptAge, PromptClock, PromptEntry, PromptOrigin},
     provisioning::{ProcessOutput, ProcessResult, ProcessRunner, ProcessSpec, SystemProcessRunner},
     router::CompatibilityRoute,
     router::HarnessCapabilities,

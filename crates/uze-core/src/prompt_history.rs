@@ -45,6 +45,9 @@ const MAX_PREVIEW_CHARS: usize = 160;
 /// Appending past this size triggers a compaction. Sized so the steady
 /// state is a single small read, not so tight that compaction is frequent.
 const COMPACT_ABOVE_BYTES: u64 = 64 * 1024;
+/// Prompts younger than this head a listing without a group label.
+const RECENT_WINDOW_SECS: u64 = 30 * 60;
+const SECS_PER_DAY: u64 = 86_400;
 
 /// Where a prompt was submitted. Carried separately from the workspace root
 /// because the root selects the file rather than living inside it.
@@ -92,17 +95,78 @@ impl PromptEntry {
         })
     }
 
-    /// Human relative time like `2m ago`, `3h ago`, `1d ago`.
-    pub fn relative_time(&self) -> String {
-        let delta = now_secs().saturating_sub(self.timestamp_secs);
+    /// Compact age for a one-line row: `now`, `8m`, `3h`, `2d`.
+    pub fn compact_age(&self, clock: &PromptClock) -> String {
+        let delta = clock.now_secs.saturating_sub(self.timestamp_secs);
         if delta < 60 {
-            "just now".to_owned()
+            "now".to_owned()
         } else if delta < 3600 {
-            format!("{}m ago", delta / 60)
+            format!("{}m", delta / 60)
         } else if delta < 86400 {
-            format!("{}h ago", delta / 3600)
+            format!("{}h", delta / 3600)
         } else {
-            format!("{}d ago", delta / 86400)
+            format!("{}d", delta / 86400)
+        }
+    }
+
+    /// Which slice of the calendar this entry falls in, for grouping a
+    /// listing. Entries newer than the recent window sit above every
+    /// labelled group; the rest split on local midnights.
+    pub fn age(&self, clock: &PromptClock) -> PromptAge {
+        if clock.now_secs.saturating_sub(self.timestamp_secs) < RECENT_WINDOW_SECS {
+            PromptAge::Recent
+        } else if self.timestamp_secs >= clock.day_start_secs {
+            PromptAge::EarlierToday
+        } else if self.timestamp_secs + SECS_PER_DAY >= clock.day_start_secs {
+            PromptAge::Yesterday
+        } else {
+            PromptAge::Older
+        }
+    }
+}
+
+/// Where a listing draws its group boundaries. Ordered oldest-last so a
+/// newest-first listing sees groups in ascending order.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub enum PromptAge {
+    Recent,
+    EarlierToday,
+    Yesterday,
+    Older,
+}
+
+impl PromptAge {
+    /// Heading a listing puts above the group; the recent group needs none
+    /// because it is the listing's opening.
+    pub fn label(self) -> Option<&'static str> {
+        match self {
+            Self::Recent => None,
+            Self::EarlierToday => Some("Earlier today"),
+            Self::Yesterday => Some("Yesterday"),
+            Self::Older => Some("Older"),
+        }
+    }
+}
+
+/// The moment ages are measured against, resolved once per listing so
+/// every row agrees on what "now" and "today" mean.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PromptClock {
+    now_secs: u64,
+    /// Local midnight preceding `now_secs`, seconds since UNIX epoch.
+    day_start_secs: u64,
+}
+
+impl PromptClock {
+    pub fn now() -> Self {
+        let now_secs = now_secs();
+        Self::at(now_secs, local_day_start(now_secs))
+    }
+
+    pub fn at(now_secs: u64, day_start_secs: u64) -> Self {
+        Self {
+            now_secs,
+            day_start_secs,
         }
     }
 }
@@ -256,6 +320,34 @@ fn now_secs() -> u64 {
         .as_secs()
 }
 
+/// Local midnight preceding `now_secs`. The offset is read from the
+/// broken-down local time rather than a fixed zone so the boundary follows
+/// the machine's clock, including DST, without a calendar dependency.
+#[cfg(unix)]
+fn local_day_start(now_secs: u64) -> u64 {
+    let Ok(time) = libc::time_t::try_from(now_secs) else {
+        return utc_day_start(now_secs);
+    };
+    let mut local: libc::tm = unsafe { std::mem::zeroed() };
+    // SAFETY: both pointers are valid for the duration of the call, and
+    // `localtime_r` writes only into the `tm` it is handed.
+    let resolved = unsafe { libc::localtime_r(&time, &mut local) };
+    if resolved.is_null() {
+        return utc_day_start(now_secs);
+    }
+    let since_midnight = local.tm_hour * 3600 + local.tm_min * 60 + local.tm_sec;
+    now_secs.saturating_sub(u64::try_from(since_midnight).unwrap_or(0))
+}
+
+#[cfg(not(unix))]
+fn local_day_start(now_secs: u64) -> u64 {
+    utc_day_start(now_secs)
+}
+
+fn utc_day_start(now_secs: u64) -> u64 {
+    now_secs - now_secs % SECS_PER_DAY
+}
+
 /// One rendered row is one line, so a multi-line prompt has to become one
 /// too — and collapsing keeps the words of the second line rather than
 /// discarding everything after the first newline.
@@ -301,6 +393,56 @@ mod tests {
             tab_label: "tab 1".into(),
             agent_binary: agent.into(),
         }
+    }
+
+    fn entry_at(timestamp_secs: u64) -> PromptEntry {
+        PromptEntry {
+            timestamp_secs,
+            ..PromptEntry::new(&origin(1, "agent"), "prompt").unwrap()
+        }
+    }
+
+    #[test]
+    fn compact_age_uses_the_largest_whole_unit() {
+        let clock = PromptClock::at(1_000_000, 0);
+        assert_eq!(entry_at(999_970).compact_age(&clock), "now");
+        assert_eq!(entry_at(1_000_000 - 8 * 60).compact_age(&clock), "8m");
+        assert_eq!(
+            entry_at(1_000_000 - 3 * 3600 - 59).compact_age(&clock),
+            "3h"
+        );
+        assert_eq!(
+            entry_at(1_000_000 - 2 * SECS_PER_DAY).compact_age(&clock),
+            "2d"
+        );
+    }
+
+    #[test]
+    fn age_splits_on_the_recent_window_and_local_midnights() {
+        let day_start = 1_000 * SECS_PER_DAY;
+        let now = day_start + 2 * 3600;
+        let clock = PromptClock::at(now, day_start);
+
+        assert_eq!(entry_at(now - 29 * 60).age(&clock), PromptAge::Recent);
+        assert_eq!(entry_at(now - 31 * 60).age(&clock), PromptAge::EarlierToday);
+        assert_eq!(entry_at(day_start).age(&clock), PromptAge::EarlierToday);
+        assert_eq!(entry_at(day_start - 1).age(&clock), PromptAge::Yesterday);
+        assert_eq!(
+            entry_at(day_start - SECS_PER_DAY).age(&clock),
+            PromptAge::Yesterday
+        );
+        assert_eq!(
+            entry_at(day_start - SECS_PER_DAY - 1).age(&clock),
+            PromptAge::Older
+        );
+        assert_eq!(entry_at(0).age(&clock), PromptAge::Older);
+    }
+
+    #[test]
+    fn the_live_clock_starts_its_day_within_the_last_twenty_four_hours() {
+        let clock = PromptClock::now();
+        assert!(clock.day_start_secs <= clock.now_secs);
+        assert!(clock.now_secs - clock.day_start_secs < SECS_PER_DAY);
     }
 
     #[test]

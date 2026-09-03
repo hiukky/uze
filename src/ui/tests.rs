@@ -1852,6 +1852,106 @@ fn a_refresh_that_shrinks_the_history_clamps_selection_and_hover() {
 }
 
 #[test]
+fn the_prompt_table_groups_rows_by_age_and_marks_the_selection() {
+    let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let recent = |tab_id: u64, agent: &str, preview: &str| uze_core::prompt_history::PromptEntry {
+        agent_binary: agent.to_owned(),
+        timestamp_secs: now - 8 * 60,
+        ..prompt(tab_id, preview)
+    };
+    let model = TuiModel {
+        route: Route::Overview,
+        focus: Focus::Content,
+        overview_prompt_selected: 1,
+        prompt_history: vec![
+            recent(1, "claude", "first prompt"),
+            recent(2, "codex", "second prompt"),
+            prompt(3, "from long ago"),
+        ],
+        ..TuiModel::default()
+    };
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| render(frame, &model, &mut hits))
+        .unwrap();
+    let rows = buffer_rows(&terminal);
+
+    let title = rows
+        .iter()
+        .find(|row| row.contains("Recent prompts — 3 recorded"))
+        .expect("the title counts the entries");
+    assert!(title.ends_with("claude 1 · codex 1 · agent 1"), "{title}");
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("HARNESS") && row.contains("WHEN") && row.contains("PROMPT")),
+        "column headings are drawn"
+    );
+    let selected = rows
+        .iter()
+        .find(|row| row.contains("second prompt"))
+        .expect("the selected entry is drawn");
+    let content = selected.rsplit('│').next().unwrap().trim_start();
+    assert!(content.starts_with("❯ codex"), "{selected}");
+    assert!(selected.contains("8m"), "{selected}");
+    assert!(selected.contains("space 1/tab 2"), "{selected}");
+    let first = rows
+        .iter()
+        .find(|row| row.contains("first prompt"))
+        .unwrap();
+    assert!(!first.contains('❯'), "{first}");
+
+    let older_heading = rows
+        .iter()
+        .position(|row| row.contains("── OLDER"))
+        .expect("entries from before yesterday sit under their own heading");
+    let older_entry = rows
+        .iter()
+        .position(|row| row.contains("from long ago"))
+        .unwrap();
+    assert_eq!(older_entry, older_heading + 1);
+    let content_of = |row: &String| row.rsplit('│').next().unwrap().trim().to_owned();
+    assert!(
+        content_of(&rows[older_heading - 1]).is_empty(),
+        "a blank separates groups"
+    );
+    assert!(
+        !rows[older_heading].ends_with('…'),
+        "the heading's rule stops at the edge instead of being clipped"
+    );
+    assert!(
+        !rows.iter().any(|row| row.contains("── EARLIER TODAY")),
+        "recent entries open the listing without a heading"
+    );
+}
+
+#[test]
+fn a_selection_below_the_fold_scrolls_the_prompt_table() {
+    let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    let mut model = overview_with_prompts(40);
+    model.overview_prompt_selected = 30;
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| render(frame, &model, &mut hits))
+        .unwrap();
+
+    assert!(
+        hits.iter()
+            .any(|(_, hit)| matches!(hit, Hit::PromptHistory(30))),
+        "the selected row is drawn even though it is not among the newest"
+    );
+    assert!(
+        !hits
+            .iter()
+            .any(|(_, hit)| matches!(hit, Hit::PromptHistory(0))),
+        "rows above scroll away to make room"
+    );
+}
+
+#[test]
 fn an_overview_with_no_room_for_the_history_still_renders() {
     let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
     let model = overview_with_prompts(40);
