@@ -20,6 +20,10 @@ class CodexBindings(Bindings):
     def session(self, cfg, prov_ip):
         return Tui(cfg, codex_container(cfg, prov_ip, self.launch), "codex-contract")
 
+    def session_in(self, cfg, prov_ip, cwd, prelude):
+        final = f"{prelude}\ncd {cwd} && {self.launch}"
+        return Tui(cfg, codex_container(cfg, prov_ip, final), "codex-isolation")
+
     def prepare(self, tui):
         """Codex opens on an onboarding flow; the prompt only accepts input
         once it is driven through."""

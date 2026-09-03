@@ -22,6 +22,10 @@ class OpenCodeBindings(Bindings):
             cfg, opencode_container(cfg, prov_ip, self.launch), "opencode-contract"
         )
 
+    def session_in(self, cfg, prov_ip, cwd, prelude):
+        final = f"{prelude}\ncd {cwd} && {self.launch}"
+        return Tui(cfg, opencode_container(cfg, prov_ip, final), "opencode-isolation")
+
     def skill_catalog(self, tui):
         time.sleep(self.warmup)
         tui.type("/skills")

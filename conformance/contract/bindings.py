@@ -44,6 +44,11 @@ class Bindings:
         """A live TUI for this harness, as a context manager."""
         raise NotImplementedError
 
+    def session_in(self, cfg, prov_ip, cwd, prelude):
+        """A live TUI started in `cwd` after `prelude` — a shell script the
+        contract wrote to lay a scene down — has run in the container."""
+        raise NotImplementedError
+
     def skill_catalog(self, tui):
         """Opens this harness's Skill list and returns the screen text."""
         raise NotImplementedError

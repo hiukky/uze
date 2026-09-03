@@ -52,6 +52,7 @@ MCP_TOOL = "uze-mcp-conformance-uze-conformance_uze_conformance"
 TOOL_NAME = os.environ.get("TOOL_NAME", MCP_TOOL)
 TOOL_ARGS = os.environ.get("TOOL_ARGS", "{}")
 
+ISOLATION_MARKERS = ["already isolated", "UZE_CONFORMANCE_REBASE"]
 SKILL_MARKERS = [
     "flow:analyze",
     "flow:commit",
@@ -84,6 +85,7 @@ def structural_summary(body_text):
     body = body_text or ""
     return {
         "skill_markers": {m: (m in body) for m in SKILL_MARKERS},
+        "isolation_markers": {m: (m in body) for m in ISOLATION_MARKERS},
         "has_available_skills": (
             "### Available skills" in body or "<available_skills>" in body
         ),

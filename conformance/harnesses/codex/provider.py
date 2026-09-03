@@ -36,6 +36,7 @@ LEAF_CERT = os.environ.get("LEAF_CERT", "/app/leaf.crt")
 LEAF_KEY = os.environ.get("LEAF_KEY", "/app/leaf.key")
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
+ISOLATION_MARKERS = ["already isolated", "UZE_CONFORMANCE_REBASE"]
 SKILL_MARKERS = [
     "flow:commit",
     "flow:review",
@@ -94,6 +95,7 @@ def structural_summary(body_text):
         tools = []
     return {
         "skill_markers": {m: (m in body) for m in SKILL_MARKERS},
+        "isolation_markers": {m: (m in body) for m in ISOLATION_MARKERS},
         "custom_tools": tools,
         "preview": body[:900],
         "has_available_skills": "### Available skills" in body,

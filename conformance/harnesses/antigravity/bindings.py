@@ -19,6 +19,16 @@ class AntigravityBindings(Bindings):
         setup = agy_setup(cfg, prov_ip, include_mcp=True, final_cmd=self.launch)
         return Tui(cfg, docker_base(cfg, prov_ip, setup), "antigravity-contract")
 
+    def session_in(self, cfg, prov_ip, cwd, prelude):
+        setup = agy_setup(
+            cfg,
+            prov_ip,
+            include_mcp=False,
+            final_cmd=self.launch,
+            prelude=f"{prelude}\ncd {cwd}",
+        )
+        return Tui(cfg, docker_base(cfg, prov_ip, setup), "antigravity-isolation")
+
     def prepare(self, tui):
         """agy opens on a colour-scheme picker and a terms screen; the prompt
         exists only after both are answered."""
@@ -33,6 +43,14 @@ class AntigravityBindings(Bindings):
         tui.child.send("\r")
         time.sleep(5)
         _, plain = tui.screen(3)
+        # A directory the harness has not seen before — a linked worktree,
+        # for one — adds a folder-trust dialog after the terms, with "Yes,
+        # I trust this folder" preselected. Text typed while it is up goes
+        # to the dialog, never to the prompt.
+        if "trust the contents" in plain:
+            tui.child.send("\r")
+            time.sleep(5)
+            _, plain = tui.screen(3)
         tui.snapshot("ready", plain)
         return plain, "Antigravity CLI" in plain and ">" in plain
 

@@ -17,6 +17,10 @@ class ClaudeBindings(Bindings):
     def session(self, cfg, prov_ip):
         return Tui(cfg, claude_container(cfg, prov_ip, self.launch), "claude-contract")
 
+    def session_in(self, cfg, prov_ip, cwd, prelude):
+        final = f"{prelude}\ncd {cwd} && {self.launch}"
+        return Tui(cfg, claude_container(cfg, prov_ip, final), "claude-isolation")
+
     def prepare(self, tui):
         """Claude opens on a chain of first-run dialogs — welcome, security
         guide, API key, theme, folder trust — before the prompt exists."""

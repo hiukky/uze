@@ -111,6 +111,7 @@ MCP_PROOF = os.environ.get("MCP_PROOF", "UZE_MCP_CONFORMANCE_PROOF_1")
 # tool (`run_command`); the MCP phases keep the default below.
 FC_NAME = os.environ.get("TOOL_NAME", "call_mcp_tool")
 
+ISOLATION_MARKERS = ["already isolated", "UZE_CONFORMANCE_REBASE"]
 SKILL_MARKERS = [
     "flow:commit",
     "flow:review",
@@ -180,6 +181,7 @@ def structural_summary(body_text):
         ],
         "tool_config": b.get("toolConfig"),
         "skill_markers": {m: (m in body) for m in SKILL_MARKERS},
+        "isolation_markers": {m: (m in body) for m in ISOLATION_MARKERS},
         "has_function_call": has_fc,
         "has_function_response": has_fr,
         "hook_markers": {m: (m in body) for m in HOOK_MARKERS},

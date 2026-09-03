@@ -49,6 +49,7 @@ LEAF_KEY = os.environ.get("LEAF_KEY", "/app/leaf.key")
 TOOL_NAME = os.environ.get("TOOL_NAME", MCP_TOOL)
 TOOL_ARGS = json.loads(os.environ.get("TOOL_ARGS", "{}"))
 
+ISOLATION_MARKERS = ["already isolated", "UZE_CONFORMANCE_REBASE"]
 SKILL_MARKERS = ["flow:commit", "flow:review", "commit", "review", "init"]
 # Conformance evidence markers carried by portable-hook denial reasons
 # (ADR-033): presence/absence in the structural summary proves what the real
@@ -81,6 +82,7 @@ def structural_summary(body_text):
         "content_types": [c.get("type") for c in b.get("content", [])],
         "tools": tools,
         "skill_markers": {m: (m in body) for m in SKILL_MARKERS},
+        "isolation_markers": {m: (m in body) for m in ISOLATION_MARKERS},
         "has_tool_use": has_tool_use,
         "has_tool_result": has_tool_result,
         "hook_markers": {m: (m in body) for m in HOOK_MARKERS},
