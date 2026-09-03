@@ -363,6 +363,29 @@ mod workspace_tests {
         );
     }
 
+    /// The sidebar and the strip name the same agent the same way — the
+    /// tab's own label, the one renaming edits — however its task is
+    /// labelled. The strip used to prefer the task's label, so a renamed
+    /// agent read as "Agent" in the sidebar and as its task slug up top.
+    #[test]
+    fn an_agent_carries_its_own_name_in_both_the_sidebar_and_the_strip() {
+        let model = agent_with_task(TaskStateView::Ready, 1);
+        assert!(
+            sidebar_rows(&model, &mut Vec::new())
+                .iter()
+                .any(|row| row.contains("Agent")),
+            "the sidebar names the tab"
+        );
+
+        let (rows, _) = tab_strip(&model);
+        let strip = rows.join(" ");
+        assert!(strip.contains("Agent"), "and so does the strip: {strip}");
+        assert!(
+            !strip.contains("fix-auth-redirect"),
+            "not the task's label: {strip}"
+        );
+    }
+
     #[test]
     fn a_running_task_offers_no_delivery_and_carries_no_mark() {
         let model = agent_with_task(TaskStateView::Running, 0);

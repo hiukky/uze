@@ -1209,17 +1209,13 @@ pub(super) fn render_tab_strip(
                     .fg(crate::ui::TEXT_BRIGHT)
                     .add_modifier(Modifier::BOLD),
             ),
-            None => Span::styled(
-                match model.tab_task(tab.id) {
-                    // One name per agent across the whole frame: the
-                    // sidebar already renames a working agent after the
-                    // task it is on, and two names for one tab reads as
-                    // two tabs.
-                    Some(task) if is_agent => task.label.clone(),
-                    _ => tab.label.clone(),
-                },
-                label_style,
-            ),
+            // One name per agent across the whole frame: the tab's own
+            // label, which is what the sidebar draws and what renaming
+            // edits. A working agent's task carries a label of its own
+            // (the prompt's slug, or the bare task identifier when it has
+            // no prompt) — showing that here left the same agent reading
+            // as "engineer" in the sidebar and "gic3jz" up top.
+            None => Span::styled(tab.label.clone(), label_style),
         };
         // An agent is never closed by a stray click — that stays a
         // right-click and a confirmation in the sidebar (see `ContextMenu`),
