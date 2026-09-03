@@ -266,6 +266,9 @@ pub struct Reconciliation {
     pub adopted: Vec<TaskId>,
     /// Tasks whose checkout is gone, now marked from where their branch stands.
     pub orphaned: Vec<TaskId>,
+    /// Delivered tasks whose agent kept working: their branch carries
+    /// commits the target does not, in a checkout still registered.
+    pub revived: Vec<TaskId>,
 }
 
 /// Brings `store` in line with the isolation directory: adopts checkouts
@@ -278,11 +281,29 @@ pub fn reconcile(primary: &Path, store: &mut TaskStore, target: &str) -> Reconci
 
     for (path, branch) in &registered {
         let id = CheckoutId::adopted(&slot_name(path));
-        if store
+        if let Some(task) = store
             .tasks
-            .iter()
-            .any(|task| task.checkout.as_ref() == Some(&id))
+            .iter_mut()
+            .filter(|task| task.checkout.as_ref() == Some(&id))
+            .max_by_key(|task| task.created_at_unix)
         {
+            // An agent that keeps working after a delivery is working
+            // again, and its slot is not free while it does: `Integrated`
+            // is only ever reached with the branch's commits already in
+            // the target (the one outcome `merge` completion produces;
+            // handoff and pr leave a task `Ready`), so a commit the target
+            // does not have, in a checkout Git still registers, is new
+            // work. Reading it here is what a slot is acquired against —
+            // `declared_done` otherwise hands the directory to the next
+            // agent while this one is still writing in it. Only the
+            // current owner revives; a slot already handed over answers
+            // for whoever holds it now.
+            if task.state == TaskState::Integrated
+                && commits_ahead(primary, target, &task.branch) > 0
+            {
+                task.state = TaskState::Running;
+                report.revived.push(task.id.clone());
+            }
             continue;
         }
         let holds_work = is_dirty(path)
@@ -997,6 +1018,48 @@ mod tests {
                 .git(&["worktree", "list", "--porcelain"])
                 .contains(&task.branch),
             "the stale entry is pruned once every directory was looked at"
+        );
+    }
+
+    /// The agent whose work was delivered mid-session keeps going, and its
+    /// next commit is work like any other. Reconciliation is where a slot
+    /// is acquired from, so a task left `Integrated` here reads as a free
+    /// directory — offered to the next agent while this one is still
+    /// writing in it.
+    #[test]
+    fn an_agent_that_commits_after_its_delivery_is_live_again() {
+        let repository = repository("slots-revive");
+        let primary = repository.root();
+        let mut store = TaskStore::default();
+
+        let (first, slot) = launch(&repository, &mut store, "first");
+        fs::write(slot.path.join("delivered.rs"), b"fn a() {}").unwrap();
+        repository.git_in(&slot.path, &["add", "."]);
+        repository.git_in(&slot.path, &["commit", "-qm", "delivered"]);
+        repository.git(&["merge", "--ff-only", &first.branch]);
+        set_state(&mut store, &first.id, TaskState::Integrated);
+
+        // Nothing new yet: delivered is the truth, and the slot is free
+        // for the next agent.
+        let report = reconcile(primary, &mut store, TARGET);
+        assert!(report.revived.is_empty(), "{report:?}");
+        assert_eq!(store.get(&first.id).unwrap().state, TaskState::Integrated);
+        assert_eq!(slots(primary, &store)[0].state, SlotState::Free);
+
+        fs::write(slot.path.join("after.rs"), b"fn b() {}").unwrap();
+        repository.git_in(&slot.path, &["add", "."]);
+        repository.git_in(&slot.path, &["commit", "-qm", "after the delivery"]);
+
+        let report = reconcile(primary, &mut store, TARGET);
+        assert_eq!(report.revived, vec![first.id.clone()]);
+        let task = store.get(&first.id).unwrap();
+        assert_eq!(task.state, TaskState::Running, "live again, and re-read");
+        assert_eq!(
+            slots(primary, &store)[0].state,
+            SlotState::Occupied {
+                task: first.id.clone()
+            },
+            "and its slot is not free for another agent while it works"
         );
     }
 
