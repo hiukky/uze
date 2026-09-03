@@ -343,11 +343,15 @@ mod workspace_tests {
         let rows = sidebar_rows(&model, &mut Vec::new());
         let name_row = rows
             .iter()
-            .find(|row| row.contains("fix-auth-redirect"))
-            .expect("the task's label names the row, not the tab's generated label: {rows:?}");
+            .find(|row| row.contains("Agent"))
+            .expect("the agent names its own row: {rows:?}");
         assert!(
             name_row.contains('\u{2713}'),
             "ready reads as a check: {name_row}"
+        );
+        assert!(
+            rows.iter().any(|row| row.contains("agent/t1")),
+            "and the task it is on reads underneath it: {rows:?}"
         );
 
         let (rows, hits) = tab_strip(&model);
@@ -363,10 +367,7 @@ mod workspace_tests {
     fn a_running_task_offers_no_delivery_and_carries_no_mark() {
         let model = agent_with_task(TaskStateView::Running, 0);
         let rows = sidebar_rows(&model, &mut Vec::new());
-        let name_row = rows
-            .iter()
-            .find(|row| row.contains("fix-auth-redirect"))
-            .unwrap();
+        let name_row = rows.iter().find(|row| row.contains("Agent")).unwrap();
         assert!(
             !name_row.contains('\u{2713}') && !name_row.contains('\u{26a0}'),
             "{name_row}"
@@ -389,10 +390,7 @@ mod workspace_tests {
             2,
         );
         let rows = sidebar_rows(&model, &mut Vec::new());
-        let name_row = rows
-            .iter()
-            .find(|row| row.contains("fix-auth-redirect"))
-            .unwrap();
+        let name_row = rows.iter().find(|row| row.contains("Agent")).unwrap();
         assert!(name_row.contains('\u{26a0}'), "{name_row}");
         let (rows, hits) = tab_strip(&model);
         assert!(rows.iter().any(|row| row.contains("conflict")), "{rows:?}");
