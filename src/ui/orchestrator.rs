@@ -182,9 +182,11 @@ struct TaskResolution {
 }
 
 /// One evaluated directory: the repository its tasks hang off, the branch
-/// checked out *at that directory* (the primary's own for an agent outside
-/// any slot — the one case the sidebar has no task to read a branch from)
-/// and what the repository now holds.
+/// checked out at the directory the evaluation is *keyed* under, and what
+/// the repository now holds. The key, not the `cwd` that asked: a slot is
+/// keyed by its primary, and a slot's pane going quiet must not write the
+/// slot's own branch where an agent outside any slot — the one case the
+/// sidebar has no task to read a branch from — then reads the primary's.
 struct EvaluationAnswer {
     primary: PathBuf,
     branch: Option<String>,
@@ -237,7 +239,7 @@ fn spawn_task_evaluation(
             let workspace = app.workspace();
             Some(EvaluationAnswer {
                 primary: workspace.primary_of(&cwd)?,
-                branch: workspace.current_branch(&cwd),
+                branch: workspace.current_branch(&key),
                 evaluation: workspace.evaluate_tasks(&cwd),
             })
         });
@@ -2197,9 +2199,10 @@ struct WorkspaceModel {
     /// Every repository's tasks as last evaluated, keyed by its primary
     /// checkout. Display state: the truth is Git and the task store.
     tasks: BTreeMap<PathBuf, Vec<TaskView>>,
-    /// The branch checked out at each evaluated directory, keyed the way
-    /// [`evaluation_key`] keys it. Read for an agent outside any slot,
-    /// whose caption has no task to take a branch from.
+    /// The branch checked out at each evaluation key (see
+    /// [`evaluation_key`]) — the primary's for every slot of a repository,
+    /// a directory's own outside any slot. Read for an agent outside any
+    /// slot, whose caption has no task to take a branch from.
     branches: BTreeMap<PathBuf, String>,
     /// Repositories an evaluation is in flight for, so a quiet pane and
     /// the clock cannot queue the same read twice.

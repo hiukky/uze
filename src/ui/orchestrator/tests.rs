@@ -15,8 +15,8 @@ mod workspace_tests {
         blank_pane, can_close_tab_from_menu, encode_mouse, evaluation_key, forward_paste,
         forward_scroll, next_agent_label, next_shell_label, pane_relative, pending_tab_drop,
         render::{
-            self, UNISOLATED_MARKER, WorkspaceLayout, compute_layout, render_preserved,
-            render_sidebar, render_status_catalog, render_tab_strip, task_mark,
+            self, WorkspaceLayout, compute_layout, render_preserved, render_sidebar,
+            render_status_catalog, render_tab_strip, task_mark,
         },
         selected_pane_cwd, space_own_tab, tab_drag_group, tab_drag_group_members,
         tab_needs_replacement_shell, workspace_has_active_agent_operation,
@@ -983,7 +983,6 @@ mod workspace_tests {
             "checks failed",
             "delivered",
             "parked",
-            "unisolated",
         ] {
             assert!(text.contains(name), "{name} is missing from: {text}");
         }
@@ -1118,11 +1117,7 @@ mod workspace_tests {
 
     /// The sidebar as text, one string per row.
     fn sidebar_rows(model: &WorkspaceModel, hits: &mut Vec<(Rect, WorkspaceHit)>) -> Vec<String> {
-        let mut terminal = Terminal::new(TestBackend::new(40, 24)).unwrap();
-        terminal
-            .draw(|frame| render_sidebar(frame, frame.area(), model, &IDENTITIES, hits))
-            .unwrap();
-        let buffer = terminal.backend().buffer().clone();
+        let buffer = sidebar_buffer(model, hits);
         (0..buffer.area.height)
             .map(|row| {
                 (0..buffer.area.width)
@@ -1130,6 +1125,33 @@ mod workspace_tests {
                     .collect()
             })
             .collect()
+    }
+
+    fn sidebar_buffer(
+        model: &WorkspaceModel,
+        hits: &mut Vec<(Rect, WorkspaceHit)>,
+    ) -> ratatui::buffer::Buffer {
+        let mut terminal = Terminal::new(TestBackend::new(40, 24)).unwrap();
+        terminal
+            .draw(|frame| render_sidebar(frame, frame.area(), model, &IDENTITIES, hits))
+            .unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    /// The foreground the agent's caption — the row under its name — is
+    /// drawn in, checked to be captioning `text`.
+    fn caption_color_of(model: &WorkspaceModel, text: &str) -> Color {
+        let buffer = sidebar_buffer(model, &mut Vec::new());
+        let rows = sidebar_rows(model, &mut Vec::new());
+        let row = rows
+            .iter()
+            .position(|row| row.contains("Agent"))
+            .expect("the agent is named in the tree")
+            + 1;
+        let column = rows[row]
+            .find(text)
+            .unwrap_or_else(|| panic!("{text} captions the agent: {rows:?}"));
+        buffer[(column as u16, row as u16)].fg
     }
 
     #[test]
@@ -1143,7 +1165,11 @@ mod workspace_tests {
             .iter()
             .find(|row| row.contains("Agent"))
             .expect("the agent is named in the tree");
-        assert!(!name_row.contains(UNISOLATED_MARKER), "{name_row}");
+        assert_eq!(
+            caption_color_of(&model, "/repo"),
+            crate::ui::TEXT_DIM,
+            "a slot is the rule and draws dim: {name_row}"
+        );
 
         let caption = rows
             .iter()
@@ -1157,25 +1183,26 @@ mod workspace_tests {
     }
 
     /// The column in front of an agent's name answers one question — how
-    /// that agent is doing — and the marker must never take it over.
+    /// that agent is doing — and "outside any slot" is never said there,
+    /// nor by a mark of its own: the caption's hue says it.
     #[test]
-    fn the_marker_leaves_the_status_column_alone() {
-        let model = agent_session_in("/repo/src");
+    fn an_agent_outside_any_slot_is_captioned_in_the_warning_hue() {
+        let mut model = agent_session_in("/repo/src");
         let rows = sidebar_rows(&model, &mut Vec::new());
         let name_row = rows
             .iter()
             .find(|row| row.contains("Agent"))
             .expect("the agent is named in the tree");
-        let status = name_row
-            .find('\u{25cb}')
-            .or_else(|| name_row.find('\u{25cf}'));
-        let marker = name_row.find(UNISOLATED_MARKER);
-        assert!(status.is_some(), "the status glyph still leads: {name_row}");
         assert!(
-            marker.is_some(),
-            "an agent outside any slot is marked: {name_row}"
+            name_row.contains('\u{25cb}') || name_row.contains('\u{25cf}'),
+            "the status glyph still leads: {name_row}"
         );
-        assert!(status < marker, "the mark follows the name: {name_row}");
+        assert_eq!(caption_color_of(&model, "/repo/src"), crate::ui::WARNING);
+
+        model
+            .branches
+            .insert(PathBuf::from("/repo/src"), "main".into());
+        assert_eq!(caption_color_of(&model, "main"), crate::ui::WARNING);
     }
 
     /// An agent outside any slot has no task to take a branch from, so
@@ -1309,10 +1336,6 @@ mod workspace_tests {
     fn an_agent_in_a_slot_carries_no_marker() {
         let model = agent_session_in("/repo/.worktrees/ai");
         let rows = sidebar_rows(&model, &mut Vec::new());
-        assert!(
-            !rows.iter().any(|row| row.contains(UNISOLATED_MARKER)),
-            "nothing to mark: {rows:?}"
-        );
         assert!(
             rows.iter()
                 .any(|row| row.contains("/repo") && !row.contains(".worktrees")),
