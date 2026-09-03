@@ -116,6 +116,16 @@ pub struct Focus {
     pub pane: PaneId,
 }
 
+/// What [`Session::open_space`] found or did — the caller only has a pane
+/// to spawn when a space was actually created.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OpenedSpace {
+    /// A space for that root was already open, and is the answer.
+    Existing(SpaceId),
+    /// A new space, whose bootstrap pane is not running yet.
+    Created { space: SpaceId, pane: PaneId },
+}
+
 /// A space to recreate on startup, restoring the shape (not the running
 /// state — see [`Session::restore`]) a previous server instance had before
 /// it stopped, whether cleanly or not (a crash, a reboot — anything that
@@ -288,10 +298,35 @@ impl Session {
         self.workspace.spaces.iter().find(|s| s.id == space)
     }
 
+    /// Opens the space rooted at `root`: the one already open for it when
+    /// there is one, a new one otherwise (labelled `label`, or after the
+    /// directory itself). A root *is* a space — answering "open this"
+    /// twice would leave two rows in the sidebar disagreeing about which
+    /// tabs one directory has — so both the attaching client and the
+    /// "+ new" prompt ask this rather than adding blind.
+    pub fn open_space(
+        &mut self,
+        label: Option<String>,
+        root: PathBuf,
+        columns: u16,
+        rows: u16,
+    ) -> OpenedSpace {
+        if let Some(space) = self.space_for_root(&root) {
+            return OpenedSpace::Existing(space);
+        }
+        let label = label.unwrap_or_else(|| space_label(&root));
+        let pane = self.add_space(label, root, columns, rows);
+        OpenedSpace::Created {
+            space: self.workspace.selected_space,
+            pane,
+        }
+    }
+
     /// Creates a space rooted at `root` with one default tab (mirroring
     /// [`Session::new`]'s own bootstrap tab), selects it, and returns the
     /// new tab's pane so the caller can spawn it exactly like
-    /// [`Session::add_tab`]'s result.
+    /// [`Session::add_tab`]'s result. Prefer [`Session::open_space`],
+    /// which will not open a second space over one directory.
     pub fn add_space(&mut self, label: String, root: PathBuf, columns: u16, rows: u16) -> PaneId {
         let space_id = SpaceId(self.next_space_id);
         let tab_id = TabId(self.next_tab_id);
@@ -675,6 +710,41 @@ mod tests {
         assert_eq!(session.selected_space().label, "frontend");
         assert_eq!(session.selected_space().tabs.len(), 1);
         assert_eq!(session.selected_tab().focus.pane, pane);
+    }
+
+    /// A root is a space: opening one twice lands on the space it already
+    /// has instead of stacking a second row over the same directory, and
+    /// the caller is told there is no pane to spawn.
+    #[test]
+    fn opening_a_root_twice_is_the_same_space() {
+        let mut session = Session::new(
+            WorkspaceId("workspace-a".into()),
+            PathBuf::from("/tmp/a"),
+            80,
+            24,
+        );
+
+        let first = session.open_space(None, PathBuf::from("/tmp/frontend"), 80, 24);
+        let OpenedSpace::Created { space, pane } = first else {
+            panic!("the first open creates: {first:?}");
+        };
+        assert_eq!(session.workspace.spaces.len(), 2);
+        assert_eq!(session.selected_space().label, "frontend");
+        assert_eq!(session.selected_tab().focus.pane, pane);
+
+        let again = session.open_space(
+            Some("a second name".into()),
+            PathBuf::from("/tmp/frontend"),
+            80,
+            24,
+        );
+        assert_eq!(again, OpenedSpace::Existing(space));
+        assert_eq!(session.workspace.spaces.len(), 2, "no second row");
+        assert_eq!(
+            session.space(space).expect("still open").label,
+            "frontend",
+            "and the open space keeps the name it has"
+        );
     }
 
     #[test]

@@ -179,3 +179,24 @@ fn backspacing_the_separator_selects_the_listed_directory_itself() {
 
     assert_eq!(picker.chosen(), Some(root.join("checkout")));
 }
+
+/// A slot is a checkout of the project, not a project of its own — so
+/// landing on one asks for the repository it was cut from. Picking it
+/// literally is what put a `.worktrees/<id>` row in the sidebar next to
+/// the space whose own agent was working inside it.
+#[test]
+fn choosing_an_agents_slot_opens_the_repository_it_was_cut_from() {
+    let root = TempDir::new("root-picker-slot");
+    let repository = root.join("project");
+    std::fs::create_dir_all(repository.join(".worktrees/4j03rn")).unwrap();
+    let picker = RootPicker::opened_in(&repository.join(".worktrees").display().to_string());
+    assert_eq!(names(&picker), ["4j03rn"]);
+
+    assert_eq!(picker.chosen(), Some(repository.clone()));
+
+    // …and the same answer for a slot typed out rather than landed on:
+    // an empty listing falls back to the typed directory itself.
+    let typed = RootPicker::opened_in(&repository.join(".worktrees/4j03rn").display().to_string());
+    assert_eq!(typed.match_count(), 0);
+    assert_eq!(typed.chosen(), Some(repository));
+}

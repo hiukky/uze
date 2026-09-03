@@ -16,6 +16,6 @@ pub use runtime::{
     RuntimeError, attach, open_space, read_event, send_request, serve, socket_path, stop,
 };
 pub use state::{
-    Focus, Layout, Pane, PaneId, Session, Space, SpaceId, SpaceSeed, Tab, TabId, TabSeed,
-    Workspace, WorkspaceId,
+    Focus, Layout, OpenedSpace, Pane, PaneId, Session, Space, SpaceId, SpaceSeed, Tab, TabId,
+    TabSeed, Workspace, WorkspaceId,
 };

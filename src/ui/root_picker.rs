@@ -122,12 +122,27 @@ impl RootPicker {
     /// directory, or — with nothing matching — the typed path itself when
     /// it already names a directory. `None` means there is nothing to
     /// create yet, and the prompt stays open.
+    ///
+    /// The answer is the *space's* root, not the directory literally
+    /// landed on: `uze_application::space_root` maps a subdirectory to the
+    /// project it belongs to and an agent's slot to the repository the
+    /// slot was cut from. The attach path already resolves its launch
+    /// directory that way; a directory picked here is the same question
+    /// asked with the mouse, and answering it differently is what put a
+    /// `.worktrees/<id>` space in the sidebar beside the space whose agent
+    /// was working in it.
     pub(super) fn chosen(&self) -> Option<PathBuf> {
-        if let Some(candidate) = self.candidate(self.selected) {
-            return Some(candidate.path.clone());
-        }
-        let typed = expand_home(&self.input);
-        typed.is_dir().then_some(typed)
+        let landed = match self.candidate(self.selected) {
+            Some(candidate) => candidate.path.clone(),
+            None => {
+                let typed = expand_home(&self.input);
+                if !typed.is_dir() {
+                    return None;
+                }
+                typed
+            }
+        };
+        Some(uze_application::space_root(&landed))
     }
 
     fn refresh(&mut self) {

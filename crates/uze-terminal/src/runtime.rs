@@ -22,9 +22,9 @@ use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
 
 use crate::{
-    CellAttributes, ClientEvent, ClientRequest, Cursor, MouseMode, PROTOCOL_VERSION, PaneDamage,
-    PaneId, PaneSnapshot, RenderCell, Session, SpaceId, SpaceSeed, TabId, TabSeed, TerminalColor,
-    WorkspaceId,
+    CellAttributes, ClientEvent, ClientRequest, Cursor, MouseMode, OpenedSpace, PROTOCOL_VERSION,
+    PaneDamage, PaneId, PaneSnapshot, RenderCell, Session, SpaceId, SpaceSeed, TabId, TabSeed,
+    TerminalColor, WorkspaceId,
 };
 
 /// ADR-038: the endpoint is local and user-private; no network transport is
@@ -762,18 +762,32 @@ impl Server {
                     columns,
                     rows,
                 } => {
-                    let (pane, space) = {
+                    // A root already open is that space, not a second one
+                    // (see `Session::open_space`) — the prompt asked to
+                    // open a directory, so landing on the space it already
+                    // has is the whole answer.
+                    let opened = {
                         let mut session = self.session.lock().expect("session poisoned");
-                        let label = label.unwrap_or_else(|| crate::state::space_label(&root));
-                        let pane = session.add_space(label, root, columns, rows);
-                        (pane, session.workspace.selected_space)
+                        session.open_space(label, root, columns, rows)
+                    };
+                    let space = match opened {
+                        OpenedSpace::Existing(space) => {
+                            self.session
+                                .lock()
+                                .expect("session poisoned")
+                                .select_space(space);
+                            space
+                        }
+                        OpenedSpace::Created { space, pane } => {
+                            if self.spawn_pane(pane, None).is_err() {
+                                let _ = events.send(ClientEvent::Error {
+                                    message: "could not create terminal pane".into(),
+                                });
+                            }
+                            space
+                        }
                     };
                     self.update_selection(client, |selection| selection.space = Some(space));
-                    if self.spawn_pane(pane, None).is_err() {
-                        let _ = events.send(ClientEvent::Error {
-                            message: "could not create terminal pane".into(),
-                        });
-                    }
                     self.broadcast_session();
                 }
                 ClientRequest::SelectSpace { space } => {
@@ -840,17 +854,17 @@ impl Server {
     /// The space rooted at `root`, created — with its first shell pane —
     /// when none is.
     fn ensure_space(&self, root: &Path) -> Result<SpaceId, RuntimeError> {
-        let (pane, space) = {
+        let opened = {
             let mut session = self.session.lock().expect("session poisoned");
-            if let Some(space) = session.space_for_root(root) {
-                return Ok(space);
-            }
-            let label = crate::state::space_label(root);
-            let pane = session.add_space(label, root.to_path_buf(), 80, 24);
-            (pane, session.workspace.selected_space)
+            session.open_space(None, root.to_path_buf(), 80, 24)
         };
-        self.spawn_pane(pane, None)?;
-        Ok(space)
+        match opened {
+            OpenedSpace::Existing(space) => Ok(space),
+            OpenedSpace::Created { space, pane } => {
+                self.spawn_pane(pane, None)?;
+                Ok(space)
+            }
+        }
     }
 
     fn selection_of(&self, client: u64) -> Selection {
