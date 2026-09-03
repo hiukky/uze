@@ -31,6 +31,7 @@ Antigravity — gets it through its own most native surface.
 ---
 
 Built in Rust. Licensed under the Apache License 2.0.
+Contributions are welcome under the rules in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Author: [Romullo Sousa (hiukky)](https://github.com/hiukky) · [Apache License 2.0](LICENSE)
 
