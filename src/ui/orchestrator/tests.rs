@@ -11,9 +11,10 @@ mod workspace_tests {
     use super::{
         AGENT_BUSY_REPAINTS, AGENT_ECHO_GRACE, AGENT_PASTE_GRACE, AgentIdentity, AgentTabStatus,
         DraggingTab, PendingDrop, PreservedOverlay, RootPicker, TabDragGroup, TaskResolution,
-        TaskStateView, TaskView, WorkspaceModel, adopt_agent_labels, agent_identity_for_tab,
-        blank_pane, can_close_tab_from_menu, encode_mouse, evaluation_key, forward_paste,
-        forward_scroll, next_agent_label, next_shell_label, pane_relative, pending_tab_drop,
+        TaskStateView, TaskView, UpstreamSync, WorkspaceModel, adopt_agent_labels,
+        agent_identity_for_tab, blank_pane, can_close_tab_from_menu, encode_mouse, evaluation_key,
+        forward_paste, forward_scroll, next_agent_label, next_shell_label, pane_relative,
+        pending_tab_drop,
         render::{
             self, WorkspaceLayout, compute_layout, render_preserved, render_sidebar,
             render_status_catalog, render_tab_strip, task_mark,
@@ -1148,9 +1149,12 @@ mod workspace_tests {
             .position(|row| row.contains("Agent"))
             .expect("the agent is named in the tree")
             + 1;
-        let column = rows[row]
+        let offset = rows[row]
             .find(text)
             .unwrap_or_else(|| panic!("{text} captions the agent: {rows:?}"));
+        // A byte offset is not a column once the caption holds small caps
+        // or subscript digits: one cell, several bytes.
+        let column = rows[row][..offset].chars().count();
         buffer[(column as u16, row as u16)].fg
     }
 
@@ -1241,6 +1245,69 @@ mod workspace_tests {
         assert!(
             !rows.iter().any(|row| row.contains("main")),
             "no task, no branch: {rows:?}"
+        );
+    }
+
+    /// The operator's own tree is where a pull or a push is due, so an
+    /// agent there carries what each would move at the right edge of its
+    /// caption — an arrow for the direction and the count in subscript,
+    /// red for what is to pull and green for what is to push — and only
+    /// the halves that have a count.
+    #[test]
+    fn an_agent_outside_any_slot_is_captioned_with_what_a_pull_and_a_push_would_move() {
+        let mut model = agent_session_in("/repo");
+        model.branches.insert(PathBuf::from("/repo"), "main".into());
+        model
+            .upstream_syncs
+            .insert(PathBuf::from("/repo"), UpstreamSync { pull: 1, push: 12 });
+        let rows = sidebar_rows(&model, &mut Vec::new());
+        let caption = rows
+            .iter()
+            .find(|row| row.contains("main"))
+            .expect("the branch captions the agent");
+        assert!(
+            caption.ends_with("\u{21e3}\u{2081} \u{21e1}\u{2081}\u{2082} \u{2502}"),
+            "⇣₁ ⇡₁₂ sit at the right edge, one pad off the divider: {caption:?}"
+        );
+        assert_eq!(caption_color_of(&model, "main"), crate::ui::WARNING);
+        assert_eq!(caption_color_of(&model, "\u{21e3}"), crate::ui::DANGER);
+        assert_eq!(caption_color_of(&model, "\u{21e1}"), crate::ui::SUCCESS);
+
+        model
+            .upstream_syncs
+            .insert(PathBuf::from("/repo"), UpstreamSync { pull: 0, push: 3 });
+        let rows = sidebar_rows(&model, &mut Vec::new());
+        let caption = rows.iter().find(|row| row.contains("main")).unwrap();
+        assert!(
+            !caption.contains('\u{21e3}') && caption.ends_with("\u{21e1}\u{2083} \u{2502}"),
+            "nothing to pull, three to push: {caption:?}"
+        );
+
+        model
+            .upstream_syncs
+            .insert(PathBuf::from("/repo"), UpstreamSync::default());
+        let rows = sidebar_rows(&model, &mut Vec::new());
+        let caption = rows.iter().find(|row| row.contains("main")).unwrap();
+        assert!(
+            !caption.contains('\u{21e1}') && !caption.contains('\u{21e3}'),
+            "in sync says nothing: {caption:?}"
+        );
+    }
+
+    /// Inside a slot the remote is the target's business, not the task's:
+    /// whatever the primary's sync reads, a slot's caption never shows it.
+    #[test]
+    fn a_slot_never_shows_the_primary_sync() {
+        let mut model = agent_session_in("/repo/.worktrees/ai");
+        model
+            .upstream_syncs
+            .insert(PathBuf::from("/repo"), UpstreamSync { pull: 2, push: 2 });
+        let rows = sidebar_rows(&model, &mut Vec::new());
+        assert!(
+            !rows
+                .iter()
+                .any(|row| row.contains('\u{21e1}') || row.contains('\u{21e3}')),
+            "no arrow in a slot: {rows:?}"
         );
     }
 

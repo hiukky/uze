@@ -266,6 +266,28 @@ fn io_error(source: io::Error) -> uze_application::UzeError {
     }
 }
 
+/// `n` in subscript digits (`12` -> `₁₂`): a count that sits beside a
+/// label without competing with it for weight — the route counts in the
+/// management sidebar, the pull/push counts under an agent's branch.
+pub(crate) fn small_digits(n: usize) -> String {
+    n.to_string()
+        .chars()
+        .map(|c| match c {
+            '0' => '₀',
+            '1' => '₁',
+            '2' => '₂',
+            '3' => '₃',
+            '4' => '₄',
+            '5' => '₅',
+            '6' => '₆',
+            '7' => '₇',
+            '8' => '₈',
+            '9' => '₉',
+            _ => c,
+        })
+        .collect()
+}
+
 /// `~/relative/path` when `root` is under the user's home directory, else
 /// the path as-is — mirrors what a shell prompt usually shows.
 pub(crate) fn display_project_path(root: &std::path::Path) -> String {

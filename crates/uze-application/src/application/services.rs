@@ -279,6 +279,24 @@ impl Workspace<'_> {
         checkout::current_branch(cwd)
     }
 
+    /// How the branch checked out at `cwd` stands against its upstream —
+    /// what a pull would bring and a push would send — when that branch
+    /// is the repository's delivery target. `None` on any other branch,
+    /// and without an upstream to measure against: an agent on a branch
+    /// of its own reaches the remote through the target, so the target
+    /// is the one branch whose sync with it is worth a caption.
+    pub fn target_upstream_sync(&self, cwd: &Path) -> Option<UpstreamSync> {
+        let repository = self.repository(cwd)?;
+        if checkout::current_branch(cwd)? != repository.target() {
+            return None;
+        }
+        let divergence = checkout::upstream_divergence(cwd)?;
+        Some(UpstreamSync {
+            pull: divergence.behind,
+            push: divergence.ahead,
+        })
+    }
+
     /// Every task recorded for `cwd`'s repository, as last evaluated.
     pub fn tasks(&self, cwd: &Path) -> Vec<TaskView> {
         self.repository(cwd)
@@ -605,6 +623,14 @@ pub struct ReleasedTask {
     /// `true` when the checkout held work and was parked for the operator
     /// instead of going back to the pool.
     pub parked: bool,
+}
+
+/// The delivery target against its upstream: commits a pull would bring
+/// in and a push would send out.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct UpstreamSync {
+    pub pull: usize,
+    pub push: usize,
 }
 
 /// One task as presentation sees it.
@@ -1315,6 +1341,36 @@ mod task_service_tests {
                 .tasks(&root)
                 .iter()
                 .all(|task| task.id != id)
+        );
+    }
+
+    /// The sidebar captions the operator's own tree with what a pull and
+    /// a push would move — on the target only. A branch of its own is
+    /// delivered through the target, so its upstream is nobody's caption.
+    #[test]
+    fn the_targets_sync_with_its_upstream_is_read_on_the_target_alone() {
+        let repository = repository("svc-upstream-sync");
+        let root = repository.root().to_path_buf();
+        let app = application("svc-upstream-sync-home");
+        assert_eq!(
+            app.workspace().target_upstream_sync(&root),
+            None,
+            "no upstream"
+        );
+
+        repository.git(&["branch", "upstream"]);
+        repository.git(&["branch", "--set-upstream-to=upstream"]);
+        repository.commit_file("mine.txt", "pushable\n");
+        assert_eq!(
+            app.workspace().target_upstream_sync(&root),
+            Some(UpstreamSync { pull: 0, push: 1 })
+        );
+
+        lock(&repository, "  target: upstream\n");
+        assert_eq!(
+            app.workspace().target_upstream_sync(&root),
+            None,
+            "the checked-out branch is not the target"
         );
     }
 

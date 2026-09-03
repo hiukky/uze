@@ -6,7 +6,7 @@ pub mod bootstrap;
 pub use application::UzeApplication;
 pub use application::services::{
     AgentIdentity, AgentNotice, AgentPlacement, DeliveryOutcome, DeliveryPolicyView,
-    DeliveryReport, Evaluation, Isolation, ReleasedTask, TaskStateView, TaskView,
+    DeliveryReport, Evaluation, Isolation, ReleasedTask, TaskStateView, TaskView, UpstreamSync,
 };
 
 /// Types the read models above are made of. Presentation consumes these

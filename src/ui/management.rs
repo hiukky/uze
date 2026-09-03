@@ -21,7 +21,7 @@ use uze_application::{Result, UzeHome};
 use super::hit::Hit;
 use super::model::{self, Focus, Overlay, ROUTES, Route, Status, TuiModel};
 use super::worker::{Intent, dispatch, drain_worker_results, spawn_startup};
-use super::{TerminalSession, overlay, view};
+use super::{TerminalSession, overlay, small_digits, view};
 
 pub(crate) fn run_management(
     terminal: &mut TerminalSession,
@@ -247,25 +247,6 @@ fn route_count(route: Route, model: &TuiModel) -> Option<usize> {
         Route::Harnesses => Some(model.doctor.as_ref().map_or(0, |d| d.harnesses.len())),
         Route::Profiles => Some(model.profiles.len()),
     }
-}
-
-fn small_digits(n: usize) -> String {
-    n.to_string()
-        .chars()
-        .map(|c| match c {
-            '0' => '₀',
-            '1' => '₁',
-            '2' => '₂',
-            '3' => '₃',
-            '4' => '₄',
-            '5' => '₅',
-            '6' => '₆',
-            '7' => '₇',
-            '8' => '₈',
-            '9' => '₉',
-            _ => c,
-        })
-        .collect()
 }
 
 fn render_sidebar(

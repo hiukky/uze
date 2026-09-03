@@ -529,6 +529,33 @@ pub fn is_dirty(root: &Path) -> bool {
         .is_none_or(|status| !status.trim().is_empty())
 }
 
+/// How far the branch checked out in `root` and its upstream have moved
+/// apart: what a pull would bring in and what a push would send out.
+/// `None` when there is nothing to measure against — a detached `HEAD`,
+/// or a branch with no upstream configured.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct UpstreamDivergence {
+    /// Commits the upstream has that the branch lacks.
+    pub behind: usize,
+    /// Commits the branch has that the upstream lacks.
+    pub ahead: usize,
+}
+
+pub fn upstream_divergence(root: &Path) -> Option<UpstreamDivergence> {
+    let counts = uze_git::read(
+        root,
+        &["rev-list", "--left-right", "--count", "@{upstream}...HEAD"],
+    )
+    .ok()?
+    .successful()
+    .ok()?;
+    let (behind, ahead) = counts.trim().split_once('\t')?;
+    Some(UpstreamDivergence {
+        behind: behind.parse().ok()?,
+        ahead: ahead.parse().ok()?,
+    })
+}
+
 /// How many commits `branch` has that `target` lacks.
 pub fn commits_ahead(root: &Path, target: &str, branch: &str) -> usize {
     uze_git::read(
@@ -1174,6 +1201,43 @@ mod tests {
         assert!(
             slot.path.join("prepared").exists(),
             "setup runs in the checkout"
+        );
+    }
+
+    /// The counts a pull and a push would move, read against whatever the
+    /// branch tracks — and nothing at all when it tracks nothing.
+    #[test]
+    fn upstream_divergence_counts_both_directions_and_needs_an_upstream() {
+        let repository = repository("upstream-divergence");
+        let primary = repository.root();
+        assert_eq!(upstream_divergence(primary), None, "no upstream, no answer");
+
+        repository.git(&["branch", "upstream"]);
+        repository.git(&["branch", "--set-upstream-to=upstream"]);
+        assert_eq!(
+            upstream_divergence(primary),
+            Some(UpstreamDivergence::default()),
+            "in sync"
+        );
+
+        repository.commit_file("mine.txt", "pushable\n");
+        repository.git(&["checkout", "--quiet", "upstream"]);
+        repository.commit_file("theirs.txt", "pullable\n");
+        repository.commit_file("more.txt", "pullable too\n");
+        repository.git(&["checkout", "--quiet", TARGET]);
+        assert_eq!(
+            upstream_divergence(primary),
+            Some(UpstreamDivergence {
+                behind: 2,
+                ahead: 1
+            })
+        );
+
+        repository.git(&["checkout", "--quiet", "--detach"]);
+        assert_eq!(
+            upstream_divergence(primary),
+            None,
+            "detached: nothing tracks"
         );
     }
 }

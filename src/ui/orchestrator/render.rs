@@ -787,6 +787,30 @@ pub(super) fn render_sidebar(
                     Span::styled(continuation, Style::default().fg(crate::ui::TEXT_FAINT));
                 let detail_span = Span::styled(detail, Style::default().fg(caption_color(&cwd)));
                 let mut spans = vec![continuation_span, detail_span];
+                // Right-aligned under the alias, with the same trailing
+                // pad off the divider: a count pinned to the row's edge
+                // keeps its column as branches vary in length.
+                let sync: Vec<Span<'_>> = unisolated_sync_caption(model, &cwd)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, (text, hue))| {
+                        let gap = if index == 0 { "" } else { " " };
+                        Span::styled(format!("{gap}{text}"), Style::default().fg(hue))
+                    })
+                    .collect();
+                if !sync.is_empty() {
+                    const TRAILING_PAD: u16 = 1;
+                    let used: u16 = spans
+                        .iter()
+                        .chain(&sync)
+                        .map(|span| span.width() as u16)
+                        .sum::<u16>()
+                        + TRAILING_PAD;
+                    let gap = detail_rect.width.saturating_sub(used).max(1);
+                    spans.push(Span::raw(" ".repeat(gap as usize)));
+                    spans.extend(sync);
+                    spans.push(Span::raw(" ".repeat(TRAILING_PAD as usize)));
+                }
                 if is_active_space {
                     fill_row_bg(
                         &mut spans,
@@ -1113,6 +1137,31 @@ fn unisolated_branch(model: &WorkspaceModel, cwd: &Path) -> Option<String> {
         return None;
     }
     model.branches.get(&evaluation_key(cwd)).cloned()
+}
+
+/// What a pull and a push would move for an agent outside any slot, when
+/// its branch is the delivery target and something is due either way:
+/// `⇣₁` in the danger hue for what is to pull, `⇡₂` in the success hue
+/// for what is to push, each only while its count is non-zero — the
+/// shape a shell prompt gives the same fact, the count in subscript so
+/// the arrow leads. No word: the two colours say which is which. Empty
+/// inside a slot, on any other branch, without an upstream, or in sync —
+/// a caption that says "nothing to do" says it best by saying nothing.
+fn unisolated_sync_caption(model: &WorkspaceModel, cwd: &Path) -> Vec<(String, Color)> {
+    if !is_unisolated(cwd) {
+        return Vec::new();
+    }
+    let Some(sync) = model.upstream_syncs.get(&evaluation_key(cwd)) else {
+        return Vec::new();
+    };
+    [
+        ('\u{21e3}', sync.pull, crate::ui::DANGER),
+        ('\u{21e1}', sync.push, crate::ui::SUCCESS),
+    ]
+    .into_iter()
+    .filter(|(_, count, _)| *count > 0)
+    .map(|(arrow, count, hue)| (format!("{arrow}{}", crate::ui::small_digits(count)), hue))
+    .collect()
 }
 
 /// `text` shortened from the left to `width`, keeping its tail — the end

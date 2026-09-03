@@ -27,7 +27,9 @@ use std::{
     time::{Duration, Instant},
 };
 use uze_application::AgentIdentity;
-use uze_application::{DeliveryOutcome, DeliveryReport, Evaluation, TaskStateView, TaskView};
+use uze_application::{
+    DeliveryOutcome, DeliveryReport, Evaluation, TaskStateView, TaskView, UpstreamSync,
+};
 use uze_application::{Result, UzeError, UzeHome};
 use uze_extensions::{
     ExtensionHit, git_diff,
@@ -182,14 +184,17 @@ struct TaskResolution {
 }
 
 /// One evaluated directory: the repository its tasks hang off, the branch
-/// checked out at the directory the evaluation is *keyed* under, and what
-/// the repository now holds. The key, not the `cwd` that asked: a slot is
-/// keyed by its primary, and a slot's pane going quiet must not write the
-/// slot's own branch where an agent outside any slot — the one case the
-/// sidebar has no task to read a branch from — then reads the primary's.
+/// checked out at the directory the evaluation is *keyed* under (and,
+/// when that branch is the delivery target, how it stands against its
+/// upstream), and what the repository now holds. The key, not the `cwd`
+/// that asked: a slot is keyed by its primary, and a slot's pane going
+/// quiet must not write the slot's own branch where an agent outside any
+/// slot — the one case the sidebar has no task to read a branch from —
+/// then reads the primary's.
 struct EvaluationAnswer {
     primary: PathBuf,
     branch: Option<String>,
+    sync: Option<UpstreamSync>,
     evaluation: Evaluation,
 }
 
@@ -240,6 +245,7 @@ fn spawn_task_evaluation(
             Some(EvaluationAnswer {
                 primary: workspace.primary_of(&cwd)?,
                 branch: workspace.current_branch(&key),
+                sync: workspace.target_upstream_sync(&key),
                 evaluation: workspace.evaluate_tasks(&cwd),
             })
         });
@@ -449,14 +455,19 @@ pub(crate) fn attach_workspace(
             let Some(EvaluationAnswer {
                 primary,
                 branch,
+                sync,
                 evaluation,
             }) = resolution.answered
             else {
                 continue;
             };
             match branch {
-                Some(branch) => model.branches.insert(resolution.key, branch),
+                Some(branch) => model.branches.insert(resolution.key.clone(), branch),
                 None => model.branches.remove(&resolution.key),
+            };
+            match sync {
+                Some(sync) => model.upstream_syncs.insert(resolution.key, sync),
+                None => model.upstream_syncs.remove(&resolution.key),
             };
             model.tasks.insert(primary, evaluation.tasks);
             // A conflict found while a clean task followed the target is
@@ -2172,6 +2183,7 @@ struct Remembered {
     prompt_buffers: BTreeMap<PaneId, PromptBuffer>,
     tasks: BTreeMap<PathBuf, Vec<TaskView>>,
     branches: BTreeMap<PathBuf, String>,
+    upstream_syncs: BTreeMap<PathBuf, UpstreamSync>,
     task_eval_pending: BTreeSet<PathBuf>,
     label_adoptions: BTreeMap<TabId, String>,
     last_task_refresh: Option<Instant>,
@@ -2194,6 +2206,7 @@ impl WorkspaceModel {
             prompt_buffers,
             tasks,
             branches,
+            upstream_syncs,
             task_eval_pending,
             label_adoptions,
             last_task_refresh,
@@ -2212,6 +2225,7 @@ impl WorkspaceModel {
             prompt_buffers,
             tasks,
             branches,
+            upstream_syncs,
             task_eval_pending,
             label_adoptions,
             last_task_refresh,
@@ -2235,6 +2249,7 @@ impl WorkspaceModel {
             prompt_buffers: self.prompt_buffers,
             tasks: self.tasks,
             branches: self.branches,
+            upstream_syncs: self.upstream_syncs,
             task_eval_pending: self.task_eval_pending,
             label_adoptions: self.label_adoptions,
             last_task_refresh: self.last_task_refresh,
@@ -2349,6 +2364,11 @@ struct WorkspaceModel {
     /// a directory's own outside any slot. Read for an agent outside any
     /// slot, whose caption has no task to take a branch from.
     branches: BTreeMap<PathBuf, String>,
+    /// How the branch in [`Self::branches`] stands against its upstream,
+    /// under the same key, for the keys where that branch is the delivery
+    /// target and tracks something. Read for an agent outside any slot:
+    /// the operator's own tree is the one a pull or a push is due on.
+    upstream_syncs: BTreeMap<PathBuf, UpstreamSync>,
     /// Repositories an evaluation is in flight for, so a quiet pane and
     /// the clock cannot queue the same read twice.
     task_eval_pending: BTreeSet<PathBuf>,
