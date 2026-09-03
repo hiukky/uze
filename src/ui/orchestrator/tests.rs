@@ -439,6 +439,34 @@ mod workspace_tests {
         );
     }
 
+    /// Two trees in one column — directories and spaces — would leave no
+    /// telling which one is being chosen from, so the picker takes the
+    /// column while it is open and gives it straight back when it closes.
+    #[test]
+    fn the_open_prompt_has_the_sidebar_to_itself() {
+        let root = uze_testkit::temp::TempDir::new("sidebar-root-alone");
+        std::fs::create_dir_all(root.join("engine")).unwrap();
+        let mut model = agent_session_in("/repo");
+
+        model.root_picker = Some(RootPicker::opened_in(&root.path().display().to_string()));
+        let rows = sidebar_rows(&model, &mut Vec::new());
+        assert!(
+            rows.iter().any(|row| row.contains("engine")),
+            "the directories are what is on offer: {rows:?}"
+        );
+        assert!(
+            !rows.iter().any(|row| row.contains("Agent")),
+            "the agents step aside: {rows:?}"
+        );
+
+        model.root_picker = None;
+        let rows = sidebar_rows(&model, &mut Vec::new());
+        assert!(
+            rows.iter().any(|row| row.contains("Agent")),
+            "and come back when it closes: {rows:?}"
+        );
+    }
+
     /// A root several levels deep is longer than the sidebar is wide, and
     /// the segment being typed is the half that must survive.
     #[test]

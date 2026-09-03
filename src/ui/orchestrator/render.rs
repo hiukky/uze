@@ -400,6 +400,45 @@ fn push_unisolated_marker(spans: &mut Vec<Span<'_>>, cwd: &Path) {
     ));
 }
 
+/// A downward cursor over one column's rows. The sidebar lays itself out a
+/// row at a time and simply stops once the column is full, so nothing it
+/// draws needs to know in advance how tall everything else came out.
+struct Rows {
+    x: u16,
+    width: u16,
+    y: u16,
+    bottom: u16,
+}
+
+impl Rows {
+    fn over(area: Rect) -> Self {
+        Self {
+            x: area.x,
+            width: area.width,
+            y: area.y,
+            bottom: area.y + area.height,
+        }
+    }
+
+    fn next(&mut self, height: u16) -> Option<Rect> {
+        if self.y + height > self.bottom {
+            return None;
+        }
+        let rect = Rect::new(self.x, self.y, self.width, height);
+        self.y += height;
+        Some(rect)
+    }
+
+    /// One blank row, when the column still has one to spare.
+    fn gap(&mut self) {
+        let _ = self.next(1);
+    }
+
+    fn remaining(&self) -> u16 {
+        self.bottom.saturating_sub(self.y)
+    }
+}
+
 /// A two-level tree, one block per space the user has created (blank-line
 /// separated — see the loop below), each expanded (no collapse/accordion)
 /// into the agent tabs [`agent_identity_for_tab`] recognizes as running
@@ -444,28 +483,19 @@ pub(super) fn render_sidebar(
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let mut y = inner.y;
-    let bottom = inner.y + inner.height;
-    let mut row = |height: u16| -> Option<Rect> {
-        if y + height > bottom {
-            return None;
-        }
-        let rect = Rect::new(inner.x, y, inner.width, height);
-        y += height;
-        Some(rect)
-    };
+    let mut rows = Rows::over(inner);
 
     // Mode toggle, one line: this used to be a global titlebar (brand +
     // status + Ctrl+O hint + path) spanning the whole frame; with only menu
     // + main container left, the menu opens with just enough chrome to
     // match the tab strip's height on the other TUI mode — a centered
     // segmented control stands in for the Ctrl+O keybinding.
-    if let Some(rect) = row(1) {
+    if let Some(rect) = rows.next(1) {
         let (_work_rect, manage_rect) = crate::ui::render_mode_toggle(frame, rect, true);
         hits.push((manage_rect, WorkspaceHit::SwitchToManagement));
     }
     if let Some(error) = &model.error
-        && let Some(rect) = row(1)
+        && let Some(rect) = rows.next(1)
     {
         frame.render_widget(
             Paragraph::new(Span::styled(
@@ -477,7 +507,7 @@ pub(super) fn render_sidebar(
             rect,
         );
     }
-    if let Some(rect) = row(1) {
+    if let Some(rect) = rows.next(1) {
         frame.render_widget(
             Paragraph::new(Span::styled(
                 "─".repeat(rect.width as usize),
@@ -494,7 +524,7 @@ pub(super) fn render_sidebar(
     // The summary and creation action share the row directly below the
     // header divider: the quiet count gives the workspace scope, while the
     // right-aligned action remains the primary affordance.
-    if let Some(rect) = row(1) {
+    if let Some(rect) = rows.next(1) {
         let agent_count = session
             .workspace
             .spaces
@@ -525,53 +555,21 @@ pub(super) fn render_sidebar(
             WorkspaceHit::NewSpace,
         ));
     }
-    // The root the next space is created at, chosen in place under "+ new":
-    // a space is born from a directory, so the prompt filters the
-    // directories that exist rather than accepting a path typed blind.
+    // While the root picker is open it owns the column: the listing it
+    // draws is a tree of directories, and side by side with the tree of
+    // spaces neither would read as the one being chosen from. Closing it
+    // brings the spaces straight back.
     if let Some(picker) = &model.root_picker {
-        if let Some(rect) = row(1) {
-            // The typed segment is what the listing below is matching on,
-            // so it reads as the query it is — bright against the dim
-            // directory it is searching.
-            let (typed_directory, needle) = picker
-                .input()
-                .rsplit_once('/')
-                .map_or(("", picker.input()), |(head, needle)| (head, needle));
-            let directory = if typed_directory.is_empty() {
-                String::new()
-            } else {
-                format!("{typed_directory}/")
-            };
-            let mut spans = vec![
-                Span::styled(" at ", Style::default().fg(crate::ui::MUTED)),
-                Span::styled(
-                    // What is being typed must stay visible in a column
-                    // this narrow, so the directory in front of it is the
-                    // part that gives way.
-                    elide_head(
-                        &directory,
-                        (rect.width as usize)
-                            .saturating_sub(" at ".len() + needle.chars().count() + 1),
-                    ),
-                    Style::default().fg(crate::ui::TEXT_DIM),
-                ),
-                Span::styled(
-                    format!("{needle}▏"),
-                    Style::default()
-                        .fg(crate::ui::TEXT_BRIGHT)
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ];
-            fill_row_bg(&mut spans, rect.width, crate::ui::SURFACE_OVERLAY);
-            frame.render_widget(Paragraph::new(Line::from(spans)), rect);
-        }
-        render_root_matches(frame, picker, &mut row, hits);
+        render_root_picker(frame, picker, &mut rows, hits);
+        return;
     }
-    row(1);
+    rows.gap();
 
     for space in &session.workspace.spaces {
         let is_active_space = space.id == session.workspace.selected_space;
-        let Some(header_rect) = row(1) else { break };
+        let Some(header_rect) = rows.next(1) else {
+            break;
+        };
         render_space_header(frame, header_rect, session, space, model, hits);
 
         let agent_tabs: Vec<&Tab> = space
@@ -587,7 +585,7 @@ pub(super) fn render_sidebar(
             // selected tab (its bootstrap shell, absent any agent) rather
             // than the workspace root, so it tracks a plain `cd` the same
             // way an agent tab's own detail line already does.
-            if let Some(cwd_rect) = row(1) {
+            if let Some(cwd_rect) = rows.next(1) {
                 let cwd = space
                     .tabs
                     .iter()
@@ -615,7 +613,9 @@ pub(super) fn render_sidebar(
             // One extra level of indent versus a flat list — these tabs
             // read as children of the space header row just drawn above.
             let connector = if is_last { "  └─ " } else { "  ├─ " };
-            let Some(label_rect) = row(1) else { break };
+            let Some(label_rect) = rows.next(1) else {
+                break;
+            };
 
             let cwd = pane_in_layout(&tab.layout, tab.focus.pane)
                 .map(|pane| pane.cwd.clone())
@@ -703,7 +703,7 @@ pub(super) fn render_sidebar(
             frame.render_widget(Paragraph::new(Line::from(spans)), label_rect);
             hits.push((label_rect, WorkspaceHit::SelectTab(tab.id)));
 
-            if let Some(detail_rect) = row(1) {
+            if let Some(detail_rect) = rows.next(1) {
                 let continuation = if is_last { "     " } else { "  │  " };
                 // The task's own working branch in place of the cwd path —
                 // what this agent will deliver from. Falls back to the cwd
@@ -738,7 +738,7 @@ pub(super) fn render_sidebar(
             // item a little room to breathe. Skipped for the last tab: it
             // has no sibling below to connect to, and the space loop's own
             // blank row already separates it from whatever comes next.
-            if !is_last && let Some(gap_rect) = row(1) {
+            if !is_last && let Some(gap_rect) = rows.next(1) {
                 let mut spans = vec![Span::styled(
                     "  │  ",
                     Style::default().fg(crate::ui::TEXT_FAINT),
@@ -753,90 +753,7 @@ pub(super) fn render_sidebar(
         // detail line, which stays tight per the comment above) — each
         // space is its own block, and needs the breathing room a flat
         // tab list didn't.
-        row(1);
-    }
-}
-
-/// `text` shortened from the left to `width`, keeping its tail — the end
-/// of a path is what says where you are; its beginning is what you can
-/// afford to lose.
-fn elide_head(text: &str, width: usize) -> String {
-    let length = text.chars().count();
-    if length <= width {
-        return text.to_owned();
-    }
-    let kept = width.saturating_sub(1);
-    std::iter::once('…')
-        .chain(text.chars().skip(length - kept))
-        .collect()
-}
-
-/// How many directories the "+ new" prompt offers at once — enough to
-/// choose from without pushing the workspace's own spaces off the sidebar;
-/// the list scrolls to keep the selection in view.
-const ROOT_MATCH_ROWS: usize = 8;
-
-/// The directories currently matching the "+ new" prompt, drawn as rows of
-/// the sidebar itself rather than a floating popup: the prompt is choosing
-/// the next entry of this very list, so it reads as part of it.
-fn render_root_matches(
-    frame: &mut ratatui::Frame<'_>,
-    picker: &RootPicker,
-    row: &mut impl FnMut(u16) -> Option<Rect>,
-    hits: &mut Vec<(Rect, WorkspaceHit)>,
-) {
-    if picker.match_count() == 0 {
-        if let Some(rect) = row(1) {
-            frame.render_widget(
-                Paragraph::new(Span::styled(
-                    "    no directory matches",
-                    Style::default().fg(crate::ui::TEXT_FAINT),
-                )),
-                rect,
-            );
-        }
-        return;
-    }
-    let start = picker.window_start(ROOT_MATCH_ROWS);
-    for (index, candidate) in picker
-        .matches()
-        .enumerate()
-        .skip(start)
-        .take(ROOT_MATCH_ROWS)
-    {
-        let Some(rect) = row(1) else { return };
-        let selected = index == picker.selected();
-        let mut spans = vec![
-            Span::styled(
-                if selected { "  › " } else { "    " },
-                Style::default().fg(crate::ui::ACCENT),
-            ),
-            Span::styled(
-                candidate.name.clone(),
-                Style::default().fg(if selected {
-                    crate::ui::TEXT_BRIGHT
-                } else {
-                    crate::ui::NAV_INACTIVE
-                }),
-            ),
-        ];
-        if selected {
-            fill_row_bg(&mut spans, rect.width, crate::ui::SURFACE_OVERLAY);
-        }
-        frame.render_widget(Paragraph::new(Line::from(spans)), rect);
-        hits.push((rect, WorkspaceHit::PickSpaceRoot(index)));
-    }
-    let hidden = picker.match_count().saturating_sub(start + ROOT_MATCH_ROWS);
-    if hidden > 0
-        && let Some(rect) = row(1)
-    {
-        frame.render_widget(
-            Paragraph::new(Span::styled(
-                format!("    +{hidden} more"),
-                Style::default().fg(crate::ui::TEXT_FAINT),
-            )),
-            rect,
-        );
+        rows.gap();
     }
 }
 
@@ -921,6 +838,119 @@ pub(super) fn task_mark(state: &TaskStateView) -> Option<(&'static str, Color)> 
         }
         TaskStateView::Integrated => Some(("↑", crate::ui::TEXT_DIM)),
         TaskStateView::Parked => Some(("⏸", crate::ui::TEXT_DIM)),
+    }
+}
+
+/// `text` shortened from the left to `width`, keeping its tail — the end
+/// of a path is what says where you are; its beginning is what you can
+/// afford to lose.
+fn elide_head(text: &str, width: usize) -> String {
+    let length = text.chars().count();
+    if length <= width {
+        return text.to_owned();
+    }
+    let kept = width.saturating_sub(1);
+    std::iter::once('…')
+        .chain(text.chars().skip(length - kept))
+        .collect()
+}
+
+/// The "+ new" prompt and the directories it currently matches, drawn as
+/// rows of the sidebar itself rather than a floating popup: the prompt is
+/// choosing where the next space in this very list goes.
+fn render_root_picker(
+    frame: &mut ratatui::Frame<'_>,
+    picker: &RootPicker,
+    rows: &mut Rows,
+    hits: &mut Vec<(Rect, WorkspaceHit)>,
+) {
+    if let Some(rect) = rows.next(1) {
+        // The typed segment is what the listing below is matching on, so
+        // it reads as the query it is — bright against the dim directory
+        // it is searching.
+        let (typed_directory, needle) = picker
+            .input()
+            .rsplit_once('/')
+            .map_or(("", picker.input()), |(head, needle)| (head, needle));
+        let directory = if typed_directory.is_empty() {
+            String::new()
+        } else {
+            format!("{typed_directory}/")
+        };
+        let mut spans = vec![
+            Span::styled(" at ", Style::default().fg(crate::ui::MUTED)),
+            Span::styled(
+                // What is being typed must stay visible in a column this
+                // narrow, so the directory in front of it is the part that
+                // gives way.
+                elide_head(
+                    &directory,
+                    (rect.width as usize).saturating_sub(" at ".len() + needle.chars().count() + 1),
+                ),
+                Style::default().fg(crate::ui::TEXT_DIM),
+            ),
+            Span::styled(
+                format!("{needle}▏"),
+                Style::default()
+                    .fg(crate::ui::TEXT_BRIGHT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ];
+        fill_row_bg(&mut spans, rect.width, crate::ui::SURFACE_OVERLAY);
+        frame.render_widget(Paragraph::new(Line::from(spans)), rect);
+    }
+    rows.gap();
+    if picker.match_count() == 0 {
+        if let Some(rect) = rows.next(1) {
+            frame.render_widget(
+                Paragraph::new(Span::styled(
+                    "    no directory matches",
+                    Style::default().fg(crate::ui::TEXT_FAINT),
+                )),
+                rect,
+            );
+        }
+        return;
+    }
+    // The picker has the column to itself, so it offers as many
+    // directories as the column has rows — one held back for the tail that
+    // says how many more there are.
+    let visible = usize::from(rows.remaining()).saturating_sub(1).max(1);
+    let start = picker.window_start(visible);
+    for (index, candidate) in picker.matches().enumerate().skip(start).take(visible) {
+        let Some(rect) = rows.next(1) else { return };
+        let selected = index == picker.selected();
+        let mut spans = vec![
+            Span::styled(
+                if selected { "  › " } else { "    " },
+                Style::default().fg(crate::ui::ACCENT),
+            ),
+            Span::styled(
+                candidate.name.clone(),
+                Style::default().fg(if selected {
+                    crate::ui::TEXT_BRIGHT
+                } else {
+                    crate::ui::NAV_INACTIVE
+                }),
+            ),
+        ];
+        if selected {
+            fill_row_bg(&mut spans, rect.width, crate::ui::SURFACE_OVERLAY);
+        }
+        frame.render_widget(Paragraph::new(Line::from(spans)), rect);
+        hits.push((rect, WorkspaceHit::PickSpaceRoot(index)));
+    }
+    let hidden = picker.match_count().saturating_sub(start + visible);
+    if hidden > 0
+        && let Some(rect) = rows.next(1)
+    {
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                format!("    +{hidden} more"),
+                Style::default().fg(crate::ui::TEXT_FAINT),
+            )),
+            rect,
+        );
     }
 }
 
