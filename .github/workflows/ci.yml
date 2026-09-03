@@ -48,14 +48,19 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      checks: write
-    env:
-      ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
     steps:
       - uses: actions/checkout@v7
-      - uses: rustsec/audit-check@v2
+      # A prebuilt binary, not `rustsec/audit-check`: that action builds
+      # cargo-audit from source on every run with a fresh resolution, so
+      # any crate in cargo-audit's own tree publishing a broken release
+      # failed this job with no change on our side (tinyvec 1.13.0,
+      # 2026-09-03). The audit itself is unchanged: our Cargo.lock
+      # against the RustSec advisory database.
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          tool: cargo-audit
+      - run: cargo audit
 
   installer:
     name: Installer
