@@ -7,10 +7,11 @@ import subprocess
 The session runs **signed in**, against a synthetic identity: a `consumer`
 token file the CLI reads as a Google account, and the CloudCode plane
 answered by the run's own provider (identity, tier, flags, model catalogue,
-model path). That is the mode users are in, and the only one in which this
-harness executes `hooks.json` hooks at all — under `GEMINI_API_KEY` they are
-loaded and never run (vendor bug google-antigravity/antigravity-cli#893).
-API-key mode keeps one declared check so the bug stays on the report.
+model path). That is the mode users are in. API-key mode is measured too:
+until 1.1.24 it loaded `hooks.json` hooks and never ran them (vendor bug
+google-antigravity/antigravity-cli#893, kept on the report as a
+declaration); since 1.1.25 the same probe sees the hook fire there, so
+that check is asserted like the rest.
 
 Phase A (TUI): prompt + synthetic credential, /skills (flow:commit,
 flow:review, uze:init), /mcp (server listed + tools enumerated),
@@ -41,11 +42,11 @@ from shared.common import (
 )
 
 #: Signed-in ("consumer") mode is how the vertical runs: it is the mode
-#: users are in, and the only one in which this harness executes
-#: `hooks.json` hooks at all (vendor bug
+#: users are in, and until 1.1.24 the only one in which this harness
+#: executed `hooks.json` hooks at all (vendor bug
 #: google-antigravity/antigravity-cli#893). API-key mode stays reachable —
-#: `phase_hooks_api_key_mode` measures the bug there — and is what
-#: `auth="apikey"` selects.
+#: `phase_hooks_api_key_mode` asserts the hook fires there since 1.1.25 —
+#: and is what `auth="apikey"` selects.
 CONSUMER_TOKEN = "/work/home/.gemini/antigravity-cli/antigravity-oauth-token"
 
 
@@ -491,13 +492,13 @@ def phase_hooks_gate(cfg, prov_ip):
     thing it measures is a vendor gate, not ours: the executor reads
     `enable_json_hooks`, field 17 of `exa.cortex_pb.CustomizationConfig`,
     which the CLI only ever receives over the CloudCode backend it speaks
-    when signed in. Under `GEMINI_API_KEY` no such config arrives, whatever
-    the `json-hooks-enabled` flag says — vendor bug
-    google-antigravity/antigravity-cli#893, and `phase_hooks_api_key_mode`
-    keeps that on the report. If a future build closed the gate in signed-in
-    mode too, this check would say so instead of the suite quietly proving
-    nothing. `phase_hooks_delivery` answers the other half: whether the
-    harness loads what UZE itself delivered.
+    when signed in. Under `GEMINI_API_KEY` no such config arrived on 1.1.24,
+    whatever the `json-hooks-enabled` flag said — vendor bug
+    google-antigravity/antigravity-cli#893 — and `phase_hooks_api_key_mode`
+    re-runs this control hook there every run. If a future build closed the
+    gate in signed-in mode too, this check would say so instead of the suite
+    quietly proving nothing. `phase_hooks_delivery` answers the other half:
+    whether the harness loads what UZE itself delivered.
 
     Returns True when the control hook denied the command.
     """
@@ -607,14 +608,19 @@ def phase_hooks_api_key_mode(cfg, prov_ip):
     """The same control hook, the same turn, on a Gemini API key — the one
     variable is the auth mode.
 
-    Signed in it denies the command; on the API key the harness loads the
-    hook and runs nothing, so the command reaches the vendor's permission
-    prompt instead. That is google-antigravity/antigravity-cli#893 ("Hooks
-    from .agents/hooks.json are loaded but never executed when authenticated
-    via GEMINI_API_KEY", open 2026-08-28); #78 records that Google does not
-    support the API-key path at all. Recorded as a declaration so the bug
-    stays visible on the report without gating the vertical — and so the day
-    the vendor fixes it, this check fails and says so.
+    On 1.1.24 the API-key session loaded the hook and ran nothing, so the
+    command reached the vendor's permission prompt instead: that was
+    google-antigravity/antigravity-cli#893 ("Hooks from .agents/hooks.json
+    are loaded but never executed when authenticated via GEMINI_API_KEY",
+    opened 2026-08-28; #78 records that Google does not support the API-key
+    path at all), and the Lab carried it as a registered declaration so the
+    bug stayed on the report. On 1.1.25 the identical probe measured the
+    hook firing under the API key — four independent CI runs on 2026-09-03,
+    while the issue was still open upstream — which escalated the
+    declaration exactly as ADR-035 says it must. From here on the mode is
+    asserted: the hook must deny the command on the API key as it does
+    signed in, and a regression to #893 fails the vertical rather than
+    hiding behind a declaration whose reason stopped being true.
     """
     outcome = hook_turn(
         cfg,
@@ -629,15 +635,14 @@ def phase_hooks_api_key_mode(cfg, prov_ip):
         return
     executes = bool(outcome["markers"].get("blocked by protect-env"))
     check(
-        "hooks-api-key-mode-runs-no-hook",
-        not executes,
-        "the vendor-format deny hook that fires signed in never runs under "
-        "GEMINI_API_KEY (google-antigravity/antigravity-cli#893)"
+        "hooks-api-key-mode-hook-executes",
+        executes,
+        "the vendor-format deny hook fires under GEMINI_API_KEY as it does "
+        "signed in (`blocked by protect-env` reached the conversation)"
+        if executes
+        else "the hook loaded but never ran under GEMINI_API_KEY"
         + (" — the permission prompt surfaced instead" if outcome["prompted"] else "")
-        if not executes
-        else "the hook executed under GEMINI_API_KEY: #893 is fixed, retire this "
-        "declaration and assert the API-key path too",
-        kind="adapted",
+        + " (google-antigravity/antigravity-cli#893 is back)",
     )
 
 

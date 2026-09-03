@@ -557,3 +557,28 @@ harness starts in the slot's directory and works there; it reads the
 projected declaration; scripted to "isolate", it creates no top-level
 worktree; text written into its pane reaches the model — is what needs a
 vendor binary, and stays here as the open task in the worktree change.
+
+## The API-key declaration expired on 1.1.25
+
+**Context.** `hooks > api-key` re-ran the vendor-format control hook on a
+Gemini API key every run, registered ADAPTED for 1.1.24 with #893 as its
+reason: the hook loaded and never ran, and the command reached the
+permission prompt. On 2026-09-03 the channel moved to 1.1.25 and four
+independent CI runs saw `blocked by protect-env` reach the conversation
+under `GEMINI_API_KEY` — the hook fired. The registry escalated, as
+ADR-035 says a registered declaration that starts passing must, while the
+upstream issue was still open and the release notes named nothing about
+hooks.
+
+**Chosen.** Retire the declaration and assert the mode: the check is now
+`hooks-api-key-mode-hook-executes`, and it must see the denial marker on
+the API key exactly as `hooks > vendor` does signed in. The measurement is
+the evidence, not the issue tracker or the changelog: what the Lab records
+is what the binary under test did.
+
+**Discarded.** Re-pinning the declaration to `1.1.25` (its reason had
+become false, and a declaration with a false reason is the false green the
+gate exists to catch); dropping the API-key probe now that it passes (it is
+what would say the gate closed again, and a regression to #893 must read as
+a red check, not as a mode dependency users discover in the field).
+

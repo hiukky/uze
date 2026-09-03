@@ -86,21 +86,21 @@ it become authoritative.
   every run (`hooks > delivery`), so if a later build starts reading plugin
   hooks, the check says so and the delivery can move back.
 
-  One vendor gate still stands in front of every delivered hook: **AGY
-  executes `hooks.json` hooks only in a signed-in session.** The executor
+  One vendor gate stands in front of every delivered hook: the executor
   reads `enable_json_hooks` (field 17 of the backend's
   `CustomizationConfig`, switched server-side by the `json-hooks-enabled`
-  feature flag), and that config reaches the CLI only over the CloudCode
-  backend it speaks when signed in to a Google account. A `GEMINI_API_KEY`
-  session loads the same hooks, lists them under `/hooks`, and runs none of
-  them — for any event. Nothing UZE delivers changes that; the mode does.
-  Vendor bug
+  feature flag). Through 1.1.24 that config reached the CLI only over the
+  CloudCode backend it speaks when signed in to a Google account, so a
+  `GEMINI_API_KEY` session loaded the same hooks, listed them under
+  `/hooks`, and ran none of them — vendor bug
   [google-antigravity/antigravity-cli#893](https://github.com/google-antigravity/antigravity-cli/issues/893)
   ("hooks loaded but never executed when authenticated via GEMINI_API_KEY"),
   alongside #78 recording that the Gemini API-key path is unsupported at
-  all. The Lab runs the vertical signed in and asserts UZE's own hooks there
-  (deny relayed, tool blocked, first-deny-wins, allow executes), and keeps
-  one declared check on the API-key mode so #893 stays visible.
+  all. On 1.1.25 the Lab measured the same hook firing under the API key.
+  The vertical runs signed in and asserts UZE's own hooks there (deny
+  relayed, tool blocked, first-deny-wins, allow executes), and asserts the
+  vendor-format control hook on the API-key mode as well, so a return of
+  #893 is a red check, not a silent mode dependency.
 - Workspace-level `.agents/mcp_config.json` discovery is a project-scope
   concern outside UZE's machine-scope integration; it was not observable
   headlessly (`agy mcp list` shows global only). `.agents/skills/` is a

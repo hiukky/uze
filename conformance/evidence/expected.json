@@ -12,16 +12,6 @@
       "observed_at": "2026-08-26"
     },
     {
-      "harness": "antigravity",
-      "check": "hooks-api-key-mode-runs-no-hook",
-      "suite": "hooks > api-key",
-      "reason": "The same vendor-format control hook that fires in the vertical's signed-in session runs nothing under GEMINI_API_KEY: the harness loads it (hooks_manager: loaded 1 named hooks) and the command reaches the permission prompt instead. The executor reads `enable_json_hooks`, field 17 of `exa.cortex_pb.CustomizationConfig`, which arrives only over the CloudCode `v1internal` backend the signed-in CLI speaks; serving `json-hooks-enabled` alone does not open the gate. Vendor bug google-antigravity/antigravity-cli#893 (open 2026-08-28); #78 records that Google does not support the Gemini API-key path at all. The declaration fails the day the hook fires under an API key.",
-      "versions": [
-        "1.1.24"
-      ],
-      "observed_at": "2026-09-02"
-    },
-    {
       "harness": "opencode",
       "check": "mcp-tool-executed-in-tui",
       "suite": "mcp",

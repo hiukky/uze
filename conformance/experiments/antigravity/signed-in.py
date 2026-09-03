@@ -1,8 +1,9 @@
 """Exploration: does the real AGY accept the Lab's synthetic signed-in
 identity, and does it then execute `hooks.json` hooks?
 
-The vertical ran on a Gemini API key, where this harness loads hooks and
-never runs them (google-antigravity/antigravity-cli#893). This drives the
+The vertical ran on a Gemini API key, where this harness (through 1.1.24)
+loaded hooks and never ran them (google-antigravity/antigravity-cli#893;
+measured fixed on 1.1.25). This drives the
 same container with the synthetic `consumer` token file in place and the
 CloudCode plane served by the provider, so a run answers two questions at
 once: which endpoints the CLI asks for (read the provider's own log, and
@@ -19,7 +20,8 @@ Switches (environment):
                          delivered plugin hook; default is the vendor-format
                          deny hook.
   SIGNED_IN_AUTH=apikey  run the same probe on the API key instead — the
-                         control for "the mode is what changed".
+                         control for "the mode is what changed" (and the
+                         fast loop for the vertical's `hooks > api-key`).
 
 Run: python3 conformance/lab.py --harness antigravity \
        --experiment antigravity/signed-in --discovery
