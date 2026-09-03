@@ -107,7 +107,14 @@ fn temporary_home(label: &str) -> PathBuf {
 
 #[test]
 fn no_subcommand_stays_headless_when_stdout_is_not_a_terminal() {
-    let output = Command::new(env!("CARGO_BIN_EXE_uze")).output().unwrap();
+    // `UZE_PANE` is set for every process the terminal runtime spawns, and
+    // a bare `uze` seeing it opens a space in the running client instead of
+    // printing help. Inherited, this test failed for anyone running the
+    // suite from inside uze itself — which is how the project dogfoods.
+    let output = Command::new(env!("CARGO_BIN_EXE_uze"))
+        .env_remove("UZE_PANE")
+        .output()
+        .unwrap();
     assert!(output.status.success());
     let text = String::from_utf8_lossy(&output.stdout);
     assert!(text.contains("Manage one local agent plugin environment"));
