@@ -10,9 +10,9 @@ mod workspace_tests {
     use super::WorkspaceHit;
     use super::{
         AGENT_BUSY_REPAINTS, AGENT_ECHO_GRACE, AGENT_PASTE_GRACE, AgentIdentity, AgentTabStatus,
-        PreservedOverlay, TaskStateView, TaskView, WorkspaceModel, agent_identity_for_tab,
-        blank_pane, can_close_tab_from_menu, encode_mouse, forward_paste, forward_scroll,
-        next_agent_label, pane_relative,
+        PreservedOverlay, RootPicker, TaskStateView, TaskView, WorkspaceModel,
+        agent_identity_for_tab, blank_pane, can_close_tab_from_menu, encode_mouse, forward_paste,
+        forward_scroll, next_agent_label, pane_relative,
         render::{render_preserved, render_sidebar, render_tab_strip},
         selected_pane_cwd, tab_needs_replacement_shell, workspace_has_active_agent_operation,
     };
@@ -396,6 +396,70 @@ mod workspace_tests {
                 .any(|row| row.contains("/repo") && !row.contains(".worktrees")),
             "the caption reads as the primary: {rows:?}"
         );
+    }
+
+    /// The "+ new" prompt is a chooser, not a text field: the sidebar
+    /// itself lists the directories the typed segment still matches, and
+    /// clicking one is the same choice Enter makes.
+    #[test]
+    fn the_new_space_prompt_lists_the_directories_it_matches() {
+        let root = uze_testkit::temp::TempDir::new("sidebar-root-picker");
+        for directory in ["engine", "extensions", "docs"] {
+            std::fs::create_dir_all(root.join(directory)).unwrap();
+        }
+        let mut model = agent_session_in("/repo");
+        model.root_picker = Some(RootPicker::opened_in(&root.path().display().to_string()));
+
+        let mut hits = Vec::new();
+        let rows = sidebar_rows(&model, &mut hits);
+        assert!(
+            rows.iter().any(|row| row.contains("engine"))
+                && rows.iter().any(|row| row.contains("docs")),
+            "the listing is on screen: {rows:?}"
+        );
+        assert!(
+            hits.iter()
+                .any(|(_, hit)| matches!(hit, WorkspaceHit::PickSpaceRoot(_))),
+            "every offered directory is clickable"
+        );
+
+        if let Some(picker) = model.root_picker.as_mut() {
+            for character in "ex".chars() {
+                picker.typed(character);
+            }
+        }
+        let rows = sidebar_rows(&model, &mut Vec::new());
+        assert!(
+            rows.iter().any(|row| row.contains("extensions")),
+            "what matches stays: {rows:?}"
+        );
+        assert!(
+            !rows.iter().any(|row| row.contains("docs")),
+            "what stopped matching is gone: {rows:?}"
+        );
+    }
+
+    /// A root several levels deep is longer than the sidebar is wide, and
+    /// the segment being typed is the half that must survive.
+    #[test]
+    fn a_long_root_gives_way_to_what_is_being_typed() {
+        let root = uze_testkit::temp::TempDir::new("sidebar-root-elide");
+        std::fs::create_dir_all(root.join("a-very-long-directory-name/inner")).unwrap();
+        let mut model = agent_session_in("/repo");
+        let mut picker = RootPicker::opened_in(&root.path().display().to_string());
+        picker.descend();
+        for character in "inn".chars() {
+            picker.typed(character);
+        }
+        model.root_picker = Some(picker);
+
+        let rows = sidebar_rows(&model, &mut Vec::new());
+        let prompt = rows
+            .iter()
+            .find(|row| row.contains(" at "))
+            .expect("the prompt row is drawn");
+        assert!(prompt.contains("inn\u{258f}"), "{prompt}");
+        assert!(prompt.contains('\u{2026}'), "the head gave way: {prompt}");
     }
 
     #[test]

@@ -525,23 +525,47 @@ pub(super) fn render_sidebar(
             WorkspaceHit::NewSpace,
         ));
     }
-    // The root the next space is created at, edited in place under "+ new":
-    // a space is born from a directory, and the prompt is that directory
-    // with the selected space's root prefilled.
-    if let Some((RenameTarget::NewSpaceRoot, buffer)) = &model.renaming
-        && let Some(rect) = row(1)
-    {
-        let mut spans = vec![
-            Span::styled(" at ", Style::default().fg(crate::ui::MUTED)),
-            Span::styled(
-                format!("{buffer}▏"),
-                Style::default()
-                    .fg(crate::ui::TEXT_BRIGHT)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ];
-        fill_row_bg(&mut spans, rect.width, crate::ui::SURFACE_OVERLAY);
-        frame.render_widget(Paragraph::new(Line::from(spans)), rect);
+    // The root the next space is created at, chosen in place under "+ new":
+    // a space is born from a directory, so the prompt filters the
+    // directories that exist rather than accepting a path typed blind.
+    if let Some(picker) = &model.root_picker {
+        if let Some(rect) = row(1) {
+            // The typed segment is what the listing below is matching on,
+            // so it reads as the query it is — bright against the dim
+            // directory it is searching.
+            let (typed_directory, needle) = picker
+                .input()
+                .rsplit_once('/')
+                .map_or(("", picker.input()), |(head, needle)| (head, needle));
+            let directory = if typed_directory.is_empty() {
+                String::new()
+            } else {
+                format!("{typed_directory}/")
+            };
+            let mut spans = vec![
+                Span::styled(" at ", Style::default().fg(crate::ui::MUTED)),
+                Span::styled(
+                    // What is being typed must stay visible in a column
+                    // this narrow, so the directory in front of it is the
+                    // part that gives way.
+                    elide_head(
+                        &directory,
+                        (rect.width as usize)
+                            .saturating_sub(" at ".len() + needle.chars().count() + 1),
+                    ),
+                    Style::default().fg(crate::ui::TEXT_DIM),
+                ),
+                Span::styled(
+                    format!("{needle}▏"),
+                    Style::default()
+                        .fg(crate::ui::TEXT_BRIGHT)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ];
+            fill_row_bg(&mut spans, rect.width, crate::ui::SURFACE_OVERLAY);
+            frame.render_widget(Paragraph::new(Line::from(spans)), rect);
+        }
+        render_root_matches(frame, picker, &mut row, hits);
     }
     row(1);
 
@@ -730,6 +754,89 @@ pub(super) fn render_sidebar(
         // space is its own block, and needs the breathing room a flat
         // tab list didn't.
         row(1);
+    }
+}
+
+/// `text` shortened from the left to `width`, keeping its tail — the end
+/// of a path is what says where you are; its beginning is what you can
+/// afford to lose.
+fn elide_head(text: &str, width: usize) -> String {
+    let length = text.chars().count();
+    if length <= width {
+        return text.to_owned();
+    }
+    let kept = width.saturating_sub(1);
+    std::iter::once('…')
+        .chain(text.chars().skip(length - kept))
+        .collect()
+}
+
+/// How many directories the "+ new" prompt offers at once — enough to
+/// choose from without pushing the workspace's own spaces off the sidebar;
+/// the list scrolls to keep the selection in view.
+const ROOT_MATCH_ROWS: usize = 8;
+
+/// The directories currently matching the "+ new" prompt, drawn as rows of
+/// the sidebar itself rather than a floating popup: the prompt is choosing
+/// the next entry of this very list, so it reads as part of it.
+fn render_root_matches(
+    frame: &mut ratatui::Frame<'_>,
+    picker: &RootPicker,
+    row: &mut impl FnMut(u16) -> Option<Rect>,
+    hits: &mut Vec<(Rect, WorkspaceHit)>,
+) {
+    if picker.match_count() == 0 {
+        if let Some(rect) = row(1) {
+            frame.render_widget(
+                Paragraph::new(Span::styled(
+                    "    no directory matches",
+                    Style::default().fg(crate::ui::TEXT_FAINT),
+                )),
+                rect,
+            );
+        }
+        return;
+    }
+    let start = picker.window_start(ROOT_MATCH_ROWS);
+    for (index, candidate) in picker
+        .matches()
+        .enumerate()
+        .skip(start)
+        .take(ROOT_MATCH_ROWS)
+    {
+        let Some(rect) = row(1) else { return };
+        let selected = index == picker.selected();
+        let mut spans = vec![
+            Span::styled(
+                if selected { "  › " } else { "    " },
+                Style::default().fg(crate::ui::ACCENT),
+            ),
+            Span::styled(
+                candidate.name.clone(),
+                Style::default().fg(if selected {
+                    crate::ui::TEXT_BRIGHT
+                } else {
+                    crate::ui::NAV_INACTIVE
+                }),
+            ),
+        ];
+        if selected {
+            fill_row_bg(&mut spans, rect.width, crate::ui::SURFACE_OVERLAY);
+        }
+        frame.render_widget(Paragraph::new(Line::from(spans)), rect);
+        hits.push((rect, WorkspaceHit::PickSpaceRoot(index)));
+    }
+    let hidden = picker.match_count().saturating_sub(start + ROOT_MATCH_ROWS);
+    if hidden > 0
+        && let Some(rect) = row(1)
+    {
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                format!("    +{hidden} more"),
+                Style::default().fg(crate::ui::TEXT_FAINT),
+            )),
+            rect,
+        );
     }
 }
 

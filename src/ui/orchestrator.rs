@@ -7,6 +7,7 @@
 
 use super::tui_application;
 use crate::ui::extension_host::WorkspaceHost;
+use crate::ui::root_picker::RootPicker;
 use crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
@@ -502,6 +503,63 @@ pub(crate) fn attach_workspace(
         }
         if event::poll(POLL).map_err(io_error)? {
             match event::read().map_err(io_error)? {
+                Event::Key(key) if model.root_picker.is_some() => {
+                    match key.code {
+                        KeyCode::Up => {
+                            if let Some(picker) = model.root_picker.as_mut() {
+                                picker.move_selection(-1);
+                            }
+                        }
+                        KeyCode::Down => {
+                            if let Some(picker) = model.root_picker.as_mut() {
+                                picker.move_selection(1);
+                            }
+                        }
+                        // Tab walks into the highlighted directory, so a
+                        // root several levels down is reached by narrowing
+                        // one level at a time instead of typing the path.
+                        KeyCode::Tab => {
+                            if let Some(picker) = model.root_picker.as_mut() {
+                                picker.descend();
+                            }
+                        }
+                        KeyCode::Enter => {
+                            if let Some(root) =
+                                model.root_picker.as_ref().and_then(RootPicker::chosen)
+                            {
+                                model.root_picker = None;
+                                let _ = send_request(
+                                    &mut stream,
+                                    &ClientRequest::CreateSpace {
+                                        label: None,
+                                        root,
+                                        columns,
+                                        rows,
+                                    },
+                                );
+                            }
+                        }
+                        KeyCode::Esc => model.root_picker = None,
+                        KeyCode::Backspace => {
+                            if let Some(picker) = model.root_picker.as_mut() {
+                                picker.backspace();
+                            }
+                        }
+                        KeyCode::Char(character) => {
+                            if let Some(picker) = model.root_picker.as_mut() {
+                                picker.typed(character);
+                            }
+                        }
+                        _ => {}
+                    }
+                    model.dirty = true;
+                }
+                Event::Paste(text) if model.root_picker.is_some() => {
+                    if let Some(picker) = model.root_picker.as_mut() {
+                        picker.pasted(text.trim_end_matches(['\r', '\n']));
+                    }
+                    model.dirty = true;
+                }
                 Event::Key(key) if model.renaming.is_some() => {
                     match key.code {
                         KeyCode::Enter => {
@@ -519,14 +577,6 @@ pub(crate) fn attach_workspace(
                                                 ClientRequest::RenameSpace {
                                                     space,
                                                     label: trimmed,
-                                                }
-                                            }
-                                            RenameTarget::NewSpaceRoot => {
-                                                ClientRequest::CreateSpace {
-                                                    label: None,
-                                                    root: expand_home(&trimmed),
-                                                    columns,
-                                                    rows,
                                                 }
                                             }
                                         },
@@ -854,6 +904,48 @@ pub(crate) fn attach_workspace(
                     // than silently confirming or acting on the click.
                     model.renaming = None;
                     model.dirty = true;
+                }
+                Event::Mouse(mouse)
+                    if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+                        && model.root_picker.is_some() =>
+                {
+                    match hit_at(&model, mouse.column, mouse.row) {
+                        Some(WorkspaceHit::PickSpaceRoot(index)) => {
+                            if let Some(root) = model.root_picker.as_mut().and_then(|picker| {
+                                picker.select(index);
+                                picker.chosen()
+                            }) {
+                                model.root_picker = None;
+                                let _ = send_request(
+                                    &mut stream,
+                                    &ClientRequest::CreateSpace {
+                                        label: None,
+                                        root,
+                                        columns,
+                                        rows,
+                                    },
+                                );
+                            }
+                        }
+                        // Click outside the picker's own rows discards it —
+                        // same rule `renaming` uses.
+                        _ => model.root_picker = None,
+                    }
+                    model.dirty = true;
+                }
+                Event::Mouse(mouse)
+                    if mouse.kind == MouseEventKind::Moved && model.root_picker.is_some() =>
+                {
+                    // The highlight follows the pointer, the same way the
+                    // agent picker and the sidebar context menu already do.
+                    if let Some(WorkspaceHit::PickSpaceRoot(index)) =
+                        hit_at(&model, mouse.column, mouse.row)
+                        && let Some(picker) = model.root_picker.as_mut()
+                        && picker.selected() != index
+                    {
+                        picker.select(index);
+                        model.dirty = true;
+                    }
                 }
                 Event::Mouse(mouse)
                     if mouse.kind == MouseEventKind::Down(MouseButton::Left)
@@ -1217,9 +1309,14 @@ pub(crate) fn attach_workspace(
                                 .map(|session| {
                                     crate::ui::display_project_path(&session.selected_space().root)
                                 })
-                                .unwrap_or_default();
-                            model.renaming = Some((RenameTarget::NewSpaceRoot, prefill));
+                                .unwrap_or_else(|| "~".to_owned());
+                            model.root_picker = Some(RootPicker::opened_in(&prefill));
                             model.dirty = true;
+                        }
+                        WorkspaceHit::PickSpaceRoot(_) => {
+                            // Only reachable while the root picker is open,
+                            // which the guarded arm above already handles —
+                            // same as `PickAgent` for the agent picker.
                         }
                         WorkspaceHit::OpenGitView => {
                             open_git_view(&mut model);
@@ -1302,6 +1399,7 @@ pub(crate) fn attach_workspace(
                 Event::Mouse(mouse)
                     if mouse.kind == MouseEventKind::Down(MouseButton::Right)
                         && model.renaming.is_none()
+                        && model.root_picker.is_none()
                         && model.agent_picker.is_none()
                         && model.context_menu.is_none() =>
                 {
@@ -1396,9 +1494,14 @@ pub(super) enum WorkspaceHit {
     /// generic over whatever action that row is, same pattern
     /// [`WorkspaceHit::PickAgent`] uses for the agent picker.
     ContextMenuAction(usize),
-    /// The sidebar's "+ new" row — creates a new space directly (no
-    /// picker; unlike an agent tab, a space has no "kind" to choose).
+    /// The sidebar's "+ new" row — opens the root picker
+    /// ([`WorkspaceModel::root_picker`]), since a space is born from a
+    /// directory and that directory is chosen, not typed blind.
     NewSpace,
+    /// One row of the open root picker, by index into its current matches
+    /// — same pattern [`WorkspaceHit::PickAgent`] uses for the agent
+    /// picker.
+    PickSpaceRoot(usize),
     /// The tab strip's right-corner button — opens the Git changes
     /// extension (`WorkspaceModel::git_view`), scoped to the active tab's
     /// live `cwd`.
@@ -1429,10 +1532,6 @@ pub(super) enum WorkspaceHit {
 enum RenameTarget {
     Tab(TabId),
     Space(SpaceId),
-    /// Not a rename: the root the next space is created at, edited in
-    /// place on the sidebar's "+ new" row with the same buffer and keys,
-    /// prefilled with the selected space's root.
-    NewSpaceRoot,
 }
 
 /// A second `Down(Left)` on the same hit within this window counts as a
@@ -1760,6 +1859,10 @@ struct WorkspaceModel {
     /// pane, and any click elsewhere cancels it (same "click outside
     /// discards" rule the management TUI's overlays use).
     renaming: Option<(RenameTarget, String)>,
+    /// Open state of the sidebar's "+ new" prompt — the directory the next
+    /// space is born from, chosen from a live listing that narrows as it is
+    /// typed. Same "click outside discards" rule as `renaming`.
+    root_picker: Option<RootPicker>,
     last_click: Option<(std::time::Instant, WorkspaceHit)>,
     /// Open state of the "+ new agent" popup; `None` when closed. Same
     /// "click outside discards" rule as `renaming`.
@@ -1953,13 +2056,15 @@ impl WorkspaceModel {
         }
     }
     /// None of the modal overlays that own mouse input while they're open
-    /// (rename buffer, agent picker, support dropdown, isolation tip,
+    /// (rename buffer, new-space root picker, agent picker, support
+    /// dropdown, isolation tip,
     /// context menu, Git changes view) are
     /// currently up — the precondition for forwarding a drag/release/scroll
     /// that isn't already claimed by one of them straight into the focused
     /// pane's PTY instead of dropping it.
     fn no_modal_open(&self) -> bool {
         self.renaming.is_none()
+            && self.root_picker.is_none()
             && self.agent_picker.is_none()
             && self.support_dropdown.is_none()
             && self.preserved.is_none()
@@ -2365,19 +2470,21 @@ fn next_shell_label_for_tab(model: &WorkspaceModel, tab: TabId) -> String {
     format!("shell {}", count + 1)
 }
 
-/// The label a fresh space opens with — same numbering convention as
-/// [`next_shell_label`], off the workspace's current space count.
-/// A path as typed on the "+ new" row: `~` means the home directory, and a
-/// relative path is relative to the home directory too — what someone
-/// naming a project from anywhere means by it.
-fn expand_home(typed: &str) -> PathBuf {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    let path = PathBuf::from(typed);
-    match (typed.strip_prefix('~'), home) {
-        (Some(rest), Some(home)) => home.join(rest.trim_start_matches('/')),
-        (None, Some(home)) if path.is_relative() => home.join(path),
-        _ => path,
-    }
+/// The hit zone under a pointer position, latest-drawn first — an overlay
+/// row drawn over the sidebar owns the click rather than the row beneath
+/// it.
+fn hit_at(model: &WorkspaceModel, column: u16, row: u16) -> Option<WorkspaceHit> {
+    model
+        .hits
+        .iter()
+        .rev()
+        .find(|(rect, _)| {
+            rect.x <= column
+                && column < rect.x + rect.width
+                && rect.y <= row
+                && row < rect.y + rect.height
+        })
+        .map(|(_, hit)| *hit)
 }
 
 /// Confirms one [`ContextMenu`] row against its `target` — sent from both

@@ -61,6 +61,7 @@ mod management;
 mod model;
 mod orchestrator;
 mod overlay;
+mod root_picker;
 pub mod view;
 mod worker;
 
