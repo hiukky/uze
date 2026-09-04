@@ -49,7 +49,8 @@ function homepageOf(name: string) {
 // can't inherit currentColor); Codex / Antigravity have no distinct mark of
 // their own — these are OpenAI's and Google Antigravity's actual favicons,
 // fetched from their own sites (public/harnesses/, not redistributed by a
-// third party), shown at their real brand colors.
+// third party), shown at their real brand colors. Terms for all four:
+// CREDITS.md.
 const harnesses = [
   {
     name: 'Claude Code',

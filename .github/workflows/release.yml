@@ -112,14 +112,16 @@ jobs:
       # Apache-2.0 4(a) and 4(d): whoever receives the binary has to receive
       # the licence and the NOTICE with it. Staging them beside the binary is
       # what puts them inside the tarball - the archive used to carry the
-      # executable alone.
+      # executable alone. CREDITS.md travels with them because the NOTICE
+      # points at it, and a pointer to a file the recipient does not have is
+      # worse than no pointer.
       - name: Package release archive
         run: |
           mkdir -p dist staging
           cp "target/${{ matrix.target }}/release/uze" staging/
-          cp LICENSE NOTICE staging/
+          cp LICENSE NOTICE CREDITS.md staging/
           tar -C staging -czf "dist/uze-${{ matrix.target }}.tar.gz" \
-            uze LICENSE NOTICE
+            uze LICENSE NOTICE CREDITS.md
       - uses: actions/upload-artifact@v7
         with:
           name: uze-${{ matrix.target }}

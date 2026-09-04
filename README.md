@@ -43,7 +43,8 @@ Security reports go through [SECURITY.md](SECURITY.md), never a public issue.
 **Trademarks.** All product names, logos and brands are the property of their
 respective owners. uze names the coding agents it interoperates with for
 identification only. It is an independent project and is not affiliated with,
-endorsed by, or sponsored by any of them.
+endorsed by, or sponsored by any of them. The marks it ships as artwork, and
+the terms each comes under, are credited in [CREDITS.md](CREDITS.md).
 
 Author: [Romullo Sousa (hiukky)](https://github.com/hiukky) · [Apache License 2.0](LICENSE)
 
