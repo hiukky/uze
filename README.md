@@ -38,6 +38,12 @@ curl -fsSL https://uze.hiukky.com/i | sh
 
 Built in Rust. Licensed under the Apache License 2.0.
 Contributions are welcome under the rules in [CONTRIBUTING.md](CONTRIBUTING.md).
+Security reports go through [SECURITY.md](SECURITY.md), never a public issue.
+
+**Trademarks.** All product names, logos and brands are the property of their
+respective owners. uze names the coding agents it interoperates with for
+identification only. It is an independent project and is not affiliated with,
+endorsed by, or sponsored by any of them.
 
 Author: [Romullo Sousa (hiukky)](https://github.com/hiukky) · [Apache License 2.0](LICENSE)
 

@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { Check } from 'lucide-react';
 import { InstallCommand } from '@/components/install-command';
+import { TrademarkNotice } from '@/components/trademark-notice';
 import matrix from '@/lib/harness-matrix.json';
 
 type Capability = 'context' | 'skills' | 'mcp' | 'agents' | 'hooks' | 'package';
@@ -292,6 +293,9 @@ export default function HomePage() {
             Romullo (@hiukky)
           </a>
         </p>
+        <div className="mt-6">
+          <TrademarkNotice />
+        </div>
       </footer>
     </main>
   );

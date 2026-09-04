@@ -86,6 +86,7 @@ naming them, and the absorbed records are listed under
 - [041 — Extension code is a distinct trust class from plugin bytes](041-extension-code-is-a-distinct-trust-class.md)
 - [042 — Enforce the architecture seams in the test suite, and close the layering debt](042-enforce-architecture-seams-in-the-test-suite.md)
 - [043 — Conformance asserts one outcome contract per capability; vendors bind, never assert](043-conformance-asserts-one-outcome-contract-per-capability.md)
+- [044 — Authorship is the human who adopts a change, not the tool that drafted it](044-authorship-is-the-human-who-adopts-the-change.md)
 
 ## Consolidated records
 

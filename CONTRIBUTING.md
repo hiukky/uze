@@ -136,9 +136,12 @@ Every commit follows [Conventional Commits](https://www.conventionalcommits.org/
   rejected, and how it was verified. Link the issue and, where one
   exists, the OpenSpec change.
 - **Pull requests are squash-merged.** `main` is linear; every commit on
-  it is one reviewed change with a conventional title. Fixup and review
-  commits on the branch are fine because they disappear at merge. Keep
-  the squash message to the pull request title and a body that says why.
+  it is one reviewed change with a conventional title, taken from the
+  pull request title. The body is assembled from the branch's own commit
+  messages, so write each of them as something worth reading on `main` —
+  and trim the fixups out in the merge box, which stays editable. The
+  pull request description is not the commit message: it is written for a
+  reviewer, and a rich one full of tables reads badly in `git log`.
 - Rebase on `main` before asking for review, and again if `main` moved
   under you. Merge commits into a feature branch are not accepted.
 - A pull request is merged by a maintainer, only after CI is green and
@@ -170,9 +173,9 @@ component means at this stage.
 
 ## Security
 
-Do not open a public issue for a vulnerability. Report it privately to the
-maintainer listed in `Cargo.toml`, with a reproduction; you will get an
-acknowledgement and a coordinated fix before anything is disclosed.
+Never open a public issue for a vulnerability. The policy — where to report,
+what a usable report contains, and what happens after — is in
+[`SECURITY.md`](SECURITY.md).
 
 ## Conduct
 

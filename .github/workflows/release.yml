@@ -109,11 +109,17 @@ jobs:
         with:
           key: release-${{ matrix.target }}
       - run: cargo build --locked --release --bin uze --target ${{ matrix.target }}
+      # Apache-2.0 4(a) and 4(d): whoever receives the binary has to receive
+      # the licence and the NOTICE with it. Staging them beside the binary is
+      # what puts them inside the tarball - the archive used to carry the
+      # executable alone.
       - name: Package release archive
         run: |
-          mkdir -p dist
-          tar -C "target/${{ matrix.target }}/release" -czf \
-            "dist/uze-${{ matrix.target }}.tar.gz" uze
+          mkdir -p dist staging
+          cp "target/${{ matrix.target }}/release/uze" staging/
+          cp LICENSE NOTICE staging/
+          tar -C staging -czf "dist/uze-${{ matrix.target }}.tar.gz" \
+            uze LICENSE NOTICE
       - uses: actions/upload-artifact@v7
         with:
           name: uze-${{ matrix.target }}
