@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { Check } from 'lucide-react';
 import { InstallCommand } from '@/components/install-command';
 import matrix from '@/lib/harness-matrix.json';
 
@@ -13,21 +14,23 @@ const columns: [Capability, string][] = [
   ['package', 'Plugin'],
 ];
 
-// A route reads as one word plus a mark, so the table can be scanned down a
-// column without a legend: filled is native, hollow is adapted, absent is a
-// gap the docs explain.
+// The question a reader is actually asking of this table is "does it work
+// here", so that is what the mark answers: every delivered route gets the
+// same check, and the route word beside it is the detail. Dimming `bridge`
+// and `adapted` against `native` answered a different question and made two
+// working routes look broken.
 function Route({ value }: { value: string }) {
   if (value === 'none') {
-    return <span className="font-mono text-xs text-muted/60">—</span>;
+    return (
+      <span className="font-mono text-xs text-muted/60" title="not delivered through this route">
+        —
+      </span>
+    );
   }
-  const native = value === 'native';
   return (
-    <span className="inline-flex items-center gap-1.5 font-mono text-xs whitespace-nowrap">
-      <span
-        aria-hidden
-        className={`size-1.5 rounded-full ${native ? 'bg-accent' : 'border border-muted'}`}
-      />
-      <span className={native ? 'text-ink' : 'text-muted'}>{value}</span>
+    <span className="inline-flex items-center gap-1.5 font-mono text-xs whitespace-nowrap text-ink">
+      <Check className="size-3.5 shrink-0 text-accent" aria-hidden strokeWidth={3} />
+      {value}
     </span>
   );
 }
@@ -190,9 +193,12 @@ export default function HomePage() {
           stopped taking. */}
       <section className="w-full max-w-5xl border-t border-line py-20 sm:py-24">
         <h2 className="font-mono font-semibold text-ink">What each harness receives</h2>
-        <p className="mt-1.5 max-w-[62ch] text-sm leading-relaxed text-muted">
-          Every route below is derived from the integration that implements it. Where a harness
-          cannot preserve a capability&apos;s semantics, uze adapts it and says so.
+        <p className="mt-1.5 max-w-[68ch] text-sm leading-relaxed text-muted">
+          A check means the capability is delivered. The word beside it is how:{' '}
+          <span className="text-ink">native</span> through the harness&apos;s own mechanism,{' '}
+          <span className="text-ink">bridge</span> or <span className="text-ink">adapted</span>{' '}
+          where uze preserves the semantics another way and reports that it did. Every route is
+          derived from the integration that implements it.
         </p>
 
         <div className="mt-10 overflow-x-auto">
@@ -232,7 +238,9 @@ export default function HomePage() {
         </div>
 
         <p className="mt-8 text-center text-sm text-muted">
-          {matrix.planned.join(', ')} are on the roadmap — cells appear when the integration lands.{' '}
+          A dash means that route does not exist for the harness, and the capability arrives another
+          way. {matrix.planned.join(', ')} are on the roadmap — cells appear when the integration
+          lands.{' '}
           <Link
             href="/docs/harnesses"
             className="text-ink underline underline-offset-4 hover:text-accent transition-colors"
