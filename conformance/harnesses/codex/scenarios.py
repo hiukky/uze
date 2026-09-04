@@ -78,23 +78,39 @@ def codex_container(cfg, prov_ip, final_cmd, plugins="flow mcp-plugin"):
 
 def drive_onboarding(child):
     """auth.json seed skips the login screen; the directory-trust prompt is
-    dismissed with Enter (default '1. Yes, continue') until the main prompt
-    stays. Returns (screen, plain)."""
+    dismissed with Enter (default '1. Yes, continue') until the directory is
+    trusted. Returns (raw, screen).
+
+    The composer line is chrome, not readiness. codex-cli 0.153.2 paints
+    "Ask Codex to do anything" while the header still reads
+    `directory: loading`, and only *then* opens the trust dialog over it — so
+    a wait that accepts that line returns before the dialog exists, and the
+    prompt typed next is swallowed by the dialog instead of starting a turn.
+    That race is why a run failed a different subset of the hooks checks each
+    time, every one of them reporting a turn that never settled: until the
+    directory is trusted the harness loads no project-local hooks at all.
+
+    The header is the signal that cannot race: `directory: loading` until the
+    directory is trusted, the working directory afterwards. The path itself is
+    never asserted — the isolation phase runs in a worktree, not /work — only
+    that `loading` is gone. Reading it off `render_screen` rather than a
+    snapshot is what makes it reliable: a read can land mid-redraw, and the
+    grid is where the current header exists.
+    """
     screen = make_screen(child)
-    wait_for = make_waiter(screen)
-    t, p, m = wait_for(
-        ["Ask Codex to do anything", "Doyoutrust", "Do you trust"], tries=18
-    )
-    for _ in range(8):
-        if "Doyoutrust" in p.replace(" ", "") or "Do you trust" in p:
+    raw = ""
+    shown = ""
+    for _ in range(30):
+        chunk, _plain = screen(1.5)
+        raw += chunk
+        shown = common.render_screen(raw)
+        squashed = shown.replace(" ", "")
+        if "Doyoutrust" in squashed:
             child.send("\r")
-            time.sleep(3)
-            t, p, m = wait_for(
-                ["Ask Codex to do anything", "Doyoutrust", "Do you trust"], tries=8
-            )
-        else:
+            continue
+        if "directory:" in shown and "directory:loading" not in squashed:
             break
-    return t, p
+    return raw, shown
 
 
 def phase_tui(cfg, prov_ip):
