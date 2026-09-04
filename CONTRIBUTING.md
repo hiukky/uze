@@ -170,9 +170,9 @@ component means at this stage.
 
 ## Security
 
-Do not open a public issue for a vulnerability. Report it privately to the
-maintainer listed in `Cargo.toml`, with a reproduction; you will get an
-acknowledgement and a coordinated fix before anything is disclosed.
+Never open a public issue for a vulnerability. The policy — where to report,
+what a usable report contains, and what happens after — is in
+[`SECURITY.md`](SECURITY.md).
 
 ## Conduct
 
