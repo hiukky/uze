@@ -1,0 +1,32 @@
+# Secret scanning for the repository and its history.
+#
+# UZE never holds a provider credential: the conformance Lab reaches its
+# gateway through `os.environ` indirection and the harnesses it drives are
+# given no key at all. This config therefore starts from the upstream rule
+# set and only says which *deliberate* fixtures are not findings.
+
+title = "UZE secret scanning"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Generated artefacts and deliberate credential-shaped fixtures"
+
+# Neither is authored: `Cargo.lock` is a resolver output whose checksums are
+# high-entropy by construction, and `lcov.info` is coverage data regenerated
+# on every run.
+paths = [
+  '''^Cargo\.lock$''',
+  '''^lcov\.info$''',
+  '''(^|/)target/''',
+  '''^\.worktrees/''',
+]
+
+# The redaction helpers in `acquisition::git` are tested by feeding them a URL
+# that carries a password, and asserting it never reaches a log line. The hosts
+# are RFC 2606 reserved names, so the "credential" resolves to nothing.
+regexes = [
+  '''(?i)(user|token):[^@\s]*@example\.(com|invalid|org|net)''',
+  '''(?i)://(user|token)(:(secret|hunter2|password))?@example\.''',
+]
