@@ -752,28 +752,61 @@ pub(super) fn render_sidebar(
                 // back to the cwd (via `caption_path`) for the moment
                 // right after tab creation, before the async evaluation
                 // resolves and a branch exists to show.
-                let detail = model
-                    .tab_task(tab.id)
-                    .map(|task| task.branch.clone())
-                    .or_else(|| unisolated_branch(model, &cwd))
-                    .unwrap_or_else(|| caption_path(&cwd));
+                // A checkout removed from under the agent is said in
+                // words, not as the kernel's `(deleted)` path: the process
+                // cannot work there any more, and the task it was running
+                // is what the preserved list now holds.
+                let lost = model.lost_checkouts.contains(&tab.focus.pane);
+                let detail = if lost {
+                    "checkout removed".to_owned()
+                } else {
+                    model
+                        .tab_task(tab.id)
+                        .map(|task| task.branch.clone())
+                        .or_else(|| unisolated_branch(model, &cwd))
+                        .unwrap_or_else(|| caption_path(&cwd))
+                };
                 let continuation_span =
                     Span::styled(continuation, Style::default().fg(crate::ui::TEXT_FAINT));
-                let detail_span = Span::styled(detail, Style::default().fg(caption_color(&cwd)));
+                let detail_color = if lost {
+                    crate::ui::WARNING
+                } else {
+                    caption_color(&cwd)
+                };
+                let detail_span = Span::styled(detail, Style::default().fg(detail_color));
                 let mut spans = vec![continuation_span, detail_span];
                 // Right-aligned under the alias, with the same trailing
                 // pad off the divider: a count pinned to the row's edge
                 // keeps its column as branches vary in length.
-                let sync: Vec<Span<'_>> = unisolated_sync_caption(model, &cwd)
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, (text, hue))| {
-                        let gap = if index == 0 { "" } else { " " };
-                        Span::styled(format!("{gap}{text}"), Style::default().fg(hue))
-                    })
-                    .collect();
+                // The way back in, on the row itself: "resume" puts the
+                // task this pane was running into a slot of its own, via
+                // the same picker a new agent goes through. Offered only
+                // while the task is waiting for one (see `lost_task`).
+                const RESUME: &str = "resume";
+                let resumable = lost && model.lost_task(tab.focus.pane).is_some();
+                let sync: Vec<Span<'_>> = if resumable {
+                    vec![Span::styled(RESUME, Style::default().fg(crate::ui::ACCENT))]
+                } else {
+                    unisolated_sync_caption(model, &cwd)
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, (text, hue))| {
+                            let gap = if index == 0 { "" } else { " " };
+                            Span::styled(format!("{gap}{text}"), Style::default().fg(hue))
+                        })
+                        .collect()
+                };
                 if !sync.is_empty() {
                     const TRAILING_PAD: u16 = 1;
+                    if resumable {
+                        let x = detail_rect
+                            .right()
+                            .saturating_sub(TRAILING_PAD + RESUME.len() as u16);
+                        hits.push((
+                            Rect::new(x, detail_rect.y, RESUME.len() as u16, 1),
+                            WorkspaceHit::ResumeLostCheckout(tab.id),
+                        ));
+                    }
                     let used: u16 = spans
                         .iter()
                         .chain(&sync)
@@ -1221,7 +1254,7 @@ pub(super) fn task_mark(state: &TaskStateView) -> Option<(&'static str, Color)> 
         TaskStateView::Conflicted { .. } => Some(("!", crate::ui::WARNING)),
         TaskStateView::GateFailed => Some(("×", crate::ui::DANGER)),
         TaskStateView::Integrated => Some(("↑", crate::ui::VIOLET)),
-        TaskStateView::Parked => Some(("‖", crate::ui::MUTED)),
+        TaskStateView::Parked => Some(("≡", crate::ui::MUTED)),
     }
 }
 
@@ -1600,6 +1633,11 @@ pub(super) fn render_preserved(
         let what = match &task.state {
             TaskStateView::Ready => format!(
                 "{} commit{}, not delivered",
+                task.ahead,
+                if task.ahead == 1 { "" } else { "s" }
+            ),
+            TaskStateView::Parked if task.checkout.is_none() => format!(
+                "checkout removed, {} commit{} kept",
                 task.ahead,
                 if task.ahead == 1 { "" } else { "s" }
             ),

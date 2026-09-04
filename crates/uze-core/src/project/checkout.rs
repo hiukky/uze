@@ -139,6 +139,15 @@ pub fn slots(primary: &Path, store: &TaskStore, occupied: &[PathBuf]) -> Vec<Slo
         .collect()
 }
 
+/// Where a slot's branch comes from when the slot is taken.
+#[derive(Clone, Copy)]
+enum Start<'a> {
+    /// A new branch, cut from this tip.
+    Branching { base_tip: &'a str },
+    /// A branch that already exists, checked out as it stands.
+    Existing,
+}
+
 /// Takes a slot for `task`, branching from `base_tip`: a free slot first,
 /// a new directory only when none is free and `cap` allows it. Runs as one
 /// critical section under the repository write lock.
@@ -150,6 +159,45 @@ pub fn acquire(
     cap: Option<usize>,
     occupied: &[PathBuf],
 ) -> Result<Acquired, AcquireError> {
+    take(
+        primary,
+        store,
+        &task.branch,
+        Start::Branching { base_tip },
+        cap,
+        occupied,
+    )
+}
+
+/// Takes a slot for a task whose branch already exists and whose checkout
+/// is gone — removed outside UZE, or swept as idle — so an agent can pick
+/// the work up where the branch stands. Same choice of slot as
+/// [`acquire`]; the difference is that nothing is cut and nothing is
+/// reset past the branch's own tip.
+pub fn resume(
+    primary: &Path,
+    store: &TaskStore,
+    task: &Task,
+    cap: Option<usize>,
+    occupied: &[PathBuf],
+) -> Result<Acquired, AcquireError> {
+    if !branch_exists(primary, &task.branch) {
+        return Err(AcquireError::Git(format!(
+            "branch {} no longer exists; there is nothing to resume",
+            task.branch
+        )));
+    }
+    take(primary, store, &task.branch, Start::Existing, cap, occupied)
+}
+
+fn take(
+    primary: &Path,
+    store: &TaskStore,
+    branch: &str,
+    start: Start<'_>,
+    cap: Option<usize>,
+    occupied: &[PathBuf],
+) -> Result<Acquired, AcquireError> {
     uze_git::locked(primary, uze_git::DEFAULT_WRITE_TIMEOUT, || {
         let existing = slots(primary, store, occupied);
         if let Some(free) = existing
@@ -157,22 +205,31 @@ pub fn acquire(
             .filter(|slot| slot.state == SlotState::Free)
             .max_by_key(|slot| modified_at(&slot.path))
         {
-            return reuse(free, &task.branch, base_tip);
+            return reuse(free, branch, start);
         }
         if let Some(cap) = cap
             && existing.len() >= cap
         {
             return Err(AcquireError::CapReached { cap });
         }
-        create(primary, &task.branch, base_tip)
+        create(primary, branch, start)
     })
     .map_err(|error| AcquireError::Git(error.to_string()))?
 }
 
-fn reuse(slot: &Slot, branch: &str, base_tip: &str) -> Result<Acquired, AcquireError> {
+fn reuse(slot: &Slot, branch: &str, start: Start<'_>) -> Result<Acquired, AcquireError> {
     let root = &slot.path;
-    git(root, &["switch", "--quiet", "-c", branch, base_tip])?;
-    git(root, &["reset", "--quiet", "--hard", base_tip])?;
+    let tip = match start {
+        Start::Branching { base_tip } => {
+            git(root, &["switch", "--quiet", "-c", branch, base_tip])?;
+            base_tip
+        }
+        Start::Existing => {
+            git(root, &["switch", "--quiet", branch])?;
+            branch
+        }
+    };
+    git(root, &["reset", "--quiet", "--hard", tip])?;
     // Without `-x` on purpose: ignored artifacts are what make the slot
     // worth keeping.
     git(root, &["clean", "--quiet", "-fd"])?;
@@ -184,7 +241,7 @@ fn reuse(slot: &Slot, branch: &str, base_tip: &str) -> Result<Acquired, AcquireE
     })
 }
 
-fn create(primary: &Path, branch: &str, base_tip: &str) -> Result<Acquired, AcquireError> {
+fn create(primary: &Path, branch: &str, start: Start<'_>) -> Result<Acquired, AcquireError> {
     // A checkout removed outside UZE leaves its registry entry behind, and
     // `worktree add` then refuses the path. Adoption already looked at
     // every directory, so pruning here drops only entries with nothing
@@ -192,12 +249,15 @@ fn create(primary: &Path, branch: &str, base_tip: &str) -> Result<Acquired, Acqu
     let _ = git(primary, &["worktree", "prune"]);
     let id = CheckoutId::generate();
     let relative = format!("{WORKTREES_DIRECTORY}/{id}");
-    git(
-        primary,
-        &[
-            "worktree", "add", "--quiet", "-b", branch, &relative, base_tip,
-        ],
-    )?;
+    match start {
+        Start::Branching { base_tip } => git(
+            primary,
+            &[
+                "worktree", "add", "--quiet", "-b", branch, &relative, base_tip,
+            ],
+        )?,
+        Start::Existing => git(primary, &["worktree", "add", "--quiet", &relative, branch])?,
+    };
     exclude_isolation_directory(primary)?;
     Ok(Acquired {
         id,
@@ -1175,6 +1235,45 @@ mod tests {
         assert!(
             !removed.contains(&slot.id) && slot.path.is_dir(),
             "the directory is not swept out from under the pane: {removed:?}"
+        );
+    }
+
+    /// A checkout removed outside UZE takes the uncommitted work with it
+    /// and nothing else: the branch keeps every commit, and resuming the
+    /// task puts a slot back under that branch exactly where it stands.
+    #[test]
+    fn a_task_whose_checkout_was_removed_resumes_on_its_own_branch() {
+        let repository = repository("slots-resume");
+        let primary = repository.root();
+        let mut store = TaskStore::default();
+        let (mut task, slot) = launch(&repository, &mut store, "first");
+        fs::write(slot.path.join("kept.rs"), b"fn kept() {}").unwrap();
+        repository.git_in(&slot.path, &["add", "."]);
+        repository.git_in(&slot.path, &["commit", "-qm", "kept"]);
+        fs::write(slot.path.join("lost.rs"), b"fn lost() {}").unwrap();
+        fs::remove_dir_all(&slot.path).unwrap();
+
+        let report = reconcile(primary, &mut store, TARGET);
+        assert_eq!(report.orphaned, vec![task.id.clone()]);
+        task = store.get(&task.id).unwrap().clone();
+        assert_eq!(task.state, TaskState::Parked, "a commit the target lacks");
+        assert_eq!(task.checkout, None);
+
+        let resumed = resume(primary, &store, &task, None, &[]).unwrap();
+        assert_eq!(resumed.branch, task.branch);
+        assert_eq!(
+            current_branch(&resumed.path).as_deref(),
+            Some(task.branch.as_str())
+        );
+        assert!(resumed.path.join("kept.rs").is_file(), "the commit is back");
+        assert!(
+            !resumed.path.join("lost.rs").exists(),
+            "the uncommitted file is not"
+        );
+        assert_eq!(
+            commits_ahead(primary, TARGET, &task.branch),
+            1,
+            "nothing was reset past the branch's own tip"
         );
     }
 

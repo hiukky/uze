@@ -81,6 +81,8 @@ pub enum UzeError {
     UnsupportedLockVersion { found: u32, expected: u32 },
     #[error("no task `{0}` is recorded for this repository")]
     UnknownTask(String),
+    #[error("cannot resume task: {0}")]
+    ResumeFailed(String),
     #[error("could not discard the task: {0}")]
     Discard(String),
     #[error("unsupported state schema {found} in {path}; this uze writes {expected}")]

@@ -284,7 +284,7 @@ impl Engine {
     }
 
     fn evaluate(&self) -> uze_application::Evaluation {
-        self.app().workspace().evaluate_tasks(self.project())
+        self.app().workspace().evaluate_tasks(self.project(), &[])
     }
 
     fn restart_server(&mut self) {

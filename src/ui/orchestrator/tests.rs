@@ -10,18 +10,20 @@ mod workspace_tests {
     use super::WorkspaceHit;
     use super::{
         AGENT_BUSY_REPAINTS, AGENT_ECHO_GRACE, AGENT_PASTE_GRACE, AgentIdentity, AgentTabStatus,
-        CommitDetailPopup, CommitDetailResolution, DraggingTab, ExtensionHit, GitAnswer, GitBadge,
-        GitResolution, PendingDrop, PreservedOverlay, RootPicker, ScrollDirection, TabDragGroup,
-        TaskResolution, TaskStateView, TaskView, UpstreamSync, WorkspaceModel, adopt_agent_labels,
-        agent_identity_for_tab, blank_pane, can_close_tab_from_menu, encode_mouse, evaluation_key,
-        forward_paste, forward_scroll, next_agent_label, next_shell_label, open_commit_detail,
-        pane_relative, pending_tab_drop,
+        Attach, AttachAnswers, AttachInbox, CommitDetailPopup, CommitDetailResolution,
+        DeliveryResolution, DraggingTab, ExtensionHit, GitAnswer, GitBadge, GitResolution,
+        GitViewResolution, OccupancyResolution, PendingDrop, PlacementResolution, PreservedOverlay,
+        RootPicker, ScrollDirection, SupportResolution, TabDragGroup, TaskResolution,
+        TaskStateView, TaskView, UpstreamSync, Viewport, WorkspaceModel, adopt_agent_labels,
+        agent_identity_for_tab, blank_pane, can_close_tab_from_menu, checkout_lost, encode_mouse,
+        evaluation_key, forward_paste, forward_scroll, next_agent_label, next_shell_label,
+        open_commit_detail, pane_relative, pending_tab_drop,
         render::{
             self, WorkspaceLayout, compute_layout, render_commit_detail, render_preserved,
             render_sidebar, render_status_catalog, render_tab_strip, task_mark, timeline_height,
         },
-        scroll_timeline, selected_pane_cwd, space_own_tab, tab_drag_group, tab_drag_group_members,
-        tab_needs_replacement_shell, workspace_has_active_agent_operation,
+        scroll_timeline, selected_pane_cwd, space_own_tab, sync_slot_occupancy, tab_drag_group,
+        tab_drag_group_members, tab_needs_replacement_shell, workspace_has_active_agent_operation,
     };
     use crossterm::event::{MouseButton, MouseEventKind};
     use ratatui::layout::Rect;
@@ -29,6 +31,7 @@ mod workspace_tests {
     use ratatui::{Terminal, backend::TestBackend};
     use std::path::{Path, PathBuf};
     use std::time::{Duration, Instant};
+    use uze_core::UzeHome;
     use uze_extensions::view::ViewHit;
     use uze_terminal::{
         CellAttributes, ClientEvent, ClientRequest, Cursor, Focus, Layout, MouseMode, Pane,
@@ -147,6 +150,9 @@ mod workspace_tests {
             branch: "agent/t1".into(),
             target: "main".into(),
             checkout: Some(PathBuf::from(checkout)),
+            checkout_id: Path::new(checkout)
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned()),
             state,
             ahead,
             published_as: None,
@@ -953,6 +959,211 @@ mod workspace_tests {
         let rows = sidebar_rows(&model, &mut Vec::new());
         let row = header_row(&rows);
         assert!(row.contains("/repo") && !row.contains(&label), "{row}");
+    }
+
+    /// The pane-to-task binding the resume rests on is made by the same
+    /// sync that binds a pane to its checkout, on the first tick the task
+    /// is known, and survives the task losing that checkout afterwards.
+    #[test]
+    fn a_pane_is_bound_to_the_task_it_was_found_in_and_keeps_it_after_the_checkout_goes() {
+        let mut model = agent_with_task(TaskStateView::Running, 0);
+        let pane = model.session.as_ref().unwrap().workspace.spaces[0].tabs[0]
+            .focus
+            .pane;
+        let home = UzeHome::at(uze_testkit::temp::scratch("sidebar-pane-task-home"));
+        let (sender, _receiver) = std::sync::mpsc::channel();
+        let (evaluations, _answers) = std::sync::mpsc::channel();
+        model.occupancy_stale = true;
+        sync_slot_occupancy(&mut model, &home, &sender, &evaluations);
+        assert_eq!(model.pane_tasks.get(&pane).map(String::as_str), Some("t1"));
+
+        let mut orphaned = model.tasks[Path::new("/repo")][0].clone();
+        orphaned.checkout = None;
+        orphaned.checkout_id = None;
+        orphaned.state = TaskStateView::Parked;
+        model.tasks.insert(PathBuf::from("/repo"), vec![orphaned]);
+        model.occupancy_stale = true;
+        sync_slot_occupancy(&mut model, &home, &sender, &evaluations);
+        assert_eq!(
+            model.pane_tasks.get(&pane).map(String::as_str),
+            Some("t1"),
+            "the binding outlives the checkout"
+        );
+        assert!(
+            model.lost_task(pane).is_some(),
+            "and is what offers the resume"
+        );
+    }
+
+    /// A checkout removed from under a live pane is the one change to a
+    /// repository nothing else asks about: the pane is still there, so no
+    /// slot was released and no reconciliation is due. Unasked, the row
+    /// keeps drawing a task view that still believes it has a checkout —
+    /// which is exactly what the way back into it is gated on, so the
+    /// "resume" never appeared however long the operator waited.
+    #[test]
+    fn a_checkout_that_vanished_under_a_pane_asks_its_repository_again() {
+        let mut model = agent_session_in("/repo/.worktrees/ai");
+        let pane = model.session.as_ref().unwrap().workspace.spaces[0].tabs[0]
+            .focus
+            .pane;
+        model
+            .pane_checkouts
+            .insert(pane, PathBuf::from("/repo/.worktrees/ai"));
+        let home = UzeHome::at(uze_testkit::temp::scratch("sidebar-vanished"));
+        let (sender, _receiver) = std::sync::mpsc::channel();
+        let (evaluations, _answers) = std::sync::mpsc::channel();
+        model.occupancy_stale = true;
+        sync_slot_occupancy(&mut model, &home, &sender, &evaluations);
+
+        assert!(model.lost_checkouts.contains(&pane));
+        assert!(
+            model.task_eval_pending.contains(Path::new("/repo")),
+            "the repository is re-read: {:?}",
+            model.task_eval_pending
+        );
+    }
+
+    /// A client that attaches after the removal never watched the
+    /// checkout go: the first thing it learns about that pane is the
+    /// kernel's ` (deleted)` spelling of the directory. Binding *that* to
+    /// a task matches nothing, and the row it draws offers no way back.
+    #[test]
+    fn a_pane_first_seen_in_a_removed_checkout_is_still_bound_to_its_task() {
+        let mut model = agent_session_in("/repo/.worktrees/ai (deleted)");
+        let pane = model.session.as_ref().unwrap().workspace.spaces[0].tabs[0]
+            .focus
+            .pane;
+        model.tasks.insert(
+            PathBuf::from("/repo"),
+            vec![task_in(
+                "/repo/.worktrees/ai",
+                "fix-auth",
+                TaskStateView::Running,
+                1,
+            )],
+        );
+        let home = UzeHome::at(uze_testkit::temp::scratch("sidebar-first-seen-lost"));
+        let (sender, _receiver) = std::sync::mpsc::channel();
+        let (evaluations, _answers) = std::sync::mpsc::channel();
+        model.occupancy_stale = true;
+        sync_slot_occupancy(&mut model, &home, &sender, &evaluations);
+
+        assert_eq!(model.pane_tasks.get(&pane).map(String::as_str), Some("t1"));
+        assert!(
+            model.lost_checkouts.contains(&pane),
+            "and the row still says the checkout is gone"
+        );
+    }
+
+    /// The task is usually not known on the tick the pane appears; it is
+    /// bound when the evaluation that names it lands.
+    #[test]
+    fn a_pane_is_bound_to_its_task_when_the_task_arrives_after_the_checkout() {
+        let mut model = agent_session_in("/repo/.worktrees/ai");
+        let pane = model.session.as_ref().unwrap().workspace.spaces[0].tabs[0]
+            .focus
+            .pane;
+        model
+            .pane_checkouts
+            .insert(pane, PathBuf::from("/repo/.worktrees/ai"));
+        model.bind_pane_tasks();
+        assert!(model.pane_tasks.is_empty(), "nothing to bind to yet");
+
+        model.tasks.insert(
+            PathBuf::from("/repo"),
+            vec![task_in(
+                "/repo/.worktrees/ai",
+                "fix-auth",
+                TaskStateView::Running,
+                0,
+            )],
+        );
+        model.bind_pane_tasks();
+        assert_eq!(model.pane_tasks.get(&pane).map(String::as_str), Some("t1"));
+    }
+
+    /// A worktree removed by hand leaves the agent standing in a directory
+    /// that no longer exists. The row says so, in words, instead of
+    /// showing the kernel's own ` (deleted)` path — and carries the way
+    /// back in: a "resume" that puts the task into a slot of its own,
+    /// offered only while the task is still waiting for one.
+    #[test]
+    fn an_agent_whose_checkout_was_removed_says_so_and_offers_to_resume() {
+        let removed = uze_testkit::temp::scratch("sidebar-lost-checkout");
+        std::fs::remove_dir_all(&removed).unwrap();
+        assert!(checkout_lost(
+            Some(&removed),
+            Path::new("/repo/.worktrees/x")
+        ));
+        assert!(checkout_lost(
+            None,
+            Path::new("/repo/.worktrees/x (deleted)")
+        ));
+        assert!(!checkout_lost(None, Path::new("/repo/.worktrees/x")));
+
+        // Bound while the task still had its checkout — the pane's own
+        // binding is what survives the reconciliation, which strips an
+        // orphaned task of both its checkout and its checkout id.
+        let mut model = agent_session_in("/repo/.worktrees/ai (deleted)");
+        let pane = model.session.as_ref().unwrap().workspace.spaces[0].tabs[0]
+            .focus
+            .pane;
+        model
+            .pane_checkouts
+            .insert(pane, PathBuf::from("/repo/.worktrees/ai"));
+        model.pane_tasks.insert(pane, "t1".to_owned());
+        model.lost_checkouts.insert(pane);
+        let mut parked = task_in("/repo/.worktrees/ai", "fix-auth", TaskStateView::Parked, 2);
+        parked.checkout = None;
+        parked.checkout_id = None;
+        model
+            .tasks
+            .insert(PathBuf::from("/repo"), vec![parked.clone()]);
+
+        let mut hits = Vec::new();
+        let rows = sidebar_rows(&model, &mut hits);
+        assert!(
+            rows.iter().any(|row| row.contains("checkout removed")),
+            "{rows:?}"
+        );
+        assert!(
+            !rows.iter().any(|row| row.contains("(deleted)")),
+            "{rows:?}"
+        );
+        let resume: Vec<Rect> = hits
+            .iter()
+            .filter_map(|(rect, hit)| match hit {
+                WorkspaceHit::ResumeLostCheckout(_) => Some(*rect),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(resume.len(), 1, "one way back in: {rows:?}");
+        let label: String = rows[resume[0].y as usize]
+            .chars()
+            .skip(resume[0].x as usize)
+            .take(resume[0].width as usize)
+            .collect();
+        assert_eq!(label, "resume", "the hit is the word itself: {rows:?}");
+
+        // Resumed: the task has a slot again, and this row — still the
+        // dead one — no longer offers a second agent for it.
+        let mut resumed = parked;
+        resumed.checkout = Some(PathBuf::from("/repo/.worktrees/b2"));
+        resumed.state = TaskStateView::Running;
+        model.tasks.insert(PathBuf::from("/repo"), vec![resumed]);
+        let mut hits = Vec::new();
+        let rows = sidebar_rows(&model, &mut hits);
+        assert!(
+            !hits
+                .iter()
+                .any(|(_, hit)| matches!(hit, WorkspaceHit::ResumeLostCheckout(_))),
+            "{rows:?}"
+        );
+        assert!(
+            rows.iter().any(|row| row.contains("checkout removed")),
+            "{rows:?}"
+        );
     }
 
     /// A scheduled evaluation is released under the key it reserved, not
@@ -2977,6 +3188,356 @@ mod workspace_tests {
         assert!(model.session.is_none());
         assert!(model.error.is_none());
         assert!(model.hits.is_empty());
+    }
+
+    /// One attached client, driven the way the real loop drives it: hits
+    /// from a real frame, a socket pair standing in for the server, and
+    /// the channels a background read answers through.
+    struct Driven<'a> {
+        attach: Attach<'a>,
+        server: std::os::unix::net::UnixStream,
+        events: std::sync::mpsc::Receiver<ClientEvent>,
+        support: std::sync::mpsc::Receiver<SupportResolution>,
+        tasks: std::sync::mpsc::Receiver<TaskResolution>,
+        deliveries: std::sync::mpsc::Receiver<DeliveryResolution>,
+        git: std::sync::mpsc::Receiver<GitResolution>,
+        commit_details: std::sync::mpsc::Receiver<CommitDetailResolution>,
+        git_views: std::sync::mpsc::Receiver<GitViewResolution>,
+        occupancy: std::sync::mpsc::Receiver<OccupancyResolution>,
+        placements: std::sync::mpsc::Receiver<PlacementResolution>,
+    }
+
+    impl Driven<'_> {
+        /// Draws the frame the next click is tested against, storing its
+        /// hits on the model exactly as the attach loop does.
+        fn frame(&mut self) {
+            full_frame(&mut self.attach.model);
+        }
+
+        fn press(&mut self, column: u16, row: u16) {
+            let area = Rect::new(0, 0, 80, 24);
+            let layout = compute_layout(area, self.attach.model.sidebar_width);
+            let viewport = Viewport {
+                size: ratatui::layout::Size::new(area.width, area.height),
+                columns: layout.pane.width,
+                rows: layout.pane.height,
+                layout,
+            };
+            let event = crossterm::event::Event::Mouse(mouse_at(
+                column,
+                row,
+                MouseEventKind::Down(MouseButton::Left),
+            ));
+            let _ = self.attach.handle(event, &viewport);
+        }
+
+        /// One turn of everything that is not an event — what absorbs a
+        /// placement once its thread has answered.
+        fn pump(&mut self) {
+            let inbox = AttachInbox {
+                events: &self.events,
+                support: &self.support,
+                tasks: &self.tasks,
+                deliveries: &self.deliveries,
+                git: &self.git,
+                commit_details: &self.commit_details,
+                git_views: &self.git_views,
+                occupancy: &self.occupancy,
+                placements: &self.placements,
+            };
+            self.attach.pump(&inbox);
+        }
+
+        /// Every request written to the server since the last read.
+        fn sent(&mut self) -> Vec<ClientRequest> {
+            self.server.set_nonblocking(true).unwrap();
+            let mut buffer = Vec::new();
+            let mut chunk = [0u8; 8192];
+            while let Ok(read) = std::io::Read::read(&mut self.server, &mut chunk) {
+                if read == 0 {
+                    break;
+                }
+                buffer.extend_from_slice(&chunk[..read]);
+            }
+            let mut requests = Vec::new();
+            let mut rest = buffer.as_slice();
+            while rest.len() >= 4 {
+                let (length, payload) = rest.split_at(4);
+                let length = u32::from_le_bytes(length.try_into().unwrap()) as usize;
+                assert!(payload.len() >= length, "a whole frame");
+                requests.push(bincode::deserialize(&payload[..length]).expect("a request"));
+                rest = &payload[length..];
+            }
+            requests
+        }
+
+        /// Hands one already-received placement back to the client, the
+        /// way the loop's own `pump` absorbs it.
+        fn placements_answered(&mut self, resolution: PlacementResolution) {
+            self.attach.answers.placements.send(resolution).unwrap();
+            self.pump();
+        }
+
+        /// The rect of the one hit of its kind the last frame drew.
+        fn hit(&self, wanted: impl Fn(&WorkspaceHit) -> bool) -> Rect {
+            let found: Vec<Rect> = self
+                .attach
+                .model
+                .hits
+                .iter()
+                .filter(|(_, hit)| wanted(hit))
+                .map(|(rect, _)| *rect)
+                .collect();
+            assert_eq!(found.len(), 1, "exactly one such hit: {found:?}");
+            found[0]
+        }
+    }
+
+    fn driven(model: WorkspaceModel, home: &UzeHome) -> Driven<'_> {
+        let (client, server) = std::os::unix::net::UnixStream::pair().unwrap();
+        let (support, support_rx) = std::sync::mpsc::channel();
+        let (tasks, tasks_rx) = std::sync::mpsc::channel();
+        let (deliveries, deliveries_rx) = std::sync::mpsc::channel();
+        let (git, git_rx) = std::sync::mpsc::channel();
+        let (commit_details, commit_details_rx) = std::sync::mpsc::channel();
+        let (git_views, git_views_rx) = std::sync::mpsc::channel();
+        let (occupancy, occupancy_rx) = std::sync::mpsc::channel();
+        let (placements, placements_rx) = std::sync::mpsc::channel();
+        let (_events, events_rx) = std::sync::mpsc::channel();
+        Driven {
+            attach: Attach {
+                model,
+                stream: client,
+                home,
+                identities: IDENTITIES.to_vec(),
+                answers: AttachAnswers {
+                    support,
+                    tasks,
+                    deliveries,
+                    git,
+                    commit_details,
+                    git_views,
+                    occupancy,
+                    placements,
+                },
+                spinner: indicatif::ProgressBar::hidden(),
+                next_tick: Instant::now(),
+            },
+            server,
+            events: events_rx,
+            support: support_rx,
+            tasks: tasks_rx,
+            deliveries: deliveries_rx,
+            git: git_rx,
+            commit_details: commit_details_rx,
+            git_views: git_views_rx,
+            occupancy: occupancy_rx,
+            placements: placements_rx,
+        }
+    }
+
+    /// A session whose one agent sits in `checkout`, removed from under
+    /// it and bound to `task` — the state the "resume" is drawn from.
+    fn agent_over_a_lost_checkout(
+        checkout: &Path,
+        primary: &Path,
+        task: TaskView,
+    ) -> WorkspaceModel {
+        let mut model = agent_session_in(&format!("{} (deleted)", checkout.display()));
+        let pane = model.session.as_ref().unwrap().workspace.spaces[0].tabs[0]
+            .focus
+            .pane;
+        // Rows under the one that lost its checkout: what the picker
+        // opens over, and what its own rows have to answer ahead of.
+        if let Some(session) = model.session.as_mut() {
+            let space = session.workspace.selected_space;
+            for label in ["Agent two", "Agent three"] {
+                let opened = session.add_tab(space, label.into(), None, 80, 24, "/repo".into());
+                session.update_pane_status(opened, "/repo".into(), "agent".into());
+            }
+        }
+        model.pane_checkouts.insert(pane, checkout.to_path_buf());
+        model.pane_tasks.insert(pane, task.id.clone());
+        model.lost_checkouts.insert(pane);
+        model.tasks.insert(primary.to_path_buf(), vec![task]);
+        model
+    }
+
+    /// A task with no checkout left, waiting to be put back in one.
+    fn parked_task(id: &str, branch: &str) -> TaskView {
+        let mut task = task_in("/repo/.worktrees/ai", id, TaskStateView::Parked, 1);
+        task.id = id.to_owned();
+        task.branch = branch.to_owned();
+        task.checkout = None;
+        task.checkout_id = None;
+        task
+    }
+
+    /// The picker opens over the tree it was asked from, so its rows sit
+    /// on top of sidebar rows drawn — and pushed — before them. The click
+    /// search the tree itself uses takes the first rect a point lands in,
+    /// which is what puts a mark's own hit ahead of its row; an overlay
+    /// has to take the last one instead, or the half of every option row
+    /// standing over the tree belongs to the row underneath it.
+    #[test]
+    fn a_picker_row_over_the_tree_answers_its_own_click() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-picker-overlap"));
+        let model = agent_over_a_lost_checkout(
+            Path::new("/repo/.worktrees/ai"),
+            Path::new("/repo"),
+            parked_task("t1", "agent/t1"),
+        );
+        let mut driven = driven(model, &home);
+
+        driven.frame();
+        let resume = driven.hit(|hit| matches!(hit, WorkspaceHit::ResumeLostCheckout(_)));
+        driven.press(resume.x, resume.y);
+        assert!(
+            driven.attach.model.agent_picker.is_some(),
+            "the resume opens the picker"
+        );
+
+        driven.frame();
+        let option = driven.hit(|hit| matches!(hit, WorkspaceHit::PickAgent(0)));
+        let tree_ends = compute_layout(Rect::new(0, 0, 80, 24), None).pane.x;
+        assert!(
+            option.x < tree_ends,
+            "the row this is about starts over the tree: {option:?}"
+        );
+        driven.press(option.x, option.y);
+        assert!(
+            driven.attach.model.placement_pending,
+            "the harness under the pointer answered, not the row beneath it"
+        );
+    }
+
+    /// An agent that could not be given a checkout of its own starts in
+    /// the operator's tree instead. The reason was computed and then
+    /// dropped: the launch looked like every other one, and the only clue
+    /// was the branch under the new row.
+    #[test]
+    fn an_agent_that_could_not_be_isolated_says_why() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-unisolated"));
+        let mut driven = driven(agent_session_in("/repo"), &home);
+        driven.placements_answered(PlacementResolution {
+            label: "agent 2".to_owned(),
+            command: vec!["claude".to_owned()],
+            placement: Ok(uze_application::AgentPlacement {
+                cwd: PathBuf::from("/repo"),
+                isolation: uze_application::Isolation::Unisolated {
+                    reason: "no commit to branch from".to_owned(),
+                },
+                warnings: Vec::new(),
+            }),
+            replacing: None,
+        });
+        let notice = driven
+            .attach
+            .model
+            .notice
+            .as_ref()
+            .expect("the fallback is said");
+        assert!(
+            notice.text.contains("agent 2") && notice.text.contains("no commit to branch from"),
+            "{}",
+            notice.text
+        );
+    }
+
+    /// The operator's own sequence, end to end: an agent commits in its
+    /// slot, the slot is removed by hand, and the row that says so is
+    /// clicked back to life. What has to come back is *that* task, on its
+    /// own branch with its own commits — not a second agent beside it.
+    #[test]
+    fn resume_clicked_on_a_lost_checkout_brings_the_task_back_with_its_commits() {
+        let repository = uze_testkit::git::Repository::new("orchestrator-resume");
+        let root = repository.root().to_path_buf();
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-resume-home"));
+        let app = uze_application::UzeApplication::new(home.clone(), Vec::new());
+        let placement = app.workspace().place_new_agent(&root, &[]);
+        let task_id = match &placement.isolation {
+            uze_application::Isolation::Slot { task, .. } => task.as_str().to_owned(),
+            uze_application::Isolation::Unisolated { reason } => panic!("{reason}"),
+        };
+        std::fs::write(placement.cwd.join("kept.rs"), b"fn kept() {}").unwrap();
+        repository.git_in(&placement.cwd, &["add", "."]);
+        repository.git_in(&placement.cwd, &["commit", "-qm", "kept"]);
+        std::fs::remove_dir_all(&placement.cwd).unwrap();
+        app.workspace().release_abandoned_tasks(&root, &[]);
+
+        let primary = root.canonicalize().unwrap();
+        let task = app
+            .workspace()
+            .tasks(&primary)
+            .into_iter()
+            .find(|task| task.id == task_id)
+            .expect("the task outlives its checkout");
+        let model = agent_over_a_lost_checkout(&placement.cwd, &primary, task);
+        let mut driven = driven(model, &home);
+
+        driven.frame();
+        let resume = driven.hit(|hit| matches!(hit, WorkspaceHit::ResumeLostCheckout(_)));
+        driven.press(resume.x, resume.y);
+        driven.frame();
+        let option = driven.hit(|hit| matches!(hit, WorkspaceHit::PickAgent(0)));
+        driven.press(option.x, option.y);
+
+        let resolution = driven
+            .placements
+            .recv_timeout(Duration::from_secs(30))
+            .expect("the placement answers");
+        let placed = resolution
+            .placement
+            .as_ref()
+            .expect("the task lands somewhere");
+        assert!(
+            matches!(
+                &placed.isolation,
+                uze_application::Isolation::Slot { task, branch, .. }
+                    if task.as_str() == task_id && *branch == format!("agent/{task_id}")
+            ),
+            "the same task, on its own branch: {:?}",
+            placed.isolation
+        );
+        let slot = placed.cwd.clone();
+        assert!(
+            slot.join("kept.rs").is_file(),
+            "with the commit it made: {}",
+            slot.display()
+        );
+
+        // And the agent it took over from: the tab is opened first, then
+        // the dead row it replaces is closed — the operator is left with
+        // one agent for the task, not a corpse beside a copy.
+        let lost_tab = driven
+            .attach
+            .model
+            .session
+            .as_ref()
+            .unwrap()
+            .workspace
+            .spaces[0]
+            .tabs[0]
+            .id;
+        driven.placements_answered(resolution);
+        let sent = driven.sent();
+        assert!(
+            sent.iter().any(
+                |request| matches!(request, ClientRequest::SelectTab { tab } if *tab == lost_tab)
+            ),
+            "the row is selected, so the revived agent opens in its space: {sent:?}"
+        );
+        let created = sent
+            .iter()
+            .position(|request| matches!(request, ClientRequest::CreateTab { cwd, .. } if cwd.as_deref() == Some(slot.as_path())))
+            .expect("the revived agent opens in the slot");
+        let closed = sent
+            .iter()
+            .position(
+                |request| matches!(request, ClientRequest::CloseTab { tab } if *tab == lost_tab),
+            )
+            .expect("the row that lost its checkout closes");
+        assert!(created < closed, "the new tab opens first: {sent:?}");
     }
 }
 

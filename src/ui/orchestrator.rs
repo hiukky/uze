@@ -243,6 +243,7 @@ fn spawn_task_evaluation(
     home: &UzeHome,
     key: PathBuf,
     cwd: PathBuf,
+    occupied: Vec<PathBuf>,
     sender: mpsc::Sender<TaskResolution>,
 ) {
     let home = home.clone();
@@ -259,7 +260,7 @@ fn spawn_task_evaluation(
                     .delivery_policy(&key)
                     .and_then(|policy| policy.target),
                 sync: workspace.target_upstream_sync(&key),
-                evaluation: workspace.evaluate_tasks(&cwd),
+                evaluation: workspace.evaluate_tasks(&cwd, &occupied),
             })
         });
         let _ = sender.send(TaskResolution { key, answered });
@@ -388,54 +389,70 @@ fn spawn_commit_detail(
     });
 }
 
-/// A slot acquired for a new agent, and what its tab needs to open.
-///
-/// Placing an agent is the most expensive thing this client ever asks
-/// for: `git worktree add`, the project's link materialization, and — when
-/// the project declares one — its whole `setup` command. A keystroke is
-/// not what waits for that, so the tab is opened when this lands.
-///
-/// `occupied` travels with the request rather than being read where it
-/// lands: it is the client's own answer to which checkouts a live pane
-/// still sits in, and none of those may be handed to the new agent even
-/// when its task record reads as done (see `sync_slot_occupancy`).
+/// The answer to a placement request: where the agent goes, or why it
+/// cannot. A new agent always goes somewhere — isolation that fails falls
+/// back to the directory it was asked from — but a resume that fails has
+/// nowhere to fall back to, and opens no tab.
 struct PlacementResolution {
     label: String,
     command: Vec<String>,
-    placement: uze_application::AgentPlacement,
+    placement: std::result::Result<uze_application::AgentPlacement, String>,
+    /// The tab this placement takes over from: the agent standing in a
+    /// checkout that is gone, whose row the resume was clicked on. Closed
+    /// once the new tab is open, and only then — a resume that failed
+    /// leaves the operator the row they asked from.
+    replacing: Option<TabId>,
 }
 
+/// What a placement is asked for: a slot for a brand-new task, or the
+/// slot a preserved task lost — its branch checked out again as it stands.
+enum PlacementRequest {
+    New { from: PathBuf },
+    Resume { primary: PathBuf, task: String },
+}
+
+/// Asks the application where an agent should start, off the frame:
+/// materializing a checkout may run the project's setup command, which is
+/// nothing a render loop waits on. `occupied` is every checkout a live
+/// pane still sits in, and none of those may be handed to the new agent
+/// even when its task record reads as done (see `sync_slot_occupancy`).
 fn spawn_agent_placement(
     home: &UzeHome,
-    from: PathBuf,
+    request: PlacementRequest,
     occupied: Vec<PathBuf>,
     label: String,
     command: Vec<String>,
+    replacing: Option<TabId>,
     sender: mpsc::Sender<PlacementResolution>,
 ) {
     let home = home.clone();
     thread::spawn(move || {
-        // A placement that cannot isolate still answers, with the
-        // directory it fell back to and the reason — the launch happens
-        // either way, and a request that returned in silence would leave
-        // the picker's key reserved and no tab ever opened.
         // Answered on every path, including the one that could not even
         // build an application: the request holds the only reservation
         // there is, and a silent return would leave this client unable to
         // create another agent for the rest of the session.
-        let placement = tui_application(home)
-            .map(|app| app.workspace().place_new_agent(&from, &occupied))
-            .unwrap_or_else(|error| uze_application::AgentPlacement {
-                cwd: from,
-                isolation: uze_application::Isolation::Unisolated {
-                    reason: error.to_string(),
-                },
-                warnings: vec![error.to_string()],
-            });
+        let placement = match request {
+            // A placement that cannot isolate still answers, with the
+            // directory it fell back to and the reason — the launch
+            // happens either way.
+            PlacementRequest::New { from } => Ok(tui_application(home)
+                .map(|app| app.workspace().place_new_agent(&from, &occupied))
+                .unwrap_or_else(|error| uze_application::AgentPlacement {
+                    cwd: from,
+                    isolation: uze_application::Isolation::Unisolated {
+                        reason: error.to_string(),
+                    },
+                    warnings: vec![error.to_string()],
+                })),
+            PlacementRequest::Resume { primary, task } => tui_application(home)
+                .and_then(|app| app.workspace().resume_task(&primary, &task, &occupied))
+                .map_err(|error| error.to_string()),
+        };
         let _ = sender.send(PlacementResolution {
             label,
             command,
             placement,
+            replacing,
         });
     });
 }
@@ -752,6 +769,10 @@ pub(super) enum WorkspaceHit {
     /// The `⇄` behind a space's name — flips that header between its label
     /// and its root (see `WorkspaceModel::roots_shown`).
     ToggleSpaceRoot(SpaceId),
+    /// The "resume" behind an agent row whose checkout was removed from
+    /// under it (see `WorkspaceModel::lost_checkouts`) — opens the agent
+    /// picker to put the task it was running back into a slot of its own.
+    ResumeLostCheckout(TabId),
     /// One row of the open [`ContextMenu`], by index into its `items` —
     /// generic over whatever action that row is, same pattern
     /// [`WorkspaceHit::PickAgent`] uses for the agent picker.
@@ -900,6 +921,20 @@ struct AgentPicker {
     /// A directory the new agent must start in — a preserved task's own
     /// slot, when resuming it. `None` lets placement acquire a slot.
     cwd: Option<PathBuf>,
+    /// A preserved task whose slot is gone: placement gives it a slot
+    /// again, on its own branch, and the agent starts there.
+    resume: Option<ResumeTarget>,
+}
+
+/// A task to put back in a checkout, named by its repository and id.
+#[derive(Clone)]
+struct ResumeTarget {
+    primary: PathBuf,
+    task: String,
+    /// The agent tab whose checkout was removed from under it, when the
+    /// resume was asked for from that row rather than from the preserved
+    /// list — the one the revived agent replaces.
+    replacing: Option<TabId>,
 }
 
 /// Open state for the informational support dropdown in an active agent
@@ -1251,7 +1286,9 @@ struct Remembered {
     delivery_pending: BTreeSet<String>,
     notice: Option<Notice>,
     pane_checkouts: BTreeMap<PaneId, PathBuf>,
+    pane_tasks: BTreeMap<PaneId, String>,
     occupied_checkouts: BTreeSet<PathBuf>,
+    lost_checkouts: BTreeSet<PaneId>,
     slots_swept: bool,
     roots_shown: BTreeSet<SpaceId>,
     timeline_collapsed: bool,
@@ -1279,7 +1316,9 @@ impl WorkspaceModel {
             delivery_pending,
             notice,
             pane_checkouts,
+            pane_tasks,
             occupied_checkouts,
+            lost_checkouts,
             slots_swept,
             roots_shown,
             timeline_collapsed,
@@ -1303,7 +1342,9 @@ impl WorkspaceModel {
             delivery_pending,
             notice,
             pane_checkouts,
+            pane_tasks,
             occupied_checkouts,
+            lost_checkouts,
             slots_swept,
             roots_shown,
             timeline_collapsed,
@@ -1332,7 +1373,9 @@ impl WorkspaceModel {
             delivery_pending: self.delivery_pending,
             notice: self.notice,
             pane_checkouts: self.pane_checkouts,
+            pane_tasks: self.pane_tasks,
             occupied_checkouts: self.occupied_checkouts,
+            lost_checkouts: self.lost_checkouts,
             slots_swept: self.slots_swept,
             roots_shown: self.roots_shown,
             timeline_collapsed: self.timeline_collapsed,
@@ -1479,9 +1522,20 @@ struct WorkspaceModel {
     /// The checkout each open pane was first seen in — a pane's slot does
     /// not change when it `cd`s.
     pane_checkouts: BTreeMap<PaneId, PathBuf>,
+    /// The task each pane was found running, bound the first time its
+    /// checkout resolved to one and kept for the life of the pane. The
+    /// checkout is how a live task is found; once its directory is gone
+    /// the reconciliation strips the task of that checkout, and this is
+    /// the only thing left that says which task the pane was in.
+    pane_tasks: BTreeMap<PaneId, String>,
     /// The slot directories a pane still holds. A checkout that leaves this
     /// set lost its last pane, which is what ends the task running there.
     occupied_checkouts: BTreeSet<PathBuf>,
+    /// Panes whose checkout is gone from under them — removed outside UZE
+    /// while the agent ran. The process is still there, standing in a
+    /// directory that no longer exists; its row says so instead of
+    /// showing the kernel's own `(deleted)` path.
+    lost_checkouts: BTreeSet<PaneId>,
     /// Whether the sweep for tasks nobody's session restored has run.
     slots_swept: bool,
     /// Whether the pane set has moved since occupancy was last worked out.
@@ -2010,6 +2064,61 @@ impl WorkspaceModel {
         self.task_for_cwd(&cwd)
     }
 
+    /// The task a pane was running in a checkout that is now gone, with
+    /// the repository it belongs to — found through the slot the pane was
+    /// bound to, since the task's own directory no longer resolves. Only
+    /// while the task is waiting for a slot: once resumed it has one, and
+    /// the row that lost its own is nobody's way back in any more.
+    pub(super) fn lost_task(&self, pane: PaneId) -> Option<(&PathBuf, &TaskView)> {
+        if !self.lost_checkouts.contains(&pane) {
+            return None;
+        }
+        let task_id = self.pane_tasks.get(&pane)?;
+        let (primary, task) = self.tasks.iter().find_map(|(primary, tasks)| {
+            tasks
+                .iter()
+                .find(|task| &task.id == task_id)
+                .map(|task| (primary, task))
+        })?;
+        let resumable = task.checkout.is_none()
+            && !matches!(
+                task.state,
+                TaskStateView::Integrating | TaskStateView::Integrated
+            );
+        resumable.then_some((primary, task))
+    }
+
+    /// Binds every pane whose checkout resolves to a task, and is not
+    /// bound yet, to that task. Called when the panes change and again
+    /// when tasks arrive — the evaluation that names a task answers off
+    /// the frame, so the first sync after a tab opens usually finds no
+    /// task to bind to. Never rebound: the task a pane was found in is
+    /// the one it keeps, even after that task loses its checkout.
+    pub(super) fn bind_pane_tasks(&mut self) {
+        let found: Vec<(PaneId, String)> = self
+            .pane_checkouts
+            .iter()
+            .filter(|(pane, _)| !self.pane_tasks.contains_key(pane))
+            .filter_map(|(pane, checkout)| {
+                self.task_for_cwd(checkout)
+                    .map(|task| (*pane, task.id.clone()))
+            })
+            .collect();
+        self.pane_tasks.extend(found);
+    }
+
+    /// The pane an agent tab's row stands for.
+    pub(super) fn tab_focus_pane(&self, tab: TabId) -> Option<PaneId> {
+        self.session
+            .as_ref()?
+            .workspace
+            .spaces
+            .iter()
+            .flat_map(|space| &space.tabs)
+            .find(|candidate| candidate.id == tab)
+            .map(|tab| tab.focus.pane)
+    }
+
     fn pane_cwd(&self, pane: PaneId) -> Option<PathBuf> {
         let session = self.session.as_ref()?;
         session
@@ -2071,7 +2180,8 @@ impl WorkspaceModel {
         if !self.task_eval_pending.insert(key.clone()) {
             return;
         }
-        spawn_task_evaluation(home, key, cwd, sender.clone());
+        let occupied: Vec<PathBuf> = self.occupied_checkouts.iter().cloned().collect();
+        spawn_task_evaluation(home, key, cwd, occupied, sender.clone());
     }
 
     fn set_notice(&mut self, text: String) {
@@ -2799,8 +2909,16 @@ fn sync_slot_occupancy(
     model: &mut WorkspaceModel,
     home: &UzeHome,
     sender: &mpsc::Sender<OccupancyResolution>,
+    tasks: &mpsc::Sender<TaskResolution>,
 ) {
     if !model.occupancy_stale || model.occupancy_pending {
+        return;
+    }
+    // A placement in flight is a live task with no pane in front of it
+    // yet, by design: reconciling now would read it as abandoned and park
+    // it under the agent about to arrive. Left stale, so this runs as
+    // soon as the placement lands (see `absorb_placement`).
+    if model.placement_pending {
         return;
     }
     model.occupancy_stale = false;
@@ -2815,8 +2933,20 @@ fn sync_slot_occupancy(
         .flat_map(|tab| panes_in_layout(&tab.layout))
         .map(|pane| (pane.id, pane.cwd.clone()))
         .collect();
+    let space_roots: Vec<PathBuf> = session
+        .workspace
+        .spaces
+        .iter()
+        .map(|space| space.root.clone())
+        .collect();
     for (pane, cwd) in &live {
-        if let Some(checkout) = uze_application::isolated_checkout(cwd) {
+        // The directory the pane was given, not `/proc`'s note about what
+        // became of it: a pane first seen *after* its checkout was
+        // removed reports the old path with ` (deleted)` appended, and
+        // binding that spelling to a task never matches the task's own —
+        // leaving the row that lost its checkout with no way back in.
+        let named = named_checkout(cwd);
+        if let Some(checkout) = uze_application::isolated_checkout(&named) {
             model
                 .pane_checkouts
                 .entry(*pane)
@@ -2826,7 +2956,35 @@ fn sync_slot_occupancy(
     model
         .pane_checkouts
         .retain(|pane, _| live.iter().any(|(live, _)| live == pane));
+    model.bind_pane_tasks();
+    model
+        .pane_tasks
+        .retain(|pane, _| live.iter().any(|(live, _)| live == pane));
     let occupied: BTreeSet<PathBuf> = model.pane_checkouts.values().cloned().collect();
+    // Bound to a checkout that is no longer on disk, or first seen already
+    // standing in one: `/proc` reports a removed directory as its old path
+    // followed by ` (deleted)`, which is not a path anything resolves.
+    let lost: BTreeSet<PaneId> = live
+        .iter()
+        .filter(|(pane, cwd)| checkout_lost(model.pane_checkouts.get(pane), cwd))
+        .map(|(pane, _)| *pane)
+        .collect();
+    // A checkout that has just gone changes what its repository's tasks
+    // are, and nothing else asks: the pane is still there, so no slot was
+    // released and no reconciliation is due. Unasked, the row keeps
+    // drawing a task view that still believes it has a checkout — the one
+    // thing the way back into it is gated on.
+    let orphaned: Vec<PathBuf> = lost
+        .difference(&model.lost_checkouts)
+        .filter_map(|pane| model.pane_checkouts.get(pane))
+        .filter_map(|checkout| {
+            uze_application::isolated_checkout(checkout).map(|slot| slot.primary.to_path_buf())
+        })
+        .collect();
+    model.lost_checkouts = lost;
+    for primary in orphaned {
+        model.schedule_evaluation(home, primary, tasks);
+    }
     let vanished: Vec<PathBuf> = model
         .occupied_checkouts
         .difference(&occupied)
@@ -2842,13 +3000,7 @@ fn sync_slot_occupancy(
     // left, or — for the sweep — every space's own root.
     let mut look_in: Vec<PathBuf> = vanished;
     if sweeping {
-        look_in.extend(
-            session
-                .workspace
-                .spaces
-                .iter()
-                .map(|space| space.root.clone()),
-        );
+        look_in.extend(space_roots);
     }
     model.occupancy_pending = true;
     spawn_occupancy_reconcile(
@@ -2857,6 +3009,25 @@ fn sync_slot_occupancy(
         occupied.into_iter().collect(),
         sender.clone(),
     );
+}
+
+/// Whether the directory a pane works in is gone: the checkout it was
+/// bound to no longer exists, or the pane was first seen already standing
+/// in a removed directory — `/proc` reports one as its old path followed
+/// by ` (deleted)`, which is not a path anything resolves.
+/// The directory a pane was given, with the kernel's ` (deleted)` note
+/// stripped — what a removed checkout is still *named*, which is what a
+/// task is matched by. Any other path is its own name.
+fn named_checkout(cwd: &Path) -> PathBuf {
+    match cwd.to_string_lossy().strip_suffix(" (deleted)") {
+        Some(named) => PathBuf::from(named),
+        None => cwd.to_path_buf(),
+    }
+}
+
+fn checkout_lost(bound_checkout: Option<&PathBuf>, cwd: &Path) -> bool {
+    bound_checkout.is_some_and(|checkout| !checkout.is_dir())
+        || cwd.to_string_lossy().ends_with(" (deleted)")
 }
 
 /// Every pane of a layout, in the order they are laid out.

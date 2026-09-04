@@ -146,6 +146,66 @@ impl Workspace<'_> {
         }
     }
 
+    /// Puts a checkout back under a task that lost its own — removed
+    /// outside UZE, or swept as idle — so a new agent can continue from
+    /// where its branch stands. The task is live again in the slot this
+    /// acquires; `occupied` is what [`Self::place_new_agent`] takes. A
+    /// task that still has its checkout is answered with that checkout.
+    pub fn resume_task(
+        &self,
+        cwd: &Path,
+        task_id: &str,
+        occupied: &[PathBuf],
+    ) -> Result<AgentPlacement> {
+        let mut repository = self
+            .repository(cwd)
+            .ok_or_else(|| UzeError::UnknownTask(task_id.to_owned()))?;
+        let target = repository.target();
+        let primary = repository.primary.clone();
+        let policy = repository.policy.clone();
+        checkout::reconcile(&primary, &mut repository.store, &target);
+        let store = repository.store.clone();
+        let task = repository
+            .task_mut(task_id)
+            .ok_or_else(|| UzeError::UnknownTask(task_id.to_owned()))?;
+        if let (Some(existing), Some(checkout)) =
+            (landing::slot_path(&primary, task), task.checkout.clone())
+        {
+            return Ok(AgentPlacement {
+                cwd: existing,
+                isolation: Isolation::Slot {
+                    task: task.id.clone(),
+                    checkout,
+                    branch: task.branch.clone(),
+                    reused: true,
+                },
+                warnings: Vec::new(),
+            });
+        }
+        let acquired = checkout::resume(&primary, &store, task, policy.slots, occupied)
+            .map_err(|error| UzeError::ResumeFailed(error.to_string()))?;
+        task.checkout = Some(acquired.id.clone());
+        task.state = TaskState::Running;
+        let isolation = Isolation::Slot {
+            task: task.id.clone(),
+            checkout: acquired.id,
+            branch: acquired.branch,
+            reused: !acquired.created,
+        };
+        task::save(&self.0.home, &primary, &repository.store)?;
+        let warnings = checkout::materialize(
+            &primary,
+            &acquired.path,
+            &policy.link,
+            policy.setup.as_deref(),
+        );
+        Ok(AgentPlacement {
+            cwd: acquired.path,
+            isolation,
+            warnings,
+        })
+    }
+
     /// The project's declared policy, or the defaults when the lock declares
     /// none. A malformed lock is an error rather than a silent default.
     fn policy(&self, primary: &Path) -> Result<WorktreePolicy> {
@@ -223,7 +283,7 @@ impl Workspace<'_> {
     /// sidebar shows after an agent's pane goes quiet — and lets a clean,
     /// live task follow a target that moved. A conflict that produces
     /// returns to the owning agent as a notice for its pane.
-    pub fn evaluate_tasks(&self, cwd: &Path) -> Evaluation {
+    pub fn evaluate_tasks(&self, cwd: &Path, occupied: &[PathBuf]) -> Evaluation {
         let Some(mut repository) = self.repository(cwd) else {
             return Evaluation::default();
         };
@@ -243,9 +303,16 @@ impl Workspace<'_> {
             // again. Only the *current* owner is reconsidered: a freed
             // slot handed to a new agent belongs to that agent's task, not
             // to the one that used to sit there. `Parked` is nobody's turn
-            // by definition and stays put.
-            let revivable = matches!(task.state, TaskState::Integrated | TaskState::Closed)
+            // by definition and stays put — unless a pane sits in its
+            // checkout (`occupied`): parked means "no agent left", and an
+            // agent that is there makes it a lie, whichever way it got
+            // there — a release that raced the tab opening, a resume.
+            let ended_owner = matches!(task.state, TaskState::Integrated | TaskState::Closed)
                 && owners.contains(task.id.as_str());
+            let parked_with_agent = task.state == TaskState::Parked
+                && landing::slot_path(&primary, task)
+                    .is_some_and(|slot| occupied.iter().any(|pane| pane.starts_with(&slot)));
+            let revivable = ended_owner || parked_with_agent;
             if task.state == TaskState::Integrating
                 || (!checkout::is_live(&task.state) && !revivable)
             {
@@ -256,7 +323,7 @@ impl Workspace<'_> {
                 // the delivery is the last thing that happened to the
                 // task, and saying `running` instead would erase it on the
                 // next tick.
-                Readiness::Running if revivable => {}
+                Readiness::Running if ended_owner => {}
                 Readiness::Running => task.state = TaskState::Running,
                 Readiness::Uncommitted => task.state = TaskState::Uncommitted,
                 Readiness::Rebasing { files } => task.state = TaskState::Conflicted { files },
@@ -592,8 +659,12 @@ pub struct TaskView {
     pub label: String,
     pub branch: String,
     pub target: String,
-    /// The slot's directory, when the task has one.
+    /// The slot's directory, when the task has one on disk.
     pub checkout: Option<PathBuf>,
+    /// The slot the task was given, whether or not its directory still
+    /// exists — what ties a pane standing in a removed checkout back to
+    /// the task it was running.
+    pub checkout_id: Option<String>,
     pub state: TaskStateView,
     /// Commits the branch has beyond its base — what a delivery would land.
     pub ahead: usize,
@@ -609,6 +680,10 @@ impl TaskView {
             branch: task.branch.clone(),
             target: task.target.clone(),
             checkout: landing::slot_path(primary, task),
+            checkout_id: task
+                .checkout
+                .as_ref()
+                .map(|checkout| checkout.as_str().to_owned()),
             state: TaskStateView::from(&task.state),
             ahead: checkout::commits_ahead(primary, &task.base_commit, &task.branch),
             published_as: task.published_as.clone(),
@@ -1000,6 +1075,93 @@ mod placement_tests {
             Isolation::Slot { reused: false, .. }
         ));
     }
+
+    /// A checkout removed by hand orphans its task; resuming the task gives
+    /// it a slot again, on the same branch, with its commits in place.
+    #[test]
+    fn a_task_whose_checkout_was_removed_resumes_into_a_slot_on_its_branch() {
+        let repository = repository("place-resume");
+        let root = repository.root().to_path_buf();
+        let app = application("place-resume-home");
+        let first = app.workspace().place_new_agent(&root, &[]);
+        let task_id = slot(&first).as_str().to_owned();
+        std::fs::write(first.cwd.join("kept.rs"), b"fn kept() {}").unwrap();
+        repository.git_in(&first.cwd, &["add", "."]);
+        repository.git_in(&first.cwd, &["commit", "-qm", "kept"]);
+        std::fs::remove_dir_all(&first.cwd).unwrap();
+
+        // What the TUI does once no pane is in front of the checkout.
+        let released = app.workspace().release_abandoned_tasks(&root, &[]);
+        assert!(
+            released
+                .iter()
+                .any(|task| task.id == task_id && task.parked)
+        );
+        let task = app
+            .workspace()
+            .tasks(&root)
+            .into_iter()
+            .find(|task| task.id == task_id)
+            .unwrap();
+        assert_eq!(task.checkout, None, "the directory is gone");
+        assert_eq!(task.state, TaskStateView::Parked);
+
+        let resumed = app.workspace().resume_task(&root, &task_id, &[]).unwrap();
+        assert!(resumed.cwd.join("kept.rs").is_file(), "the commit is back");
+        assert!(matches!(
+            &resumed.isolation,
+            Isolation::Slot { task, branch, .. }
+                if task.as_str() == task_id && *branch == format!("agent/{task_id}")
+        ));
+        let task = app
+            .workspace()
+            .tasks(&root)
+            .into_iter()
+            .find(|task| task.id == task_id)
+            .unwrap();
+        assert_eq!(task.checkout.as_deref(), Some(resumed.cwd.as_path()));
+        assert_eq!(task.state, TaskStateView::Running, "live again");
+    }
+
+    /// Parked says "no agent left". A pane sitting in the task's checkout
+    /// says otherwise, and wins: the evaluation reads the task as live
+    /// again instead of leaving a working agent marked as set aside.
+    #[test]
+    fn a_parked_task_with_a_pane_in_its_checkout_is_live_again() {
+        let repository = repository("place-parked-live");
+        let root = repository.root().to_path_buf();
+        let app = application("place-parked-live-home");
+        let first = app.workspace().place_new_agent(&root, &[]);
+        let task_id = slot(&first).as_str().to_owned();
+        std::fs::write(first.cwd.join("work.rs"), b"fn work() {}").unwrap();
+        // Released as if no pane were there: parked, since it holds work.
+        let released = app.workspace().release_abandoned_tasks(&root, &[]);
+        assert!(
+            released
+                .iter()
+                .any(|task| task.id == task_id && task.parked)
+        );
+
+        let state_of = |occupied: &[PathBuf]| {
+            app.workspace()
+                .evaluate_tasks(&root, occupied)
+                .tasks
+                .into_iter()
+                .find(|task| task.id == task_id)
+                .unwrap()
+                .state
+        };
+        assert_eq!(
+            state_of(&[]),
+            TaskStateView::Parked,
+            "nobody there: stays put"
+        );
+        assert_eq!(
+            state_of(&[first.cwd.join("src")]),
+            TaskStateView::Uncommitted,
+            "a pane inside makes it that agent's task again"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1064,11 +1226,11 @@ mod task_service_tests {
 
         std::fs::write(slot.join("draft.rs"), "").unwrap();
         assert_eq!(
-            app.workspace().evaluate_tasks(&root).tasks[0].state,
+            app.workspace().evaluate_tasks(&root, &[]).tasks[0].state,
             TaskStateView::Uncommitted
         );
         agent_commits(&repository, &slot, "draft.rs", "fn done() {}");
-        let evaluation = app.workspace().evaluate_tasks(&root);
+        let evaluation = app.workspace().evaluate_tasks(&root, &[]);
         assert_eq!(evaluation.tasks[0].state, TaskStateView::Ready);
         assert!(evaluation.notices.is_empty());
 
@@ -1096,12 +1258,12 @@ mod task_service_tests {
 
         // Nothing new: the delivery is the last thing that happened, and
         // an evaluation must not talk it back down to `running`.
-        app.workspace().evaluate_tasks(&root);
+        app.workspace().evaluate_tasks(&root, &[]);
         assert_eq!(state_of(&app, &root, &id), TaskStateView::Integrated);
 
         // The same agent carries on in the same checkout.
         std::fs::write(slot.join("second.rs"), "fn second() {}").unwrap();
-        app.workspace().evaluate_tasks(&root);
+        app.workspace().evaluate_tasks(&root, &[]);
         assert_eq!(
             state_of(&app, &root, &id),
             TaskStateView::Uncommitted,
@@ -1109,7 +1271,7 @@ mod task_service_tests {
         );
 
         agent_commits(&repository, &slot, "second.rs", "fn second() {}");
-        app.workspace().evaluate_tasks(&root);
+        app.workspace().evaluate_tasks(&root, &[]);
         assert_eq!(
             state_of(&app, &root, &id),
             TaskStateView::Ready,
@@ -1136,7 +1298,7 @@ mod task_service_tests {
         assert_eq!(reused, slot, "the delivered slot was free to reuse");
         std::fs::write(reused.join("draft.rs"), "in progress").unwrap();
 
-        app.workspace().evaluate_tasks(&root);
+        app.workspace().evaluate_tasks(&root, &[]);
         assert_eq!(
             state_of(&app, &root, &second),
             TaskStateView::Uncommitted,
@@ -1162,7 +1324,7 @@ mod task_service_tests {
         // The clean task follows the target on evaluation, and the
         // conflict that produces is already the agent's to resolve; a
         // delivery asked for meanwhile is refused, never forced.
-        let evaluation = app.workspace().evaluate_tasks(&root);
+        let evaluation = app.workspace().evaluate_tasks(&root, &[]);
         assert_eq!(evaluation.notices.len(), 1, "{evaluation:?}");
         let notice = &evaluation.notices[0];
         assert_eq!(notice.checkout, slot);
@@ -1190,7 +1352,7 @@ mod task_service_tests {
         let (_, slot) = launched(&app, &root);
         agent_commits(&repository, &slot, "mine.rs", "agent's mine\n");
         repository.commit_file("theirs.rs", "");
-        let evaluation = app.workspace().evaluate_tasks(&root);
+        let evaluation = app.workspace().evaluate_tasks(&root, &[]);
         assert!(evaluation.notices.is_empty());
         assert!(
             slot.join("theirs.rs").is_file(),
@@ -1198,7 +1360,7 @@ mod task_service_tests {
         );
 
         repository.commit_file("mine.rs", "operator's mine\n");
-        let evaluation = app.workspace().evaluate_tasks(&root);
+        let evaluation = app.workspace().evaluate_tasks(&root, &[]);
         assert_eq!(evaluation.notices.len(), 1);
         assert_eq!(evaluation.notices[0].checkout, slot);
     }
@@ -1214,7 +1376,7 @@ mod task_service_tests {
         let app = application("svc-gate-home");
         let (id, slot) = launched(&app, &root);
         agent_commits(&repository, &slot, "a.rs", "");
-        app.workspace().evaluate_tasks(&root);
+        app.workspace().evaluate_tasks(&root, &[]);
 
         let report = app.workspace().deliver_task(&root, &id).unwrap();
         assert!(
@@ -1225,7 +1387,7 @@ mod task_service_tests {
         assert_eq!(state_of(&app, &root, &id), TaskStateView::GateFailed);
 
         agent_commits(&repository, &slot, "must-exist", "");
-        app.workspace().evaluate_tasks(&root);
+        app.workspace().evaluate_tasks(&root, &[]);
         let report = app.workspace().deliver_task(&root, &id).unwrap();
         assert_eq!(report.outcome, DeliveryOutcome::Merged);
     }
@@ -1240,7 +1402,7 @@ mod task_service_tests {
         let (_, second) = launched(&app, &root);
         agent_commits(&repository, &first, "first.rs", "");
         agent_commits(&repository, &second, "second.rs", "");
-        app.workspace().evaluate_tasks(&root);
+        app.workspace().evaluate_tasks(&root, &[]);
 
         let reports = app.workspace().deliver_ready(&root);
         assert_eq!(reports.len(), 2);
@@ -1260,7 +1422,7 @@ mod task_service_tests {
         let app = application("svc-finish-discard-home");
         let (id, slot) = launched(&app, &root);
         agent_commits(&repository, &slot, "a.rs", "");
-        app.workspace().evaluate_tasks(&root);
+        app.workspace().evaluate_tasks(&root, &[]);
         let report = app.workspace().deliver_task(&root, &id).unwrap();
         assert_eq!(report.outcome, DeliveryOutcome::Handoff);
         assert_eq!(state_of(&app, &root, &id), TaskStateView::Ready);

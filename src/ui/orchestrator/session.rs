@@ -331,7 +331,13 @@ impl Attach<'_> {
                 {
                     let label = next_agent_label(&self.model);
                     let command = option.command.clone();
-                    self.launch_agent(label, command, picker.cwd.clone(), (columns, rows));
+                    self.launch_agent(
+                        label,
+                        command,
+                        picker.cwd.clone(),
+                        picker.resume.clone(),
+                        (columns, rows),
+                    );
                 }
             }
             // Esc, or anything else — the picker only reacts to
@@ -377,16 +383,31 @@ impl Attach<'_> {
                         .schedule_evaluation(self.home, cwd.clone(), &self.answers.tasks);
                 }
             }
+            // Into the task's own slot when it still has one; otherwise
+            // placement gives it a slot again on its own branch — a
+            // checkout removed by hand took only the uncommitted work.
             KeyCode::Char('r') => {
-                if let Some((_, task)) = preserved.get(overlay.selected)
-                    && let Some(checkout) = task.checkout.clone()
-                {
+                if let Some((primary, task)) = preserved.get(overlay.selected) {
+                    let (cwd, resume) = match task.checkout.clone() {
+                        Some(checkout) => (Some(checkout), None),
+                        None => (
+                            None,
+                            Some(ResumeTarget {
+                                primary: primary.clone(),
+                                task: task.id.clone(),
+                                // Asked for from the list, not from a
+                                // row: there is no dead tab behind it.
+                                replacing: None,
+                            }),
+                        ),
+                    };
                     self.model.preserved = None;
                     self.model.agent_picker = Some(AgentPicker {
                         options: agent_options(self.home),
                         selected: 0,
                         anchor: Rect::default(),
-                        cwd: Some(checkout),
+                        cwd,
+                        resume,
                     });
                 }
             }
@@ -594,25 +615,27 @@ impl Attach<'_> {
                 self.model.dirty = true;
             }
             _ if self.model.agent_picker.is_some() => {
-                let hit = self
-                    .model
-                    .hits
-                    .iter()
-                    .find(|(rect, _)| {
-                        rect.x <= mouse.column
-                            && mouse.column < rect.x + rect.width
-                            && rect.y <= mouse.row
-                            && mouse.row < rect.y + rect.height
-                    })
-                    .map(|(_, hit)| *hit);
-                match hit {
+                // `hit_at`, not the tree's own first-rect search: the
+                // picker is drawn last and hangs over whatever asked for
+                // it — the sidebar row a "resume" was clicked on, with
+                // rows of its own under half of every option. Its hover
+                // half already reads the last rect; a click that read the
+                // first one landed on the tree beneath instead, and the
+                // picker closed having launched nothing.
+                match hit_at(&self.model, mouse.column, mouse.row) {
                     Some(WorkspaceHit::PickAgent(index)) => {
                         if let Some(picker) = self.model.agent_picker.take()
                             && let Some(option) = picker.options.get(index)
                         {
                             let label = next_agent_label(&self.model);
                             let command = option.command.clone();
-                            self.launch_agent(label, command, picker.cwd.clone(), (columns, rows));
+                            self.launch_agent(
+                                label,
+                                command,
+                                picker.cwd.clone(),
+                                picker.resume.clone(),
+                                (columns, rows),
+                            );
                         }
                     }
                     // Click outside the picker's own rows discards it —
@@ -1199,6 +1222,7 @@ impl Attach<'_> {
                     selected: 0,
                     anchor: hit_rect,
                     cwd: None,
+                    resume: None,
                 });
                 // Unlike every other arm here, this is a purely
                 // local state change with no server round trip
@@ -1278,6 +1302,34 @@ impl Attach<'_> {
             }
             WorkspaceHit::ToggleSpaceRoot(space) => {
                 toggle_space_root(&mut self.model, space);
+            }
+            WorkspaceHit::ResumeLostCheckout(tab) => {
+                let resume = self
+                    .model
+                    .tab_focus_pane(tab)
+                    .and_then(|pane| self.model.lost_task(pane))
+                    .map(|(primary, task)| ResumeTarget {
+                        primary: primary.clone(),
+                        task: task.id.clone(),
+                        replacing: Some(tab),
+                    });
+                if let Some(resume) = resume {
+                    // The revived agent is created in the *selected*
+                    // space, and the row it takes over from is closed
+                    // once it is open — a tab cannot be the last one
+                    // left in its space and still close. Selecting the
+                    // row first makes both land in the same space,
+                    // whichever space the operator was looking at.
+                    let _ = send_request(&mut self.stream, &ClientRequest::SelectTab { tab });
+                    self.model.agent_picker = Some(AgentPicker {
+                        options: agent_options(self.home),
+                        selected: 0,
+                        anchor: hit_rect,
+                        cwd: None,
+                        resume: Some(resume),
+                    });
+                    self.model.dirty = true;
+                }
             }
             WorkspaceHit::OpenStatusCatalog(anchor) => {
                 self.model.status_catalog = Some(anchor);
@@ -1366,15 +1418,26 @@ impl Attach<'_> {
         label: String,
         command: Vec<String>,
         cwd: Option<PathBuf>,
+        resume: Option<ResumeTarget>,
         size: (u16, u16),
     ) {
         let Some(cwd) = cwd else {
-            let Some(from) = selected_pane_cwd(&self.model) else {
-                // Nothing selected to place a slot relative to — the
-                // server's own default directory it is, same as before
-                // slots existed.
-                self.open_agent_tab_at(label, command, None, size);
-                return;
+            let replacing = resume.as_ref().and_then(|target| target.replacing);
+            let request = match resume {
+                Some(target) => PlacementRequest::Resume {
+                    primary: target.primary,
+                    task: target.task,
+                },
+                None => match selected_pane_cwd(&self.model) {
+                    Some(from) => PlacementRequest::New { from },
+                    // Nothing selected to place a slot relative to — the
+                    // server's own default directory it is, same as
+                    // before slots existed.
+                    None => {
+                        self.open_agent_tab_at(label, command, None, size);
+                        return;
+                    }
+                },
             };
             if self.model.placement_pending {
                 return;
@@ -1385,10 +1448,11 @@ impl Attach<'_> {
             let occupied: Vec<PathBuf> = self.model.occupied_checkouts.iter().cloned().collect();
             spawn_agent_placement(
                 self.home,
-                from,
+                request,
                 occupied,
                 label,
                 command,
+                replacing,
                 self.answers.placements.clone(),
             );
             return;
@@ -1435,15 +1499,35 @@ impl Attach<'_> {
     /// Opens the tab a placement was acquired for.
     fn absorb_placement(&mut self, resolution: PlacementResolution) {
         self.model.placement_pending = false;
+        self.model.occupancy_stale = true;
         let PlacementResolution {
             label,
             command,
             placement,
+            replacing,
         } = resolution;
-        // A warning is what preparing the checkout could not do; none of
-        // it stops the launch, so it is said once and the tab still opens.
-        match placement.warnings.first() {
-            Some(warning) => self.model.set_notice(format!("{label}: {warning}")),
+        // A resume with nowhere to go opens nothing: the task keeps its
+        // branch and stays in the preserved list, and the reason is said.
+        let placement = match placement {
+            Ok(placement) => placement,
+            Err(reason) => {
+                self.model.set_notice(format!("{label}: {reason}"));
+                return;
+            }
+        };
+        // What the launch could not do, said once — the tab opens either
+        // way. An agent that could not be isolated is the louder of the
+        // two: it is about to write in the operator's own checkout, and
+        // the reason for that was computed and then dropped on the floor
+        // until this read it.
+        let said = match &placement.isolation {
+            uze_application::Isolation::Unisolated { reason } => {
+                Some(format!("no checkout of its own: {reason}"))
+            }
+            uze_application::Isolation::Slot { .. } => placement.warnings.first().cloned(),
+        };
+        match said {
+            Some(text) => self.model.set_notice(format!("{label}: {text}")),
             None => {
                 self.model.notice = None;
                 self.model.dirty = true;
@@ -1455,6 +1539,13 @@ impl Attach<'_> {
         // resize path keeps in step with the layout.
         let size = self.model.last_size;
         self.open_agent_tab(label, command, placement.cwd, size);
+        // The agent this one took over from stood in a directory that no
+        // longer exists: nothing it is told can reach the task any more,
+        // and the operator asked for that task to continue here. Sent
+        // after the new tab, so the space is never left without one.
+        if let Some(tab) = replacing {
+            let _ = send_request(&mut self.stream, &ClientRequest::CloseTab { tab });
+        }
     }
 
     /// Turns a finished reconciliation into what the operator sees: a
@@ -1495,7 +1586,12 @@ impl Attach<'_> {
         while let Ok(resolution) = inbox.occupancy.try_recv() {
             self.absorb_occupancy(resolution);
         }
-        sync_slot_occupancy(&mut self.model, self.home, &self.answers.occupancy);
+        sync_slot_occupancy(
+            &mut self.model,
+            self.home,
+            &self.answers.occupancy,
+            &self.answers.tasks,
+        );
         while let Ok(resolution) = inbox.placements.try_recv() {
             self.absorb_placement(resolution);
         }
@@ -1531,6 +1627,7 @@ impl Attach<'_> {
                 None => self.model.upstream_syncs.remove(&resolution.key),
             };
             self.model.tasks.insert(primary, evaluation.tasks);
+            self.model.bind_pane_tasks();
             // A conflict found while a clean task followed the target is
             // the agent's to resolve: the message goes into its pane, as
             // one submission.
