@@ -11,7 +11,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from shared.common import ansi_strip
+from shared.common import ansi_strip, squash
 
 
 class StripTest(unittest.TestCase):
@@ -44,6 +44,24 @@ class StripTest(unittest.TestCase):
 
     def test_plain_text_passes_through(self):
         self.assertEqual(ansi_strip("UZE_CONFORMANCE_OK"), "UZE_CONFORMANCE_OK")
+
+
+class SquashTest(unittest.TestCase):
+    """A harness that spaces its words with cursor-forward moves leaves the
+    transcript's words run together; a marker only matches once both sides
+    drop the spacing. Sample: Claude Code 2.1.260's folder-trust screen,
+    whose unrecognized text cost the vertical all 24 checks."""
+
+    def test_cursor_forward_spacing_leaves_words_joined(self):
+        raw = "Yes,[1CI[1Ctrust[1Cthis[1Cfolder"
+        self.assertEqual(ansi_strip(raw), "Yes,Itrustthisfolder")
+        self.assertIn(squash("Yes, I trust this folder"), squash(ansi_strip(raw)))
+
+    def test_squash_drops_newlines_and_runs_of_spaces(self):
+        self.assertEqual(squash("  No,\n exit  "), "No,exit")
+
+    def test_squash_is_idempotent(self):
+        self.assertEqual(squash(squash("Quick safety check")), "Quicksafetycheck")
 
 
 if __name__ == "__main__":

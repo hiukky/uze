@@ -951,6 +951,19 @@ def ansi_strip(text):
     return "".join(plain)
 
 
+def squash(text):
+    """Drops every space a marker match should not depend on.
+
+    A harness that spaces its words with cursor-forward moves rather than
+    literal spaces (Claude Code paints whole first-run screens this way)
+    leaves `ansi_strip` a transcript with the words run together, so a
+    marker written the way a person reads it never matches. Squashing both
+    sides asks the only question a marker actually has: are these
+    characters on the screen, in this order?
+    """
+    return "".join(text.split())
+
+
 def render_screen(text, columns=240, rows=200):
     """Reconstructs what the terminal *shows* after replaying a raw TUI
     stream, rather than the order in which bytes arrived.
@@ -1076,7 +1089,14 @@ def make_screen(child):
 
 
 def make_waiter(screen):
-    def wait_for(markers, tries=12, gap=2.0, stop_on_death=False, accumulate=False):
+    def wait_for(
+        markers,
+        tries=12,
+        gap=2.0,
+        stop_on_death=False,
+        accumulate=False,
+        squash_spaces=False,
+    ):
         """Waits for any marker to appear on the harness's screen.
 
         `accumulate` searches the whole wait instead of the latest snapshot:
@@ -1086,6 +1106,11 @@ def make_waiter(screen):
         continues the line by moving the cursor, so the marker exists on
         screen and in no single snapshot. Off by default: a check that reads
         the returned screen should normally see that screen alone.
+
+        `squash_spaces` matches without whitespace on either side (see
+        `squash`), for a surface whose spacing is cursor motion rather than
+        characters. The text handed back stays the real screen — only the
+        question asked of it loosens.
         """
         seen_raw = ""
         seen = ""
@@ -1094,8 +1119,9 @@ def make_waiter(screen):
             seen_raw += t
             seen += p
             searched = f"{seen}\n{render_screen(seen_raw)}" if accumulate else p
+            hay = squash(searched) if squash_spaces else searched
             for m in markers:
-                if m in searched:
+                if (squash(m) if squash_spaces else m) in hay:
                     return t, searched, m
             if (
                 stop_on_death

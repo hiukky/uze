@@ -71,7 +71,16 @@ def claude_container(cfg, prov_ip, final_cmd, plugins="flow mcp-plugin"):
 def drive_onboarding(child):
     """Dialogs: Welcome/Security guide (2.1.250 first-run) -> API key (Yes)
     -> theme -> security notes -> trust (Yes) -> Tips/What's-new popup ->
-    prompt. Returns (screen, plain, marker)."""
+    prompt. Returns (screen, plain, marker).
+
+    Every match here is space-insensitive (`squash`): 2.1.260 paints the
+    first-run screens with cursor-forward moves instead of spaces, so a
+    marker spelled the way a person reads it ("Yes, I trust this folder")
+    is absent from the transcript while being plainly on screen. Matching
+    on the spelled form let the trust screen fall through to the generic
+    "❯" match, which returned as if the prompt were up — and the next
+    Enter landed on "No, exit" and quit the TUI, taking all 24 checks with
+    it."""
     screen = make_screen(child)
     wait_for = make_waiter(screen)
     DIALOGS = [
@@ -89,8 +98,14 @@ def drive_onboarding(child):
         "API Usage Billing",
         "❯",
     ]
-    t, p, m = wait_for(DIALOGS, tries=16, stop_on_death=True)
+
+    def prompt_is_up(t, p):
+        j = common.squash(p)
+        return bool(t) and ("Opus" in j or "APIUsageBilling" in j)
+
+    t, p, m = wait_for(DIALOGS, tries=16, stop_on_death=True, squash_spaces=True)
     for i in range(10):
+        j = common.squash(p)
         if m == "Detected a custom API key":
             child.send("\x1b[A")
             time.sleep(0.3)
@@ -106,14 +121,14 @@ def drive_onboarding(child):
             # 2.1.250 first-run: the folder-trust screen defaults to
             # "❯ No, exit" — plain Enter would quit the TUI. Select
             # "Yes, I trust this folder" first.
-            if "No, exit" in p and "Yes, I trust" in p:
+            if "No,exit" in j and "Yes,Itrust" in j:
                 child.send("\x1b[B")
                 time.sleep(0.3)
             child.send("\r")
-        elif "Yes, I trust this folder" in p and "No, exit" in p:
+        elif "Yes,Itrustthisfolder" in j and "No,exit" in j:
             # 2.1.250: keep "Yes" selected (down from "No, exit") before
             # confirming, and re-confirm if the guide stays up.
-            if "❯" in p and "❯ No, exit" in p.replace(" ", ""):
+            if "❯No,exit" in j:
                 child.send("\x1b[B")
                 time.sleep(0.3)
             child.send("\r")
@@ -123,12 +138,12 @@ def drive_onboarding(child):
             child.send("\r")
         else:
             break
-        t, p, m = wait_for(DIALOGS, tries=14, stop_on_death=True)
+        t, p, m = wait_for(DIALOGS, tries=14, stop_on_death=True, squash_spaces=True)
         if m in ("Opus5", "Opus", "API Usage Billing", "❯"):
             break
         # The 2.1.250 prompt frame carries the model/status bar content;
         # "❯" alone is invalid here (it appears on every option screen).
-        if t and ("Opus" in p or "API Usage Billing" in p):
+        if prompt_is_up(t, p):
             break
     # The Tips/What's-new overlay popup does not block the prompt; the first
     # slash-command keystroke dismisses it. Never send Esc here (Esc on an
@@ -138,13 +153,14 @@ def drive_onboarding(child):
     # CONTENT (Opus/status bar/prompt arrow), never on a stale or empty
     # read.
     for _ in range(10):
-        if t and ("Opus" in p or "API Usage Billing" in p):
+        if prompt_is_up(t, p):
             return t, p, m
         t, p, m = wait_for(
             ["Opus5", "Opus", "API Usage Billing", "❯"],
             tries=4,
             gap=2.0,
             stop_on_death=True,
+            squash_spaces=True,
         )
     return t, p, m
 
@@ -380,7 +396,10 @@ def phase_hooks(cfg, prov_ip, kind):
         time.sleep(0.06)
     child.send("\r")
     t3, p3, m3 = wait_for(
-        ["UZE_CONFORMANCE_PASS"] + spec["tui_markers"], tries=24, gap=2.5
+        ["UZE_CONFORMANCE_PASS"] + spec["tui_markers"],
+        tries=24,
+        gap=2.5,
+        squash_spaces=True,
     )
     # Absence checks below may only evaluate once the turn settled AND the
     # TUI went quiet (ADR-035): "never appeared" is not provable while the
