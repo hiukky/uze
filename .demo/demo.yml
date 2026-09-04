@@ -1,0 +1,353 @@
+# The demo video, as a spec. This file is the source of truth: it says what
+# the video shows, in order, and everything needed to make it again.
+#
+#   tui-record beats  .demo   # the script, as prose
+#   tui-record seed   .demo   # build the sandbox (first run, or after a /tmp wipe)
+#   tui-record probe  .demo   # the app in its sandbox, to try a selector out
+#   tui-record run    .demo   # record → cut → leak-check → render → poster
+#   tui-record recut  .demo   # re-cut the last take, without recording
+#
+# `tui-record` ships with the `tui` plugin: uze plugin install tui@ai
+
+video:
+  title: uze
+  # Rendered beside its spec, published where it is consumed. Only the
+  # published copy is committed (.demo renders are gitignored): the same
+  # ~700KB blob twice per recording is history nobody needs, and both the
+  # site (/uze-demo.gif) and the README already point at web/public.
+  out: .demo/uze-demo.gif
+  poster: .demo/uze-demo-poster.png
+  publish:
+    - from: out
+      to: web/public/uze-demo.gif
+    - from: poster
+      to: web/public/uze-demo-poster.png
+  # A take that caught the provider rate-limiting is a bad take, not a bad
+  # render: fail loudly instead of publishing it.
+  forbid:
+    - Upstream request limit
+    - Retry attempt
+  cast: '{root}/uze-hero.cast'
+  cols: 152                 # wide enough for the Integrations cards, narrow
+  rows: 36                  # enough that GitHub's ~900px column stays readable
+  speed: 1.45               # reads as a person; past ~1.5 it reads as fast-forward
+  background: 0a0c0d        # crate::ui::BASE — a mismatch shows as a border
+  font_size: 14
+  wait_collapse: 1.5        # what an agent's thinking time collapses to
+  # The still the site shows first: named by what must be on screen, so a
+  # re-cut cannot silently move it to a half-drawn frame.
+  poster_when: CAPABILITIES
+  sidebar: 31               # where the sidebar band ends, for `in: sidebar`
+sandbox:
+  root: ~/.uzedemo          # never on screen
+  fixtures: /tmp/demos      # on screen: a path under $HOME carries a username
+  cwd: '{fixtures}/demo-app'
+  command:
+    - '{project}/target/release/uze'
+  shell: '{home}/demoshell'
+  path:
+    - '{home}/.uze/shims'
+    - '{home}/.local/bin'
+    - '{home}/bin'
+    - /usr/local/bin
+    - /usr/bin
+    - /bin
+  env:
+    PS1: '\[\e[38;5;114m\]demo-app\[\e[0m\] $ '
+  binaries:
+    - claude
+    - opencode
+    - agy
+  author: Ada Lovelace
+  author_email: ada@demo.dev
+  # A deliberate, revocable grant: symlinks, never copies. Delete the link
+  # and the grant is over; without them the harnesses record a login screen.
+  link:
+    - from: ~/.claude/.credentials.json
+      to: '{home}/.claude/.credentials.json'
+      optional: true
+    - from: ~/.local/share/opencode/auth.json
+      to: '{home}/.local/share/opencode/auth.json'
+      optional: true
+  copy:
+    - from: ~/.config/opencode/opencode.json
+      to: '{home}/.config/opencode/opencode.json'
+  # Shims first, or every Integrations card reports "PATH shadowed" on camera.
+  provision:
+    - test -x {home}/.local/bin/codex || curl -fsSL https://chatgpt.com/codex/install.sh | sh
+    - '{project}/target/release/uze setup'
+  # The sandbox's own terminal server, by pid, verified through /proc — never
+  # a pattern kill, which would match the shell running it.
+  reset:
+    - |
+      for pid in $(pgrep -x uze 2>/dev/null); do
+        cmd=$(tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null) || continue
+        case "$cmd" in *"terminal serve --root /tmp/demos/"*) kill -TERM "$pid" 2>/dev/null ;; esac
+      done
+  clear:
+    - '{home}/.uze/state/terminal'
+    - '{runtime}/uze-runtime'
+  write:
+    - path: '{home}/demoshell'
+      executable: true
+      text: |
+        #!/bin/sh
+        exec /bin/bash --norc --noprofile
+    - path: '{home}/.gitconfig'
+      text: "[user]\n\tname = Ada Lovelace\n\temail = ada@demo.dev\n[init]\n\tdefaultBranch = main\n"
+    - path: '{home}/.claude.json'
+      text: |
+        {
+          "hasCompletedOnboarding": true,
+          "lastOnboardingVersion": "2.1.201",
+          "installMethod": "native",
+          "autoUpdates": false,
+          "theme": "dark",
+          "tipsHistory": { "powerup-onboarding": 99, "new-user-warmup": 99, "shift-enter": 99 },
+          "tipLifetimeShownCounts": { "powerup-onboarding": 99 },
+          "projects": {
+            "/tmp/demos/demo-app": { "hasTrustDialogAccepted": true, "allowedTools": [] },
+            "/tmp/demos/demo-web": { "hasTrustDialogAccepted": true, "allowedTools": [] }
+          }
+        }
+  # An allow list, not a bypass mode: the bypass opens a consent screen that
+  # would be the first frame of the video.
+  patch_json:
+    - path: '{home}/.claude/settings.json'
+      merge: '{"permissions": {"defaultMode": "acceptEdits", "allow": ["Bash"]}}'
+# Two projects with a believable past: an empty repo reads as a test
+# fixture, a handful of dated commits reads as a project.
+fixtures:
+  - name: demo-app
+    commits:
+      - message: 'chore: initial commit'
+        days_ago: 7
+        files:
+          README.md: '# demo-app'
+      - message: 'feat(api): add the health endpoint'
+        days_ago: 5
+        files:
+          src/main.rs: fn main() {}
+      - message: 'docs: describe the request lifecycle'
+        days_ago: 3
+        files:
+          docs/lifecycle.md: '# Request lifecycle'
+      - message: 'feat(config): read settings from config.toml'
+        days_ago: 2
+        files:
+          config.toml: |-
+            [app]
+            port = 8080
+      - message: 'fix(api): return 404 for an unknown route'
+        days_ago: 1
+        files:
+          src/router.rs: pub fn route() {}
+      - message: 'docs: add AGENTS.md with the project''s conventions'
+        days_ago: 1
+        files:
+          AGENTS.md: |
+            # AGENTS.md
+
+            Guidance for agentic tools working in this repository.
+
+            ## What this is
+
+            `demo-app` is a small HTTP service. `src/router.rs` maps a path to a
+            response; `config.toml` carries the runtime settings.
+
+            ## Conventions
+
+            - Keep handlers total: every route returns a `Response`, never panics.
+            - Document a new route in `docs/lifecycle.md` in the same change.
+            - Conventional Commits for commit subjects.
+      - message: 'chore: declare the worktree policy in agents.lock'
+        days_ago: 1
+        files:
+          agents.lock: |-
+            version: 1
+            worktrees:
+              target: main
+              completion: merge
+              slots: 3
+  - name: demo-web
+    commits:
+      - message: 'chore: initial commit'
+        days_ago: 6
+        files:
+          index.html: <!doctype html><title>demo-web</title>
+      - message: 'feat(ui): base typography'
+        days_ago: 3
+        files:
+          styles.css: 'body { font: 16px system-ui; }'
+      - message: 'docs: add AGENTS.md'
+        days_ago: 2
+        files:
+          AGENTS.md: |-
+            # AGENTS.md
+
+            The marketing site for demo-app. Plain HTML and CSS, no build step.
+      - message: 'chore: declare the worktree policy in agents.lock'
+        days_ago: 2
+        files:
+          agents.lock: |-
+            version: 1
+            worktrees:
+              target: main
+              completion: merge
+              slots: 3
+# What the video shows, in order. Edit this list first.
+beats:
+  - say: uze is open on a project, a real shell in the space
+    pause: 1.2
+  - say: the project has a past
+    type: git log --oneline -4
+    pause: 2.2
+  - say: the space is renamed — it is yours, not the directory's
+    dclick: demo-app
+    in: sidebar
+    offset: 3
+    expect: demo-app▏
+    pause: 0.6
+  - type: api
+    clear: 8
+    pause: 0.9
+  - say: an agent is placed, in a checkout of its own
+    click: ✦
+    in: strip
+    expect: new agent
+    expect_timeout: 6
+    pause: 0.9
+  - click: Claude Code
+    in: pane
+    offset: 4
+    expect: Claude Code v
+    expect_timeout: 25
+    pause: 1.6
+  - say: and named after the work it is doing
+    dclick: ✦
+    in: strip
+    offset: 2
+    expect: ▏
+    expect_in: strip
+    expect_timeout: 6
+  - type: ping
+    clear: all
+    expect: ping
+    expect_in: strip
+    pause: 0.7
+  - say: asked for something real, and for the commit
+    type: add a /ping route to src/router.rs that answers pong, then commit
+    expect: esc to interrupt
+    expect_timeout: 20
+    pause: 1.8
+  - say: a second agent, on a different harness
+    click: ✦
+    in: strip
+    occurrence: 2
+    expect: new agent
+    expect_timeout: 6
+    pause: 0.9
+  - click: OpenCode
+    in: pane
+    offset: 4
+    expect: ctrl\+p commands
+    expect_timeout: 25
+    pause: 1.8
+  - dclick: ✦
+    in: strip
+    offset: 2
+    expect: ▏
+    expect_in: strip
+    expect_timeout: 6
+  - type: docs
+    clear: all
+    expect: docs
+    expect_in: strip
+    pause: 0.7
+  - say: asked for something else — this one without a commit
+    type: add a Routes line to README.md listing the health and ping routes
+    pause: 1.6
+  - say: 'what uze delivered to *this* harness: AGENTS.md native, not shimmed'
+    click: ✦
+    in: strip
+    occurrence: last
+    expect: CAPABILITIES
+    expect_timeout: 6
+    pause: 3.2
+  - key: Escape
+    pause: 0.8
+  - say: wait for that agent's first edit — the only stretch the cut squeezes
+    wait: shell
+    until: grep -qs Routes /tmp/demos/demo-app/.worktrees/*/README.md
+    timeout: 150
+    settle: 2.0
+    pause: 0.2
+  - say: its uncommitted change, in its own checkout
+    expect: CHANGES
+    expect_timeout: 8
+    refuse: no changes
+    pause: 2.6
+    key: C-g
+  - key: Escape
+    pause: 0.8
+  - say: what every glyph means, opened from the mark itself
+    click: ''
+    glyph: ±⇧…!✕↑≡
+    in: sidebar
+    expect: uncommitted
+    expect_timeout: 6
+    pause: 3.4
+  - key: Escape
+    pause: 0.8
+  - say: a commit from the timeline, in detail
+    click: ◉
+    in: sidebar
+    offset: 2
+    expect: commit
+    expect_timeout: 6
+    pause: 2.6
+  - key: Escape
+    pause: 0.8
+  - say: the management side, unhurried
+    click: Manage
+    in: sidebar
+    offset: 2
+    expect: Overview
+    pause: 2.2
+  - click: Plugins
+    in: sidebar
+    offset: 2
+    expect: PLUGIN
+    expect_timeout: 8
+    pause: 2.1
+  - click: Extensions
+    in: sidebar
+    offset: 2
+    expect: EXTENSION
+    expect_timeout: 8
+    pause: 2.1
+  - click: Integrations
+    in: sidebar
+    offset: 2
+    expect: HARNESS
+    expect_timeout: 8
+    pause: 2.1
+  - click: Profiles
+    in: sidebar
+    offset: 2
+    expect: Harnesses
+    expect_timeout: 8
+    pause: 2.1
+  - click: Overview
+    in: sidebar
+    offset: 2
+    expect: status & health
+    expect_timeout: 8
+    pause: 2.1
+  - click: Work
+    in: sidebar
+    offset: 1
+    expect: agents
+    pause: 1.6
+  - say: and out — the cut stops here, before the screen blanks
+    end: C-q

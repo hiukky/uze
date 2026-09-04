@@ -9,3 +9,10 @@ lcov.info
 
 # Local exploration labs — never committed
 .labs/
+
+# Demo video: the spec is tracked, the render is not — the published copy in
+# web/public is the one the site and the README point at, and committing both
+# would put the same ~700KB blob in history twice per recording.
+/.demo/*.gif
+/.demo/*.png
+/.demo/*.cast
