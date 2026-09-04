@@ -36,14 +36,18 @@ export default function Layout({ children }: LayoutProps<'/'>) {
       <body className="flex flex-col min-h-screen font-sans">
         <Banner
           id="alpha-2026-08"
-          height="auto"
-          className="relative flex-wrap gap-x-2 gap-y-1 px-12 py-2.5 text-center font-mono text-xs tracking-tight"
+          height="var(--uze-banner-height)"
+          className="gap-x-2 px-12 text-center font-mono text-xs tracking-tight"
         >
           <span className="text-accent">Alpha</span>
-          <span className="mx-2 text-fd-muted-foreground">·</span>
-          APIs and harness behavior are still changing
-          <span className="mx-2 hidden text-fd-muted-foreground sm:inline">·</span>
-          <span className="hidden sm:inline">no packaged installer yet, build from source</span>
+          <span className="text-fd-muted-foreground">·</span>
+          {/* One line at every width: the banner's height feeds the docs
+              grid's sticky offsets, so text that wraps is text that gets
+              clipped. */}
+          <span className="sm:hidden">first release coming soon</span>
+          <span className="max-sm:hidden">APIs and harness behavior are still changing</span>
+          <span className="text-fd-muted-foreground max-sm:hidden">·</span>
+          <span className="max-sm:hidden">first release coming soon</span>
         </Banner>
         <RootProvider>{children}</RootProvider>
       </body>

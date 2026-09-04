@@ -1,4 +1,36 @@
 import Link from 'next/link';
+import { InstallCommand } from '@/components/install-command';
+import matrix from '@/lib/harness-matrix.json';
+
+type Capability = 'context' | 'skills' | 'mcp' | 'agents' | 'hooks' | 'package';
+
+const columns: [Capability, string][] = [
+  ['context', 'AGENTS.md'],
+  ['skills', 'Skills'],
+  ['mcp', 'MCP'],
+  ['agents', 'Agents'],
+  ['hooks', 'Hooks'],
+  ['package', 'Plugin'],
+];
+
+// A route reads as one word plus a mark, so the table can be scanned down a
+// column without a legend: filled is native, hollow is adapted, absent is a
+// gap the docs explain.
+function Route({ value }: { value: string }) {
+  if (value === 'none') {
+    return <span className="font-mono text-xs text-muted/60">—</span>;
+  }
+  const native = value === 'native';
+  return (
+    <span className="inline-flex items-center gap-1.5 font-mono text-xs whitespace-nowrap">
+      <span
+        aria-hidden
+        className={`size-1.5 rounded-full ${native ? 'bg-accent' : 'border border-muted'}`}
+      />
+      <span className={native ? 'text-ink' : 'text-muted'}>{value}</span>
+    </span>
+  );
+}
 
 // Icon sources: Claude Code / OpenCode are simple-icons paths (recolored to
 // the theme, since an <image>-embedded SVG renders in its own document and
@@ -9,271 +41,246 @@ import Link from 'next/link';
 const harnesses = [
   {
     name: 'Claude Code',
-    delivery: 'native plugin',
     icon: {
       type: 'path' as const,
       d: 'M21 10.5h3v3h-3v3h-1.5v3H18v-3h-1.5v3H15v-3H9v3H7.5v-3H6v3H4.5v-3H3v-3H0v-3h3v-6h18Zm-15 0h1.5v-3H6Zm10.5 0H18v-3h-1.5z',
     },
   },
-  { name: 'Codex', delivery: 'native plugin', icon: { type: 'image' as const, href: '/harnesses/codex.png' } },
+  { name: 'Codex', icon: { type: 'image' as const, href: '/harnesses/codex.png' } },
   {
     name: 'OpenCode',
-    delivery: 'native skills + bridge',
     icon: { type: 'path' as const, d: 'M22 24H2V0h20zM17 4.8H7v14.4h10z' },
   },
   {
     name: 'Antigravity',
-    delivery: 'native plugin',
     icon: { type: 'image' as const, href: '/harnesses/antigravity.png' },
   },
 ];
 
-const rowY = [30, 104, 178, 252];
-
-const spec = [
+const pillars = [
   {
-    term: 'STORE',
-    title: 'One store, four surfaces',
-    body: 'Plugin bytes live once in the Store. Each harness receives them through its own most native mechanism — a real plugin where one exists, a safe adapter only as a last resort.',
+    title: 'One package, four native surfaces',
+    body: 'The Store owns a plugin’s bytes and writes nothing a harness reads. Each integration delivers them through the most native mechanism that harness has — a real plugin where one exists, a safe adapter only as a last resort.',
     href: '/docs/concepts',
+    link: 'How delivery is decided',
   },
   {
-    term: 'SEMANTICS',
-    title: 'Semantics survive delivery',
-    body: 'Invocation policy, hooks, and capabilities are canonical. Integrations translate the policy into each vendor’s encoding instead of dropping it.',
+    title: 'Semantics survive the trip',
+    body: 'A skill’s invocation policy, a hook’s effect, an agent’s frontmatter — each is translated into the vendor’s own encoding, or reported as adapted. uze never claims a route is native without a passing real-harness scenario.',
     href: '/docs/concepts/capabilities',
+    link: 'What travels, and how',
   },
   {
-    term: 'CONTEXT',
     title: 'One project context',
-    body: 'AGENTS.md is the portable baseline. Every harness reads it natively or through a managed bridge — never four instruction files to maintain.',
+    body: 'AGENTS.md is the portable baseline. Every harness reads it natively or through the one bridge uze maintains, inside regions it owns — never four instruction files drifting apart.',
     href: '/docs/concepts/context',
+    link: 'How context reaches each harness',
+  },
+  {
+    title: 'Agents that don’t collide',
+    body: 'Run several at once in one terminal. Each starts in an isolated checkout on a branch of its own, readiness is read from Git rather than announced, and finished work comes home through a delivery you trigger.',
+    href: '/docs/workspace',
+    link: 'Inside the workspace',
   },
 ];
 
 export default function HomePage() {
   return (
     <main className="flex flex-col items-center flex-1 px-6 font-sans">
-      {/* Hero */}
-      <section className="grid md:grid-cols-[1fr_1fr] gap-12 md:gap-8 items-center content-center w-full max-w-6xl min-h-[calc(100dvh_-_3.5rem)] py-20 md:py-28">
-        <div>
-          <div className="inline-flex items-center gap-2 text-[11px] font-mono uppercase tracking-[0.2em] text-muted">
-            <span className="size-1.5 bg-accent" aria-hidden />
-            Rust CLI — alpha
+      {/* Hero. Holds the first screen on its own — the banner and the h-14
+          header are the only chrome above it — so the recording below is
+          something you arrive at by scrolling, not something competing with
+          the headline for the same view. */}
+      <section className="flex w-full max-w-5xl flex-col justify-center min-h-[calc(100dvh_-_var(--uze-banner-height)_-_3.5rem)] py-14 text-center">
+        <h1 className="mx-auto max-w-[18ch] font-mono font-bold tracking-tight text-ink text-[2.5rem] leading-[1.02] sm:text-6xl lg:text-[4.25rem]">
+          Install once.
+          <br />
+          <span className="text-accent">Native everywhere.</span>
+        </h1>
+        <p className="mx-auto mt-6 max-w-[58ch] text-lg leading-relaxed text-muted">
+          One plugin and one project context reach Claude Code, Codex, OpenCode and Antigravity
+          through each one&apos;s own native surface — and one terminal runs them side by side,
+          each agent in a checkout of its own.
+        </p>
+
+        <div className="mx-auto mt-9 flex max-w-xl flex-col items-stretch gap-3 sm:flex-row">
+          <div className="flex-1 text-left">
+            <InstallCommand command="curl -fsSL https://uze.hiukky.com/i | sh" />
           </div>
-          <h1 className="mt-5 font-mono font-bold leading-[1.05] tracking-tight text-ink text-4xl sm:text-5xl">
-            Install once.
-            <br />
-            <span className="text-accent">Native everywhere.</span>
-          </h1>
-          <p className="mt-6 max-w-md text-[15px] leading-relaxed text-muted">
-            uze is a compatibility and distribution layer for agent tooling. A single plugin and
-            project context, delivered to Claude Code, Codex, OpenCode, and Antigravity through
-            each harness&apos;s own native surface.
-          </p>
-          <div className="flex flex-row flex-wrap gap-3 mt-8">
-            <Link
-              href="/docs"
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-[3px] text-xs font-mono font-medium uppercase tracking-[0.12em] bg-fd-primary text-fd-primary-foreground hover:opacity-90 transition-opacity"
-            >
-              Read the docs <span aria-hidden>→</span>
-            </Link>
-            <Link
-              href="https://github.com/hiukky/uze"
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-[3px] text-xs font-mono font-medium uppercase tracking-[0.12em] border border-line text-ink hover:bg-surface transition-colors"
-            >
-              <svg viewBox="0 0 16 16" className="size-3.5" fill="currentColor" aria-hidden="true">
-                <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" />
-              </svg>
-              Source
-            </Link>
-          </div>
-        </div>
-
-        {/* Signature diagram — one canonical package, four native surfaces.
-            min-width keeps the embedded SVG-unit labels legible instead of
-            shrinking past readable size on narrow viewports; the wrapper
-            scrolls horizontally there instead, same as a wide table. */}
-        <div className="flex flex-col gap-2 overflow-x-auto">
-          <svg
-            viewBox="0 0 480 300"
-            className="uze-diagram h-auto w-full min-w-[420px] max-w-xl mx-auto"
-            role="img"
-            aria-label="uze routes one plugin package to Claude Code, Codex, OpenCode, and Antigravity, each through its own native surface"
-          >
-            {/* corner ticks */}
-            <path d="M0 10 V0 H10" fill="none" stroke="var(--color-line)" strokeWidth="1" />
-            <path
-              d="M470 290 V300 H460"
-              fill="none"
-              stroke="var(--color-line)"
-              strokeWidth="1"
-            />
-
-            {/* source node */}
-            <rect
-              x="4"
-              y="125"
-              width="100"
-              height="32"
-              rx="2"
-              fill="none"
-              stroke="var(--color-line)"
-            />
-            <text
-              x="54"
-              y="145"
-              textAnchor="middle"
-              fontFamily="var(--font-mono)"
-              fontWeight="700"
-              fontSize="12"
-              fill="var(--color-ink)"
-            >
-              STORE
-            </text>
-            <text
-              x="54"
-              y="170"
-              textAnchor="middle"
-              fontFamily="var(--font-mono)"
-              fontSize="7.5"
-              letterSpacing="0.5"
-              fill="var(--color-muted)"
-            >
-              PLUGIN BYTES
-            </text>
-
-            {/* trunk + spine + branches */}
-            <line
-              className="uze-line"
-              x1="104"
-              y1="141"
-              x2="170"
-              y2="141"
-              stroke="var(--color-line)"
-              strokeWidth="1.5"
-              pathLength={1}
-            />
-            <line
-              className="uze-line"
-              x1="170"
-              y1="30"
-              x2="170"
-              y2="252"
-              stroke="var(--color-line)"
-              strokeWidth="1.5"
-              pathLength={1}
-            />
-            {rowY.map((y) => (
-              <line
-                key={y}
-                className="uze-line"
-                x1="170"
-                y1={y}
-                x2="250"
-                y2={y}
-                stroke="var(--color-line)"
-                strokeWidth="1.5"
-                pathLength={1}
-              />
-            ))}
-
-            <circle className="uze-dot" cx="170" cy="141" r="3" fill="var(--color-accent)" />
-
-            {/* leaf nodes */}
-            {harnesses.map((h, i) => {
-              const y = rowY[i];
-              return (
-                <g key={h.name}>
-                  <rect
-                    x="250"
-                    y={y - 16}
-                    width="210"
-                    height="32"
-                    rx="2"
-                    fill="none"
-                    stroke="var(--color-line)"
-                  />
-                  <rect
-                    x="262"
-                    y={y - 13}
-                    width="18"
-                    height="18"
-                    rx="2"
-                    fill="var(--color-surface)"
-                    stroke="var(--color-line)"
-                  />
-                  {h.icon.type === 'path' ? (
-                    <g transform={`translate(265, ${y - 10}) scale(0.5)`}>
-                      <path d={h.icon.d} fill="var(--color-ink)" />
-                    </g>
-                  ) : (
-                    <image href={h.icon.href} x="265" y={y - 10} width="12" height="12" />
-                  )}
-                  <text
-                    x="286"
-                    y={y - 2}
-                    fontFamily="var(--font-mono)"
-                    fontWeight="700"
-                    fontSize="11"
-                    fill="var(--color-ink)"
-                  >
-                    {h.name}
-                  </text>
-                  <text
-                    x="286"
-                    y={y + 11}
-                    fontFamily="var(--font-mono)"
-                    fontSize="7.5"
-                    letterSpacing="0.5"
-                    fill="var(--color-muted)"
-                  >
-                    {h.delivery.toUpperCase()}
-                  </text>
-                  <circle className="uze-dot" cx="250" cy={y} r="3" fill="var(--color-accent)" />
-                </g>
-              );
-            })}
-          </svg>
-          <p className="text-[11px] font-mono uppercase tracking-[0.15em] text-muted text-right max-w-md mx-auto w-full">
-            detected + verified per harness
-          </p>
-        </div>
-      </section>
-
-      {/* Spec rows */}
-      <section className="w-full max-w-3xl border-t border-line">
-        {spec.map((item) => (
           <Link
-            key={item.term}
-            href={item.href}
-            className="group flex flex-col sm:flex-row gap-2 sm:gap-8 py-6 px-2 -mx-2 border-b border-line hover:bg-surface/60 transition-colors"
+            href="/docs/getting-started"
+            className="inline-flex shrink-0 items-center justify-center border border-ink bg-ink px-5 py-2.5 font-mono text-[13px] text-paper transition-opacity hover:opacity-85"
           >
-            <span className="shrink-0 sm:w-32 font-mono text-xs uppercase tracking-[0.15em] text-accent pt-0.5">
-              {item.term}
-            </span>
-            <span className="flex-1">
-              <h2 className="font-mono font-semibold text-ink">{item.title}</h2>
-              <p className="mt-1.5 text-sm text-muted leading-relaxed">{item.body}</p>
-            </span>
-            <span
-              className="shrink-0 self-center font-mono text-muted group-hover:text-accent group-hover:translate-x-1 transition-all"
-              aria-hidden
-            >
-              →
-            </span>
+            Get started
           </Link>
-        ))}
+        </div>
+        <p className="mt-3 text-xs text-muted">
+          Linux, x86_64 or aarch64, checksum verified.{' '}
+          <Link href="/docs/getting-started" className="text-ink underline underline-offset-4 hover:text-accent transition-colors">
+            Build from source
+          </Link>{' '}
+          on anything else.
+        </p>
+
       </section>
 
-      <footer className="w-full max-w-3xl border-t border-line py-10 text-center">
+      {/* The recording. `prefers-reduced-motion` gets a still frame instead,
+          and <source media> means only the matched file is ever fetched. */}
+      <section className="w-full max-w-6xl pt-12 pb-24 sm:pb-28">
+        <figure className="m-0">
+          <div className="uze-demo-frame border border-line" style={{ background: '#0a0c0d' }}>
+            <picture>
+              <source srcSet="/uze-demo-poster.png" media="(prefers-reduced-motion: reduce)" />
+              <img
+                src="/uze-demo.gif"
+                width={1268}
+                height={746}
+                alt="The uze terminal: a project space with its commit timeline, the changes overlay reviewing a diff, then the machine view listing the four detected coding agents and what each one receives natively."
+                className="block h-auto w-full"
+              />
+            </picture>
+          </div>
+          <figcaption className="mt-3 text-center font-mono text-xs text-muted">
+            Run <span className="text-ink">uze</span> with no arguments. Ctrl+O switches between the
+            workspace and the machine view.
+          </figcaption>
+        </figure>
+      </section>
+
+      {/* Who it delivers to. */}
+      <section className="w-full max-w-5xl border-t border-line py-20 sm:py-24">
+        <h2 className="text-center font-mono text-xs text-muted">Delivers natively to</h2>
+        <ul className="mt-10 grid grid-cols-2 gap-x-6 gap-y-10 sm:grid-cols-4">
+          {harnesses.map((harness) => (
+            <li key={harness.name} className="flex flex-col items-center gap-2.5 text-center">
+              <svg viewBox="0 0 24 24" className="size-7" aria-hidden>
+                {harness.icon.type === 'path' ? (
+                  <path d={harness.icon.d} fill="var(--color-ink)" />
+                ) : (
+                  <image href={harness.icon.href} width="24" height="24" />
+                )}
+              </svg>
+              <span className="font-mono text-sm font-semibold text-ink">{harness.name}</span>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      {/* What it actually does. */}
+      <section className="w-full max-w-5xl border-t border-line py-20 sm:py-24">
+        <ul className="grid gap-x-16 gap-y-14 sm:grid-cols-2">
+          {pillars.map((pillar) => (
+            <li key={pillar.title}>
+              <h3 className="font-mono text-lg font-semibold leading-snug text-ink">{pillar.title}</h3>
+              <p className="mt-2.5 text-sm leading-relaxed text-muted">{pillar.body}</p>
+              <Link
+                href={pillar.href}
+                className="mt-3.5 inline-block border-b border-accent/50 pb-0.5 font-mono text-xs text-ink transition-colors hover:border-accent hover:text-accent"
+              >
+                {pillar.link}
+              </Link>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      {/* What each harness receives. Generated from the integration code
+          (web/lib/harness-matrix.json) — the same source the docs matrix is
+          built from, so the landing page cannot claim a route the code
+          stopped taking. */}
+      <section className="w-full max-w-5xl border-t border-line py-20 sm:py-24">
+        <h2 className="font-mono font-semibold text-ink">What each harness receives</h2>
+        <p className="mt-1.5 max-w-[62ch] text-sm leading-relaxed text-muted">
+          Every route below is derived from the integration that implements it. Where a harness
+          cannot preserve a capability&apos;s semantics, uze adapts it and says so.
+        </p>
+
+        <div className="mt-10 overflow-x-auto">
+          <table className="w-full min-w-[38rem] border-collapse text-left">
+            <thead>
+              <tr className="border-b border-line">
+                <th className="py-3 pe-4 font-mono text-xs font-normal text-muted">Harness</th>
+                {columns.map(([key, label]) => (
+                  <th key={key} className="px-3 py-3 font-mono text-xs font-normal text-muted">
+                    {label}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {matrix.harnesses.map((harness) => (
+                <tr key={harness.name} className="border-b border-line/70">
+                  <th scope="row" className="py-4 pe-4 font-normal">
+                    <span className="flex items-center gap-2.5">
+                      {harness.icon ? (
+                        <img src={harness.icon} alt="" className="size-4 shrink-0 rounded-[2px]" />
+                      ) : null}
+                      <span className="font-mono text-sm font-semibold text-ink">
+                        {harness.name}
+                      </span>
+                    </span>
+                  </th>
+                  {columns.map(([key]) => (
+                    <td key={key} className="px-3 py-4">
+                      <Route value={harness[key]} />
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <p className="mt-8 text-center text-sm text-muted">
+          {matrix.planned.join(', ')} are on the roadmap — cells appear when the integration lands.{' '}
+          <Link
+            href="/docs/harnesses"
+            className="text-ink underline underline-offset-4 hover:text-accent transition-colors"
+          >
+            The full matrix, per capability
+          </Link>
+          .
+        </p>
+      </section>
+
+      <section className="w-full max-w-5xl border-t border-line py-24 sm:py-28 text-center">
+        <h2 className="font-mono text-2xl font-bold tracking-tight text-ink">
+          Set it up once, on this machine.
+        </h2>
+        <p className="mx-auto mt-3 max-w-[52ch] text-sm leading-relaxed text-muted">
+          uze detects the coding agents you already have, provisions the ones you don&apos;t through
+          each vendor&apos;s own installer, and reports what it could not do rather than guessing.
+        </p>
+        <div className="mt-10 flex flex-wrap items-center justify-center gap-4 font-mono text-xs">
+          <Link
+            href="/docs/getting-started"
+            className="border border-ink bg-ink px-5 py-2.5 text-paper transition-opacity hover:opacity-85"
+          >
+            Get started
+          </Link>
+          <Link
+            href="/docs/creating-a-plugin"
+            className="border border-line px-5 py-2.5 text-ink transition-colors hover:bg-surface"
+          >
+            Write a plugin
+          </Link>
+          <Link
+            href="https://github.com/hiukky/uze"
+            className="inline-flex items-center gap-2 border border-line px-5 py-2.5 text-ink transition-colors hover:bg-surface"
+          >
+            <svg viewBox="0 0 16 16" className="size-3.5" fill="currentColor" aria-hidden="true">
+              <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" />
+            </svg>
+            Browse the source
+          </Link>
+        </div>
+      </section>
+
+      <footer className="w-full max-w-5xl border-t border-line py-14 text-center">
         <p className="inline-flex items-center gap-2 text-[11px] font-mono text-muted">
           <span className="size-1.5 bg-accent" aria-hidden />
           Built with 🖤 by{' '}
-          <a
-            href="https://hiukky.com"
-            className="text-ink hover:text-accent transition-colors"
-          >
+          <a href="https://hiukky.com" className="text-ink hover:text-accent transition-colors">
             Romullo (@hiukky)
           </a>
         </p>

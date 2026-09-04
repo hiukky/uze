@@ -50,6 +50,29 @@
   --color-accent: #8fd19e;
 }
 
+/*
+  The banner's height is not decoration: fumadocs feeds it into
+  `--fd-banner-height`, which becomes `--fd-docs-row-1` — the offset the docs
+  sidebar and the TOC are `position: sticky` against, and the amount their
+  `calc(100dvh - …)` height subtracts. A keyword there (`height="auto"`)
+  resolves both to `auto`, which makes sticky inert and scrolls the sidebar
+  away with the page. So it is a real length — and the banner's own copy is
+  kept to one line at every width, since a second line would be clipped by it.
+*/
+:root {
+  --uze-banner-height: 2.75rem;
+}
+
+/*
+  The banner is sticky, because the docs grid measures its sticky offsets from
+  the banner's height. fumadocs' home header is sticky at top-0 as well, and
+  wins on DOM order — so without this it parks on top of the banner and hides
+  it the moment you scroll. The docs header already offsets itself correctly.
+*/
+#nd-nav {
+  top: var(--fd-banner-height, 0px);
+}
+
 html {
   scrollbar-gutter: stable;
 }
@@ -57,6 +80,34 @@ html {
 html > body[data-scroll-locked] {
   margin-right: 0px !important;
   --removed-body-scroll-bar-size: 0px !important;
+}
+
+/*
+  The recording is the page's one loud element, so it gets the page's one
+  piece of depth: a soft accent bloom behind the frame, strong enough to lift
+  a dark still off a light ground and invisible once the ground is dark too.
+*/
+.uze-demo-frame {
+  position: relative;
+  box-shadow:
+    0 1px 2px rgba(10, 12, 13, 0.06),
+    0 24px 60px -30px rgba(10, 12, 13, 0.45);
+}
+.uze-demo-frame::before {
+  content: '';
+  position: absolute;
+  inset: -6% -3% 8%;
+  z-index: -1;
+  background: radial-gradient(60% 60% at 50% 40%, var(--color-accent), transparent 70%);
+  opacity: 0.14;
+  filter: blur(48px);
+  pointer-events: none;
+}
+.dark .uze-demo-frame {
+  box-shadow: none;
+}
+.dark .uze-demo-frame::before {
+  opacity: 0.1;
 }
 
 /* harness logos inlined by uze-harness-matrix in content/docs/harnesses.mdx */
@@ -71,54 +122,4 @@ html > body[data-scroll-locked] {
   height: 14px;
   border-radius: 2px;
   flex-shrink: 0;
-}
-
-/* signature diagram — one canonical source, drawn out to its native surfaces */
-.uze-diagram .uze-line {
-  stroke-dasharray: 1;
-  stroke-dashoffset: 1;
-  animation: uze-draw 700ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
-}
-.uze-diagram .uze-line:nth-of-type(1) {
-  animation-delay: 0ms;
-}
-.uze-diagram .uze-line:nth-of-type(2) {
-  animation-delay: 140ms;
-}
-.uze-diagram .uze-line:nth-of-type(3) {
-  animation-delay: 320ms;
-}
-.uze-diagram .uze-line:nth-of-type(4) {
-  animation-delay: 380ms;
-}
-.uze-diagram .uze-line:nth-of-type(5) {
-  animation-delay: 440ms;
-}
-.uze-diagram .uze-line:nth-of-type(6) {
-  animation-delay: 500ms;
-}
-.uze-diagram .uze-dot {
-  opacity: 0;
-  animation: uze-fade 300ms ease-out forwards;
-  animation-delay: 750ms;
-}
-@keyframes uze-draw {
-  to {
-    stroke-dashoffset: 0;
-  }
-}
-@keyframes uze-fade {
-  to {
-    opacity: 1;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .uze-diagram .uze-line {
-    animation: none;
-    stroke-dashoffset: 0;
-  }
-  .uze-diagram .uze-dot {
-    animation: none;
-    opacity: 1;
-  }
 }
