@@ -772,31 +772,21 @@ impl Server {
                     columns,
                     rows,
                 } => {
-                    // A root already open is that space, not a second one
-                    // (see `Session::open_space`) — the prompt asked to
-                    // open a directory, so landing on the space it already
-                    // has is the whole answer.
-                    let opened = {
+                    // Always a new space, even over a directory another
+                    // space already holds (see `Session::create_space`):
+                    // the prompt asked for a space, and one repository is
+                    // routinely worth two — one per branch, one per thing
+                    // being tried. `ensure_space` is the other question.
+                    let (space, pane) = {
                         let mut session = self.session.lock().expect("session poisoned");
-                        session.open_space(label, root, columns, rows)
+                        let pane = session.create_space(label, root, columns, rows);
+                        (session.workspace.selected_space, pane)
                     };
-                    let space = match opened {
-                        OpenedSpace::Existing(space) => {
-                            self.session
-                                .lock()
-                                .expect("session poisoned")
-                                .select_space(space);
-                            space
-                        }
-                        OpenedSpace::Created { space, pane } => {
-                            if self.spawn_pane(pane, None).is_err() {
-                                let _ = events.send(ClientEvent::Error {
-                                    message: "could not create terminal pane".into(),
-                                });
-                            }
-                            space
-                        }
-                    };
+                    if self.spawn_pane(pane, None).is_err() {
+                        let _ = events.send(ClientEvent::Error {
+                            message: "could not create terminal pane".into(),
+                        });
+                    }
                     self.update_selection(client, |selection| selection.space = Some(space));
                     self.broadcast_session();
                 }

@@ -298,12 +298,15 @@ impl Session {
         self.workspace.spaces.iter().find(|s| s.id == space)
     }
 
-    /// Opens the space rooted at `root`: the one already open for it when
-    /// there is one, a new one otherwise (labelled `label`, or after the
-    /// directory itself). A root *is* a space — answering "open this"
-    /// twice would leave two rows in the sidebar disagreeing about which
-    /// tabs one directory has — so both the attaching client and the
-    /// "+ new" prompt ask this rather than adding blind.
+    /// Goes to the space rooted at `root`: the one already open for it
+    /// when there is one, a new one otherwise (labelled `label`, or after
+    /// the directory itself).
+    ///
+    /// This is "take me to this directory" — what `uze` run inside a pane
+    /// asks — and landing on the space that already has it is the whole
+    /// answer. Asking for a *new* space over a directory is a different
+    /// question, and [`Session::create_space`] answers it by creating one
+    /// whatever is already open there.
     pub fn open_space(
         &mut self,
         label: Option<String>,
@@ -322,11 +325,49 @@ impl Session {
         }
     }
 
+    /// Opens a new space at `root`, whatever is already open there.
+    ///
+    /// Two spaces over one directory is a normal way to work — one per
+    /// branch, one per thing being tried — and the "+ new" prompt is an
+    /// explicit request for one, not a lookup. What the duplicate needs
+    /// is to be tellable apart, so a label already on screen is numbered
+    /// rather than repeated.
+    pub fn create_space(
+        &mut self,
+        label: Option<String>,
+        root: PathBuf,
+        columns: u16,
+        rows: u16,
+    ) -> PaneId {
+        let label = label.unwrap_or_else(|| self.unrepeated_label(&root));
+        self.add_space(label, root, columns, rows)
+    }
+
+    /// `space_label`'s answer for `root`, numbered from 2 while a space on
+    /// screen already carries it.
+    fn unrepeated_label(&self, root: &Path) -> String {
+        let base = space_label(root);
+        let taken = |name: &str| {
+            self.workspace
+                .spaces
+                .iter()
+                .any(|space| space.label == name)
+        };
+        if !taken(&base) {
+            return base;
+        }
+        (2..)
+            .map(|ordinal| format!("{base} {ordinal}"))
+            .find(|candidate| !taken(candidate))
+            .expect("an unused ordinal always exists")
+    }
+
     /// Creates a space rooted at `root` with one default tab (mirroring
     /// [`Session::new`]'s own bootstrap tab), selects it, and returns the
     /// new tab's pane so the caller can spawn it exactly like
-    /// [`Session::add_tab`]'s result. Prefer [`Session::open_space`],
-    /// which will not open a second space over one directory.
+    /// [`Session::add_tab`]'s result. [`Session::create_space`] is the
+    /// entry point that names it; [`Session::open_space`] the one that
+    /// first looks for a space already there.
     pub fn add_space(&mut self, label: String, root: PathBuf, columns: u16, rows: u16) -> PaneId {
         let space_id = SpaceId(self.next_space_id);
         let tab_id = TabId(self.next_tab_id);
@@ -743,6 +784,43 @@ mod tests {
         assert!(!session.rename_tab(TabId(99), "ghost".into()));
     }
 
+    /// A directory is not owned by the first space that opened it: asking
+    /// for a space over one already open creates one, and the repeated
+    /// name is numbered so the two rows are tellable apart.
+    #[test]
+    fn a_second_space_over_one_directory_opens_under_a_numbered_name() {
+        let mut session = Session::new(
+            WorkspaceId("workspace-a".into()),
+            PathBuf::from("/tmp/a"),
+            80,
+            24,
+        );
+
+        session.create_space(None, PathBuf::from("/tmp/frontend"), 80, 24);
+        assert_eq!(session.selected_space().label, "frontend");
+
+        let pane = session.create_space(None, PathBuf::from("/tmp/frontend"), 80, 24);
+        assert_eq!(session.workspace.spaces.len(), 3);
+        assert_eq!(session.selected_space().label, "frontend 2");
+        assert_eq!(
+            session.selected_space().root,
+            PathBuf::from("/tmp/frontend")
+        );
+        assert_eq!(session.selected_tab().focus.pane, pane);
+
+        session.create_space(None, PathBuf::from("/tmp/frontend"), 80, 24);
+        assert_eq!(session.selected_space().label, "frontend 3");
+
+        // A name the caller gives is its own business, repeated or not.
+        session.create_space(
+            Some("frontend".into()),
+            PathBuf::from("/tmp/frontend"),
+            80,
+            24,
+        );
+        assert_eq!(session.selected_space().label, "frontend");
+    }
+
     #[test]
     fn add_space_creates_a_selected_space_with_its_own_bootstrap_tab() {
         let mut session = Session::new(
@@ -758,11 +836,12 @@ mod tests {
         assert_eq!(session.selected_tab().focus.pane, pane);
     }
 
-    /// A root is a space: opening one twice lands on the space it already
-    /// has instead of stacking a second row over the same directory, and
-    /// the caller is told there is no pane to spawn.
+    /// "Take me to this directory" is answered by the space that has it,
+    /// not by a new one — this is the path `uze` run inside a pane takes,
+    /// where a second row over the same directory is never what was meant.
+    /// Asking for a space outright is `create_space`, below.
     #[test]
-    fn opening_a_root_twice_is_the_same_space() {
+    fn going_to_a_root_twice_lands_on_the_same_space() {
         let mut session = Session::new(
             WorkspaceId("workspace-a".into()),
             PathBuf::from("/tmp/a"),

@@ -1370,6 +1370,20 @@ mod workspace_tests {
         }
     }
 
+    /// A session whose one space is rooted at `root` — a real directory,
+    /// so the picker and the client compare the same canonical path.
+    fn session_rooted_at(root: &Path) -> WorkspaceModel {
+        WorkspaceModel {
+            session: Some(Session::new(
+                WorkspaceId("workspace".into()),
+                root.to_path_buf(),
+                80,
+                24,
+            )),
+            ..WorkspaceModel::default()
+        }
+    }
+
     /// A one-agent session in `/repo` whose checkout's history is
     /// `subjects`, newest first, every commit landed `3h` ago.
     fn session_with_timeline(subjects: &[&str]) -> WorkspaceModel {
@@ -3408,6 +3422,60 @@ mod workspace_tests {
         assert!(
             driven.attach.model.placement_pending,
             "the harness under the pointer answered, not the row beneath it"
+        );
+    }
+
+    /// A directory another space already holds is opened all the same:
+    /// one repository is routinely worth two spaces (one per branch, one
+    /// per thing being tried), and the prompt is an explicit request for
+    /// one — not a lookup of what is already open.
+    #[test]
+    fn a_directory_a_space_already_holds_is_opened_again() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-space-again"));
+        let root = uze_testkit::temp::TempDir::new("orchestrator-space-root");
+        std::fs::create_dir_all(root.join("inner")).unwrap();
+        let mut model = session_rooted_at(root.path());
+        // Deleting the trailing separator is how the directory being
+        // listed is picked (see `RootPicker`) — here, the space's own root.
+        let mut picker = RootPicker::opened_in(&root.path().display().to_string());
+        picker.backspace();
+        model.root_picker = Some(picker);
+        let mut driven = driven(model, &home);
+
+        driven.frame();
+        let row = driven.hit(|hit| matches!(hit, WorkspaceHit::PickSpaceRoot(_)));
+        driven.press(row.x, row.y);
+
+        let sent = driven.sent();
+        assert!(
+            sent.iter().any(|request| matches!(
+                request,
+                ClientRequest::CreateSpace { root: picked, .. } if picked == root.path()
+            )),
+            "the pick is asked for, not looked up: {sent:?}"
+        );
+    }
+
+    #[test]
+    fn a_directory_no_space_holds_is_opened_as_one() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-space-new"));
+        let root = uze_testkit::temp::TempDir::new("orchestrator-space-new-root");
+        std::fs::create_dir_all(root.join("inner")).unwrap();
+        let mut model = session_rooted_at(root.path());
+        model.root_picker = Some(RootPicker::opened_in(&root.path().display().to_string()));
+        let mut driven = driven(model, &home);
+
+        driven.frame();
+        let row = driven.hit(|hit| matches!(hit, WorkspaceHit::PickSpaceRoot(_)));
+        driven.press(row.x, row.y);
+
+        let sent = driven.sent();
+        assert!(
+            sent.iter().any(|request| matches!(
+                request,
+                ClientRequest::CreateSpace { root: picked, .. } if picked == &root.join("inner")
+            )),
+            "{sent:?}"
         );
     }
 

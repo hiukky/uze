@@ -244,15 +244,7 @@ impl Attach<'_> {
             KeyCode::Enter => {
                 if let Some(root) = self.model.root_picker.as_ref().and_then(RootPicker::chosen) {
                     self.model.root_picker = None;
-                    let _ = send_request(
-                        &mut self.stream,
-                        &ClientRequest::CreateSpace {
-                            label: None,
-                            root,
-                            columns,
-                            rows,
-                        },
-                    );
+                    self.open_space_at(root, columns, rows);
                 }
             }
             KeyCode::Esc => self.model.root_picker = None,
@@ -568,6 +560,25 @@ impl Attach<'_> {
         }
     }
 
+    /// Opens a space at `root` — the one thing both ways of picking a
+    /// directory (Enter on the prompt, a click on one of its rows) do.
+    ///
+    /// A directory another space already holds is opened all the same:
+    /// the server numbers the repeated name rather than refusing (see
+    /// `Session::create_space`), because one repository is routinely
+    /// worth two spaces and the prompt is an explicit request for one.
+    fn open_space_at(&mut self, root: PathBuf, columns: u16, rows: u16) {
+        let _ = send_request(
+            &mut self.stream,
+            &ClientRequest::CreateSpace {
+                label: None,
+                root,
+                columns,
+                rows,
+            },
+        );
+    }
+
     /// A left button going down.
     ///
     /// Guards first, in the same modal-precedence order the keyboard has:
@@ -597,15 +608,7 @@ impl Attach<'_> {
                             picker.chosen()
                         }) {
                             self.model.root_picker = None;
-                            let _ = send_request(
-                                &mut self.stream,
-                                &ClientRequest::CreateSpace {
-                                    label: None,
-                                    root,
-                                    columns,
-                                    rows,
-                                },
-                            );
+                            self.open_space_at(root, columns, rows);
                         }
                     }
                     // Click outside the picker's own rows discards it —
