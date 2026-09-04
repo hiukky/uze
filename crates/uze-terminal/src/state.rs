@@ -1049,7 +1049,6 @@ mod tests {
         assert_eq!(pane.cwd, PathBuf::from("/tmp/moved"));
     }
 
-    #[test]
     /// A seed names its agent by position because restoring mints fresh
     /// ids; what must survive a server restart is which tab belongs with
     /// which, not the numbers they happened to carry.
