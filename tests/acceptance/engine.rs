@@ -474,6 +474,68 @@ fn a_closed_agent_gives_its_slot_back_and_one_holding_work_keeps_it() {
     assert_ne!(fresh, kept, "a parked slot is never handed to a new agent");
 }
 
+/// The pass a workspace client actually runs: it names every path it has
+/// reason to doubt and gets back the repositories that changed, once
+/// each.
+///
+/// Naming several paths of one repository is the ordinary case — a
+/// vanished slot and the space's own root both point at it — and
+/// reconciling it twice would release against a store the first pass had
+/// already rewritten.
+#[test]
+fn one_reconciliation_pass_answers_a_repository_once_however_it_is_named() {
+    let mut engine = Engine::start("  completion: merge\n");
+    let project = engine.project().to_path_buf();
+
+    let (empty, slot) = engine.launch("true\n");
+    // A second agent that stays open: the pass must leave it alone.
+    let (live, occupied_slot) = engine.launch("true\n");
+    engine.close_tab_in(&slot);
+
+    // The checkout that just emptied, the repository root, and the slot's
+    // own parent: three names for one repository.
+    let look_in = vec![slot.clone(), project.clone(), project.join(".worktrees")];
+    let held = engine.occupied();
+    assert!(
+        held.iter().any(|cwd| cwd.starts_with(&occupied_slot)),
+        "the live agent's checkout is what `held` is for: {held:?}"
+    );
+    let reconciliation = engine
+        .app()
+        .workspace()
+        .reconcile_occupancy(&look_in, &held);
+
+    assert_eq!(
+        reconciliation.released.len(),
+        1,
+        "only the abandoned slot was released: {reconciliation:?}"
+    );
+    assert!(
+        occupied_slot.is_dir(),
+        "a checkout a pane still sits in survives the same pass"
+    );
+    assert_eq!(
+        engine.state_of(&live),
+        TaskStateView::Running,
+        "and its task is untouched"
+    );
+    assert_eq!(
+        reconciliation.changed.len(),
+        1,
+        "and its repository is reported once, not once per name: {reconciliation:?}"
+    );
+    assert_eq!(engine.state_of(&empty), TaskStateView::Closed);
+
+    let quiet = engine
+        .app()
+        .workspace()
+        .reconcile_occupancy(&look_in, &engine.occupied());
+    assert!(
+        quiet.changed.is_empty() && quiet.released.is_empty(),
+        "a second pass over the same state changes nothing: {quiet:?}"
+    );
+}
+
 /// The status column is read off the checkout, every time, for as long as
 /// somebody is in it: an agent almost never stops at its first delivery,
 /// and a row that froze on `delivered` was reporting the past over a slot

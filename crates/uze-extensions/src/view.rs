@@ -40,6 +40,13 @@ pub enum Role {
     /// An unselected navigable item.
     Inactive,
     Accent,
+    /// A level below [`Muted`](Self::Muted): supporting detail *beside*
+    /// supporting text, where both are on screen at once and the reader
+    /// has to be able to tell which is which.
+    Dim,
+    /// The faintest legible level — a value nobody reads unless they went
+    /// looking for it, such as an age column beside a subject.
+    Faint,
     /// The badge hue — distinct from every state colour, so a mark that
     /// classifies rather than warns cannot be misread as one.
     Info,
@@ -161,14 +168,59 @@ pub enum LineTone {
     Removed,
 }
 
+/// A collapsible section an extension contributes to one of the host's
+/// own columns — the sidebar, today.
+///
+/// The second shape this module describes, after [`View`], and it exists
+/// for the same reason that one does. The host used to draw this from the
+/// extension's raw data, which meant the palette, the eliding and the hit
+/// rectangles were all decided on the host's side of a boundary whose
+/// entire point is that they are not — a section was half an extension.
+///
+/// Advisory throughout: an extension says what the section *is*, never
+/// how tall it may be, how many rows fit, or where it sits in the column.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Section {
+    pub title: String,
+    /// Right-aligned beside the title — the branch, a count.
+    pub caption: Span,
+    /// Folded shut. The host draws the marker and owns the gesture that
+    /// changes this; the extension only reports what it was told.
+    pub collapsed: bool,
+    /// Whether the host should offer the divider that resizes this
+    /// section. A section with nothing to reveal has nothing to drag.
+    pub resizable: bool,
+    /// First row to show. The host clamps it to what actually fits, the
+    /// same way it clamps [`Content::Lines::scroll`].
+    pub scroll: usize,
+    pub rows: Vec<SectionRow>,
+}
+
+/// One row of a [`Section`]: a mark, a name, and a value at the far edge.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SectionRow {
+    /// One glyph before the name, in its own role — the row's standing.
+    pub marker: Span,
+    pub name: Span,
+    /// Right-aligned. Gives way last: the host elides the name to make
+    /// room for it, because a row that only half-says *what* still says
+    /// what, and the column that says *when* has to stay a column.
+    pub trailing: Span,
+}
+
 /// Something the viewer did, in the view's own terms. The host produces
 /// these from what it drew, so an extension never sees a coordinate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ViewHit {
-    /// The `id` of a [`NavigatorRow::Item`].
+    /// The `id` of a [`NavigatorRow::Item`], or the index of a
+    /// [`SectionRow`].
     SelectItem(usize),
     /// The divider between navigator and content, dragged.
     ResizeNavigator,
+    /// A [`Section`]'s header, which folds it.
+    ToggleSection,
+    /// A [`Section`]'s divider, dragged to change how much of it shows.
+    ResizeSection,
     Close,
 }
 

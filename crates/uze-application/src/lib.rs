@@ -6,7 +6,8 @@ pub mod bootstrap;
 pub use application::UzeApplication;
 pub use application::services::{
     AgentIdentity, AgentNotice, AgentPlacement, DeliveryOutcome, DeliveryPolicyView,
-    DeliveryReport, Evaluation, Isolation, ReleasedTask, TaskStateView, TaskView, UpstreamSync,
+    DeliveryReport, Evaluation, Isolation, Reconciliation, ReleasedTask, TaskStateView, TaskView,
+    UpstreamSync,
 };
 
 /// Types the read models above are made of. Presentation consumes these
@@ -37,6 +38,30 @@ pub use uze_core::{
     workspace::workspace_root_or_self,
     worktree::{IsolatedCheckout, isolated_checkout},
 };
+
+/// The repository a directory's tasks hang off, resolved lexically.
+///
+/// Every slot of a repository answers with that repository's primary
+/// checkout, so two agents of one project are one answer rather than two;
+/// anything else answers itself. Lexical on purpose — this is the key a
+/// caller reserves *before* paying for the real read, and the real read is
+/// what asking Git would be. Coarse (two subdirectories of one primary
+/// answer separately), never wrong.
+pub fn slot_key(cwd: &std::path::Path) -> std::path::PathBuf {
+    isolated_checkout(cwd)
+        .map(|checkout| checkout.primary.to_path_buf())
+        .unwrap_or_else(|| cwd.to_path_buf())
+}
+
+/// Whether a directory is one of the isolated checkouts UZE places agents
+/// in, rather than the operator's own tree.
+///
+/// The distinction the workspace draws an agent's caption by: work in a
+/// slot is contained, work outside one is on the operator's own branch and
+/// is the thing they have to know about.
+pub fn is_isolated_checkout(cwd: &std::path::Path) -> bool {
+    isolated_checkout(cwd).is_some()
+}
 
 /// The root of the space a directory belongs to.
 ///

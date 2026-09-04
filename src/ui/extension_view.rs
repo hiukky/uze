@@ -19,8 +19,8 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap},
 };
 use uze_extensions::view::{
-    Content, ContentLine, LineTone, Navigator, NavigatorRow, Role, ScrollTarget, Size, Span, View,
-    ViewHit,
+    Content, ContentLine, LineTone, Navigator, NavigatorRow, Role, ScrollTarget, Section, Size,
+    Span, View, ViewHit,
 };
 
 use crate::ui::{
@@ -53,6 +53,8 @@ fn color(role: Role) -> Color {
         Role::Bright => TEXT_BRIGHT,
         Role::Inactive => NAV_INACTIVE,
         Role::Accent => ACCENT,
+        Role::Dim => TEXT_DIM,
+        Role::Faint => TEXT_FAINT,
         Role::Info => BLUE,
         Role::Success => SUCCESS,
         Role::Warning => WARNING,
@@ -388,6 +390,104 @@ fn fill_row_bg(spans: &mut Vec<TextSpan<'static>>, width: u16, background: Color
         " ".repeat((width as usize).saturating_sub(used)),
         Style::default().bg(background),
     ));
+}
+
+/// Draws one extension [`Section`] into the rows it is given, and reports
+/// what a click on each row would mean.
+///
+/// The counterpart to [`render`] for a section rather than a full frame,
+/// and the reason it is here rather than in either sidebar: an extension
+/// section is an extension surface, and both of them resolve colour,
+/// eliding and hit rectangles in this one module. `dragging` is the host's
+/// own state — whether the divider under the header is being pulled right
+/// now — because the gesture belongs to the host, not to whoever the
+/// section came from.
+pub(crate) fn render_section(
+    frame: &mut ratatui::Frame<'_>,
+    section: &Section,
+    rows: &mut crate::ui::Rows,
+    dragging: bool,
+    hits: &mut Vec<(Rect, ViewHit)>,
+) {
+    let Some(header_rect) = rows.next(1) else {
+        return;
+    };
+    let fold = if section.collapsed { "▸" } else { "▾" };
+    // Bold on a filled row: the one section header in a column of tree
+    // rows, so it reads as a heading rather than as one more item.
+    let mut spans = vec![
+        TextSpan::styled(format!("{fold} "), Style::default().fg(TEXT_SECONDARY)),
+        TextSpan::styled(
+            section.title.clone(),
+            Style::default()
+                .fg(TEXT_SECONDARY)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ];
+    crate::ui::push_trailing(
+        &mut spans,
+        header_rect.width,
+        section.caption.text.clone(),
+        color(section.caption.role),
+    );
+    crate::ui::fill_row_bg(&mut spans, header_rect.width, SURFACE_OVERLAY);
+    frame.render_widget(Paragraph::new(Line::from(spans)), header_rect);
+    hits.push((header_rect, ViewHit::ToggleSection));
+    if section.collapsed {
+        return;
+    }
+    // The divider between the header and its rows doubles as the drag
+    // handle, the way the sidebar's own border does — lit in the accent
+    // while it is being dragged, same as that border.
+    if section.resizable
+        && let Some(handle_rect) = rows.next(1)
+    {
+        let hue = if dragging { ACCENT } else { BORDER_FAINT };
+        frame.render_widget(
+            Paragraph::new(TextSpan::styled(
+                "─".repeat(handle_rect.width as usize),
+                Style::default().fg(hue),
+            )),
+            handle_rect,
+        );
+        hits.push((handle_rect, ViewHit::ResizeSection));
+    }
+    // Scrolled by whole rows, never past the page that ends on the last
+    // one — so the section is always full when its content is.
+    let visible = usize::from(rows.remaining());
+    let first = section
+        .scroll
+        .min(section.rows.len().saturating_sub(visible));
+    for (index, row) in section.rows.iter().enumerate().skip(first) {
+        let Some(rect) = rows.next(1) else {
+            break;
+        };
+        let marker_width = row.marker.text.chars().count() as u16 + 1;
+        let trailing_width = row.trailing.text.chars().count() as u16;
+        // The name gives way before the trailing value, and one column is
+        // reserved for the gap `push_trailing` always leaves between them.
+        let name_width = rect
+            .width
+            .saturating_sub(marker_width + 1 + trailing_width + crate::ui::TRAILING_PAD);
+        let mut spans = vec![
+            TextSpan::styled(
+                format!("{} ", row.marker.text),
+                Style::default().fg(color(row.marker.role)),
+            ),
+            TextSpan::styled(
+                crate::ui::elide_tail(&row.name.text, name_width as usize),
+                Style::default().fg(color(row.name.role)),
+            ),
+        ];
+        crate::ui::push_trailing(
+            &mut spans,
+            rect.width,
+            row.trailing.text.clone(),
+            color(row.trailing.role),
+        );
+        frame.render_widget(Paragraph::new(Line::from(spans)), rect);
+        hits.push((rect, ViewHit::SelectItem(index)));
+    }
 }
 
 #[cfg(test)]

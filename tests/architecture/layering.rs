@@ -150,6 +150,24 @@ const RULES: &[Rule] = &[
         budget: &[],
     },
     Rule {
+        name: "drawing the workspace reaches nothing",
+        scope: "src/ui/orchestrator",
+        forbidden: "WorkspaceHost",
+        reason: "the render and input halves of the workspace client run on the \
+                 thread that owns the frame. Holding the extension host there is \
+                 what let a `git status` — several processes, unbounded on a large \
+                 repository — run inside the `dirty` branch immediately before \
+                 `terminal.draw`, which is a stalled UI by construction rather than \
+                 by accident.",
+        remedy: "read on a thread and answer through a channel, the way \
+                 `spawn_git_read`/`spawn_task_evaluation` already do, and give the \
+                 renderer the resolved data. If a view needs something a host \
+                 resolves, resolve it where the read happens and store it — \
+                 `GitView::display_root` is the worked example.",
+        sanctioned: &[],
+        budget: &[],
+    },
+    Rule {
         name: "an extension never names the domain crate",
         scope: "crates/uze-extensions/src",
         forbidden: "uze_core",
@@ -162,6 +180,60 @@ const RULES: &[Rule] = &[
         budget: &[],
     },
 ];
+
+/// Every reach for the extension host in the workspace client sits inside
+/// a `thread::spawn`.
+///
+/// The rule above keeps the host out of the render and input halves
+/// entirely. This one covers the file those halves are driven from, where
+/// the host legitimately appears — but only ever as the thing a
+/// background read hands to the extension. A `git status` on an ordinary
+/// repository outlasts several frames, so where it runs is not a style
+/// question: it is the difference between a client that keeps drawing and
+/// one that stops.
+///
+/// Structural rather than exact: the check is that no mention of the host
+/// is reachable without passing a `thread::spawn` first, which is what a
+/// reviewer would look for.
+#[test]
+fn the_workspace_client_reaches_for_git_only_from_a_thread() {
+    let path = repository_root().join("src/ui/orchestrator.rs");
+    let source = fs::read_to_string(&path).expect("the workspace client");
+    let source = strip_test_modules(&source);
+
+    let mut depth: i32 = 0;
+    let mut spawn_depth: Option<i32> = None;
+    let mut escaped = Vec::new();
+    for (number, line) in source.lines().enumerate() {
+        let code = line.trim_start();
+        let is_comment = code.starts_with("//");
+        if !is_comment && code.contains("thread::spawn") && spawn_depth.is_none() {
+            spawn_depth = Some(depth);
+        }
+        if !is_comment
+            && line.contains("WorkspaceHost")
+            && !line.contains("use crate::ui::extension_host")
+            && spawn_depth.is_none()
+        {
+            escaped.push(format!("  src/ui/orchestrator.rs:{}: {}", number + 1, code));
+        }
+        depth += (line.matches('{').count() as i32) - (line.matches('}').count() as i32);
+        if let Some(opened) = spawn_depth
+            && depth <= opened
+        {
+            spawn_depth = None;
+        }
+    }
+
+    assert!(
+        escaped.is_empty(),
+        "\n\nthe extension host is reached outside a background thread:\n\n{}\n\n\
+         Every Git read this client makes belongs on a thread of its own, answered \
+         through a channel — see `spawn_git_read` and `WorkspaceModel::absorb_git_read`. \
+         Reading inline is what made a keystroke wait on `git status`.\n",
+        escaped.join("\n")
+    );
+}
 
 #[test]
 fn architecture_rules_hold() {

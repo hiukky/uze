@@ -10,11 +10,12 @@ mod workspace_tests {
     use super::WorkspaceHit;
     use super::{
         AGENT_BUSY_REPAINTS, AGENT_ECHO_GRACE, AGENT_PASTE_GRACE, AgentIdentity, AgentTabStatus,
-        CommitDetailPopup, DraggingTab, GitBadge, PendingDrop, PreservedOverlay, RootPicker,
-        ScrollDirection, TabDragGroup, TaskResolution, TaskStateView, TaskView, UpstreamSync,
-        WorkspaceModel, adopt_agent_labels, agent_identity_for_tab, blank_pane,
-        can_close_tab_from_menu, encode_mouse, evaluation_key, forward_paste, forward_scroll,
-        next_agent_label, next_shell_label, pane_relative, pending_tab_drop,
+        CommitDetailPopup, CommitDetailResolution, DraggingTab, ExtensionHit, GitAnswer, GitBadge,
+        GitResolution, PendingDrop, PreservedOverlay, RootPicker, ScrollDirection, TabDragGroup,
+        TaskResolution, TaskStateView, TaskView, UpstreamSync, WorkspaceModel, adopt_agent_labels,
+        agent_identity_for_tab, blank_pane, can_close_tab_from_menu, encode_mouse, evaluation_key,
+        forward_paste, forward_scroll, next_agent_label, next_shell_label, open_commit_detail,
+        pane_relative, pending_tab_drop,
         render::{
             self, WorkspaceLayout, compute_layout, render_commit_detail, render_preserved,
             render_sidebar, render_status_catalog, render_tab_strip, task_mark, timeline_height,
@@ -28,6 +29,7 @@ mod workspace_tests {
     use ratatui::{Terminal, backend::TestBackend};
     use std::path::{Path, PathBuf};
     use std::time::{Duration, Instant};
+    use uze_extensions::view::ViewHit;
     use uze_terminal::{
         CellAttributes, ClientEvent, ClientRequest, Cursor, Focus, Layout, MouseMode, Pane,
         PaneDamage, PaneId, RenderCell, Session, SpaceId, Tab, TabId, TerminalColor, WorkspaceId,
@@ -1183,6 +1185,181 @@ mod workspace_tests {
         model
     }
 
+    /// Scheduling a read never answers one.
+    ///
+    /// The point of the whole background path: `git status` and `git log`
+    /// launch processes, and the loop that calls this is the loop that
+    /// draws. It reserves the checkout and returns; the badge is whatever
+    /// it already was.
+    #[test]
+    fn scheduling_a_git_read_reserves_the_checkout_and_answers_nothing() {
+        let mut model = agent_session_in("/repo");
+        let (sender, receiver) = std::sync::mpsc::channel();
+
+        model.schedule_git_read(&sender);
+
+        assert_eq!(
+            model.git_pending.as_deref(),
+            Some(Path::new("/repo")),
+            "the checkout is reserved while its read is out"
+        );
+        assert!(
+            model.git_badge.is_none(),
+            "nothing is read on the caller's thread"
+        );
+        assert!(
+            receiver.try_recv().is_err() || model.git_pending.is_some(),
+            "the answer arrives on the channel, not from the call"
+        );
+
+        // A reservation is what stops the next tick asking again.
+        model.schedule_git_read(&sender);
+        assert_eq!(model.git_pending.as_deref(), Some(Path::new("/repo")));
+    }
+
+    /// An answer about a checkout the selection has left is released and
+    /// dropped — not drawn over the checkout now in front of the viewer.
+    #[test]
+    fn a_git_answer_for_another_checkout_is_released_and_dropped() {
+        let mut model = agent_session_in("/repo");
+        model.git_pending = Some(PathBuf::from("/elsewhere"));
+
+        let changed = model.absorb_git_read(GitResolution {
+            cwd: PathBuf::from("/elsewhere"),
+            answer: GitAnswer::Full {
+                summary: None,
+                timeline: Some(uze_extensions::git::Timeline {
+                    branch: "other".to_owned(),
+                    commits: Vec::new(),
+                }),
+            },
+        });
+
+        assert!(!changed, "nothing on screen changed");
+        assert!(
+            model.git_pending.is_none(),
+            "the key is released whatever the answer, or the checkout is \
+             never asked about again"
+        );
+        assert!(
+            model.git_badge.is_none(),
+            "no badge for a checkout nobody is on"
+        );
+    }
+
+    /// The two cadences are independent: a summary-only answer keeps the
+    /// history the badge already had, rather than blanking the timeline
+    /// every 750ms between the 3s reads that fill it.
+    #[test]
+    fn a_summary_only_answer_keeps_the_history_already_read() {
+        let mut model = session_with_timeline(&["landed"]);
+        let read_at = model
+            .git_badge
+            .as_ref()
+            .map(|badge| badge.timeline_checked_at);
+
+        let changed = model.absorb_git_read(GitResolution {
+            cwd: PathBuf::from("/repo"),
+            answer: GitAnswer::Summary(Some(uze_extensions::git::GitChangeSummary {
+                additions: 2,
+                deletions: 1,
+            })),
+        });
+
+        assert!(changed);
+        let badge = model.git_badge.as_ref().expect("a badge");
+        assert_eq!(
+            badge
+                .timeline
+                .as_ref()
+                .map(|timeline| timeline.commits.len()),
+            Some(1),
+            "the timeline survives a summary-only read"
+        );
+        assert_eq!(
+            Some(badge.timeline_checked_at),
+            read_at,
+            "and keeps its own read time, so its own cadence still governs it"
+        );
+        assert!(badge.summary.is_some());
+    }
+
+    /// A commit account is asked for, not read inline, and an answer
+    /// nobody is waiting for never opens over them.
+    #[test]
+    fn a_commit_account_arrives_only_for_the_row_last_clicked() {
+        let mut model = session_with_timeline(&["newest", "older"]);
+        let (sender, _receiver) = std::sync::mpsc::channel();
+
+        open_commit_detail(&mut model, 1, Rect::new(0, 0, 10, 1), &sender);
+        assert!(
+            model.commit_detail.is_none(),
+            "the popup opens when the read lands, never from the click"
+        );
+        let asked = model.commit_detail_pending.clone().expect("a pending hash");
+
+        let stale = model.absorb_commit_detail(CommitDetailResolution {
+            hash: "deadbee".to_owned(),
+            anchor: Rect::new(0, 0, 10, 1),
+            target: None,
+            detail: None,
+        });
+        assert!(!stale, "an answer for another commit is dropped");
+        assert_eq!(model.commit_detail_pending.as_deref(), Some(asked.as_str()));
+
+        // Dismissing while the read is still out cancels it, so it cannot
+        // open behind the viewer's back when it lands.
+        model.dismiss_commit_detail();
+        assert!(model.commit_detail_pending.is_none());
+        assert!(!model.commit_detail_open());
+    }
+
+    /// Everything the timeline puts on screen is the extension's, and it
+    /// says so in the extension's own vocabulary.
+    ///
+    /// The section used to be drawn by hand from `git::Timeline` with
+    /// three `WorkspaceHit` variants of its own, which made it half an
+    /// extension: the palette, the eliding and the hit rectangles were
+    /// all decided on the host's side of a boundary whose whole point is
+    /// that they are not.
+    #[test]
+    fn the_timeline_speaks_only_the_extensions_vocabulary() {
+        let model = session_with_timeline(&["feat: newest", "chore: older"]);
+        let mut hits = Vec::new();
+        let rows = sidebar_rows(&model, &mut hits);
+
+        let header = timeline_hit(&hits).expect("the header folds the section");
+        let divider = resize_hit(&hits).expect("the divider resizes it");
+        assert_eq!(divider.y, header.y + 1, "the handle sits under the header");
+
+        let commits: Vec<usize> = hits
+            .iter()
+            .filter_map(|(_, hit)| match hit {
+                WorkspaceHit::Extension(ExtensionHit::GitTimeline(ViewHit::SelectItem(index))) => {
+                    Some(*index)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(commits, vec![0, 1], "one hit per commit, in order");
+
+        // Nothing in the section reaches the host's own hit vocabulary.
+        let timeline_top = header.y;
+        assert!(
+            hits.iter()
+                .filter(|(rect, _)| rect.y >= timeline_top)
+                .all(|(_, hit)| matches!(
+                    hit,
+                    WorkspaceHit::Extension(ExtensionHit::GitTimeline(_))
+                )),
+            "a host hit escaped into the extension's section: {hits:?}"
+        );
+        assert!(
+            rows.iter().any(|row| row.contains("feat: newest")),
+            "and the rows are actually drawn: {rows:?}"
+        );
+    }
+
     /// A sidebar row without its right-hand divider and the padding
     /// before it.
     fn inside(row: &str) -> &str {
@@ -1191,13 +1368,17 @@ mod workspace_tests {
 
     fn timeline_hit(hits: &[(Rect, WorkspaceHit)]) -> Option<Rect> {
         hits.iter()
-            .find(|(_, hit)| *hit == WorkspaceHit::ToggleTimeline)
+            .find(|(_, hit)| {
+                *hit == WorkspaceHit::Extension(ExtensionHit::GitTimeline(ViewHit::ToggleSection))
+            })
             .map(|(rect, _)| *rect)
     }
 
     fn resize_hit(hits: &[(Rect, WorkspaceHit)]) -> Option<Rect> {
         hits.iter()
-            .find(|(_, hit)| *hit == WorkspaceHit::ResizeTimeline)
+            .find(|(_, hit)| {
+                *hit == WorkspaceHit::Extension(ExtensionHit::GitTimeline(ViewHit::ResizeSection))
+            })
             .map(|(rect, _)| *rect)
     }
 
@@ -1258,7 +1439,9 @@ mod workspace_tests {
         let targets: Vec<usize> = hits
             .iter()
             .filter_map(|(_, hit)| match hit {
-                WorkspaceHit::TimelineCommit(index) => Some(*index),
+                WorkspaceHit::Extension(ExtensionHit::GitTimeline(ViewHit::SelectItem(index))) => {
+                    Some(*index)
+                }
                 _ => None,
             })
             .collect();

@@ -31,7 +31,8 @@ cargo test --test package_containment                       # one top-level inte
 
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings                  # CI uses --all-targets; plain `clippy -- -D warnings` is the Makefile default
-cargo llvm-cov --workspace --summary-only --fail-under-lines 64 --fail-under-regions 65 --html
+cargo llvm-cov --workspace --summary-only --fail-under-lines 68 --fail-under-regions 69 \
+  -- --skip real_codex_dogfood --skip foreground_status_reports --skip acquisition
 ```
 
 `Makefile` wraps all of the above (`make build`, `make test`, `make check`,
@@ -121,9 +122,12 @@ need to).
   pseudoterminals and a versioned client protocol, so a pane survives a
   client leaving. Depends on nothing else in the workspace.
 - `crates/uze-extensions` — built-in TUI extensions. An extension answers
-  with a `view::View` (what it has) and never draws, computes geometry, or
-  names a colour; `src/ui/extension_view.rs` renders it. Presentation, one
-  module per extension, one `ExtensionRegistry::builtin` entry.
+  with a `view::View` (a full-frame surface) or a `view::Section` (a
+  collapsible block of one of the host's own columns) and never draws,
+  computes geometry, or names a colour; `src/ui/extension_view.rs` renders
+  both. Presentation, one module per extension, one
+  `ExtensionRegistry::builtin` entry, one `ExtensionHit` variant per
+  surface it draws.
 - `crates/uze-integrations` — one module per harness
   (`claude`, `codex`, `opencode`, `antigravity`)
   implementing the shared `IntegrationPort` from `uze-core`, plus `shared/`
@@ -199,14 +203,27 @@ giving them crates of their own — a decision about what the `uze` binary
 is, not a tidy-up.
 
 **An extension never draws, and reaches nothing it was not handed.** It
-returns a `view::View` — the host owns rendering, geometry, hit-testing and
-the palette — and every other capability (running Git, reading a file,
-resolving `$HOME`) arrives through `uze_extensions::Host`, implemented in
+returns a `view::View` or a `view::Section` — the host owns rendering,
+geometry, hit-testing and the palette — and every other capability
+(running Git, reading a file, resolving `$HOME`) arrives through
+`uze_extensions::Host`, implemented in
 `src/ui/extension_host.rs`. `uze-extensions` depends on no UZE crate at
 all, and names no process, filesystem or environment API; the architecture
 suite fails on each. An extension is code UZE runs in its own
 process, which is a different trust class from plugin bytes a harness
 reads; see ADR-041 in `docs/adr/`.
+
+**Nothing the workspace client draws waits on a repository.** Every Git
+read it makes — the badge, the sidebar timeline, a commit's account, the
+changes overlay and its per-file diff — runs on a thread and answers
+through a channel, and so do the two other unbounded operations: placing a
+new agent (`git worktree add` plus the project's `setup`) and slot
+reconciliation. Two tests hold it: `src/ui/orchestrator/` (the render and
+input halves) may not name `WorkspaceHost` at all, and every mention of it
+in `src/ui/orchestrator.rs` must sit inside a `thread::spawn`. Every answer
+carries the question it was asked, so one that arrives after the viewer
+moved on is dropped rather than drawn. Adding a read means a
+`spawn_*`/`absorb_*` pair beside the existing ones, never an inline call.
 
 **Speak to Git through `uze-git`.** Never spawn `git` directly: two callers
 with two exit-code conventions is what this replaced, and a repository

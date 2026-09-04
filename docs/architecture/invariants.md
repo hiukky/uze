@@ -346,6 +346,72 @@ another's entries, the file and its directory are `0600`/`0700`, and
 
 ---
 
+## The workspace client (ADR-038 companion)
+
+### Nothing the workspace client draws waits on a repository
+
+Every Git read the workspace makes — the tab strip's badge, the sidebar's
+commit timeline, a commit's account, the changes overlay and its per-file
+diff — runs on a thread of its own and answers through a channel. So does
+placing a new agent, which is `git worktree add` plus the project's link
+materialization and its `setup` command, and so is slot reconciliation,
+which rewrites the task store and collects garbage.
+
+The client used to read Git inline: `refresh_git_badge` ran inside the
+`dirty` branch immediately before `terminal.draw`, and selecting a file in
+the overlay loaded and highlighted its diff from the key handler. On an
+ordinary repository `git status --untracked-files=all` outlasts several
+frames, which made that a stalled UI by construction rather than by
+accident.
+
+Two rules hold it: the render and input halves of the client may not name
+the extension host at all, and in the file they are driven from every
+mention of it is inside a `thread::spawn`.
+
+> `tests/architecture/layering.rs::architecture_rules_hold` ("drawing the workspace reaches nothing")
+> `tests/architecture/layering.rs::the_workspace_client_reaches_for_git_only_from_a_thread`
+> `src/ui/orchestrator.rs::workspace_tests::scheduling_a_git_read_reserves_the_checkout_and_answers_nothing`
+> `crates/uze-extensions/src/git.rs::view_tests::selecting_a_file_asks_for_its_diff_rather_than_reading_it`
+
+### An answer that arrives late is dropped, never drawn
+
+Every background read is tagged with the question it answers — the
+checkout, the commit hash, the placement the viewer was at. A read whose
+question the viewer has since moved past releases its key and is
+discarded; it is not wrong, it is no longer what is being asked. This is
+what makes an unbounded read safe to start from a keystroke.
+
+> `src/ui/orchestrator.rs::workspace_tests::a_git_answer_for_another_checkout_is_released_and_dropped`
+> `src/ui/orchestrator.rs::workspace_tests::a_commit_account_arrives_only_for_the_row_last_clicked`
+
+### An extension describes every surface it has, including a sidebar section
+
+`view::View` was never the whole contract: the commit timeline was drawn
+by hand from the extension's raw data, which put the palette, the eliding
+and the hit rectangles on the host's side of a boundary whose whole point
+is that they are not there. A section is now `view::Section`, drawn by
+`extension_view::render_section` like any other extension surface, and its
+hits come back as `ExtensionHit` — one variant per surface, so
+"row 3 was clicked" cannot be confused between a file list and a list of
+commits.
+
+> `src/ui/orchestrator.rs::workspace_tests::the_timeline_speaks_only_the_extensions_vocabulary`
+> `crates/uze-extensions/src/git.rs::view_tests::the_timeline_section_names_meaning_rather_than_colour`
+
+### Slot lifecycle is the application's, not the client's
+
+Which pane sits in which checkout is a client fact. What that *means* for
+a task — that several paths of one repository reconcile once, that a
+release precedes the collection acting on it, that only removals which
+cannot lose work are taken, and that a directory a pane is still in is
+never collected or reused whatever its record says — is domain, and a
+caller getting the order wrong hands one agent's slot to another.
+
+> `tests/acceptance/engine.rs::one_reconciliation_pass_answers_a_repository_once_however_it_is_named`
+> `crates/uze-application/src/application/services/tasks.rs::placement_tests::a_delivered_tasks_slot_stays_its_agents_while_a_pane_sits_in_it`
+
+---
+
 ## Official marketplace (M3, ADR-032)
 
 ### The repository is the official marketplace

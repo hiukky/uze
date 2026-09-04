@@ -116,8 +116,10 @@ const AGENT_REDRAW_GRACE: Duration = Duration::from_millis(1000);
 
 mod input;
 mod render;
+mod session;
 use input::*;
 use render::*;
+use session::*;
 
 pub(crate) enum WorkspaceExit {
     Management,
@@ -224,19 +226,15 @@ struct PreservedOverlay {
     confirm_discard: bool,
 }
 
-/// What an evaluation of `cwd` is reserved under, so two panes of one
-/// repository do not both pay for the same answer.
+/// What an evaluation of `cwd` is reserved under.
 ///
-/// Lexical on purpose: this runs on the UI thread, and the repository a
-/// path belongs to is only knowable for certain by asking Git — which is
-/// the work being deferred. Every slot of a repository resolves to that
-/// repository, which is the case the sidebar is full of; a directory that
-/// is not a slot answers itself, so two subdirectories of one primary pay
-/// twice. Coarse, never wrong.
+/// The repository a slot hangs off — [`uze_application::slot_key`], which
+/// is where the rule that every slot of a repository is one answer lives.
+/// Kept as a name here because it reads as the *key* at every call site,
+/// and a reader following one should land on the rule rather than on a
+/// path helper.
 fn evaluation_key(cwd: &Path) -> PathBuf {
-    uze_application::isolated_checkout(cwd)
-        .map(|checkout| checkout.primary.to_path_buf())
-        .unwrap_or_else(|| cwd.to_path_buf())
+    uze_application::slot_key(cwd)
 }
 
 /// Re-reads the tasks of the repository `cwd` belongs to, off the UI
@@ -306,6 +304,198 @@ fn describe_delivery(report: &DeliveryReport) -> String {
         DeliveryOutcome::Refused(reason) => format!("not delivered — {reason}"),
         DeliveryOutcome::ReturnedToAgent(_) => "returned to its agent to resolve".to_owned(),
     }
+}
+
+/// What one background Git read was asked to produce, and produced.
+///
+/// The working tree and the history behind it move at different speeds
+/// (see [`GIT_BADGE_REFRESH`]/[`TIMELINE_REFRESH`]), so a read that only
+/// owes a summary says so in its answer rather than handing back a
+/// `None` the receiver would have to tell apart from "there is no
+/// history".
+enum GitAnswer {
+    Summary(Option<git::GitChangeSummary>),
+    Full {
+        summary: Option<git::GitChangeSummary>,
+        timeline: Option<git::Timeline>,
+    },
+}
+
+/// A finished Git read, tagged with the checkout it answers about: the
+/// selection can move while a read is in flight, and an answer about a
+/// checkout the workspace has since left must never be drawn as the
+/// current one.
+struct GitResolution {
+    cwd: PathBuf,
+    answer: GitAnswer,
+}
+
+/// Reads the badge — and, when `history` is set, the timeline behind it —
+/// off the UI thread.
+///
+/// Every one of these launches `git` several times (`rev-parse`,
+/// `status`, `log`, `rev-list`), which is why it cannot run where a frame
+/// is drawn: on a large repository `status --untracked-files=all` alone
+/// outlasts several frames, and it used to run inside the `dirty` branch
+/// immediately before `terminal.draw`.
+fn spawn_git_read(
+    cwd: PathBuf,
+    target: Option<String>,
+    history: bool,
+    sender: mpsc::Sender<GitResolution>,
+) {
+    thread::spawn(move || {
+        let summary = git::change_summary(&WorkspaceHost, &cwd);
+        let answer = if history {
+            GitAnswer::Full {
+                summary,
+                timeline: git::timeline(&WorkspaceHost, &cwd, TIMELINE_COMMITS, target.as_deref()),
+            }
+        } else {
+            GitAnswer::Summary(summary)
+        };
+        let _ = sender.send(GitResolution { cwd, answer });
+    });
+}
+
+/// One commit's account, read off the UI thread.
+///
+/// Tagged with the commit asked about so an answer that arrives after the
+/// popup was dismissed — or after another row was clicked — is dropped
+/// instead of replacing what the viewer is now looking at.
+struct CommitDetailResolution {
+    hash: String,
+    anchor: Rect,
+    target: Option<String>,
+    detail: Option<git::CommitDetail>,
+}
+
+fn spawn_commit_detail(
+    cwd: PathBuf,
+    hash: String,
+    anchor: Rect,
+    target: Option<String>,
+    sender: mpsc::Sender<CommitDetailResolution>,
+) {
+    thread::spawn(move || {
+        let detail = git::commit_detail(&WorkspaceHost, &cwd, &hash);
+        let _ = sender.send(CommitDetailResolution {
+            hash,
+            anchor,
+            target,
+            detail,
+        });
+    });
+}
+
+/// A slot acquired for a new agent, and what its tab needs to open.
+///
+/// Placing an agent is the most expensive thing this client ever asks
+/// for: `git worktree add`, the project's link materialization, and — when
+/// the project declares one — its whole `setup` command. A keystroke is
+/// not what waits for that, so the tab is opened when this lands.
+///
+/// `occupied` travels with the request rather than being read where it
+/// lands: it is the client's own answer to which checkouts a live pane
+/// still sits in, and none of those may be handed to the new agent even
+/// when its task record reads as done (see `sync_slot_occupancy`).
+struct PlacementResolution {
+    label: String,
+    command: Vec<String>,
+    placement: uze_application::AgentPlacement,
+}
+
+fn spawn_agent_placement(
+    home: &UzeHome,
+    from: PathBuf,
+    occupied: Vec<PathBuf>,
+    label: String,
+    command: Vec<String>,
+    sender: mpsc::Sender<PlacementResolution>,
+) {
+    let home = home.clone();
+    thread::spawn(move || {
+        // A placement that cannot isolate still answers, with the
+        // directory it fell back to and the reason — the launch happens
+        // either way, and a request that returned in silence would leave
+        // the picker's key reserved and no tab ever opened.
+        // Answered on every path, including the one that could not even
+        // build an application: the request holds the only reservation
+        // there is, and a silent return would leave this client unable to
+        // create another agent for the rest of the session.
+        let placement = tui_application(home)
+            .map(|app| app.workspace().place_new_agent(&from, &occupied))
+            .unwrap_or_else(|error| uze_application::AgentPlacement {
+                cwd: from,
+                isolation: uze_application::Isolation::Unisolated {
+                    reason: error.to_string(),
+                },
+                warnings: vec![error.to_string()],
+            });
+        let _ = sender.send(PlacementResolution {
+            label,
+            command,
+            placement,
+        });
+    });
+}
+
+/// What one pass of slot reconciliation freed.
+struct OccupancyResolution {
+    reconciliation: uze_application::Reconciliation,
+}
+
+/// Reconciles slot occupancy off the UI thread.
+///
+/// Releasing a slot rewrites the task store and collecting one asks Git
+/// about every branch of the repository — the sweep a client runs before
+/// it can place its first agent is the most expensive thing an attach
+/// does, and it used to run inline in the loop.
+///
+/// `held` is every checkout a live pane still sits in, and it travels
+/// with the request because only this client knows it. Both halves need
+/// it: a task no pane is in front of ends, and a directory a pane *is* in
+/// is never collected, whatever its record says.
+fn spawn_occupancy_reconcile(
+    home: &UzeHome,
+    look_in: Vec<PathBuf>,
+    held: Vec<PathBuf>,
+    sender: mpsc::Sender<OccupancyResolution>,
+) {
+    let home = home.clone();
+    thread::spawn(move || {
+        let reconciliation = tui_application(home)
+            .map(|app| app.workspace().reconcile_occupancy(&look_in, &held))
+            .unwrap_or_default();
+        // Answered even when nothing changed: the pending flag is
+        // released here, and a pass that returns in silence would never
+        // let another one run.
+        let _ = sender.send(OccupancyResolution { reconciliation });
+    });
+}
+
+/// A re-read of the open changes overlay, tagged with the checkout and the
+/// placement it was read for — see [`git::ViewPlacement`] for why the
+/// placement travels with the answer.
+struct GitViewResolution {
+    root: PathBuf,
+    placement: git::ViewPlacement,
+    view: git::GitView,
+}
+
+fn spawn_git_view_reload(
+    root: PathBuf,
+    placement: git::ViewPlacement,
+    sender: mpsc::Sender<GitViewResolution>,
+) {
+    thread::spawn(move || {
+        let view = git::GitView::reload(&WorkspaceHost, root.clone(), placement.clone());
+        let _ = sender.send(GitViewResolution {
+            root,
+            placement,
+            view,
+        });
+    });
 }
 
 pub(crate) fn attach_workspace(
@@ -405,11 +595,21 @@ pub(crate) fn attach_workspace(
     let task_receiver = &memory.tasks.receiver;
     let delivery_sender = memory.deliveries.sender.clone();
     let delivery_receiver = &memory.deliveries.receiver;
+    let git_sender = memory.git.sender.clone();
+    let git_receiver = &memory.git.receiver;
+    let commit_detail_sender = memory.commit_details.sender.clone();
+    let commit_detail_receiver = &memory.commit_details.receiver;
+    let git_view_sender = memory.git_views.sender.clone();
+    let git_view_receiver = &memory.git_views.receiver;
+    let occupancy_sender = memory.occupancy.sender.clone();
+    let occupancy_receiver = &memory.occupancy.receiver;
+    let placement_sender = memory.placements.sender.clone();
+    let placement_receiver = &memory.placements.receiver;
     let activity_spinner = ProgressBar::new_spinner();
     activity_spinner.set_draw_target(ProgressDrawTarget::hidden());
     activity_spinner
         .set_style(ProgressStyle::default_spinner().tick_strings(&AGENT_ACTIVITY_FRAMES));
-    let mut next_activity_tick = Instant::now();
+    let next_activity_tick = Instant::now();
     // The server's session/pane state is persistent — reattaching after a
     // Ctrl+O round trip to management finds the same shells exactly as they
     // were left. But the client's view of that session and its panes always
@@ -447,1347 +647,85 @@ pub(crate) fn attach_workspace(
             resize_pane(&mut stream, &mut model, pane, columns, rows);
         }
     }
+    // The loop's own state, gathered into one value so an event handler
+    // reaches for a field instead of closing over a dozen locals — see
+    // `session::Attach`.
+    let mut attach = Attach {
+        model,
+        stream,
+        home,
+        identities,
+        answers: AttachAnswers {
+            support: support_sender,
+            tasks: task_sender,
+            deliveries: delivery_sender,
+            git: git_sender,
+            commit_details: commit_detail_sender,
+            git_views: git_view_sender,
+            occupancy: occupancy_sender,
+            placements: placement_sender,
+        },
+        spinner: activity_spinner,
+        next_tick: next_activity_tick,
+    };
+    let inbox = AttachInbox {
+        events: &receiver,
+        support: support_receiver,
+        tasks: task_receiver,
+        deliveries: delivery_receiver,
+        git: git_receiver,
+        commit_details: commit_detail_receiver,
+        git_views: git_view_receiver,
+        occupancy: occupancy_receiver,
+        placements: placement_receiver,
+    };
     // Every way out of the loop — Ctrl+O, Ctrl+Q, an error — must hand the
     // model's memory back, so the loop runs inside one call whose result is
     // read only after that handover.
     let outcome: Result<WorkspaceExit> = (|| loop {
-        while let Ok(event) = receiver.try_recv() {
-            model.apply(event, &identities);
-        }
-        for request in adopt_agent_labels(&mut model, &identities) {
-            let _ = send_request(&mut stream, &request);
-        }
-        sync_slot_occupancy(&mut model, home, &task_sender);
-        while let Ok(resolution) = support_receiver.try_recv() {
-            if model.agent_support_pending.as_ref() == Some(&resolution.key) {
-                model.agent_support_pending = None;
-            }
-            model.agent_support = Some(resolution);
-            model.dirty = true;
-        }
-        while let Ok(resolution) = task_receiver.try_recv() {
-            model.task_eval_pending.remove(&resolution.key);
-            let Some(EvaluationAnswer {
-                primary,
-                branch,
-                target,
-                sync,
-                evaluation,
-            }) = resolution.answered
-            else {
-                continue;
-            };
-            match branch {
-                Some(branch) => model.branches.insert(resolution.key.clone(), branch),
-                None => model.branches.remove(&resolution.key),
-            };
-            match target {
-                Some(target) => model.targets.insert(resolution.key.clone(), target),
-                None => model.targets.remove(&resolution.key),
-            };
-            match sync {
-                Some(sync) => model.upstream_syncs.insert(resolution.key, sync),
-                None => model.upstream_syncs.remove(&resolution.key),
-            };
-            model.tasks.insert(primary, evaluation.tasks);
-            // A conflict found while a clean task followed the target is
-            // the agent's to resolve: the message goes into its pane, as
-            // one submission.
-            for notice in evaluation.notices {
-                if let Some(pane) = model.pane_for_checkout(&notice.checkout) {
-                    let mut bytes = notice.message.into_bytes();
-                    bytes.push(b'\r');
-                    let _ = send_request(&mut stream, &ClientRequest::Input { pane, bytes });
-                }
-            }
-            model.dirty = true;
-        }
-        while let Ok(resolution) = delivery_receiver.try_recv() {
-            for report in &resolution.reports {
-                model.delivery_pending.remove(&report.task.id);
-                model.set_task_notice(
-                    &report.task.id,
-                    &report.task.label,
-                    describe_delivery(report),
-                );
-                if let DeliveryOutcome::ReturnedToAgent(notice) = &report.outcome
-                    && let Some(pane) = model.pane_for_checkout(&notice.checkout)
-                {
-                    let mut bytes = notice.message.clone().into_bytes();
-                    bytes.push(b'\r');
-                    let _ = send_request(&mut stream, &ClientRequest::Input { pane, bytes });
-                }
-            }
-            if resolution.reports.is_empty() {
-                model.set_notice("nothing ready to deliver".to_owned());
-            }
-            model.schedule_evaluation(home, resolution.cwd, &task_sender);
-            model.dirty = true;
-        }
-        // Readiness is a Git fact, read when a pane goes quiet and, less
-        // often, on a clock — never told by the agent.
-        let quiet_panes = std::mem::take(&mut model.recently_quiet);
-        let quiet: Vec<PathBuf> = quiet_panes
-            .into_iter()
-            .filter_map(|pane| model.pane_cwd(pane))
-            .collect();
-        for cwd in quiet {
-            model.schedule_evaluation(home, cwd, &task_sender);
-        }
-        if model
-            .last_task_refresh
-            .is_none_or(|last| last.elapsed() >= TASK_REFRESH)
-        {
-            model.last_task_refresh = Some(Instant::now());
-            if let Some(cwd) = selected_pane_cwd(&model) {
-                model.schedule_evaluation(home, cwd, &task_sender);
-            }
-        }
-        if model
-            .notice
-            .as_ref()
-            .is_some_and(|notice| notice.since.elapsed() >= NOTICE_TTL)
-        {
-            model.notice = None;
-            model.dirty = true;
-        }
-        // Contextual resolution: whatever the selection currently is, that
-        // is what must be resolved. Keyed on `(harness, cwd)`, so this
-        // fires exactly when the answer could have changed — a different
-        // agent tab selected, or the server's live probe reporting the
-        // pane moved — and never repeats for an answer already held.
-        if let Some(key) = selected_agent_context(&model, &identities)
-            && model.agent_support_pending.as_ref() != Some(&key)
-            && model
-                .agent_support
-                .as_ref()
-                .is_none_or(|resolution| resolution.key != key)
-        {
-            model.agent_support_pending = Some(key.clone());
-            spawn_support_refresh(home, key, support_sender.clone());
-        }
-        if let Some(view) = model.git_view.as_mut()
-            && view.refresh_due()
-        {
-            view.refresh(&WorkspaceHost);
-            model.dirty = true;
-        }
-        if model.expire_agent_activity(Instant::now()) {
-            model.dirty = true;
-        }
-        if workspace_has_active_agent_operation(&model, &identities) {
-            let now = Instant::now();
-            if now >= next_activity_tick {
-                activity_spinner.inc(1);
-                model.tick = activity_spinner.position() as usize;
-                next_activity_tick = now + AGENT_ACTIVITY_TICK;
-                model.dirty = true;
-            }
-        }
+        attach.pump(&inbox);
         let size = terminal.size()?;
         let layout = compute_layout(
             Rect::new(0, 0, size.width, size.height),
-            model.sidebar_width,
+            attach.model.sidebar_width,
         );
-        let (columns, rows) = (layout.pane.width, layout.pane.height);
-        if (columns, rows) != model.last_size {
-            model.last_size = (columns, rows);
-            model.dirty = true;
-            let focused = model.focused_pane();
-            resize_pane(&mut stream, &mut model, focused, columns, rows);
+        let viewport = Viewport {
+            size,
+            columns: layout.pane.width,
+            rows: layout.pane.height,
+            layout,
+        };
+        if (viewport.columns, viewport.rows) != attach.model.last_size {
+            attach.model.last_size = (viewport.columns, viewport.rows);
+            attach.model.dirty = true;
+            let focused = attach.model.focused_pane();
+            resize_pane(
+                &mut attach.stream,
+                &mut attach.model,
+                focused,
+                viewport.columns,
+                viewport.rows,
+            );
         }
-        if model.dirty {
-            model.refresh_git_badge();
+        if attach.model.dirty {
             let mut hits = Vec::new();
-            terminal.draw(|frame| render(frame, &model, &identities, &mut hits))?;
-            model.hits = hits;
-            model.dirty = false;
+            let model = &attach.model;
+            let identities = &attach.identities;
+            terminal.draw(|frame| render(frame, model, identities, &mut hits))?;
+            attach.model.hits = hits;
+            attach.model.dirty = false;
         }
-        if event::poll(POLL).map_err(io_error)? {
-            match event::read().map_err(io_error)? {
-                Event::Key(key) if model.root_picker.is_some() => {
-                    match key.code {
-                        KeyCode::Up => {
-                            if let Some(picker) = model.root_picker.as_mut() {
-                                picker.move_selection(-1);
-                            }
-                        }
-                        KeyCode::Down => {
-                            if let Some(picker) = model.root_picker.as_mut() {
-                                picker.move_selection(1);
-                            }
-                        }
-                        // Tab walks into the highlighted directory, so a
-                        // root several levels down is reached by narrowing
-                        // one level at a time instead of typing the path.
-                        KeyCode::Tab => {
-                            if let Some(picker) = model.root_picker.as_mut() {
-                                picker.descend();
-                            }
-                        }
-                        KeyCode::Enter => {
-                            if let Some(root) =
-                                model.root_picker.as_ref().and_then(RootPicker::chosen)
-                            {
-                                model.root_picker = None;
-                                let _ = send_request(
-                                    &mut stream,
-                                    &ClientRequest::CreateSpace {
-                                        label: None,
-                                        root,
-                                        columns,
-                                        rows,
-                                    },
-                                );
-                            }
-                        }
-                        KeyCode::Esc => model.root_picker = None,
-                        KeyCode::Backspace => {
-                            if let Some(picker) = model.root_picker.as_mut() {
-                                picker.backspace();
-                            }
-                        }
-                        KeyCode::Char(character) => {
-                            if let Some(picker) = model.root_picker.as_mut() {
-                                picker.typed(character);
-                            }
-                        }
-                        _ => {}
-                    }
-                    model.dirty = true;
-                }
-                Event::Paste(text) if model.root_picker.is_some() => {
-                    if let Some(picker) = model.root_picker.as_mut() {
-                        picker.pasted(text.trim_end_matches(['\r', '\n']));
-                    }
-                    model.dirty = true;
-                }
-                Event::Key(key) if model.renaming.is_some() => {
-                    match key.code {
-                        KeyCode::Enter => {
-                            if let Some((target, buffer)) = model.renaming.take() {
-                                let trimmed = buffer.trim().to_owned();
-                                if !trimmed.is_empty() {
-                                    let _ = send_request(
-                                        &mut stream,
-                                        &match target {
-                                            RenameTarget::Tab(tab) => ClientRequest::RenameTab {
-                                                tab,
-                                                label: trimmed,
-                                            },
-                                            RenameTarget::Space(space) => {
-                                                ClientRequest::RenameSpace {
-                                                    space,
-                                                    label: trimmed,
-                                                }
-                                            }
-                                        },
-                                    );
-                                }
-                            }
-                        }
-                        KeyCode::Esc => model.renaming = None,
-                        KeyCode::Backspace => {
-                            if let Some((_, buffer)) = model.renaming.as_mut() {
-                                buffer.pop();
-                            }
-                        }
-                        KeyCode::Char(c) => {
-                            if let Some((_, buffer)) = model.renaming.as_mut() {
-                                buffer.push(c);
-                            }
-                        }
-                        _ => {}
-                    }
-                    model.dirty = true;
-                }
-                Event::Paste(text) if model.renaming.is_some() => {
-                    if let Some((_, buffer)) = model.renaming.as_mut() {
-                        buffer.push_str(text.trim_end_matches(['\r', '\n']));
-                    }
-                    model.dirty = true;
-                }
-                Event::Key(key) if model.agent_picker.is_some() => {
-                    match key.code {
-                        KeyCode::Up => {
-                            if let Some(picker) = model.agent_picker.as_mut() {
-                                picker.selected = picker.selected.saturating_sub(1);
-                            }
-                        }
-                        KeyCode::Down => {
-                            if let Some(picker) = model.agent_picker.as_mut() {
-                                picker.selected = (picker.selected + 1)
-                                    .min(picker.options.len().saturating_sub(1));
-                            }
-                        }
-                        KeyCode::Enter => {
-                            if let Some(picker) = model.agent_picker.take()
-                                && let Some(option) = picker.options.get(picker.selected)
-                            {
-                                let label = next_agent_label(&model);
-                                let cwd = picker
-                                    .cwd
-                                    .clone()
-                                    .or_else(|| agent_launch_cwd(&model, home));
-                                if let Some(cwd) = cwd.clone() {
-                                    model.schedule_evaluation(home, cwd, &task_sender);
-                                }
-                                let _ = send_request(
-                                    &mut stream,
-                                    &ClientRequest::CreateTab {
-                                        cwd,
-                                        label,
-                                        agent: None,
-                                        columns,
-                                        rows,
-                                        command: Some(option.command.clone()),
-                                    },
-                                );
-                            }
-                        }
-                        // Esc, or anything else — the picker only reacts to
-                        // Up/Down/Enter, so any other key just dismisses it
-                        // rather than leaking through to the pane.
-                        _ => model.agent_picker = None,
-                    }
-                    model.dirty = true;
-                }
-                Event::Key(key) if model.preserved.is_some() => {
-                    let preserved = model.preserved_tasks();
-                    let overlay = model.preserved.as_mut().expect("guarded");
-                    match key.code {
-                        KeyCode::Esc => model.preserved = None,
-                        KeyCode::Up => {
-                            overlay.selected = overlay.selected.saturating_sub(1);
-                            overlay.confirm_discard = false;
-                        }
-                        KeyCode::Down => {
-                            overlay.selected =
-                                (overlay.selected + 1).min(preserved.len().saturating_sub(1));
-                            overlay.confirm_discard = false;
-                        }
-                        KeyCode::Char('i') => {
-                            if let Some((cwd, task)) = preserved.get(overlay.selected) {
-                                model.delivery_pending.insert(task.id.clone());
-                                spawn_delivery(
-                                    home,
-                                    cwd.clone(),
-                                    Some(task.id.clone()),
-                                    delivery_sender.clone(),
-                                );
-                            }
-                        }
-                        KeyCode::Char('f') => {
-                            if let Some((cwd, task)) = preserved.get(overlay.selected)
-                                && let Ok(app) = tui_application(home.clone())
-                            {
-                                let _ = app.workspace().finish_task(cwd, &task.id);
-                                model.schedule_evaluation(home, cwd.clone(), &task_sender);
-                            }
-                        }
-                        KeyCode::Char('r') => {
-                            if let Some((_, task)) = preserved.get(overlay.selected)
-                                && let Some(checkout) = task.checkout.clone()
-                            {
-                                model.preserved = None;
-                                model.agent_picker = Some(AgentPicker {
-                                    options: agent_options(home),
-                                    selected: 0,
-                                    anchor: Rect::default(),
-                                    cwd: Some(checkout),
-                                });
-                            }
-                        }
-                        // Discard is the one action that deletes work, so
-                        // it is the one that asks twice.
-                        KeyCode::Char('d') => overlay.confirm_discard = true,
-                        KeyCode::Char('y') if overlay.confirm_discard => {
-                            overlay.confirm_discard = false;
-                            if let Some((cwd, task)) = preserved.get(overlay.selected)
-                                && let Ok(app) = tui_application(home.clone())
-                            {
-                                match app.workspace().discard_task(cwd, &task.id) {
-                                    Ok(()) => {
-                                        model.set_notice(format!("{}: discarded", task.label));
-                                    }
-                                    Err(error) => model.set_notice(error.to_string()),
-                                }
-                                model.schedule_evaluation(home, cwd.clone(), &task_sender);
-                            }
-                        }
-                        _ => overlay.confirm_discard = false,
-                    }
-                    model.dirty = true;
-                }
-                Event::Key(_) if model.support_dropdown.is_some() => {
-                    model.support_dropdown = None;
-                    model.dirty = true;
-                }
-                Event::Key(_) if model.commit_detail.is_some() => {
-                    model.commit_detail = None;
-                    model.dirty = true;
-                }
-                Event::Key(_) if model.status_catalog.is_some() => {
-                    model.status_catalog = None;
-                    model.dirty = true;
-                }
-                Event::Key(key)
-                    if key.modifiers.contains(KeyModifiers::ALT)
-                        && key.code == KeyCode::Char('i') =>
-                {
-                    deliver_selected_tab(&mut model, home, &delivery_sender);
-                }
-                Event::Key(key)
-                    if key.modifiers.contains(KeyModifiers::ALT)
-                        && key.code == KeyCode::Char('I') =>
-                {
-                    if let Some(cwd) = selected_pane_cwd(&model) {
-                        spawn_delivery(home, cwd, None, delivery_sender.clone());
-                        model.set_notice("delivering every ready task…".to_owned());
-                    }
-                }
-                Event::Key(key)
-                    if key.modifiers.contains(KeyModifiers::ALT)
-                        && key.code == KeyCode::Char('p') =>
-                {
-                    model.preserved = match model.preserved {
-                        Some(_) => None,
-                        None => Some(PreservedOverlay {
-                            selected: 0,
-                            confirm_discard: false,
-                        }),
-                    };
-                    model.dirty = true;
-                }
-                Event::Key(key) if model.context_menu.is_some() => {
-                    // Up/Down move the selection; Enter confirms whichever
-                    // row is selected; anything else (Esc included)
-                    // dismisses without acting — same "only reacts to its
-                    // own actions" rule the agent picker above uses.
-                    match key.code {
-                        KeyCode::Up => {
-                            if let Some(menu) = model.context_menu.as_mut() {
-                                menu.selected = menu.selected.saturating_sub(1);
-                            }
-                        }
-                        KeyCode::Down => {
-                            if let Some(menu) = model.context_menu.as_mut() {
-                                menu.selected =
-                                    (menu.selected + 1).min(menu.items.len().saturating_sub(1));
-                            }
-                        }
-                        KeyCode::Enter => {
-                            if let Some(menu) = model.context_menu.take()
-                                && let Some(action) = menu.items.get(menu.selected).copied()
-                            {
-                                dispatch_menu_action(
-                                    &mut stream,
-                                    &mut model,
-                                    &identities,
-                                    menu.target,
-                                    action,
-                                );
-                            }
-                        }
-                        _ => model.context_menu = None,
-                    }
-                    model.dirty = true;
-                }
-                Event::Key(key) if model.git_view.is_some() => {
-                    if let Some(view) = model.git_view.as_mut()
-                        && matches!(
-                            git::handle_key(&WorkspaceHost, view, key),
-                            git::GitViewOutcome::Close
-                        )
-                    {
-                        model.git_view = None;
-                    }
-                    model.dirty = true;
-                }
-                Event::Key(key)
-                    if key.modifiers.contains(KeyModifiers::CONTROL)
-                        && key.code == KeyCode::Char('o') =>
-                {
-                    let _ = send_request(&mut stream, &ClientRequest::Detach);
-                    return Ok(WorkspaceExit::Management);
-                }
-                Event::Key(key)
-                    if key.modifiers.contains(KeyModifiers::CONTROL)
-                        && key.code == KeyCode::Char('q') =>
-                {
-                    let _ = send_request(&mut stream, &ClientRequest::Detach);
-                    return Ok(WorkspaceExit::Quit);
-                }
-                Event::Key(key)
-                    if key.modifiers.contains(KeyModifiers::CONTROL)
-                        && key.code == KeyCode::Char('t') =>
-                {
-                    let _ = send_request(
-                        &mut stream,
-                        &ClientRequest::CreateTab {
-                            label: next_shell_label(&model, &identities),
-                            agent: context_agent(&model, &identities),
-                            columns,
-                            rows,
-                            cwd: new_shell_cwd(&model, &identities),
-                            command: None,
-                        },
-                    );
-                }
-                Event::Key(key)
-                    if key.modifiers.contains(KeyModifiers::CONTROL)
-                        && key.code == KeyCode::Char('w') =>
-                {
-                    if let Some(tab) = model.selected_tab() {
-                        let _ = send_request(&mut stream, &ClientRequest::CloseTab { tab });
-                    }
-                }
-                Event::Key(key)
-                    if key.modifiers.contains(KeyModifiers::CONTROL)
-                        && key.code == KeyCode::Char('g') =>
-                {
-                    open_git_view(&mut model);
-                }
-                Event::Key(key)
-                    if key.modifiers.contains(KeyModifiers::ALT)
-                        && matches!(key.code, KeyCode::Char('1'..='9')) =>
-                {
-                    let index = match key.code {
-                        KeyCode::Char(value) => value as usize - '1' as usize,
-                        _ => 0,
-                    };
-                    if let Some(tab) = model
-                        .session
-                        .as_ref()
-                        .and_then(|session| session.selected_space().tabs.get(index))
-                        .map(|tab| tab.id)
-                    {
-                        model.acknowledge_completed_agent_tab(tab);
-                        let _ = send_request(&mut stream, &ClientRequest::SelectTab { tab });
-                        if let Some(pane) = model.pane_for_tab(tab) {
-                            resize_pane(&mut stream, &mut model, pane, columns, rows);
-                        }
-                    }
-                }
-                Event::Key(key) => {
-                    if let Some(bytes) = encode_key(key) {
-                        let pane = model.focused_pane();
-                        // `encode_key` emits a bare CR for Enter and 0x03
-                        // for Ctrl+C, so these are exact byte comparisons
-                        // rather than a substring scan that a pasted or
-                        // multi-byte sequence could trip.
-                        let submitted = bytes.as_slice() == *b"\r";
-                        let cancelled = bytes.as_slice() == [3u8];
-                        let prompt = if submitted {
-                            model.prompt_buffers.entry(pane).or_default().submit()
-                        } else {
-                            if cancelled {
-                                model.prompt_buffers.remove(&pane);
-                            } else {
-                                model.prompt_buffers.entry(pane).or_default().apply(key);
-                            }
-                            None
-                        };
-                        // Forwarded before anything is recorded: the pane's
-                        // own responsiveness must never wait on history.
-                        let _ = send_request(&mut stream, &ClientRequest::Input { pane, bytes });
-                        model.note_pane_input(pane);
-                        if submitted {
-                            model.note_agent_prompt_submission(
-                                pane,
-                                &identities,
-                                prompt.as_deref(),
-                            );
-                        }
-                    }
-                }
-                Event::Paste(text) if model.no_modal_open() => {
-                    let pane = model.focused_pane();
-                    model.prompt_buffers.entry(pane).or_default().paste(&text);
-                    forward_paste(&mut stream, &model, &text);
-                    model.note_pane_paste(pane);
-                }
-                Event::Mouse(mouse)
-                    if mouse.kind == MouseEventKind::Down(MouseButton::Left)
-                        && model.renaming.is_some() =>
-                {
-                    // Same rule the management TUI's overlays use: a click
-                    // outside the thing being edited discards it rather
-                    // than silently confirming or acting on the click.
-                    model.renaming = None;
-                    model.dirty = true;
-                }
-                Event::Mouse(mouse)
-                    if mouse.kind == MouseEventKind::Down(MouseButton::Left)
-                        && model.root_picker.is_some() =>
-                {
-                    match hit_at(&model, mouse.column, mouse.row) {
-                        Some(WorkspaceHit::PickSpaceRoot(index)) => {
-                            if let Some(root) = model.root_picker.as_mut().and_then(|picker| {
-                                picker.select(index);
-                                picker.chosen()
-                            }) {
-                                model.root_picker = None;
-                                let _ = send_request(
-                                    &mut stream,
-                                    &ClientRequest::CreateSpace {
-                                        label: None,
-                                        root,
-                                        columns,
-                                        rows,
-                                    },
-                                );
-                            }
-                        }
-                        // Click outside the picker's own rows discards it —
-                        // same rule `renaming` uses.
-                        _ => model.root_picker = None,
-                    }
-                    model.dirty = true;
-                }
-                Event::Mouse(mouse)
-                    if mouse.kind == MouseEventKind::Moved && model.root_picker.is_some() =>
-                {
-                    // The highlight follows the pointer, the same way the
-                    // agent picker and the sidebar context menu already do.
-                    if let Some(WorkspaceHit::PickSpaceRoot(index)) =
-                        hit_at(&model, mouse.column, mouse.row)
-                        && let Some(picker) = model.root_picker.as_mut()
-                        && picker.selected() != index
-                    {
-                        picker.select(index);
-                        model.dirty = true;
-                    }
-                }
-                Event::Mouse(mouse)
-                    if mouse.kind == MouseEventKind::Down(MouseButton::Left)
-                        && model.agent_picker.is_some() =>
-                {
-                    let hit = model
-                        .hits
-                        .iter()
-                        .find(|(rect, _)| {
-                            rect.x <= mouse.column
-                                && mouse.column < rect.x + rect.width
-                                && rect.y <= mouse.row
-                                && mouse.row < rect.y + rect.height
-                        })
-                        .map(|(_, hit)| *hit);
-                    match hit {
-                        Some(WorkspaceHit::PickAgent(index)) => {
-                            if let Some(picker) = model.agent_picker.take()
-                                && let Some(option) = picker.options.get(index)
-                            {
-                                let label = next_agent_label(&model);
-                                let cwd = picker
-                                    .cwd
-                                    .clone()
-                                    .or_else(|| agent_launch_cwd(&model, home));
-                                if let Some(cwd) = cwd.clone() {
-                                    model.schedule_evaluation(home, cwd, &task_sender);
-                                }
-                                let _ = send_request(
-                                    &mut stream,
-                                    &ClientRequest::CreateTab {
-                                        cwd,
-                                        label,
-                                        agent: None,
-                                        columns,
-                                        rows,
-                                        command: Some(option.command.clone()),
-                                    },
-                                );
-                            }
-                        }
-                        // Click outside the picker's own rows discards it —
-                        // same rule `renaming` uses.
-                        _ => model.agent_picker = None,
-                    }
-                    model.dirty = true;
-                }
-                Event::Mouse(mouse)
-                    if mouse.kind == MouseEventKind::Moved && model.agent_picker.is_some() =>
-                {
-                    // Keep this dropdown's pointer behavior aligned with the
-                    // sidebar context menu: the highlighted option follows
-                    // the cursor, while keyboard navigation remains intact.
-                    let hit = model
-                        .hits
-                        .iter()
-                        .rev()
-                        .find(|(rect, _)| {
-                            rect.x <= mouse.column
-                                && mouse.column < rect.x + rect.width
-                                && rect.y <= mouse.row
-                                && mouse.row < rect.y + rect.height
-                        })
-                        .map(|(_, hit)| *hit);
-                    if let Some(WorkspaceHit::PickAgent(index)) = hit
-                        && let Some(picker) = model.agent_picker.as_mut()
-                        && picker.selected != index
-                    {
-                        picker.selected = index;
-                        model.dirty = true;
-                    }
-                }
-                Event::Mouse(mouse)
-                    if mouse.kind == MouseEventKind::Down(MouseButton::Left)
-                        && model.support_dropdown.is_some() =>
-                {
-                    // Informational dropdown: every click simply dismisses
-                    // it, preventing the click from leaking into the pane.
-                    model.support_dropdown = None;
-                    model.dirty = true;
-                }
-                Event::Mouse(mouse)
-                    if mouse.kind == MouseEventKind::Down(MouseButton::Left)
-                        && model.commit_detail.is_some() =>
-                {
-                    // Informational, like the support dropdown: any click
-                    // dismisses it rather than leaking into the pane.
-                    model.commit_detail = None;
-                    model.dirty = true;
-                }
-                Event::Mouse(mouse)
-                    if mouse.kind == MouseEventKind::Down(MouseButton::Left)
-                        && model.status_catalog.is_some() =>
-                {
-                    // Informational, like the support dropdown: any click
-                    // dismisses it rather than leaking into the pane.
-                    model.status_catalog = None;
-                    model.dirty = true;
-                }
-                Event::Mouse(mouse)
-                    if mouse.kind == MouseEventKind::Down(MouseButton::Left)
-                        && model.context_menu.is_some() =>
-                {
-                    // `.rev()`: the popup renders last, so its own rows sit
-                    // at the tail of `hits` — searching forward could match
-                    // an older, now visually-covered sidebar row underneath
-                    // it instead (the tight, gapless sidebar packing meant
-                    // this landed on a covered row far more often than not,
-                    // which is what made the popup's own click feel
-                    // intermittent — it depended on which row was
-                    // right-clicked, not on timing).
-                    let hit = model
-                        .hits
-                        .iter()
-                        .rev()
-                        .find(|(rect, _)| {
-                            rect.x <= mouse.column
-                                && mouse.column < rect.x + rect.width
-                                && rect.y <= mouse.row
-                                && mouse.row < rect.y + rect.height
-                        })
-                        .map(|(_, hit)| *hit);
-                    let action = match hit {
-                        Some(WorkspaceHit::ContextMenuAction(index)) => model
-                            .context_menu
-                            .as_ref()
-                            .and_then(|menu| menu.items.get(index).copied()),
-                        _ => None,
-                    };
-                    // Dismiss unconditionally (any click, on the popup or
-                    // outside it, closes the menu) but only dispatch when
-                    // the click actually resolved to one of its own rows —
-                    // the two used to be one `if let` that discarded the
-                    // menu before checking the hit, so a miss silently
-                    // dismissed without acting instead of visibly no-oping.
-                    let target = model.context_menu.take().map(|menu| menu.target);
-                    if let (Some(target), Some(action)) = (target, action) {
-                        dispatch_menu_action(&mut stream, &mut model, &identities, target, action);
-                    }
-                    model.dirty = true;
-                }
-                Event::Mouse(mouse)
-                    if mouse.kind == MouseEventKind::Moved && model.context_menu.is_some() =>
-                {
-                    // Hovering a row selects it, same as Up/Down — so the
-                    // popup reads as a real menu (highlight follows the
-                    // cursor) instead of only reacting to a click. Only
-                    // marks the frame dirty when the hover actually moved
-                    // onto a different row, so waving the mouse across the
-                    // rest of the screen doesn't force a redraw every tick.
-                    let hit = model
-                        .hits
-                        .iter()
-                        .rev()
-                        .find(|(rect, _)| {
-                            rect.x <= mouse.column
-                                && mouse.column < rect.x + rect.width
-                                && rect.y <= mouse.row
-                                && mouse.row < rect.y + rect.height
-                        })
-                        .map(|(_, hit)| *hit);
-                    if let Some(WorkspaceHit::ContextMenuAction(index)) = hit
-                        && let Some(menu) = model.context_menu.as_mut()
-                        && menu.selected != index
-                    {
-                        menu.selected = index;
-                        model.dirty = true;
-                    }
-                }
-                Event::Mouse(mouse)
-                    if mouse.kind == MouseEventKind::Down(MouseButton::Left)
-                        && model.git_view.is_some() =>
-                {
-                    let hit = model
-                        .hits
-                        .iter()
-                        .find(|(rect, _)| {
-                            rect.x <= mouse.column
-                                && mouse.column < rect.x + rect.width
-                                && rect.y <= mouse.row
-                                && mouse.row < rect.y + rect.height
-                        })
-                        .map(|(_, hit)| *hit);
-                    // Mirrors `WorkspaceHit::ResizeSidebar` below: arms
-                    // dragging instead of reaching `git::handle_mouse`,
-                    // which only knows about `ExtensionHit`s that are its
-                    // own — the resize handle's drag lifecycle belongs to
-                    // this workspace client, not the extension.
-                    let view_hit = match hit {
-                        Some(WorkspaceHit::Extension(ExtensionHit::Git(view_hit))) => {
-                            Some(view_hit)
-                        }
-                        _ => None,
-                    };
-                    if view_hit == Some(ViewHit::ResizeNavigator) {
-                        model.dragging_git_tree = true;
-                    } else if let Some(view) = model.git_view.as_mut()
-                        && matches!(
-                            git::handle_mouse(&WorkspaceHost, view, view_hit),
-                            git::GitViewOutcome::Close
-                        )
-                    {
-                        model.git_view = None;
-                    }
-                    model.dirty = true;
-                }
-                Event::Mouse(mouse)
-                    if mouse.kind == MouseEventKind::Drag(MouseButton::Left)
-                        && model.dragging_git_tree =>
-                {
-                    let frame_area = Rect::new(0, 0, size.width, size.height);
-                    let (tree_column, diff_column, _footer) =
-                        crate::ui::extension_view::content_columns(
-                            frame_area,
-                            model.git_tree_width,
-                        );
-                    let new_width = crate::ui::extension_view::clamp_navigator_width(
-                        mouse.column.saturating_sub(tree_column.x),
-                        tree_column.width + diff_column.width,
-                    );
-                    if model.git_tree_width != Some(new_width) {
-                        model.git_tree_width = Some(new_width);
-                        model.dirty = true;
-                    }
-                }
-                Event::Mouse(mouse)
-                    if matches!(
-                        mouse.kind,
-                        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
-                    ) && model.git_view.is_some() =>
-                {
-                    if let Some(view) = model.git_view.as_mut()
-                        && let Some(target) = crate::ui::extension_view::scroll_target(
-                            Rect::new(0, 0, size.width, size.height),
-                            model.git_tree_width,
-                            mouse.column,
-                            mouse.row,
-                        )
-                    {
-                        git::handle_scroll(
-                            &WorkspaceHost,
-                            view,
-                            target,
-                            if mouse.kind == MouseEventKind::ScrollUp {
-                                ScrollDirection::Up
-                            } else {
-                                ScrollDirection::Down
-                            },
-                        );
-                    }
-                    model.dirty = true;
-                }
-                Event::Mouse(mouse)
-                    if matches!(
-                        mouse.kind,
-                        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
-                    ) && model.commit_detail.is_some() =>
-                {
-                    if let Some(popup) = model.commit_detail.as_mut() {
-                        let limit = render::commit_detail_layout(
-                            Rect::new(0, 0, size.width, size.height),
-                            popup,
-                        )
-                        .scroll_limit();
-                        popup.scroll = if mouse.kind == MouseEventKind::ScrollUp {
-                            popup.scroll.saturating_sub(1)
-                        } else {
-                            popup.scroll.saturating_add(1).min(limit)
-                        };
-                        model.dirty = true;
-                    }
-                }
-                Event::Mouse(mouse)
-                    if matches!(
-                        mouse.kind,
-                        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
-                    ) && model.no_modal_open()
-                        && model.over_timeline(mouse.column, mouse.row) =>
-                {
-                    scroll_timeline(
-                        &mut model,
-                        if mouse.kind == MouseEventKind::ScrollUp {
-                            ScrollDirection::Up
-                        } else {
-                            ScrollDirection::Down
-                        },
-                    );
-                }
-                Event::Mouse(mouse)
-                    if matches!(
-                        mouse.kind,
-                        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
-                    ) && model.no_modal_open() =>
-                {
-                    forward_scroll(&mut stream, &model, layout.pane, mouse);
-                }
-                Event::Mouse(mouse) if mouse.kind == MouseEventKind::Down(MouseButton::Left) => {
-                    let Some((hit_rect, hit)) = model
-                        .hits
-                        .iter()
-                        .find(|(rect, _)| {
-                            rect.x <= mouse.column
-                                && mouse.column < rect.x + rect.width
-                                && rect.y <= mouse.row
-                                && mouse.row < rect.y + rect.height
-                        })
-                        .map(|(rect, hit)| (*rect, *hit))
-                    else {
-                        model.last_click = None;
-                        forward_mouse(&mut stream, &model, layout.pane, mouse);
-                        continue;
-                    };
-                    let now = std::time::Instant::now();
-                    let is_double_click = model.last_click.is_some_and(|(at, previous)| {
-                        previous == hit && now.duration_since(at) < DOUBLE_CLICK_WINDOW
-                    });
-                    model.last_click = Some((now, hit));
-                    if is_double_click {
-                        model.last_click = None;
-                        match hit {
-                            WorkspaceHit::SelectTab(tab) => {
-                                begin_rename(&mut model, MenuTarget::Tab(tab));
-                                model.dirty = true;
-                            }
-                            WorkspaceHit::SelectSpace(space) => {
-                                begin_rename(&mut model, MenuTarget::Space(space));
-                                model.dirty = true;
-                            }
-                            // Two quick clicks on the toggle are two
-                            // toggles, not a gesture of their own.
-                            WorkspaceHit::ToggleSpaceRoot(space) => {
-                                toggle_space_root(&mut model, space);
-                            }
-                            WorkspaceHit::ToggleTimeline => {
-                                toggle_timeline(&mut model);
-                            }
-                            _ => {}
-                        }
-                        continue;
-                    }
-                    match hit {
-                        WorkspaceHit::SelectTab(tab) => {
-                            // Whether this click landed on the tab already
-                            // holding its space's selection — read before
-                            // `SelectTab` is sent below, since the model
-                            // only updates once the server's broadcast
-                            // confirms it, not optimistically here. A drag
-                            // candidate arms only on this "second click":
-                            // the first click on a different tab just
-                            // selects it, exactly like before dragging
-                            // existed. Without this, every plain selection
-                            // click also armed a drag from that row, and
-                            // any incidental pointer motion afterward
-                            // (moving toward the next click, mouse jitter)
-                            // could cross the threshold and show the drop
-                            // indicator on a row the user never meant to
-                            // touch.
-                            let already_selected = model.session.as_ref().is_some_and(|session| {
-                                session
-                                    .workspace
-                                    .spaces
-                                    .iter()
-                                    .any(|space| space.selected_tab == tab)
-                            });
-                            model.acknowledge_completed_agent_tab(tab);
-                            let _ = send_request(&mut stream, &ClientRequest::SelectTab { tab });
-                            if let Some(pane) = model.pane_for_tab(tab) {
-                                resize_pane(&mut stream, &mut model, pane, columns, rows);
-                            }
-                            if already_selected
-                                && let Some(group) =
-                                    tab_drag_group(&model, &identities, &layout, hit_rect, tab)
-                            {
-                                let origin = match group {
-                                    TabDragGroup::Agents(_) => mouse.row,
-                                    TabDragGroup::Strip(..) => mouse.column,
-                                };
-                                model.dragging_tab = Some(DraggingTab {
-                                    tab,
-                                    group,
-                                    origin,
-                                    armed: false,
-                                    pending: None,
-                                });
-                            }
-                        }
-                        WorkspaceHit::CloseTab(tab) => {
-                            let _ = send_request(&mut stream, &ClientRequest::CloseTab { tab });
-                        }
-                        WorkspaceHit::NewTab => {
-                            let _ = send_request(
-                                &mut stream,
-                                &ClientRequest::CreateTab {
-                                    label: next_shell_label(&model, &identities),
-                                    agent: context_agent(&model, &identities),
-                                    columns,
-                                    rows,
-                                    cwd: new_shell_cwd(&model, &identities),
-                                    command: None,
-                                },
-                            );
-                        }
-                        WorkspaceHit::NewAgentMenu => {
-                            model.agent_picker = Some(AgentPicker {
-                                options: agent_options(home),
-                                selected: 0,
-                                anchor: hit_rect,
-                                cwd: None,
-                            });
-                            // Unlike every other arm here, this is a purely
-                            // local state change with no server round trip
-                            // to eventually mark the model dirty via
-                            // `apply()` — without this the popup exists in
-                            // `model` but the screen never redraws to show
-                            // it.
-                            model.dirty = true;
-                        }
-                        WorkspaceHit::PickAgent(_) => {
-                            // Only reachable while the picker is open, which
-                            // the guarded arm above already handles; a
-                            // stale hit here (picker just closed) is a
-                            // no-op.
-                        }
-                        WorkspaceHit::SelectSpace(space) => {
-                            // A space's own row is its own context: it
-                            // lands on a shell belonging to no agent, the
-                            // way each agent row lands on that agent. That
-                            // is the whole way back to the space's shells
-                            // once an agent is what the strip is showing.
-                            // A space of nothing but agents has no such
-                            // tab, and the click stays a plain switch.
-                            let landing = model.session.as_ref().and_then(|session| {
-                                let space = session
-                                    .workspace
-                                    .spaces
-                                    .iter()
-                                    .find(|candidate| candidate.id == space)?;
-                                Some((space.selected_tab, space_own_tab(space, &identities)))
-                            });
-                            if let Some((selected, own)) = landing {
-                                model.acknowledge_completed_agent_tab(own.unwrap_or(selected));
-                            }
-                            let _ = match landing.and_then(|(_, own)| own) {
-                                Some(tab) => {
-                                    send_request(&mut stream, &ClientRequest::SelectTab { tab })
-                                }
-                                None => {
-                                    send_request(&mut stream, &ClientRequest::SelectSpace { space })
-                                }
-                            };
-                            // Resize the pane the same way `SelectTab` does
-                            // — switching spaces switches which tab (and so
-                            // which pane) is focused, same as switching
-                            // tabs within one space already does.
-                            if let Some(pane) = landing
-                                .map(|(selected, own)| own.unwrap_or(selected))
-                                .and_then(|tab| model.pane_for_tab(tab))
-                            {
-                                resize_pane(&mut stream, &mut model, pane, columns, rows);
-                            }
-                        }
-                        WorkspaceHit::ContextMenuAction(_) => {
-                            // Only reachable while the context menu is
-                            // open, which the guarded arm above already
-                            // handles — same as `PickAgent` above for the
-                            // agent picker.
-                        }
-                        WorkspaceHit::NewSpace => {
-                            let prefill = model
-                                .session
-                                .as_ref()
-                                .map(|session| {
-                                    crate::ui::display_project_path(&session.selected_space().root)
-                                })
-                                .unwrap_or_else(|| "~".to_owned());
-                            model.root_picker = Some(RootPicker::opened_in(&prefill));
-                            model.dirty = true;
-                        }
-                        WorkspaceHit::PickSpaceRoot(_) => {
-                            // Only reachable while the root picker is open,
-                            // which the guarded arm above already handles —
-                            // same as `PickAgent` for the agent picker.
-                        }
-                        WorkspaceHit::OpenGitView => {
-                            open_git_view(&mut model);
-                        }
-                        WorkspaceHit::Deliver(_) => {
-                            deliver_selected_tab(&mut model, home, &delivery_sender);
-                        }
-                        WorkspaceHit::ToggleSpaceRoot(space) => {
-                            toggle_space_root(&mut model, space);
-                        }
-                        WorkspaceHit::ToggleTimeline => {
-                            toggle_timeline(&mut model);
-                        }
-                        WorkspaceHit::OpenStatusCatalog(anchor) => {
-                            model.status_catalog = Some(anchor);
-                            // Purely local state, no server round trip to
-                            // eventually mark the model dirty — same as
-                            // `NewAgentMenu` above.
-                            model.dirty = true;
-                        }
-                        WorkspaceHit::OpenAgentSupport(anchor) => {
-                            model.support_dropdown = selected_agent_context(&model, &identities)
-                                .map(|key| AgentSupportDropdown { key, anchor });
-                            // Opening always re-reads, even when an answer
-                            // for this key is already held: `AGENTS.md` and
-                            // `.agents/` can change under an open workspace,
-                            // and this is the one moment the user is
-                            // actually looking at the answer.
-                            if let Some(dropdown) = &model.support_dropdown {
-                                model.agent_support_pending = Some(dropdown.key.clone());
-                                spawn_support_refresh(
-                                    home,
-                                    dropdown.key.clone(),
-                                    support_sender.clone(),
-                                );
-                            }
-                            model.dirty = true;
-                        }
-                        WorkspaceHit::Extension(_) => {
-                            // Only reachable while the git view is open,
-                            // which its own guarded arm below already
-                            // handles — same as `PickAgent`/`CloseSpace`
-                            // above for the other two overlays.
-                        }
-                        WorkspaceHit::SwitchToManagement => {
-                            let _ = send_request(&mut stream, &ClientRequest::Detach);
-                            return Ok(WorkspaceExit::Management);
-                        }
-                        WorkspaceHit::ResizeSidebar => {
-                            model.dragging_sidebar = true;
-                        }
-                        WorkspaceHit::ResizeTimeline => {
-                            model.dragging_timeline = true;
-                        }
-                        WorkspaceHit::TimelineCommit(index) => {
-                            open_commit_detail(&mut model, index, hit_rect);
-                        }
-                    }
-                }
-                Event::Mouse(mouse)
-                    if mouse.kind == MouseEventKind::Drag(MouseButton::Left)
-                        && model.dragging_timeline =>
-                {
-                    // The divider follows the pointer; what is remembered
-                    // is the commit rows that leaves under it, never fewer
-                    // than one — folding is the header's own click, not a
-                    // drag to nothing.
-                    let wanted = layout
-                        .sidebar
-                        .bottom()
-                        .saturating_sub(mouse.row)
-                        .saturating_sub(render::TIMELINE_CHROME - 1)
-                        .clamp(1, TIMELINE_COMMITS as u16);
-                    if model.timeline_rows != Some(wanted) {
-                        model.timeline_rows = Some(wanted);
-                        model.dirty = true;
-                    }
-                }
-                Event::Mouse(mouse)
-                    if mouse.kind == MouseEventKind::Drag(MouseButton::Left)
-                        && model.dragging_sidebar =>
-                {
-                    let new_width = super::clamp_sidebar_width(
-                        mouse.column.saturating_sub(layout.sidebar.x),
-                        size.width,
-                    );
-                    if model.sidebar_width != Some(new_width) {
-                        model.sidebar_width = Some(new_width);
-                        // Written straight through to the shared value (not
-                        // just kept on `model`) so a Ctrl+O switch to
-                        // management picks up this width immediately,
-                        // instead of only on the next drag.
-                        *sidebar_width = model.sidebar_width;
-                        model.dirty = true;
-                    }
-                }
-                Event::Mouse(mouse)
-                    if mouse.kind == MouseEventKind::Drag(MouseButton::Left)
-                        && model.dragging_tab.is_some() =>
-                {
-                    let Some(mut dragging) = model.dragging_tab else {
-                        unreachable!("guarded by the match arm above");
-                    };
-                    let pointer = match dragging.group {
-                        TabDragGroup::Agents(_) => mouse.row,
-                        TabDragGroup::Strip(..) => mouse.column,
-                    };
-                    if !dragging.armed {
-                        dragging.armed = pointer.abs_diff(dragging.origin) >= TAB_DRAG_THRESHOLD;
-                    }
-                    dragging.pending = dragging
-                        .armed
-                        .then(|| {
-                            // The dragged tab's own rect stays in `hits`
-                            // (nothing about the underlying order changes
-                            // during the drag — see the design's "indicator,
-                            // not a live reorder" decision), so it has to be
-                            // excluded here or its own midpoint would offer
-                            // itself as a drop target.
-                            let members = tab_drag_group_members(
-                                &model,
-                                &identities,
-                                &layout,
-                                dragging.group,
-                            )
-                            .into_iter()
-                            .filter(|(_, tab)| *tab != dragging.tab)
-                            .collect::<Vec<_>>();
-                            pending_tab_drop(&members, dragging.group, pointer, dragging.origin)
-                        })
-                        .flatten();
-                    model.dragging_tab = Some(dragging);
-                    model.dirty = true;
-                }
-                Event::Mouse(mouse)
-                    if mouse.kind == MouseEventKind::Drag(MouseButton::Left)
-                        && !model.dragging_sidebar
-                        && !model.dragging_git_tree
-                        && !model.dragging_timeline
-                        && model.dragging_tab.is_none()
-                        && model.no_modal_open() =>
-                {
-                    forward_mouse(&mut stream, &model, layout.pane, mouse);
-                }
-                Event::Mouse(mouse) if mouse.kind == MouseEventKind::Up(MouseButton::Left) => {
-                    // A drag this client never owned (no flag was set, no
-                    // tab drag was in progress, and nothing modal was open
-                    // to have owned it either) is one it was forwarding
-                    // into the pane above — the matching release belongs
-                    // there too, not just silently dropped the way it was
-                    // before pane forwarding existed.
-                    if !model.dragging_sidebar
-                        && !model.dragging_git_tree
-                        && !model.dragging_timeline
-                        && model.dragging_tab.is_none()
-                        && model.no_modal_open()
-                    {
-                        forward_mouse(&mut stream, &model, layout.pane, mouse);
-                    }
-                    if let Some(dragging) = model.dragging_tab.take()
-                        && let Some(pending) = dragging.pending
-                    {
-                        let _ = send_request(
-                            &mut stream,
-                            &ClientRequest::ReorderTab {
-                                tab: dragging.tab,
-                                before: pending.as_before(),
-                            },
-                        );
-                    }
-                    model.dragging_sidebar = false;
-                    model.dragging_git_tree = false;
-                    model.dragging_timeline = false;
-                    model.dirty = true;
-                }
-                Event::Mouse(mouse)
-                    if mouse.kind == MouseEventKind::Down(MouseButton::Right)
-                        && model.renaming.is_none()
-                        && model.root_picker.is_none()
-                        && model.agent_picker.is_none()
-                        && model.context_menu.is_none() =>
-                {
-                    // The only way to close a space or an agent tab: right-
-                    // click it, then confirm in the popup this opens (see
-                    // `ContextMenu`) — never a direct click, so a stray
-                    // click can't kill a running agent or a whole space's
-                    // worth of them by accident. Guarded on `context_menu`
-                    // being closed too (like the left-click/Enter handlers
-                    // already are) so right-clicking a different row while
-                    // a menu is open can't silently swap its target instead
-                    // of requiring the open menu be dismissed first.
-                    let hit = model
-                        .hits
-                        .iter()
-                        .find(|(rect, _)| {
-                            rect.x <= mouse.column
-                                && mouse.column < rect.x + rect.width
-                                && rect.y <= mouse.row
-                                && mouse.row < rect.y + rect.height
-                        })
-                        .map(|(_, hit)| *hit);
-                    // Anchored to the cursor itself, not the clicked row's
-                    // rect — a row spans the sidebar's full width, so
-                    // anchoring to `rect.x` always opened the menu at the
-                    // row's left edge regardless of where along it you
-                    // right-clicked, which read as the popup ignoring the
-                    // mouse entirely.
-                    let anchor = Rect::new(mouse.column, mouse.row, 1, 1);
-                    // `rename` is always offered. A tab can close with a
-                    // sibling as usual, and a lone agent can close because
-                    // the action replaces it with a plain shell. Renaming a
-                    // lone space or shell remains the only available action.
-                    if let Some(WorkspaceHit::SelectSpace(space)) = hit {
-                        let mut items = vec![MenuAction::Rename];
-                        if model
-                            .session
-                            .as_ref()
-                            .is_some_and(|session| session.workspace.spaces.len() > 1)
-                        {
-                            items.push(MenuAction::Close);
-                        }
-                        model.context_menu = Some(ContextMenu {
-                            target: MenuTarget::Space(space),
-                            items,
-                            selected: 0,
-                            anchor,
-                        });
-                        model.dirty = true;
-                    } else if let Some(WorkspaceHit::SelectTab(tab)) = hit {
-                        let mut items = vec![MenuAction::Rename];
-                        if can_close_tab_from_menu(&model, &identities, tab) {
-                            items.push(MenuAction::Close);
-                        }
-                        model.context_menu = Some(ContextMenu {
-                            target: MenuTarget::Tab(tab),
-                            items,
-                            selected: 0,
-                            anchor,
-                        });
-                        model.dirty = true;
-                    }
-                }
-                Event::Resize(_, _) | Event::Mouse(_) => {}
-                _ => {}
-            }
+        // The sidebar width is shared with management (see `super::run`),
+        // so a drag in this mode shows up there on the next Ctrl+O rather
+        // than only after the next drag.
+        *sidebar_width = attach.model.sidebar_width;
+        if event::poll(POLL).map_err(io_error)?
+            && let Flow::Exit(exit) = attach.handle(event::read().map_err(io_error)?, &viewport)
+        {
+            return Ok(exit);
         }
     })();
-    memory.remembered = model.remember();
+    memory.remembered = attach.model.remember();
     outcome
 }
 
@@ -1814,18 +752,6 @@ pub(super) enum WorkspaceHit {
     /// The `⇄` behind a space's name — flips that header between its label
     /// and its root (see `WorkspaceModel::roots_shown`).
     ToggleSpaceRoot(SpaceId),
-    /// The header of the sidebar's timeline section — folds the section
-    /// to that one row and back (see `WorkspaceModel::timeline_collapsed`).
-    ToggleTimeline,
-    /// The hairline above the timeline's header — dragged, it sets how
-    /// many commit rows the section shows (see
-    /// `WorkspaceModel::timeline_rows`), the way the sidebar's own border
-    /// sets its width.
-    ResizeTimeline,
-    /// One commit row of the timeline, by index into its commits — opens
-    /// that commit's popup (`WorkspaceModel::commit_detail`) beside the
-    /// row.
-    TimelineCommit(usize),
     /// One row of the open [`ContextMenu`], by index into its `items` —
     /// generic over whatever action that row is, same pattern
     /// [`WorkspaceHit::PickAgent`] uses for the agent picker.
@@ -2291,6 +1217,14 @@ pub(crate) struct WorkspaceMemory {
     support: Answers<SupportResolution>,
     tasks: Answers<TaskResolution>,
     deliveries: Answers<DeliveryResolution>,
+    /// The badge and the timeline behind it. Git is read off-thread like
+    /// everything else expensive here; it was the last subsystem still
+    /// answering inline on the render path.
+    git: Answers<GitResolution>,
+    commit_details: Answers<CommitDetailResolution>,
+    git_views: Answers<GitViewResolution>,
+    occupancy: Answers<OccupancyResolution>,
+    placements: Answers<PlacementResolution>,
 }
 
 /// The fields of [`WorkspaceModel`] that outlive one attach — each is
@@ -2305,6 +1239,7 @@ struct Remembered {
     agent_support: Option<SupportResolution>,
     agent_support_pending: Option<SupportKey>,
     git_badge: Option<GitBadge>,
+    git_pending: Option<PathBuf>,
     prompt_buffers: BTreeMap<PaneId, PromptBuffer>,
     tasks: BTreeMap<PathBuf, Vec<TaskView>>,
     branches: BTreeMap<PathBuf, String>,
@@ -2332,6 +1267,7 @@ impl WorkspaceModel {
             agent_support,
             agent_support_pending,
             git_badge,
+            git_pending,
             prompt_buffers,
             tasks,
             branches,
@@ -2355,6 +1291,7 @@ impl WorkspaceModel {
             agent_support,
             agent_support_pending,
             git_badge,
+            git_pending,
             prompt_buffers,
             tasks,
             branches,
@@ -2383,6 +1320,7 @@ impl WorkspaceModel {
             agent_support: self.agent_support,
             agent_support_pending: self.agent_support_pending,
             git_badge: self.git_badge,
+            git_pending: self.git_pending,
             prompt_buffers: self.prompt_buffers,
             tasks: self.tasks,
             branches: self.branches,
@@ -2491,6 +1429,14 @@ struct WorkspaceModel {
     /// Stored client-side because it is display chrome, not terminal session
     /// state that belongs in `uze-terminal`.
     git_badge: Option<GitBadge>,
+    /// The checkout a background Git read is out for, so the workspace
+    /// asks once rather than once per frame — see [`spawn_git_read`].
+    git_pending: Option<PathBuf>,
+    /// The commit a background `git show` is out for; see
+    /// [`CommitDetailResolution`] for why the answer names it back.
+    commit_detail_pending: Option<String>,
+    /// Whether a re-read of the open changes overlay is out.
+    git_view_pending: bool,
     /// Per-pane reconstruction of the line being typed, flushed on Enter.
     prompt_buffers: BTreeMap<PaneId, PromptBuffer>,
     /// Sink for recorded prompts. `None` leaves the history untouched —
@@ -2538,6 +1484,21 @@ struct WorkspaceModel {
     occupied_checkouts: BTreeSet<PathBuf>,
     /// Whether the sweep for tasks nobody's session restored has run.
     slots_swept: bool,
+    /// Whether the pane set has moved since occupancy was last worked out.
+    ///
+    /// The loop runs at 60Hz and the pane set changes when a tab opens or
+    /// closes — a few times a session. Without this the sweep below cloned
+    /// every pane's path and rebuilt two collections on every one of those
+    /// ticks, to conclude nothing had happened.
+    occupancy_stale: bool,
+    /// Whether a reconciliation is out; only one at a time, and never on
+    /// this thread — it releases slots and collects garbage, both of which
+    /// ask Git.
+    occupancy_pending: bool,
+    /// Whether a slot is being acquired for a new agent. One at a time:
+    /// two acquisitions racing over the same pool is how two agents end
+    /// up in one checkout.
+    placement_pending: bool,
     /// The spaces whose header row shows its root instead of its label —
     /// flipped by the `⇄` behind the name (see
     /// [`WorkspaceHit::ToggleSpaceRoot`]). Never both at once: the row is
@@ -2547,7 +1508,7 @@ struct WorkspaceModel {
     roots_shown: BTreeSet<SpaceId>,
     /// Whether the sidebar's timeline section shows only its header —
     /// folded by clicking that header (see
-    /// [`WorkspaceHit::ToggleTimeline`]). Remembered across attaches for
+    /// `ViewHit::ToggleSection`). Remembered across attaches for
     /// the same reason `roots_shown` is.
     timeline_collapsed: bool,
     /// How many commit rows the user dragged the timeline section to;
@@ -2561,7 +1522,7 @@ struct WorkspaceModel {
     /// it still shows its tail rather than nothing.
     timeline_scroll: usize,
     /// The open commit popup and the timeline row it hangs off (see
-    /// [`WorkspaceHit::TimelineCommit`]). Informational and anchored like
+    /// `ViewHit::SelectItem`). Informational and anchored like
     /// `support_dropdown`: any click or key dismisses it.
     commit_detail: Option<CommitDetailPopup>,
 }
@@ -2676,14 +1637,19 @@ impl WorkspaceModel {
         }
         self.dirty = true;
         match event {
-            ClientEvent::Attached { session } => self.session = Some(session),
+            ClientEvent::Attached { session } => {
+                self.session = Some(session);
+                self.occupancy_stale = true;
+            }
             ClientEvent::Snapshot { session, panes } => {
                 self.session = Some(session);
                 self.panes = panes.into_iter().map(|pane| (pane.pane, pane)).collect();
+                self.occupancy_stale = true;
             }
             ClientEvent::SessionUpdated { session } => {
                 self.session = Some(session);
                 self.prune_dragging_tab();
+                self.occupancy_stale = true;
             }
             ClientEvent::Damage(damage) => {
                 if is_incremental_repaint(&damage) {
@@ -2747,10 +1713,20 @@ impl WorkspaceModel {
             && self.preserved.is_none()
             && self.context_menu.is_none()
             && self.git_view.is_none()
-            && self.commit_detail.is_none()
+            && !self.commit_detail_open()
     }
 
     fn hit_at(&self, column: u16, row: u16) -> Option<WorkspaceHit> {
+        self.hit_rect_at(column, row).map(|(_, hit)| hit)
+    }
+
+    /// The same hit, with the rectangle the last frame drew it into.
+    ///
+    /// Several answers anchor a popup to that rectangle, so the geometry
+    /// travels with the hit rather than being re-derived by whoever needs
+    /// it — the split that let the renderer and the input loop disagree
+    /// about where a row was.
+    fn hit_rect_at(&self, column: u16, row: u16) -> Option<(Rect, WorkspaceHit)> {
         self.hits
             .iter()
             .find(|(rect, _)| {
@@ -2759,7 +1735,7 @@ impl WorkspaceModel {
                     && rect.y <= row
                     && row < rect.y + rect.height
             })
-            .map(|(_, hit)| *hit)
+            .map(|(rect, hit)| (*rect, *hit))
     }
 
     /// Whether `(column, row)` is over the sidebar's timeline section —
@@ -2768,11 +1744,7 @@ impl WorkspaceModel {
     fn over_timeline(&self, column: u16, row: u16) -> bool {
         matches!(
             self.hit_at(column, row),
-            Some(
-                WorkspaceHit::ToggleTimeline
-                    | WorkspaceHit::ResizeTimeline
-                    | WorkspaceHit::TimelineCommit(_)
-            )
+            Some(WorkspaceHit::Extension(ExtensionHit::GitTimeline(_)))
         )
     }
 
@@ -2781,7 +1753,12 @@ impl WorkspaceModel {
     fn timeline_rows_shown(&self) -> usize {
         self.hits
             .iter()
-            .filter(|(_, hit)| matches!(hit, WorkspaceHit::TimelineCommit(_)))
+            .filter(|(_, hit)| {
+                matches!(
+                    hit,
+                    WorkspaceHit::Extension(ExtensionHit::GitTimeline(ViewHit::SelectItem(_)))
+                )
+            })
             .count()
     }
     fn focused_pane(&self) -> PaneId {
@@ -3168,46 +2145,149 @@ impl WorkspaceModel {
             self.dirty = true;
         }
     }
-    fn refresh_git_badge(&mut self) {
-        let cwd = self.session.as_ref().and_then(|session| {
-            let tab = session.selected_tab();
-            pane_in_layout(&tab.layout, tab.focus.pane).map(|pane| pane.cwd.clone())
-        });
-        let now = Instant::now();
-        if self.git_badge.as_ref().is_some_and(|badge| {
-            cwd.as_ref().is_some_and(|cwd| cwd == &badge.cwd)
-                && now.duration_since(badge.checked_at) < GIT_BADGE_REFRESH
-        }) {
-            return;
-        }
-        let Some(cwd) = cwd else {
+    /// The working directory the badge and the timeline are about: the
+    /// focused pane of the selected tab.
+    fn focused_cwd(&self) -> Option<PathBuf> {
+        let session = self.session.as_ref()?;
+        let tab = session.selected_tab();
+        pane_in_layout(&tab.layout, tab.focus.pane).map(|pane| pane.cwd.clone())
+    }
+
+    /// Asks for whatever the badge is missing, on a thread of its own.
+    ///
+    /// Cheap enough to call every tick — it compares two instants and a
+    /// path — which is the point: the read it schedules is the expensive
+    /// half, and it now happens where nobody is waiting for a frame.
+    fn schedule_git_read(&mut self, sender: &mpsc::Sender<GitResolution>) {
+        let Some(cwd) = self.focused_cwd() else {
             self.git_badge = None;
             return;
         };
-        let (timeline, timeline_checked_at) = match self.git_badge.take() {
-            Some(badge)
-                if badge.cwd == cwd
-                    && now.duration_since(badge.timeline_checked_at) < TIMELINE_REFRESH =>
-            {
-                (badge.timeline, badge.timeline_checked_at)
-            }
-            _ => (
-                git::timeline(
-                    &WorkspaceHost,
-                    &cwd,
-                    TIMELINE_COMMITS,
-                    self.targets.get(&evaluation_key(&cwd)).map(String::as_str),
-                ),
-                now,
-            ),
-        };
-        self.git_badge = Some(GitBadge {
-            summary: git::change_summary(&WorkspaceHost, &cwd),
-            timeline,
-            timeline_checked_at,
-            cwd,
-            checked_at: now,
+        if self.git_pending.is_some() {
+            return;
+        }
+        let now = Instant::now();
+        let current = self.git_badge.as_ref().filter(|badge| badge.cwd == cwd);
+        let summary_fresh =
+            current.is_some_and(|badge| now.duration_since(badge.checked_at) < GIT_BADGE_REFRESH);
+        let timeline_fresh = current
+            .is_some_and(|badge| now.duration_since(badge.timeline_checked_at) < TIMELINE_REFRESH);
+        if summary_fresh && timeline_fresh {
+            return;
+        }
+        let target = self.targets.get(&evaluation_key(&cwd)).cloned();
+        self.git_pending = Some(cwd.clone());
+        spawn_git_read(cwd, target, !timeline_fresh, sender.clone());
+    }
+
+    /// Installs a finished read, or drops it.
+    ///
+    /// Returns whether anything on screen changed. An answer about a
+    /// checkout the selection has since left is released — its key must
+    /// not stay reserved — and then discarded: it is not wrong, it is no
+    /// longer the question being asked.
+    fn absorb_git_read(&mut self, resolution: GitResolution) -> bool {
+        if self.git_pending.as_ref() == Some(&resolution.cwd) {
+            self.git_pending = None;
+        }
+        if self.focused_cwd().as_ref() != Some(&resolution.cwd) {
+            return false;
+        }
+        let now = Instant::now();
+        let carried = self
+            .git_badge
+            .take()
+            .filter(|badge| badge.cwd == resolution.cwd);
+        self.git_badge = Some(match resolution.answer {
+            GitAnswer::Summary(summary) => GitBadge {
+                cwd: resolution.cwd,
+                summary,
+                timeline: carried.as_ref().and_then(|badge| badge.timeline.clone()),
+                timeline_checked_at: carried.map_or(now, |badge| badge.timeline_checked_at),
+                checked_at: now,
+            },
+            GitAnswer::Full { summary, timeline } => GitBadge {
+                cwd: resolution.cwd,
+                summary,
+                timeline,
+                timeline_checked_at: now,
+                checked_at: now,
+            },
         });
+        true
+    }
+
+    /// Whether a commit account is on screen *or* on its way — both are
+    /// states a keystroke or a click dismisses, so an answer still in
+    /// flight cannot open over a viewer who has already moved on.
+    fn commit_detail_open(&self) -> bool {
+        self.commit_detail.is_some() || self.commit_detail_pending.is_some()
+    }
+
+    fn dismiss_commit_detail(&mut self) {
+        self.commit_detail = None;
+        self.commit_detail_pending = None;
+        self.dirty = true;
+    }
+
+    /// Opens the popup a background `git show` answered for, or drops the
+    /// answer.
+    ///
+    /// Dropped when the viewer clicked another row, or dismissed the
+    /// popup, while the read ran: the pending hash is what they last
+    /// asked for, and nothing else may open over them.
+    fn absorb_commit_detail(&mut self, resolution: CommitDetailResolution) -> bool {
+        if self.commit_detail_pending.as_deref() != Some(resolution.hash.as_str()) {
+            return false;
+        }
+        self.commit_detail_pending = None;
+        let Some(detail) = resolution.detail else {
+            return false;
+        };
+        self.commit_detail = Some(CommitDetailPopup {
+            detail,
+            target: resolution.target,
+            anchor: resolution.anchor,
+            scroll: 0,
+        });
+        true
+    }
+
+    /// Asks for a re-read of the open changes overlay when its own cadence
+    /// says so, carrying the placement the viewer is at (see
+    /// [`git::GitView::reload`]).
+    fn schedule_git_view_reload(&mut self, sender: &mpsc::Sender<GitViewResolution>) {
+        if self.git_view_pending {
+            return;
+        }
+        let Some(view) = self.git_view.as_ref() else {
+            return;
+        };
+        // A moved selection is asked for at once; the periodic re-read is
+        // what the cadence governs.
+        if !view.diff_pending() && !view.refresh_due() {
+            return;
+        }
+        self.git_view_pending = true;
+        spawn_git_view_reload(view.root().to_path_buf(), view.placement(), sender.clone());
+    }
+
+    /// Installs a re-read overlay, or drops it.
+    ///
+    /// Dropped when the viewer moved while the read ran: the answer
+    /// describes a placement they have already left, and installing it
+    /// would drag them back to it. The view they are on still reads as
+    /// due, so the next tick asks again for where they now are.
+    fn absorb_git_view_reload(&mut self, resolution: GitViewResolution) -> bool {
+        self.git_view_pending = false;
+        let Some(view) = self.git_view.as_mut() else {
+            return false;
+        };
+        if view.root() != resolution.root || view.placement() != resolution.placement {
+            return false;
+        }
+        *view = resolution.view;
+        true
     }
 }
 
@@ -3688,21 +2768,8 @@ fn deliver_selected_tab(
         model.set_notice("this tab has no task to deliver".to_owned());
         return;
     };
-    if !task.state.is_deliverable() {
-        model.set_notice(format!(
-            "{}: {}",
-            task.label,
-            match &task.state {
-                TaskStateView::Running => "nothing committed yet",
-                TaskStateView::Uncommitted => "uncommitted changes in its checkout",
-                TaskStateView::Conflicted { .. } => "a rebase is paused; the agent is on it",
-                TaskStateView::Integrating => "already being delivered",
-                TaskStateView::Integrated => "already delivered",
-                TaskStateView::Closed => "its branch holds nothing",
-                TaskStateView::Parked | TaskStateView::Ready | TaskStateView::GateFailed =>
-                    "not deliverable",
-            }
-        ));
+    if let Some(reason) = task.state.undeliverable_reason() {
+        model.set_notice(format!("{}: {reason}", task.label));
         return;
     }
     if !model.delivery_pending.insert(task.id.clone()) {
@@ -3715,23 +2782,28 @@ fn deliver_selected_tab(
     spawn_delivery(home, cwd, Some(task.id), sender.clone());
 }
 
-/// Ends the tasks whose agent is gone, so their slots can be reused.
+/// Works out who is sitting in which slot, and asks the application to
+/// reconcile it when that has changed.
 ///
-/// A slot is occupied by the pane sitting in it and by nothing else: the
-/// task record alone cannot say whether an agent is still there, and a task
-/// that stays live keeps its checkout out of the pool for good. Two things
-/// end one — a tab that closed, seen here as a checkout whose last pane is
-/// gone, and a session nobody restored, swept once before this client can
-/// place its first agent.
+/// The client's half only: a pane is bound to the checkout it was *first
+/// seen* in rather than to wherever it currently sits — an agent that
+/// `cd`s out of its own slot has not left it, and must never have it
+/// handed to somebody else. What that binding *means* for a task is the
+/// application's (`Workspace::reconcile_occupancy`), and it asks Git, so
+/// it runs on a thread of its own.
 ///
-/// A pane is bound to the checkout it was *first seen* in rather than to
-/// wherever it currently sits: an agent that `cd`s out of its own slot has
-/// not left it, and must never have it handed to somebody else.
+/// Two things make a slot free — a tab that closed, seen here as a
+/// checkout whose last pane is gone, and a session nobody restored, swept
+/// once before this client can place its first agent.
 fn sync_slot_occupancy(
     model: &mut WorkspaceModel,
     home: &UzeHome,
-    sender: &mpsc::Sender<TaskResolution>,
+    sender: &mpsc::Sender<OccupancyResolution>,
 ) {
+    if !model.occupancy_stale || model.occupancy_pending {
+        return;
+    }
+    model.occupancy_stale = false;
     let Some(session) = model.session.as_ref() else {
         return;
     };
@@ -3768,9 +2840,9 @@ fn sync_slot_occupancy(
     }
     // A repository is named by any path inside it: the checkout a pane just
     // left, or — for the sweep — every space's own root.
-    let mut repositories: Vec<PathBuf> = vanished;
+    let mut look_in: Vec<PathBuf> = vanished;
     if sweeping {
-        repositories.extend(
+        look_in.extend(
             session
                 .workspace
                 .spaces
@@ -3778,33 +2850,13 @@ fn sync_slot_occupancy(
                 .map(|space| space.root.clone()),
         );
     }
-    let Ok(app) = tui_application(home.clone()) else {
-        return;
-    };
-    let held: Vec<PathBuf> = occupied.into_iter().collect();
-    let mut seen = BTreeSet::new();
-    for cwd in repositories {
-        let Some(primary) = app.workspace().primary_of(&cwd) else {
-            continue;
-        };
-        if !seen.insert(primary) {
-            continue;
-        }
-        let released = app.workspace().release_abandoned_tasks(&cwd, &held);
-        if let Some(parked) = released.iter().find(|task| task.parked) {
-            model.set_notice(format!(
-                "{}: parked, its work is preserved (alt+p)",
-                parked.label
-            ));
-        }
-        if !released.is_empty() {
-            model.schedule_evaluation(home, cwd.clone(), sender);
-        }
-        // Only ever the removals that cannot lose work, and only from the
-        // path that just changed what "in use" means.
-        let occupied: Vec<PathBuf> = model.occupied_checkouts.iter().cloned().collect();
-        app.workspace().collect_slot_garbage(&cwd, &occupied);
-    }
+    model.occupancy_pending = true;
+    spawn_occupancy_reconcile(
+        home,
+        look_in,
+        occupied.into_iter().collect(),
+        sender.clone(),
+    );
 }
 
 /// Every pane of a layout, in the order they are laid out.
@@ -3817,21 +2869,6 @@ fn panes_in_layout(layout: &uze_terminal::Layout) -> Vec<&uze_terminal::Pane> {
             panes
         }
     }
-}
-
-/// Where a newly created agent starts: the slot the application acquired
-/// for it, or — when isolation is impossible — the directory it was created
-/// from. The application decides; this only asks from the selected pane,
-/// and tells it which checkouts a live pane still sits in (see
-/// `sync_slot_occupancy`) so a delivered task's agent is never handed its
-/// own directory's next tenant.
-fn agent_launch_cwd(model: &WorkspaceModel, home: &UzeHome) -> Option<PathBuf> {
-    let pane_cwd = selected_pane_cwd(model)?;
-    let Ok(app) = tui_application(home.clone()) else {
-        return Some(pane_cwd);
-    };
-    let occupied: Vec<PathBuf> = model.occupied_checkouts.iter().cloned().collect();
-    Some(app.workspace().place_new_agent(&pane_cwd, &occupied).cwd)
 }
 
 /// The new-agent picker inherits the selected pane's live directory. The
@@ -3891,7 +2928,17 @@ fn scroll_timeline(model: &mut WorkspaceModel, direction: ScrollDirection) {
 /// Opens the popup for the timeline's `index`-th commit, beside the row
 /// it was clicked in. Read now, once: the account of a commit does not
 /// change, and the click is the one moment it is wanted.
-fn open_commit_detail(model: &mut WorkspaceModel, index: usize, anchor: Rect) {
+/// Asks for the account of the commit on timeline row `index`.
+///
+/// The read is a `git show`, so it happens off-thread like every other
+/// Git call here and the popup appears when the answer lands — see
+/// [`WorkspaceModel::absorb_commit_detail`].
+fn open_commit_detail(
+    model: &mut WorkspaceModel,
+    index: usize,
+    anchor: Rect,
+    sender: &mpsc::Sender<CommitDetailResolution>,
+) {
     let Some(badge) = model.git_badge.as_ref() else {
         return;
     };
@@ -3902,17 +2949,13 @@ fn open_commit_detail(model: &mut WorkspaceModel, index: usize, anchor: Rect) {
     else {
         return;
     };
-    let target = model.targets.get(&evaluation_key(&badge.cwd)).cloned();
-    model.commit_detail =
-        git::commit_detail(&WorkspaceHost, &badge.cwd, &commit.hash).map(|detail| {
-            CommitDetailPopup {
-                detail,
-                target,
-                anchor,
-                scroll: 0,
-            }
-        });
+    let hash = commit.hash.clone();
+    let cwd = badge.cwd.clone();
+    let target = model.targets.get(&evaluation_key(&cwd)).cloned();
+    model.commit_detail = None;
+    model.commit_detail_pending = Some(hash.clone());
     model.dirty = true;
+    spawn_commit_detail(cwd, hash, anchor, target, sender.clone());
 }
 
 /// Opens the Git changes overlay scoped to the *currently selected tab's*
@@ -3928,7 +2971,12 @@ fn open_git_view(model: &mut WorkspaceModel) {
     let Some(pane) = pane_in_layout(&tab.layout, tab.focus.pane) else {
         return;
     };
-    model.git_view = Some(git::GitView::open(&WorkspaceHost, pane.cwd.clone()));
+    // Asked for, not read: the read is `schedule_git_view_reload`'s, on a
+    // thread. Formatting the path is not a read, so the overlay opens
+    // already knowing which checkout it is about.
+    let cwd = pane.cwd.clone();
+    let display_root = crate::ui::display_project_path(&cwd);
+    model.git_view = Some(git::GitView::opening(cwd, display_root));
     model.dirty = true;
 }
 

@@ -7,8 +7,8 @@
 //! Today there's exactly one extension ([`git`]: the changes overlay and
 //! the sidebar's commit timeline); the crate is structured so a second one
 //! is another module with its own `CATALOG` entry (see `git::CATALOG`),
-//! one registration in `ExtensionRegistry::builtin`, and one more
-//! [`ExtensionHit`] variant, not a new crate.
+//! one registration in `ExtensionRegistry::builtin`, and one
+//! [`ExtensionHit`] variant per surface it draws, not a new crate.
 //!
 //! # An extension holds no machine access of its own
 //!
@@ -43,7 +43,15 @@ pub mod view;
 /// "row 3 was clicked" is meaningless without saying whose row 3.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExtensionHit {
+    /// The git extension's full-frame changes overlay.
     Git(view::ViewHit),
+    /// The git extension's sidebar section — its commit timeline.
+    ///
+    /// A second variant for a second *surface* of the one extension, not
+    /// a second extension: `SelectItem(3)` means a different thing in a
+    /// file list than in a list of commits, and the host is the only side
+    /// that knows which of the two it drew.
+    GitTimeline(view::ViewHit),
 }
 
 /// What an extension may ask the host to do on its behalf.

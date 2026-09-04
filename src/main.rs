@@ -669,201 +669,9 @@ fn run(cli: Cli) -> Result<()> {
                 OutputFormat::Json => print_json(&report),
             }
         }
-        Command::Context { action } => match action {
-            ContextAction::Inspect { path, format } => {
-                let status = app.context().inspect(&context_path(path))?;
-                match format {
-                    OutputFormat::Text => print!("{}", render_context_status(&status)),
-                    OutputFormat::Json => print_json(&status),
-                }
-            }
-            ContextAction::Plan { path, format } => {
-                let plan = app.context().plan(&context_path(path))?;
-                match format {
-                    OutputFormat::Text => print!("{}", render_context_plan(&plan, &app)),
-                    OutputFormat::Json => print_json(&plan),
-                }
-            }
-            ContextAction::Reconcile { path, format } => {
-                let report = app.context().reconcile(&context_path(path))?;
-                match format {
-                    OutputFormat::Text => {
-                        print!("{}", render_context_reconciliation(&report, &app));
-                    }
-                    OutputFormat::Json => print_json(&report),
-                }
-            }
-        },
-        Command::Market { action } => match action {
-            MarketAction::Add { source } => {
-                let spinner = progress::spinner("Adding marketplace...");
-                match app.marketplace().add(&source) {
-                    Ok(true) => {
-                        spinner.finish_and_clear();
-                        progress::success(&format!("Added marketplace from {source}"));
-                    }
-                    Ok(false) => {
-                        spinner.finish_and_clear();
-                        progress::success(&format!("Marketplace from {source} is already added"));
-                    }
-                    Err(e) => {
-                        spinner.finish_and_clear();
-                        progress::error(&format!("Failed to add marketplace: {e}"));
-                        return Err(e);
-                    }
-                }
-            }
-            MarketAction::List { format } => {
-                let mps = app.marketplace().list()?;
-                match format {
-                    OutputFormat::Text => print!("{}", render_market_list(&mps)),
-                    OutputFormat::Json => print_json(&mps),
-                }
-            }
-            MarketAction::Remove { name } => {
-                app.marketplace().remove(&name)?;
-                println!("Removed marketplace {name}");
-            }
-            MarketAction::Inspect { name, format } => {
-                let detail = app.marketplace().inspect(&name)?;
-                match format {
-                    OutputFormat::Text => print!("{}", render_market_detail(&detail)),
-                    OutputFormat::Json => print_json(&detail),
-                }
-            }
-        },
-        Command::Plugin { action } => match action {
-            PluginAction::Install {
-                plugin,
-                trust,
-                alias,
-                replace,
-                format,
-            } => {
-                let authority = trust_authority(trust);
-                let name_authority = name_collision_authority(alias, replace);
-                let spinner = progress::spinner(&format!("Installing plugin {plugin}..."));
-                // Every install goes through a marketplace that must have
-                // been added first: `uze market add <market>` then
-                // `uze plugin install <name>@<market>`. A direct source
-                // (path or Git URL) is never accepted — the marketplace is
-                // the product's provenance contract (see ADR-019).
-                let installed = if plugin.contains('@') {
-                    app.marketplace().install_plugin_resolving(
-                        &plugin,
-                        authority.as_ref(),
-                        name_authority.as_ref(),
-                    )
-                } else {
-                    return Err(uze_application::UzeError::UnknownPackage(format!(
-                        "`{plugin}` is not a `name@marketplace` spec; add its marketplace with \
-                         `uze market add <market>` first, then install with \
-                         `uze plugin install {plugin}@<market>`"
-                    )));
-                };
-                match installed {
-                    Ok(report) => {
-                        spinner.finish_and_clear();
-                        match format {
-                            OutputFormat::Text => {
-                                println!(
-                                    "{}",
-                                    progress::report_title(
-                                        "Plugin installed",
-                                        Some(&report.plugin.id)
-                                    )
-                                );
-                                println!(
-                                    "{}",
-                                    progress::key_value(
-                                        "Store path",
-                                        report.plugin.store_path.display().to_string()
-                                    )
-                                );
-                                print!("{}", render_add_report(&report, verbose, &app));
-                                for publication in &report.publications {
-                                    if let Some(error) = &publication.error {
-                                        progress::warn(&format!(
-                                            "{} could not publish: {error}",
-                                            app.health()
-                                                .integration_label(&publication.integration)
-                                        ));
-                                    }
-                                }
-                            }
-                            OutputFormat::Json => print_json(&report),
-                        }
-                    }
-                    Err(e) => {
-                        spinner.finish_and_clear();
-                        progress::error(&format!("Failed to install plugin: {e}"));
-                        return Err(e);
-                    }
-                }
-            }
-            PluginAction::List { format } => {
-                let plugins = app.plugins().list()?;
-                match format {
-                    OutputFormat::Text => {
-                        println!(
-                            "{}",
-                            progress::report_title("Plugins", Some("Installed on this machine"))
-                        );
-                        if plugins.is_empty() {
-                            println!("  No plugins installed");
-                        } else {
-                            println!(
-                                "{}",
-                                progress::aligned_rows(
-                                    plugins
-                                        .iter()
-                                        .map(|plugin| {
-                                            let origin = if plugin.active_name == plugin.id {
-                                                String::new()
-                                            } else {
-                                                progress::label(format!("origin: {}", plugin.id))
-                                            };
-                                            vec![
-                                                progress::title(&plugin.active_name),
-                                                origin,
-                                                format!("{} capabilities", plugin.capability_count),
-                                            ]
-                                        })
-                                        .collect()
-                                )
-                            );
-                        }
-                    }
-                    OutputFormat::Json => print_json(&plugins),
-                }
-            }
-            PluginAction::Inspect { plugin, format } => {
-                let report = app.plugins().inspect(&plugin)?;
-                match format {
-                    OutputFormat::Text => print!("{}", render_inspection(&report)),
-                    OutputFormat::Json => print_json(&report),
-                }
-            }
-            PluginAction::Remove { plugin, format } => {
-                let report = app.plugins().remove(&plugin)?;
-                match format {
-                    OutputFormat::Text => print!("{}", render_remove(&report)),
-                    OutputFormat::Json => print_json(&report),
-                }
-            }
-            PluginAction::Update {
-                plugin,
-                trust,
-                format,
-            } => {
-                let authority = trust_authority(trust);
-                let report = app.plugins().update(&plugin, authority.as_ref())?;
-                match format {
-                    OutputFormat::Text => print!("{}", render_update(&report)),
-                    OutputFormat::Json => print_json(&report),
-                }
-            }
-        },
+        Command::Context { action } => run_context(&app, action)?,
+        Command::Market { action } => run_market(&app, action)?,
+        Command::Plugin { action } => run_plugin(&app, action, verbose)?,
         Command::Doctor { format } => {
             let spinner = progress::spinner("Running diagnostics...");
             let report = app.health().report();
@@ -1028,6 +836,214 @@ fn print_setup_help() {
 /// installer's output is buffered to `$UZE_HOME/state/logs/setup-<harness>.log`
 /// instead of interleaving on the terminal, so the terminal shows only
 /// ordered step headers and the per-harness final status.
+/// `uze context …` — the project-scoped half of the grammar: what this
+/// project declares, what reconciling it would write, and writing it. See
+/// ADR-019 for why none of these ever touch machine state.
+fn run_context(app: &UzeApplication, action: ContextAction) -> Result<()> {
+    match action {
+        ContextAction::Inspect { path, format } => {
+            let status = app.context().inspect(&context_path(path))?;
+            match format {
+                OutputFormat::Text => print!("{}", render_context_status(&status)),
+                OutputFormat::Json => print_json(&status),
+            }
+        }
+        ContextAction::Plan { path, format } => {
+            let plan = app.context().plan(&context_path(path))?;
+            match format {
+                OutputFormat::Text => print!("{}", render_context_plan(&plan, app)),
+                OutputFormat::Json => print_json(&plan),
+            }
+        }
+        ContextAction::Reconcile { path, format } => {
+            let report = app.context().reconcile(&context_path(path))?;
+            match format {
+                OutputFormat::Text => {
+                    print!("{}", render_context_reconciliation(&report, app));
+                }
+                OutputFormat::Json => print_json(&report),
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `uze market …` — the marketplaces a machine knows about.
+fn run_market(app: &UzeApplication, action: MarketAction) -> Result<()> {
+    match action {
+        MarketAction::Add { source } => {
+            let spinner = progress::spinner("Adding marketplace...");
+            match app.marketplace().add(&source) {
+                Ok(true) => {
+                    spinner.finish_and_clear();
+                    progress::success(&format!("Added marketplace from {source}"));
+                }
+                Ok(false) => {
+                    spinner.finish_and_clear();
+                    progress::success(&format!("Marketplace from {source} is already added"));
+                }
+                Err(e) => {
+                    spinner.finish_and_clear();
+                    progress::error(&format!("Failed to add marketplace: {e}"));
+                    return Err(e);
+                }
+            }
+        }
+        MarketAction::List { format } => {
+            let mps = app.marketplace().list()?;
+            match format {
+                OutputFormat::Text => print!("{}", render_market_list(&mps)),
+                OutputFormat::Json => print_json(&mps),
+            }
+        }
+        MarketAction::Remove { name } => {
+            app.marketplace().remove(&name)?;
+            println!("Removed marketplace {name}");
+        }
+        MarketAction::Inspect { name, format } => {
+            let detail = app.marketplace().inspect(&name)?;
+            match format {
+                OutputFormat::Text => print!("{}", render_market_detail(&detail)),
+                OutputFormat::Json => print_json(&detail),
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `uze plugin …` — the machine-scoped package lifecycle.
+fn run_plugin(app: &UzeApplication, action: PluginAction, verbose: bool) -> Result<()> {
+    match action {
+        PluginAction::Install {
+            plugin,
+            trust,
+            alias,
+            replace,
+            format,
+        } => {
+            let authority = trust_authority(trust);
+            let name_authority = name_collision_authority(alias, replace);
+            let spinner = progress::spinner(&format!("Installing plugin {plugin}..."));
+            // Every install goes through a marketplace that must have
+            // been added first: `uze market add <market>` then
+            // `uze plugin install <name>@<market>`. A direct source
+            // (path or Git URL) is never accepted — the marketplace is
+            // the product's provenance contract (see ADR-019).
+            let installed = if plugin.contains('@') {
+                app.marketplace().install_plugin_resolving(
+                    &plugin,
+                    authority.as_ref(),
+                    name_authority.as_ref(),
+                )
+            } else {
+                return Err(uze_application::UzeError::UnknownPackage(format!(
+                    "`{plugin}` is not a `name@marketplace` spec; add its marketplace with \
+                     `uze market add <market>` first, then install with \
+                     `uze plugin install {plugin}@<market>`"
+                )));
+            };
+            match installed {
+                Ok(report) => {
+                    spinner.finish_and_clear();
+                    match format {
+                        OutputFormat::Text => {
+                            println!(
+                                "{}",
+                                progress::report_title("Plugin installed", Some(&report.plugin.id))
+                            );
+                            println!(
+                                "{}",
+                                progress::key_value(
+                                    "Store path",
+                                    report.plugin.store_path.display().to_string()
+                                )
+                            );
+                            print!("{}", render_add_report(&report, verbose, app));
+                            for publication in &report.publications {
+                                if let Some(error) = &publication.error {
+                                    progress::warn(&format!(
+                                        "{} could not publish: {error}",
+                                        app.health().integration_label(&publication.integration)
+                                    ));
+                                }
+                            }
+                        }
+                        OutputFormat::Json => print_json(&report),
+                    }
+                }
+                Err(e) => {
+                    spinner.finish_and_clear();
+                    progress::error(&format!("Failed to install plugin: {e}"));
+                    return Err(e);
+                }
+            }
+        }
+        PluginAction::List { format } => {
+            let plugins = app.plugins().list()?;
+            match format {
+                OutputFormat::Text => {
+                    println!(
+                        "{}",
+                        progress::report_title("Plugins", Some("Installed on this machine"))
+                    );
+                    if plugins.is_empty() {
+                        println!("  No plugins installed");
+                    } else {
+                        println!(
+                            "{}",
+                            progress::aligned_rows(
+                                plugins
+                                    .iter()
+                                    .map(|plugin| {
+                                        let origin = if plugin.active_name == plugin.id {
+                                            String::new()
+                                        } else {
+                                            progress::label(format!("origin: {}", plugin.id))
+                                        };
+                                        vec![
+                                            progress::title(&plugin.active_name),
+                                            origin,
+                                            format!("{} capabilities", plugin.capability_count),
+                                        ]
+                                    })
+                                    .collect()
+                            )
+                        );
+                    }
+                }
+                OutputFormat::Json => print_json(&plugins),
+            }
+        }
+        PluginAction::Inspect { plugin, format } => {
+            let report = app.plugins().inspect(&plugin)?;
+            match format {
+                OutputFormat::Text => print!("{}", render_inspection(&report)),
+                OutputFormat::Json => print_json(&report),
+            }
+        }
+        PluginAction::Remove { plugin, format } => {
+            let report = app.plugins().remove(&plugin)?;
+            match format {
+                OutputFormat::Text => print!("{}", render_remove(&report)),
+                OutputFormat::Json => print_json(&report),
+            }
+        }
+        PluginAction::Update {
+            plugin,
+            trust,
+            format,
+        } => {
+            let authority = trust_authority(trust);
+            let report = app.plugins().update(&plugin, authority.as_ref())?;
+            match format {
+                OutputFormat::Text => print!("{}", render_update(&report)),
+                OutputFormat::Json => print_json(&report),
+            }
+        }
+    }
+    Ok(())
+}
+
 fn run_setup(
     app: &UzeApplication,
     home: &UzeHome,

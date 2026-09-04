@@ -6,6 +6,7 @@
 //! `&WorkspaceModel` and paint it, which is what makes them one module.
 
 use super::*;
+use crate::ui::{Rows, fill_row_bg};
 
 pub(super) fn blank_pane(pane: PaneId, columns: u16, rows: u16) -> PaneSnapshot {
     PaneSnapshot {
@@ -127,7 +128,6 @@ pub(super) fn render(
         let mut view_hits = Vec::new();
         let area = frame.area();
         let view = git::view(
-            &crate::ui::extension_host::WorkspaceHost,
             git,
             crate::ui::extension_view::content_space(area, model.git_tree_width),
         );
@@ -397,7 +397,7 @@ fn small_caps(s: &str) -> String {
 /// [`caption_color`]). Not a mark on the row, and not a status in the
 /// catalog: the branch is already there, and its colour says it.
 fn is_unisolated(cwd: &Path) -> bool {
-    uze_application::isolated_checkout(cwd).is_none()
+    !uze_application::is_isolated_checkout(cwd)
 }
 
 /// The hue an agent's caption line is drawn in: dim, like every other
@@ -425,45 +425,6 @@ fn push_trailing_mark(
     if mark_x < label_rect.right() {
         let cell = Rect::new(mark_x, label_rect.y, 1, 1);
         hits.push((cell, WorkspaceHit::OpenStatusCatalog(cell)));
-    }
-}
-
-/// A downward cursor over one column's rows. The sidebar lays itself out a
-/// row at a time and simply stops once the column is full, so nothing it
-/// draws needs to know in advance how tall everything else came out.
-struct Rows {
-    x: u16,
-    width: u16,
-    y: u16,
-    bottom: u16,
-}
-
-impl Rows {
-    fn over(area: Rect) -> Self {
-        Self {
-            x: area.x,
-            width: area.width,
-            y: area.y,
-            bottom: area.y + area.height,
-        }
-    }
-
-    fn next(&mut self, height: u16) -> Option<Rect> {
-        if self.y + height > self.bottom {
-            return None;
-        }
-        let rect = Rect::new(self.x, self.y, self.width, height);
-        self.y += height;
-        Some(rect)
-    }
-
-    /// One blank row, when the column still has one to spare.
-    fn gap(&mut self) {
-        let _ = self.next(1);
-    }
-
-    fn remaining(&self) -> u16 {
-        self.bottom.saturating_sub(self.y)
     }
 }
 
@@ -916,13 +877,14 @@ pub(super) fn timeline_height(
 /// turn where the divider was dropped into a count of commit rows.
 pub(super) const TIMELINE_CHROME: u16 = 2;
 
-/// The Git extension's timeline as a section of the sidebar: a header
-/// that folds it, a divider that is its resize handle, then one row per
-/// commit, newest first — `HEAD` ringed, the rest dotted, each with how
-/// long ago it landed pinned to the row's right edge, the column the agent
-/// rows keep their alias in. No commit row is a target: the section says
-/// where the branch has been, and the changes overlay is where a diff is
-/// read.
+/// The sidebar's commit-timeline section.
+///
+/// Nothing here knows what a commit is. The extension says what the
+/// section holds ([`git::timeline_section`]) and
+/// `extension_view::render_section` draws it; this only supplies the host
+/// state the extension is not allowed to hold — whether the section is
+/// folded, how far it is scrolled, whether its divider is being dragged —
+/// and tags the hits that come back with the surface they came from.
 fn render_timeline(
     frame: &mut ratatui::Frame<'_>,
     timeline: &git::Timeline,
@@ -930,106 +892,21 @@ fn render_timeline(
     rows: &mut Rows,
     hits: &mut Vec<(Rect, WorkspaceHit)>,
 ) {
-    let Some(header_rect) = rows.next(1) else {
-        return;
-    };
-    let fold = if model.timeline_collapsed {
-        "▸"
-    } else {
-        "▾"
-    };
-    // Bold on a filled row: the one section header in a column of tree
-    // rows, so it reads as a heading rather than as one more item.
-    let mut spans = vec![
-        Span::styled(
-            format!("{fold} "),
-            Style::default().fg(crate::ui::TEXT_SECONDARY),
-        ),
-        Span::styled(
-            "timeline",
-            Style::default()
-                .fg(crate::ui::TEXT_SECONDARY)
-                .add_modifier(Modifier::BOLD),
-        ),
-    ];
-    push_trailing(
-        &mut spans,
-        header_rect.width,
-        timeline.branch.clone(),
-        crate::ui::TEXT_DIM,
+    let section = git::timeline_section(timeline, model.timeline_collapsed, model.timeline_scroll);
+    let mut section_hits = Vec::new();
+    crate::ui::extension_view::render_section(
+        frame,
+        &section,
+        rows,
+        model.dragging_timeline,
+        &mut section_hits,
     );
-    fill_row_bg(&mut spans, header_rect.width, crate::ui::SURFACE_OVERLAY);
-    frame.render_widget(Paragraph::new(Line::from(spans)), header_rect);
-    hits.push((header_rect, WorkspaceHit::ToggleTimeline));
-    if model.timeline_collapsed {
-        return;
-    }
-    // The divider between the header and its rows doubles as the drag
-    // handle, the way the sidebar's own border does — lit in the accent
-    // while it is being dragged, same as that border.
-    if let Some(handle_rect) = rows.next(1) {
-        let hue = if model.dragging_timeline {
-            crate::ui::ACCENT
-        } else {
-            crate::ui::BORDER_FAINT
-        };
-        frame.render_widget(
-            Paragraph::new(Span::styled(
-                "─".repeat(handle_rect.width as usize),
-                Style::default().fg(hue),
-            )),
-            handle_rect,
-        );
-        hits.push((handle_rect, WorkspaceHit::ResizeTimeline));
-    }
-
-    // Scrolled by whole rows, never past the page that ends on the oldest
-    // commit — so the section is always full when the history is.
-    let visible = usize::from(rows.remaining());
-    let first = model
-        .timeline_scroll
-        .min(timeline.commits.len().saturating_sub(visible));
-    for (index, commit) in timeline.commits.iter().enumerate().skip(first) {
-        let Some(rect) = rows.next(1) else {
-            break;
-        };
-        let is_head = index == 0;
-        // The hue is the commit's standing, the ring is `HEAD`: blue for
-        // what is still ahead of the base — what a delivery or a push
-        // would move — and the target's own gold for what has landed in
-        // it, the same gold the operator's tree wears in the tree above.
-        let mark = if is_head { "◉" } else { "●" };
-        let mark_hue = if commit.ahead {
-            crate::ui::BLUE
-        } else {
-            crate::ui::WARNING
-        };
-        let subject_hue = if is_head {
-            crate::ui::NAV_INACTIVE
-        } else {
-            crate::ui::TEXT_DIM
-        };
-        // The subject gives way before the age: a row that only says
-        // "fix(tui): the sidebar…" still says what, and the column that
-        // says when stays a column.
-        let age_width = commit.age.chars().count() as u16;
-        let subject_width = rect.width.saturating_sub(2 + 1 + age_width + TRAILING_PAD);
-        let mut spans = vec![
-            Span::styled(format!("{mark} "), Style::default().fg(mark_hue)),
-            Span::styled(
-                elide_tail(&commit.subject, subject_width as usize),
-                Style::default().fg(subject_hue),
-            ),
-        ];
-        push_trailing(
-            &mut spans,
-            rect.width,
-            commit.age.clone(),
-            crate::ui::TEXT_FAINT,
-        );
-        frame.render_widget(Paragraph::new(Line::from(spans)), rect);
-        hits.push((rect, WorkspaceHit::TimelineCommit(index)));
-    }
+    hits.extend(section_hits.into_iter().map(|(rect, hit)| {
+        (
+            rect,
+            WorkspaceHit::Extension(ExtensionHit::GitTimeline(hit)),
+        )
+    }));
 }
 
 /// Where the commit popup goes and what it says, resolved once for both
@@ -1208,35 +1085,6 @@ pub(super) fn render_commit_detail(
 
 /// The one column every right-pinned label in the sidebar keeps off the
 /// divider (see `render_sidebar`'s `Padding::new(1, 0, 0, 0)`).
-const TRAILING_PAD: u16 = 1;
-
-/// Appends `text` pinned to the row's right edge, `TRAILING_PAD` off the
-/// divider — the column the agent rows keep their alias in.
-fn push_trailing<'a>(spans: &mut Vec<Span<'a>>, width: u16, text: String, hue: Color) {
-    let used: u16 = spans.iter().map(|span| span.width() as u16).sum::<u16>()
-        + text.chars().count() as u16
-        + TRAILING_PAD;
-    let gap = width.saturating_sub(used).max(1);
-    spans.push(Span::raw(" ".repeat(gap as usize)));
-    spans.push(Span::styled(text, Style::default().fg(hue)));
-    spans.push(Span::raw(" ".repeat(TRAILING_PAD as usize)));
-}
-
-/// `text` shortened from the right to `width`, keeping its head — a
-/// subject says what it did in its first words.
-fn elide_tail(text: &str, width: usize) -> String {
-    if text.chars().count() <= width {
-        return text.to_owned();
-    }
-    let Some(kept) = width.checked_sub(1) else {
-        return String::new();
-    };
-    text.chars()
-        .take(kept)
-        .chain(std::iter::once('…'))
-        .collect()
-}
-
 /// One space's header row in the sidebar tree — its label, or its root once
 /// the `⇄` behind it is clicked (never both: see
 /// `WorkspaceModel::roots_shown`) — dim for every space,
@@ -1550,7 +1398,7 @@ pub(super) fn render_status_catalog(
 /// read it. `None` inside a slot: the branch there belongs to the task,
 /// and the key an unslotted directory is evaluated under is its own path.
 fn unisolated_branch(model: &WorkspaceModel, cwd: &Path) -> Option<String> {
-    if uze_application::isolated_checkout(cwd).is_some() {
+    if !is_unisolated(cwd) {
         return None;
     }
     model.branches.get(&evaluation_key(cwd)).cloned()
@@ -1826,20 +1674,6 @@ pub(super) fn render_preserved(
 
 pub(super) fn agent_activity_frame(tick: usize) -> &'static str {
     AGENT_ACTIVITY_FRAMES[tick % AGENT_ACTIVITY_FRAMES.len()]
-}
-
-/// Stamps `bg` onto every span already in the row, then appends a
-/// trailing background-filled run of spaces so the highlight spans the
-/// row's full width instead of stopping at the last glyph — same pattern
-/// the management views' `render_plugin_row`/`header_line` use for their
-/// own selected-row backgrounds.
-pub(super) fn fill_row_bg<'a>(spans: &mut Vec<Span<'a>>, width: u16, bg: Color) {
-    for span in spans.iter_mut() {
-        span.style = span.style.bg(bg);
-    }
-    let used: usize = spans.iter().map(Span::width).sum();
-    let gap = (width as usize).saturating_sub(used);
-    spans.push(Span::styled(" ".repeat(gap), Style::default().bg(bg)));
 }
 
 /// The horizontal tab strip above the pane: the *selected space's* shell

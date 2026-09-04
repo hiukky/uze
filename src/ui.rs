@@ -534,5 +534,95 @@ fn route_style(route: &str) -> Style {
     }
 }
 
+// --- Row chrome ----------------------------------------------------------
+//
+// One column, one row at a time: what both sidebars and every extension
+// section are laid out with. Here rather than in either mode's own
+// renderer because an extension's section is drawn by `extension_view`,
+// which is a sibling of both — and two modules deriving the same trailing
+// column independently is what this file already exists to prevent.
+
+/// A downward cursor over one column's rows. The sidebar lays itself out a
+/// row at a time and simply stops once the column is full, so nothing it
+/// draws needs to know in advance how tall everything else came out.
+pub(crate) struct Rows {
+    x: u16,
+    width: u16,
+    y: u16,
+    bottom: u16,
+}
+
+impl Rows {
+    pub(crate) fn over(area: Rect) -> Self {
+        Self {
+            x: area.x,
+            width: area.width,
+            y: area.y,
+            bottom: area.y + area.height,
+        }
+    }
+
+    pub(crate) fn next(&mut self, height: u16) -> Option<Rect> {
+        if self.y + height > self.bottom {
+            return None;
+        }
+        let rect = Rect::new(self.x, self.y, self.width, height);
+        self.y += height;
+        Some(rect)
+    }
+
+    /// One blank row, when the column still has one to spare.
+    pub(crate) fn gap(&mut self) {
+        let _ = self.next(1);
+    }
+
+    pub(crate) fn remaining(&self) -> u16 {
+        self.bottom.saturating_sub(self.y)
+    }
+}
+
+pub(crate) const TRAILING_PAD: u16 = 1;
+
+/// Appends `text` pinned to the row's right edge, `TRAILING_PAD` off the
+/// divider — the column the agent rows keep their alias in.
+pub(crate) fn push_trailing<'a>(spans: &mut Vec<Span<'a>>, width: u16, text: String, hue: Color) {
+    let used: u16 = spans.iter().map(|span| span.width() as u16).sum::<u16>()
+        + text.chars().count() as u16
+        + TRAILING_PAD;
+    let gap = width.saturating_sub(used).max(1);
+    spans.push(Span::raw(" ".repeat(gap as usize)));
+    spans.push(Span::styled(text, Style::default().fg(hue)));
+    spans.push(Span::raw(" ".repeat(TRAILING_PAD as usize)));
+}
+
+/// `text` shortened from the right to `width`, keeping its head — a
+/// subject says what it did in its first words.
+pub(crate) fn elide_tail(text: &str, width: usize) -> String {
+    if text.chars().count() <= width {
+        return text.to_owned();
+    }
+    let Some(kept) = width.checked_sub(1) else {
+        return String::new();
+    };
+    text.chars()
+        .take(kept)
+        .chain(std::iter::once('…'))
+        .collect()
+}
+
+/// Stamps `bg` onto every span already in the row, then appends a
+/// trailing background-filled run of spaces so the highlight spans the
+/// row's full width instead of stopping at the last glyph — same pattern
+/// the management views' `render_plugin_row`/`header_line` use for their
+/// own selected-row backgrounds.
+pub(crate) fn fill_row_bg<'a>(spans: &mut Vec<Span<'a>>, width: u16, bg: Color) {
+    for span in spans.iter_mut() {
+        span.style = span.style.bg(bg);
+    }
+    let used: usize = spans.iter().map(Span::width).sum();
+    let gap = (width as usize).saturating_sub(used);
+    spans.push(Span::styled(" ".repeat(gap), Style::default().bg(bg)));
+}
+
 #[cfg(test)]
 mod tests;

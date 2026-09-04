@@ -37,7 +37,7 @@ use syntect::{easy::HighlightLines, highlighting::ThemeSet, parsing::SyntaxSet};
 
 use crate::view::{
     Content, ContentLine, LineTone, Navigator, NavigatorRow, Rgb, Role, ScrollDirection,
-    ScrollTarget, Size, Span, View, ViewHit,
+    ScrollTarget, Section, SectionRow, Size, Span, View, ViewHit,
 };
 
 use crate::Host;
@@ -190,6 +190,55 @@ pub fn timeline(
         }
     }
     Some(Timeline { branch, commits })
+}
+
+/// The sidebar section a checkout's [`Timeline`] draws as.
+///
+/// Everything the host used to decide for this extension: the fold
+/// marker's meaning, which hue a commit's dot wears, which text gives way
+/// when the column is narrow. The host still owns every rectangle — see
+/// [`crate::view::Section`].
+///
+/// `collapsed` and `scroll` come back from the host because the gestures
+/// that change them are the host's (a click on the header, a wheel over
+/// the rows); the extension is told what they are, and says what the
+/// section looks like as a result.
+pub fn timeline_section(timeline: &Timeline, collapsed: bool, scroll: usize) -> Section {
+    Section {
+        title: "timeline".to_owned(),
+        caption: Span::new(timeline.branch.clone(), Role::Dim),
+        collapsed,
+        resizable: true,
+        scroll,
+        rows: timeline
+            .commits
+            .iter()
+            .enumerate()
+            .map(|(index, commit)| {
+                let head = index == 0;
+                SectionRow {
+                    // The hue is the commit's standing, the ring is
+                    // `HEAD`: the badge hue for what is still ahead of
+                    // the base — what a delivery or a push would move —
+                    // and the target's own warning hue for what has
+                    // landed in it.
+                    marker: Span::new(
+                        if head { "\u{25c9}" } else { "\u{25cf}" },
+                        if commit.ahead {
+                            Role::Info
+                        } else {
+                            Role::Warning
+                        },
+                    ),
+                    name: Span::new(
+                        commit.subject.clone(),
+                        if head { Role::Inactive } else { Role::Dim },
+                    ),
+                    trailing: Span::new(commit.age.clone(), Role::Faint),
+                }
+            })
+            .collect(),
+    }
 }
 
 /// What "ahead" is measured against: the delivery target from any other
@@ -373,8 +422,9 @@ fn compact_age(relative: &str) -> String {
     format!("{count}{suffix}")
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum GitViewFocus {
+    #[default]
     Files,
     Diff,
 }
@@ -474,6 +524,11 @@ pub struct GitView {
     /// the active tab's live `cwd` — see `open`'s doc comment. Inside a
     /// linked worktree this is that worktree, not the primary it hangs off.
     root: PathBuf,
+    /// `root` as a person would recognise it, resolved once through the
+    /// host that read the checkout. Drawing this view then needs no host
+    /// at all, which is what lets the renderer hold none — see
+    /// [`view`].
+    display_root: String,
     /// The branch `root` is on, for the overlay's title — the one place a
     /// scoped view still has to say *which* checkout you are looking at.
     branch: String,
@@ -487,7 +542,31 @@ pub struct GitView {
     error: Option<String>,
     scroll: u16,
     focus: GitViewFocus,
+    /// Set when the selection moved and cleared when a read catches up.
+    ///
+    /// Selecting a file means reading and highlighting its diff, which is
+    /// the one thing in this extension whose cost has no bound — a large
+    /// file's syntax highlighting is not something an arrow key may pay
+    /// for on the thread that draws. So selecting only records *what* is
+    /// selected; the host reloads, and until it answers this says the
+    /// diff on screen is not the one being asked for.
+    diff_pending: bool,
     refreshed_at: Instant,
+}
+
+/// What a viewer did inside an open [`GitView`] that a re-read must not
+/// undo: the file they were on, which half had focus, how far they had
+/// scrolled.
+///
+/// Opaque to the host — it takes one from [`GitView::placement`] and hands
+/// it back to [`GitView::reload`] without ever looking inside. Comparable,
+/// so a host that reads in the background can tell an answer describing
+/// where the viewer *is* from one describing where they *were*.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ViewPlacement {
+    path: Option<PathBuf>,
+    focus: GitViewFocus,
+    scroll: u16,
 }
 
 impl GitView {
@@ -503,7 +582,7 @@ impl GitView {
     pub fn open(host: &dyn Host, cwd: PathBuf) -> Self {
         let root = match repository_root(host, &cwd) {
             Ok(root) => root,
-            Err(message) => return Self::with_error(cwd, message),
+            Err(message) => return Self::with_error(host, cwd, message),
         };
         let status = match run_git(
             host,
@@ -511,9 +590,10 @@ impl GitView {
             &["status", "--porcelain=v1", "--untracked-files=all"],
         ) {
             Ok(output) => output,
-            Err(message) => return Self::with_error(root, message),
+            Err(message) => return Self::with_error(host, root, message),
         };
         let mut view = Self {
+            display_root: host.display_path(&root),
             branch: current_branch(host, &root),
             files: parse_porcelain_status(&status, &root),
             root,
@@ -522,14 +602,43 @@ impl GitView {
             error: None,
             scroll: 0,
             focus: GitViewFocus::Files,
+            diff_pending: false,
             refreshed_at: Instant::now(),
         };
         view.load_selected_diff(host);
         view
     }
 
-    fn with_error(root: PathBuf, message: String) -> Self {
+    /// A view that has been asked for but not read yet.
+    ///
+    /// Opening reads a repository — `rev-parse`, `status`, a `diff`, and
+    /// the highlighting of that diff — which is exactly the cost a
+    /// reload pays and belongs on exactly the same thread. So the overlay
+    /// appears the instant it is asked for, saying it is reading, and
+    /// fills in when the host's reload lands.
+    ///
+    /// `display_root` is the path as a person would recognise it; the
+    /// caller has it without a host, because formatting a path reads
+    /// nothing.
+    pub fn opening(cwd: PathBuf, display_root: String) -> Self {
         Self {
+            display_root,
+            root: cwd,
+            branch: String::new(),
+            files: Vec::new(),
+            selected: 0,
+            diff: Vec::new(),
+            error: None,
+            scroll: 0,
+            focus: GitViewFocus::Files,
+            diff_pending: true,
+            refreshed_at: Instant::now(),
+        }
+    }
+
+    fn with_error(host: &dyn Host, root: PathBuf, message: String) -> Self {
+        Self {
+            display_root: host.display_path(&root),
             root,
             branch: String::new(),
             files: Vec::new(),
@@ -538,6 +647,7 @@ impl GitView {
             error: Some(message),
             scroll: 0,
             focus: GitViewFocus::Files,
+            diff_pending: false,
             refreshed_at: Instant::now(),
         }
     }
@@ -545,34 +655,67 @@ impl GitView {
     /// Selects `index` (clamped to the file list) and reloads its diff —
     /// the one place both keyboard navigation and a file-row click funnel
     /// through, so the two can never disagree about what "selected" means.
-    fn select(&mut self, host: &dyn Host, index: usize) {
+    fn select(&mut self, index: usize) {
         if self.files.is_empty() {
             return;
         }
-        self.selected = index.min(self.files.len() - 1);
+        let wanted = index.min(self.files.len() - 1);
+        if wanted == self.selected && !self.diff.is_empty() {
+            return;
+        }
+        self.selected = wanted;
         self.scroll = 0;
-        self.load_selected_diff(host);
+        self.diff = Vec::new();
+        self.diff_pending = true;
+    }
+
+    /// Whether the diff being shown is the selected file's yet.
+    pub fn diff_pending(&self) -> bool {
+        self.diff_pending
+    }
+
+    /// The checkout this view is scoped to, so the host can say which
+    /// repository an answer it is holding was read from.
+    pub fn root(&self) -> &Path {
+        &self.root
     }
 
     pub fn refresh_due(&self) -> bool {
         self.refreshed_at.elapsed() >= REFRESH_INTERVAL
     }
 
-    pub fn refresh(&mut self, host: &dyn Host) {
-        let selected_path = self.files.get(self.selected).map(|file| file.path.clone());
-        let focus = self.focus;
-        let scroll = self.scroll;
-        let mut refreshed = Self::open(host, self.root.clone());
-        refreshed.focus = focus;
-        refreshed.scroll = scroll;
-        if let Some(path) = selected_path
-            && let Some(file) = refreshed.files.iter().position(|file| file.path == path)
-        {
-            refreshed.selected = file;
-            refreshed.load_selected_diff(host);
+    /// Where the viewer had this view when it was asked — see
+    /// [`ViewPlacement`].
+    pub fn placement(&self) -> ViewPlacement {
+        ViewPlacement {
+            path: self.files.get(self.selected).map(|file| file.path.clone()),
+            focus: self.focus,
+            scroll: self.scroll,
         }
-        refreshed.refreshed_at = Instant::now();
-        *self = refreshed;
+    }
+
+    /// A whole new view of `root`, positioned where `placement` left the
+    /// last one.
+    ///
+    /// Takes no `&self` on purpose: reading a repository is the slow part
+    /// of this extension — a `status`, a `diff`, and the highlighting of
+    /// that diff — and an associated function can run wherever the host
+    /// puts it. The host reads on a thread of its own and installs the
+    /// answer when it lands, which is why nothing here may borrow the
+    /// view being replaced.
+    pub fn reload(host: &dyn Host, root: PathBuf, placement: ViewPlacement) -> Self {
+        let mut reloaded = Self::open(host, root);
+        reloaded.focus = placement.focus;
+        reloaded.scroll = placement.scroll;
+        if let Some(path) = placement.path
+            && let Some(file) = reloaded.files.iter().position(|file| file.path == path)
+        {
+            reloaded.selected = file;
+            reloaded.load_selected_diff(host);
+        }
+        reloaded.diff_pending = false;
+        reloaded.refreshed_at = Instant::now();
+        reloaded
     }
 
     fn load_selected_diff(&mut self, host: &dyn Host) {
@@ -898,7 +1041,7 @@ fn highlight_one_line(
         .collect()
 }
 
-pub fn handle_key(host: &dyn Host, view: &mut GitView, key: KeyEvent) -> GitViewOutcome {
+pub fn handle_key(view: &mut GitView, key: KeyEvent) -> GitViewOutcome {
     if key.code == KeyCode::Esc
         || (key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('g'))
     {
@@ -912,11 +1055,11 @@ pub fn handle_key(host: &dyn Host, view: &mut GitView, key: KeyEvent) -> GitView
             };
         }
         KeyCode::Up => match view.focus {
-            GitViewFocus::Files => view.select(host, view.selected.saturating_sub(1)),
+            GitViewFocus::Files => view.select(view.selected.saturating_sub(1)),
             GitViewFocus::Diff => view.scroll = view.scroll.saturating_sub(1),
         },
         KeyCode::Down => match view.focus {
-            GitViewFocus::Files => view.select(host, view.selected + 1),
+            GitViewFocus::Files => view.select(view.selected + 1),
             GitViewFocus::Diff => view.scroll = view.scroll.saturating_add(1),
         },
         KeyCode::Enter if view.focus == GitViewFocus::Files => {
@@ -931,9 +1074,9 @@ pub fn handle_key(host: &dyn Host, view: &mut GitView, key: KeyEvent) -> GitView
     GitViewOutcome::Stay
 }
 
-pub fn handle_mouse(host: &dyn Host, view: &mut GitView, hit: Option<ViewHit>) -> GitViewOutcome {
+pub fn handle_mouse(view: &mut GitView, hit: Option<ViewHit>) -> GitViewOutcome {
     match hit {
-        Some(ViewHit::SelectItem(index)) => view.select(host, index),
+        Some(ViewHit::SelectItem(index)) => view.select(index),
         Some(ViewHit::Close) => return GitViewOutcome::Close,
         _ => {}
     }
@@ -949,20 +1092,15 @@ pub fn handle_mouse(host: &dyn Host, view: &mut GitView, hit: Option<ViewHit>) -
 /// *Where* is resolved by the host, which owns the layout — this used to
 /// re-derive the columns from the frame rectangle, which meant two sides
 /// computing the same geometry and only one of them being authoritative.
-pub fn handle_scroll(
-    host: &dyn Host,
-    view: &mut GitView,
-    target: ScrollTarget,
-    direction: ScrollDirection,
-) {
+pub fn handle_scroll(view: &mut GitView, target: ScrollTarget, direction: ScrollDirection) {
     if view.error.is_some() || view.files.is_empty() {
         return;
     }
     match (target, direction) {
         (ScrollTarget::Navigator, ScrollDirection::Up) => {
-            view.select(host, view.selected.saturating_sub(1));
+            view.select(view.selected.saturating_sub(1));
         }
-        (ScrollTarget::Navigator, ScrollDirection::Down) => view.select(host, view.selected + 1),
+        (ScrollTarget::Navigator, ScrollDirection::Down) => view.select(view.selected + 1),
         (ScrollTarget::Content, ScrollDirection::Up) => {
             view.scroll = view.scroll.saturating_sub(3);
         }
@@ -977,10 +1115,15 @@ pub fn handle_scroll(
 ///
 /// `space` is advisory: it bounds how much content is worth producing,
 /// never where any of it goes.
-pub fn view(host: &dyn Host, git: &GitView, space: Size) -> View {
+///
+/// Takes no [`Host`]: everything a view says was resolved when the
+/// checkout was read (see [`GitView::display_root`]). Drawing is the one
+/// thing in this crate that reaches nothing at all, and the architecture
+/// suite holds the renderer to it.
+pub fn view(git: &GitView, space: Size) -> View {
     let title = format!(
         " git — {}{} ",
-        host.display_path(&git.root),
+        git.display_root,
         if git.branch.is_empty() {
             String::new()
         } else {
@@ -1011,6 +1154,14 @@ pub fn view(host: &dyn Host, git: &GitView, space: Size) -> View {
             text: "no changes in this checkout".to_owned(),
             role: Role::Muted,
         }
+    } else if git.diff_pending {
+        // The selection moved and its diff is still being read. Saying so
+        // beats showing the previous file's diff under the new file's
+        // name, and beats an empty pane that reads as "no changes".
+        Content::Message {
+            text: "reading…".to_owned(),
+            role: Role::Muted,
+        }
     } else {
         Content::Lines {
             heading: format!(
@@ -1019,7 +1170,7 @@ pub fn view(host: &dyn Host, git: &GitView, space: Size) -> View {
                     .get(git.selected)
                     .and_then(|file| file.path.strip_prefix(&git.root).ok())
                     .map(|path| path.display().to_string())
-                    .unwrap_or_else(|| host.display_path(&git.root))
+                    .unwrap_or_else(|| git.display_root.clone())
             ),
             scroll: git.scroll,
             // Bounded by the space plus what is scrolled past, not by the
@@ -1232,6 +1383,7 @@ mod tests {
     fn projects_changed_paths_as_a_compact_navigator() {
         let root = PathBuf::from("/repo");
         let view = GitView {
+            display_root: root.display().to_string(),
             root: root.clone(),
             branch: "main".to_owned(),
             files: vec![
@@ -1253,6 +1405,7 @@ mod tests {
             error: None,
             scroll: 0,
             focus: GitViewFocus::Files,
+            diff_pending: false,
             refreshed_at: Instant::now(),
         };
         let items = file_tree_items(&view);
@@ -1364,12 +1517,18 @@ mod tests {
         );
 
         std::fs::write(root.join("later.rs"), "fn later() {}\n").unwrap();
-        view.refresh(&TestHost);
+        let placement = view.placement();
+        view = GitView::reload(&TestHost, view.root().to_path_buf(), placement.clone());
         assert!(
             view.files
                 .iter()
                 .any(|file| file.path == root.join("later.rs")),
-            "refresh must pick up a change made while the viewer is open"
+            "a reload must pick up a change made while the viewer is open"
+        );
+        assert_eq!(
+            view.placement(),
+            placement,
+            "a reload lands the viewer where they were, not at the top of a new list"
         );
 
         let _ = std::fs::remove_dir_all(&root);
@@ -1701,6 +1860,7 @@ mod view_tests {
     fn fixture() -> GitView {
         let root = PathBuf::from("/repo");
         GitView {
+            display_root: root.display().to_string(),
             root: root.clone(),
             branch: "main".to_owned(),
             files: vec![
@@ -1723,6 +1883,7 @@ mod view_tests {
             error: None,
             scroll: 0,
             focus: GitViewFocus::Files,
+            diff_pending: false,
             refreshed_at: Instant::now(),
         }
     }
@@ -1739,7 +1900,7 @@ mod view_tests {
     /// chrome colour is decided.
     #[test]
     fn the_view_names_meaning_rather_than_colour() {
-        let view = view(&TestHost, &fixture(), space());
+        let view = view(&fixture(), space());
         let navigator = view.navigator.expect("files to navigate");
         assert_eq!(navigator.badge, "2");
         assert!(navigator.focused);
@@ -1760,7 +1921,7 @@ mod view_tests {
     /// from a theme the extension ships, and a role would throw it away.
     #[test]
     fn syntax_colour_survives_as_the_extensions_own_data() {
-        let view = view(&TestHost, &fixture(), space());
+        let view = view(&fixture(), space());
         let Content::Lines { lines, .. } = view.content else {
             panic!("a selected file has a diff");
         };
@@ -1778,8 +1939,7 @@ mod view_tests {
     #[test]
     fn an_unreadable_checkout_has_nothing_to_navigate() {
         let view = view(
-            &TestHost,
-            &GitView::with_error(PathBuf::from("/nope"), "boom".to_owned()),
+            &GitView::with_error(&TestHost, PathBuf::from("/nope"), "boom".to_owned()),
             space(),
         );
         assert!(view.navigator.is_none());
@@ -1790,5 +1950,86 @@ mod view_tests {
                 ..
             }
         ));
+    }
+
+    /// Moving the selection reads nothing.
+    ///
+    /// `TestHost::git` panics, so this passes only while selecting is
+    /// pure — which is the property that keeps an arrow key off the
+    /// thread that draws.
+    #[test]
+    fn selecting_a_file_asks_for_its_diff_rather_than_reading_it() {
+        // The fixture opens on its second file, so `Up` is the move that
+        // actually changes the selection.
+        let mut open = fixture();
+        assert!(!open.diff_pending(), "a fresh view shows what it read");
+
+        let outcome = handle_key(&mut open, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+
+        assert!(matches!(outcome, GitViewOutcome::Stay));
+        assert_eq!(open.selected, 0, "the selection moved");
+        assert!(open.diff_pending(), "and a read is owed for it");
+        assert!(
+            open.diff.is_empty(),
+            "the previous file's diff is not left under the new name"
+        );
+
+        // What the viewer sees in the meantime says so, rather than
+        // reading as "this file has no changes".
+        let rendered = view(
+            &open,
+            Size {
+                width: 80,
+                height: 24,
+            },
+        );
+        assert!(
+            matches!(&rendered.content, Content::Message { text, .. } if text == "reading…"),
+            "{:?}",
+            rendered.content
+        );
+    }
+
+    /// The section names meaning, never colour — the same contract the
+    /// full-frame view is held to.
+    #[test]
+    fn the_timeline_section_names_meaning_rather_than_colour() {
+        let timeline = Timeline {
+            branch: "agent/x".to_owned(),
+            commits: vec![
+                Commit {
+                    hash: "a".to_owned(),
+                    subject: "feat: ahead".to_owned(),
+                    age: "3h".to_owned(),
+                    ahead: true,
+                },
+                Commit {
+                    hash: "b".to_owned(),
+                    subject: "chore: landed".to_owned(),
+                    age: "2d".to_owned(),
+                    ahead: false,
+                },
+            ],
+        };
+
+        let section = timeline_section(&timeline, false, 0);
+
+        assert_eq!(section.title, "timeline");
+        assert_eq!(section.caption.text, "agent/x");
+        assert!(section.resizable);
+        // HEAD is ringed; standing is the hue, and the hue is a role.
+        assert_eq!(section.rows[0].marker.text, "\u{25c9}");
+        assert_eq!(section.rows[0].marker.role, Role::Info);
+        assert_eq!(section.rows[1].marker.text, "\u{25cf}");
+        assert_eq!(section.rows[1].marker.role, Role::Warning);
+        assert_eq!(section.rows[0].trailing.text, "3h");
+
+        let folded = timeline_section(&timeline, true, 0);
+        assert!(folded.collapsed);
+        assert_eq!(
+            folded.rows.len(),
+            section.rows.len(),
+            "folding is the host's to draw; the section still holds what it holds"
+        );
     }
 }
