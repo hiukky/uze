@@ -310,6 +310,14 @@ pub trait IntegrationPort {
         None
     }
 
+    /// The vendor's own page for this harness — where a reader who has just
+    /// met the name goes to find out what it is. `None` where the harness
+    /// has no public home. Presentation-only, rendered by docs/matrix
+    /// tooling; never fetched, and never used for lookup or matching.
+    fn homepage(&self) -> Option<&'static str> {
+        None
+    }
+
     /// The integration, not the resource representation, selects how the
     /// harness receives a capability from a composed UZE environment.
     fn exposure_plan(&self, resource: &crate::project::Resource) -> ExposurePlan;

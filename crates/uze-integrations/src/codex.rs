@@ -314,6 +314,10 @@ impl IntegrationPort for CodexIntegration {
         Some("/harnesses/codex.png")
     }
 
+    fn homepage(&self) -> Option<&'static str> {
+        Some("https://chatgpt.com/codex")
+    }
+
     /// Reads the shared `AGENTS.md` natively (it is the origin harness for
     /// the convention); UZE maintains no artifact for it.
     fn context_delivery(&self) -> ContextDelivery {

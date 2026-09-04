@@ -64,10 +64,11 @@ One authored `hooks.json` plus a shell-command ABI — normalized stdin/stdout,
 bounded output and timeout, first-deny-wins — is the canonical hook surface.
 Each harness gets its own projection:
 
-- **Claude Code / Codex** — merged entries in their own hook configuration
-- **Antigravity** — named entries in its shared `hooks.json`
-- **OpenCode** — an owned, regenerable plugin bridge, because no declarative hook
-  surface exists there
+- **[Claude Code](https://code.claude.com) / [Codex](https://chatgpt.com/codex)** — merged
+  entries in their own hook configuration
+- **[Antigravity](https://antigravity.google)** — named entries in its shared `hooks.json`
+- **[OpenCode](https://opencode.ai)** — an owned, regenerable plugin bridge, because no
+  declarative hook surface exists there
 
 Projections are receipt-owned and content-identity inspected; foreign hooks,
 plugins, and ordering are never touched. The delivered artifact is a generated
@@ -82,10 +83,10 @@ than pretending:
 
 | Harness | Events | Effects |
 | --- | --- | --- |
-| Claude Code | `PreToolUse`, `PostToolUse`, `Stop` | `observe`, `allow`, `deny` |
-| Codex | `PreToolUse`, `PostToolUse`, `Stop` | `observe`, `allow`, `deny` |
-| Antigravity | `PreToolUse`, `PostToolUse`, `Stop` | `observe`, `allow`, `ask`, `deny` |
-| OpenCode | `PreToolUse`, `PostToolUse` | `observe`, `allow` |
+| [Claude Code](https://code.claude.com) | `PreToolUse`, `PostToolUse`, `Stop` | `observe`, `allow`, `deny` |
+| [Codex](https://chatgpt.com/codex) | `PreToolUse`, `PostToolUse`, `Stop` | `observe`, `allow`, `deny` |
+| [Antigravity](https://antigravity.google) | `PreToolUse`, `PostToolUse`, `Stop` | `observe`, `allow`, `ask`, `deny` |
+| [OpenCode](https://opencode.ai) | `PreToolUse`, `PostToolUse` | `observe`, `allow` |
 
 `transform` is in the canonical vocabulary and no harness carries it today.
 OpenCode's tool hooks receive the tool input but no block signal, and its one

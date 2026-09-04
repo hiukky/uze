@@ -253,6 +253,10 @@ impl IntegrationPort for ClaudeIntegration {
         Some("/harnesses/claude-code.svg")
     }
 
+    fn homepage(&self) -> Option<&'static str> {
+        Some("https://code.claude.com")
+    }
+
     /// Reads project context only through the `@AGENTS.md` bridge region in
     /// `CLAUDE.md` — the vendor's own documented interop path.
     fn context_delivery(&self) -> ContextDelivery {

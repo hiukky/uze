@@ -229,6 +229,10 @@ impl IntegrationPort for AntigravityIntegration {
         Some("/harnesses/antigravity.png")
     }
 
+    fn homepage(&self) -> Option<&'static str> {
+        Some("https://antigravity.google")
+    }
+
     /// Reads the shared `AGENTS.md` natively (official docs: identical
     /// workspace context rules) plus the legacy `GEMINI.md` global-rules
     /// file, which is observed for portability reporting only.

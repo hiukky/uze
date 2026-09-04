@@ -149,6 +149,16 @@ fn assert_basic_identity_contract(integration: &dyn IntegrationPort) {
         "{}: display_name() must be a human label distinct from the stable id — the id is for logic, the label for display",
         integration.id()
     );
+    // Presentation-only, but the docs matrix links every name it prints:
+    // a relative or `http` value there is a broken link on the site, not a
+    // wrong delivery claim, and nothing else would catch it.
+    if let Some(homepage) = integration.homepage() {
+        assert!(
+            homepage.starts_with("https://"),
+            "{}: homepage() must be an absolute https URL — the docs site links it verbatim",
+            integration.id()
+        );
+    }
     let capabilities = integration.capabilities();
     assert!(
         !(capabilities.direct_standard.is_empty()

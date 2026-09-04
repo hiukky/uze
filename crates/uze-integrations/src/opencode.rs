@@ -114,6 +114,10 @@ impl IntegrationPort for OpenCodeIntegration {
         Some("/harnesses/opencode.svg")
     }
 
+    fn homepage(&self) -> Option<&'static str> {
+        Some("https://opencode.ai")
+    }
+
     /// Reads the shared `AGENTS.md` natively (preferred over `CLAUDE.md`
     /// per its own docs); UZE maintains no artifact for it.
     fn context_delivery(&self) -> ContextDelivery {
