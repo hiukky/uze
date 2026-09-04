@@ -145,7 +145,7 @@ impl Engine {
     /// whose first process is the scripted agent, started in the slot.
     /// `start` is what the agent does before it goes quiet.
     fn launch(&mut self, start: &str) -> (String, PathBuf) {
-        let placement = self.app().workspace().place_new_agent(self.project());
+        let placement = self.app().workspace().place_new_agent(self.project(), &[]);
         let Isolation::Slot { task, .. } = &placement.isolation else {
             panic!("{placement:?}");
         };
@@ -616,7 +616,7 @@ fn a_server_restart_loses_no_task_and_a_dirty_orphan_is_parked() {
         "unfinished\n",
         "parked, with every file preserved"
     );
-    let next = engine.app().workspace().place_new_agent(&project);
+    let next = engine.app().workspace().place_new_agent(&project, &[]);
     assert!(
         next.cwd != project.join(".worktrees/agent-2"),
         "a parked slot is never handed to a new agent"

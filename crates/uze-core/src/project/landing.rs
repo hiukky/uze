@@ -555,7 +555,7 @@ mod tests {
             tip_of(primary, TARGET),
             TARGET.into(),
         );
-        let acquired = acquire(primary, store, &task, &task.base_commit, None).unwrap();
+        let acquired = acquire(primary, store, &task, &task.base_commit, None, &[]).unwrap();
         task.checkout = Some(acquired.id);
         store.upsert(task.clone());
         task

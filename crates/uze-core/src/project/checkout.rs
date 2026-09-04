@@ -65,7 +65,9 @@ impl fmt::Display for CheckoutId {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SlotState {
-    /// A live task runs here.
+    /// An agent is here: its task is live, or a pane still sits in the
+    /// directory after the task ended — a delivered task whose agent has
+    /// not left is still somebody's checkout.
     Occupied { task: TaskId },
     /// Clean, and everything on its branch is in the target or was
     /// declared done: the next agent may take it.
@@ -115,13 +117,18 @@ impl fmt::Display for AcquireError {
 
 impl std::error::Error for AcquireError {}
 
-/// The slots of `primary` and their state, derived from Git and `store`.
-pub fn slots(primary: &Path, store: &TaskStore) -> Vec<Slot> {
+/// The slots of `primary` and their state, derived from Git, `store`, and
+/// `occupied` — the directories a live pane still sits in. The task record
+/// alone cannot say whether an agent is still there: a task ends when its
+/// work is delivered, and the agent that delivered it is usually still in
+/// the checkout, so a slot read without the panes would be handed to the
+/// next agent under the feet of the last.
+pub fn slots(primary: &Path, store: &TaskStore, occupied: &[PathBuf]) -> Vec<Slot> {
     registered_checkouts(primary)
         .into_iter()
         .map(|(path, branch)| {
             let id = CheckoutId::adopted(&slot_name(&path));
-            let state = slot_state(primary, &path, branch.as_deref(), &id, store);
+            let state = slot_state(primary, &path, branch.as_deref(), &id, store, occupied);
             Slot {
                 id,
                 path,
@@ -141,9 +148,10 @@ pub fn acquire(
     task: &Task,
     base_tip: &str,
     cap: Option<usize>,
+    occupied: &[PathBuf],
 ) -> Result<Acquired, AcquireError> {
     uze_git::locked(primary, uze_git::DEFAULT_WRITE_TIMEOUT, || {
-        let existing = slots(primary, store);
+        let existing = slots(primary, store, occupied);
         if let Some(free) = existing
             .iter()
             .filter(|slot| slot.state == SlotState::Free)
@@ -376,10 +384,16 @@ pub struct Collected {
 /// Both are safe on their own; taking the write lock once around them is
 /// what keeps a branch from being pruned in the moment a concurrent
 /// acquisition is creating it.
-pub fn collect(primary: &Path, store: &TaskStore, target: &str, age: Duration) -> Collected {
+pub fn collect(
+    primary: &Path,
+    store: &TaskStore,
+    target: &str,
+    age: Duration,
+    occupied: &[PathBuf],
+) -> Collected {
     uze_git::locked(primary, uze_git::DEFAULT_WRITE_TIMEOUT, || Collected {
         branches: prune_integrated_branches(primary, store, target),
-        slots: remove_idle_slots(primary, store, age),
+        slots: remove_idle_slots(primary, store, age, occupied),
     })
     .unwrap_or_default()
 }
@@ -414,10 +428,15 @@ pub fn prune_integrated_branches(primary: &Path, store: &TaskStore, target: &str
 
 /// Removes the directory of every free slot untouched for longer than
 /// `age`, keeping its branch. Returns the slots removed.
-pub fn remove_idle_slots(primary: &Path, store: &TaskStore, age: Duration) -> Vec<CheckoutId> {
+pub fn remove_idle_slots(
+    primary: &Path,
+    store: &TaskStore,
+    age: Duration,
+    occupied: &[PathBuf],
+) -> Vec<CheckoutId> {
     let now = SystemTime::now();
     let mut removed = Vec::new();
-    for slot in slots(primary, store) {
+    for slot in slots(primary, store, occupied) {
         if slot.state != SlotState::Free {
             continue;
         }
@@ -645,20 +664,24 @@ fn slot_state(
     branch: Option<&str>,
     id: &CheckoutId,
     store: &TaskStore,
+    occupied: &[PathBuf],
 ) -> SlotState {
     let task = store
         .tasks
         .iter()
         .filter(|task| task.checkout.as_ref() == Some(id))
         .max_by_key(|task| task.created_at_unix);
+    let pane_inside = occupied.iter().any(|pane| pane.starts_with(path));
     if let Some(task) = task
-        && is_live(&task.state)
+        && (is_live(&task.state) || pane_inside)
     {
         return SlotState::Occupied {
             task: task.id.clone(),
         };
     }
-    if is_dirty(path) {
+    // A pane in a directory no task ever claimed is still somebody at
+    // work there; only the operator moves it on.
+    if pane_inside || is_dirty(path) {
         return SlotState::Parked;
     }
     let declared_done = task.is_some_and(|task| task.state == TaskState::Integrated);
@@ -757,7 +780,7 @@ mod tests {
         let primary = repository.root();
         let mut task = task(label);
         task.base_commit = tip_of(primary, TARGET);
-        let acquired = acquire(primary, store, &task, &task.base_commit, None).unwrap();
+        let acquired = acquire(primary, store, &task, &task.base_commit, None, &[]).unwrap();
         task.checkout = Some(acquired.id.clone());
         store.upsert(task.clone());
         (task, acquired)
@@ -788,7 +811,7 @@ mod tests {
             "it ended with nothing; nothing of it reached the target"
         );
         assert_eq!(
-            slots(repository.root(), &store)[0].state,
+            slots(repository.root(), &store, &[])[0].state,
             SlotState::Free,
             "nothing is in front of it and it holds nothing"
         );
@@ -935,9 +958,9 @@ mod tests {
         repository.git_in(&slot.path, &["add", "."]);
         repository.git_in(&slot.path, &["commit", "-qm", "work"]);
         set_state(&mut store, &first.id, TaskState::Integrated);
-        assert_eq!(slots(primary, &store)[0].state, SlotState::Free);
+        assert_eq!(slots(primary, &store, &[])[0].state, SlotState::Free);
 
-        let removed = remove_idle_slots(primary, &store, Duration::ZERO);
+        let removed = remove_idle_slots(primary, &store, Duration::ZERO, &[]);
         assert_eq!(removed, vec![slot.id]);
         assert!(!slot.path.exists());
         assert!(
@@ -956,7 +979,7 @@ mod tests {
         fs::write(slot.path.join("dirty"), b"").unwrap();
         let mut forgotten = TaskStore::default();
         reconcile(primary, &mut forgotten, TARGET);
-        assert!(remove_idle_slots(primary, &forgotten, Duration::ZERO).is_empty());
+        assert!(remove_idle_slots(primary, &forgotten, Duration::ZERO, &[]).is_empty());
         assert!(slot.path.join("dirty").exists());
     }
 
@@ -1003,15 +1026,30 @@ mod tests {
         assert!(a.created && b.created && a.path != b.path);
 
         let blocked = task("c");
-        let error =
-            acquire(primary, &store, &blocked, &tip_of(primary, TARGET), Some(2)).unwrap_err();
+        let error = acquire(
+            primary,
+            &store,
+            &blocked,
+            &tip_of(primary, TARGET),
+            Some(2),
+            &[],
+        )
+        .unwrap_err();
         assert!(
             matches!(error, AcquireError::CapReached { cap: 2 }),
             "{error}"
         );
 
         set_state(&mut store, &first.id, TaskState::Integrated);
-        let reused = acquire(primary, &store, &blocked, &tip_of(primary, TARGET), Some(2)).unwrap();
+        let reused = acquire(
+            primary,
+            &store,
+            &blocked,
+            &tip_of(primary, TARGET),
+            Some(2),
+            &[],
+        )
+        .unwrap();
         assert!(!reused.created);
         assert_eq!(reused.path, a.path);
     }
@@ -1071,7 +1109,7 @@ mod tests {
         let report = reconcile(primary, &mut store, TARGET);
         assert!(report.revived.is_empty(), "{report:?}");
         assert_eq!(store.get(&first.id).unwrap().state, TaskState::Integrated);
-        assert_eq!(slots(primary, &store)[0].state, SlotState::Free);
+        assert_eq!(slots(primary, &store, &[])[0].state, SlotState::Free);
 
         fs::write(slot.path.join("after.rs"), b"fn b() {}").unwrap();
         repository.git_in(&slot.path, &["add", "."]);
@@ -1082,11 +1120,61 @@ mod tests {
         let task = store.get(&first.id).unwrap();
         assert_eq!(task.state, TaskState::Running, "live again, and re-read");
         assert_eq!(
-            slots(primary, &store)[0].state,
+            slots(primary, &store, &[])[0].state,
             SlotState::Occupied {
                 task: first.id.clone()
             },
             "and its slot is not free for another agent while it works"
+        );
+    }
+
+    /// The agent that delivered a task is still in its checkout until its
+    /// tab closes. The task record says done, and read alone it would hand
+    /// the directory to the next agent under the feet of the last — which
+    /// is exactly what the panes are consulted for.
+    #[test]
+    fn a_slot_a_pane_still_sits_in_is_neither_reused_nor_removed_after_delivery() {
+        let repository = repository("slots-pane-inside");
+        let primary = repository.root();
+        let mut store = TaskStore::default();
+        let (first, slot) = launch(&repository, &mut store, "first");
+        set_state(&mut store, &first.id, TaskState::Integrated);
+        let inside = vec![slot.path.join("src")];
+
+        assert_eq!(
+            slots(primary, &store, &[])[0].state,
+            SlotState::Free,
+            "the record alone reads as free"
+        );
+        assert_eq!(
+            slots(primary, &store, &inside)[0].state,
+            SlotState::Occupied {
+                task: first.id.clone()
+            },
+            "a pane inside keeps it the last agent's"
+        );
+
+        let second = task("second");
+        let acquired = acquire(
+            primary,
+            &store,
+            &second,
+            &tip_of(primary, TARGET),
+            None,
+            &inside,
+        )
+        .unwrap();
+        assert!(
+            acquired.created,
+            "the next agent gets a directory of its own"
+        );
+        assert_ne!(acquired.path, slot.path);
+        // The new directory belongs to no recorded task and reads as idle,
+        // so an immediate sweep may take it; the pane's own must survive.
+        let removed = remove_idle_slots(primary, &store, Duration::ZERO, &inside);
+        assert!(
+            !removed.contains(&slot.id) && slot.path.is_dir(),
+            "the directory is not swept out from under the pane: {removed:?}"
         );
     }
 
@@ -1118,7 +1206,7 @@ mod tests {
             TaskState::Closed,
             "clean and nothing ahead: free to reuse, and no delivery to claim"
         );
-        assert_eq!(slots(primary, &store)[0].state, SlotState::Free);
+        assert_eq!(slots(primary, &store, &[])[0].state, SlotState::Free);
     }
 
     #[test]
@@ -1149,7 +1237,7 @@ mod tests {
     fn a_repository_without_a_commit_cannot_host_a_slot() {
         let repository = Repository::empty("slots-unborn");
         let store = TaskStore::default();
-        let error = acquire(repository.root(), &store, &task("x"), "HEAD", None).unwrap_err();
+        let error = acquire(repository.root(), &store, &task("x"), "HEAD", None, &[]).unwrap_err();
         assert!(matches!(error, AcquireError::Git(_)), "{error}");
     }
 

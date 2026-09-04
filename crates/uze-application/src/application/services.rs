@@ -186,11 +186,14 @@ impl Workspace<'_> {
     ///
     /// Every agent isolates: a slot is acquired for a new task in the
     /// repository `pane_cwd` belongs to, prepared as the project's policy
-    /// says, and the primary checkout is never assigned to an agent. Where
+    /// says, and the primary checkout is never assigned to an agent.
+    /// `occupied` names the checkout directories a live pane still sits
+    /// in; none of them is reused, whatever its task record says — a
+    /// delivered task's agent is still there until its tab closes. Where
     /// isolation is impossible — no repository, no branch, no commit to
     /// branch from, Git refusing — the agent starts in place and the
     /// placement says why, so the tab can.
-    pub fn place_new_agent(&self, pane_cwd: &Path) -> AgentPlacement {
+    pub fn place_new_agent(&self, pane_cwd: &Path, occupied: &[PathBuf]) -> AgentPlacement {
         let Some(primary) = worktree::primary_checkout(pane_cwd) else {
             return AgentPlacement::unisolated(pane_cwd, "not inside a Git working tree");
         };
@@ -220,7 +223,7 @@ impl Workspace<'_> {
         };
         checkout::reconcile(&primary, &mut store, &target);
         let mut task = Task::new(None, Base::Ref(target.clone()), base_tip.clone(), target);
-        match checkout::acquire(&primary, &store, &task, &base_tip, policy.slots) {
+        match checkout::acquire(&primary, &store, &task, &base_tip, policy.slots, occupied) {
             Ok(acquired) => {
                 task.checkout = Some(acquired.id.clone());
                 store.upsert(task.clone());
@@ -465,8 +468,9 @@ impl Workspace<'_> {
     /// Takes out the safe removals: an `agent/` branch whose every commit
     /// is already in the target, and the directory of a clean slot nobody
     /// has touched in a fortnight — its branch kept. Nothing holding work
-    /// is ever touched here; that is the operator's alone.
-    pub fn collect_slot_garbage(&self, cwd: &Path) -> Vec<String> {
+    /// is ever touched here, and nothing a live pane sits in (`occupied`);
+    /// that is the operator's alone.
+    pub fn collect_slot_garbage(&self, cwd: &Path, occupied: &[PathBuf]) -> Vec<String> {
         let Some(repository) = self.repository(cwd) else {
             return Vec::new();
         };
@@ -476,6 +480,7 @@ impl Workspace<'_> {
             &repository.store,
             &target,
             checkout::IDLE_SLOT_AGE,
+            occupied,
         );
         collected
             .branches
@@ -869,7 +874,7 @@ mod placement_tests {
         let repository = repository("place-first");
         let root = repository.root().to_path_buf();
         let app = application("place-first-home");
-        let placement = app.workspace().place_new_agent(&root);
+        let placement = app.workspace().place_new_agent(&root, &[]);
         let primary = root.canonicalize().unwrap();
         assert_ne!(
             placement.cwd, primary,
@@ -892,13 +897,13 @@ mod placement_tests {
         let root = repository.root().to_path_buf();
         let app = application("release-free-home");
 
-        let first = app.workspace().place_new_agent(&root);
+        let first = app.workspace().place_new_agent(&root, &[]);
         let abandoned_branch = repository.branch_of(&first.cwd);
         let released = app.workspace().release_abandoned_tasks(&root, &[]);
         assert_eq!(released.len(), 1);
         assert!(!released[0].parked, "an empty checkout holds nothing");
 
-        let second = app.workspace().place_new_agent(&root);
+        let second = app.workspace().place_new_agent(&root, &[]);
         assert_eq!(
             second.cwd, first.cwd,
             "the freed slot is reused instead of a new directory"
@@ -906,7 +911,7 @@ mod placement_tests {
 
         // The branch it left behind carries nothing the target lacks, so
         // the safe collection takes it once the slot has moved off it.
-        app.workspace().collect_slot_garbage(&root);
+        app.workspace().collect_slot_garbage(&root, &[]);
         assert!(
             !repository
                 .git(&["branch", "--list", &abandoned_branch])
@@ -930,13 +935,13 @@ mod placement_tests {
         let root = repository.root().to_path_buf();
         let app = application("release-park-home");
 
-        let abandoned = app.workspace().place_new_agent(&root);
+        let abandoned = app.workspace().place_new_agent(&root, &[]);
         std::fs::write(abandoned.cwd.join("draft.rs"), b"unsaved").unwrap();
         let released = app.workspace().release_abandoned_tasks(&root, &[]);
         assert_eq!(released.len(), 1);
         assert!(released[0].parked);
 
-        let next = app.workspace().place_new_agent(&root);
+        let next = app.workspace().place_new_agent(&root, &[]);
         assert_ne!(
             next.cwd, abandoned.cwd,
             "a parked checkout is never offered to a new agent"
@@ -955,7 +960,7 @@ mod placement_tests {
         let repository = repository("space-root");
         let root = repository.root().to_path_buf();
         let app = application("space-root-home");
-        let placement = app.workspace().place_new_agent(&root);
+        let placement = app.workspace().place_new_agent(&root, &[]);
         assert_eq!(
             crate::space_root(&placement.cwd),
             crate::space_root(&root),
@@ -975,7 +980,7 @@ mod placement_tests {
         let app = application("place-three-home");
         let primary = root.canonicalize().unwrap();
         let placements: Vec<AgentPlacement> = (0..3)
-            .map(|_| app.workspace().place_new_agent(&root))
+            .map(|_| app.workspace().place_new_agent(&root, &[]))
             .collect();
         let mut cwds: Vec<&PathBuf> = placements.iter().map(|p| &p.cwd).collect();
         cwds.sort();
@@ -997,8 +1002,8 @@ mod placement_tests {
         std::fs::write(root.join("README.md"), "edited by the operator\n").unwrap();
         std::fs::write(root.join("scratch.txt"), "untracked\n").unwrap();
 
-        app.workspace().place_new_agent(&root);
-        app.workspace().place_new_agent(&root);
+        app.workspace().place_new_agent(&root, &[]);
+        app.workspace().place_new_agent(&root, &[]);
 
         assert_eq!(
             std::fs::read_to_string(root.join("README.md")).unwrap(),
@@ -1020,7 +1025,7 @@ mod placement_tests {
         let repository = uze_testkit::git::Repository::empty("place-unborn");
         let root = repository.root().to_path_buf();
         let app = application("place-unborn-home");
-        let placement = app.workspace().place_new_agent(&root);
+        let placement = app.workspace().place_new_agent(&root, &[]);
         assert_eq!(placement.cwd, root.canonicalize().unwrap());
         assert!(
             matches!(&placement.isolation, Isolation::Unisolated { reason } if reason.contains("commit")),
@@ -1032,7 +1037,7 @@ mod placement_tests {
     fn a_directory_outside_any_repository_launches_in_place() {
         let outside = uze_testkit::temp::scratch("place-no-repo");
         let app = application("place-no-repo-home");
-        let placement = app.workspace().place_new_agent(&outside);
+        let placement = app.workspace().place_new_agent(&outside, &[]);
         assert_eq!(placement.cwd, outside);
         assert!(matches!(placement.isolation, Isolation::Unisolated { .. }));
         std::fs::remove_dir_all(outside).unwrap();
@@ -1045,17 +1050,43 @@ mod placement_tests {
         let repository = repository("place-reuse");
         let root = repository.root().to_path_buf();
         let app = application("place-reuse-home");
-        let first = app.workspace().place_new_agent(&root);
+        let first = app.workspace().place_new_agent(&root, &[]);
         let primary = root.canonicalize().unwrap();
         let mut store = task::load(&app.home, &primary).unwrap();
         store.get_mut(slot(&first)).unwrap().state = uze_core::task::TaskState::Integrated;
         task::save(&app.home, &primary, &store).unwrap();
 
-        let second = app.workspace().place_new_agent(&root);
+        let second = app.workspace().place_new_agent(&root, &[]);
         assert_eq!(second.cwd, first.cwd);
         assert!(matches!(
             second.isolation,
             Isolation::Slot { reused: true, .. }
+        ));
+    }
+
+    /// The agent that delivered a task is still in its checkout until its
+    /// tab closes: the record says done, the pane says occupied, and the
+    /// pane wins — the next agent gets a directory of its own.
+    #[test]
+    fn a_delivered_tasks_slot_stays_its_agents_while_a_pane_sits_in_it() {
+        let repository = repository("place-occupied");
+        let root = repository.root().to_path_buf();
+        let app = application("place-occupied-home");
+        let first = app.workspace().place_new_agent(&root, &[]);
+        let primary = root.canonicalize().unwrap();
+        let mut store = task::load(&app.home, &primary).unwrap();
+        store.get_mut(slot(&first)).unwrap().state = uze_core::task::TaskState::Integrated;
+        task::save(&app.home, &primary, &store).unwrap();
+
+        let still_inside = vec![first.cwd.clone()];
+        let second = app.workspace().place_new_agent(&root, &still_inside);
+        assert_ne!(
+            second.cwd, first.cwd,
+            "never the checkout somebody is still in"
+        );
+        assert!(matches!(
+            second.isolation,
+            Isolation::Slot { reused: false, .. }
         ));
     }
 }
@@ -1084,7 +1115,7 @@ mod task_service_tests {
     }
 
     fn launched(app: &UzeApplication, root: &Path) -> (String, PathBuf) {
-        let placement = app.workspace().place_new_agent(root);
+        let placement = app.workspace().place_new_agent(root, &[]);
         match placement.isolation {
             Isolation::Slot { task, .. } => (task.as_str().to_owned(), placement.cwd),
             Isolation::Unisolated { reason } => panic!("{reason}"),
@@ -1386,7 +1417,7 @@ mod task_service_tests {
         let root = repository.root().to_path_buf();
         let app = application("svc-lock-launch-home");
 
-        let placement = app.workspace().place_new_agent(&root);
+        let placement = app.workspace().place_new_agent(&root, &[]);
         let Isolation::Slot { branch, .. } = &placement.isolation else {
             panic!("{placement:?}");
         };
@@ -1408,7 +1439,7 @@ mod task_service_tests {
         );
         let _ = branch;
 
-        let second = app.workspace().place_new_agent(&root);
+        let second = app.workspace().place_new_agent(&root, &[]);
         assert!(
             matches!(&second.isolation, Isolation::Unisolated { reason } if reason.contains("1 declared")),
             "{second:?}"

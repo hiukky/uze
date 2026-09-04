@@ -3802,7 +3802,8 @@ fn sync_slot_occupancy(
         }
         // Only ever the removals that cannot lose work, and only from the
         // path that just changed what "in use" means.
-        app.workspace().collect_slot_garbage(&cwd);
+        let occupied: Vec<PathBuf> = model.occupied_checkouts.iter().cloned().collect();
+        app.workspace().collect_slot_garbage(&cwd, &occupied);
     }
 }
 
@@ -3820,13 +3821,17 @@ fn panes_in_layout(layout: &uze_terminal::Layout) -> Vec<&uze_terminal::Pane> {
 
 /// Where a newly created agent starts: the slot the application acquired
 /// for it, or — when isolation is impossible — the directory it was created
-/// from. The application decides; this only asks from the selected pane.
+/// from. The application decides; this only asks from the selected pane,
+/// and tells it which checkouts a live pane still sits in (see
+/// `sync_slot_occupancy`) so a delivered task's agent is never handed its
+/// own directory's next tenant.
 fn agent_launch_cwd(model: &WorkspaceModel, home: &UzeHome) -> Option<PathBuf> {
     let pane_cwd = selected_pane_cwd(model)?;
     let Ok(app) = tui_application(home.clone()) else {
         return Some(pane_cwd);
     };
-    Some(app.workspace().place_new_agent(&pane_cwd).cwd)
+    let occupied: Vec<PathBuf> = model.occupied_checkouts.iter().cloned().collect();
+    Some(app.workspace().place_new_agent(&pane_cwd, &occupied).cwd)
 }
 
 /// The new-agent picker inherits the selected pane's live directory. The
