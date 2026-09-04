@@ -15,7 +15,7 @@ Antigravity — gets it through its own most native surface. Then run them
 side by side, each agent in an isolated checkout of its own.
 
 <p align="center">
-  <img src=".assets/tui.png" alt="uze TUI — overview, marketplace, plugins and context bridges" width="860" />
+  <img src="web/public/uze-demo.gif" alt="The uze terminal running a Claude Code agent and an OpenCode agent at once, each on its own branch in its own checkout" width="860" />
 </p>
 
 ```sh

@@ -136,9 +136,9 @@ export default function HomePage() {
               <source srcSet="/uze-demo-poster.png" media="(prefers-reduced-motion: reduce)" />
               <img
                 src="/uze-demo.gif"
-                width={1268}
-                height={746}
-                alt="The uze terminal: a project space with its commit timeline, the changes overlay reviewing a diff, then the machine view listing the four detected coding agents and what each one receives natively."
+                width={1298}
+                height={725}
+                alt="The uze terminal: one project running a Claude Code agent and an OpenCode agent at once, each on its own branch in its own checkout, with the commit timeline of one beside them."
                 className="block h-auto w-full"
               />
             </picture>
