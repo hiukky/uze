@@ -12,10 +12,10 @@ Current matrix, derived from the integration implementations themselves.
 
 | Harness | AGENTS.md | Skill | User-only | MCP | Package | Agents | Hooks | Shim |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| <span className="harness-table-cell"><img src="/harnesses/claude-code.svg" alt="" className="harness-table-icon" />Claude Code</span> | 🟢 | 🟢 | 🟢 | 🟢 | 🟢 | 🟢 | ⚪ | 🧪 |
-| <span className="harness-table-cell"><img src="/harnesses/codex.png" alt="" className="harness-table-icon" />Codex</span> | 🟢 | 🟢 | 🟢 | 🟢 | 🟢 | 🟢 | ⚪ | 🧪 |
-| <span className="harness-table-cell"><img src="/harnesses/opencode.svg" alt="" className="harness-table-icon" />OpenCode</span> | 🟢 | 🟢 | 🟢 | 🟢 | ⚪ | 🟢 | ⚪ | 🧪 |
-| <span className="harness-table-cell"><img src="/harnesses/antigravity.png" alt="" className="harness-table-icon" />Antigravity</span> | 🟢 | 🟢 | 🟡 | 🟢 | 🟢 | 🟢 | ⚪ | 🧪 |
+| <span className="harness-table-cell"><img src="/harnesses/claude-code.svg" alt="" className="harness-table-icon" />Claude Code</span> | 🟢 | 🟢 | 🟢 | 🟢 | 🟢 | 🟢 | 🟢 | 🧪 |
+| <span className="harness-table-cell"><img src="/harnesses/codex.png" alt="" className="harness-table-icon" />Codex</span> | 🟢 | 🟢 | 🟢 | 🟢 | 🟢 | 🟢 | 🟢 | 🧪 |
+| <span className="harness-table-cell"><img src="/harnesses/opencode.svg" alt="" className="harness-table-icon" />OpenCode</span> | 🟢 | 🟢 | 🟢 | 🟢 | ⚪ | 🟢 | 🟡 | 🧪 |
+| <span className="harness-table-cell"><img src="/harnesses/antigravity.png" alt="" className="harness-table-icon" />Antigravity</span> | 🟢 | 🟢 | 🟡 | 🟢 | 🟢 | 🟢 | 🟢 | 🧪 |
 
 🟢 native · 🟡 adapted · 🟠 degraded · ⚪ roadmap · 🧪 experimental · — n/a
 
@@ -47,21 +47,53 @@ Current matrix, derived from the integration implementations themselves.
 
 ## Notes per harness
 
-- **Claude Code** — plugin delivery through a UZE-managed marketplace; skills-dir reference as
-  fallback. Project context arrives through the `CLAUDE.md` bridge (`@AGENTS.md`).
-- **Codex** — same marketplace model (`~/.agents/skills` shares its root with OpenCode); user-only
-  skills carry `agents/openai.yaml` with implicit invocation disabled.
-- **OpenCode** — V2 consumes no external plugin envelope: skills and agents are delivered
-  natively, MCP through its global config, hooks through an owned plugin bridge. The runtime shim
-  dispatches `opencode` to the legacy `opencode2` binary cleanly.
-- **Antigravity** — the Google-family v0 harness: the canonical `plugin.json` *is* a valid plugin
-  manifest, so envelope-less packages install straight from the Store. Non-default invocation
-  policies are **adapted** — no explicit-only mechanism exists; skills stay model-discoverable and
-  slash-invocable.
+- **Claude Code** — plugin delivery through a UZE-managed marketplace; a skills-directory
+  reference is the fallback. Project context arrives through the `CLAUDE.md` bridge
+  (`@AGENTS.md`) — the only bridge uze maintains. Hooks merge into its own user-scope hook
+  configuration.
+- **Codex** — the same marketplace model; its skills root (`~/.agents/skills`) is shared with
+  OpenCode, which uze accounts for when resolving names. User-only skills carry
+  `agents/openai.yaml` with implicit invocation disabled. Hooks merge into Codex's own
+  `hooks.json` command form.
+- **OpenCode** — consumes no external plugin envelope: skills and agents are delivered natively,
+  MCP through its global config, and hooks through an owned, regenerable plugin bridge, since no
+  declarative hook surface exists. Its binary is detected as `opencode`, with the legacy
+  `opencode2` alias still resolved.
+- **Antigravity** — the Google-family v0 harness (ADR-027): the canonical `plugin.json` *is* a
+  valid plugin manifest, so envelope-less packages install straight from the Store. Non-default
+  invocation policies are **adapted** — no explicit-only mechanism exists, so skills stay
+  model-discoverable and slash-invocable. It carries the widest hook effect set of the four.
+
+## Profiles
+
+Alongside packages, uze models user *intent* about how a harness behaves, and each integration
+translates it into that harness's own settings file. Three axes, deliberately small:
+
+| Axis | Values | What it means |
+| --- | --- | --- |
+| **Autonomy** | `manual`, `balanced`, `auto`, `unattended` | How much the harness may do without asking |
+| **Sandbox** | `read-only`, `workspace-write`, `full-access` | How far its writes and execution reach |
+| **Model** | `default`, `fast`, `capable` | A capability tier — never a literal vendor model id |
+
+Edit them on the **Profiles** screen of the management TUI (`Ctrl+O`). Each axis reports its own
+translation fidelity on the same Native/Adapted/Unsupported scale the capability router uses, with
+the reason attached whenever it is not native — for example:
+
+- Claude Code has no workspace-scoped write allowlist at user scope, so `sandbox` sets its coarse
+  enabled/disabled state only, and never claims native for a non-default value.
+- Codex needs an exact model id and publishes no tier-alias catalogue, so anything but `default`
+  is reported unsupported rather than guessed into a model that may not exist.
+- OpenCode has no single autonomy key — permissions are independent per-category values — so
+  `autonomy` is always adapted, decomposed across several keys.
+- Antigravity's settings are the least settled of the four, so every mapping there is
+  deliberately conservative — never native, and `model` unsupported outright rather than guessed.
+
+A preference is never carried by guessing a key. Where a harness cannot express an axis, uze says
+so and writes nothing: overwriting a setting you made yourself is worse than not carrying the
+intent.
 
 ## The runtime PATH shim
 
 An experimental mechanism that projects `AGENTS.md` into a harness without writing into the
 project — a real shim symlink in `$UZE_HOME/shims` that resolves the real harness binary without
-ever recursing into itself. Antigravity opts in too via `agy setup`; disable it by removing the
-symlink.
+ever recursing into itself, a boundary held by its own test. Disable it by removing the symlink.

@@ -1,0 +1,192 @@
+---
+title: The agent workspace
+description: Run several agents at once in one terminal — each in its own checkout, with readiness and delivery observed from Git
+---
+
+# The agent workspace
+
+Running `uze` with no arguments opens the **workspace**: a persistent terminal
+that hosts your agent sessions. Every agent gets an isolated checkout of the
+repository, so two of them can work at the same time without touching each
+other's files — or yours.
+
+<Callout type="info">
+  The workspace is **experimental** (ADR-038). The runtime, its protocol, and the
+  shortcuts below may still change.
+</Callout>
+
+## Spaces, tabs, panes
+
+Three levels, and no more:
+
+| Level | What it is |
+| --- | --- |
+| **Space** | One project directory. The sidebar lists them; `+ new` opens a picker to add one. |
+| **Tab** | One session inside a space — a plain shell, or an agent. |
+| **Pane** | The live terminal a tab draws. Owned by the runtime server, not by the client. |
+
+The panes belong to a local server, not to the window you are looking at
+(ADR-038). Closing the client — switching to management, detaching, quitting the
+terminal emulator — leaves every process running; the next attach finds them
+exactly where they were.
+
+```bash
+$ uze                    # attach the workspace (starts its server when needed)
+$ uze terminal attach    # the same thing, explicitly
+$ uze terminal stop      # stop this workspace's session and its processes
+```
+
+Running `uze` *inside* one of the workspace's own panes doesn't nest a second
+client — it opens a space for that directory in the uze already running, and
+exits.
+
+## Shortcuts
+
+| Keys | Action |
+| --- | --- |
+| `Ctrl+T` | New shell tab |
+| `✦` (tab strip) | New agent tab — pick which harness starts |
+| `Ctrl+W` | Close the selected tab |
+| `Alt+1` … `Alt+9` | Select a tab by position |
+| `Ctrl+G` | Open the changes overlay for the active tab's directory |
+| `Alt+I` | Deliver the selected task |
+| `Alt+Shift+I` | Deliver every ready task in the space |
+| `Alt+P` | Preserved work — tasks whose agent is gone but whose branch still holds commits |
+| `Ctrl+O` | Switch to management (and back) |
+| `Ctrl+Q` | Quit |
+
+Everything else typed goes to the pane. Tabs and spaces can be renamed inline
+and reordered by dragging; right-click gives the same actions as a menu.
+
+## Every agent gets its own checkout
+
+In any Git repository with at least one commit, uze places an agent in an
+isolated checkout **before its harness starts** — no question asked, and nothing
+required of the harness. The primary checkout stays yours.
+
+- The checkout is a **slot**: `.worktrees/<id>`, on branch `agent/<id>`.
+- A new agent takes a **free slot** — new branch from the base, tracked and
+  untracked files reset, ignored artifacts (a `target/`, a `node_modules/`) left
+  in place — and a new directory is created only when no slot is free. The number
+  of checkouts is bounded by peak concurrency, not by how many tasks you run.
+- Where isolation is impossible (not a repository, no commits yet), the agent
+  starts in place and its tab says so.
+
+Because the slot is reused, the second agent in a Rust project doesn't pay for a
+cold build the way a fresh `git worktree` would.
+
+<Callout type="warn">
+  A `.worktrees/` slot is UZE's. Don't hand-manage the branches inside it — the
+  workspace resets a slot when it hands it to the next agent.
+</Callout>
+
+### What the project declares
+
+One block in `agents.lock`, at the project root:
+
+```yaml
+version: 1
+worktrees:
+  target: main             # branch finished work targets (default: the primary's branch)
+  completion: handoff      # handoff | merge | pr
+  link: [.env, .env.local] # ignored files a fresh slot links from the primary
+  setup: pnpm install      # prepares a slot after linking; a failure warns, never blocks
+  gate: cargo test         # run on the rebased commits; non-zero refuses delivery
+  slots: 3                 # cap on concurrent checkouts (default: peak concurrency)
+```
+
+See the [`agents.lock` reference](/docs/agents-lock) for the rest of the file.
+
+## Readiness is read, not announced
+
+A task's state comes from Git in its own checkout — never from something the
+agent claims:
+
+| State | What it means |
+| --- | --- |
+| `Running` | Live, nothing observed yet |
+| `Uncommitted` | Changes in the checkout that aren't committed |
+| `Ready` | Commits ahead of the base, clean tree — delivery may be offered |
+| `Integrating` | Delivery in progress |
+| `Conflicted` | A rebase stopped; it stays paused in the agent's own checkout |
+| `GateFailed` | The declared gate failed on the rebased commits |
+| `Integrated` | The work is in the target |
+| `Parked` | The agent is gone and the checkout still holds work |
+| `Closed` | The agent is gone and had nothing to deliver |
+
+Only `Ready` and `GateFailed` can be delivered. A conflict returns the task to
+the agent that owns it — that agent is the one holding the intent behind the
+change — rather than asking you to resolve someone else's rebase.
+
+## Delivery
+
+Delivery is an explicit action (`Alt+I`), one task at a time, under the
+repository write lock. uze rebases the branch onto the target's tip **inside the
+task's own checkout**, runs the declared gate on the rebased commits, and then
+does what `completion:` says:
+
+- **`handoff`** (default) — the branch is left for a person to integrate. Nothing
+  reaches the target without someone deciding it should.
+- **`merge`** — the target is fast-forwarded, once the gate passes.
+- **`pr`** — the branch is pushed and a pull request opened through `gh` (or a
+  merge request through `glab`), whichever is on `PATH`.
+
+A failed gate or a conflict leaves the target untouched.
+
+## Work that outlives its agent
+
+An agent can end with commits still on its branch — you closed the tab, the
+harness exited, the machine rebooted. That task becomes **parked**, and its
+checkout is not handed to anyone else. `Alt+P` opens the preserved list, where
+each entry can be:
+
+| Key | Action |
+| --- | --- |
+| `r` | Resume — start a new agent in that same checkout, on the same branch |
+| `i` | Deliver it now |
+| `f` | Finish — close the task and free the slot, leaving the branch |
+| `d` then `y` | Discard. The one action that destroys work, so it is the one that asks twice |
+
+## Prompt history
+
+What you send to an agent tab is recorded per workspace, and the management
+view lists it — click an entry to jump back to the tab it was typed in.
+
+It is a convenience log, not a transcript. uze forwards keystrokes to a
+pseudoterminal whose contents it never interprets, so it cannot see what the
+agent's own line editor did with them: entries can be missing, and nothing
+treats the history as a complete record. The file is owner-only, and a
+workspace's history can be cleared outright.
+
+## The Git extension
+
+The workspace's Git surface is a built-in [extension](/docs/architecture#the-supporting-crates):
+
+- a **commit timeline** in the sidebar, showing what has landed in the target and
+  what is still ahead;
+- a **changes overlay** (`Ctrl+G`, or the git button in the tab strip) with the
+  changed files and a syntax-highlighted diff of the selected one (ADR-039), read
+  from the active tab's own working directory.
+
+It is read-only: viewing changes and history, never staging or committing.
+
+Every Git read the workspace makes runs on a thread and answers through a
+channel, so nothing it draws waits on a repository — a large history never
+blocks a keystroke.
+
+## Subagents inside a session
+
+A harness that spawns its own writing subagents can still collide with itself.
+uze projects a small managed region into the project's `AGENTS.md` describing
+the checkout the agent is already in, so a subagent knows not to isolate a
+second time on top of it, and knows to commit on its own branch instead of
+integrating its work itself.
+
+That projection is the only thing this feature writes into your project, and it
+lives in its own delimited region — see [Project context](/docs/concepts/context).
+
+<Cards>
+  <Card title="agents.lock reference" href="/docs/agents-lock" />
+  <Card title="Project context" href="/docs/concepts/context" />
+  <Card title="CLI reference" href="/docs/cli" />
+</Cards>

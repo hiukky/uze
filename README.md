@@ -11,11 +11,16 @@
 
 A compatibility layer for agent tooling: install a plugin once, share one
 project context, and every harness — Claude, Codex, OpenCode,
-Antigravity — gets it through its own most native surface.
+Antigravity — gets it through its own most native surface. Then run them
+side by side, each agent in an isolated checkout of its own.
 
 <p align="center">
   <img src=".assets/tui.png" alt="uze TUI — overview, marketplace, plugins and context bridges" width="860" />
 </p>
+
+```sh
+curl -fsSL https://uze.hiukky.com/i | sh
+```
 
 **[Full documentation →](https://uze-hiukky.vercel.app)**
 
@@ -24,9 +29,10 @@ Antigravity — gets it through its own most native surface.
 ## Roadmap
 
 - [x] Harness management · Skills & MCP portability · Project context · Marketplace · TUI
-- [ ] Agent & hook portability · Native package delivery
+- [x] Agent & hook portability · Native package delivery
+- [x] Profiles · Environment maintenance · Terminal workspace with isolated agents
 - [ ] Requirements & dependencies · Security & trust
-- [ ] Runtime context projection · Migration tooling · Ecosystem expansion
+- [ ] Packaged releases · Runtime context projection · Migration tooling · Ecosystem expansion
 
 ---
 

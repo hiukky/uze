@@ -15,20 +15,23 @@ does.
 
 <Files>
   <Folder name="my-plugin" defaultOpen>
-    <File name="plugin.json (required)" />
-    <Folder name="skills" defaultOpen>
-      <File name="<name>/SKILL.md" />
-    </Folder>
     <Folder name="agents" defaultOpen>
-      <File name="<name>.md" />
+      <File name="planner.md" />
     </Folder>
+    <Folder name="skills" defaultOpen>
+      <Folder name="commit" defaultOpen>
+        <File name="SKILL.md" />
+      </Folder>
+    </Folder>
+    <File name="plugin.json" />
+    <File name="AGENTS.md" />
     <File name="hooks.json" />
     <File name="mcp.json" />
   </Folder>
 </Files>
 
-Every part after `plugin.json` is optional — ship only what your plugin needs. uze's Store
-preserves every byte verbatim; nothing here is re-serialized into an internal schema.
+Only `plugin.json` is required; everything else is optional — ship what your plugin needs. uze's
+Store preserves every byte verbatim, and nothing here is re-serialized into an internal schema.
 
 ### `plugin.json`
 
@@ -42,8 +45,8 @@ The [Agent Plugins](https://agent-plugins.org) `1.0.0` schema, minimal:
 }
 ```
 
-This is the repo's own official plugin, verbatim (`plugins/uze/plugin.json`) — a real, minimal
-example, not a hypothetical one.
+`name` is the only required field beyond the schema. This is the same shape as this repository's
+own official plugin (`plugins/uze/plugin.json`) — a real manifest, not a hypothetical one.
 
 ## Skills
 
@@ -142,7 +145,9 @@ One authored `hooks.json` plus plain scripts — a narrow command ABI, not a plu
 - **Matcher**: `|`-separated portable tool aliases (`shell`, `file.read`, `file.write`,
   `file.edit`, `search.files`, `search.web`, `agent.spawn`, `agent.message`), or an explicit
   `native:<tool>` escape hatch. Omitted, it matches every tool.
-- **Effect**: `observe` (default), `allow`, `ask`, `deny`, or `transform` (`PreToolUse` only).
+- **Effect**: `observe` (default), `allow`, `ask`, `deny`, or `transform` (`PreToolUse`
+  only). Not every harness carries every effect — see
+  [what each harness can actually carry](/docs/concepts/capabilities#what-each-harness-can-actually-carry).
 - Your handler reads one normalized JSON object on stdin and may write one bounded JSON decision
   (`{"decision": "allow|ask|deny", "reason": "..."}`) on stdout. Exit `3` is the canonical hard
   deny; any other failure is fail-open for `observe`/`allow` and fail-closed for
@@ -158,8 +163,19 @@ One authored `hooks.json` plus plain scripts — a narrow command ABI, not a plu
   Hook commands and MCP server commands are **executable capabilities** — uze's single
   acquisition trust prompt lists every process your package can cause to run before anything is
   installed, so authors can't smuggle in a surprise command and consumers always see the full
-  list up front.
+  list up front. Consent is not inherited across an update: a new executable capability is asked
+  about again.
 </Callout>
+
+## Instructions
+
+A package may ship its own `AGENTS.md`. Its content is composed into the *project's* `AGENTS.md`
+as one delimited, receipt-owned region when someone runs `uze context reconcile` — one region per
+contributing package, and nothing outside it is touched. This is how a plugin ships standing
+project instructions without asking anyone to maintain a second file per harness.
+
+Write it as the instructions themselves, not as a document about your plugin: it lands inside
+someone else's project file.
 
 ## Testing it locally
 
@@ -212,5 +228,5 @@ that name in older material, it's the same manifest under its current, correct f
 <Cards>
   <Card title="Capabilities" href="/docs/concepts/capabilities" />
   <Card title="Harness compatibility" href="/docs/harnesses" />
-  <Card title="CLI reference" href="/docs/cli" />
+  <Card title="agents.lock reference" href="/docs/agents-lock" />
 </Cards>

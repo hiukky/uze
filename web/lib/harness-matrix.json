@@ -1,0 +1,46 @@
+{
+  "_generated": "cargo run --bin uze-harness-matrix — do not hand-edit",
+  "harnesses": [
+    {
+      "name": "Claude Code",
+      "icon": "/harnesses/claude-code.svg",
+      "context": "bridge",
+      "skills": "native",
+      "mcp": "native",
+      "agents": "native",
+      "hooks": "native",
+      "package": "native"
+    },
+    {
+      "name": "Codex",
+      "icon": "/harnesses/codex.png",
+      "context": "native",
+      "skills": "native",
+      "mcp": "native",
+      "agents": "native",
+      "hooks": "native",
+      "package": "native"
+    },
+    {
+      "name": "OpenCode",
+      "icon": "/harnesses/opencode.svg",
+      "context": "native",
+      "skills": "native",
+      "mcp": "native",
+      "agents": "native",
+      "hooks": "adapted",
+      "package": "none"
+    },
+    {
+      "name": "Antigravity",
+      "icon": "/harnesses/antigravity.png",
+      "context": "native",
+      "skills": "native",
+      "mcp": "native",
+      "agents": "native",
+      "hooks": "native",
+      "package": "native"
+    }
+  ],
+  "planned": ["Cursor CLI", "Muse", "PI"]
+}

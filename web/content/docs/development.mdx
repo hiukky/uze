@@ -8,22 +8,40 @@ description: Build, test, and validate uze — and how the conformance lab prove
 ## Build and test
 
 ```bash
-cargo build --locked --bin uze            # debug build
-cargo test --no-fail-fast                 # full workspace suite
-cargo clippy --all-targets -- -D warnings # CI gate
+cargo build --locked --bin uze                  # debug build
+cargo test --workspace --no-fail-fast           # full workspace suite
+cargo clippy --all-targets -- -D warnings       # CI gate
 cargo fmt --check
 ```
 
-`make help` lists every wrapper (`make build`, `make test`, `make check`…); `ci.yml` is the
-source of truth for what gates a merge. Coverage is enforced as well:
+`make help` lists every wrapper (`make build`, `make test`, `make check`,
+`make coverage`…). `ci.yml` is the source of truth for what gates a merge; treat
+`make check` as a close local proxy, not a guarantee of parity.
+
+Coverage is enforced too:
 
 ```bash
-cargo llvm-cov --workspace --summary-only --fail-under-lines 64 --fail-under-regions 65 --html
+cargo llvm-cov --workspace --summary-only \
+  --fail-under-lines 68 --fail-under-regions 69 \
+  -- --skip real_codex_dogfood --skip foreground_status_reports --skip acquisition
 ```
+
+## How the tests are organized
+
+Integration suites live under `tests/`, one `main.rs` per domain (`cli/`,
+`memory/`, `packages/`, `workspace/`, `lifecycle/`, `projection/`,
+`integrations/`, `acceptance/`), with shared infrastructure — an isolated
+`TestEnvironment`, a `FakeHarness`, canonical fixtures — in `crates/uze-testkit`.
+`tests/README.md` documents the L0–L4 taxonomy and where a new test goes.
+
+Some of those tests are the architecture itself: the layering rules, the
+vendor-neutrality of core/application/CLI, and the workspace's
+never-block-on-Git rule all fail as ordinary test failures when broken.
 
 ## OpenSpec
 
-Change proposals live under `openspec/`:
+Change proposals live under `openspec/` — a spec-driven work log, with archived
+changes kept:
 
 ```bash
 openspec validate --all --strict
@@ -31,18 +49,39 @@ openspec validate --all --strict
 
 ## Conformance Lab
 
-Real-harness evidence never links into the deterministic suite: `conformance/` runs the **real
-harness binary** against a **synthetic world** — a disposable Docker environment with a synthetic
-provider, zero internet, zero tokens — one vertical per supported harness:
+Real-harness evidence never links into the deterministic suite. `conformance/`
+runs the **real harness binary** against a **synthetic world** — a disposable
+Docker environment with a synthetic provider, zero internet, zero tokens — one
+vertical per supported harness:
 
 ```bash
 python3 conformance/lab.py --harness claude      # or codex | opencode | antigravity
 make lab-replay                                   # replay a recorded run
 ```
 
-The lab is vendor-specific by design; the deterministic suite (`cargo test`) runs everywhere.
+`contract/` states what **every** harness must prove, in outcome terms, and names
+no vendor; `harnesses/<vendor>/bindings.py` says how that harness is driven and
+carries no assertion. A harness that cannot deliver part of a contract declares
+that through its bindings, with a reason the run records — never by omitting the
+check (ADR-043).
+
+The lab is vendor-specific by design; the deterministic suite (`cargo test`) runs
+everywhere.
+
+## Distribution
+
+`install.sh` at the repository root is the official Linux installer: it downloads
+the prebuilt binary for the machine from GitHub Releases, verifies its SHA-256
+checksum, and installs into `$XDG_BIN_HOME` or `~/.local/bin` (ADR-034). Until
+the first release is published it detects that and prints build-from-source
+instructions instead of failing partway through a `curl` pipe.
+
+Versions come from one place — `[workspace.package].version` in the root
+`Cargo.toml`, inherited by every crate. `CHANGELOG.md` is generated from
+Conventional Commits with `git-cliff` (`make changelog`).
 
 ## Marketplace
 
-This repository is itself the official uze marketplace: `marketplace.json` + `plugins/**` at the
-root, with `plugins/uze` (the `/uze` Skill) as the one official plugin.
+This repository is itself the official uze marketplace: `marketplace.json` +
+`plugins/**` at the root, with `plugins/uze` — the `uze:init` and `uze:worktree`
+Skills — as the one official plugin.

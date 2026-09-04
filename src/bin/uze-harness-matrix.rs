@@ -11,11 +11,14 @@
 //! <!-- uze-matrix:end -->
 //! ```
 //!
-//! `--check` exits non-zero when the doc is stale (wired into the lefthook
-//! pre-push and `make harness-matrix`); without the flag it rewrites the
-//! doc in place. Nothing here hardcodes a harness's capability claim —
-//! every cell is derived from the code that implements it, so a capability
-//! change that forgets the docs fails the push.
+//! and the same routes into `web/lib/harness-matrix.json`, which the landing
+//! page's capability table renders.
+//!
+//! `--check` exits non-zero when either artifact is stale (wired into the
+//! lefthook pre-push and `make harness-matrix`); without the flag it rewrites
+//! them in place. Nothing here hardcodes a harness's capability claim — every
+//! cell is derived from the code that implements it, so a capability change
+//! that forgets the docs fails the push.
 
 use std::path::PathBuf;
 
@@ -40,6 +43,10 @@ const PLANNED_HARNESSES: [&str; 3] = ["Cursor CLI", "Muse", "PI"];
 const MARKER_START: &str = "{/* uze-matrix:start */}";
 const MARKER_END: &str = "{/* uze-matrix:end */}";
 const HARNESS_DOCS: &str = "web/content/docs/harnesses.mdx";
+/// The same routes, for the landing page's capability table. One generator,
+/// two consumers: the landing page used to restate delivery in hand-written
+/// prose, which is a second place for the same claim to go stale.
+const HARNESS_JSON: &str = "web/lib/harness-matrix.json";
 
 fn route_symbol(route: CompatibilityRoute) -> &'static str {
     match route {
@@ -75,8 +82,22 @@ fn pkg_root() -> PathBuf {
         r#"{"mcpServers":{"conformance":{"command":"fixture","args":[]}}}"#,
     )
     .unwrap();
+    std::fs::write(root.join(uze_core::hook::HOOKS_FILE_NAME), HOOKS_MANIFEST).unwrap();
     root
 }
+
+/// The authored hook manifest every hook cell is derived from. A real one:
+/// a hook resource's payload *is* the normalized group (see the engine's
+/// `hook_resources`), so a placeholder payload makes every integration's
+/// plan fail to parse and report `Unsupported` — a shipped capability
+/// documented as a roadmap gap.
+///
+/// `observe` is the portable baseline every harness can carry, so the cell
+/// answers "does this harness deliver hooks at all". A blocking effect is
+/// a per-effect question one column cannot hold — a `deny` group is
+/// honestly unsupported on a harness whose hook point carries no block
+/// signal — and belongs in the prose below the generated block.
+const HOOKS_MANIFEST: &str = r#"{"hooks":{"PreToolUse":[{"id":"guard","matcher":"shell","effect":"observe","hooks":[{"type":"command","command":"./hooks/guard.sh"}]}]}}"#;
 
 fn skill(payload: &str, name: &str) -> Resource {
     let root = pkg_root();
@@ -104,6 +125,29 @@ fn mcp() -> Resource {
             payload: br#"{"command":"fixture","args":[]}"#.to_vec(),
         },
         "conformance".to_owned(),
+    )
+}
+
+/// One canonical hook group, materialized exactly as the engine does it:
+/// parse the authored manifest, and carry the normalized group as the
+/// resource payload.
+fn hook() -> Resource {
+    let root = pkg_root();
+    let manifest = root.join(uze_core::hook::HOOKS_FILE_NAME);
+    let group = uze_core::hook::parse_manifest(&manifest, HOOKS_MANIFEST.as_bytes())
+        .expect("matrix hook manifest is valid")
+        .remove(0);
+    let name = group.id.clone();
+    Resource::from_package_named(
+        PackageId::from_plugin_name("flow", &root.join("plugin.json")).unwrap(),
+        root,
+        Capability {
+            kind: CapabilityKind::Hook,
+            representation: Representation::Standard,
+            path: manifest,
+            payload: serde_json::to_vec(&group).expect("portable hook serializes"),
+        },
+        name,
     )
 }
 
@@ -214,7 +258,7 @@ fn matrix_block() -> String {
     );
     let mcp = mcp();
     let agents = capability_resource(CapabilityKind::Agent, "/store/flow/agents/planner.md");
-    let hooks = capability_resource(CapabilityKind::Hook, "/store/flow/hooks/pre-commit.sh");
+    let hooks = hook();
 
     let mut out = String::new();
     out.push_str(&format!(
@@ -329,6 +373,69 @@ fn matrix_block() -> String {
     out
 }
 
+fn route_name(route: CompatibilityRoute) -> &'static str {
+    match route {
+        CompatibilityRoute::Native => "native",
+        CompatibilityRoute::Adaptable => "adapted",
+        CompatibilityRoute::Degraded => "degraded",
+        CompatibilityRoute::Unsupported => "none",
+    }
+}
+
+/// The landing page's table, as data. Deliberately a subset of the docs
+/// matrix: the columns a reader weighs before installing, not every column
+/// the reference needs.
+fn matrix_json() -> String {
+    let default_skill = skill(
+        "---\nname: commit\ndescription: Matrix fixture skill.\n---\n\nBody.\n",
+        "commit",
+    );
+    let mcp = mcp();
+    let agents = capability_resource(CapabilityKind::Agent, "/store/flow/agents/planner.md");
+    let hooks = hook();
+
+    let mut rows = Vec::new();
+    for harness in harnesses() {
+        let integration = harness.integration.as_ref();
+        let context = match integration.context_delivery() {
+            ContextDelivery::Bridge { .. } => "bridge",
+            _ => "native",
+        };
+        let package = package_route(integration).map(route_name).unwrap_or("none");
+        rows.push(format!(
+            "    {{\n      \"name\": {},\n      \"icon\": {},\n      \"context\": \"{context}\",\n      \"skills\": \"{}\",\n      \"mcp\": \"{}\",\n      \"agents\": \"{}\",\n      \"hooks\": \"{}\",\n      \"package\": \"{package}\"\n    }}",
+            json_string(integration.display_name()),
+            match integration.icon_path() {
+                Some(icon) => json_string(icon),
+                None => "null".to_owned(),
+            },
+            route_name(effective_route(
+                integration,
+                &default_skill,
+                route_of(integration, &default_skill)
+            )),
+            route_name(effective_route(integration, &mcp, route_of(integration, &mcp))),
+            route_name(route_of(integration, &agents)),
+            route_name(route_of(integration, &hooks)),
+        ));
+    }
+
+    let planned = PLANNED_HARNESSES
+        .iter()
+        .map(|name| json_string(name))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    format!(
+        "{{\n  \"_generated\": \"cargo run --bin uze-harness-matrix — do not hand-edit\",\n  \"harnesses\": [\n{}\n  ],\n  \"planned\": [{planned}]\n}}\n",
+        rows.join(",\n")
+    )
+}
+
+fn json_string(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
 fn replace_block(contents: &str, block: &str) -> String {
     let start = contents
         .find(MARKER_START)
@@ -345,11 +452,28 @@ fn replace_block(contents: &str, block: &str) -> String {
     format!("{}{}{}", &contents[..start], block, tail)
 }
 
+/// Writes `contents` to `path` unless it is already what is there; under
+/// `--check` a difference is a stale artifact and fails instead.
+fn sync(path: &str, contents: &str, check: bool) -> bool {
+    let current = std::fs::read_to_string(path).unwrap_or_default();
+    if current == contents {
+        return false;
+    }
+    if check {
+        eprintln!("{path} is stale — run `make harness-matrix` and commit.");
+        std::process::exit(1);
+    }
+    std::fs::write(path, contents).unwrap_or_else(|error| panic!("{path} is writable: {error}"));
+    println!("updated {path}");
+    true
+}
+
 fn main() {
     let check = std::env::args().any(|argument| argument == "--check");
     let block = matrix_block();
     let doc = std::fs::read_to_string(HARNESS_DOCS).expect("harnesses.mdx is readable");
     let expected = replace_block(&doc, &block);
+    let json_changed = sync(HARNESS_JSON, &matrix_json(), check);
     if doc != expected {
         if check {
             eprintln!(
@@ -359,7 +483,7 @@ fn main() {
         }
         std::fs::write(HARNESS_DOCS, expected).expect("harnesses.mdx is writable");
         println!("updated {HARNESS_DOCS} harness matrix");
-    } else if !check {
+    } else if !check && !json_changed {
         println!("{HARNESS_DOCS} harness matrix is up to date");
     }
 }

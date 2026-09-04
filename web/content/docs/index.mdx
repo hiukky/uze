@@ -5,48 +5,95 @@ description: What uze is and the problem it solves
 
 # Welcome
 
-**uze is a compatibility and distribution layer for agent tooling.** You install a plugin once;
-uze stores its bytes centrally and delivers it through each harness's most native mechanism — a
-real plugin where one exists, native capabilities where it doesn't, a safe adapter only as a last
-resort.
+**uze is the compatibility and distribution layer for agent tooling.** You
+install a plugin and write one `AGENTS.md`; uze keeps the bytes in one place and
+delivers them to each harness — Claude Code, Codex, OpenCode, Antigravity —
+through the most native mechanism that harness has. A real plugin where one
+exists, a native capability where it doesn't, an adapter only as a last resort.
+
+**And it is where you run those agents.** A terminal that gives each agent a
+checkout of its own (`.worktrees/<id>`, on branch `agent/<id>`), watches what
+each one did, and brings the work home to the target branch.
 
 <Callout type="info">
-  Status: **alpha**. APIs, schemas and harness integration behavior may change while the
-  cross-harness model is being validated. Real-harness evidence lives in the
-  [Conformance Lab](/docs/development#conformance-lab).
+  Status: **alpha**. APIs, schemas and harness integration behavior may change
+  while the cross-harness model is being validated. Real-harness evidence lives in
+  the [Conformance Lab](/docs/development#conformance-lab).
 </Callout>
 
 ## The problem
 
-Coding agents — Claude Code, Codex, OpenCode, Antigravity — each have their own plugin format,
-their own skills directory, their own way of reading project instructions. Maintaining the same
-skill or the same project context four times over is how agent setups rot.
+Coding agents each have their own plugin format, their own skills directory,
+their own way of reading project instructions. Maintaining the same skill or the
+same project context four times over is how agent setups rot.
 
-## The approach
+And once you run more than one at a time, they collide: two agents editing one
+checkout, with your own uncommitted work in the middle.
 
-1. **One plugin bytes, one place.** The Store owns the canonical package; nothing a harness reads
-   is ever written from anywhere else.
-2. **One project context.** `AGENTS.md` is the portable baseline, projected into each harness's
-   own bridge/config format instead of maintaining four files.
-3. **Per-harness native delivery.** Every capability is delivered through the most native
-   mechanism that preserves its semantics — and when a harness genuinely cannot preserve them,
-   uze says so honestly instead of degrading silently.
+## What uze does
+
+Everything below works today. The two scopes never touch each other's state:
+machine commands read and write `~/.uze`, project commands read and write the
+directory you are in.
+
+### Distribution — machine scope
+
+| Mechanism | What it gives you |
+| --- | --- |
+| **Store** | Owns a package's bytes and is the single source of truth. It never writes anything a harness reads, and no integration writes back into it. |
+| **Marketplaces** | Register a Git repository or a local directory; `uze-official` is embedded in the binary. Plugins are always resolved through one. |
+| **Receipts** | Every managed artifact — a symlink, a generated directory, a config entry, a bridge region — carries a typed receipt. Drift blocks a destructive change instead of authorizing it. |
+| **Trust** | An MCP command or a hook handler is execution you are being asked to authorize. uze lists every one before installing, and refuses rather than assuming yes when it cannot ask. |
+| **Maintenance** | `uze doctor` repairs the UZE-owned artifacts it can prove are safe to rebuild, and escalates only what needs your decision. |
+
+### Portability — what travels
+
+| Capability | How it travels |
+| --- | --- |
+| **Skills** | The canonical capability. Its portable semantics are *who may invoke it* — the `invoke: {model, user}` block — translated into each vendor's own encoding. |
+| **MCP servers** | Delivered through each harness's native mechanism, or folded into the plugin envelope where one exists. |
+| **Agents** | Markdown agent profiles projected onto each harness's native agent surface — including a generated TOML file for Codex, which has no on-disk Markdown format. |
+| **Hooks** | One authored `hooks.json` and a shell-command ABI, so a hook works everywhere without a per-vendor runtime. |
+| **Instructions** | A package's own `AGENTS.md` is composed into the project's, one owned region per package. |
+| **Project context** | `AGENTS.md` is the baseline; `uze context inspect \| plan \| reconcile` keeps each harness's bridge in step. |
+| **Profiles** | Autonomy, sandbox and model preferences translated into each harness's own settings, with the fidelity reported per axis. |
+
+### Orchestration — the terminal
+
+| Mechanism | What it gives you |
+| --- | --- |
+| **Terminal runtime** | A local server owns the pseudoterminals, so a pane survives the client leaving. Close the TUI; the agent keeps working. |
+| **Workspace** | Spaces, tabs and panes, with a prompt history you can jump back through. |
+| **Isolated checkouts** | Every agent starts in a reusable slot on a branch of its own, before its harness starts. |
+| **Task lifecycle** | Running, uncommitted, ready, conflicted, integrated, parked — read from Git, never announced by an agent. |
+| **Delivery** | Rebase onto the target inside the agent's own checkout, run the project's gate, then hand off, merge, or open a pull request. |
+| **Extensions** | Built-in TUI extensions, today a Git one: status badge, commit timeline, and a changes overlay with per-file diffs. |
+
+### The guarantees around it
+
+- **Conformance Lab** — the real harness binary against a synthetic world, in
+  Docker, with zero internet and zero tokens. A harness that cannot meet part of
+  a contract declares that with a reason; it never omits the check.
+- **One-way dependencies, enforced by tests** — the domain, the orchestration
+  layer and the CLI/TUI may not name a harness. A new harness is one integration
+  vertical and one registry entry, with no change to Store, Engine or Router.
 
 ## The loop
 
 ```bash
-$ uze setup            # detect + provision the four harnesses through official routes
-$ uze flow@ai          # add a plugin from a marketplace to this project
-$ uze doctor           # diagnostics: store, harnesses, attachment health
-$ uze context reconcile   # project context across every detected harness
+$ uze setup                # detect + provision the four harnesses through official routes
+$ uze flow@my-marketplace  # add a plugin from a marketplace to this project
+$ uze context reconcile    # project context across every detected harness
+$ uze doctor               # diagnostics: store, harnesses, attachment health
 ```
 
-Or just run `uze` with no arguments for the terminal UI.
+Or run `uze` with no arguments for the workspace — your agents, side by side.
 
 ## Next steps
 
 <Cards>
   <Card title="Getting started" href="/docs/getting-started" />
   <Card title="Concepts" href="/docs/concepts" />
+  <Card title="The agent workspace" href="/docs/workspace" />
   <Card title="Harness compatibility" href="/docs/harnesses" />
 </Cards>

@@ -7,32 +7,35 @@ description: The model behind uze — store, engine, router, receipts, delivery
 
 ## Standards first
 
-uze doesn't invent a competing format for what already has one. It adopts AGENTS.md, Agent
-Skills, MCP, and Agent Plugins directly, and models only the confirmed gap standards leave
-uncovered — see [Standards, not another format](/docs/concepts/standards) for the full reasoning
-and where `agents.lock`, `marketplace.json`, and the canonical package envelope fit in.
+uze doesn't invent a competing format for what already has one. It adopts
+AGENTS.md, Agent Skills, MCP, and Agent Plugins directly, and models only the
+confirmed gap standards leave uncovered — see
+[Standards, not another format](/docs/concepts/standards) for the full reasoning
+and where `agents.lock`, `marketplace.json`, and the canonical package envelope
+fit in.
 
 ## Store, Engine, Router
 
-- **Store** — owns installed package bytes. It is the single source of truth: it never writes
-  anything a harness reads, and integrations never mutate it.
-- **Engine** — composes an environment from the Store: which resources (skills, MCP servers,
-  agents, hooks) a package contributes.
-- **Router** — decides per capability and per harness which route is possible, given what the
-  harness can genuinely preserve.
+- **Store** — owns installed package bytes. It is the single source of truth: it
+  never writes anything a harness reads, and integrations never mutate it.
+- **Engine** — composes an environment from the Store: which resources
+  (instructions, skills, MCP servers, agents, hooks) a package contributes.
+- **Router** — decides per capability and per harness which route is possible,
+  given what the harness can genuinely preserve.
 
 ## Delivery precedence
 
-Every capability is delivered per harness through the first route that preserves its canonical
-semantics:
+Every capability is delivered per harness through the first route that preserves
+its canonical semantics:
 
 **Native > Generated Native > Safe Adaptation > Unsupported**
 
-- *Native* is an officially supported mechanism preserving canonical semantics — not necessarily
-  the same physical primitive across vendors.
-- *Generated Native* is a deterministically synthesized envelope (e.g. a UZE-built plugin
-  directory) delivered through the native mechanism.
-- *Safe Adaptation* degrades a property and says so — an honest report, never a silent loss.
+- *Native* is an officially supported mechanism preserving canonical semantics —
+  not necessarily the same physical primitive across vendors.
+- *Generated Native* is a deterministically synthesized envelope (e.g. a
+  UZE-built plugin directory) delivered through the native mechanism.
+- *Safe Adaptation* degrades a property and says so — an honest report, never a
+  silent loss.
 - *Unsupported* is stated as unsupported, with the reason.
 
 ## Identifiers are not labels
@@ -44,29 +47,73 @@ Every integration carries two names with distinct jobs:
 | **id** | `claude-code`, `antigravity` | Receipts, state records, setup targets, matching — anything the machine needs keyed on |
 | **label** | `Claude Code`, `Antigravity` | Every human-facing surface: the TUI, the README, CLI text output |
 
-The label is display-only: lookups never depend on it (the CLI also accepts aliases like `claude`
-and `agy`). Machine output (`--format json`) keeps the stable id.
+The label is display-only: lookups never depend on it (the CLI also accepts
+aliases like `claude` and `agy`). Machine output (`--format json`) keeps the
+stable id.
 
 ## Receipts drive lifecycle safety
 
-Every managed artifact — a symlink, a generated directory, a config entry, a bridge region — is
-tracked by a typed **receipt**. Drift or an unreadable ledger blocks destructive mutation rather
-than authorizing one, and removal always inspects current state before detaching
-(inspect-before-detach).
+Every managed artifact — a symlink, a generated directory, a config entry, a
+bridge region — is tracked by a typed **receipt**. Drift or an unreadable ledger
+blocks destructive mutation rather than authorizing one, and removal always
+inspects current state before detaching (inspect-before-detach).
 
-Derived artifacts (a generated envelope, a projected bridge file) are non-authoritative: safe to
-delete and rebuild from the Store + Engine alone.
+Derived artifacts (a generated envelope, a projected bridge file) are
+non-authoritative: safe to delete and rebuild from the Store + Engine alone.
+That is what lets `uze doctor` repair them without asking — a repair that
+cannot replace user-owned state, acquire bytes, or expand trust is not a
+decision, it is maintenance. Everything else is escalated to you.
+
+## Trust and containment
+
+Installing a package is not copying files — it is authorizing code a harness will
+later execute. uze is what performs that introduction, so it is where the
+question is asked.
+
+- **One question, asked once.** MCP server commands and hook handlers are
+  *executable capabilities*. Before anything is installed, uze lists every process
+  the package can cause to run, with its command and arguments. It is not a
+  permission system: no policy language, no stored grants, no per-capability
+  rules — one boundary, made visible.
+- **Consent is not inherited.** An update that introduces execution the installed
+  version did not have asks again.
+- **A refusal beats a guess.** Where uze cannot ask — a pipeline, a non-interactive
+  shell — it fails with `TRUST_REQUIRED` rather than assuming yes. `--trust`
+  answers up front for CI.
+
+Fetching a package is treated as hostile input on its own:
+
+- Remote clones run with the environment cleared — no inherited Git config, no
+  proxy or credential helper from your shell, system and global config pointed at
+  `/dev/null`. A repository's own hooks are never run, and a private repository
+  fails immediately instead of blocking on a credential prompt.
+- A materialized repository is capped at 512 MB.
+- A package root may not escape its checkout — checked lexically *and* after
+  resolving symlinks, so a path that only escapes once followed is refused too.
 
 ## Machine scope vs project scope
 
-| `~/.uze` (machine) | `project/` (project) |
-| --- | --- |
-| `uze add \| remove \| update` | `uze context inspect \| plan \| reconcile` |
-| `uze market \| plugin \| harness` | `uze install \| remove` (`agents.lock`) |
+Two scopes, and neither touches the other's state (ADR-019).
 
-Neither touches the other's state. `AGENTS.md` is the portable baseline for project context;
-a generated bridge (e.g. `CLAUDE.md` with an `@AGENTS.md` import) is the only projection uze
-maintains — and never outside its own managed regions.
+| `~/.uze` (machine) | the project directory |
+| --- | --- |
+| `uze setup`, `uze doctor` | `uze status` |
+| `uze market …`, `uze plugin …` | `uze <plugin>@<market>`, `uze install`, `uze remove` |
+| the Store and its receipt ledger | `agents.lock`, `AGENTS.md` and its bridges |
+
+`uze plugin install` never writes to a project's `agents.lock`; `uze remove` never
+removes anything from the Store. `AGENTS.md` is the portable baseline for project
+context, and a generated bridge (e.g. `CLAUDE.md` with an `@AGENTS.md` import) is
+the only projection uze maintains — never outside its own managed regions.
+
+## Preferences travel too
+
+Alongside packages, uze models user *intent* about how a harness behaves —
+**autonomy** (how much it may do without asking), **sandbox** (how far its writes
+and execution reach), and **model** (a capability tier, never a vendor model id).
+Each integration translates a resolved profile into its own native settings and
+reports the fidelity on the same Native/Adapted/Unsupported scale the capability
+router uses. See [Profiles](/docs/harnesses#profiles).
 
 <Cards>
   <Card title="Standards, not another format" href="/docs/concepts/standards" />

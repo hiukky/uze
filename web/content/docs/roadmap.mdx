@@ -7,15 +7,40 @@ description: Where uze is going — from alpha to ecosystem
 
 ## Status
 
-**Alpha** — APIs, schemas, and harness integration behavior may change while the cross-harness
-model is being validated.
+**Alpha.** APIs, schemas, and harness integration behavior may change while the
+cross-harness model is validated. No packaged release has shipped yet — building
+from source is the way in today.
 
-## Now
+## Working today
 
-- [x] Harness management · Skills & MCP portability · Project context · Marketplace · Terminal UI
-- [x] Agent & hook portability · Native package delivery
-- [ ] Requirements & dependencies · Security & trust
-- [ ] Runtime context projection · Migration tooling · Ecosystem expansion
+- **Harness management** — detection, provisioning through official routes, and
+  a cached readiness report for Claude Code, Codex, OpenCode and Antigravity.
+- **Capability portability** — skills with invocation policy, MCP servers,
+  portable agents, portable hooks, and package instructions, each delivered
+  through the most native route the harness can preserve.
+- **Native package delivery** — a preserved vendor envelope where one exists, a
+  deterministically generated one where it doesn't.
+- **Project context** — `AGENTS.md` as the baseline, with the one bridge that
+  needs maintaining, in regions uze owns and nothing else.
+- **Marketplaces and `agents.lock`** — reproducible project environments from a
+  committed lock file.
+- **Profiles** — autonomy, sandbox and model preferences translated into each
+  harness's own settings, with the fidelity reported per axis.
+- **Environment maintenance** — `doctor` repairs the UZE-owned artifacts it can
+  prove are safe to rebuild, and escalates only real decisions.
+- **The terminal workspace** — persistent panes, parallel agents in isolated
+  checkouts, readiness read from Git, and explicit delivery.
+
+## In progress
+
+- **Requirements & dependencies** — what a plugin needs from its host, declared
+  and checked before install.
+- **Security & trust** — beyond today's executable-capability boundary.
+- **Runtime context projection** — the PATH shim that reaches a harness without
+  writing into the project is still experimental.
+- **Packaged releases** — GitHub Releases for Linux first (ADR-034); macOS and
+  Windows after.
+- **Migration tooling and ecosystem expansion.**
 
 ## Planned harnesses
 
@@ -25,11 +50,13 @@ model is being validated.
 | Muse | ⚪ roadmap |
 | PI | ⚪ roadmap |
 
-Cells flip when the integration lands — the harness matrix on the [compatibility page](/docs/harnesses)
-is generated from the integration code itself, so it can never silently rot.
+Cells flip when the integration lands — the matrix on the
+[compatibility page](/docs/harnesses) is generated from the integration code
+itself, so it can never silently rot.
 
 ## The marketplace
 
-The plugin ecosystem grows through the official marketplace (`marketplace.json` at the repo root)
-plus any community marketplaces registered with `uze market add`. The one official plugin today
-is `plugins/uze` — the `/uze` Skill.
+The plugin ecosystem grows through the official marketplace (`marketplace.json`
+at the repository root, embedded in the binary as `uze-official`) plus any
+community marketplace registered with `uze market add`. The one official plugin
+today is `plugins/uze`, carrying the `uze:init` and `uze:worktree` Skills.

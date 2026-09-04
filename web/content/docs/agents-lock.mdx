@@ -1,0 +1,141 @@
+---
+title: agents.lock
+description: The project file — which plugins this project needs, where they came from, and what happens to an agent's finished work
+---
+
+# `agents.lock`
+
+One YAML file at the project root, committed with the repository. It answers two
+questions: **which plugins does this project need**, and **what happens to an
+isolated agent's finished work**. `git clone && uze install` reconstructs the
+environment from this file alone (ADR-016).
+
+It is written by uze — `uze <plugin>@<market>` and `uze remove` maintain the
+plugin entries — but it is a plain, readable file, and the `worktrees:` block is
+yours to write by hand.
+
+```yaml
+version: 1
+
+worktrees:
+  completion: merge
+
+marketplaces:
+  ai:
+    source:
+      type: path
+      path: /home/you/ai
+
+plugins:
+  git:
+    source:
+      type: marketplace
+      marketplace: ai
+      plugin: git
+    resolved: {}
+```
+
+`version` is required and must be `1`. Every other block is optional.
+
+## `worktrees`
+
+What this project does with the work of an agent uze placed in an isolated
+checkout — see [The agent workspace](/docs/workspace). The layout of those
+checkouts (`.worktrees/<id>`, branch `agent/<id>`) is fixed infrastructure and is
+deliberately *not* declared here.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `target` | the branch the primary checkout is on when the task is created | The branch finished work targets |
+| `completion` | `handoff` | `handoff` (leave the branch), `merge` (fast-forward the target), `pr` (push and open a request) |
+| `link` | none | Ignored files a fresh checkout links from the primary — `.env` and friends |
+| `setup` | none | A shell command that prepares a checkout, run in it after linking. Failure warns; it never blocks a launch |
+| `gate` | none | A shell command run in the task's checkout on the rebased commits. A non-zero exit refuses delivery |
+| `slots` | unbounded | The most checkouts that may exist at once |
+
+```yaml
+worktrees:
+  target: main
+  completion: pr
+  link: [.env, .env.local]
+  setup: pnpm install
+  gate: pnpm test
+  slots: 3
+```
+
+<Callout type="warn">
+  `link` entries must be relative paths that stay inside the repository — an
+  absolute path, or one that escapes through `..`, is refused when the file is
+  read, not silently dropped. The agent writes *through* a link into your primary
+  checkout, so only what it reads belongs there.
+</Callout>
+
+## `marketplaces`
+
+Every marketplace this project resolves plugins from, keyed by the name you
+registered it under. Three source types:
+
+```yaml
+marketplaces:
+  community:
+    source:
+      type: git
+      url: https://github.com/you/marketplace
+      reference: main          # optional — branch, tag or sha
+      subdirectory: ./markets  # optional
+    resolved:
+      revision: 9f1c2ab…       # what `reference` actually resolved to
+  local:
+    source:
+      type: path
+      path: /home/you/marketplaces/local
+  official:
+    source:
+      type: embedded
+      id: uze-official
+```
+
+`uze-official` is embedded in the binary — it needs no registration and is always
+available.
+
+## `plugins`
+
+One entry per plugin this project depends on, keyed by the name it is active
+under. Reproducible identity is `source` + `resolved.revision`, never a branch
+alias: a `reference: main` says what you asked for, `resolved.revision` says what
+you got.
+
+```yaml
+plugins:
+  flow:
+    source:
+      type: marketplace
+      marketplace: community
+      plugin: flow
+    resolved:
+      revision: 4c7d0e1…
+      version: 1.2.0
+      integrity: sha256-…
+  internal:
+    source:
+      type: git
+      url: https://github.com/you/internal-plugin
+      reference: v2
+    resolved:
+      revision: 8ab19f3…
+```
+
+A `path` marketplace has nothing to pin, so its plugins carry `resolved: {}`.
+
+## What this file is not
+
+`agents.lock` is **project scope**. It never records what is installed on your
+machine — that lives in the Store under `~/.uze`, and `uze plugin install` never
+writes here. The two are independent by design (ADR-019); see
+[Machine scope vs project scope](/docs/concepts#machine-scope-vs-project-scope).
+
+<Cards>
+  <Card title="The agent workspace" href="/docs/workspace" />
+  <Card title="CLI reference" href="/docs/cli" />
+  <Card title="Creating a plugin" href="/docs/creating-a-plugin" />
+</Cards>

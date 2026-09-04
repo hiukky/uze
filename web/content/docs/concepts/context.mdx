@@ -5,8 +5,9 @@ description: AGENTS.md as the portable baseline, and the bridges that reach the 
 
 # Project context
 
-`AGENTS.md` is the portable baseline for project instructions. Each harness consumes it through
-its own most native path, and uze reports the result instead of guessing:
+`AGENTS.md` is the portable baseline for project instructions. Each harness
+consumes it through its own most native path, and uze reports the result instead
+of guessing:
 
 | Harness | Delivery |
 | --- | --- |
@@ -18,19 +19,41 @@ its own most native path, and uze reports the result instead of guessing:
 ## The commands
 
 ```bash
-$ uze context inspect      # what each harness currently sees
-$ uze context plan         # what reconcile would change
+$ uze context inspect      # what each harness currently sees — never writes
+$ uze context plan         # exactly what reconcile would change — never writes
 $ uze context reconcile    # apply it
 ```
 
-`reconcile` maintains only the delimited region it owns inside a bridge file — anything a user
-wrote around it is preserved. A file that carries content outside a well-formed managed region is
-recognized and reported (`VendorLocked`), never overwritten.
+`reconcile` maintains only the delimited regions it owns. Anything you wrote
+around them is preserved, and a file carrying content outside a well-formed
+managed region is recognized and reported (`VendorLocked`), never overwritten.
+
+## What lives in a managed region
+
+`AGENTS.md` is yours; uze owns nothing but the marked blocks inside it.
+
+- **`package:<name>:instructions`** — one region per installed package that ships
+  its own `AGENTS.md`, composed in by `reconcile`.
+- **`project:worktree-policy`** — the checkout an agent is already working in, and
+  what this project does with finished work. Its only audience is a writer uze did
+  not place itself: a subagent spawned inside a harness session, which would
+  otherwise isolate a second time on top of the checkout it is already in. See
+  [The agent workspace](/docs/workspace).
+
+Each region is receipt-owned. Drift inside one is reported rather than
+overwritten, and a region whose owner is gone is removed rather than left behind.
 
 ## Portability states
 
-- **Portable** — `AGENTS.md` exists and every detected harness that needs something from it has
-  it (natively or via a matched bridge).
-- **Partially portable** — at least one harness's bridge is out of date.
-- **Vendor-locked** — no `AGENTS.md`, but vendor-specific files hold their own content; uze
-  makes the split visible instead of papering over it.
+- **Portable** — `AGENTS.md` exists and every detected harness that needs
+  something from it has it (natively or via a matched bridge).
+- **Partially portable** — at least one harness's bridge is missing or out of
+  date; the report names which.
+- **Vendor-locked** — no `AGENTS.md`, but vendor-specific files hold their own
+  content. uze makes the split visible instead of papering over it.
+- **No context** — no recognized instructions file at all.
+
+<Cards>
+  <Card title="The agent workspace" href="/docs/workspace" />
+  <Card title="Harness compatibility" href="/docs/harnesses" />
+</Cards>

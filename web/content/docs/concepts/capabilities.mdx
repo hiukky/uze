@@ -1,16 +1,18 @@
 ---
 title: Capabilities
-description: Skills, MCP servers, agents, and portable hooks — and how invocation policy survives delivery
+description: Instructions, skills, MCP servers, agents and portable hooks — and how their semantics survive delivery
 ---
 
 # Capabilities
 
-uze routes four resource kinds. For each one, the question is: *can this harness preserve the
-canonical semantics through its own native mechanism?*
+uze routes five resource kinds out of a package. For each one, the question is
+the same: *can this harness preserve the canonical semantics through its own
+native mechanism?*
 
 ## Agent Skills — one capability, invocation policy as semantics
 
-A Skill is the canonical capability. Its portable semantics are **who may invoke it**:
+A Skill is the canonical capability. Its portable semantics are **who may invoke
+it**:
 
 ```md
 ---
@@ -20,38 +22,83 @@ invoke:
 ---
 ```
 
-The invocation policy is never a separate capability kind and never a second surface: it is the
-`invoke: {model, user}` block in `SKILL.md`. Integrations translate that policy into their own
-encoding — Claude's frontmatter, Codex's `agents/openai.yaml`, OpenCode's `metadata.opencode`
-— or report the degradation honestly when it cannot be expressed.
+The invocation policy is never a separate capability kind and never a second
+surface: it is the `invoke: {model, user}` block in `SKILL.md` (ADR-030).
+Integrations translate that policy into their own encoding — Claude's
+frontmatter, Codex's `agents/openai.yaml`, OpenCode's `metadata.opencode` — or
+report the degradation honestly when it cannot be expressed.
 
-Every UZE-projected skill gets a stable, plugin-qualified invocation label (`flow:review`,
-ADR-026), so installation order and other plugins can never change how it is invoked.
+Every UZE-projected skill gets a stable, plugin-qualified invocation label
+(`flow:review`, ADR-026), so installation order and other plugins can never
+change how it is invoked.
+
+## Instructions
+
+A package may ship its own `AGENTS.md`. Its content becomes one delimited region
+inside the project's `AGENTS.md` when you run `uze context reconcile` — one
+region per contributing package, each owned by a receipt, none of them able to
+touch what you wrote around them. This is how a plugin contributes standing
+project instructions without a second instruction file per harness.
 
 ## MCP servers
 
-Delivered natively where the harness has a native mechanism (`claude mcp add`, `codex mcp add`,
-`agy mcp add`, OpenCode's global config) or inside the native/generated plugin when the package
-already ships the envelope.
+Delivered natively where the harness has a native mechanism (`claude mcp add`,
+`codex mcp add`, `agy mcp add`, OpenCode's global config) or inside the
+native/generated plugin when the package already ships the envelope. A package
+declaring several servers produces one resource per server, while the original
+`mcp.json` bytes are preserved once in the Store.
 
 ## Agents
 
-Markdown agent definitions projected to each harness's native agent surface — Claude's agents
-directory, Codex's standalone TOML files, OpenCode's config agents, Antigravity's global agents.
+Markdown agent definitions projected to each harness's native agent surface —
+Claude's agents directory, OpenCode's config agents, Antigravity's global agents,
+and Codex's documented standalone TOML file, which uze generates because Codex
+has no on-disk Markdown agent format (ADR-031). Only the verified portable
+frontmatter subset is claimed; vendor-only model, permission and orchestration
+fields are never silently dropped — a route that cannot preserve them is reported
+as adapted, not native.
 
 ## Hooks (portable, ADR-033)
 
-One authored `hooks.json` + a shell-command ABI (normalized stdin/stdout, bounded output and
-timeout, first-deny-wins) is the canonical hook surface. Each harness gets its own projection:
+One authored `hooks.json` plus a shell-command ABI — normalized stdin/stdout,
+bounded output and timeout, first-deny-wins — is the canonical hook surface.
+Each harness gets its own projection:
 
-- **Claude/Codex** — merged entries in their own hook config (settings.json / hooks.json)
-- **Antigravity** — named entries in the generated native plugin
-- **OpenCode** — an owned, regenerable plugin bridge (no native declarative hook surface exists)
+- **Claude Code / Codex** — merged entries in their own hook configuration
+- **Antigravity** — named entries in its shared `hooks.json`
+- **OpenCode** — an owned, regenerable plugin bridge, because no declarative hook
+  surface exists there
 
-Projections are receipt-owned and content-identity inspected; foreign hooks, plugins, and ordering
-are never touched.
+Projections are receipt-owned and content-identity inspected; foreign hooks,
+plugins, and ordering are never touched. The delivered artifact is a generated
+wrapper, so handlers run against the portable `HOOK_*` contract with **no uze
+binary on the execution path** (ADR-040).
+
+### What each harness can actually carry
+
+The canonical vocabulary is wider than any one harness. uze assesses each group
+against what the harness genuinely supports, and reports the difference rather
+than pretending:
+
+| Harness | Events | Effects |
+| --- | --- | --- |
+| Claude Code | `PreToolUse`, `PostToolUse`, `Stop` | `observe`, `allow`, `deny` |
+| Codex | `PreToolUse`, `PostToolUse`, `Stop` | `observe`, `allow`, `deny` |
+| Antigravity | `PreToolUse`, `PostToolUse`, `Stop` | `observe`, `allow`, `ask`, `deny` |
+| OpenCode | `PreToolUse`, `PostToolUse` | `observe`, `allow` |
+
+`transform` is in the canonical vocabulary and no harness carries it today.
+OpenCode's tool hooks receive the tool input but no block signal, and its one
+decision point carries the action's resources rather than its input — so a
+`deny` or `ask` group is diagnosed as unsupported *before* it is attached, never
+fabricated into something that would silently let the tool run.
 
 <Callout type="warn">
-  A hook whose route cannot preserve its declared semantics is reported as a finding — a
-  degraded hook is actionable, never hidden behind a healthy row.
+  A hook whose route cannot preserve its declared semantics is reported as a
+  finding — a degraded hook is actionable, never hidden behind a healthy row.
 </Callout>
+
+<Cards>
+  <Card title="Creating a plugin" href="/docs/creating-a-plugin" />
+  <Card title="Harness compatibility" href="/docs/harnesses" />
+</Cards>

@@ -1,27 +1,21 @@
 ---
 title: Getting started
-description: Install uze, set up harnesses, and add your first plugin
+description: Install uze, provision your harnesses, share one project context, and run agents side by side
 ---
 
 # Getting started
 
 ## Install
 
-<Callout type="warn">
-  uze is alpha — no packaged release has shipped yet. Building from source is the only way to
-  run uze today; the installer below already exists and will just say so until the first
-  release does.
-</Callout>
-
-<Tabs items={['Linux', 'macOS', 'Windows', 'Source']} defaultIndex={3}>
+<Tabs items={['Linux', 'macOS', 'Windows', 'Source']} defaultIndex={0}>
   <Tab value="Linux">
     ```bash
     curl -fsSL https://uze.hiukky.com/i | sh
     ```
 
-    Prebuilt binary for `x86_64`/`aarch64`, glibc or musl auto-detected; verifies a SHA-256
-    checksum before installing into `~/.local/bin` (or `$XDG_BIN_HOME`). Not live yet — it prints
-    build-from-source instructions until the first GitHub release ships.
+    Prebuilt binary for `x86_64`/`aarch64`, glibc or musl auto-detected; verifies a
+    SHA-256 checksum before installing into `~/.local/bin` (or `$XDG_BIN_HOME`)
+    — ADR-034.
   </Tab>
   <Tab value="macOS">
     Planned, not yet supported — see the **Source** tab.
@@ -33,70 +27,140 @@ description: Install uze, set up harnesses, and add your first plugin
     ```bash
     git clone https://github.com/hiukky/uze.git
     cd uze
-    cargo install --path . --locked
+    cargo install --path . --bin uze --locked
     ```
 
-    Works today on anything Rust's stable toolchain targets.
+    Rust stable, MSRV 1.97. Works on anything the toolchain targets.
   </Tab>
 </Tabs>
 
-## Set up harnesses
+<Callout type="warn">
+  No release is published yet, so the installer says so and prints
+  build-from-source instructions instead of failing partway through the pipe.
+</Callout>
 
-`uze setup` detects the four supported harnesses on your machine and provisions any missing
-binaries through each vendor's official installer:
+## Provision your harnesses
+
+`uze setup` detects the four supported harnesses and provisions any that are
+missing through each vendor's own official installer — never a mirror, never a
+repackaged binary (ADR-010).
 
 ```bash
 $ uze setup
-▸ Provisioning 4 harnesses through official routes…
-[1/4] Claude Code: ready (verified)
-[2/4] Codex: ready (verified)
-[3/4] OpenCode: ready (verified)
-[4/4] Antigravity: ready (verified)
+▸ Provisioning 4 harness(es) through official routes…
+(installer output is buffered per harness — see $UZE_HOME/state/logs/setup-<harness>.log; use --verbose to stream)
+✓ [1/4] claude-code: ready (update; version 2.1.260)
+  ↳ shim: ~/.uze/shims/claude
+✓ [2/4] codex: ready (update; version 0.152.1)
+  ↳ shim: ~/.uze/shims/codex
+✓ [3/4] opencode: ready (update; version v0.0.0-beta-18999)
+  ↳ shim: ~/.uze/shims/opencode
+✓ [4/4] antigravity: ready (install; version 1.1.26)
+  ↳ shim: ~/.uze/shims/agy
+
+✓ Setup completed — all 4 harness(es) ready.
 ```
 
-Setup is idempotent — running it again refreshes recorded facts instead of duplicating state.
-Use `uze setup <name>` to target one harness (`claude`, `codex`, `opencode`, `agy` — or their
-stable ids `claude-code`, `antigravity`).
+The word in parentheses is what setup did: `install` where the binary was
+absent, `update` where it was already there. Each `↳ shim` line is the
+[runtime PATH shim](/docs/harnesses#the-runtime-path-shim) for that harness;
+if setup had to add `$UZE_HOME/shims` to your shell profile, it prints the
+command to reload it.
 
-<Callout type="warn">
-  The installer output is buffered per harness under `$UZE_HOME/state/logs/setup-<id>.log`;
-  use `--verbose` to stream it.
-</Callout>
+A harness that could not be provisioned is a failure, not a warning — setup
+exits non-zero and names it, so an image build or a bootstrap script never
+reads "all ready" over a missing binary.
+
+It is idempotent — running it again refreshes recorded facts instead of
+duplicating state. Target one harness with `uze setup <name>`, and read state
+without changing anything:
+
+```bash
+$ uze setup list                 # detected harnesses and their setup state
+$ uze setup inspect claude       # one harness, in full
+```
+
+Names accept the stable id (`claude-code`), an alias (`claude`, `agy`), or the
+label (`Claude Code`).
 
 ## Add a plugin
 
-Project shorthand adds a plugin from a marketplace to the current project:
+A plugin always comes from a marketplace. `uze-official` is embedded in the
+binary and needs no registration; add your own with `uze market add`.
 
 ```bash
-$ uze flow@ai
-Claude Code: native (plugin:flow)
-Codex: native (plugin:flow)
-OpenCode: native (skills/flow)
-Antigravity: native (plugin:flow)
+$ uze market add ./my-marketplace          # a local directory, or an https:// Git URL
+$ uze market list
+$ uze flow@my-marketplace                  # add it to this project (writes agents.lock)
 ```
 
-Machine-scoped verbs (`add`, `remove`, `update`, `market`, `plugin`, `harness`) manage the
-machine-wide Store; project-scoped verbs (`context`, plus `install`/`remove` against
-`agents.lock`) manage the current project. Neither touches the other's state.
+The `<plugin>@<market>` shorthand is **project scope** — it records the plugin in
+`agents.lock`. To install into the machine Store without touching any project,
+use `uze plugin install flow@my-marketplace`. Neither implies the other.
+
+```bash
+$ uze plugin inspect flow    # capabilities, and how each harness will receive them
+```
+
+<Callout type="warn">
+  MCP server commands and hook handlers are **executable capabilities**. uze lists
+  every process a package can cause to run and asks before installing it. A
+  non-interactive shell refuses with `TRUST_REQUIRED` rather than assuming yes —
+  `--trust` answers the question up front, for CI.
+</Callout>
+
+## Share one project context
+
+`AGENTS.md` at the project root is the portable baseline. `uze context` reads it,
+shows what each harness sees, and maintains the one bridge that needs
+maintaining:
+
+```bash
+$ uze context inspect     # what each harness currently sees — read-only
+$ uze context plan        # exactly what reconcile would change — read-only
+$ uze context reconcile   # apply it
+```
+
+`reconcile` only ever writes inside the delimited regions it owns. Anything you
+wrote around them is preserved, and a vendor file holding its own content is
+reported rather than overwritten. See [Project context](/docs/concepts/context).
 
 ## Check the health
 
 ```bash
-$ uze doctor     # store, harness detection, attachment health, ledger
-$ uze status     # how this project's context reaches each harness
+$ uze doctor     # store, harness detection, attachment health, receipt ledger
+$ uze status     # how this project's environment and context reach each harness
 ```
 
-## Terminal UI
+`doctor` is a report, not a chore list: it repairs the deterministic,
+UZE-owned artifacts it can prove are safe to rebuild, and escalates only what
+genuinely needs your decision.
 
-Run `uze` with no arguments for the terminal UI: overview, marketplace, plugins with per-harness
-delivery, harness drawer with compatibility per capability, and doctor.
+## Run agents side by side
 
-## A fresh project
-
-On a new clone, `agents.lock` records the project's plugin set:
+Running `uze` with no arguments opens the **workspace** — a persistent terminal
+that hosts your agent sessions:
 
 ```bash
-$ uze install     # install this project's environment from agents.lock
+$ uze
+```
+
+Each agent starts in an isolated checkout of the repository, so two of them never
+touch each other's files, or yours. `Ctrl+O` switches to management — Overview,
+Plugins, Extensions, Integrations, Profiles — and back.
+
+<Cards>
+  <Card title="The agent workspace" href="/docs/workspace" />
+</Cards>
+
+## A fresh clone
+
+`agents.lock` is committed with the project, so a new machine reconstructs the
+same environment from it alone:
+
+```bash
+$ git clone …
+$ uze install
 ```
 
 ## What happens next
