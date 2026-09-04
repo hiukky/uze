@@ -62,6 +62,40 @@ jobs:
           tool: cargo-audit
       - run: cargo audit
 
+  secrets:
+    name: Secrets
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      # Pinned so a scan result is reproducible: a floating scanner means a
+      # green run today and a red one tomorrow with no commit in between.
+      GITLEAKS_VERSION: 8.30.0
+      GITLEAKS_SHA256: 79a3ab579b53f71efd634f3aaf7e04a0fa0cf206b7ed434638d1547a2470a66e
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # gitleaks walks commits, not the worktree; a shallow clone would
+          # silently scan almost nothing and still report success.
+          fetch-depth: 0
+      # Installed from the upstream release rather than an action:
+      # `gitleaks/gitleaks-action` gates organisation use behind a licence key,
+      # and `taiki-e/install-action` does not carry gitleaks (it is Go, so its
+      # cargo-binstall fallback looks for a crate that does not exist).
+      - name: Install gitleaks
+        run: |
+          curl -fsSL --retry 3 -o gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" | sha256sum --check --strict
+          tar xzf gitleaks.tar.gz gitleaks
+          ./gitleaks version
+      # The whole history is scanned on every event, not just the commits a
+      # pull request adds. It costs seconds, it cannot be defeated by a force
+      # push rewriting the range, and it is what catches a secret matched only
+      # by a rule upstream wrote after the commit had already landed.
+      - name: Scan the full history
+        run: ./gitleaks git --no-banner --redact=4 --config .gitleaks.toml
+
   installer:
     name: Installer
     runs-on: ubuntu-latest
