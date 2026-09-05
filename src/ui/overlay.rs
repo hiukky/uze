@@ -338,7 +338,7 @@ pub(crate) fn render_harness_help(frame: &mut ratatui::Frame<'_>, area: Rect) {
             "Routed through UZE's managed AGENTS.md bridge file.",
         ),
         entry(
-            Symbol::MarkWarning,
+            Symbol::MarkAttention,
             "Missing/Drifted",
             theme::color(Token::StateWarning),
             "AGENTS.md bridge needs reconciliation — a to analyze, p to apply.",

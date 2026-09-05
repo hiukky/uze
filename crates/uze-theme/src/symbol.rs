@@ -93,14 +93,14 @@ vocabulary! {
         MarkAdapted = "mark.adapted",
         /// No route exists at all.
         MarkUnsupported = "mark.unsupported",
-        /// Needs attention but is not broken. A pictograph by default, so it
-        /// belongs in a label that has room for one — never in a
-        /// one-column status mark, where terminals draw the emoji family at
-        /// a width that varies and a glyph that ignores the hue carrying
-        /// the meaning. Use [`MarkAttention`](Self::MarkAttention) there.
-        MarkWarning = "mark.warning",
-        /// The one-column form of "this needs you": a paused rebase, a
-        /// capability the environment is shadowing, an alert worth reading.
+        /// This needs you: a paused rebase, a capability the environment is
+        /// shadowing, an alert worth reading.
+        ///
+        /// There was a second, pictographic form of this once — `⚠` — and
+        /// it was the one glyph in the whole set a terminal drew from its
+        /// emoji font, at a width that varied and in a colour that ignored
+        /// the hue carrying the meaning. Losing it lost nothing: "needs
+        /// attention" is one meaning, so it is one symbol.
         MarkAttention = "mark.attention",
         /// Dismisses what it sits on.
         MarkClose = "mark.close",

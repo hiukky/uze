@@ -7,7 +7,6 @@
     "mark.official": "*",
     "mark.adapted": "~",
     "mark.unsupported": "-",
-    "mark.warning": "!",
     "mark.attention": "!",
     "mark.close": "x",
     "mark.dot": "-",

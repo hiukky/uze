@@ -1114,12 +1114,13 @@ mod workspace_tests {
         ]
     }
 
-    /// The marks are symbols, not emoji. The line is drawn at U+2300: the
-    /// blocks from there to U+27BF (Miscellaneous Technical, Miscellaneous
-    /// Symbols, Dingbats) are where the pictographs live, and a terminal
-    /// draws those from its emoji font — a different family, a width that
-    /// varies by terminal, and a glyph that ignores the hue carrying the
-    /// meaning. `⚠`, `⏸` and `✎` all came from there.
+    /// The marks are symbols, not emoji, and this is the narrow form of that
+    /// rule: a status mark is one column, so it is held to U+2300 — below
+    /// the blocks where the pictographs start — rather than merely to being
+    /// non-emoji.
+    ///
+    /// `uze_theme::load::tests::no_bundled_glyph_is_an_emoji` is the wider
+    /// rule, over every glyph UZE ships rather than only these.
     #[test]
     fn no_status_mark_is_drawn_from_the_pictographic_blocks() {
         for state in every_task_state() {

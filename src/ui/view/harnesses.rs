@@ -502,7 +502,7 @@ fn context_row(mechanism: ContextMechanism) -> (String, Style) {
             theme::fg(Token::Accent),
         ),
         ContextMechanism::ShimShadowed => (
-            format!("{} PATH shadowed", theme::glyph(Symbol::MarkWarning)),
+            format!("{} PATH shadowed", theme::glyph(Symbol::MarkAttention)),
             theme::fg(Token::StateWarning),
         ),
         ContextMechanism::Unsupported => (
@@ -626,7 +626,7 @@ mod tests {
         ));
         assert_eq!(
             rows[0].1,
-            format!("{} PATH shadowed", theme::glyph(Symbol::MarkWarning))
+            format!("{} PATH shadowed", theme::glyph(Symbol::MarkAttention))
         );
         assert_eq!(rows[0].2.fg, Some(theme::color(Token::StateWarning)));
     }

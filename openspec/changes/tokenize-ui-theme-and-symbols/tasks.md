@@ -98,3 +98,10 @@ rather than only converting it mechanically:
 - [x] 11.4 An anonymous `const PAD: u16 = 1` beside the existing `CHIP_PAD`, same value and same meaning
 - [x] 11.5 Verified nothing was lost: both architecture rules green, no palette constant left in `src/`, and `src/theme.rs`, the application facade, `theme_state` and the docs byte-identical to their pre-rebase form
 - [x] 11.6 The published schema had drifted to two validation patterns — `surface.hover` was written at a mid-rebase commit, before `@token/aa` existed. Regenerated
+
+## 12. No emoji in UZE's own themes
+
+- [x] 12.1 `⚠` (U+26A0) was the one glyph in the bundled set with an emoji presentation — a different font family, a width that varies by terminal, a picture that ignores the hue carrying the meaning. Gone
+- [x] 12.2 It was also the only reason two "needs attention" symbols existed, so `mark.warning` merges into `mark.attention`: one meaning, one symbol
+- [x] 12.3 `no_bundled_glyph_is_an_emoji` holds every bundled glyph to it — the pictographic ranges plus the Dingbats that carry an emoji presentation, named individually so `✓`, `✕`, `✦`, `❯`, `●` and `○` are not banned along with them. Verified by reinjecting `⚠` and watching it fail
+- [x] 12.4 Scoped to UZE's own themes: a theme someone writes is theirs, stated in `docs/theming.md` and in the test's own doc

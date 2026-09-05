@@ -1060,6 +1060,56 @@ mod tests {
         assert_eq!(actual, BUNDLED_SYNTAX_THEMES);
     }
 
+    /// No glyph UZE ships is one a terminal draws from its emoji font.
+    ///
+    /// An emoji is a different family, a width that varies by terminal, and
+    /// a picture that ignores the hue carrying the meaning — three reasons a
+    /// status mark cannot be one. This is a rule about *UZE's own* themes:
+    /// a theme someone writes is theirs, and may use whatever their terminal
+    /// renders.
+    ///
+    /// The ranges below are the pictographic ones — where a codepoint has an
+    /// emoji presentation or is drawn from the emoji font in practice.
+    /// Dingbats and Geometric Shapes are deliberately *not* banned wholesale:
+    /// `✓`, `✕`, `✦`, `❯`, `●` and `○` live there and are text, which is the
+    /// whole distinction. The handful of Dingbats that do carry an emoji
+    /// presentation are named individually.
+    #[test]
+    fn no_bundled_glyph_is_an_emoji() {
+        const PICTOGRAPHIC: &[(u32, u32)] = &[
+            (0x2600, 0x26FF),   // Miscellaneous Symbols — ⚠ and its neighbours
+            (0x2B00, 0x2BFF),   // Miscellaneous Symbols and Arrows
+            (0xFE00, 0xFE0F),   // variation selectors, including VS16
+            (0x1F000, 0x1FAFF), // the emoji planes
+        ];
+        // Dingbats is mixed; these are the members with an emoji presentation.
+        const EMOJI_DINGBATS: &[u32] = &[
+            0x2702, 0x2705, 0x2708, 0x2709, 0x270A, 0x270B, 0x270C, 0x270D, 0x270F, 0x2712, 0x2714,
+            0x2716, 0x271D, 0x2721, 0x2728, 0x2733, 0x2734, 0x2744, 0x2747, 0x274C, 0x274E, 0x2753,
+            0x2754, 0x2755, 0x2757, 0x2763, 0x2764, 0x2795, 0x2796, 0x2797, 0x27B0, 0x27BF,
+        ];
+
+        for id in builtin_names() {
+            let theme = builtin(id).expect("bundled");
+            for symbol in Symbol::ALL {
+                for frame in theme.symbol(*symbol).frames() {
+                    for character in frame.chars() {
+                        let point = character as u32;
+                        let pictographic = PICTOGRAPHIC
+                            .iter()
+                            .any(|(low, high)| (*low..=*high).contains(&point));
+                        assert!(
+                            !pictographic && !EMOJI_DINGBATS.contains(&point),
+                            "theme `{id}` draws `{symbol}` as `{character}` \
+                             (U+{point:04X}), which terminals render from the \
+                             emoji font"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn every_builtin_name_resolves() {
         for name in builtin_names() {

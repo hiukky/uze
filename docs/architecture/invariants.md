@@ -818,8 +818,10 @@ follows. Surfaces and borders are declared as a separation from the
 theme's own background rather than as the value they resolve to, which is
 what lets a background declaration alone carry a light theme.
 
-Colours bound to a hue by contract are the one thing that does not follow
-a meaning: the sixteen a program inside a pane names by index are literal,
+UZE's own themes carry no emoji — an emoji is a different font family, a
+width that varies by terminal, and a picture that ignores the hue carrying
+the meaning. Colours bound to a hue by contract are the one thing that does
+not follow a meaning: the sixteen a program inside a pane names by index are literal,
 because index 2 is *green* to whatever emitted it.
 
 > `tests/architecture/layering.rs::architecture_rules_hold`
@@ -827,6 +829,7 @@ because index 2 is *green* to whatever emitted it.
 > `crates/uze-theme/src/load.rs::the_default_carries_the_palette_that_shipped`
 > `crates/uze-theme/src/load.rs::a_light_theme_gets_light_surfaces_from_the_background_alone`
 > `crates/uze-theme/src/load.rs::the_terminals_own_sixteen_keep_their_hues_when_a_theme_repaints_a_meaning`
+> `crates/uze-theme/src/load.rs::no_bundled_glyph_is_an_emoji`
 > `src/theme.rs::a_variation_resolves_over_the_theme_it_varies`
 > `src/theme.rs::the_operators_overrides_outlast_the_theme_they_are_applied_over`
 > `src/progress.rs::the_cli_and_the_tui_resolve_a_shared_token_to_the_same_colour`

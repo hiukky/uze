@@ -162,6 +162,12 @@ any of them:
 }
 ```
 
+UZE's own themes carry **no emoji** — only symbols. An emoji is a different
+font family, a width that varies by terminal, and a picture that ignores the
+hue carrying the meaning, which is three reasons a status mark cannot be
+one; a test holds the bundled themes to it. Your theme is yours, and may use
+whatever your terminal renders.
+
 A symbol is a string, a list of frames for an animation, or an object with
 an explicit `width` — for a glyph whose display width the terminal disagrees
 with Unicode about, which is the usual story with a Nerd Font's private-use
