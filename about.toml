@@ -1,0 +1,18 @@
+# Attribution policy for `cargo about` (see `make attributions`).
+#
+# `accepted` mirrors deny.toml's allowlist: cargo-deny decides whether a
+# licence may be here at all, cargo-about writes down the one each crate is
+# taken under. A crate offering `MIT OR Apache-2.0` is attributed under the
+# first entry below that it offers, so the order is the project's own
+# preference, not an alphabetical accident.
+accepted = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "MIT",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  "Zlib",
+  "CC0-1.0",
+]

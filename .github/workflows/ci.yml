@@ -62,6 +62,32 @@ jobs:
           tool: cargo-audit
       - run: cargo audit
 
+  licences:
+    name: Licences
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Its own job, not a step of Audit: this one answers whether the
+      # project may ship what it links, which is a different question from
+      # whether what it links has a known defect, and a red one here is
+      # read by a different person.
+      - name: Install cargo-deny and cargo-about
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny,cargo-about
+      # Licences, advisories, bans and sources — the policy lives in
+      # deny.toml, including the two `unmaintained` advisories accepted
+      # there with a written reason.
+      - run: cargo deny check
+      # A drifting attribution file is worse than none: it states a licence
+      # set the binary no longer has. Regenerate and compare, so a
+      # dependency change that forgets CREDITS.md fails here.
+      - run: make attributions-check
+
   secrets:
     name: Secrets
     runs-on: ubuntu-latest

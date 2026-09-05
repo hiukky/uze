@@ -43,9 +43,13 @@ By contributing you agree that your work is licensed under the
 Nothing merges unless all of this is green, locally and in CI:
 
 ```bash
-make check                      # fmt + clippy (warnings denied) + tests + ruff
+make check                      # fmt + clippy (warnings denied) + cargo-deny + tests + ruff
 openspec validate --all --strict
 ```
+
+`make check` needs two tools CI installs for itself:
+`cargo install cargo-deny cargo-about --locked`. They are dev tooling and
+never appear in `Cargo.toml`.
 
 `ci.yml` is the source of truth for what gates a merge; `make check` is
 the local proxy. Specifically:
@@ -57,6 +61,14 @@ the local proxy. Specifically:
 - `cargo test --workspace --no-fail-fast` passes. A test that is flaky is
   a bug in the test; fix it or delete it, never `#[ignore]` it to get
   green.
+- `cargo deny check` clean: licence policy, advisories, bans and sources
+  (`deny.toml`). A licence outside the allowlist is not allowlisted to get
+  green — say so in the pull request and let the dependency decision be
+  made. An `unmaintained` advisory may be accepted in `deny.toml` with a
+  written reason that names what would remove it; a vulnerability never is.
+- `CREDITS.md` is generated. A dependency change regenerates it with
+  `make attributions`; CI fails when it drifts from `Cargo.lock`. Edit
+  `about.hbs`, never the file.
 - Coverage does not drop below the thresholds in `ci.yml`.
 - The conformance verticals (`make lab-run`) pass for every harness a
   change touches. A harness that cannot deliver part of a contract
