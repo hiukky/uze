@@ -57,8 +57,9 @@ serves is under `web/public/` or comes from a package above.
 
 ## Rust dependencies
 
-The published binary statically links every crate below. The graph is the one
-the release build resolves — default features, no optional backend nobody
+The published binary statically links every crate below. uze's own crates are
+not among them — they are this project, not third-party material. The graph is
+the one the release build resolves — default features, no optional backend nobody
 enables — which is also what `cargo deny` audits (`deny.toml`). A crate
 offered under more than one licence is counted under the first one `about.toml`
 accepts, which is why the table sums to more than the number of crates.

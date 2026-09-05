@@ -16,3 +16,10 @@ accepted = [
   "Zlib",
   "CC0-1.0",
 ]
+
+# The workspace's own crates are not third-party material, and listing them
+# with their version made every release bump the file stale — the attribution
+# check would fail on the release pull request, every time. They are all
+# `publish = false`, which is what marks them private here.
+[private]
+ignore = true

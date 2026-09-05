@@ -3,801 +3,425 @@
 All notable changes to UZE are documented here, generated from Conventional
 Commits by `git-cliff` (`make changelog`). Until v1, UZE ships only SemVer
 pre-releases — see `docs/versioning.md`.
-## [0.0.0-alpha.1]
 
-### CI
-
-- Add GitHub Actions quality pipeline and hide target in VS Code (c15bb25)
-
-- Add audit job for RustSec vulnerability check (abfd304)
-
-- Fix audit-check token and allow Node 20 (30480fc)
-
-- Run all harness verticals (d7f0b25)
-
-- Add one-click release workflow (97015f9)
-
-- Lint and exercise the installer in CI (be04707)
-
-- Optimize coverage pipeline speed and add local coverage target (969a343)
-
-- Run UZE's own vertical beside the four harnesses (530ce91)
-
-- Run the conformance unit tests (b3c7b3f)
-
-- Run the whole workspace, not the root crate (21f560a)
-
-- Install cargo-audit as a prebuilt binary instead of building it per run (95bf3b6)
-
-- Scan every commit for secrets (#10) (b5ee527)
-
-- Audit dependency licences, generate the attribution, credit the marks (#12) (84bada6)
-
-- Version the repository rules, and close the four audit gaps (#14) (ef6a1e3)
-
-
-### Chore
-
-- Exclude conformance build artifacts (a9b6725)
-
-- Add local development make targets (9cf8f1e)
-
-- Add cross-distro WSL install helper (90f1623)
-
-- Archive four completed changes (25e909b)
-
-- Add lefthook for local pre-commit/pre-push checks (3564514)
-
-- Add cargo-release/git-cliff release tooling (74e4013)
-
-- Update rmcp/schemars/ratatui/crossterm, fix CI, add Dependabot (5cc2f56)
-
-- Remove stale native package tracer report (72a44a4)
-
-- Bump actions/upload-artifact from 4 to 7 (cf82bab)
-
-- Bump version to 0.0.0-alpha.9 for local install (2dccaa9)
-
-- Track this repo's own agents.lock (8089699)
-
-- Bump version to 0.0.0-alpha.10 for local install (a656f05)
-
-- Bump actions/checkout from 4 to 7 (5cc933b)
-
-- Bump version to 0.0.0-alpha.12 for local install (7388717)
-
-- Bump version to 0.0.0-alpha.13 for local install (376d45b)
-
-- Bump version to 0.0.0-alpha.14 for local install (2aa7b8a)
-
-- Clarify that make install is a force-rebuild without version bump (96ad5a5)
-
-- Prefix fixture directories with underscore so they sort to the top (62a5e7b)
-
-- Migrate openspec operator skills to the shared .agents layout (fc14bd3)
-
-- Remove lab-watch live follower (9716ca2)
-
-- Archive completed changes (4526fcc)
-
-- Add fmt, lint and check aggregate targets (cd92842)
-
-- Lint and format Python with ruff (ef65ef2)
-
-- Bump actions/download-artifact from 7 to 8 (d50dada)
-
-- Bump the cargo-dependencies group with 2 updates (4c00c6e)
-
-- Exclude build artifacts from VS Code explorer and search (e228d21)
-
-- Switch worktree completion to merge (7f39858)
-
-- Scaffold the contributor licence agreement (#13) (09e9407)
-
-
-### Documentation
-
-- Define standards-first UZE architecture (2b7c041)
-
-- Characterize the MCP headless approval gap precisely (39c5cbf)
-
-- Map harness ecosystem for local conformance (bf74c51)
-
-- Pin conformance inference image digest (cb90e82)
-
-- Explain how tests are organized and where a new one goes (0e7b907)
-
-- Define official harness provisioning boundary (fba7d0d)
-
-- Research the M3 capability landscape (7aecee6)
-
-- Rewrite README as a technical landing page (9d83b5b)
-
-- Add evidence-graded per-harness compatibility READMEs (9008c61)
-
-- Remove superseded implementation status pointer (a74a881)
-
-- Rewrite AGENTS.md as the portable agent baseline (3a1f572)
-
-- Deterministic harness x feature matrix + lean top-level readme (4666ae0)
-
-- Regenerate harness matrix for portable hooks (21819ff)
-
-- Document the one-click release workflow (f12dd90)
-
-- Adopt GitHub Releases as the Linux distribution channel (7608dfe)
-
-- Move the harness matrix and detail content into the docs site (3c8a220)
-
-- Sync harness matrix (a483dfe)
-
-- Add conformance-debug skill and point AGENTS.md at it (d2a93b0)
-
-- Consolidate 39 records into 25 (2a37d20)
-
-- Propose enforcing the architecture seams (27003df)
-
-- State the seams as enforced facts (7aab887)
-
-- Say why the transport is a crate, and drop a glyph that never shipped (fd63b62)
-
-- Record the registry-driven CLI as not taken, and why (af918a9)
-
-- Record the boundary work that happened outside a change (1ed096b)
-
-- Record why the Codex envelope carries bytes instead of symlinks (d029b61)
-
-- Record why the Claude and Antigravity hook phases now fail (6efbf25)
-
-- State what the capability contract holds (458a17b)
-
-- Close out the capability contract's tasks (ad20173)
-
-- Teach the debug skill to check the vendor before the code (38a0fa1)
-
-- Propose native-first hooks (9287cac)
-
-- Propose plugin requirements (c078231)
-
-- Plugin requirements — UZE explains, the person installs (3fd46ce)
-
-- Propose the Antigravity signed-in Lab (ea1c2b3)
-
-- Write down the contract a delivered hook actually speaks (c2fa2d5)
-
-- Record what the Lab now exercises and why (fff9ff1)
-
-- Record what the new hook delivery guarantees (d59bb31)
-
-- Name what actually holds Antigravity's hook gate shut (e8b38de)
-
-- Cite the vendor bug behind Antigravity's closed hook gate (1579499)
-
-- State the two gates a delivered Antigravity hook must pass (8bb3e75)
-
-- Record Antigravity's delivery route and its denial exit code (06265ea)
-
-- Regenerate the harness matrix for the compiled hook delivery (dde9313)
-
-- Evolve the worktree policy change to the slot model (efe9488)
-
-- Archive five completed changes and record ADRs 041-043 (0ebf3b8)
-
-- Add CONTRIBUTING.md with the rules a change has to follow (990c117)
-
-- Describe what uze does today, and stop the matrix understating it (71d6d84)
-
-- Describe the README video as a spec (29dc400)
-
-- Add NOTICE, security policy and trademark notice (#11) (1860288)
-
+## [0.0.0-alpha.1](https://github.com/hiukky/uze/releases/tag/v0.0.0-alpha.1) - 2026-09-05
 
 ### Features
 
-- Add Rust project composition CLI (502554c)
-
-- Add OpenCode peer integration conformance (89e3256)
-
-- Compose stored environments through integrations (26b66c3)
-
-- Compose project and store environments (6fed786)
-
-- Enable transparent harness attachment for Claude Code and Codex (a09f0cc)
-
-- Close Agent Skills behavioral E2E for Claude Code and Codex (f6b5a79)
-
-- Enable MCP as UZE's second capability (4330325)
-
-- Add package-centric UZE application lifecycle (e2c29b5)
-
-- Add package-centric terminal UI (dea652b)
-
-- Add an experimental fourth harness to test the extracted core (ee4c4a6)
-
-- Add package provenance, git sources and a consent boundary (e38b0d0)
-
-- Refine package-centric terminal interface (a329d30)
-
-- Provision harnesses through integration routes (8f1e4f8)
-
-- Stream official installer progress (9fd79bc)
-
-- Deploy portable test plugin to WSL lab (2058196)
-
-- Reconcile portable AGENTS.md across all four harnesses (3eabb84)
-
-- Add portable project context reconciliation (3b45217)
-
-- Add portable uze skill and project status (d4dc682)
-
-- Short naming, legacy receipt reuse and collision handling (3d7ff98)
-
-- Seed builtin official uze skill globally (2a0422d)
-
-- Official marketplace contract + generic default-plugin bootstrap (a1922d8)
-
-- Rebuild TUI as sidebar-navigated product surface, wire update_plugin (2af8b0b)
-
-- Harness compatibility table, drop redundant hints, version in footer (a0c0163)
-
-- Add experimental PATH shim for Claude runtime context projection (79027ba)
-
-- Automate PATH integration for the harness shim (12c72ca)
-
-- Establish native-first plugin delivery (5ffc135)
-
-- Safe decomposed to native migration for exact coverage (ac8fe03)
-
-- Add marketplace registry and plugin install via name@marketplace (7ae67fb)
-
-- Implement Project Agent Environment with agents.lock (9e55f2f)
-
-- Improve CLI help with colors and shorter descriptions (bf0154e)
-
-- Reorganize CLI commands by category and improve help (c6081ea)
-
-- Reorganize CLI commands, add colored help, and progress feedback (61e3ee0)
-
-- Cache harness detection to make CLI ops millisecond-fast (45357ed)
-
-- Support multiple marketplaces in browse, install, and add flows (fdc5012)
-
-- Rebuild TUI to match imported design; fix harness provisioning bugs (6bd9147)
-
-- Harness status glossary and friendlier status display (b52c4d0)
-
-- Redesign command grammar around explicit Project/Machine boundary (435bdc0)
-
-- Add Generated Native Package projection tier; generalize runtime-shim boundary (eb95c8c)
-
-- Extend Generated Native Package to Codex/Gemini; add Integration Conformance Test Suite (254a6ae)
-
-- Rename marketplace root manifest to agents.json [**breaking**] (e459bae)
-
-- Workspace-aware Overview with semantic health states (57ddd2e)
-
-- Add Command as a first-class capability (c3e288e)
-
-- Expose stable namespaced invocation labels (841d683)
-
-- Make Antigravity CLI the Google-family v0 harness (d17b565)
-
-- Replace canonical Command with Skill + invocation policy (6eceb2e)
-
-- Python Real-Harness + Synthetic World lab, vertical per harness (3ce45ef)
-
-- Add opencode vertical to the Python lab (df2b0d1)
-
-- Lab-watch becomes a live follower of the newest TUI recording (03ac435)
-
-- Add isolated marketplace fixture (3924872)
-
-- Migrate integration to v2 (071cfc0)
-
-- Promote MCP to native via opencode mcp add CLI (4a5e169)
-
-- Improve CLI header formatting (3f7e00b)
-
-- Add native harness projections (e9abe5f)
-
-- Add canonical hook model and discovery (78795de)
-
-- Deliver portable hooks across all four harnesses (a8a6eec)
-
-- Add official Linux install script (3c73d78)
-
-- Align projections with real harness contracts and lab evidence (2cb8c8b)
-
-- Gate evidence integrity and agent exploration modes (544265c)
-
-- Add Fumadocs documentation site (9695781)
-
-- Unify harness display names across CLI, TUI, and docs (e27c384)
-
-- Redesign docs site UI/UX, add plugin-authoring guide, fix Antigravity invocation prefix (30ed520)
-
-- Reconcile safe environment state (5acbf5f)
-
-- Reconcile orphaned receipts left by package renames (9499ced)
-
-- Unify workspace and harness setup (ec2648f)
-
-- Add Profiles/Preferences vertical slice (d69a4bd)
-
-- Add persistent terminal workspace (0978e7b)
-
-- Add agent-launching tabs and split the TUI into per-mode modules (21576f1)
-
-- Group workspace tabs into persistent, agent-aware Spaces (d4de376)
-
-- Add contextual git diff overlay (91e7da6)
-
-- Refine git worktree changes navigator (3104382)
-
-- Polish the workspace toggle, tab strip, and git changes overlay (710f461)
-
-- Report xterm mouse-tracking mode on pane snapshots/damage (023106b)
-
-- Surface per-harness agent support and bracketed paste (48d6f6e)
-
-- Animate in-flight agents and make the context menu a real menu (f3417cd)
-
-- Add the /uze:worktree concurrent-worktree coordinator (6e81603)
-
-- Add extensions and improve agent support (5f98f64)
-
-- Refine catalog and detail panels (10a74c2)
-
-- Record and browse agent prompt history (a7f9914)
-
-- Isolate concurrent agents at launch and project the policy [**breaking**] (144e98d)
-
-- Apply the updates uze can settle on its own when it opens (6380b42)
-
-- Mark which isolated checkout an agent tab runs in (948aa7a)
-
-- Make the portable tool vocabulary carry its fields (d19eb87)
-
-- Handlers read the context from the environment, answer with an exit code [**breaking**] (a154155)
-
-- Compile the hook into a wrapper the harness runs directly (ff727d2)
-
-- The OpenCode plugin becomes the wrapper (8a141a3)
-
-- Report which route delivered a hook, and what it needs (87f3379)
-
-- Serve Antigravity's feature-flag plane in the synthetic world (cbafa36)
-
-- Serve Antigravity's signed-in plane in the synthetic world (2dfc669)
-
-- Take the repository write lock in write (c5603b8)
-
-- Add the task model and retire linked-worktree discovery (b89f021)
-
-- Reusable checkout slots with adoption and safe pruning (6625693)
-
-- Every agent starts in a slot of its own; the seat rule is removed [**breaking**] (002fdc2)
-
-- Readiness and delivery of a task's work (f49ea2b)
-
-- Tasks are evaluated when a pane goes quiet and delivered with one action (7151aac)
-
-- Project the slot model, rewrite the Skill, and prove the engine end to end (e7494cb)
-
-- One server per user, spaces born from a root, focus per client [**breaking**] (b61b636)
-
-- A slot belongs to its repository, and returns to the pool (fc490fd)
-
-- The new-space prompt chooses a root from the directories that exist (54f0477)
-
-- The open root picker has the sidebar to itself (27fe921)
-
-- A tab belongs with the agent it was born from [**breaking**] (6376e9d)
-
-- Status marks read by color, and say what they mean (bfdbd6f)
-
-- Add isolation contract proving worktree scoping in a real harness (40db70f)
-
-- Drag-to-reorder tabs within a space (8b0baaa)
-
-- An agent outside any slot wears a glyph, its branch and an agent label (0db64d8)
-
-- An agent in the operator's tree shows what a pull and a push would move (f8946b3)
-
-- A space header flips between its name and its root (49bc63b)
-
-- The overview lists recent prompts as a table grouped by age (611f522)
-
-- The Git extension keeps a commit timeline in the sidebar (71472f5)
-
-- Rebuild the landing page around a recording of the real TUI (06119f1)
-
-- A task whose checkout was removed is put back on its branch (2dadf7b)
-
-- Show the workspace running two harnesses at once, on the site and in the README (2464ca1)
-
-- "+ new" opens a space over a directory another already holds (b2ae681)
-
-- The browser tab carries the tagline, not just the name (a11d05a)
-
+- Add Rust project composition CLI ([502554c](https://github.com/hiukky/uze/commit/502554c1344895797aa25cf7a1be46fb3c0d29a0))
+- Add OpenCode peer integration conformance ([89e3256](https://github.com/hiukky/uze/commit/89e3256a1126a8101799138eeec4e01187a9b620))
+- Compose stored environments through integrations ([26b66c3](https://github.com/hiukky/uze/commit/26b66c3a8da86483249863ce81ef015b470a0275))
+- Compose project and store environments ([6fed786](https://github.com/hiukky/uze/commit/6fed786ab2deb4ef2043363e839806ba2c1aecf4))
+- Enable transparent harness attachment for Claude Code and Codex ([a09f0cc](https://github.com/hiukky/uze/commit/a09f0cc46bdcf560eb00abcf6a72329828a54ba8))
+- Close Agent Skills behavioral E2E for Claude Code and Codex ([f6b5a79](https://github.com/hiukky/uze/commit/f6b5a79d18624818a178214679fad228537b9274))
+- Enable MCP as UZE's second capability ([4330325](https://github.com/hiukky/uze/commit/4330325b62073604b65be64a1f6c6b824ebfd9bf))
+- Add package-centric UZE application lifecycle ([e2c29b5](https://github.com/hiukky/uze/commit/e2c29b5f267ad56b8126a6fc5800553c3de15902))
+- Add package-centric terminal UI ([dea652b](https://github.com/hiukky/uze/commit/dea652b571564db16348ef78d9123eff2ceb788c))
+- Add an experimental fourth harness to test the extracted core ([ee4c4a6](https://github.com/hiukky/uze/commit/ee4c4a6a50407df91e216d440b604d7c86d43c13))
+- Add package provenance, git sources and a consent boundary ([e38b0d0](https://github.com/hiukky/uze/commit/e38b0d07829e069da08d120e9dcefdd02401a16a))
+- Refine package-centric terminal interface ([a329d30](https://github.com/hiukky/uze/commit/a329d30db518deb27588a6c4395312776a4c69f0))
+- Provision harnesses through integration routes ([8f1e4f8](https://github.com/hiukky/uze/commit/8f1e4f81633c59ec94ad5851ba4598154fe9c677))
+- Stream official installer progress ([9fd79bc](https://github.com/hiukky/uze/commit/9fd79bc7031e2b05d2a3924ed0247e7990a407e0))
+- Deploy portable test plugin to WSL lab ([2058196](https://github.com/hiukky/uze/commit/20581962f526fded178d2fe665876b57e4a70c10))
+- Reconcile portable AGENTS.md across all four harnesses ([3eabb84](https://github.com/hiukky/uze/commit/3eabb84eeceb1bf5f4fc8f34689e0b4cc3b7747f))
+- Add portable project context reconciliation ([3b45217](https://github.com/hiukky/uze/commit/3b45217c162fd56e75255b926be1bafee375cc0e))
+- Add portable uze skill and project status ([d4dc682](https://github.com/hiukky/uze/commit/d4dc682f1686c75f4ea336851f3add5272b7fd46))
+- Short naming, legacy receipt reuse and collision handling ([3d7ff98](https://github.com/hiukky/uze/commit/3d7ff98f36ed0f18c1a77d20f4cfb8ca961f0866))
+- Seed builtin official uze skill globally ([2a0422d](https://github.com/hiukky/uze/commit/2a0422d526e34c59d86d64a351dfc2e8ef3dfeee))
+- Official marketplace contract + generic default-plugin bootstrap ([a1922d8](https://github.com/hiukky/uze/commit/a1922d86c5238ba221786724506a20bf96b78535))
+- Rebuild TUI as sidebar-navigated product surface, wire update_plugin ([2af8b0b](https://github.com/hiukky/uze/commit/2af8b0b4dca7eb6d8fd0cb4cbade74daa0c6d986))
+- Harness compatibility table, drop redundant hints, version in footer ([a0c0163](https://github.com/hiukky/uze/commit/a0c0163553548f0026d14fcfa142e86a5cdd1544))
+- Add experimental PATH shim for Claude runtime context projection ([79027ba](https://github.com/hiukky/uze/commit/79027baed8c1374dce6f755fb8b39a819bc53d9b))
+- Automate PATH integration for the harness shim ([12c72ca](https://github.com/hiukky/uze/commit/12c72ca72de298a4845d82dd4c69213fa881ae04))
+- Establish native-first plugin delivery ([5ffc135](https://github.com/hiukky/uze/commit/5ffc135bfda73dca92a95680742cd439fff1d31c))
+- Safe decomposed to native migration for exact coverage ([ac8fe03](https://github.com/hiukky/uze/commit/ac8fe03d50d3958db306442f8ff7332ca66869e1))
+- Add marketplace registry and plugin install via name@marketplace ([7ae67fb](https://github.com/hiukky/uze/commit/7ae67fbce266c664188dd88fa5886fc0b18f767d))
+- Implement Project Agent Environment with agents.lock ([9e55f2f](https://github.com/hiukky/uze/commit/9e55f2f573f8d029eb1aa9e4405ca0efd9a6ffa1))
+- Improve CLI help with colors and shorter descriptions ([bf0154e](https://github.com/hiukky/uze/commit/bf0154e7019714be2bec86c5bbee116423921b90))
+- Reorganize CLI commands by category and improve help ([c6081ea](https://github.com/hiukky/uze/commit/c6081ead4b75e846cdabcb2e039d43828ce5012e))
+- Reorganize CLI commands, add colored help, and progress feedback ([61e3ee0](https://github.com/hiukky/uze/commit/61e3ee0c1c7e15e7a7fef728470304457c6e2e16))
+- Cache harness detection to make CLI ops millisecond-fast ([45357ed](https://github.com/hiukky/uze/commit/45357ed90e97ba2b8d88e114869be0746d7592f6))
+- Support multiple marketplaces in browse, install, and add flows ([fdc5012](https://github.com/hiukky/uze/commit/fdc50120b2a695871a63737010f43762a2e6ef93))
+- Rebuild TUI to match imported design; fix harness provisioning bugs ([6bd9147](https://github.com/hiukky/uze/commit/6bd9147e98e635b68e3a0d8c99c7594b210e2f5f))
+- Harness status glossary and friendlier status display ([b52c4d0](https://github.com/hiukky/uze/commit/b52c4d01123eb2eae01f7cd84f827198843728a6))
+- Redesign command grammar around explicit Project/Machine boundary ([435bdc0](https://github.com/hiukky/uze/commit/435bdc01f95cdeb82b375138faa48b7c60845f38))
+- Add Generated Native Package projection tier; generalize runtime-shim boundary ([eb95c8c](https://github.com/hiukky/uze/commit/eb95c8c0abccacdf25af064a9cee1641bf162066))
+- Extend Generated Native Package to Codex/Gemini; add Integration Conformance Test Suite ([254a6ae](https://github.com/hiukky/uze/commit/254a6ae49f29632af473950f0aa7985aff60bced))
+- Rename marketplace root manifest to agents.json [**breaking**] ([e459bae](https://github.com/hiukky/uze/commit/e459bae3657371e33ebdd52ddd4c6bef6fa7f549))
+- Workspace-aware Overview with semantic health states ([57ddd2e](https://github.com/hiukky/uze/commit/57ddd2e6741b601ffc1ecab039862563aa459289))
+- Add Command as a first-class capability ([c3e288e](https://github.com/hiukky/uze/commit/c3e288eea8d369b3b21a7fb07e7a3e2376dd29ac))
+- Expose stable namespaced invocation labels ([841d683](https://github.com/hiukky/uze/commit/841d6837b1c68ada8fc41ef52daf5ff8f9ba5502))
+- Make Antigravity CLI the Google-family v0 harness ([d17b565](https://github.com/hiukky/uze/commit/d17b565b37dbe23ddd716b08c6cf052e844d79c3))
+- Replace canonical Command with Skill + invocation policy ([6eceb2e](https://github.com/hiukky/uze/commit/6eceb2e627089621ebc7751e1b045475233254a2))
+- Python Real-Harness + Synthetic World lab, vertical per harness ([3ce45ef](https://github.com/hiukky/uze/commit/3ce45ef3a80d595832fb220830c2a18d2895f2de))
+- Add opencode vertical to the Python lab ([df2b0d1](https://github.com/hiukky/uze/commit/df2b0d1bd60be4926e50fb589c54ef448aac2f01))
+- Lab-watch becomes a live follower of the newest TUI recording ([03ac435](https://github.com/hiukky/uze/commit/03ac435f58d3bd1304c3505c2d114a605300b6b3))
+- Add isolated marketplace fixture ([3924872](https://github.com/hiukky/uze/commit/39248727b0c587a44269aeb0a052691995f80c26))
+- Migrate integration to v2 ([071cfc0](https://github.com/hiukky/uze/commit/071cfc020e6700f468546a13ef947ce8d37b04b2))
+- Promote MCP to native via opencode mcp add CLI ([4a5e169](https://github.com/hiukky/uze/commit/4a5e169ab39941aa222d10b20372993d3dd6e5a6))
+- Improve CLI header formatting ([3f7e00b](https://github.com/hiukky/uze/commit/3f7e00bd3140e9c21ea3156a0b8f66dc5bab1ede))
+- Add native harness projections ([e9abe5f](https://github.com/hiukky/uze/commit/e9abe5f35784e10aa6088a15094a6bbc64e0f40e))
+- Add canonical hook model and discovery ([78795de](https://github.com/hiukky/uze/commit/78795deda829cf9be7b8a643ee107bee2502dda8))
+- Deliver portable hooks across all four harnesses ([a8a6eec](https://github.com/hiukky/uze/commit/a8a6eec7da8bc688e25aa3538df9343fc65a4496))
+- Add official Linux install script ([3c73d78](https://github.com/hiukky/uze/commit/3c73d786c1e522c585316545a8e8c0d8718b7570))
+- Align projections with real harness contracts and lab evidence ([2cb8c8b](https://github.com/hiukky/uze/commit/2cb8c8b999a5be9f401925dd1580097e89d5c171))
+- Gate evidence integrity and agent exploration modes ([544265c](https://github.com/hiukky/uze/commit/544265c5ed94a5c3c700db88f5642435398b45f8))
+- Add Fumadocs documentation site ([9695781](https://github.com/hiukky/uze/commit/96957818907840e2d0fd17bbb3aff2a6acb420f6))
+- Unify harness display names across CLI, TUI, and docs ([e27c384](https://github.com/hiukky/uze/commit/e27c38406ec4ee925038fbfabefc8a5bdfba9294))
+- Redesign docs site UI/UX, add plugin-authoring guide, fix Antigravity invocation prefix ([30ed520](https://github.com/hiukky/uze/commit/30ed520d35d8605508b8760242654e7175800ccc))
+- Reconcile safe environment state ([5acbf5f](https://github.com/hiukky/uze/commit/5acbf5fae4a86fa3e733a713d2fbcaebe9c6d080))
+- Reconcile orphaned receipts left by package renames ([9499ced](https://github.com/hiukky/uze/commit/9499ced79f8af0a1c73080fd004fe778499641a0))
+- Unify workspace and harness setup ([ec2648f](https://github.com/hiukky/uze/commit/ec2648f0d450e2344a130169e8ca1d88abfd3855))
+- Add Profiles/Preferences vertical slice ([d69a4bd](https://github.com/hiukky/uze/commit/d69a4bd843d1199b875c81816f9e4ed31aab9975))
+- Add persistent terminal workspace ([0978e7b](https://github.com/hiukky/uze/commit/0978e7bc6c791f161bb7951b96c50391f6813742))
+- Add agent-launching tabs and split the TUI into per-mode modules ([21576f1](https://github.com/hiukky/uze/commit/21576f10352f5f92c1e16bba0b45b10ce111d972))
+- Group workspace tabs into persistent, agent-aware Spaces ([d4de376](https://github.com/hiukky/uze/commit/d4de376ab85b75da5090210544c56ea8aa01e8d2))
+- Add contextual git diff overlay ([91e7da6](https://github.com/hiukky/uze/commit/91e7da62ac9536358d1c2d3e654bcd80579859e1))
+- Refine git worktree changes navigator ([3104382](https://github.com/hiukky/uze/commit/3104382f69e12bca6670a99c4282ac629f019f05))
+- Polish the workspace toggle, tab strip, and git changes overlay ([710f461](https://github.com/hiukky/uze/commit/710f46114f334135d1d63c7e54e58250d1b6d2c6))
+- Report xterm mouse-tracking mode on pane snapshots/damage ([023106b](https://github.com/hiukky/uze/commit/023106b7d2141c5f69160fb99102959729a05ce3))
+- Surface per-harness agent support and bracketed paste ([48d6f6e](https://github.com/hiukky/uze/commit/48d6f6e9c1048af1c47cb4982984283f086d70c4))
+- Animate in-flight agents and make the context menu a real menu ([f3417cd](https://github.com/hiukky/uze/commit/f3417cd7c1a9d7a6dbe35ad297796809763a84e4))
+- Add the /uze:worktree concurrent-worktree coordinator ([6e81603](https://github.com/hiukky/uze/commit/6e8160329d28da1f1ca37b6484af699e541b4119))
+- Add extensions and improve agent support ([5f98f64](https://github.com/hiukky/uze/commit/5f98f6423988141c9eaae3e010a183912c88043c))
+- Refine catalog and detail panels ([10a74c2](https://github.com/hiukky/uze/commit/10a74c217fd2357fb13e44942dbaad2215a2a82e))
+- Record and browse agent prompt history ([a7f9914](https://github.com/hiukky/uze/commit/a7f99148a35d1f4d4c4bb4c93c1272c09afb5b76))
+- Isolate concurrent agents at launch and project the policy [**breaking**] ([144e98d](https://github.com/hiukky/uze/commit/144e98d982df9bab784c7169c0ed576036324687))
+- Apply the updates uze can settle on its own when it opens ([6380b42](https://github.com/hiukky/uze/commit/6380b425f17a8234d4cc16771e261838979ec802))
+- Mark which isolated checkout an agent tab runs in ([948aa7a](https://github.com/hiukky/uze/commit/948aa7a6de7c2d2746b09db61e7689d279c56f99))
+- Make the portable tool vocabulary carry its fields ([d19eb87](https://github.com/hiukky/uze/commit/d19eb8775fb8c0eb077a6600732902c6d0a1176e))
+- Handlers read the context from the environment, answer with an exit code [**breaking**] ([a154155](https://github.com/hiukky/uze/commit/a15415555045570b73963d08bc0c9094361c211c))
+- Compile the hook into a wrapper the harness runs directly ([ff727d2](https://github.com/hiukky/uze/commit/ff727d24687ffc7cde57b6a8615d0af63a946f66))
+- The OpenCode plugin becomes the wrapper ([8a141a3](https://github.com/hiukky/uze/commit/8a141a35878fb586fe084685633265892865ac8e))
+- Report which route delivered a hook, and what it needs ([87f3379](https://github.com/hiukky/uze/commit/87f337926deb79e2c1394b25b79071c4da228600))
+- Serve Antigravity's feature-flag plane in the synthetic world ([cbafa36](https://github.com/hiukky/uze/commit/cbafa36626f8748eb0ec65a375b6afd7421305c4))
+- Serve Antigravity's signed-in plane in the synthetic world ([2dfc669](https://github.com/hiukky/uze/commit/2dfc6698577338bd3020d64d91e232312197e404))
+- Take the repository write lock in write ([c5603b8](https://github.com/hiukky/uze/commit/c5603b832f4c52f98d6456bb6ccd31f86e61a298))
+- Add the task model and retire linked-worktree discovery ([b89f021](https://github.com/hiukky/uze/commit/b89f02144ef32fe2153b14c082952fed50f77cec))
+- Reusable checkout slots with adoption and safe pruning ([6625693](https://github.com/hiukky/uze/commit/662569333545ef168282e202287efa3839e30643))
+- Every agent starts in a slot of its own; the seat rule is removed [**breaking**] ([002fdc2](https://github.com/hiukky/uze/commit/002fdc21ce5bc48f4790329b323b3a38e262f28c))
+- Readiness and delivery of a task's work ([f49ea2b](https://github.com/hiukky/uze/commit/f49ea2b9a55ed0034660dd6776389fe45ef56224))
+- Tasks are evaluated when a pane goes quiet and delivered with one action ([7151aac](https://github.com/hiukky/uze/commit/7151aac12cce9bd1a9e3d8711b3d5bfeea400a17))
+- Project the slot model, rewrite the Skill, and prove the engine end to end ([e7494cb](https://github.com/hiukky/uze/commit/e7494cbb378cce2c22768b28fa28f936f9b0d107))
+- One server per user, spaces born from a root, focus per client [**breaking**] ([b61b636](https://github.com/hiukky/uze/commit/b61b636f7cb939581f17a8bd43cd734d9bde9665))
+- A slot belongs to its repository, and returns to the pool ([fc490fd](https://github.com/hiukky/uze/commit/fc490fd1f388b90e3d4a70f5a4845abd45cd050c))
+- The new-space prompt chooses a root from the directories that exist ([54f0477](https://github.com/hiukky/uze/commit/54f04775d12d031b4408cb7fdbaa2b6ae14f4f61))
+- The open root picker has the sidebar to itself ([27fe921](https://github.com/hiukky/uze/commit/27fe9218c41502b9fd1ccff4d881fac7b3228b1b))
+- A tab belongs with the agent it was born from [**breaking**] ([6376e9d](https://github.com/hiukky/uze/commit/6376e9dcc37dff4137d5962c1dad1845b8068380))
+- Status marks read by color, and say what they mean ([bfdbd6f](https://github.com/hiukky/uze/commit/bfdbd6f9c3af674151eedeec7a8e3092bf4f11e3))
+- Add isolation contract proving worktree scoping in a real harness ([40db70f](https://github.com/hiukky/uze/commit/40db70f2046cffcb768879115b972b35c5ad0ef9))
+- Drag-to-reorder tabs within a space ([8b0baaa](https://github.com/hiukky/uze/commit/8b0baaa9ac62610e535466c6cf10c41456135f36))
+- An agent outside any slot wears a glyph, its branch and an agent label ([0db64d8](https://github.com/hiukky/uze/commit/0db64d80330996cbc4c9452c82c0bdd3b3208969))
+- An agent in the operator's tree shows what a pull and a push would move ([f8946b3](https://github.com/hiukky/uze/commit/f8946b3039a7a40b7ad1fe5ee19c6a0189377ec4))
+- A space header flips between its name and its root ([49bc63b](https://github.com/hiukky/uze/commit/49bc63b808bce922d77bdb6cbfdc9599c11b4e09))
+- The overview lists recent prompts as a table grouped by age ([611f522](https://github.com/hiukky/uze/commit/611f5226978f0dad528d6fcda0259dbac6c84551))
+- The Git extension keeps a commit timeline in the sidebar ([71472f5](https://github.com/hiukky/uze/commit/71472f5542c5523d8349ecfe32678351f0f15b75))
+- Rebuild the landing page around a recording of the real TUI ([06119f1](https://github.com/hiukky/uze/commit/06119f180311e2a24fbd1fa327b4e44282b8275c))
+- A task whose checkout was removed is put back on its branch ([2dadf7b](https://github.com/hiukky/uze/commit/2dadf7b8b18bd0bbf50a39d92518b1f20b59a3ed))
+- Show the workspace running two harnesses at once, on the site and in the README ([2464ca1](https://github.com/hiukky/uze/commit/2464ca1256fea2cec5f947ca1c1f49b3df6800fd))
+- "+ new" opens a space over a directory another already holds ([b2ae681](https://github.com/hiukky/uze/commit/b2ae681657d5ac24aebd132e8d797d1a068af846))
+- The browser tab carries the tagline, not just the name ([a11d05a](https://github.com/hiukky/uze/commit/a11d05aa1cc6019681287bb02712082d326767da))
 
 ### Fixes
 
-- Consolidate package lifecycle safety (72c2eae)
-
-- Make routed conformance gateway ready and identifiable (72ea7d4)
-
-- Point tooling paths at e2e/ and add OpenCode routed-gateway smoke (ffe6104)
-
-- Prepare detected harnesses during plugin add (e062005)
-
-- Repair broken test build and opencode provisioning gambiarra (675efa0)
-
-- Consolidate shared skill naming and polish the TUI (b3a730a)
-
-- Make harness detection deterministic for CI (9d96e51)
-
-- Compact remove confirmation and protect official marketplace plugins (79b44c3)
-
-- Compute exact native package coverage for Codex and Gemini (f08da26)
-
-- Marketplace add is idempotent; complete the Project Agent Environment (12252e1)
-
-- Reject unsafe manifest paths via shared predicate; remove dead foreign importer; fix CI test isolation (1769519)
-
-- Use the update subcommand, not a nonexistent --upgrade flag; fix e2e Dockerfile build path (c3350a7)
-
-- Republish derived views before attaching default plugins (4e766f7)
-
-- Keep the titlebar health-only and make it open the Doctor page (edb4738)
-
-- Capture vendor CLI output and own the install report (ece9556)
-
-- Declare native package delivery as the primary route (7715137)
-
-- Migrate legacy skill names to stable labels (c7db9d3)
-
-- Reject unsafe CLI tokens in package and MCP names (70ceb32)
-
-- Target the V1 channel for provisioning and delivery (12ac1bc)
-
-- Shared-root superset keeps both vendors' invocation policy (145e626)
-
-- Make plugin install idempotent for owned antigravity native package (4a2eca3)
-
-- Spinner ghost log duplication on plugin/marketplace install (84dfc42)
-
-- Auto-detect the last lab run for lab-watch instead of defaulting to antigravity (74d69d6)
-
-- Strip terminal mouse/focus reporting from lab-watch output (dab1b80)
-
-- Tolerate latest antigravity request order (9e8da4b)
-
-- Preserve qualified skill labels (1a466d7)
-
-- Preserve model-only skill policy (a0d5430)
-
-- Make MCP fixture coverage-robust for opencode native (ed300b3)
-
-- Stop clobbering the scripted tool with a Bash default (fd83c33)
-
-- Ignore Playwright MCP debug output (44ce09a)
-
-- Create default harness shims (3908e0a)
-
-- Stop mangling generated-plugin paths for real agy (a322aba)
-
-- Reuse collected coverage data (dcac21c)
-
-- Adapt AGY confirmation deadlock (8ec794c)
-
-- Inherit cwd for new agents (a915fef)
-
-- Map auto profiles to no approvals (7eb563b)
-
-- Sweep /proc for hook-handler stragglers sharing a killed PGID (642ac8e)
-
-- Harden child process execution (59be367)
-
-- Scroll alternate-screen agents without mouse tracking (660ac8a)
-
-- Preserve scrollback in embedded panes (5f20e3f)
-
-- Kill process groups through kill(2), not /bin/kill (aa01c57)
-
-- Stop the user's own typing from re-arming the agent spinner (1d1fb86)
-
-- Scope the git changes view to the tab's own checkout (34755e8)
-
-- Read an agent tab's state from what its pane actually paints (441bbf9)
-
-- Close the worktree policy vocabulary and say what replaced the key (dd66614)
-
-- Mirror the generated envelope as real bytes, not Store symlinks (fa0ca86)
-
-- Put the generated hooks.json entries at the document root (440a69d)
-
-- A matcher names every tool its alias binds (43f0159)
-
-- The fallback route's default reason names no packager (80426c6)
-
-- Identity does not survive a capture inside a string (558fb1b)
-
-- Emit Antigravity's Stop entry in the flat shape its parser accepts (133e65b)
-
-- Read what the harness sent, and what it rendered (fd297aa)
-
-- Deliver hooks where the harness actually reads them (9b71675)
-
-- Sidebar agent labels, spacing, and space/agent hierarchy (e7176cd)
-
-- An agent carries one name in the sidebar and in the strip (6146f8a)
-
-- The task status tells the truth, and only where it has one (2118582)
-
-- A slot's row belongs to the agent sitting in it now (22ebb37)
-
-- A delivered task still in its slot is read again (7a492dd)
-
-- A task that ended in its slot is still read while it sits there (f7919bc)
-
-- A picked directory opens its project, not a slot inside it (0f65cf1)
-
-- A delivered agent still writing keeps its slot (5ce405a)
-
-- A delivery's outcome lands next to its own trigger (de6ac07)
-
-- An agent outside any slot says so by its branch's hue, not a mark (49fefc2)
-
-- The sidebar keeps what it resolved across a Ctrl+O round trip (284676c)
-
-- A harness that was not provisioned fails setup instead of reading as ready (2fead6c)
-
-- Assert the Antigravity API-key hook path now that 1.1.25 runs it (eadeeff)
-
-- The status catalog opens from the task mark alone (27d9517)
-
-- The root picker's prompt stands where the first space's header stood (10623f4)
-
-- The plugins drawer fetches the detail of a row nobody navigated to (255b10f)
-
-- Side panels meet the frame's right edge, and Profiles keeps the shared inset (48bc9a4)
-
-- The archive guidance parses, so config.yaml is read again (58915dd)
-
-- The harness drawer reports declared context support, not a project's (fadcdd3)
-
-- A slot a pane still sits in is never handed to the next agent (cacd591)
-
-- The capability table answers whether a route works, not whether it is native (de380b5)
-
-- The claude first-run drive reads a screen spaced by cursor moves (c29c127)
-
-- Drop the second #[test] on restoring_rebuilds_which_tab_belongs_with_which (8c1a7a2)
-
+- Consolidate package lifecycle safety ([72c2eae](https://github.com/hiukky/uze/commit/72c2eae65dcf31075ff32639b3cbdd25b18e309b))
+- Make routed conformance gateway ready and identifiable ([72ea7d4](https://github.com/hiukky/uze/commit/72ea7d4182778b24fe60fc1283ab052b00261c2d))
+- Point tooling paths at e2e/ and add OpenCode routed-gateway smoke ([ffe6104](https://github.com/hiukky/uze/commit/ffe6104e68ad3b245b294d0958108083431a8121))
+- Prepare detected harnesses during plugin add ([e062005](https://github.com/hiukky/uze/commit/e062005900515a00e2ea9a9991754f583faecffa))
+- Repair broken test build and opencode provisioning gambiarra ([675efa0](https://github.com/hiukky/uze/commit/675efa0700f8b18e082b2efa29ea1db37014443a))
+- Consolidate shared skill naming and polish the TUI ([b3a730a](https://github.com/hiukky/uze/commit/b3a730a8cbec68dbb5d00932b7316d20a3bfd742))
+- Make harness detection deterministic for CI ([9d96e51](https://github.com/hiukky/uze/commit/9d96e51690e59c04ede91ee48dde0c9e7364ba70))
+- Compact remove confirmation and protect official marketplace plugins ([79b44c3](https://github.com/hiukky/uze/commit/79b44c35ef5609a529b121b6f26ffaea98c7cbd0))
+- Compute exact native package coverage for Codex and Gemini ([f08da26](https://github.com/hiukky/uze/commit/f08da26110d56903e3eec69b856e4bbb61db44b7))
+- Marketplace add is idempotent; complete the Project Agent Environment ([12252e1](https://github.com/hiukky/uze/commit/12252e1f7355fc668aacb04f1514f35f99db20f9))
+- Reject unsafe manifest paths via shared predicate; remove dead foreign importer; fix CI test isolation ([1769519](https://github.com/hiukky/uze/commit/17695196902bcdd5e0c7b9526b7b31dcdb9f4c81))
+- Use the update subcommand, not a nonexistent --upgrade flag; fix e2e Dockerfile build path ([c3350a7](https://github.com/hiukky/uze/commit/c3350a7f76cad6e0b2bcbfe0faeadfe5e45a3072))
+- Republish derived views before attaching default plugins ([4e766f7](https://github.com/hiukky/uze/commit/4e766f702ab0651f991ddf04b1fc3f3998bf91ac))
+- Keep the titlebar health-only and make it open the Doctor page ([edb4738](https://github.com/hiukky/uze/commit/edb47384dadfd5fdb0f663f1030ad71fac2835b5))
+- Capture vendor CLI output and own the install report ([ece9556](https://github.com/hiukky/uze/commit/ece95567278c3ea8650ed532268b48b5f4f2f0bd))
+- Declare native package delivery as the primary route ([7715137](https://github.com/hiukky/uze/commit/7715137f642da907ebc20969ea693b00f1e1e9de))
+- Migrate legacy skill names to stable labels ([c7db9d3](https://github.com/hiukky/uze/commit/c7db9d328142ed9f04213eedd25c8796fb78e6b4))
+- Reject unsafe CLI tokens in package and MCP names ([70ceb32](https://github.com/hiukky/uze/commit/70ceb3258b54b6697cde25fa42d74e19c628f076))
+- Target the V1 channel for provisioning and delivery ([12ac1bc](https://github.com/hiukky/uze/commit/12ac1bc4a94e0b9e03f20cc46252d9d20983350a))
+- Shared-root superset keeps both vendors' invocation policy ([145e626](https://github.com/hiukky/uze/commit/145e6269d2c961c900326f4b4f362c5d2473618c))
+- Make plugin install idempotent for owned antigravity native package ([4a2eca3](https://github.com/hiukky/uze/commit/4a2eca3695c6ef180295a1a0f2e072d12b283c24))
+- Spinner ghost log duplication on plugin/marketplace install ([84dfc42](https://github.com/hiukky/uze/commit/84dfc42eaf308777dd139fa26784f74e377dfaa1))
+- Auto-detect the last lab run for lab-watch instead of defaulting to antigravity ([74d69d6](https://github.com/hiukky/uze/commit/74d69d6f81be0d59db033b819894ce4f33328be4))
+- Strip terminal mouse/focus reporting from lab-watch output ([dab1b80](https://github.com/hiukky/uze/commit/dab1b80a25102881dc4a73d53020fe669afa459c))
+- Tolerate latest antigravity request order ([9e8da4b](https://github.com/hiukky/uze/commit/9e8da4bde8b6b520219089aab6b924af28558edd))
+- Preserve qualified skill labels ([1a466d7](https://github.com/hiukky/uze/commit/1a466d700f5fa9ffab75cbf143e0dcc3b175f3f8))
+- Preserve model-only skill policy ([a0d5430](https://github.com/hiukky/uze/commit/a0d5430d23a3bd3bbadc33fba28b816486402e1e))
+- Make MCP fixture coverage-robust for opencode native ([ed300b3](https://github.com/hiukky/uze/commit/ed300b30ab93a90a4380b906b86aa226effe91d5))
+- Stop clobbering the scripted tool with a Bash default ([fd83c33](https://github.com/hiukky/uze/commit/fd83c3300626e516a8acde6fba2b5a8f2dec9184))
+- Ignore Playwright MCP debug output ([44ce09a](https://github.com/hiukky/uze/commit/44ce09a416ab44167f4be5fab8a2365a84ce64fe))
+- Create default harness shims ([3908e0a](https://github.com/hiukky/uze/commit/3908e0a5833e8f1f83aa2854a8eb453b8c42a947))
+- Stop mangling generated-plugin paths for real agy ([a322aba](https://github.com/hiukky/uze/commit/a322abaec39baf7f7e1b3c10c6bf61d5b743676d))
+- Reuse collected coverage data ([dcac21c](https://github.com/hiukky/uze/commit/dcac21cb60f71cd304241d81d8b1665970d8a404))
+- Adapt AGY confirmation deadlock ([8ec794c](https://github.com/hiukky/uze/commit/8ec794cca301f19e98736498399e8216a9294664))
+- Inherit cwd for new agents ([a915fef](https://github.com/hiukky/uze/commit/a915fefa360bffd7c64f6efab713be1746d26a73))
+- Map auto profiles to no approvals ([7eb563b](https://github.com/hiukky/uze/commit/7eb563bbc471a18035e88c5ef245ba8f972f2689))
+- Sweep /proc for hook-handler stragglers sharing a killed PGID ([642ac8e](https://github.com/hiukky/uze/commit/642ac8e9a0fb7286650139a09ca489459f638ba3))
+- Harden child process execution ([59be367](https://github.com/hiukky/uze/commit/59be367642b7282fc288f3a4ea657ca516ca8698))
+- Scroll alternate-screen agents without mouse tracking ([660ac8a](https://github.com/hiukky/uze/commit/660ac8abbad178440eee6409e085c2bc6bc22b82))
+- Preserve scrollback in embedded panes ([5f20e3f](https://github.com/hiukky/uze/commit/5f20e3f24401951c855dd5d4c7790a8ebb9dc2bc))
+- Kill process groups through kill(2), not /bin/kill ([aa01c57](https://github.com/hiukky/uze/commit/aa01c57f3c2939871955a776846ba90323ad88c2))
+- Stop the user's own typing from re-arming the agent spinner ([1d1fb86](https://github.com/hiukky/uze/commit/1d1fb8610626cd824e2fe606f1f531426d3c47d7))
+- Scope the git changes view to the tab's own checkout ([34755e8](https://github.com/hiukky/uze/commit/34755e8a0f93e9cb631a6bf5f186111c25d57877))
+- Read an agent tab's state from what its pane actually paints ([441bbf9](https://github.com/hiukky/uze/commit/441bbf9caff2b910739fd25d5c9eed8271255cdd))
+- Close the worktree policy vocabulary and say what replaced the key ([dd66614](https://github.com/hiukky/uze/commit/dd6661469233a77f247cad2950b2d7cbf0663b54))
+- Mirror the generated envelope as real bytes, not Store symlinks ([fa0ca86](https://github.com/hiukky/uze/commit/fa0ca8648d8af1893d40aa22a83ececdac23707b))
+- Put the generated hooks.json entries at the document root ([440a69d](https://github.com/hiukky/uze/commit/440a69d809a388026bca2f6afeb3baef308840e0))
+- A matcher names every tool its alias binds ([43f0159](https://github.com/hiukky/uze/commit/43f01598fb8e3fd506f6cfb539417c7c51ca13ba))
+- The fallback route's default reason names no packager ([80426c6](https://github.com/hiukky/uze/commit/80426c6a0cd54f08cb1f0b73749fbb3e148bc1b5))
+- Identity does not survive a capture inside a string ([558fb1b](https://github.com/hiukky/uze/commit/558fb1bf179c9c72feaa255f727d2dd59cf72e74))
+- Emit Antigravity's Stop entry in the flat shape its parser accepts ([133e65b](https://github.com/hiukky/uze/commit/133e65b8b2c91a6bcbf73708dd85cb0f852b3f78))
+- Read what the harness sent, and what it rendered ([fd297aa](https://github.com/hiukky/uze/commit/fd297aac96a99c31df2b2c061ceebeebf669727d))
+- Deliver hooks where the harness actually reads them ([9b71675](https://github.com/hiukky/uze/commit/9b716752f64b5d0aca9806f74e000edc25954dcf))
+- Sidebar agent labels, spacing, and space/agent hierarchy ([e7176cd](https://github.com/hiukky/uze/commit/e7176cd6a32c197737ab90f06b64b8560ac451d3))
+- An agent carries one name in the sidebar and in the strip ([6146f8a](https://github.com/hiukky/uze/commit/6146f8a5445427d29cc5722aaf04f3b2eff9417d))
+- The task status tells the truth, and only where it has one ([2118582](https://github.com/hiukky/uze/commit/211858217c0f7f0519bc6eb95b47bc7733941234))
+- A slot's row belongs to the agent sitting in it now ([22ebb37](https://github.com/hiukky/uze/commit/22ebb3737d833b40422be344c968a0bb2adde346))
+- A delivered task still in its slot is read again ([7a492dd](https://github.com/hiukky/uze/commit/7a492dd020aff4139acaa50805c7584840d43a08))
+- A task that ended in its slot is still read while it sits there ([f7919bc](https://github.com/hiukky/uze/commit/f7919bcd9143c8a47989a4429554a3ab5af3f9f7))
+- A picked directory opens its project, not a slot inside it ([0f65cf1](https://github.com/hiukky/uze/commit/0f65cf1989a089c6db0d9830fee29dd973358671))
+- A delivered agent still writing keeps its slot ([5ce405a](https://github.com/hiukky/uze/commit/5ce405a17e90196a0b61208aebe11ec540508ba8))
+- A delivery's outcome lands next to its own trigger ([de6ac07](https://github.com/hiukky/uze/commit/de6ac07636b6ed89de934df96605298ae3b905a8))
+- An agent outside any slot says so by its branch's hue, not a mark ([49fefc2](https://github.com/hiukky/uze/commit/49fefc2e0a2e4d9de581824913718098ce280bb4))
+- The sidebar keeps what it resolved across a Ctrl+O round trip ([284676c](https://github.com/hiukky/uze/commit/284676c7209123e3fde90cbc88402d33e0c48b12))
+- A harness that was not provisioned fails setup instead of reading as ready ([2fead6c](https://github.com/hiukky/uze/commit/2fead6c960a79a14f26dda111272382d67809ecf))
+- Assert the Antigravity API-key hook path now that 1.1.25 runs it ([eadeeff](https://github.com/hiukky/uze/commit/eadeeff6a6bd9bd7a6f0675e534c970131058437))
+- The status catalog opens from the task mark alone ([27d9517](https://github.com/hiukky/uze/commit/27d95175695970e6fa811c5c3d31e6656e97c130))
+- The root picker's prompt stands where the first space's header stood ([10623f4](https://github.com/hiukky/uze/commit/10623f48e61b1de487363fae0667669f8d838de6))
+- The plugins drawer fetches the detail of a row nobody navigated to ([255b10f](https://github.com/hiukky/uze/commit/255b10f8e624b5d4129848471344dcef4895d2f6))
+- Side panels meet the frame's right edge, and Profiles keeps the shared inset ([48bc9a4](https://github.com/hiukky/uze/commit/48bc9a41ecdb09e4cf4ed3678e2d9f79ecbf06dd))
+- The archive guidance parses, so config.yaml is read again ([58915dd](https://github.com/hiukky/uze/commit/58915dd2a248427ae69585593ababcbba261539e))
+- The harness drawer reports declared context support, not a project's ([fadcdd3](https://github.com/hiukky/uze/commit/fadcdd3aa53a687469356ceb41a929ac9ca713a7))
+- A slot a pane still sits in is never handed to the next agent ([cacd591](https://github.com/hiukky/uze/commit/cacd5913021c4ac8dbc74c81f633d26fa3cb9874))
+- The capability table answers whether a route works, not whether it is native ([de380b5](https://github.com/hiukky/uze/commit/de380b515c2977d215ec1f3c5c4e69363c6874e7))
+- The claude first-run drive reads a screen spaced by cursor moves ([c29c127](https://github.com/hiukky/uze/commit/c29c127792c4b816d4e0806dcebc0c7262cb0334))
+- Drop the second #[test] on restoring_rebuilds_which_tab_belongs_with_which ([8c1a7a2](https://github.com/hiukky/uze/commit/8c1a7a24ae9de2765457392a3780b06d57ea656c))
+
+### Performance
+
+- Cache attachment inspection verdicts on read paths ([14ff137](https://github.com/hiukky/uze/commit/14ff13733e1978481340c604b1a91c689306ab16))
+- Frame the wire protocol with length-prefixed bincode ([4b2033d](https://github.com/hiukky/uze/commit/4b2033d0d21ceac0ba16fc211a31d441e80567b4))
+- Canonicalize a PATH entry only when it could be the shims directory ([8bcc9e3](https://github.com/hiukky/uze/commit/8bcc9e39e9aa892da9dbcaa62a1a65e92e2e05ed))
+
+### Refactor
+
+- Separate peer harness integrations from core ([6246d48](https://github.com/hiukky/uze/commit/6246d48cf51f8bc0a7195009b54fb0a0c6f6f53e))
+- Make the product suite deterministic end to end ([95eacdc](https://github.com/hiukky/uze/commit/95eacdce1c375049872228a49784e18c30f4a3da))
+- Move vendor knowledge out of the Store and UzeHome ([a393d77](https://github.com/hiukky/uze/commit/a393d771295468c6b9f7fd079bdf40af699c3666))
+- Extract harness-agnostic uze core ([38c1877](https://github.com/hiukky/uze/commit/38c18773e0a5359daedf2e9c207c891a474bb5e6))
+- Split application and integrations layers ([2ee26b9](https://github.com/hiukky/uze/commit/2ee26b93fd80874cfa9882dd1e89fc6d94fbbecb))
+- Shorten skill and MCP names for real distribution ([210a829](https://github.com/hiukky/uze/commit/210a829090834505b71043a6c771fd9b89a475f2))
+- Finish native decomposition slice and rename to ui ([6ad360f](https://github.com/hiukky/uze/commit/6ad360f92b894db61d853c1d11cdd31eb854dc24))
+- Mod.rs -> self-named files; decompose claude into submodules ([68c4f5a](https://github.com/hiukky/uze/commit/68c4f5aa237abb40c95f43efdf694994754eb848))
+- Decompose codex/gemini/opencode into submodules ([42a03c7](https://github.com/hiukky/uze/commit/42a03c7b798c10e9ea5296956639e06406b9adb9))
+- Resolve opencode2 through the PATH shim, not a symlink alias ([b31416c](https://github.com/hiukky/uze/commit/b31416ce816efc6503a69d1cd877d8f4880be406))
+- Surface-based visual redesign without emoji or borders ([2cb5ac5](https://github.com/hiukky/uze/commit/2cb5ac50ce341e8babcc8b84f2ef59aa9593c4c8))
+- Align harness drawer key/value label column ([479c6af](https://github.com/hiukky/uze/commit/479c6af5e0611efd07229da385106f657b0ff630))
+- Rename the harness lab e2e/ -> conformance/ and collapse fixtures ([3506ef9](https://github.com/hiukky/uze/commit/3506ef991a87599bb89f7f7daa6fbb282897fad4))
+- Rename uze skill to init — /uze:init ([8d89831](https://github.com/hiukky/uze/commit/8d898315b1f4667d4bd2c37b70779eae18a77cfe))
+- Single registry composition root, vendor-neutral application/CLI ([bfa54d1](https://github.com/hiukky/uze/commit/bfa54d10d423908e400c3d0c6262e268ceb2b436))
+- Restore marketplace manifest name [**breaking**] ([f5a5cf7](https://github.com/hiukky/uze/commit/f5a5cf782e8cfbe430adecb19e77b97ee80d597f))
+- Namespace plugins by marketplace [**breaking**] ([16ffe16](https://github.com/hiukky/uze/commit/16ffe161cb9bf66ed7ea5e640e3bbe11387baf14))
+- Simplify architecture documentation ([f764284](https://github.com/hiukky/uze/commit/f764284dfc7fe8de338b158568e2b6f4120ee0c2))
+- Extract built-in extensions into a uze-extensions crate ([38d71fb](https://github.com/hiukky/uze/commit/38d71fb8e4482fa5070822bddf7767f87f33e9ac))
+- Remove project context details ([1bbcf9e](https://github.com/hiukky/uze/commit/1bbcf9e8282f5d1b40660098fa9f75643b2317eb))
+- Consolidate profile layout ([2d50668](https://github.com/hiukky/uze/commit/2d506685924916f89d431e5dd3192bcc0c6a35e9))
+- Refine workspace and management layout ([16ceb4b](https://github.com/hiukky/uze/commit/16ceb4ba66e3537b5dba01670ee5e515df4ef1d3))
+- Polish management navigation and detail layouts ([dce3bae](https://github.com/hiukky/uze/commit/dce3baeef58dc7133e402378e17100cd5dd7cdb4))
+- Resolve project context once, per agent ([4928faf](https://github.com/hiukky/uze/commit/4928faf952c733fb3b4fbb94b7c5856c2c4b4daf))
+- Extract read models and tests out of application.rs ([e2ef393](https://github.com/hiukky/uze/commit/e2ef39306b825f1683ed2c0bb2dd06b6267a7e18))
+- Split the workspace orchestrator into render, input and tests ([d36fb3f](https://github.com/hiukky/uze/commit/d36fb3fa79100961ac961e93bf090a7d0d2a04b2))
+- Give speaking to Git one owner ([ce32ca0](https://github.com/hiukky/uze/commit/ce32ca019cac1aafe204158a2790cb43c5478925))
+- An extension describes, the host draws [**breaking**] ([d75fe1d](https://github.com/hiukky/uze/commit/d75fe1df1668c7e482e9fddb540fae2ddae95688))
+- Drop ratatui, now that nothing draws here ([e2a602b](https://github.com/hiukky/uze/commit/e2a602ba629240974a621a06e485ed56a779fcd7))
+- Group 36 flat modules into the five concerns they already are ([4d9352a](https://github.com/hiukky/uze/commit/4d9352a63868870afe61b4b52016034026ab1561))
+- Scope the first capability off the god handle ([aa04680](https://github.com/hiukky/uze/commit/aa046801b0f088f1197f1a08a2750efaa048765c))
+- Scope profiles behind their own handle ([d86f24b](https://github.com/hiukky/uze/commit/d86f24b9b228e40829fa37d3f93df02b55f2a64a))
+- Scope the marketplace behind its own handle ([47ad3a7](https://github.com/hiukky/uze/commit/47ad3a723dad22f924535168c42f37a4d30e4ec5))
+- Scope health checks behind their own handle ([65a2429](https://github.com/hiukky/uze/commit/65a242906bea22c9dc0bd5e7d207d53642ba2a4f))
+- Split project environment from instruction context ([7b424dc](https://github.com/hiukky/uze/commit/7b424dcb97d1fb9a5cea3769cd4df7026bfbde9c))
+- Finish scoping the facade into seven services [**breaking**] ([885fc56](https://github.com/hiukky/uze/commit/885fc564b7c9083e818571b9721b8697cf114c2a))
+- Consume the application instead of reaching past it ([419b3ac](https://github.com/hiukky/uze/commit/419b3ac3a79bc03bfaf9b93d6274bceab5a9ebfc))
+- Delete the compatibility facade that hid the layer from its guard [**breaking**] ([daf8dda](https://github.com/hiukky/uze/commit/daf8ddaa7de84e4607680c526aacb6a3b13c02d6))
+- The last 55 reaches past the application, and the last operation ([2527ac2](https://github.com/hiukky/uze/commit/2527ac295ac1a8df0047dac08d7d85ddddcb25ae))
+- Give preference translation one procedure ([58405c8](https://github.com/hiukky/uze/commit/58405c862533613bc12df403097649b6ba8d89d4))
+- An extension reaches nothing it was not handed [**breaking**] ([eeadf82](https://github.com/hiukky/uze/commit/eeadf82950c7607058f120a56390e9eb20f269e2))
+- The workspace client reads Git from a thread, never from the frame ([19b2992](https://github.com/hiukky/uze/commit/19b2992484f59dfc7216e004cb79927594a020e6))
+
+### Documentation
+
+- Define standards-first UZE architecture ([2b7c041](https://github.com/hiukky/uze/commit/2b7c04119d517e476912dac12a9abae90445e726))
+- Characterize the MCP headless approval gap precisely ([39c5cbf](https://github.com/hiukky/uze/commit/39c5cbf434a2961a37aec67e20e157c0bb429caa))
+- Map harness ecosystem for local conformance ([bf74c51](https://github.com/hiukky/uze/commit/bf74c5107ea589e9e8459d2afa01c64870972445))
+- Pin conformance inference image digest ([cb90e82](https://github.com/hiukky/uze/commit/cb90e8241cfa513b90843ade4151a1630eb017cb))
+- Explain how tests are organized and where a new one goes ([0e7b907](https://github.com/hiukky/uze/commit/0e7b90722544ecaa725220b07e9136f33ee87370))
+- Define official harness provisioning boundary ([fba7d0d](https://github.com/hiukky/uze/commit/fba7d0de3af3ef477f2b851013811549583f78e1))
+- Research the M3 capability landscape ([7aecee6](https://github.com/hiukky/uze/commit/7aecee6866a01c82ca71ef06ca6d336612b90690))
+- Rewrite README as a technical landing page ([9d83b5b](https://github.com/hiukky/uze/commit/9d83b5bd620c3131c15460e1393729c294105d3b))
+- Add evidence-graded per-harness compatibility READMEs ([9008c61](https://github.com/hiukky/uze/commit/9008c6156d48562fdc47fb1f4e1f1c6fc6fead9a))
+- Remove superseded implementation status pointer ([a74a881](https://github.com/hiukky/uze/commit/a74a8816e227f986fedc1dade15e9477ca8b451b))
+- Rewrite AGENTS.md as the portable agent baseline ([3a1f572](https://github.com/hiukky/uze/commit/3a1f572edb1fb5fbe8d1730c15c27dc4a4d02c79))
+- Deterministic harness x feature matrix + lean top-level readme ([4666ae0](https://github.com/hiukky/uze/commit/4666ae0055a3c4c9b562414567c1f11f9a80377d))
+- Regenerate harness matrix for portable hooks ([21819ff](https://github.com/hiukky/uze/commit/21819ffefcf7972d6fe58390daa180faf12607fb))
+- Document the one-click release workflow ([f12dd90](https://github.com/hiukky/uze/commit/f12dd9074bd5807665498976a71660aa7fff9d5f))
+- Adopt GitHub Releases as the Linux distribution channel ([7608dfe](https://github.com/hiukky/uze/commit/7608dfe9bda61bf38c85bfd0b973899abf2056e1))
+- Move the harness matrix and detail content into the docs site ([3c8a220](https://github.com/hiukky/uze/commit/3c8a22082d13403635c7954a49a5361f8b44b900))
+- Sync harness matrix ([a483dfe](https://github.com/hiukky/uze/commit/a483dfea74dca14b2e3eec50a78108553cc26139))
+- Add conformance-debug skill and point AGENTS.md at it ([d2a93b0](https://github.com/hiukky/uze/commit/d2a93b0830e4a9304098eddb69d7e8fceea5ee66))
+- Consolidate 39 records into 25 ([2a37d20](https://github.com/hiukky/uze/commit/2a37d20bbd80da867b0067567a2bd028546c11c8))
+- Propose enforcing the architecture seams ([27003df](https://github.com/hiukky/uze/commit/27003dfdba61dc3058bbe64bb61307acbebf86dc))
+- State the seams as enforced facts ([7aab887](https://github.com/hiukky/uze/commit/7aab8872fa29d8f8159cc4cb23cadee8cb41d7eb))
+- Say why the transport is a crate, and drop a glyph that never shipped ([fd63b62](https://github.com/hiukky/uze/commit/fd63b624cd88c1635615d386a9ab983b340cd405))
+- Record the registry-driven CLI as not taken, and why ([af918a9](https://github.com/hiukky/uze/commit/af918a9f6e54734710d4f5c71ad4c95f166e958d))
+- Record the boundary work that happened outside a change ([1ed096b](https://github.com/hiukky/uze/commit/1ed096bd31389c2dfd67c7c007624c79cc068849))
+- Record why the Codex envelope carries bytes instead of symlinks ([d029b61](https://github.com/hiukky/uze/commit/d029b616504040fd8c0cc7b6edcd0ce22bce3949))
+- Record why the Claude and Antigravity hook phases now fail ([6efbf25](https://github.com/hiukky/uze/commit/6efbf25412175855ad2033deb5432f9055dea1ea))
+- State what the capability contract holds ([458a17b](https://github.com/hiukky/uze/commit/458a17b5de3a6fc4212ee6300ec0ebddc653fafe))
+- Close out the capability contract's tasks ([ad20173](https://github.com/hiukky/uze/commit/ad2017324e3d8da2a86645df4b3746d66f76330b))
+- Teach the debug skill to check the vendor before the code ([38a0fa1](https://github.com/hiukky/uze/commit/38a0fa1de0ba4f32216caa116dbe74496a191039))
+- Propose native-first hooks ([9287cac](https://github.com/hiukky/uze/commit/9287caceb04f7e8f6abf6150e0dd4d88f806cc59))
+- Propose plugin requirements ([c078231](https://github.com/hiukky/uze/commit/c0782313bf40220277fc872bab14f0360c3f77d3))
+- Plugin requirements — UZE explains, the person installs ([3fd46ce](https://github.com/hiukky/uze/commit/3fd46ce751f7d8c9a3b225f6c0b1b7af775f8b3f))
+- Propose the Antigravity signed-in Lab ([ea1c2b3](https://github.com/hiukky/uze/commit/ea1c2b38d9bcd897aaba64ededca34d50f13e967))
+- Write down the contract a delivered hook actually speaks ([c2fa2d5](https://github.com/hiukky/uze/commit/c2fa2d5f3f616f13a22ab9a76b46d86f1b8e71ad))
+- Record what the Lab now exercises and why ([fff9ff1](https://github.com/hiukky/uze/commit/fff9ff1801e5b59d0533c6fe907249410902e772))
+- Record what the new hook delivery guarantees ([d59bb31](https://github.com/hiukky/uze/commit/d59bb31c3300026de6e3a6a1e52394d24d9935e4))
+- Name what actually holds Antigravity's hook gate shut ([e8b38de](https://github.com/hiukky/uze/commit/e8b38de44c9a9e7ac6fa5c5349cb853b9f1ba8ac))
+- Cite the vendor bug behind Antigravity's closed hook gate ([1579499](https://github.com/hiukky/uze/commit/15794991ca2272aa0fab963db9e7cf189cb47ef0))
+- State the two gates a delivered Antigravity hook must pass ([8bb3e75](https://github.com/hiukky/uze/commit/8bb3e75d1419a872e0ad9e7fa6510c7841277bc9))
+- Record Antigravity's delivery route and its denial exit code ([06265ea](https://github.com/hiukky/uze/commit/06265eaed61eadbfb40e85ea4438269b65ad1acf))
+- Regenerate the harness matrix for the compiled hook delivery ([dde9313](https://github.com/hiukky/uze/commit/dde9313d41f4c4941ffdd4120687d77ce3b7dbc8))
+- Evolve the worktree policy change to the slot model ([efe9488](https://github.com/hiukky/uze/commit/efe94884c7b873989eec77ac1103acdeb662abfd))
+- Archive five completed changes and record ADRs 041-043 ([0ebf3b8](https://github.com/hiukky/uze/commit/0ebf3b80c2f7b499b4e626128dd9b08836feed21))
+- Add CONTRIBUTING.md with the rules a change has to follow ([990c117](https://github.com/hiukky/uze/commit/990c117e0ac9702f9d39e23e5d1dfc4938f62b40))
+- Describe what uze does today, and stop the matrix understating it ([71d6d84](https://github.com/hiukky/uze/commit/71d6d84a6d62414be418c31b8f8899a0581aabdf))
+- Describe the README video as a spec ([29dc400](https://github.com/hiukky/uze/commit/29dc400127e86a56e63207c836342d56a65bb9b0))
+- Add NOTICE, security policy and trademark notice (#11) ([1860288](https://github.com/hiukky/uze/commit/186028824b16d9587bde9a4e0232f1e17d1a1c85))
+
+### Tests
+
+- Add real harness skill conformance playground ([3b37149](https://github.com/hiukky/uze/commit/3b371494ec3e212e5b7ff79bce31e9b4d2e0fdc9))
+- Consolidate fixtures by test boundary ([f78b472](https://github.com/hiukky/uze/commit/f78b47232e35ee054e9702818b33152d689d4620))
+- Run harness conformance with economical models ([f8ca94a](https://github.com/hiukky/uze/commit/f8ca94a29c1069d0930c609b156828536409fa8c))
+- Add isolated harness lab spike ([c456f32](https://github.com/hiukky/uze/commit/c456f32cb3d4e437148723210e1f115bb7a2373f))
+- Add minimal local inference compose contract ([5c9d43a](https://github.com/hiukky/uze/commit/5c9d43a2433912dc99a77184b0309ac65d2831a4))
+- Add dynamic conformance proof evidence ([02f8786](https://github.com/hiukky/uze/commit/02f878611d633cfa5bbfdb0368fb256338f8d5b1))
+- Route conformance through isolated LiteLLM gateway ([a1afe16](https://github.com/hiukky/uze/commit/a1afe167d67c690bf041038c58ded2b6d987270e))
+- Classify blocked Groq conformance smoke ([7a99ee2](https://github.com/hiukky/uze/commit/7a99ee290c7b1a3062369440683684df8c2286b5))
+- Relocate harness conformance lab to e2e/ and add OpenCode E2E driver ([959b1ad](https://github.com/hiukky/uze/commit/959b1adbca09e0aee3db6c8842a8def5eaf17ec9))
+- Separate conformance evidence by determinism ([f7f0dff](https://github.com/hiukky/uze/commit/f7f0dff2795a7983043bfd9b7407603895832390))
+- Isolate PATH in the install-dispatch test ([6795406](https://github.com/hiukky/uze/commit/6795406f0a9c6915e2ff483d0f69a62a82932ecd))
+- Domain-organized suite, isolated environments, acceptance coverage ([1e8850c](https://github.com/hiukky/uze/commit/1e8850c8da791e1dea46b9c717f208e55da9ac24))
+- Rework the harness lab onto the unified L2/L4 evidence model ([09d7c28](https://github.com/hiukky/uze/commit/09d7c28b1735e4405948be6b7329e8662f4aeb4f))
+- Expect qualified shared skill wrappers ([7167188](https://github.com/hiukky/uze/commit/7167188106924d2f719d2f4faa86af95c7a6595f))
+- Align package policy coverage ([decd1a8](https://github.com/hiukky/uze/commit/decd1a8a08e4c301a131b8e1509f97df1de85de5))
+- Add offline fixture suite for the installer ([d1a281a](https://github.com/hiukky/uze/commit/d1a281a0a66a33f385d13afd7c65d3bce499bf28))
+- Record AGY adaptation evidence ([4c83e4c](https://github.com/hiukky/uze/commit/4c83e4cb840ef6d1742cf7fa0a0541f7bdd0db4e))
+- Keep the deterministic suite off the real host ([4641a56](https://github.com/hiukky/uze/commit/4641a56bb2cb515e0ce4eb5e916de52eb2ced2e6))
+- Route every scratch directory through uze-testkit ([3df0515](https://github.com/hiukky/uze/commit/3df05152a9fc32ae692b56df4f57548c08a5f5d0))
+- Enforce the layering the docs already claim ([d84c7f3](https://github.com/hiukky/uze/commit/d84c7f309dd12d6f01bc66f7110c126e106c93bc))
+- Give Git-driving tests a repository with no ambient config ([06e5134](https://github.com/hiukky/uze/commit/06e5134443cd63755f9d145327fefc92797bdf79))
+- Put the seat tests on the shared Git fixture ([f98b615](https://github.com/hiukky/uze/commit/f98b615e2d3d5f59423aad5f663bef88c6782778))
+- Repair the scoping test the cherry-pick damaged ([34a30fc](https://github.com/hiukky/uze/commit/34a30fc0b8366a5a9d19626c158bc2fc8b0422a9))
+- Name the second Git spawn instead of claiming there is one ([849fbbd](https://github.com/hiukky/uze/commit/849fbbdf52630ffbaabbd1289b45aba45e5d6cea))
+- Read Codex policy evidence where Codex reads it ([21a7427](https://github.com/hiukky/uze/commit/21a742751e6ffafee6255d7a3d1d47d5fff0305f))
+- Require the relayed denial before asserting absence ([f6399a7](https://github.com/hiukky/uze/commit/f6399a7fd988c3c98617f53ca1753f166b5a0510))
+- Record the green Codex run on codex-cli 0.152.1 ([f79f437](https://github.com/hiukky/uze/commit/f79f437b00d1933436b9d9f3ad5e0a636e315581))
+- Assert one Skill contract across harnesses ([a63d107](https://github.com/hiukky/uze/commit/a63d107565eac083ff9ab4c98c1be4cb4c5535ce))
+- Bindings for OpenCode and Antigravity ([5d6681a](https://github.com/hiukky/uze/commit/5d6681aedc621597add42c2989e2a53b39622584))
+- Record that two harnesses cannot enforce user: false ([5d66adc](https://github.com/hiukky/uze/commit/5d66adcbb6cc4008000f353ded4abee9ce669391))
+- Bindings for Claude, and the finding they produced ([cacc77a](https://github.com/hiukky/uze/commit/cacc77a21b44f51f8cac9f2cfc97ea9c8681f6e0))
+- Assert one MCP contract across harnesses ([2de5888](https://github.com/hiukky/uze/commit/2de58882a154d528f8f05bd6b9132a279b49874c))
+- Delete from the verticals what the contract now proves ([573b893](https://github.com/hiukky/uze/commit/573b893e05b6dc52919058378bd438b299f0b27d))
+- Give UZE's own client a vertical ([87c7821](https://github.com/hiukky/uze/commit/87c7821cabfa7ab9f109a0354bfe1f29e3d8ec9e))
+- Colour the verdict labels and drop the bracket padding ([aeb2e8e](https://github.com/hiukky/uze/commit/aeb2e8e2255ea35e50647c28c71a1dafd060587d))
+- Let Claude's hooks run, and keep a denial once the model saw it ([12fde30](https://github.com/hiukky/uze/commit/12fde301b4cf9e048f500f44c4cb5cacf98ad645))
+- Make --discovery capture what the harness sent ([aefa0d9](https://github.com/hiukky/uze/commit/aefa0d9461492f48268d645d6370431435f8d6ea))
+- Measure Antigravity's hook gate; assert Claude's model-only Skill ([8150dc7](https://github.com/hiukky/uze/commit/8150dc7670a26b340d57efa9aad96547aca10f95))
+- Assert the vocabulary row the handler was handed ([e4ffd9b](https://github.com/hiukky/uze/commit/e4ffd9bad36bbdae7c862131b1c8853c73c62f63))
+- Five verticals green on the compiled hook delivery ([54f65de](https://github.com/hiukky/uze/commit/54f65dea3d9cc46bf4bf820759170990a8bfaf8d))
+- Run Antigravity's vertical signed in, and measure both gates ([3d669cd](https://github.com/hiukky/uze/commit/3d669cdc6efb332434bda24819c4b85c0e27e005))
+- Assert UZE's hooks on Antigravity, and retire the declarations ([de0b492](https://github.com/hiukky/uze/commit/de0b4922a1b8805af77ac57e0504b2ecfc6b6722))
+- The headless check no longer inherits UZE_PANE ([175b700](https://github.com/hiukky/uze/commit/175b700271e21ec5333e872bfd6016c705048583))
+- Read the agent's row by the agent's own name ([5846a18](https://github.com/hiukky/uze/commit/5846a188efbbc4ff7f836c0837fee9b5a7f41f63))
+- Drive the TUI's checkout-recovery flow in a container ([241e989](https://github.com/hiukky/uze/commit/241e989ab88b19106c3cfbd450c6d898b4f0b77e))
+
+### CI
+
+- Add GitHub Actions quality pipeline and hide target in VS Code ([c15bb25](https://github.com/hiukky/uze/commit/c15bb251f23282626d6d27ca3562bdb80d7be4ef))
+- Add audit job for RustSec vulnerability check ([abfd304](https://github.com/hiukky/uze/commit/abfd304254910e7f42f30baf24126a9af78327c2))
+- Fix audit-check token and allow Node 20 ([30480fc](https://github.com/hiukky/uze/commit/30480fcc192ffbfed4adc0af3bd76edafc26ceba))
+- Run all harness verticals ([d7f0b25](https://github.com/hiukky/uze/commit/d7f0b25c598c56e8c5b7bd55b2945e0248563c13))
+- Add one-click release workflow ([97015f9](https://github.com/hiukky/uze/commit/97015f98f7268a612e25a757aecb56f865ace884))
+- Lint and exercise the installer in CI ([be04707](https://github.com/hiukky/uze/commit/be04707cbfb190fa415ec25c0f3fe492afc86f8b))
+- Optimize coverage pipeline speed and add local coverage target ([969a343](https://github.com/hiukky/uze/commit/969a343c33374b36e2b8cccc615e010301682c41))
+- Run UZE's own vertical beside the four harnesses ([530ce91](https://github.com/hiukky/uze/commit/530ce91cb9725480facfb7e6a26a590ff2d3f9ab))
+- Run the conformance unit tests ([b3c7b3f](https://github.com/hiukky/uze/commit/b3c7b3f2168687bb651f8d4dcc5c3515c16ad568))
+- Run the whole workspace, not the root crate ([21f560a](https://github.com/hiukky/uze/commit/21f560a1566d90a7980216b3ab0599211aed64ac))
+- Install cargo-audit as a prebuilt binary instead of building it per run ([95bf3b6](https://github.com/hiukky/uze/commit/95bf3b67c318c61299f787e8ea4bbb16cff4b7c0))
+- Scan every commit for secrets (#10) ([b5ee527](https://github.com/hiukky/uze/commit/b5ee52738b1ba0dbc9637fd10161a647ca231553))
+- Audit dependency licences, generate the attribution, credit the marks (#12) ([84bada6](https://github.com/hiukky/uze/commit/84bada62e9d16b2eb91268b009a1b5d274eb1107))
+- Version the repository rules, and close the four audit gaps (#14) ([ef6a1e3](https://github.com/hiukky/uze/commit/ef6a1e3d368eeb6ef78fa2789e6b22c6ffa83b02))
+
+### Chore
+
+- Exclude conformance build artifacts ([a9b6725](https://github.com/hiukky/uze/commit/a9b6725c7ca6eba88f8dd4706a7d10488eec3f46))
+- Add local development make targets ([9cf8f1e](https://github.com/hiukky/uze/commit/9cf8f1ef8deba8616385cdbd22665f4ebb086014))
+- Add cross-distro WSL install helper ([90f1623](https://github.com/hiukky/uze/commit/90f1623f52bffdf364feb818cce843e9bbb08e21))
+- Archive four completed changes ([25e909b](https://github.com/hiukky/uze/commit/25e909bde9c3d824b72432533ccdb2a0c1a46735))
+- Add lefthook for local pre-commit/pre-push checks ([3564514](https://github.com/hiukky/uze/commit/35645140506db759c4721b06b1d63e4ee8806faf))
+- Add cargo-release/git-cliff release tooling ([74e4013](https://github.com/hiukky/uze/commit/74e4013a08d6e268c26c6fdda3f4531f7c1eeb5d))
+- Update rmcp/schemars/ratatui/crossterm, fix CI, add Dependabot ([5cc2f56](https://github.com/hiukky/uze/commit/5cc2f563f6917133d3a3023c86ec58db968fbe16))
+- Remove stale native package tracer report ([72a44a4](https://github.com/hiukky/uze/commit/72a44a45fc6d235fe0d003d7b930a5f2b122a606))
+- Bump actions/upload-artifact from 4 to 7 ([cf82bab](https://github.com/hiukky/uze/commit/cf82bab3193b89f6d0b8c8be4fda60db3315f1b2))
+- Bump version to 0.0.0-alpha.9 for local install ([2dccaa9](https://github.com/hiukky/uze/commit/2dccaa911f938c2a03bee57c4d6e04da1ea009ab))
+- Track this repo's own agents.lock ([8089699](https://github.com/hiukky/uze/commit/80896990277e9ad696b7b071e759ea051983fa6c))
+- Bump version to 0.0.0-alpha.10 for local install ([a656f05](https://github.com/hiukky/uze/commit/a656f0520d5a8940ceeb9601d70e6023ad607186))
+- Bump actions/checkout from 4 to 7 ([5cc933b](https://github.com/hiukky/uze/commit/5cc933b831958cb902e09c43b47dd9f3b8567c99))
+- Bump version to 0.0.0-alpha.12 for local install ([7388717](https://github.com/hiukky/uze/commit/7388717e50614ed679c7d6e7f6bfaecea4c426b9))
+- Bump version to 0.0.0-alpha.13 for local install ([376d45b](https://github.com/hiukky/uze/commit/376d45b9af1c61f1b2aecd0d4e749c03e541cd28))
+- Bump version to 0.0.0-alpha.14 for local install ([2aa7b8a](https://github.com/hiukky/uze/commit/2aa7b8aafa8eb6373156bf3d18f4b13c7e32b1f0))
+- Clarify that make install is a force-rebuild without version bump ([96ad5a5](https://github.com/hiukky/uze/commit/96ad5a538079b9171fadf54daa8067154895b8f3))
+- Prefix fixture directories with underscore so they sort to the top ([62a5e7b](https://github.com/hiukky/uze/commit/62a5e7bd7f043228d76bce3f8213a545e2e33da5))
+- Migrate openspec operator skills to the shared .agents layout ([fc14bd3](https://github.com/hiukky/uze/commit/fc14bd36af657eda5dc515fafc639f89fe854bfd))
+- Remove lab-watch live follower ([9716ca2](https://github.com/hiukky/uze/commit/9716ca2856549aa399c5a3a2f4a5cd96fd7ebf43))
+- Archive completed changes ([4526fcc](https://github.com/hiukky/uze/commit/4526fcc02ea94c46cb95573bfee7ebbf5f9aea2f))
+- Add fmt, lint and check aggregate targets ([cd92842](https://github.com/hiukky/uze/commit/cd9284265a5268343118f6c185b2115b19a6808d))
+- Lint and format Python with ruff ([ef65ef2](https://github.com/hiukky/uze/commit/ef65ef2c0c94c263762ee8abd0894f4e5588ec3c))
+- Bump actions/download-artifact from 7 to 8 ([d50dada](https://github.com/hiukky/uze/commit/d50dada857cb69e9312926a6c6bfed9326a6c1b8))
+- Bump the cargo-dependencies group with 2 updates ([4c00c6e](https://github.com/hiukky/uze/commit/4c00c6eac0c2e17aa51cb22018c4ace3bb0d2b84))
+- Exclude build artifacts from VS Code explorer and search ([e228d21](https://github.com/hiukky/uze/commit/e228d21b9de9e8083a6137f2c6c29d6c3a6fa95b))
+- Switch worktree completion to merge ([7f39858](https://github.com/hiukky/uze/commit/7f39858ad0bc3ced5972cba682a994709c7e7711))
+- Scaffold the contributor licence agreement (#13) ([09e9407](https://github.com/hiukky/uze/commit/09e94074ffdc6ca12f0bdacf375f47130afdb595))
+
+### Style
+
+- Apply cargo fmt ([84f781d](https://github.com/hiukky/uze/commit/84f781dd1148e671dae5dfaac5b90834aab7aa6d))
+- Run cargo fmt ([119dbb0](https://github.com/hiukky/uze/commit/119dbb09a68e97749bed92d53aa7cb8df0ba5ca2))
 
 ### Other
 
 - Merge pull request #2 from hiukky/refactor/vendor-neutral-core
 
-feat: consolidate package-centric UZE v0 (bdc9535)
-
+feat: consolidate package-centric UZE v0 ([bdc9535](https://github.com/hiukky/uze/commit/bdc95356eb711ec9d6bcf057c8e43080dd78cf73))
 - Merge pull request #4 from hiukky/dependabot/github_actions/actions/upload-artifact-7
 
-chore(deps): bump actions/upload-artifact from 4 to 7 (4e4bb8d)
-
+chore(deps): bump actions/upload-artifact from 4 to 7 ([4e4bb8d](https://github.com/hiukky/uze/commit/4e4bb8d24b571871f7cc3aba068c38a2539a8a96))
 - Merge pull request #3 from hiukky/dependabot/github_actions/actions/checkout-7
 
-chore(deps): bump actions/checkout from 4 to 7 (1412242)
-
+chore(deps): bump actions/checkout from 4 to 7 ([1412242](https://github.com/hiukky/uze/commit/141224254086928499ba0705af311e3b677eaf56))
 - Merge pull request #5 from hiukky/dependabot/github_actions/actions/download-artifact-8
 
-chore(deps): bump actions/download-artifact from 7 to 8 (0cc2e3f)
-
+chore(deps): bump actions/download-artifact from 7 to 8 ([0cc2e3f](https://github.com/hiukky/uze/commit/0cc2e3f78a03d940f9fdf8be68794447c32409c8))
 - Merge pull request #6 from hiukky/dependabot/cargo/cargo-dependencies-ba95eb9c1d
 
-chore(deps): bump the cargo-dependencies group with 2 updates (3a4405f)
-
-- Honest conformance for Codex, and honest failure for the rest (897fe9f)
-
+chore(deps): bump the cargo-dependencies group with 2 updates ([3a4405f](https://github.com/hiukky/uze/commit/3a4405f458b7d1fbec0d8c964e319574bc5709a7))
+- Honest conformance for Codex, and honest failure for the rest ([897fe9f](https://github.com/hiukky/uze/commit/897fe9f592e8fe1b551354b8dea0987c277ff278))
 - Merge pull request #8 from hiukky/feature/native-first-hooks
 
-feat(hooks)!: compile portable hooks into native artifacts and run Antigravity signed in (57c6319)
-
-
-### Performance
-
-- Cache attachment inspection verdicts on read paths (14ff137)
-
-- Frame the wire protocol with length-prefixed bincode (4b2033d)
-
-- Canonicalize a PATH entry only when it could be the shims directory (8bcc9e3)
-
-
-### Refactor
-
-- Separate peer harness integrations from core (6246d48)
-
-- Make the product suite deterministic end to end (95eacdc)
-
-- Move vendor knowledge out of the Store and UzeHome (a393d77)
-
-- Extract harness-agnostic uze core (38c1877)
-
-- Split application and integrations layers (2ee26b9)
-
-- Shorten skill and MCP names for real distribution (210a829)
-
-- Finish native decomposition slice and rename to ui (6ad360f)
-
-- Mod.rs -> self-named files; decompose claude into submodules (68c4f5a)
-
-- Decompose codex/gemini/opencode into submodules (42a03c7)
-
-- Resolve opencode2 through the PATH shim, not a symlink alias (b31416c)
-
-- Surface-based visual redesign without emoji or borders (2cb5ac5)
-
-- Align harness drawer key/value label column (479c6af)
-
-- Rename the harness lab e2e/ -> conformance/ and collapse fixtures (3506ef9)
-
-- Rename uze skill to init — /uze:init (8d89831)
-
-- Single registry composition root, vendor-neutral application/CLI (bfa54d1)
-
-- Restore marketplace manifest name [**breaking**] (f5a5cf7)
-
-- Namespace plugins by marketplace [**breaking**] (16ffe16)
-
-- Simplify architecture documentation (f764284)
-
-- Extract built-in extensions into a uze-extensions crate (38d71fb)
-
-- Remove project context details (1bbcf9e)
-
-- Consolidate profile layout (2d50668)
-
-- Refine workspace and management layout (16ceb4b)
-
-- Polish management navigation and detail layouts (dce3bae)
-
-- Resolve project context once, per agent (4928faf)
-
-- Extract read models and tests out of application.rs (e2ef393)
-
-- Split the workspace orchestrator into render, input and tests (d36fb3f)
-
-- Give speaking to Git one owner (ce32ca0)
-
-- An extension describes, the host draws [**breaking**] (d75fe1d)
-
-- Drop ratatui, now that nothing draws here (e2a602b)
-
-- Group 36 flat modules into the five concerns they already are (4d9352a)
-
-- Scope the first capability off the god handle (aa04680)
-
-- Scope profiles behind their own handle (d86f24b)
-
-- Scope the marketplace behind its own handle (47ad3a7)
-
-- Scope health checks behind their own handle (65a2429)
-
-- Split project environment from instruction context (7b424dc)
-
-- Finish scoping the facade into seven services [**breaking**] (885fc56)
-
-- Consume the application instead of reaching past it (419b3ac)
-
-- Delete the compatibility facade that hid the layer from its guard [**breaking**] (daf8dda)
-
-- The last 55 reaches past the application, and the last operation (2527ac2)
-
-- Give preference translation one procedure (58405c8)
-
-- An extension reaches nothing it was not handed [**breaking**] (eeadf82)
-
-- The workspace client reads Git from a thread, never from the frame (19b2992)
-
-
-### Style
-
-- Apply cargo fmt (84f781d)
-
-- Run cargo fmt (119dbb0)
-
-
-### Tests
-
-- Add real harness skill conformance playground (3b37149)
-
-- Consolidate fixtures by test boundary (f78b472)
-
-- Run harness conformance with economical models (f8ca94a)
-
-- Add isolated harness lab spike (c456f32)
-
-- Add minimal local inference compose contract (5c9d43a)
-
-- Add dynamic conformance proof evidence (02f8786)
-
-- Route conformance through isolated LiteLLM gateway (a1afe16)
-
-- Classify blocked Groq conformance smoke (7a99ee2)
-
-- Relocate harness conformance lab to e2e/ and add OpenCode E2E driver (959b1ad)
-
-- Separate conformance evidence by determinism (f7f0dff)
-
-- Isolate PATH in the install-dispatch test (6795406)
-
-- Domain-organized suite, isolated environments, acceptance coverage (1e8850c)
-
-- Rework the harness lab onto the unified L2/L4 evidence model (09d7c28)
-
-- Expect qualified shared skill wrappers (7167188)
-
-- Align package policy coverage (decd1a8)
-
-- Add offline fixture suite for the installer (d1a281a)
-
-- Record AGY adaptation evidence (4c83e4c)
-
-- Keep the deterministic suite off the real host (4641a56)
-
-- Route every scratch directory through uze-testkit (3df0515)
-
-- Enforce the layering the docs already claim (d84c7f3)
-
-- Give Git-driving tests a repository with no ambient config (06e5134)
-
-- Put the seat tests on the shared Git fixture (f98b615)
-
-- Repair the scoping test the cherry-pick damaged (34a30fc)
-
-- Name the second Git spawn instead of claiming there is one (849fbbd)
-
-- Read Codex policy evidence where Codex reads it (21a7427)
-
-- Require the relayed denial before asserting absence (f6399a7)
-
-- Record the green Codex run on codex-cli 0.152.1 (f79f437)
-
-- Assert one Skill contract across harnesses (a63d107)
-
-- Bindings for OpenCode and Antigravity (5d6681a)
-
-- Record that two harnesses cannot enforce user: false (5d66adc)
-
-- Bindings for Claude, and the finding they produced (cacc77a)
-
-- Assert one MCP contract across harnesses (2de5888)
-
-- Delete from the verticals what the contract now proves (573b893)
-
-- Give UZE's own client a vertical (87c7821)
-
-- Colour the verdict labels and drop the bracket padding (aeb2e8e)
-
-- Let Claude's hooks run, and keep a denial once the model saw it (12fde30)
-
-- Make --discovery capture what the harness sent (aefa0d9)
-
-- Measure Antigravity's hook gate; assert Claude's model-only Skill (8150dc7)
-
-- Assert the vocabulary row the handler was handed (e4ffd9b)
-
-- Five verticals green on the compiled hook delivery (54f65de)
-
-- Run Antigravity's vertical signed in, and measure both gates (3d669cd)
-
-- Assert UZE's hooks on Antigravity, and retire the declarations (de0b492)
-
-- The headless check no longer inherits UZE_PANE (175b700)
-
-- Read the agent's row by the agent's own name (5846a18)
-
-- Drive the TUI's checkout-recovery flow in a container (241e989)
-
+feat(hooks)!: compile portable hooks into native artifacts and run Antigravity signed in ([57c6319](https://github.com/hiukky/uze/commit/57c631969fc259b03d2cbaf16f9e8e828b527ee6))
 
