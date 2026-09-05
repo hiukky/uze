@@ -78,5 +78,10 @@ with it.
 detection via `ldd --version`), verifies the SHA-256 against `SHASUMS256.txt`
 and refuses to install on mismatch, then installs to `$XDG_BIN_HOME` or
 `~/.local/bin` (`UZE_BIN_DIR` overrides; `UZE_VERSION` pins a release;
-`UZE_BASE_URL` points at a mirror). The offline fixture suite is
-`make test-installer` (also gating CI).
+`UZE_BASE_URL` points at a mirror). It opens with the same
+centred header `uze --help` does, reports one step at a time — download,
+checksum, install, verify — with a spinner on the line in flight and a
+check on every line already settled, closes on the two commands worth
+running next, and falls back to a plain, escape-free transcript whenever
+stdout is not a terminal or `NO_COLOR` is set, which is what CI and the
+fixture suite read. That suite is `make test-installer` (also gating CI).

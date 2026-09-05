@@ -118,6 +118,8 @@ fake_uname() { # $1=fake bin dir  $2=os  $3=arch
   chmod +x "$1/uname"
 }
 
+archive_glibc="uze-$(uname -m | sed 's/^amd64$/x86_64/;s/^arm64$/aarch64/')-unknown-linux-gnu.tar.gz"
+
 # Syntax door check.
 sh -n "$installer"
 check "install.sh parses cleanly under /bin/sh" $?
@@ -129,6 +131,24 @@ check "glibc/latest install succeeds" $?
 check "installed binary is the glibc artifact" $?
 grep -q "latest/download" "$work/out1.log"
 check "latest release URL shape is used" $?
+grep -q "Downloaded ${archive_glibc}" "$work/out1.log"
+check "each step reports what it settled on" $?
+# The install ends on the version the binary itself reports, not on the
+# step's own generic wording — the fixture binary prints "uze 9.9.9-glibc".
+grep -q "9.9.9-glibc" "$work/out1.log"
+check "the last step settles on the version installed" $?
+grep -q "Agent environment manager" "$work/out1.log"
+check "the installer opens with the CLI's own header" $?
+grep -q "uze setup" "$work/out1.log"
+check "and closes on what to run next" $?
+# Redirected output is not a terminal, so the installer owes the log a plain
+# transcript: no colour, no spinner frames, nothing a `grep` in CI or a
+# pasted-into-an-issue log has to be read around.
+if grep -q "$(printf '\033')" "$work/out1.log"; then
+  check "a redirected install writes no escape sequences" 1
+else
+  check "a redirected install writes no escape sequences" 0
+fi
 
 # musl detection via a fake `ldd` earlier on PATH.
 make_fake_bin "$work/musl-bin" "unused"
