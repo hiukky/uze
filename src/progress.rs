@@ -118,7 +118,7 @@ pub fn clap_styles() -> clap::builder::Styles {
 fn table() -> comfy_table::Table {
     let mut table = comfy_table::Table::new();
     table
-        .load_preset(comfy_table::presets::NOTHING)
+        .load_style(comfy_table::presets::NOTHING)
         .set_content_arrangement(comfy_table::ContentArrangement::Disabled);
     table
 }
