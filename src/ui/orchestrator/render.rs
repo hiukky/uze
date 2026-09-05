@@ -1648,11 +1648,30 @@ fn render_root_picker(
 /// before pressing it (see [`delivery_ending`]).
 fn deliver_button(task: &TaskView) -> Option<(String, Color, bool)> {
     match &task.state {
-        TaskStateView::Ready => Some((
-            format!("⇧{} {}", task.ahead, delivery_ending(task)),
-            crate::ui::ACCENT,
-            true,
-        )),
+        TaskStateView::Ready => Some(match task.unsynced {
+            // Level with what was published: pressing sends nothing new,
+            // so the button reports the sync instead of counting commits
+            // the request already carries. It stays pressable — the target
+            // moves, and a re-sync is how the branch follows it.
+            Some(0) => (
+                format!("✓ {}", delivery_ending(task)),
+                crate::ui::MUTED,
+                true,
+            ),
+            // What a press would send, which is not how far the branch is
+            // from the target: that distance is the merge's question and
+            // stays open until the request lands.
+            Some(unsynced) => (
+                format!("⇧{unsynced} {}", delivery_ending(task)),
+                crate::ui::ACCENT,
+                true,
+            ),
+            None => (
+                format!("⇧{} {}", task.ahead, delivery_ending(task)),
+                crate::ui::ACCENT,
+                true,
+            ),
+        }),
         // The hue is the state's own (see `task_mark`), not the button's
         // mood: one meaning, one color, wherever the state is drawn.
         TaskStateView::GateFailed => Some(("⇧ retry".to_owned(), crate::ui::DANGER, true)),
@@ -1677,9 +1696,13 @@ fn deliver_button(task: &TaskView) -> Option<(String, Color, bool)> {
 fn delivery_ending(task: &TaskView) -> String {
     match task.completion {
         CompletionBehavior::Merge => format!("merge → {}", task.target),
-        CompletionBehavior::Pr => match task.published_request {
-            Some(request) => format!("#{request}"),
-            None => format!("pr → {}", task.target),
+        CompletionBehavior::Pr => match (task.published_request, &task.published_as) {
+            (Some(request), _) => format!("#{request}"),
+            // Published, and the forge publishes no ref this one could be
+            // read from: the branch on the remote is then the only name
+            // the ending has, and it is still not "open a request".
+            (None, Some(branch)) => branch.clone(),
+            (None, None) => format!("pr → {}", task.target),
         },
         CompletionBehavior::Handoff => "hand off".to_owned(),
     }

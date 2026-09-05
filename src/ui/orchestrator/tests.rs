@@ -170,6 +170,7 @@ mod workspace_tests {
             ahead,
             published_as: None,
             published_request: None,
+            unsynced: None,
             created_at_unix: 1,
         }
     }
@@ -826,6 +827,42 @@ mod workspace_tests {
             !after.contains("pr → main"),
             "a request that exists is not opened again: {after}"
         );
+    }
+
+    /// The count on the button is what pressing it would send, and a
+    /// branch level with its request would send nothing. Counting commits
+    /// against the target instead left `⇧6 #20` standing on a request that
+    /// already carried all six — a merge's question asked of a sync.
+    #[test]
+    fn a_branch_level_with_its_request_reports_the_sync_instead_of_a_count() {
+        let mut model = agent_with_task(TaskStateView::Ready, 6);
+        for task in model.tasks.values_mut().flatten() {
+            task.completion = CompletionBehavior::Pr;
+            task.published_as = Some("fix-auth-redirect".into());
+            task.published_request = Some(20);
+            task.unsynced = Some(0);
+        }
+        let (synced, hits) = tab_strip(&model);
+        let synced = synced.join("\n");
+        assert!(synced.contains("✓ #20"), "{synced}");
+        assert!(
+            !synced.contains("⇧6"),
+            "the target is still six commits away, and that is not this button's question: {synced}"
+        );
+        assert!(
+            hits.iter()
+                .any(|(_, hit)| matches!(hit, WorkspaceHit::Deliver(_))),
+            "a synced branch still follows a target that moves"
+        );
+
+        // Two commits later the button counts those two, not the six the
+        // request has carried since the last sync.
+        for task in model.tasks.values_mut().flatten() {
+            task.unsynced = Some(2);
+        }
+        let (behind_by_two, _) = tab_strip(&model);
+        let behind_by_two = behind_by_two.join("\n");
+        assert!(behind_by_two.contains("⇧2 #20"), "{behind_by_two}");
     }
 
     /// A branch too long for the column is elided, not cut. It used to run

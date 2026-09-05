@@ -695,6 +695,12 @@ pub struct TaskView {
     /// The request open on the forge for the published branch, once there
     /// is one: what turns the delivery button from an errand into a sync.
     pub published_request: Option<u32>,
+    /// Commits the published branch does not carry yet — what a sync would
+    /// send. `None` until the branch has been published at all, and
+    /// `Some(0)` once the request is level with the branch: work already
+    /// handed over is not work waiting to be handed over, however far the
+    /// branch still is from the target, which only a merge closes.
+    pub unsynced: Option<usize>,
     pub created_at_unix: u64,
 }
 
@@ -715,6 +721,10 @@ impl TaskView {
             ahead: checkout::commits_ahead(primary, &task.base_commit, &task.branch),
             published_as: task.published_as.clone(),
             published_request: task.published_request,
+            unsynced: task
+                .published_tip
+                .as_deref()
+                .map(|tip| checkout::commits_ahead(primary, tip, &task.branch)),
             created_at_unix: task.created_at_unix,
         }
     }

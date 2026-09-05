@@ -445,6 +445,7 @@ fn publish(primary: &Path, task: &mut Task) -> Result<Delivered, DeliveryFailure
     git(primary, &push).map_err(DeliveryFailure::Git)?;
     task.pushed = true;
     task.published_as = Some(name.clone());
+    task.published_tip = Some(checkout::tip_of(primary, &task.branch));
     if task.published_request.is_none() {
         task.published_request = discover_request(primary, task);
     }
@@ -992,6 +993,12 @@ mod tests {
             "a published branch with a request open for it is a sync"
         );
         assert_eq!(task.published_request, Some(11));
+        assert_eq!(
+            task.published_tip.as_deref(),
+            Some(tip_of(primary, &task.branch).as_str()),
+            "what the request carries, so a surface can tell a sync that \
+             would send something from one that would send nothing"
+        );
     }
 
     /// The same discovery, in the namespace the other family of forges
