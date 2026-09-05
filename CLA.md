@@ -36,12 +36,37 @@ Departures from that text, all of them deliberate:
    here happens by comment on a pull request; see the end of this document.
 6. **No governing law and no venue clause.** Deliberately not drafted:
    that is counsel's to choose, not this scaffold's to guess.
+7. **Clause 10 is new**: the Agreement and the licences under it pass to a
+   successor in the ownership of the Work. The ASF never needed this — a
+   foundation does not change legal form. A holder who is a person today and
+   an entity tomorrow does, and without this the contributor's grant would
+   have to be chased down or re-signed at exactly the moment that is hardest.
+8. **A sentence is given back where the nonprofit undertaking was removed.**
+   Departure 2 took out the only thing the counterparty promised in return,
+   which is the shape that makes a broad-grant CLA read as one-sided. What
+   replaces it promises nothing new: a released version keeps the licence it
+   was released under, which is already true of an irrevocable Apache-2.0
+   grant, and clause 2 governs future versions rather than that one.
+9. **Clauses 9 and 10 carry an `ADDED — NOT ASF TEXT` marker** in the body,
+   so a reader inside the document can tell what is not the ICLA without
+   scrolling back to this list.
+
+Not a departure, but worth knowing before someone asks: clause 4 offers a
+contributor whose employer holds rights three routes, and the third is a
+Corporate CLA. **No Corporate CLA exists for this project today**, so that
+route is unavailable rather than undocumented — the other two work as
+written. The sentence stays as the ICLA wrote it: deleting it would widen
+the diff against the original to fix nothing, and it is the sentence a
+corporate contributor will point at when one is finally needed.
 
 ---
 
 You accept and agree to the following terms and conditions for Your
 Contributions (present and future) that you submit to
-Romullo Sousa (hiukky). Except for the license granted herein to
+Romullo Sousa (hiukky). In return, a version of the Work that has been
+released with Your Contribution in it stays licensed under the licence it
+was released under; a later change of licence applies to later versions, not
+to that one. Except for the license granted herein to
 Romullo Sousa (hiukky) and recipients of software distributed by
 Romullo Sousa (hiukky), You reserve all right, title, and interest in and
 to Your Contributions.
@@ -139,6 +164,8 @@ third-party: [named here]".
 circumstances of which you become aware that would make these
 representations inaccurate in any respect.
 
+<!-- ADDED — NOT ASF TEXT -->
+
 **9. You keep your copyright.**
 
 This Agreement grants a licence and transfers nothing. You remain the
@@ -147,6 +174,16 @@ Your Contributions for any other purpose, on any terms, without restriction
 by or obligation to Romullo Sousa (hiukky). Nothing in this Agreement
 assigns ownership of Your Contributions or of any intellectual property
 right in them.
+
+<!-- ADDED — NOT ASF TEXT -->
+
+**10. Successors.**
+
+Romullo Sousa (hiukky) may assign or transfer this Agreement, and the
+licences granted under it, to a successor in the ownership of the Work,
+including on a change of legal form, reorganisation, merger or acquisition.
+No further permission from You is required, and the Agreement binds and
+benefits the successor on the same terms.
 
 ---
 
