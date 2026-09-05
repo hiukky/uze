@@ -40,8 +40,11 @@ impl Plugins<'_> {
         if bootstrap::DEFAULT_PLUGIN_IDS.contains(&embedded_id.as_str()) {
             return true;
         }
-        if let Ok((_, entries)) = bootstrap::entries()
-            && entries.iter().any(|entry| entry.name == *embedded_id)
+        if let Ok(official) = bootstrap::entries()
+            && official
+                .plugins
+                .iter()
+                .any(|entry| entry.name == *embedded_id)
         {
             return true;
         }

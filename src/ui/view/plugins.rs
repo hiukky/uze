@@ -149,17 +149,10 @@ pub(crate) fn render_plugins(
         .saturating_sub(drawer_width.unwrap_or(0))
         .saturating_sub(if drawer_open { 1 } else { 0 });
     let header_area = Rect::new(outer.x, outer.y, list_area_width, outer.height);
-    let trailer = (model.marketplace_count > 0).then(|| {
+    let sources = model.marketplaces.len();
+    let trailer = (sources > 0).then(|| {
         Span::styled(
-            format!(
-                "{} source{}",
-                model.marketplace_count,
-                if model.marketplace_count == 1 {
-                    ""
-                } else {
-                    "s"
-                }
-            ),
+            format!("{sources} source{}", if sources == 1 { "" } else { "s" }),
             Style::default().fg(MUTED),
         )
     });
@@ -477,28 +470,31 @@ fn render_plugin_drawer(
         status_height,
     );
 
-    let mut lines = vec![
+    let room = body.width as usize;
+    let mut lines = vec![Line::from(Span::styled(
+        "PLUGIN",
+        Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
+    ))];
+    lines.extend(fold(&plugin.name, room).into_iter().map(|row| {
         Line::from(Span::styled(
-            "PLUGIN",
-            Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
-        )),
-        Line::from(Span::styled(
-            &plugin.name,
+            row,
             Style::default()
                 .fg(TEXT_BRIGHT)
                 .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
-        Line::from(Span::styled(
-            plugin.description.clone().unwrap_or_default(),
-            Style::default().fg(TEXT_SECONDARY),
-        )),
-    ];
+        ))
+    }));
+    lines.push(Line::from(""));
+    lines.extend(
+        fold(plugin.description.as_deref().unwrap_or_default(), room)
+            .into_iter()
+            .map(|row| Line::from(Span::styled(row, Style::default().fg(TEXT_SECONDARY)))),
+    );
     if !plugin.keywords.is_empty() {
-        lines.push(Line::from(Span::styled(
-            plugin.keywords.join(", "),
-            Style::default().fg(TEXT_DIM),
-        )));
+        lines.extend(
+            fold(&plugin.keywords.join(", "), room)
+                .into_iter()
+                .map(|row| Line::from(Span::styled(row, Style::default().fg(TEXT_DIM)))),
+        );
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
@@ -506,22 +502,66 @@ fn render_plugin_drawer(
         Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
     )));
     let source_row_y = body.y + lines.len() as u16;
-    lines.push(Line::from(vec![
-        Span::styled(
-            group_display_name(&plugin.marketplace),
-            Style::default().fg(TEXT_PRIMARY),
-        ),
-        // Local rows carry no marketplace to jump to beyond their own
-        // group; the ↗ still lands there meaningfully (expand + select),
-        // so every row offers it uniformly.
-        Span::raw("  "),
-        Span::styled("↗", Style::default().fg(MUTED)),
-    ]));
+    let name = group_display_name(&plugin.marketplace);
+    let homepage = model
+        .marketplaces
+        .iter()
+        .find(|entry| entry.name == plugin.marketplace)
+        .and_then(|entry| entry.homepage.clone());
+    // Just the name: one glyph on the card, and it belongs to the address
+    // below, which is the row that leaves the application. Marking this
+    // row too made the pair read as two links to the same place.
+    lines.push(Line::from(Span::styled(
+        name.to_owned(),
+        Style::default().fg(TEXT_PRIMARY),
+    )));
     if source_row_y < body.y + body.height {
         hits.push((
             Rect::new(body.x, source_row_y, body.width, 1),
             Hit::JumpToMarketplace(plugin.marketplace.clone()),
         ));
+    }
+    // The address itself, on a row of its own and clickable along its
+    // whole length. It was a one-column "↗" beside the name to begin
+    // with, which is a target you miss by moving the mouse one cell —
+    // and missing it landed on the jump underneath, which re-selects the
+    // group already selected and so reads as nothing happening at all.
+    // Writing the address out also gives the reader something to check
+    // before trusting it, and something to copy when the terminal this
+    // drawer draws into has no browser to hand it to.
+    if let Some(url) = homepage.as_deref() {
+        let url_row_y = body.y + lines.len() as u16;
+        let address_room = body.width.saturating_sub(2) as usize;
+        // Muted until the pointer is on it, the way the rest of this
+        // drawer's secondary text reads: an address that wore the accent
+        // at rest competed with the row the reader had actually selected.
+        // The underline is what says "link" while it sits quiet; the
+        // accent is what answers the pointer.
+        let link = if model.source_link_hovered {
+            Style::default()
+                .fg(ACCENT)
+                .add_modifier(Modifier::UNDERLINED)
+        } else {
+            Style::default()
+                .fg(MUTED)
+                .add_modifier(Modifier::UNDERLINED)
+        };
+        lines.push(Line::from(vec![
+            // Underlined, which is what a link looks like everywhere else
+            // a person reads one. The accent alone said "interactive" in
+            // this palette's own vocabulary and nothing at all in anyone
+            // else's — the row was a target the whole time and still read
+            // as a caption.
+            Span::styled(crate::ui::elide_tail(url, address_room), link),
+            Span::raw(" "),
+            Span::styled("↗", link),
+        ]));
+        if url_row_y < body.y + body.height {
+            hits.push((
+                Rect::new(body.x, url_row_y, body.width, 1),
+                Hit::OpenLink(plugin.marketplace.clone()),
+            ));
+        }
     }
     lines.push(Line::from(""));
 
@@ -644,6 +684,55 @@ fn render_plugin_drawer(
             "Press i to install this plugin",
         );
     }
+}
+
+/// Folds `text` to `width` the way the drawer's paragraph would, but
+/// *before* it is authored — so every line the drawer pushes is one drawn
+/// row, and a row index is a screen row.
+///
+/// The drawer renders through `Wrap`, and its two clickable rows (the
+/// marketplace name, the address under it) were anchored by counting
+/// authored lines. A description long enough to fold pushed the drawn rows
+/// down and left the targets sitting above them: the address read as a
+/// link and answered nothing. Wrapping the free text here keeps the two
+/// counts the same number by construction, with no measurement of what
+/// ratatui did afterwards.
+fn fold(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![text.to_owned()];
+    }
+    let mut rows: Vec<String> = Vec::new();
+    let mut row = String::new();
+    for word in text.split_whitespace() {
+        // A word wider than the row is broken across rows rather than
+        // left to overflow — the paragraph's own wrapper does the same,
+        // and a bare URL in a description is exactly that word.
+        let mut word = word;
+        while word.chars().count() > width {
+            if !row.is_empty() {
+                rows.push(std::mem::take(&mut row));
+            }
+            let split = word
+                .char_indices()
+                .nth(width)
+                .map_or(word.len(), |(index, _)| index);
+            let (head, tail) = word.split_at(split);
+            rows.push(head.to_owned());
+            word = tail;
+        }
+        let projected = row.chars().count() + usize::from(!row.is_empty()) + word.chars().count();
+        if projected > width && !row.is_empty() {
+            rows.push(std::mem::take(&mut row));
+        }
+        if !row.is_empty() {
+            row.push(' ');
+        }
+        row.push_str(word);
+    }
+    if !row.is_empty() || rows.is_empty() {
+        rows.push(row);
+    }
+    rows
 }
 
 fn exposure_route_label(plan: &uze_application::ExposurePlan) -> &'static str {

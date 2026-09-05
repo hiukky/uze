@@ -14,10 +14,16 @@ pub(crate) enum Hit {
     /// A marketplace group's header row — clicking it expands/collapses
     /// that group instead of selecting a plugin.
     MarketplaceGroupToggle(String),
-    /// The external-link glyph on a plugin detail's Source card — jumps
-    /// list selection to that marketplace's header, expanding it first if
-    /// it's currently collapsed.
+    /// A plugin detail's Source card — jumps list selection to that
+    /// marketplace's header, expanding it first if it's currently
+    /// collapsed.
     JumpToMarketplace(String),
+    /// The external-link glyph on that same card, by marketplace name:
+    /// opens where the marketplace actually lives, in the reader's own
+    /// browser. Carries the name rather than the address so the two can
+    /// never disagree — the URL is resolved from the same read model the
+    /// card printed it from.
+    OpenLink(String),
     ExtensionRow(usize),
     HarnessRow(usize),
     NewProfile,
@@ -100,6 +106,12 @@ impl TuiModel {
                 self.focus = Focus::Content;
                 self.marketplace_inspect_intent()
             }
+            Hit::OpenLink(marketplace) => self
+                .marketplaces
+                .iter()
+                .find(|entry| entry.name == marketplace)
+                .and_then(|entry| entry.homepage.clone())
+                .map_or(Intent::None, Intent::OpenLink),
             Hit::ExtensionRow(index) => {
                 // Selection opens the drawer immediately — `move_selection`
                 // does the same for keyboard navigation, so both input

@@ -35,24 +35,33 @@ impl Marketplace<'_> {
 
     pub fn list(&self) -> Result<Vec<MarketplaceSummary>> {
         let mut out = Vec::new();
-        let (official_name, official_entries) = bootstrap::entries()?;
+        let official = bootstrap::entries()?;
         out.push(MarketplaceSummary {
             name: "uze-official".to_owned(),
             source: "embedded:uze-official".to_owned(),
-            plugin_count: official_entries.len(),
+            homepage: official.homepage,
+            plugin_count: official.plugins.len(),
         });
         for (name, record) in uze_core::state::marketplace_list(&self.0.home)? {
-            let plugin_count = match UzeApplication::load_marketplace_manifest(&record.source) {
-                Ok((_, manifest)) => manifest.plugins.len(),
-                Err(_) => 0,
-            };
+            let manifest = UzeApplication::load_marketplace_manifest(&record.source).ok();
+            let plugin_count = manifest
+                .as_ref()
+                .map_or(0, |(_, manifest)| manifest.plugins.len());
+            // What the marketplace says about itself first; its registered
+            // source only when that is a URL a browser can open. A local
+            // path is where the manifest was read from, not somewhere to
+            // send a reader.
+            let source = record.source.display();
+            let homepage = manifest
+                .and_then(|(_, manifest)| manifest.owner.and_then(|owner| owner.url))
+                .or_else(|| source.starts_with("http").then(|| source.clone()));
             out.push(MarketplaceSummary {
                 name: name.clone(),
-                source: record.source.display(),
+                source,
+                homepage,
                 plugin_count,
             });
         }
-        let _ = official_name;
         Ok(out)
     }
 
@@ -137,8 +146,7 @@ impl Marketplace<'_> {
 
         let mut out = Vec::new();
 
-        let (_name, official_entries) = bootstrap::entries()?;
-        out.extend(official_entries.into_iter().map(|entry| {
+        out.extend(bootstrap::entries()?.plugins.into_iter().map(|entry| {
             // `installed` is keyed by the full `plugin@marketplace` identity
             // (ADR-036); a catalog entry's own `name` is bare, scoped to
             // *this* marketplace listing, so the lookup must reconstruct the

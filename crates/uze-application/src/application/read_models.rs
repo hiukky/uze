@@ -112,6 +112,11 @@ pub struct PluginCapability {
 pub struct MarketplaceSummary {
     pub name: String,
     pub source: String,
+    /// Where this marketplace lives for a person: the manifest's
+    /// `owner.url`, or its registered source when that is already a URL.
+    /// `None` for one registered from a local path — there is nothing to
+    /// open, and inventing a link is worse than admitting there is none.
+    pub homepage: Option<String>,
     pub plugin_count: usize,
 }
 

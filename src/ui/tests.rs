@@ -5,7 +5,7 @@ use ratatui::{Terminal, backend::TestBackend, layout::Rect};
 
 use uze_application::UzeHome;
 use uze_application::application::{
-    DoctorReport, MaintenanceReport, MarketplacePluginSummary, PluginSummary,
+    DoctorReport, MaintenanceReport, MarketplacePluginSummary, MarketplaceSummary, PluginSummary,
 };
 
 use super::hit::Hit;
@@ -53,7 +53,12 @@ fn model_with_data() -> TuiModel {
 
     let mut model = model_with_plugins(&["one", "two"]);
     model.plugins[0].update_available = Some(true);
-    model.marketplace_count = 1;
+    model.marketplaces = vec![MarketplaceSummary {
+        name: "uze-official".to_owned(),
+        source: "embedded:uze-official".to_owned(),
+        homepage: Some("https://github.com/hiukky/uze".to_owned()),
+        plugin_count: 1,
+    }];
     model.marketplace_plugins = vec![MarketplacePluginSummary {
         marketplace: "uze-official".to_owned(),
         name: "flow".to_owned(),
@@ -200,7 +205,7 @@ fn every_route_renders_without_panicking() {
         let model = TuiModel {
             route,
             plugins: base.plugins.clone(),
-            marketplace_count: base.marketplace_count,
+            marketplaces: base.marketplaces.clone(),
             marketplace_plugins: base.marketplace_plugins.clone(),
             doctor: base.doctor.clone(),
             harnesses_selected: base.harnesses_selected,
@@ -1058,6 +1063,188 @@ fn r_refreshes_outside_plugins_but_still_removes_within_plugins() {
     let intent = plugins_model.apply_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
     assert!(matches!(plugins_model.overlay, Overlay::ConfirmRemove { ref id, .. } if id == "one"));
     assert_eq!(intent, Intent::None);
+}
+
+/// The Source card names where a plugin's marketplace actually lives, and
+/// the address itself is what opens it — a whole row of target, not a
+/// one-column glyph you miss by moving the mouse one cell. The card used
+/// to show no address at all, and its "↗" only ever jumped to a group
+/// header in the list below.
+#[test]
+fn the_source_card_shows_the_marketplace_link_and_offers_to_open_it() {
+    let mut model = model_with_plugins(&["one"]);
+    model.route = Route::Plugins;
+    model.marketplace_drawer_open = true;
+    model.marketplaces = vec![MarketplaceSummary {
+        name: "uze-official".to_owned(),
+        source: "embedded:uze-official".to_owned(),
+        homepage: Some("https://github.com/hiukky/uze".to_owned()),
+        plugin_count: 1,
+    }];
+    model.marketplace_plugins = vec![MarketplacePluginSummary {
+        marketplace: "uze-official".to_owned(),
+        name: "flow".to_owned(),
+        description: Some("A flow plugin".to_owned()),
+        keywords: Vec::new(),
+        installed: true,
+        update_available: Some(false),
+        is_default: true,
+    }];
+
+    let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| render(frame, &model, &mut hits))
+        .unwrap();
+    model.hits = hits;
+    let rows = buffer_rows(&terminal);
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("https://github.com/hiukky/uze")),
+        "the address reads on the card: {rows:#?}"
+    );
+
+    let rect = model
+        .hits
+        .iter()
+        .find(|(_, hit)| matches!(hit, Hit::OpenLink(name) if name == "uze-official"))
+        .map(|(rect, _)| *rect)
+        .expect("the address is a target of its own");
+    assert!(
+        rect.width > 20,
+        "and the whole row of it, not one column: {rect:?}"
+    );
+    for column in [rect.x, rect.x + rect.width / 2, rect.right() - 1] {
+        assert_eq!(
+            model.click(column, rect.y),
+            Intent::OpenLink("https://github.com/hiukky/uze".to_owned()),
+            "clicking anywhere along it hands the address over"
+        );
+    }
+}
+
+/// A description long enough to fold used to push every drawn row of the
+/// drawer down while the hit rects stayed where the authored line count
+/// put them: the address read as a link and answered nothing, because the
+/// row the reader clicked was two rows below the target.
+#[test]
+fn the_source_link_is_clickable_on_the_row_it_is_drawn_on() {
+    let mut model = model_with_plugins(&["one"]);
+    model.route = Route::Plugins;
+    model.marketplace_drawer_open = true;
+    model.marketplaces = vec![MarketplaceSummary {
+        name: "uze-official".to_owned(),
+        source: "embedded:uze-official".to_owned(),
+        homepage: Some("https://github.com/hiukky/uze".to_owned()),
+        plugin_count: 1,
+    }];
+    model.marketplace_plugins = vec![MarketplacePluginSummary {
+        marketplace: "uze-official".to_owned(),
+        name: "flow".to_owned(),
+        description: Some(
+            "Makes this project's instructions portable across every harness \
+             uze knows about, so switching agents never costs the context \
+             the project already wrote down."
+                .to_owned(),
+        ),
+        keywords: vec!["context".to_owned(), "portability".to_owned()],
+        installed: true,
+        update_available: Some(false),
+        is_default: true,
+    }];
+
+    let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| render(frame, &model, &mut hits))
+        .unwrap();
+    model.hits = hits;
+
+    let rows = buffer_rows(&terminal);
+    let drawn = rows
+        .iter()
+        .position(|row| row.contains("https://github.com/hiukky/uze"))
+        .expect("the address reads on the card") as u16;
+    let rect = model
+        .hits
+        .iter()
+        .find(|(_, hit)| matches!(hit, Hit::OpenLink(name) if name == "uze-official"))
+        .map(|(rect, _)| *rect)
+        .expect("the address is a target of its own");
+    assert_eq!(
+        rect.y, drawn,
+        "the target sits on the row the address is drawn on: {rows:#?}"
+    );
+    assert_eq!(
+        model.click(rect.x + 1, drawn),
+        Intent::OpenLink("https://github.com/hiukky/uze".to_owned()),
+    );
+}
+
+/// The address is chrome until the pointer is on it: muted at rest, accent
+/// under the pointer. Hover and click read the same hit list, so a row that
+/// lights up is a row that answers.
+#[test]
+fn the_source_link_lights_up_only_under_the_pointer() {
+    let mut model = model_with_plugins(&["one"]);
+    model.route = Route::Plugins;
+    model.marketplace_drawer_open = true;
+    model.marketplaces = vec![MarketplaceSummary {
+        name: "uze-official".to_owned(),
+        source: "embedded:uze-official".to_owned(),
+        homepage: Some("https://github.com/hiukky/uze".to_owned()),
+        plugin_count: 1,
+    }];
+    model.marketplace_plugins = vec![MarketplacePluginSummary {
+        marketplace: "uze-official".to_owned(),
+        name: "flow".to_owned(),
+        description: Some("A flow plugin".to_owned()),
+        keywords: Vec::new(),
+        installed: true,
+        update_available: Some(false),
+        is_default: true,
+    }];
+
+    let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| render(frame, &model, &mut hits))
+        .unwrap();
+    model.hits = hits;
+    let rect = model
+        .hits
+        .iter()
+        .find(|(_, hit)| matches!(hit, Hit::OpenLink(name) if name == "uze-official"))
+        .map(|(rect, _)| *rect)
+        .expect("the address is a target of its own");
+
+    assert!(
+        !model.source_link_hovered,
+        "muted until the pointer arrives"
+    );
+    model.apply_mouse(
+        MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: rect.x + 1,
+            row: rect.y,
+            modifiers: KeyModifiers::NONE,
+        },
+        100,
+    );
+    assert!(
+        model.source_link_hovered,
+        "and lit while the pointer is on it"
+    );
+    model.apply_mouse(
+        MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: rect.x + 1,
+            row: rect.y + 1,
+            modifiers: KeyModifiers::NONE,
+        },
+        100,
+    );
+    assert!(!model.source_link_hovered, "muted again once it leaves");
 }
 
 #[test]

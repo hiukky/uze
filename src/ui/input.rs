@@ -431,13 +431,17 @@ impl TuiModel {
                     Intent::None
                 }
             }
-            MouseEventKind::Moved
-                if self.overlay == Overlay::None && self.route == Route::Overview =>
-            {
-                self.overview_prompt_hovered = match self.hit_at(event.column, event.row) {
-                    Some(Hit::PromptHistory(index)) => Some(*index),
+            MouseEventKind::Moved if self.overlay == Overlay::None => {
+                // One read of the hit list answers every hover the chrome
+                // has: a target that lights up under the pointer is only
+                // honest if it lights up for the same rect the click
+                // resolves against.
+                let hovered = self.hit_at(event.column, event.row).cloned();
+                self.overview_prompt_hovered = match hovered {
+                    Some(Hit::PromptHistory(index)) if self.route == Route::Overview => Some(index),
                     _ => None,
                 };
+                self.source_link_hovered = matches!(hovered, Some(Hit::OpenLink(_)));
                 Intent::None
             }
             _ => Intent::None,
