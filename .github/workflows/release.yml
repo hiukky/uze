@@ -171,7 +171,7 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "$tag" -m "uze ${{ steps.detect.outputs.version }}"
+          git tag -a "$tag" -m "$tag"
           git push origin "$tag"
 
   package:
@@ -293,13 +293,16 @@ jobs:
         run: |
           set -euo pipefail
           tag="${{ needs.tag.outputs.tag }}"
-          version="${{ needs.tag.outputs.version }}"
           if gh release view "$tag" >/dev/null 2>&1; then
             echo "release $tag exists — uploading assets"
             gh release upload "$tag" assets/* --clobber
           else
+            # Titled by the tag itself. A release called "uze 0.0.0-alpha.1"
+            # repeats the repository's own name back at the reader and reads
+            # as a different identifier from the `v0.0.0-alpha.1` that
+            # install.sh, the changelog and the tag ruleset all speak.
             gh release create "$tag" assets/* \
-              --title "uze $version" \
+              --title "$tag" \
               --notes "One-click release: version bump, changelog and tag are in the \`chore(release)\` commit ($tag)."
           fi
           gh release view "$tag" --json tagName,assets --jq '{tag: .tagName, assets: [.assets[].name]}'
