@@ -16,9 +16,11 @@ comment on the pull request itself. It is a licence grant and not an
 assignment: you keep the copyright in what you wrote and may reuse it
 however you like. What it adds beyond the sentence above is that a
 contribution may travel into a future version of uze under a different
-licence, including a commercial one. **The agreement is not in force yet —
-it is awaiting legal review, and the check that asks for it is dormant
-until the maintainer turns it on.**
+licence, including a commercial one.
+
+The document lists, at the top, every way it departs from the Apache ICLA it
+is built on. Read that list: it is the part written for this project rather
+than inherited, and it is where anything you would object to will be.
 
 ## Before you write code
 

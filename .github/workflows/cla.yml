@@ -28,9 +28,9 @@ jobs:
     name: CLA signed
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # Inert until `CLA_ACTIVE` is set to `true`. It stays unset while CLA.md
-    # is marked DO NOT PUBLISH: nobody should be asked to agree to a document
-    # that is still awaiting legal review.
+    # `CLA_ACTIVE` is the switch, kept out of the file so the agreement can be
+    # turned off without a commit — and so a fork of this repository never
+    # asks anyone to sign an agreement with someone else.
     if: >-
       vars.CLA_ACTIVE == 'true' &&
       (github.event_name == 'pull_request_target' ||
