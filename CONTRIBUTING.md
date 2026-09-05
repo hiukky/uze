@@ -194,6 +194,28 @@ component means at this stage.
   development delivery bumps `alpha.N`. Choosing the bump is part of the
   release, not of the pull request.
 
+## Repository rules
+
+What GitHub itself enforces on `main` and on release tags is versioned in
+[`.github/rulesets/`](.github/rulesets/), one JSON file per ruleset, in the
+format the API imports.
+
+`main.json` forbids deleting the branch, force-pushing it, merge commits and
+rebase merges — squash only, which is what the history already is — and
+requires the fast checks to be green. The long E2E verticals run and report
+without gating: they only trigger for changes that can reach the Lab image,
+so requiring them would leave every documentation pull request waiting on a
+check that never arrives. `release-tags.json` stops a published `v*` tag
+being deleted or repointed, because `install.sh` resolves a release by tag
+and moving one changes what a user installs under a version they already
+have.
+
+**These files are a reference for re-import, not a deployment.** Live
+enforcement is a repository setting, so the two can drift: a rule changed in
+the UI does not change the file, and merging a change to the file does not
+change the repository. Both ship with `"enforcement": "disabled"` for that
+reason — importing one is never what turns it on.
+
 ## Security
 
 Never open a public issue for a vulnerability. The policy — where to report,
