@@ -1,0 +1,57 @@
+name: CLA
+
+# Records that a contributor has signed CLA.md, by comment on their own
+# pull request. It does one thing and touches nothing else — see the
+# permissions below and the absence of a checkout step.
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_target:
+    types: [opened, closed, synchronize]
+
+# `pull_request_target` runs with the base repository's token, so a fork's
+# code must never be checked out or executed in this workflow. Nothing here
+# does: the action reads the pull request through the API and writes a
+# signature file to another repository.
+permissions:
+  actions: write
+  contents: read
+  pull-requests: write
+  statuses: write
+
+jobs:
+  cla:
+    name: CLA signed
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Inert until the maintainer sets both variables to the repository that
+    # will hold the signatures, and adds a token that can write to it.
+    # Signatures do not live in this repository: a contributor signing must
+    # not mean a commit on `main` of the project they are contributing to.
+    if: >-
+      vars.CLA_SIGNATURES_ORG != '' && vars.CLA_SIGNATURES_REPO != '' &&
+      (github.event_name == 'pull_request_target' ||
+       github.event.comment.body == 'recheck' ||
+       github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA')
+    steps:
+      - uses: contributor-assistant/github-action@v2.6.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Needs `repo` scope on the signatures repository, and nothing
+          # else. Added by the maintainer; it cannot come from `secrets
+          # .GITHUB_TOKEN`, which is scoped to this repository alone.
+          PERSONAL_ACCESS_TOKEN: ${{ secrets.CLA_SIGNATURES_TOKEN }}
+        with:
+          # Versioned on purpose: a change to CLA.md that alters what a
+          # signature means starts a new path, so nobody is recorded as
+          # having agreed to a document they never read.
+          path-to-signatures: signatures/v1/cla.json
+          path-to-document: https://github.com/${{ github.repository }}/blob/main/CLA.md
+          remote-organization-name: ${{ vars.CLA_SIGNATURES_ORG }}
+          remote-repository-name: ${{ vars.CLA_SIGNATURES_REPO }}
+          branch: main
+          # Bots cannot agree to anything, and the maintainer is the party
+          # the agreement is with. Without this, every dependency bump
+          # blocks on a signature that will never come.
+          allowlist: dependabot[bot],renovate[bot],hiukky

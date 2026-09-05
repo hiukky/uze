@@ -7,7 +7,18 @@ not suggestions: a pull request that does not follow them is sent back
 before anyone reads the code.
 
 By contributing you agree that your work is licensed under the
-[Apache License 2.0](LICENSE), the same as the rest of the project.
+[Apache License 2.0](LICENSE), the same as the rest of the project. That
+stays true for everything contributed so far and for anyone who never signs
+anything.
+
+A first pull request also asks you to sign [`CLA.md`](CLA.md), by one
+comment on the pull request itself. It is a licence grant and not an
+assignment: you keep the copyright in what you wrote and may reuse it
+however you like. What it adds beyond the sentence above is that a
+contribution may travel into a future version of uze under a different
+licence, including a commercial one. **The agreement is not in force yet —
+it is awaiting legal review, and the check that asks for it is dormant
+until the maintainer turns it on.**
 
 ## Before you write code
 
