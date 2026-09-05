@@ -8,6 +8,12 @@
 use super::*;
 use crate::ui::{Rows, fill_row_bg};
 
+/// The columns of fill a control keeps on each side of its label. Part of
+/// the button, not a gap beside it: it is filled, hovered and pressed with
+/// the label, which is what gives a one-glyph control something to be a
+/// control *in*.
+const CHIP_PAD: u16 = 1;
+
 pub(super) fn blank_pane(pane: PaneId, columns: u16, rows: u16) -> PaneSnapshot {
     PaneSnapshot {
         pane,
@@ -1638,6 +1644,72 @@ fn render_root_picker(
     }
 }
 
+/// What the pointer is doing to a control. The same four answers for
+/// every control the header draws, so hovering one and hovering another
+/// mean the same thing on screen.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ChipState {
+    Resting,
+    Hovered,
+    Pressed,
+    /// Not a control at all: drawn in a control's shape because it stands
+    /// where one stands, and recessed rather than raised so the shape
+    /// alone never promises a press ("… delivering" is a report; "⇧6 #20"
+    /// is a button).
+    Static,
+}
+
+fn chip_state(model: &WorkspaceModel, hit: Option<WorkspaceHit>) -> ChipState {
+    let Some(hit) = hit else {
+        return ChipState::Static;
+    };
+    if model.pressed_hit() == Some(hit) {
+        ChipState::Pressed
+    } else if model.hovered == Some(hit) {
+        ChipState::Hovered
+    } else {
+        ChipState::Resting
+    }
+}
+
+/// The label colour and the surface under it, for a chip of `hue` in
+/// `state`. A pressed chip inverts — the hue becomes the fill and the
+/// label drops to the backdrop — which is why this answers with both
+/// rather than leaving the label to whoever drew it: pressing is the one
+/// state that overrules a label's own colour.
+fn chip_skin(state: ChipState, hue: Color) -> (Color, Color) {
+    match state {
+        ChipState::Resting => (hue, crate::ui::SURFACE_OVERLAY),
+        ChipState::Hovered => (hue, crate::ui::SURFACE_HOVER),
+        ChipState::Pressed => (crate::ui::BASE, hue),
+        ChipState::Static => (hue, crate::ui::SURFACE_SUBTLE),
+    }
+}
+
+/// Where a chip carrying `text` sits when its right edge is `right`: the
+/// label with one column of padding on each side. The padding is part of
+/// the button — it is filled, hovered and clicked like the glyphs are —
+/// which is why the rect is measured here once and used for all three.
+fn chip_rect(text: &str, right: u16, row: u16) -> Rect {
+    let width = Span::raw(text).width() as u16 + 2 * CHIP_PAD;
+    Rect::new(right.saturating_sub(width), row, width, 1)
+}
+
+/// One header control: `text` in `hue`, padded and filled per `state`.
+fn draw_chip(frame: &mut ratatui::Frame<'_>, rect: Rect, text: &str, hue: Color, state: ChipState) {
+    let (label, surface) = chip_skin(state, hue);
+    let mut spans = vec![
+        Span::raw(" ".repeat(CHIP_PAD as usize)),
+        Span::styled(
+            text.to_owned(),
+            Style::default().fg(label).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" ".repeat(CHIP_PAD as usize)),
+    ];
+    fill_row_bg(&mut spans, rect.width, surface);
+    frame.render_widget(Paragraph::new(Line::from(spans)), rect);
+}
+
 /// The header's delivery button for a task: text, hue, and whether it is a
 /// button at all rather than a state the header only reports.
 ///
@@ -1970,8 +2042,13 @@ pub(super) fn render_tab_strip(
             ));
         }
         chip.push(Span::raw(" "));
+        // A tab is a control too, and the pointer says so — one shade
+        // under the selected chip's own fill, so hovering an unselected
+        // tab never reads as having already switched to it.
         if selected {
             fill_row_bg(&mut chip, chip_width, crate::ui::SURFACE_OVERLAY);
+        } else if model.hovered == Some(WorkspaceHit::SelectTab(tab.id)) {
+            fill_row_bg(&mut chip, chip_width, crate::ui::ACTIVE_SPACE_OVERLAY);
         }
         hits.push((
             Rect::new(chip_start, inner.y, chip_width, 1),
@@ -2027,30 +2104,50 @@ pub(super) fn render_tab_strip(
     let button_width: u16 = 7; // " + │ ✦ "
     if x + button_width <= inner.right() {
         let action_start = x;
-        let mut actions = vec![
-            Span::raw(" "),
+        // Each half answers the pointer on its own — one button split by a
+        // divider is still two things to press, and a fill that lit both
+        // at once would say the pointer is on either. The resting fill
+        // stays the pair's own brighter surface (above); hover and press
+        // are the same skins every other control in this row wears.
+        let half = |state: ChipState, hue: Color| match state {
+            ChipState::Resting => (hue, crate::ui::SURFACE_OVERLAY_BRIGHT),
+            other => chip_skin(other, hue),
+        };
+        let (plus, plus_surface) = half(
+            chip_state(model, Some(WorkspaceHit::NewTab)),
+            crate::ui::NAV_INACTIVE,
+        );
+        let (star, star_surface) = half(
+            chip_state(model, Some(WorkspaceHit::NewAgentMenu)),
+            crate::ui::ACCENT,
+        );
+        let actions = vec![
+            Span::styled(" ", Style::default().bg(plus_surface)),
             Span::styled(
                 "+",
                 Style::default()
-                    .fg(crate::ui::NAV_INACTIVE)
+                    .fg(plus)
+                    .bg(plus_surface)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::raw(" "),
-            Span::styled("│", Style::default().fg(crate::ui::BORDER_FAINT)),
-            Span::raw(" "),
-            Span::styled("✦", Style::default().fg(crate::ui::ACCENT)),
-            Span::raw(" "),
+            Span::styled(" ", Style::default().bg(plus_surface)),
+            Span::styled(
+                "│",
+                Style::default()
+                    .fg(crate::ui::BORDER_FAINT)
+                    .bg(crate::ui::SURFACE_OVERLAY_BRIGHT),
+            ),
+            Span::styled(" ", Style::default().bg(star_surface)),
+            Span::styled("✦", Style::default().fg(star).bg(star_surface)),
+            Span::styled(" ", Style::default().bg(star_surface)),
         ];
+        // Each half is its own three columns, so what lights up under the
+        // pointer is exactly what a click lands on.
         hits.push((Rect::new(action_start, inner.y, 3, 1), WorkspaceHit::NewTab));
         hits.push((
             Rect::new(action_start + 4, inner.y, 3, 1),
             WorkspaceHit::NewAgentMenu,
         ));
-        fill_row_bg(
-            &mut actions,
-            button_width,
-            crate::ui::SURFACE_OVERLAY_BRIGHT,
-        );
         spans.extend(actions);
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), inner);
@@ -2070,27 +2167,29 @@ pub(super) fn render_tab_strip(
     // The status badge belongs to the active agent/shell tab's `cwd`, not
     // the workspace root. It is intentionally absent for a clean directory
     // or one outside Git; when it is present, it remains the entry point to
-    // the full changes overlay. Unlike the "+"/"✦" pair above, this button
-    // is a bare icon with no filled chip behind it — it sits directly on
-    // the plain backdrop.
+    // the full changes overlay.
+    //
+    // Every control in this zone is drawn by [`draw_chip`]: a filled,
+    // padded surface that lifts under the pointer and inverts while
+    // pressed. Bare glyphs on the plain backdrop are what the message zone
+    // beside them uses, and the whole point of that zone is that a message
+    // is not a control — so the controls cannot look like one too.
     let mut trailing_right = inner.right();
     if selected_agent_context(model, identities).is_some() {
-        let button = vec![Span::styled(
+        // Its own rect is what the dropdown hangs off, so the chip is
+        // measured before it is drawn and the hit carries the same
+        // rectangle the fill covers — pad included, since the padding is
+        // as much of the button as the glyph is.
+        let rect = chip_rect("✦", trailing_right, inner.y);
+        draw_chip(
+            frame,
+            rect,
             "✦",
-            Style::default()
-                .fg(crate::ui::ACCENT)
-                .add_modifier(Modifier::BOLD),
-        )];
-        let button_width = button.iter().map(Span::width).sum::<usize>() as u16;
-        let button_rect = Rect::new(
-            trailing_right.saturating_sub(button_width),
-            inner.y,
-            button_width,
-            1,
+            crate::ui::ACCENT,
+            chip_state(model, Some(WorkspaceHit::OpenAgentSupport(rect))),
         );
-        frame.render_widget(Paragraph::new(Line::from(button)), button_rect);
-        hits.push((button_rect, WorkspaceHit::OpenAgentSupport(button_rect)));
-        trailing_right = button_rect.x.saturating_sub(1);
+        hits.push((rect, WorkspaceHit::OpenAgentSupport(rect)));
+        trailing_right = rect.x.saturating_sub(1);
     }
     // One verb — deliver — whose ending is the project's completion, not a
     // choice made here. Conditioned, not disabled: when the task cannot be
@@ -2102,48 +2201,45 @@ pub(super) fn render_tab_strip(
         && let Some(task) = model.tab_task(tab)
         && let Some((text, hue, clickable)) = deliver_button(task)
     {
-        let button = vec![Span::styled(
-            text,
-            Style::default().fg(hue).add_modifier(Modifier::BOLD),
-        )];
-        let button_width = button.iter().map(Span::width).sum::<usize>() as u16;
-        let button_rect = Rect::new(
-            trailing_right.saturating_sub(button_width),
-            inner.y,
-            button_width,
-            1,
-        );
-        frame.render_widget(Paragraph::new(Line::from(button)), button_rect);
-        if clickable {
-            hits.push((button_rect, WorkspaceHit::Deliver(tab)));
+        let rect = chip_rect(&text, trailing_right, inner.y);
+        let hit = clickable.then_some(WorkspaceHit::Deliver(tab));
+        draw_chip(frame, rect, &text, hue, chip_state(model, hit));
+        if let Some(hit) = hit {
+            hits.push((rect, hit));
         }
-        trailing_right = button_rect.x.saturating_sub(1);
+        trailing_right = rect.x.saturating_sub(1);
     }
     if let Some(summary) = model.git_badge.as_ref().and_then(|badge| badge.summary) {
+        // The one chip whose label is two-hued, so it draws its own spans
+        // rather than taking a single colour: the additions and the
+        // deletions are two numbers, not one label.
+        let state = chip_state(model, Some(WorkspaceHit::OpenGitView));
+        let (label, background) = chip_skin(state, crate::ui::SUCCESS);
+        let (additions, deletions) = match state {
+            // Pressed, the chip is one solid hue: its numbers go dark with
+            // everything else on it, or they vanish into the fill.
+            ChipState::Pressed => (label, label),
+            _ => (crate::ui::SUCCESS, crate::ui::DANGER),
+        };
+        let text = format!("+{} -{}", summary.additions, summary.deletions);
+        let rect = chip_rect(&text, trailing_right, inner.y);
         let mut badge = vec![
             Span::raw(" "),
             Span::styled(
                 format!("+{}", summary.additions),
-                Style::default().fg(crate::ui::SUCCESS),
+                Style::default().fg(additions),
             ),
             Span::raw(" "),
             Span::styled(
                 format!("-{}", summary.deletions),
-                Style::default().fg(crate::ui::DANGER),
+                Style::default().fg(deletions),
             ),
             Span::raw(" "),
         ];
-        let badge_width = badge.iter().map(Span::width).sum::<usize>() as u16;
-        fill_row_bg(&mut badge, badge_width, crate::ui::SURFACE_OVERLAY);
-        let badge_rect = Rect::new(
-            trailing_right.saturating_sub(badge_width),
-            inner.y,
-            badge_width,
-            1,
-        );
-        frame.render_widget(Paragraph::new(Line::from(badge)), badge_rect);
-        hits.push((badge_rect, WorkspaceHit::OpenGitView));
-        trailing_right = badge_rect.x.saturating_sub(1);
+        fill_row_bg(&mut badge, rect.width, background);
+        frame.render_widget(Paragraph::new(Line::from(badge)), rect);
+        hits.push((rect, WorkspaceHit::OpenGitView));
+        trailing_right = rect.x.saturating_sub(1);
     }
     render_notice_chip(frame, model, inner, trailing_right);
 }

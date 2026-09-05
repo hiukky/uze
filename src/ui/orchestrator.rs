@@ -69,6 +69,10 @@ const TIMELINE_REFRESH: Duration = Duration::from_secs(3);
 /// instead of letting indicatif write to stderr.
 const AGENT_ACTIVITY_FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
 const AGENT_ACTIVITY_TICK: Duration = Duration::from_millis(120);
+/// How long a pressed control wears its pressed skin. Long enough to be
+/// seen at a glance, short enough that it reads as the press itself and
+/// never as a state the control got stuck in.
+const PRESS_FLASH: Duration = Duration::from_millis(140);
 /// How long an agent pane must stay quiet before its work reads as
 /// finished. Agent harnesses animate while they work — a spinner, an
 /// elapsed-token counter — so a pane that is genuinely busy keeps emitting
@@ -1486,6 +1490,16 @@ struct WorkspaceModel {
     /// [`AGENT_ECHO_GRACE`] and [`AGENT_PASTE_GRACE`]).
     input_echo_until: BTreeMap<PaneId, Instant>,
     hits: Vec<(Rect, WorkspaceHit)>,
+    /// The piece of chrome the pointer is over, read from the same hit
+    /// list a click reads. Only ever set while no modal is open: what
+    /// sits under an overlay is not what the pointer is on.
+    hovered: Option<WorkspaceHit>,
+    /// The last control pressed, and when. A press flashes for
+    /// [`PRESS_FLASH`] so pressing is visible in itself — most of these
+    /// buttons answer somewhere else on the frame, or after a round trip,
+    /// and a control that looks identical the instant after it is pressed
+    /// is one the operator presses again.
+    pressed: Option<(WorkspaceHit, Instant)>,
     /// Set whenever applying an event (or a resize) changes what should be
     /// on screen; the input loop only redraws when this is true. Redrawing
     /// unconditionally at the input-poll rate was the other half of the
@@ -1961,6 +1975,28 @@ impl WorkspaceModel {
                     && row < rect.y + rect.height
             })
             .map(|(rect, hit)| (*rect, *hit))
+    }
+
+    /// The control still wearing its pressed skin, if any. Read at draw
+    /// time rather than cleared at press time, so the flash ends with the
+    /// clock instead of with whatever the press went on to do.
+    fn pressed_hit(&self) -> Option<WorkspaceHit> {
+        self.pressed
+            .filter(|(_, at)| at.elapsed() < PRESS_FLASH)
+            .map(|(hit, _)| hit)
+    }
+
+    /// Drops a press whose flash has run out, and says whether that
+    /// changed the frame — the one repaint the flash needs to end on,
+    /// since nothing else is necessarily moving when it does.
+    fn expire_press(&mut self, now: Instant) -> bool {
+        let expired = self
+            .pressed
+            .is_some_and(|(_, at)| now.duration_since(at) >= PRESS_FLASH);
+        if expired {
+            self.pressed = None;
+        }
+        expired
     }
 
     /// Whether `(column, row)` is over the sidebar's timeline section —

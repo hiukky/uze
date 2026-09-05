@@ -754,6 +754,12 @@ impl Attach<'_> {
                     previous == hit && now.duration_since(at) < DOUBLE_CLICK_WINDOW
                 });
                 self.model.last_click = Some((now, hit));
+                // Say the press happened before saying what it did: what
+                // it does can be slow, silent, or drawn somewhere else
+                // entirely, and none of that is the button's answer to
+                // "did it take my click".
+                self.model.pressed = Some((hit, now));
+                self.model.dirty = true;
                 if is_double_click {
                     self.model.last_click = None;
                     self.double_click(hit);
@@ -1051,7 +1057,18 @@ impl Attach<'_> {
                     self.model.dirty = true;
                 }
             }
-            _ => {}
+            // The chrome itself: every button under the pointer reads its
+            // own hover off this, so a control is raised by being pointed
+            // at rather than only by being pressed. Redrawn only when the
+            // hover actually moves to another control — waving the mouse
+            // across the pane must not cost a frame a tick.
+            _ => {
+                let hovered = hit_at(&self.model, mouse.column, mouse.row);
+                if self.model.hovered != hovered {
+                    self.model.hovered = hovered;
+                    self.model.dirty = true;
+                }
+            }
         }
         Flow::Continue
     }
@@ -1766,6 +1783,9 @@ impl Attach<'_> {
         self.model.schedule_git_read(&self.answers.git);
         self.model.schedule_git_view_reload(&self.answers.git_views);
         if self.model.expire_agent_activity(Instant::now()) {
+            self.model.dirty = true;
+        }
+        if self.model.expire_press(Instant::now()) {
             self.model.dirty = true;
         }
         // The same clock drives the notice chip's spinner, so it has to

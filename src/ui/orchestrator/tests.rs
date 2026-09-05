@@ -209,6 +209,29 @@ mod workspace_tests {
         (rows, hits)
     }
 
+    /// The colours one header chip is drawn in: the surface under its
+    /// padding, and the label's own foreground. Read off the cells rather
+    /// than off the skin function, so the test proves what reaches the
+    /// screen.
+    fn chip_colors(model: &WorkspaceModel, rect: Rect) -> (Color, Color) {
+        let mut terminal = Terminal::new(TestBackend::new(80, 3)).unwrap();
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| render_tab_strip(frame, frame.area(), model, &IDENTITIES, &mut hits))
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (buffer[(rect.x + 1, rect.y)].fg, buffer[(rect.x, rect.y)].bg)
+    }
+
+    /// Where the strip drew the given control last frame.
+    fn hit_rect(model: &WorkspaceModel, wanted: WorkspaceHit) -> Rect {
+        let (_, hits) = tab_strip(model);
+        hits.iter()
+            .find(|(_, hit)| *hit == wanted)
+            .map(|(rect, _)| *rect)
+            .unwrap_or_else(|| panic!("{wanted:?} is not on the strip"))
+    }
+
     /// A space holding two agents, each with one shell of its own, plus
     /// the shell the space was born with. Returns the model and the two
     /// agent tabs, in creation order.
@@ -769,6 +792,76 @@ mod workspace_tests {
             hits.iter()
                 .any(|(_, hit)| matches!(hit, WorkspaceHit::Deliver(_))),
             "the button is a hit"
+        );
+    }
+
+    /// A control that looks identical idle, pointed at and pressed is one
+    /// the operator presses twice. Every header button is drawn as a
+    /// filled chip that lifts under the pointer and inverts while the
+    /// press flash lasts — the press's own answer, given where the finger
+    /// is rather than wherever the work will show up.
+    #[test]
+    fn a_header_button_answers_the_pointer_and_the_press() {
+        let mut model = agent_with_task(TaskStateView::Ready, 3);
+        let deliver = WorkspaceHit::Deliver(model.selected_tab().expect("a selected tab"));
+        let rect = hit_rect(&model, deliver);
+        assert!(
+            rect.width > 4,
+            "the chip is padded around its label: {rect:?}"
+        );
+
+        assert_eq!(
+            chip_colors(&model, rect),
+            (crate::ui::ACCENT, crate::ui::SURFACE_OVERLAY),
+            "at rest: the hue, raised off the strip"
+        );
+
+        model.hovered = Some(deliver);
+        assert_eq!(
+            chip_colors(&model, rect),
+            (crate::ui::ACCENT, crate::ui::SURFACE_HOVER),
+            "under the pointer: one step brighter, and only this control"
+        );
+
+        model.pressed = Some((deliver, Instant::now()));
+        assert_eq!(
+            chip_colors(&model, rect),
+            (crate::ui::BASE, crate::ui::ACCENT),
+            "pressed: the hue becomes the button"
+        );
+    }
+
+    /// The header draws reports in the same row as its controls, and the
+    /// shape has to tell them apart: a report is recessed and answers no
+    /// pointer, where a button is raised and does.
+    #[test]
+    fn a_report_in_the_actions_row_is_not_dressed_as_a_button() {
+        let model = agent_with_task(TaskStateView::Integrating, 3);
+        let (rows, hits) = tab_strip(&model);
+        let row = rows.join("\n");
+        assert!(row.contains("… delivering"), "{row}");
+        assert!(
+            !hits
+                .iter()
+                .any(|(_, hit)| matches!(hit, WorkspaceHit::Deliver(_))),
+            "a delivery in flight is not pressed again"
+        );
+
+        let column = rows[0]
+            .char_indices()
+            .find(|(_, character)| *character == '…')
+            .map(|(index, _)| rows[0][..index].chars().count() as u16)
+            .expect("the report is on the strip");
+        let mut terminal = Terminal::new(TestBackend::new(80, 3)).unwrap();
+        terminal
+            .draw(|frame| {
+                render_tab_strip(frame, frame.area(), &model, &IDENTITIES, &mut Vec::new())
+            })
+            .unwrap();
+        assert_eq!(
+            terminal.backend().buffer()[(column, 0)].bg,
+            crate::ui::SURFACE_SUBTLE,
+            "recessed, not raised"
         );
     }
 

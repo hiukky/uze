@@ -159,6 +159,12 @@ const SURFACE_SUBTLE: Color = Color::Rgb(16, 18, 19);
 /// decoration with no bold/color weight otherwise carrying it, so it needs
 /// the extra contrast.
 const SURFACE_OVERLAY_BRIGHT: Color = Color::Rgb(44, 46, 47);
+/// The surface a control takes while the pointer is on it —
+/// `rgba(255,255,255,0.20)` pre-blended over `BASE`, one step above every
+/// resting surface above it. One tone for every hovered control, whatever
+/// its resting fill: hover is the frame answering "yes, this one", and an
+/// answer that differs per control is one the eye has to learn twice.
+const SURFACE_HOVER: Color = Color::Rgb(59, 61, 61);
 
 const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
