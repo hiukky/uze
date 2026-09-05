@@ -502,7 +502,15 @@ fn spawn_occupancy_reconcile(
     let home = home.clone();
     thread::spawn(move || {
         let reconciliation = tui_application(home)
-            .map(|app| app.workspace().reconcile_occupancy(&look_in, &held))
+            .map(|app| {
+                // Shares this pass rather than earning a thread of its own:
+                // the runtime projections left by destroyed checkouts are
+                // swept by exactly the same event that notices a slot is
+                // gone, and the sweep is a `readdir` next to the repository
+                // work already happening here.
+                app.health().prune_runtime_projections();
+                app.workspace().reconcile_occupancy(&look_in, &held)
+            })
             .unwrap_or_default();
         // Answered even when nothing changed: the pending flag is
         // released here, and a pass that returns in silence would never

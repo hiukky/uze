@@ -782,6 +782,51 @@ inside a client.
 
 ---
 
+## Runtime projection lifecycle (ADR-014)
+
+### A projection belongs to a project root, and no two share one
+
+Each project root gets its own runtime directory, keyed by its canonical
+path. A worktree is a root of its own, so a branch's `AGENTS.md` and Skills
+never reach a session working on another — and two sessions on the *same*
+root compute the same directory and the same content, so there is nothing to
+coordinate between them.
+
+> `crates/uze-integrations/src/claude/runtime.rs::runtime_projection_tests::repeated_projection_for_the_same_project_is_idempotent`
+> `crates/uze-integrations/src/claude/runtime.rs::runtime_projection_tests::concurrent_projection_calls_never_degrade_to_passthrough`
+> `tests/integrations/runtime_projection.rs::a_destroyed_checkout_loses_its_projection_and_its_repository_keeps_one`
+
+### A projection outlives its project only until the next sweep
+
+Every project's runtime directory records the canonical root it was built
+for, and a sweep removes each one whose root is gone — the checkout of a
+delivered agent, a worktree deleted by hand, a project moved. Existence of
+the root is the only criterion: a projection already current is skipped
+rather than rewritten, so mtime says when the project last changed, not when
+it was last used, and an age rule would collect exactly the projections that
+work. A directory naming no root it can be identified by is swept on the
+same terms, and rebuilt by the next launch that needs it.
+
+> `crates/uze-core/src/machine/harness_runtime.rs::tests::a_projection_outlives_its_project_only_until_the_next_sweep`
+> `crates/uze-core/src/machine/harness_runtime.rs::tests::a_project_that_still_exists_is_never_swept`
+> `crates/uze-core/src/machine/harness_runtime.rs::tests::a_project_directory_that_names_no_root_is_swept`
+> `tests/integrations/runtime_projection.rs::a_swept_projection_is_rebuilt_by_the_next_launch`
+
+### The runtime tree's two tenants are never confused for one another
+
+`runtime/projects/` holds derived projections that outlive every invocation
+and die with their project root; `runtime/sessions/` holds the receipts that
+let a filesystem projection be undone, and dies with the invocation that made
+it. They are named siblings rather than sibling ids under one integration, so
+the sweep can never take one for the other, and nothing project-owned is
+reached through a projection it collects.
+
+> `crates/uze-core/src/machine/harness_runtime.rs::tests::the_sweep_keeps_both_tenants_and_nothing_else`
+> `tests/integrations/runtime_projection.rs::sweeping_a_dead_projection_never_touches_the_project_it_pointed_at`
+> `tests/packages/store.rs::uze_home_derives_every_owned_path_from_one_root`
+
+---
+
 ## Architecture seams (`enforce-architecture-seams`)
 
 ### The layer direction is a fact, not a convention

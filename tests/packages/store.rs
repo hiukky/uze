@@ -41,9 +41,21 @@ fn uze_home_derives_every_owned_path_from_one_root() {
     assert_eq!(home.state_dir(), root.join("state"));
     assert_eq!(home.cache_dir(), root.join("cache"));
     assert_eq!(home.runtime_dir(), root.join("runtime"));
+    // The runtime tree's two tenants are named siblings, never interleaved
+    // by integration: one is swept when a project root goes, the other dies
+    // with the invocation that made it.
     assert_eq!(
         home.runtime_session_dir("fake", "session"),
-        root.join("runtime/fake/session")
+        root.join("runtime/sessions/fake/session")
+    );
+    assert_eq!(home.runtime_projects_dir(), root.join("runtime/projects"));
+    assert_eq!(
+        home.runtime_project_dir("abc123"),
+        root.join("runtime/projects/abc123")
+    );
+    assert_eq!(
+        home.runtime_projection_dir("fake", "abc123"),
+        root.join("runtime/projects/abc123/fake")
     );
 }
 

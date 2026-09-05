@@ -37,7 +37,7 @@ invocation of `claude` via `argv[0]`, resolves the real Claude executable,
 asks `ClaudeIntegration` for a runtime contribution, and `exec`s the real
 binary with that contribution applied — the user's own argv untouched. For
 a project with an `AGENTS.md`, the contribution is a small derived file
-under `$UZE_HOME/runtime/claude-code/projects/<project-id>/CLAUDE.md`
+under `$UZE_HOME/runtime/projects/<project-id>/claude-code/CLAUDE.md`
 containing only `@<absolute-path-to-AGENTS.md>`, delivered via
 `--add-dir <that-dir>` plus `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1`.
 
@@ -124,8 +124,8 @@ what that implies going forward.
 **Canonical** — never overwritten, never treated as replaceable: `AGENTS.md`
 (and `.agents/` where a harness defines it), package bytes in the Store.
 
-**Derived** — owned by UZE, live under `$UZE_HOME/runtime/claude-code/
-projects/<project-id>/`, and must be: rebuildable from the canonical source
+**Derived** — owned by UZE, live under `$UZE_HOME/runtime/projects/
+<project-id>/claude-code/`, and must be: rebuildable from the canonical source
 alone; non-authoritative (deleting one loses nothing — it is regenerated on
 next launch); content-deterministic (`@<canonical-agents-md-path>`, nothing
 else); safely disposable; never a second source of truth. The projected
@@ -234,9 +234,19 @@ The shim does **not** delete the runtime projection on exit. Because the
 artifact is rebuildable, non-authoritative, and lives under `$UZE_HOME` (not
 the project), keeping it between sessions is safer than mandatory per-session
 cleanup: it avoids a delete/recreate race between concurrent sessions on the
-same project, and there is nothing to leak into the project either way. Any
-future cache/GC policy for stale `$UZE_HOME/runtime/claude-code/projects/*`
-entries is deliberately left open — Future Work, not this decision.
+same project, and there is nothing to leak into the project either way.
+
+The GC policy this left open is now decided, and deliberately not the shim's
+job: each project's runtime directory records the canonical root it was built
+for (`harness_runtime::PROJECTION_MARKER`), and
+`harness_runtime::prune_projections` sweeps every one whose root no longer
+exists — most of them the checkout of an agent UZE placed, removed once its
+work was delivered or discarded. It runs from the workspace client's
+occupancy pass (`Health::prune_runtime_projections`), never from the shim,
+whose hot path stays free of directory scans. Existence of the root is the
+only criterion; mtime would be wrong, because a projection already current is
+skipped rather than rewritten, so its mtime says when the project last
+changed rather than when it was last used.
 
 ## Failure / Bypass Semantics
 
@@ -289,8 +299,8 @@ so failing closed is the safer choice. This is implemented, not aspirational
   directory → same content; verified live with two simultaneous `-p`
   sessions against one project, producing exactly one runtime directory and
   no corruption.
-- **Ownership boundary (ADR-009):** `$UZE_HOME/runtime/claude-code/
-  projects/*` is UZE-owned, entirely outside the project's working tree,
+- **Ownership boundary (ADR-009):** `$UZE_HOME/runtime/projects/*` is
+  UZE-owned, entirely outside the project's working tree,
   which stays user-owned throughout. Runtime projection creates and updates
   files only inside its own UZE-owned subtree; it never writes into, deletes
   from, or overwrites anything under the project root. This separation —

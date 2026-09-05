@@ -147,12 +147,28 @@ impl UzeHome {
         self.cache_dir().join("inspection.json")
     }
 
+    /// The runtime tree, whose two tenants have opposite lifetimes and are
+    /// therefore kept in named siblings rather than interleaved by
+    /// integration: `projects/` outlives every invocation and dies with the
+    /// project root, `sessions/` dies with the invocation that made it.
+    /// A sweep that had to tell them apart by guessing at a name would be
+    /// one rename away from deleting the wrong one.
     pub fn runtime_dir(&self) -> PathBuf {
         self.root.join("runtime")
     }
 
+    /// Every project UZE has ever projected into, one directory each —
+    /// which is also the whole input to `harness_runtime::prune_projections`.
+    pub fn runtime_projects_dir(&self) -> PathBuf {
+        self.runtime_dir().join("projects")
+    }
+
+    pub fn runtime_sessions_dir(&self) -> PathBuf {
+        self.runtime_dir().join("sessions")
+    }
+
     pub fn runtime_session_dir(&self, integration: &str, session: &str) -> PathBuf {
-        self.runtime_dir().join(integration).join(session)
+        self.runtime_sessions_dir().join(integration).join(session)
     }
 
     /// Where the PATH shim (`claude`, `codex`, `opencode`, `antigravity`,
@@ -163,18 +179,26 @@ impl UzeHome {
         self.root.join("shims")
     }
 
-    /// Where a project-scoped runtime projection lives for one integration,
-    /// keyed by `harness_runtime::project_id_for`. Distinct from
-    /// `runtime_session_dir`: a runtime projection is a derived,
-    /// rebuildable cache meant to persist and be safely shared by
+    /// One project's own corner of the runtime tree, keyed by
+    /// `harness_runtime::project_id_for` — the parent of every integration's
+    /// projection for it, and of the marker naming the root they were all
+    /// built for.
+    ///
+    /// Project-first rather than integration-first because the lifetime is
+    /// the project's: everything below shares one answer to "does the root
+    /// still exist", so a dead project is one `remove_dir_all` and one
+    /// marker to read, not one of each per harness.
+    pub fn runtime_project_dir(&self, project_id: &str) -> PathBuf {
+        self.runtime_projects_dir().join(project_id)
+    }
+
+    /// Where a project-scoped runtime projection lives for one integration.
+    /// Distinct from `runtime_session_dir`: a runtime projection is a
+    /// derived, rebuildable cache meant to persist and be safely shared by
     /// concurrent sessions on the same project — never torn down at session
-    /// end — so it lives under its own `projects` namespace rather than
-    /// reusing the session-scoped, `Drop`-cleaned tree.
+    /// end.
     pub fn runtime_projection_dir(&self, integration: &str, project_id: &str) -> PathBuf {
-        self.runtime_dir()
-            .join(integration)
-            .join("projects")
-            .join(project_id)
+        self.runtime_project_dir(project_id).join(integration)
     }
 
     pub fn ensure_layout(&self) -> Result<()> {

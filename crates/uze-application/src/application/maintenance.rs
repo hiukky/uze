@@ -9,6 +9,7 @@ use std::collections::BTreeSet;
 use serde::Serialize;
 
 use uze_core::{
+    harness_runtime,
     integration::{AttachmentState, ManagedArtifact, PublicationStatus},
     persistence::MutationLock,
     reconciliation::{PackageRemovalPlan, plan_remove},
@@ -74,6 +75,25 @@ impl MaintenanceReport {
 }
 
 impl Health<'_> {
+    /// Sweeps the runtime projections of projects that no longer exist —
+    /// most of them the checkout of an agent UZE placed, deleted when its
+    /// work was delivered or discarded.
+    ///
+    /// Machine-scoped like the rest of this module, and deliberately not
+    /// hung off the checkout lifecycle that produces the garbage: that
+    /// would put a machine-state write inside a project-scoped operation
+    /// (ADR-019), to save kilobytes for the remainder of one session. The
+    /// sweep is a `readdir` and a `stat` per project, so the moment it runs
+    /// is free to be whichever one is cheapest to reason about — the
+    /// client's first occupancy pass — rather than whichever is soonest.
+    ///
+    /// Takes no mutation lock: it touches nothing the Store, the ledger or
+    /// any receipt describes, and a projection it raced would be rebuilt by
+    /// its own next launch.
+    pub fn prune_runtime_projections(&self) -> Vec<String> {
+        harness_runtime::prune_projections(&self.0.home)
+    }
+
     /// Bounded, local maintenance used by health presenters. It only repairs
     /// receipt-proven missing artifacts and stale derived views. Every other
     /// state remains evidence for a person to decide on.
