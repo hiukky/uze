@@ -248,15 +248,19 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          path: dist
-          merge-multiple: true
+      # Checkout first, and only then the artifacts. `actions/checkout` cleans
+      # the workspace, so downloading before it deleted the four tarballs it
+      # had just fetched — the publish failed on `dist/uze-*.tar.gz: No such
+      # file or directory` after every target had built successfully.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # The tag, so the SBOM describes the tree the binaries were built
           # from rather than whatever `main` has moved on to.
           ref: ${{ needs.tag.outputs.tag }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          path: dist
+          merge-multiple: true
       - uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8 # v2
         with:
           tool: cargo-cyclonedx
