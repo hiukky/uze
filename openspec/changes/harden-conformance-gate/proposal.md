@@ -54,5 +54,5 @@ None.
   summaries.
 - New deterministic unit tests for the gate logic (registry parsing, escalate,
   unsettled-absence).
-- `.github/workflows/conformance.yml` — nightly stability job; evidence-commit step.
+- `.github/workflows/conformance-stability.yml` — nightly stability job; evidence-commit step.
 - `conformance/README.md`, `docs/adr/035-*.md`.

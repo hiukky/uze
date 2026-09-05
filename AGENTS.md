@@ -154,6 +154,8 @@ need to).
   `make lab-replay`. `conformance.yml` runs all four verticals (matrix) —
   its own workflow, on the paths that reach the Lab image plus nightly, so
   a docs or web change no longer pays 34 runner-minutes to prove nothing.
+  `conformance-stability.yml` is ADR-035's promotion gate (3 clean runs per
+  vertical), nightly only.
   Debugging a failure: see the `conformance-debug` skill (fast `--sandbox`
   reproduction loop, seconds not minutes) before iterating against the full
   gate run.
