@@ -1,0 +1,48 @@
+name: Bug report
+description: Something uze does that it should not, or does not do that it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Never report a vulnerability here — see [SECURITY.md](../blob/main/SECURITY.md).
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you ran, what you expected, what you got. Paste the output.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce it
+      description: The shortest sequence that shows it. A report nobody can reproduce is a report nobody can fix.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: uze version
+      description: Output of `uze --version`.
+    validations:
+      required: true
+  - type: dropdown
+    id: harness
+    attributes:
+      label: Which harness, if the bug involves one
+      multiple: true
+      options:
+        - Claude Code
+        - Codex
+        - OpenCode
+        - Antigravity
+        - None / not harness-specific
+  - type: input
+    id: environment
+    attributes:
+      label: OS and shell
+      placeholder: "Ubuntu 24.04 on WSL2, zsh"
+    validations:
+      required: true

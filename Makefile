@@ -5,7 +5,7 @@ UZE_BIN ?= target/debug/uze
 RELEASE_BIN ?= target/release/uze
 INSTALL_ARGS ?= --force
 
-.PHONY: help build release install wsl-lab run test test-acceptance test-conformance test-installer harness-test harness-matrix check fmt lint deny attributions attributions-check coverage version clean changelog lab-image lab-run lab-evidence lab-sandbox lab-experiment lab-matrix lab-replay python-fmt python-lint
+.PHONY: help build release install wsl-lab run test test-acceptance test-conformance test-installer harness-test harness-matrix check ci fmt lint deny msrv web audit secrets installer attributions attributions-check coverage version clean changelog lab-image lab-run lab-evidence lab-sandbox lab-experiment lab-matrix lab-replay python-fmt python-lint
 
 help: ## Show the available local-development targets.
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z0-9_.-]+:.*##/ { printf "  %-12s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -67,6 +67,22 @@ attributions-check: ## Fail if CREDITS.md is stale relative to Cargo.lock.
 	diff -u CREDITS.md /tmp/uze-credits-check.md || \
 		{ printf 'CREDITS.md is stale - run `make attributions` and commit.\n' >&2; exit 1; }
 
+msrv: ## Build on the MSRV declared in Cargo.toml (needs `rustup toolchain install 1.97`).
+	$(CARGO) +1.97 check --workspace --all-targets --locked
+
+web: ## Typecheck and build the documentation site (needs bun).
+	cd web && bun install --frozen-lockfile && bun run types:check && bun run build
+
+audit: ## Check the dependency tree against the RustSec advisory database.
+	$(CARGO) audit
+
+secrets: ## Scan the whole history for credentials (needs gitleaks).
+	gitleaks git --no-banner --redact=4 --config .gitleaks.toml
+
+installer: ## Lint install.sh and exercise it offline against a synthetic release.
+	shellcheck install.sh
+	sh tests/scripts/installer-test.sh
+
 python-fmt: ## Check Python formatting with ruff (conformance/).
 	ruff format --check conformance/
 
@@ -78,6 +94,14 @@ coverage: ## Run workspace tests with LLVM coverage (skips env-failing tests).
 	cargo llvm-cov report --lcov --output-path lcov.info
 
 check: fmt lint deny test python-fmt python-lint ## Local proxy for the CI gate; also cargo-release's pre-release-hook.
+
+# GitHub publishes no offline runner (`actions/runner` is for self-hosted and
+# is still driven by GitHub), so the honest local mirror is the commands
+# themselves. `ci` is every job in ci.yml except the Lab, which has `lab-run`,
+# and Coverage, which has `coverage`. What no local run can reproduce: the
+# release attestation (it needs GitHub's OIDC identity), the path filters that
+# decide whether the Lab runs at all, and the rulesets.
+ci: check msrv web audit attributions-check secrets installer coverage ## Every fast CI job, locally.
 
 
 # --- Harness Conformance Lab (Python, Real Harness + Synthetic World) ---

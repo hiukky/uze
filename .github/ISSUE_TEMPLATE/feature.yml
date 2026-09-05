@@ -1,0 +1,21 @@
+name: Idea
+description: Something uze should do, or should do differently.
+labels: [idea]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you were trying to do, and what stopped you. Describe the situation before the solution — the solution is the easy part to change later.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you have in mind
+      description: Optional. A shape, a command, a flag — whatever you already pictured.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you tried instead
+      description: The workaround you are using today, if there is one. It says a lot about how much the gap costs.
