@@ -78,16 +78,29 @@ pub fn has_update(plugin_name: &str, stored_root: &Path) -> Result<bool> {
     Ok(!trees_match(current.root(), stored_root)?)
 }
 
-/// The official embedded marketplace's own declared name (`marketplace.json`'s
-/// `name` field) and every plugin entry it lists — a pure, read-only parse of
-/// the manifest. This is the one place `uze-application` reads
-/// `marketplace.json` structure directly; the Application facade turns this
-/// into product-facing read models, and nothing below `uze-core::acquisition`
-/// ever sees it.
-pub fn entries() -> Result<(String, Vec<marketplace::MarketplacePluginEntry>)> {
+/// The official embedded marketplace as it describes itself — a pure,
+/// read-only parse of its `marketplace.json`. This is the one place
+/// `uze-application` reads `marketplace.json` structure directly; the
+/// Application facade turns this into product-facing read models, and
+/// nothing below `uze-core::acquisition` ever sees it.
+pub struct OfficialCatalog {
+    /// The manifest's own declared name.
+    pub name: String,
+    /// Where a reader goes to see this marketplace for themselves
+    /// (`owner.url`). `None` when the manifest names no owner: the
+    /// embedded snapshot has no source URL of its own to fall back on.
+    pub homepage: Option<String>,
+    pub plugins: Vec<marketplace::MarketplacePluginEntry>,
+}
+
+pub fn entries() -> Result<OfficialCatalog> {
     let (root, manifest) = extract_and_parse()?;
     let _ = fs::remove_dir_all(&root);
-    Ok((manifest.name, manifest.plugins))
+    Ok(OfficialCatalog {
+        name: manifest.name,
+        homepage: manifest.owner.and_then(|owner| owner.url),
+        plugins: manifest.plugins,
+    })
 }
 
 /// Extracts a fresh copy of the embedded snapshot and parses its

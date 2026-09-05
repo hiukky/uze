@@ -55,20 +55,28 @@ for deliberate milestones. The workflow, on a branch of its own:
 **2. Merge it.** The release is reviewed and gated like anything else, and
 the merge is the decision to publish.
 
-**3. Publishing happens on that push.** The same workflow, on `push` to
-`main` touching `Cargo.toml`, reads the version in the tree and asks whether
-a tag already exists for it. When one does — an ordinary dependency bump,
-say — it stops there. When none does:
+**3. Publishing happens on that push.** The same workflow, on every `push`
+to `main`, reads the version in the tree and asks whether it has a published
+*release* yet. When it does — an ordinary change, or a version already out —
+it stops there. When it does not:
 
    - the annotated `v<v>` tag is created on the merge commit, which is the
-     commit carrying version bump + changelog + lockfile;
+     commit carrying version bump + changelog + lockfile — or reused, when
+     an earlier attempt got that far before failing;
    - the four Linux artifacts (`x86_64`/`aarch64` × `gnu`/`musl`) are built
      from that tag on native runners;
    - a CycloneDX SBOM is generated from the tag's own lockfile, provenance
      is signed for every asset (`gh attestation verify <file> --repo
-     hiukky/uze`), and the `v<v>` GitHub Release is created with the
-     tarballs, the SBOM and `SHASUMS256.txt`. Re-runs upload assets with
-     `--clobber`, so a failed publish can be repaired in place.
+     hiukky/uze`), and the GitHub Release — named `v<v>`, the same
+     identifier the tag, the changelog and `install.sh` all use — is
+     created with the tarballs, the SBOM and `SHASUMS256.txt`. Re-runs
+     upload assets with `--clobber`, so a failed publish can be repaired
+     in place.
+
+Asking about the release rather than the tag is what makes the repair
+possible: the first attempt at `v0.0.0-alpha.1` tagged the commit and then
+failed to build two of its four targets, and a tag-only check would have
+left that version unpublishable for good.
 
 Each tarball carries `LICENSE`, `NOTICE` and `CREDITS.md` beside the binary:
 Apache-2.0 §4(a) obliges whoever receives the binary to receive the licence
@@ -78,5 +86,10 @@ with it.
 detection via `ldd --version`), verifies the SHA-256 against `SHASUMS256.txt`
 and refuses to install on mismatch, then installs to `$XDG_BIN_HOME` or
 `~/.local/bin` (`UZE_BIN_DIR` overrides; `UZE_VERSION` pins a release;
-`UZE_BASE_URL` points at a mirror). The offline fixture suite is
-`make test-installer` (also gating CI).
+`UZE_BASE_URL` points at a mirror). It opens with the same
+centred header `uze --help` does, reports one step at a time — download,
+checksum, install, verify — with a spinner on the line in flight and a
+check on every line already settled, closes on the two commands worth
+running next, and falls back to a plain, escape-free transcript whenever
+stdout is not a terminal or `NO_COLOR` is set, which is what CI and the
+fixture suite read. That suite is `make test-installer` (also gating CI).

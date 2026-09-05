@@ -4,6 +4,7 @@
 
 use std::{
     path::PathBuf,
+    process::{Command, Stdio},
     sync::mpsc::Sender,
     thread,
     time::{Duration, Instant},
@@ -56,6 +57,11 @@ pub(crate) enum Intent {
     },
     Setup(String),
     AddMarketplace(String),
+    /// Hand a URL to the reader's own browser (the plugin drawer's Source
+    /// card). Not a product operation — nothing is read or written — but
+    /// it spawns a process, which is not something the render thread
+    /// should be doing.
+    OpenLink(String),
     ContextAnalyze(PathBuf),
     ContextApply(PathBuf),
     /// Reproduce the detected consumer workspace's `agents.lock` through
@@ -155,6 +161,18 @@ pub(crate) fn dispatch(
                     .map_err(|error| error.to_string());
                 let _ = sender.send(WorkerResult::MarketplaceInspected(result));
             });
+        }
+        Intent::OpenLink(url) => {
+            model.status = match open_in_browser(&url) {
+                // Present tense on purpose: the opener took the address,
+                // which is all that can be known without waiting on it —
+                // and nothing on this thread waits for anything.
+                Some(opener) => Status::Success(format!("Opening {url} via {opener}")),
+                // The address is already on screen beside the glyph that
+                // was clicked, so a failure here costs the reader a
+                // copy-paste, not the link.
+                None => Status::Error(format!("No browser to open {url} with")),
+            };
         }
         Intent::Remove(id) => {
             model.status = Status::Working(format!("Removing {id}…"));
@@ -420,7 +438,7 @@ fn load_refresh_data(home: UzeHome, context_root: &std::path::Path) -> Result<Re
     // per-receipt vendor probing milliseconds in steady state, so every
     // screen sees real attachment state (never a masked "unknown").
     let doctor = app.health().report();
-    let marketplace_count = app.marketplace().list()?.len();
+    let marketplaces = app.marketplace().list()?;
     let marketplace_plugins = app.marketplace().plugins()?;
     let profiles = app.profiles().list()?;
     // Workspace detection first, then context at the detected root: callers
@@ -440,7 +458,7 @@ fn load_refresh_data(home: UzeHome, context_root: &std::path::Path) -> Result<Re
         plugins,
         doctor: Some(doctor),
         marketplace_plugins,
-        marketplace_count,
+        marketplaces,
         profiles,
         context_status,
         workspace,
@@ -674,6 +692,64 @@ fn update_message(report: UpdatePluginReport) -> String {
             )
         }
     }
+}
+
+/// Hands `url` to whatever this machine opens links with, and answers with
+/// the name of the opener that accepted it.
+///
+/// Ordered by how directly each one speaks for the user: `$BROWSER` is
+/// what they set themselves, `xdg-open` is what the desktop answers with,
+/// `sensible-browser` is Debian's fallback, and `explorer.exe` answers on
+/// WSL — where `xdg-open` is installed as somebody else's dependency,
+/// accepts the address and exits 4 without opening a thing.
+///
+/// `wslview` is deliberately absent: it is the tool that case calls for,
+/// but its project (`wslutilities/wslu`) was archived in March 2025, and
+/// it only shells out to the Windows interop this list now reaches
+/// directly. Anyone still running it names it in `$BROWSER`, which is
+/// honoured ahead of everything here.
+///
+/// Every stream is closed: the alternate screen belongs to ratatui, and a
+/// browser's startup chatter written into it lands in the middle of the
+/// frame.
+fn open_in_browser(url: &str) -> Option<String> {
+    // `$BROWSER` is a colon-separated list, and an entry may carry the URL
+    // in a `%s` placeholder rather than as a trailing argument.
+    let configured = std::env::var("BROWSER").unwrap_or_default();
+    let preferred: Vec<&str> = configured.split(':').filter(|e| !e.is_empty()).collect();
+    for opener in preferred
+        .into_iter()
+        .chain(["xdg-open", "sensible-browser", "explorer.exe"])
+    {
+        let mut words = opener.split_whitespace();
+        let Some(program) = words.next() else {
+            continue;
+        };
+        let mut command = Command::new(program);
+        let mut placed = false;
+        for word in words {
+            command.arg(word.replace("%s", url));
+            placed |= word.contains("%s");
+        }
+        if !placed {
+            command.arg(url);
+        }
+        let spawned = command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+        if let Ok(mut child) = spawned {
+            // A launcher hands the URL over and exits at once; nobody is
+            // waiting on it, so reap it off-thread rather than leaving a
+            // zombie behind for as long as the TUI runs.
+            thread::spawn(move || {
+                let _ = child.wait();
+            });
+            return Some(program.to_owned());
+        }
+    }
+    None
 }
 
 #[cfg(test)]

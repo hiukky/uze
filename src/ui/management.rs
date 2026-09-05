@@ -246,7 +246,7 @@ fn route_subtitle(route: Route) -> &'static str {
 fn route_count(route: Route, model: &TuiModel) -> Option<usize> {
     match route {
         Route::Overview => None,
-        Route::Plugins => Some(model.marketplace_count),
+        Route::Plugins => Some(model.marketplaces.len()),
         Route::Extensions => Some(model.extensions.len()),
         Route::Harnesses => Some(model.doctor.as_ref().map_or(0, |d| d.harnesses.len())),
         Route::Profiles => Some(model.profiles.len()),

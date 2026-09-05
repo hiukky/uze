@@ -12,8 +12,8 @@ use uze_extensions::registry::BuiltinExtension;
 
 use uze_application::application::{
     ContextPlan, DoctorReport, HarnessHealth, MarketplacePluginDetail, MarketplacePluginSummary,
-    OverviewWorkspaceSummary, PluginInspection, PluginSummary, ProfileApplyResult, ProfileSummary,
-    ProjectContextStatus, ProjectEnvironmentState,
+    MarketplaceSummary, OverviewWorkspaceSummary, PluginInspection, PluginSummary,
+    ProfileApplyResult, ProfileSummary, ProjectContextStatus, ProjectEnvironmentState,
 };
 
 use super::hit::Hit;
@@ -220,7 +220,7 @@ pub(crate) struct RefreshData {
     pub(crate) plugins: Vec<PluginSummary>,
     pub(crate) doctor: Option<DoctorReport>,
     pub(crate) marketplace_plugins: Vec<MarketplacePluginSummary>,
-    pub(crate) marketplace_count: usize,
+    pub(crate) marketplaces: Vec<MarketplaceSummary>,
     pub(crate) profiles: Vec<ProfileSummary>,
     pub(crate) context_status: Option<ProjectContextStatus>,
     /// The Overview's workspace-aware read model — present from the very
@@ -264,7 +264,9 @@ pub(crate) struct TuiModel {
     pub(crate) plugins: Vec<PluginSummary>,
     pub(crate) plugin_detail: Option<PluginInspection>,
 
-    pub(crate) marketplace_count: usize,
+    /// Every registered marketplace, by the name its plugins carry —
+    /// what the plugin drawer resolves a source link through.
+    pub(crate) marketplaces: Vec<MarketplaceSummary>,
     pub(crate) marketplace_plugins: Vec<MarketplacePluginSummary>,
     /// An index into the *visible* (filtered, group-expanded) sequence —
     /// see `marketplace_visible_indices` — not directly into
@@ -344,6 +346,12 @@ pub(crate) struct TuiModel {
     pub(crate) overview_prompt_selected: usize,
     pub(crate) overview_prompt_hovered: Option<usize>,
 
+    /// Whether the pointer is on the plugin drawer's source address.
+    /// A link in a terminal has no cursor to change shape, so the colour
+    /// is the only thing that can answer the pointer — see the address's
+    /// own style in `view::plugins`.
+    pub(crate) source_link_hovered: bool,
+
     /// Frame counter for spinner animation while background work is pending.
     pub(crate) tick: usize,
 
@@ -376,7 +384,7 @@ impl Default for TuiModel {
             maintenance_in_flight: false,
             plugins: Vec::new(),
             plugin_detail: None,
-            marketplace_count: 0,
+            marketplaces: Vec::new(),
             marketplace_plugins: Vec::new(),
             marketplace_selected: 0,
             marketplace_detail: None,
@@ -411,6 +419,7 @@ impl Default for TuiModel {
             prompt_history: Vec::new(),
             overview_prompt_selected: 0,
             overview_prompt_hovered: None,
+            source_link_hovered: false,
             tick: 0,
             hits: Vec::new(),
             sidebar_width: None,
@@ -881,7 +890,7 @@ impl TuiModel {
         self.doctor = data.doctor;
         self.clamp_harness_selection();
         self.marketplace_plugins = data.marketplace_plugins;
-        self.marketplace_count = data.marketplace_count;
+        self.marketplaces = data.marketplaces;
         self.clamp_marketplace_selection();
         self.clamp_extension_selection();
         self.profiles = data.profiles;

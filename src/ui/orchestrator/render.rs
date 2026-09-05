@@ -773,8 +773,7 @@ pub(super) fn render_sidebar(
                 } else {
                     caption_color(&cwd)
                 };
-                let detail_span = Span::styled(detail, Style::default().fg(detail_color));
-                let mut spans = vec![continuation_span, detail_span];
+                let mut spans = vec![continuation_span];
                 // Right-aligned under the alias, with the same trailing
                 // pad off the divider: a count pinned to the row's edge
                 // keeps its column as branches vary in length.
@@ -796,6 +795,26 @@ pub(super) fn render_sidebar(
                         })
                         .collect()
                 };
+                // The branch is elided, never cut: a name longer than the
+                // column used to run under the sync caption and off the
+                // right edge, so the one thing the row was pinning there —
+                // "3 ahead", "resume" — was what disappeared. What it says
+                // is now sized to what is left after that caption, and the
+                // "…" says a name was shortened rather than leaving the
+                // reader to wonder whether the branch really ends there.
+                {
+                    let taken: u16 = spans
+                        .iter()
+                        .chain(&sync)
+                        .map(|span| span.width() as u16)
+                        .sum::<u16>()
+                        + crate::ui::TRAILING_PAD;
+                    let room = detail_rect.width.saturating_sub(taken).max(1);
+                    spans.push(Span::styled(
+                        crate::ui::elide_tail(&detail, room as usize),
+                        Style::default().fg(detail_color),
+                    ));
+                }
                 if !sync.is_empty() {
                     const TRAILING_PAD: u16 = 1;
                     if resumable {
