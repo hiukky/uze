@@ -42,9 +42,12 @@ pub fn json_schema() -> Value {
             "description": { "type": "string" },
             "colors": {
                 "description":
-                    "Token name to colour. A colour is `#rrggbb`, `#rrggbbaa` \
-                     (composited over this theme's own `surface.background`), or \
-                     `@another.token` to take another token's value.",
+                    "Token name to colour. A colour is `#rrggbb`; `#rrggbbaa`, \
+                     composited over this theme's own `surface.background`; \
+                     `~aa`, separated from that background by `aa` in whichever \
+                     direction is visible against it (white on a dark theme, \
+                     black on a light one); or `@another.token`, taking another \
+                     token's value.",
                 "type": "object",
                 "additionalProperties": false,
                 "properties": color_properties(),
@@ -80,7 +83,7 @@ fn color_properties() -> Value {
             token.name().to_owned(),
             json!({
                 "type": "string",
-                "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|@[a-z0-9.-]+)$",
+                "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
             }),
         );
     }

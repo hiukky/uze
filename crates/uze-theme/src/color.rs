@@ -31,6 +31,18 @@ impl Rgb {
         )
     }
 
+    /// Whether this colour is light enough that a neutral overlay has to go
+    /// *darker* to separate from it.
+    ///
+    /// The one thing a translucent declaration cannot know for itself: on
+    /// UZE's near-black backdrop a raised surface is a little white, and on
+    /// a light one it has to be a little black. Same intent, opposite
+    /// colour, which is why the theme file says how far to separate rather
+    /// than which way.
+    pub fn is_light(self) -> bool {
+        self.relative_luminance() > 0.18
+    }
+
     /// WCAG relative luminance, the input to [`contrast_ratio`].
     fn relative_luminance(self) -> f32 {
         let channel = |value: u8| {
@@ -75,11 +87,11 @@ mod tests {
         // is what says a theme author can write the translucent form and get
         // the design's own value back.
         //
-        // Two of today's shades (`border.default` and `surface.raised-bright`)
-        // were nudged off their stated alpha by hand and are not reproduced by
-        // any single blend, which is exactly why the built-in theme declares
-        // every colour as a literal rather than deriving it: the default is
-        // byte-identical to what shipped, blend or no blend.
+        // Two of them (`border.default` and `surface.raised-bright`) were
+        // nudged a step off their own stated alpha by hand and so are not
+        // reproduced by any single blend — see
+        // `load::tests::derived_surfaces_are_composited_rather_than_transcribed`
+        // for what that costs and why it is worth it.
         let base = Rgb(10, 12, 13);
         let white = Rgb(255, 255, 255);
         let accent = Rgb(143, 209, 158);
@@ -97,6 +109,15 @@ mod tests {
         let top = Rgb(200, 100, 50);
         assert_eq!(top.over(base, 255), top);
         assert_eq!(top.over(base, 0), base);
+    }
+
+    #[test]
+    fn lightness_is_what_decides_which_way_an_overlay_goes() {
+        assert!(!Rgb(10, 12, 13).is_light(), "UZE's own backdrop");
+        assert!(Rgb(250, 247, 242).is_light(), "a warm off-white page");
+        // Mid-greys have to fall on one side; the threshold is set so a
+        // surface that reads as dark chrome still lifts with white.
+        assert!(!Rgb(60, 60, 60).is_light());
     }
 
     #[test]

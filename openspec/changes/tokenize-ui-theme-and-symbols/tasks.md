@@ -51,11 +51,11 @@ Each task below is one file taken to zero raw colours and zero chrome glyph lite
 
 ## 7. Selection, storage and product surface
 
-- [ ] 7.1 `UzeHome::themes_dir()` and the active-theme state path in `uze-core`; `uze-application` exposes reading/writing the selection so `src/` never names `uze_core::`
-- [ ] 7.2 Load the selected theme at startup for both the CLI and the TUI; a missing, unparseable or invalid theme reports the file and the problem by name and continues on the built-in default
-- [ ] 7.3 `uze theme list|use|show` — `list` marks the active one and includes the built-ins; `show` prints the resolved tokens plus any load warnings; classify all three as `Budgeted` in `src/command_performance.rs`
-- [ ] 7.4 A theme switch inside the TUI: pick a theme, `set_active`, redraw on the next frame with no session, pane or agent disturbed
-- [ ] 7.5 Ship the second built-in theme (`ascii`: every symbol within ASCII, colours unchanged) and confirm no layout depends on a glyph the terminal cannot render
+- [x] 7.1 `UzeHome::themes_dir()` and the active-theme state path in `uze-core`; `uze-application` exposes reading/writing the selection so `src/` never names `uze_core::`
+- [x] 7.2 Load the selected theme at startup for both the CLI and the TUI; a missing, unparseable or invalid theme reports the file and the problem by name and continues on the built-in default
+- [x] 7.3 `uze theme list|use|show` — `list` marks the active one and includes the built-ins; `show` prints the resolved tokens plus any load warnings; classify all three as `Budgeted` in `src/command_performance.rs`
+- [x] 7.4 A theme switch inside the TUI: pick a theme, `set_active`, redraw on the next frame with no session, pane or agent disturbed
+- [x] 7.5 Ship the second built-in theme (`ascii`: every symbol within ASCII, colours unchanged) and confirm no layout depends on a glyph the terminal cannot render
 
 ## 8. Evidence and documentation
 

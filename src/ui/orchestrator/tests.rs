@@ -814,21 +814,30 @@ mod workspace_tests {
 
         assert_eq!(
             chip_colors(&model, rect),
-            (theme::color(Token::Accent), theme::color(Token::SurfaceRaised)),
+            (
+                theme::color(Token::Accent),
+                theme::color(Token::SurfaceRaised)
+            ),
             "at rest: the hue, raised off the strip"
         );
 
         model.hovered = Some(deliver);
         assert_eq!(
             chip_colors(&model, rect),
-            (theme::color(Token::Accent), theme::color(Token::SurfaceHover)),
+            (
+                theme::color(Token::Accent),
+                theme::color(Token::SurfaceHover)
+            ),
             "under the pointer: one step brighter, and only this control"
         );
 
         model.pressed = Some((deliver, Instant::now()));
         assert_eq!(
             chip_colors(&model, rect),
-            (theme::color(Token::SurfaceBackground), theme::color(Token::Accent)),
+            (
+                theme::color(Token::SurfaceBackground),
+                theme::color(Token::Accent)
+            ),
             "pressed: the hue becomes the button"
         );
     }

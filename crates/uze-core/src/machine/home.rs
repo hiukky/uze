@@ -101,6 +101,21 @@ impl UzeHome {
         self.state_dir().join("sidebar.json")
     }
 
+    /// Where a user's own themes live, one file per theme, named by the
+    /// theme's own id. Durable user intent like Profiles are — a theme is
+    /// something someone wrote, never something UZE can rebuild — so
+    /// `state_dir()`'s sibling under the root rather than a cache.
+    pub fn themes_dir(&self) -> PathBuf {
+        self.root.join("themes")
+    }
+
+    /// Which theme is active. Machine-scoped, like every other appearance
+    /// choice: a project does not get to decide what the operator's
+    /// terminal looks like.
+    pub fn active_theme_path(&self) -> PathBuf {
+        self.state_dir().join("theme.json")
+    }
+
     pub fn cache_dir(&self) -> PathBuf {
         self.root.join("cache")
     }

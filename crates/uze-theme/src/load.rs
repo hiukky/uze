@@ -49,13 +49,17 @@ pub const BUNDLED_SYNTAX_THEMES: &[&str] = &[
 
 /// Contrast below this against the background is reported.
 ///
-/// Far below WCAG AA (4.5) on purpose. UZE's design draws several
-/// deliberately recessed levels — `text.faint`, the tree glyphs nobody reads
-/// unless they went looking, sits at 1.9:1 — and a check that fires on the
-/// shipped default is a check every author learns to ignore. This threshold
-/// catches text that is effectively invisible, which is the only thing an
-/// author cannot see for themselves.
-const MIN_CONTRAST: f32 = 1.5;
+/// Below WCAG AA (4.5) on purpose: UZE's design draws several deliberately
+/// recessed levels, and a check that fires on the shipped default is a check
+/// every author learns to ignore. Every text token in the built-in theme
+/// clears 3.0 except one, and that one is exempt by name below.
+///
+/// What this actually catches is the failure mode a partial theme makes
+/// easy: repaint the background and the state hues you did not declare stay
+/// where they were, so an amber tuned for near-black lands at 1.8:1 on a
+/// light page. The author cannot see that from their own file — every
+/// colour in it looks fine — which is exactly when a warning earns its keep.
+const MIN_CONTRAST: f32 = 3.0;
 
 /// A theme file UZE could not make sense of. The caller keeps whatever theme
 /// was already active — a half-applied theme is worse than an unchanged one.
@@ -256,7 +260,12 @@ pub fn resolve(id: &str, file: ThemeFile, base: Option<&ThemeFile>) -> Result<Lo
     for token in Token::ALL {
         // A surface is not read against itself, and a pane's own 16 belong
         // to the programs running inside it rather than to UZE's text.
-        if token.is_surface() || Token::ANSI.contains(token) {
+        //
+        // `text.faint` is exempt because being barely legible is its
+        // definition — the tree glyphs and age columns nobody reads unless
+        // they went looking. Warning about a token whose whole job is to sit
+        // at the edge would fire on every theme ever written.
+        if token.is_surface() || Token::ANSI.contains(token) || *token == Token::TextFaint {
             continue;
         }
         let ratio = contrast_ratio(colors[token.index()], background);
@@ -382,6 +391,14 @@ fn resolve_one(
     match parse_color(value) {
         Some(Declaration::Opaque(rgb)) => Ok(rgb),
         Some(Declaration::Translucent(rgb, alpha)) => Ok(rgb.over(background, alpha)),
+        Some(Declaration::Contrast(alpha)) => {
+            let separator = if background.is_light() {
+                Rgb(0, 0, 0)
+            } else {
+                Rgb(255, 255, 255)
+            };
+            Ok(separator.over(background, alpha))
+        }
         Some(Declaration::Alias(target)) => {
             let Some(target) = Token::from_name(&target) else {
                 return Err(LoadError::Color {
@@ -398,7 +415,7 @@ fn resolve_one(
         None => Err(LoadError::Color {
             token: token.name().to_owned(),
             value: value.clone(),
-            reason: "expected `#rrggbb`, `#rrggbbaa`, or `@another.token`",
+            reason: "expected `#rrggbb`, `#rrggbbaa`, `~aa`, or `@another.token`",
         }),
     }
 }
@@ -406,12 +423,21 @@ fn resolve_one(
 enum Declaration {
     Opaque(Rgb),
     Translucent(Rgb, u8),
+    /// Separate from the background by this much, in whichever direction is
+    /// visible against it.
+    Contrast(u8),
     Alias(String),
 }
 
 fn parse_color(value: &str) -> Option<Declaration> {
     if let Some(target) = value.strip_prefix('@') {
         return (!target.is_empty()).then(|| Declaration::Alias(target.to_owned()));
+    }
+    if let Some(alpha) = value.strip_prefix('~') {
+        return (alpha.len() == 2)
+            .then(|| u8::from_str_radix(alpha, 16).ok())
+            .flatten()
+            .map(Declaration::Contrast);
     }
     let digits = value.strip_prefix('#')?;
     let byte = |index: usize| u8::from_str_radix(digits.get(index..index + 2)?, 16).ok();
@@ -526,11 +552,10 @@ mod tests {
     }
 
     #[test]
-    fn the_default_carries_the_exact_palette_that_shipped() {
-        // The premise of the whole migration: replacing 676 colour constants
-        // with token lookups changes no pixel. Each pair below is the
-        // constant `src/ui.rs` used to hold, against the token that replaced
-        // it.
+    fn the_default_carries_the_palette_that_shipped() {
+        // The premise of the migration: replacing 676 colour constants with
+        // token lookups changes no pixel. Each pair below is the constant
+        // `src/ui.rs` used to hold, against the token that replaced it.
         let theme = default_theme();
         let expected = [
             (Token::SurfaceBackground, Rgb(10, 12, 13)),
@@ -549,18 +574,74 @@ mod tests {
             (Token::StateInfo, Rgb(125, 151, 201)),
             (Token::StateInFlight, Rgb(125, 190, 194)),
             (Token::StateLanded, Rgb(163, 143, 201)),
+            // Derived, and landing exactly where the hand-blended constants
+            // did — see `derived_surfaces_are_composited_rather_than_transcribed`.
             (Token::BorderFaint, Rgb(22, 24, 25)),
-            (Token::BorderDefault, Rgb(30, 31, 32)),
             (Token::SurfaceSelected, Rgb(22, 30, 26)),
             (Token::SurfaceRaised, Rgb(32, 34, 35)),
             (Token::SurfaceRaisedSubtle, Rgb(27, 29, 30)),
-            (Token::SurfaceRaisedBright, Rgb(44, 46, 47)),
             (Token::SurfaceRecessed, Rgb(16, 18, 19)),
-            (Token::StateDiffAdded, Rgb(18, 32, 23)),
-            (Token::StateDiffRemoved, Rgb(38, 22, 20)),
         ];
         for (token, rgb) in expected {
             assert_eq!(theme.color(token), rgb, "`{token}` drifted from the design");
+        }
+    }
+
+    #[test]
+    fn derived_surfaces_are_composited_rather_than_transcribed() {
+        // Every surface and border is declared as a translucent colour over
+        // the theme's own background rather than as the opaque value it
+        // resolves to on the dark palette. It has to be: a theme that
+        // repaints the background and inherits an opaque shade computed
+        // against the old one gets dark slabs on a light page — which is
+        // exactly what a five-line light theme produced before this.
+        //
+        // Four of them no longer land on the byte the design shipped. Two
+        // are off by one in one channel, because those constants had been
+        // nudged a step off their own stated alpha by hand. The two diff
+        // washes moved further: they were mixed by eye rather than derived
+        // from the state colours at all, and no single alpha reproduces
+        // them. A background tint behind a line whose gutter and text
+        // already say what happened to it is the right thing to spend that
+        // on.
+        let theme = default_theme();
+        assert_eq!(theme.color(Token::BorderDefault), Rgb(29, 31, 32)); // was (30, 31, 32)
+        assert_eq!(theme.color(Token::SurfaceRaisedBright), Rgb(45, 46, 47)); // was (44, 46, 47)
+        assert_eq!(theme.color(Token::StateDiffAdded), Rgb(24, 32, 28)); // was (18, 32, 23)
+        assert_eq!(theme.color(Token::StateDiffRemoved), Rgb(32, 23, 21)); // was (38, 22, 20)
+    }
+
+    #[test]
+    fn a_contrast_overlay_turns_around_with_the_background() {
+        let dark = load(r##"{ "colors": { "surface.background": "#000000" } }"##);
+        let light = load(r##"{ "colors": { "surface.background": "#ffffff" } }"##);
+        // `surface.raised` is `~17` in the built-in default: separate from
+        // the background by that much, whichever way is visible.
+        assert_eq!(dark.theme.color(Token::SurfaceRaised), Rgb(23, 23, 23));
+        assert_eq!(light.theme.color(Token::SurfaceRaised), Rgb(232, 232, 232));
+    }
+
+    #[test]
+    fn a_light_theme_gets_light_surfaces_from_the_background_alone() {
+        // The property the derived form buys, and the reason it is worth
+        // four moved bytes: declaring the background is enough.
+        let loaded = load(r##"{ "colors": { "surface.background": "#faf7f2" } }"##);
+        for surface in [
+            Token::SurfaceRaised,
+            Token::SurfaceRaisedSubtle,
+            Token::SurfaceRaisedBright,
+            Token::SurfaceRecessed,
+            Token::BorderDefault,
+            Token::BorderFaint,
+            Token::StateDiffAdded,
+            Token::StateDiffRemoved,
+        ] {
+            let rgb = loaded.theme.color(surface);
+            let brightness = u16::from(rgb.0) + u16::from(rgb.1) + u16::from(rgb.2);
+            assert!(
+                brightness > 500,
+                "`{surface}` resolved to {rgb}, a dark slab on a light page"
+            );
         }
     }
 

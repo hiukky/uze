@@ -49,10 +49,12 @@ mod profile;
 mod project_environment;
 mod read_models;
 pub mod services;
+mod theme;
 
 pub use agent_context::{AgentContextStatus, ResourceDelivery, UndeliveredReason};
 pub use profile::{ProfileApplyResult, ProfileSummary};
 pub use read_models::*;
+pub use theme::ThemeSummary;
 
 // Re-export project environment types for CLI access.
 pub use project_environment::{

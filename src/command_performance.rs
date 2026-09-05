@@ -53,6 +53,12 @@ pub const CLASSIFICATION: &[(&str, PerformanceClass)] = &[
             "reconstructs the project's agent environment from agents.lock, acquiring packages",
         ),
     ),
+    // Machine scope: theme. Every one of these is a small JSON read plus a
+    // directory listing under `$UZE_HOME` — no harness is probed, and no
+    // theme is resolved that is not the one being asked about.
+    ("theme list", PerformanceClass::Budgeted),
+    ("theme use", PerformanceClass::Budgeted),
+    ("theme show", PerformanceClass::Budgeted),
     // Machine scope: market.
     ("market list", PerformanceClass::Budgeted),
     ("market remove", PerformanceClass::Budgeted),
@@ -149,6 +155,18 @@ pub const BUDGETED_COMMAND_TESTS: &[(&str, &str)] = &[
     (
         "context reconcile",
         "uze_application::application::tests::cache_warm_detect_cached_meets_the_performance_budget",
+    ),
+    (
+        "theme list",
+        "uze_application::application::theme::tests::theme_selection_meets_the_performance_budget",
+    ),
+    (
+        "theme use",
+        "uze_application::application::theme::tests::theme_selection_meets_the_performance_budget",
+    ),
+    (
+        "theme show",
+        "uze_application::application::theme::tests::theme_selection_meets_the_performance_budget",
     ),
     (
         "market list",

@@ -4,12 +4,12 @@
   "description": "UZE's own look: a near-black backdrop, warm off-white text, and one signature sage accent doubling as the success hue. Structure comes from hairline dividers, never from filled slabs.",
   "colors": {
     "surface.background": "#0a0c0d",
-    "surface.selected": "#161e1a",
-    "surface.raised": "#202223",
-    "surface.raised-subtle": "#1b1d1e",
-    "surface.raised-bright": "#2c2e2f",
-    "surface.recessed": "#101213",
-    "surface.hover": "#3b3d3d",
+    "surface.selected": "#8fd19e17",
+    "surface.raised": "~17",
+    "surface.raised-subtle": "~12",
+    "surface.raised-bright": "~24",
+    "surface.recessed": "~06",
+    "surface.hover": "~33",
 
     "text.bright": "#f2f0ea",
     "text.primary": "#e6e4de",
@@ -20,8 +20,8 @@
     "text.faint": "#3d4247",
     "text.inactive": "#9a9892",
 
-    "border.default": "#1e1f20",
-    "border.faint": "#161819",
+    "border.default": "~14",
+    "border.faint": "~0d",
 
     "accent": "#8fd19e",
     "state.success": "@accent",
@@ -30,8 +30,8 @@
     "state.info": "#7d97c9",
     "state.in-flight": "#7dbec2",
     "state.landed": "#a38fc9",
-    "state.diff-added": "#122017",
-    "state.diff-removed": "#261614",
+    "state.diff-added": "#8fd19e1a",
+    "state.diff-removed": "#e0765f1a",
 
     "ansi.0": "@surface.background",
     "ansi.1": "@state.danger",

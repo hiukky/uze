@@ -42,6 +42,10 @@ pub(crate) enum Intent {
     SwitchToWorkspaceTab(u64),
     /// Delete the current workspace's recorded prompts.
     ClearPromptHistory,
+    /// Show what UZE can be drawn in.
+    OpenThemePicker,
+    /// Draw in this theme from now on, here and in the CLI.
+    SelectTheme(String),
     Refresh,
     InspectPlugin(String),
     InspectMarketplacePlugin {
@@ -115,6 +119,30 @@ pub(crate) fn dispatch(
         | Intent::Quit
         | Intent::SwitchToWorkspace
         | Intent::SwitchToWorkspaceTab(_) => {}
+        Intent::OpenThemePicker => {
+            // Cheap enough to read here rather than on a thread: a JSON
+            // read and a directory listing, the same work `uze theme list`
+            // is budgeted for.
+            let themes = tui_application(home.clone())
+                .and_then(|app| app.themes().list(uze_theme::builtin_names()))
+                .map(|themes| themes.into_iter().map(|theme| theme.id).collect::<Vec<_>>())
+                .unwrap_or_else(|_| {
+                    uze_theme::builtin_names()
+                        .iter()
+                        .map(|id| (*id).to_owned())
+                        .collect()
+                });
+            let active = uze_theme::active();
+            let selected = themes
+                .iter()
+                .position(|id| id == active.name())
+                .unwrap_or(0);
+            model.overlay = crate::ui::model::Overlay::ThemePicker { themes, selected };
+        }
+        Intent::SelectTheme(id) => match select_theme(home, &id) {
+            Ok(()) => model.status = Status::Success(format!("Drawing in {id}")),
+            Err(error) => model.status = Status::Error(error),
+        },
         Intent::ClearPromptHistory => {
             let root = model.workspace_root();
             match tui_application(home.clone())
@@ -750,6 +778,29 @@ fn open_in_browser(url: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Puts a theme in force and records it, so the next frame — and the next
+/// `uze` command — are drawn in it. No session, pane or agent is touched:
+/// changing what UZE looks like is not an event in the work it is hosting.
+fn select_theme(home: &UzeHome, id: &str) -> std::result::Result<(), String> {
+    let application = tui_application(home.clone()).map_err(|error| error.to_string())?;
+    let themes = application.themes();
+    let loaded = match themes.path_of(id).map_err(|error| error.to_string())? {
+        Some(path) => {
+            uze_theme::load_file(&path).map_err(|error| format!("theme `{id}`: {error}"))?
+        }
+        None => match uze_theme::builtin(id) {
+            Some(theme) => uze_theme::Loaded {
+                theme: theme.clone(),
+                warnings: Vec::new(),
+            },
+            None => return Err(format!("no theme `{id}`")),
+        },
+    };
+    themes.select(id).map_err(|error| error.to_string())?;
+    uze_theme::set_active(loaded.theme);
+    Ok(())
 }
 
 #[cfg(test)]

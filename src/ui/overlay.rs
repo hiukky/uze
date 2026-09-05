@@ -83,6 +83,34 @@ impl TuiModel {
                 Intent::None
             }
             (Overlay::ConfirmDeleteProfile { .. }, _) => Intent::None,
+            (Overlay::ThemePicker { themes, selected }, KeyCode::Down | KeyCode::Char('j')) => {
+                let last = themes.len().saturating_sub(1);
+                self.overlay = Overlay::ThemePicker {
+                    themes: themes.clone(),
+                    selected: (*selected + 1).min(last),
+                };
+                Intent::None
+            }
+            (Overlay::ThemePicker { themes, selected }, KeyCode::Up | KeyCode::Char('k')) => {
+                self.overlay = Overlay::ThemePicker {
+                    themes: themes.clone(),
+                    selected: selected.saturating_sub(1),
+                };
+                Intent::None
+            }
+            (Overlay::ThemePicker { themes, selected }, KeyCode::Enter) => {
+                let Some(id) = themes.get(*selected).cloned() else {
+                    self.close_overlay();
+                    return Intent::None;
+                };
+                self.close_overlay();
+                Intent::SelectTheme(id)
+            }
+            (Overlay::ThemePicker { .. }, KeyCode::Esc | KeyCode::Char('q')) => {
+                self.close_overlay();
+                Intent::None
+            }
+            (Overlay::ThemePicker { .. }, _) => Intent::None,
             (Overlay::ConfirmClearPromptHistory, KeyCode::Char('y' | 'Y') | KeyCode::Enter) => {
                 self.close_overlay();
                 Intent::ClearPromptHistory
@@ -631,6 +659,70 @@ fn slugify(input: &str) -> String {
         }
     }
     slug
+}
+
+/// The theme picker: what UZE can be drawn in, and which it is drawn in now.
+///
+/// Deliberately a plain list with no preview. A preview would have to draw a
+/// second palette inside a frame already painted in the first one, which is
+/// the one thing a terminal cannot do convincingly — and the real preview is
+/// free: pressing enter repaints everything.
+pub(crate) fn render_theme_picker(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    themes: &[String],
+    selected: usize,
+) {
+    let width = 46.min(area.width.saturating_sub(4));
+    let height = (themes.len() as u16 + 4).min(area.height.saturating_sub(2));
+    let popup = Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    );
+    frame.render_widget(Clear, popup);
+    let block = modal_block(" Theme ", theme::color(Token::Accent));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let active = uze_theme::active();
+    let mut lines: Vec<Line<'static>> = themes
+        .iter()
+        .enumerate()
+        .map(|(index, id)| {
+            let cursor = if index == selected {
+                theme::glyph(Symbol::ChevronCollapsed)
+            } else {
+                " ".to_owned()
+            };
+            let in_force = id == active.name();
+            Line::from(vec![
+                Span::styled(format!("{cursor} "), theme::fg(Token::Accent)),
+                Span::styled(
+                    id.clone(),
+                    if index == selected {
+                        theme::fg_bold(Token::TextBright)
+                    } else {
+                        theme::fg(Token::TextPrimary)
+                    },
+                ),
+                Span::styled(
+                    if in_force {
+                        format!("  {} in use", theme::glyph(Symbol::StatusSelected))
+                    } else {
+                        String::new()
+                    },
+                    theme::fg(Token::TextDim),
+                ),
+            ])
+        })
+        .collect();
+    lines.push(Line::from(""));
+    lines.push(Line::from(crate::ui::hint_spans(
+        "↑↓ select · enter apply · esc close",
+    )));
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 pub(crate) fn render_new_profile(frame: &mut ratatui::Frame<'_>, area: Rect, input: &str) {

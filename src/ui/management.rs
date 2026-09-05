@@ -224,6 +224,9 @@ pub(crate) fn render(
         Overlay::AddMarketplace(input) => {
             overlay::render_add_marketplace(frame, frame.area(), input)
         }
+        Overlay::ThemePicker { themes, selected } => {
+            overlay::render_theme_picker(frame, frame.area(), themes, *selected)
+        }
         Overlay::NewProfile(input) => overlay::render_new_profile(frame, frame.area(), input),
         Overlay::ConfirmDeleteProfile { id, focus } => {
             overlay::render_confirm_delete_profile(frame, frame.area(), id, *focus)
