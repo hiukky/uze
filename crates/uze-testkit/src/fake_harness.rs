@@ -91,6 +91,12 @@ while IFS= read -r line; do
       fi
       : > "$dir/$slot.fixed"
       ;;
+    *"Open a pull request"*)
+      if [ -f "$dir/$slot.request.sh" ]; then
+        sh "$dir/$slot.request.sh" >>"$log" 2>&1
+      fi
+      : > "$dir/$slot.opened"
+      ;;
     quit)
       exit 0
       ;;
@@ -455,7 +461,9 @@ impl FakeHarness {
     /// `<scripts_dir>/<checkout name>.start.sh` when present, touches
     /// `<checkout name>.started`, then reads its pane line by line — a line
     /// mentioning `rebase --continue` runs `<checkout name>.conflict.sh` and
-    /// touches `.resolved`; one mentioning `checks failed` runs `.gate.sh`
+    /// touches `.resolved`; one asking it to open a pull request runs
+    /// `.request.sh` and touches `.opened`; one mentioning `checks failed`
+    /// runs `.gate.sh`
     /// and touches `.fixed`; `quit` exits. Every line lands in `.inbox`.
     /// `AGENT_SCRIPTS` must name `scripts_dir` in the agent's environment.
     ///

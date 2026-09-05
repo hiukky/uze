@@ -11,19 +11,22 @@ mod workspace_tests {
     use super::{
         AGENT_BUSY_REPAINTS, AGENT_ECHO_GRACE, AGENT_PASTE_GRACE, AgentIdentity, AgentTabStatus,
         Attach, AttachAnswers, AttachInbox, CommitDetailPopup, CommitDetailResolution,
-        DeliveryResolution, DraggingTab, ExtensionHit, GitAnswer, GitBadge, GitResolution,
-        GitViewResolution, OccupancyResolution, PendingDrop, PlacementResolution, PreservedOverlay,
-        RootPicker, ScrollDirection, SupportResolution, TabDragGroup, TaskResolution,
-        TaskStateView, TaskView, UpstreamSync, Viewport, WorkspaceModel, adopt_agent_labels,
-        agent_identity_for_tab, blank_pane, can_close_tab_from_menu, checkout_lost, encode_mouse,
-        evaluation_key, forward_paste, forward_scroll, next_agent_label, next_shell_label,
-        open_commit_detail, pane_relative, pending_tab_drop,
+        CompletionBehavior, DeliveryResolution, DraggingTab, ExtensionHit, GitAnswer, GitBadge,
+        GitResolution, GitViewResolution, NOTICE_TTL, OccupancyResolution, PendingDrop,
+        PlacementResolution, PreservedOverlay, RootPicker, ScrollDirection, SupportResolution,
+        TabDragGroup, TaskResolution, TaskStateView, TaskView, UpstreamSync, Viewport,
+        WorkspaceModel, adopt_agent_labels, agent_activity_frame, agent_identity_for_tab,
+        blank_pane, can_close_tab_from_menu, checkout_lost, encode_mouse, evaluation_key,
+        forward_paste, forward_scroll, next_agent_label, next_shell_label, open_commit_detail,
+        pane_relative, pending_tab_drop,
         render::{
-            self, WorkspaceLayout, compute_layout, render_commit_detail, render_preserved,
-            render_sidebar, render_status_catalog, render_tab_strip, task_mark, timeline_height,
+            self, FrameMetrics, WorkspaceLayout, compute_layout, render_commit_detail,
+            render_preserved, render_sidebar, render_status_catalog, render_tab_strip, task_mark,
+            timeline_height,
         },
-        scroll_timeline, selected_pane_cwd, space_own_tab, sync_slot_occupancy, tab_drag_group,
-        tab_drag_group_members, tab_needs_replacement_shell, workspace_has_active_agent_operation,
+        scroll_timeline, scroll_tree, selected_pane_cwd, space_own_tab, sync_slot_occupancy,
+        tab_drag_group, tab_drag_group_members, tab_needs_replacement_shell, toggle_timeline,
+        workspace_has_active_agent_operation,
     };
     use crossterm::event::{MouseButton, MouseEventKind};
     use ratatui::layout::Rect;
@@ -126,7 +129,16 @@ mod workspace_tests {
         let mut terminal = Terminal::new(TestBackend::new(40, 24)).unwrap();
         let mut hits = Vec::new();
         terminal
-            .draw(|frame| render_sidebar(frame, frame.area(), &model, &IDENTITIES, &mut hits))
+            .draw(|frame| {
+                render_sidebar(
+                    frame,
+                    frame.area(),
+                    &model,
+                    &IDENTITIES,
+                    &mut hits,
+                    &mut FrameMetrics::default(),
+                )
+            })
             .unwrap();
         let glyphs = |needle: &str| {
             terminal
@@ -154,8 +166,11 @@ mod workspace_tests {
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned()),
             state,
+            completion: CompletionBehavior::Merge,
             ahead,
             published_as: None,
+            published_request: None,
+            unsynced: None,
             created_at_unix: 1,
         }
     }
@@ -192,6 +207,29 @@ mod workspace_tests {
             })
             .collect();
         (rows, hits)
+    }
+
+    /// The colours one header chip is drawn in: the surface under its
+    /// padding, and the label's own foreground. Read off the cells rather
+    /// than off the skin function, so the test proves what reaches the
+    /// screen.
+    fn chip_colors(model: &WorkspaceModel, rect: Rect) -> (Color, Color) {
+        let mut terminal = Terminal::new(TestBackend::new(80, 3)).unwrap();
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| render_tab_strip(frame, frame.area(), model, &IDENTITIES, &mut hits))
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (buffer[(rect.x + 1, rect.y)].fg, buffer[(rect.x, rect.y)].bg)
+    }
+
+    /// Where the strip drew the given control last frame.
+    fn hit_rect(model: &WorkspaceModel, wanted: WorkspaceHit) -> Rect {
+        let (_, hits) = tab_strip(model);
+        hits.iter()
+            .find(|(_, hit)| *hit == wanted)
+            .map(|(rect, _)| *rect)
+            .unwrap_or_else(|| panic!("{wanted:?} is not on the strip"))
     }
 
     /// A space holding two agents, each with one shell of its own, plus
@@ -361,10 +399,44 @@ mod workspace_tests {
         let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
         let mut hits = Vec::new();
         terminal
-            .draw(|frame| render::render(frame, model, &IDENTITIES, &mut hits))
+            .draw(|frame| {
+                render::render(
+                    frame,
+                    model,
+                    &IDENTITIES,
+                    &mut hits,
+                    &mut render::FrameMetrics::default(),
+                )
+            })
             .unwrap();
         model.hits = hits;
         compute_layout(area, model.sidebar_width)
+    }
+
+    /// The whole frame as text, row by row — for asserting not just that
+    /// something was drawn, but where.
+    fn frame_rows(model: &mut WorkspaceModel) -> Vec<String> {
+        let area = Rect::new(0, 0, 80, 24);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|frame| {
+                render::render(
+                    frame,
+                    model,
+                    &IDENTITIES,
+                    &mut Vec::new(),
+                    &mut render::FrameMetrics::default(),
+                )
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..buffer.area.height)
+            .map(|row| {
+                (0..buffer.area.width)
+                    .map(|column| buffer[(column, row)].symbol())
+                    .collect()
+            })
+            .collect()
     }
 
     /// A hit's rect alone says which drag group it belongs to: a sidebar
@@ -721,6 +793,169 @@ mod workspace_tests {
                 .any(|(_, hit)| matches!(hit, WorkspaceHit::Deliver(_))),
             "the button is a hit"
         );
+    }
+
+    /// A control that looks identical idle, pointed at and pressed is one
+    /// the operator presses twice. Every header button is drawn as a
+    /// filled chip that lifts under the pointer and inverts while the
+    /// press flash lasts — the press's own answer, given where the finger
+    /// is rather than wherever the work will show up.
+    #[test]
+    fn a_header_button_answers_the_pointer_and_the_press() {
+        let mut model = agent_with_task(TaskStateView::Ready, 3);
+        let deliver = WorkspaceHit::Deliver(model.selected_tab().expect("a selected tab"));
+        let rect = hit_rect(&model, deliver);
+        assert!(
+            rect.width > 4,
+            "the chip is padded around its label: {rect:?}"
+        );
+
+        assert_eq!(
+            chip_colors(&model, rect),
+            (crate::ui::ACCENT, crate::ui::SURFACE_OVERLAY),
+            "at rest: the hue, raised off the strip"
+        );
+
+        model.hovered = Some(deliver);
+        assert_eq!(
+            chip_colors(&model, rect),
+            (crate::ui::ACCENT, crate::ui::SURFACE_HOVER),
+            "under the pointer: one step brighter, and only this control"
+        );
+
+        model.pressed = Some((deliver, Instant::now()));
+        assert_eq!(
+            chip_colors(&model, rect),
+            (crate::ui::BASE, crate::ui::ACCENT),
+            "pressed: the hue becomes the button"
+        );
+    }
+
+    /// The header draws reports in the same row as its controls, and the
+    /// shape has to tell them apart: a report is recessed and answers no
+    /// pointer, where a button is raised and does.
+    #[test]
+    fn a_report_in_the_actions_row_is_not_dressed_as_a_button() {
+        let model = agent_with_task(TaskStateView::Integrating, 3);
+        let (rows, hits) = tab_strip(&model);
+        let row = rows.join("\n");
+        assert!(row.contains("… delivering"), "{row}");
+        assert!(
+            !hits
+                .iter()
+                .any(|(_, hit)| matches!(hit, WorkspaceHit::Deliver(_))),
+            "a delivery in flight is not pressed again"
+        );
+
+        let column = rows[0]
+            .char_indices()
+            .find(|(_, character)| *character == '…')
+            .map(|(index, _)| rows[0][..index].chars().count() as u16)
+            .expect("the report is on the strip");
+        let mut terminal = Terminal::new(TestBackend::new(80, 3)).unwrap();
+        terminal
+            .draw(|frame| {
+                render_tab_strip(frame, frame.area(), &model, &IDENTITIES, &mut Vec::new())
+            })
+            .unwrap();
+        assert_eq!(
+            terminal.backend().buffer()[(column, 0)].bg,
+            crate::ui::SURFACE_SUBTLE,
+            "recessed, not raised"
+        );
+    }
+
+    /// The button says what pressing it does. One verb over three
+    /// completions read the same whether it was about to fast-forward the
+    /// target under you, open a pull request against it, or touch nothing
+    /// outside the branch.
+    #[test]
+    fn the_delivery_button_names_the_ending_the_project_asked_for() {
+        let ending = |completion| {
+            let mut model = agent_with_task(TaskStateView::Ready, 3);
+            for task in model.tasks.values_mut().flatten() {
+                task.completion = completion;
+            }
+            let (rows, _) = tab_strip(&model);
+            rows.join("\n")
+        };
+
+        assert!(
+            ending(CompletionBehavior::Merge).contains("⇧3 merge → main"),
+            "{}",
+            ending(CompletionBehavior::Merge)
+        );
+        assert!(
+            ending(CompletionBehavior::Pr).contains("⇧3 pr → main"),
+            "{}",
+            ending(CompletionBehavior::Pr)
+        );
+        assert!(
+            ending(CompletionBehavior::Handoff).contains("⇧3 hand off"),
+            "a completion that writes to nothing names no target: {}",
+            ending(CompletionBehavior::Handoff)
+        );
+    }
+
+    /// `pr` is two actions over a task's life, and the button is how the
+    /// operator tells them apart: an errand while no request exists, a
+    /// sync onto a named one once it does.
+    #[test]
+    fn a_published_request_turns_the_delivery_button_into_a_sync() {
+        let mut model = agent_with_task(TaskStateView::Ready, 4);
+        for task in model.tasks.values_mut().flatten() {
+            task.completion = CompletionBehavior::Pr;
+        }
+        let (before, _) = tab_strip(&model);
+        let before = before.join("\n");
+        assert!(before.contains("⇧4 pr → main"), "{before}");
+
+        for task in model.tasks.values_mut().flatten() {
+            task.published_request = Some(11);
+        }
+        let (after, _) = tab_strip(&model);
+        let after = after.join("\n");
+        assert!(after.contains("⇧4 #11"), "{after}");
+        assert!(
+            !after.contains("pr → main"),
+            "a request that exists is not opened again: {after}"
+        );
+    }
+
+    /// The count on the button is what pressing it would send, and a
+    /// branch level with its request would send nothing. Counting commits
+    /// against the target instead left `⇧6 #20` standing on a request that
+    /// already carried all six — a merge's question asked of a sync.
+    #[test]
+    fn a_branch_level_with_its_request_reports_the_sync_instead_of_a_count() {
+        let mut model = agent_with_task(TaskStateView::Ready, 6);
+        for task in model.tasks.values_mut().flatten() {
+            task.completion = CompletionBehavior::Pr;
+            task.published_as = Some("fix-auth-redirect".into());
+            task.published_request = Some(20);
+            task.unsynced = Some(0);
+        }
+        let (synced, hits) = tab_strip(&model);
+        let synced = synced.join("\n");
+        assert!(synced.contains("✓ #20"), "{synced}");
+        assert!(
+            !synced.contains("⇧6"),
+            "the target is still six commits away, and that is not this button's question: {synced}"
+        );
+        assert!(
+            hits.iter()
+                .any(|(_, hit)| matches!(hit, WorkspaceHit::Deliver(_))),
+            "a synced branch still follows a target that moves"
+        );
+
+        // Two commits later the button counts those two, not the six the
+        // request has carried since the last sync.
+        for task in model.tasks.values_mut().flatten() {
+            task.unsynced = Some(2);
+        }
+        let (behind_by_two, _) = tab_strip(&model);
+        let behind_by_two = behind_by_two.join("\n");
+        assert!(behind_by_two.contains("⇧2 #20"), "{behind_by_two}");
     }
 
     /// A branch too long for the column is elided, not cut. It used to run
@@ -1288,6 +1523,144 @@ mod workspace_tests {
             !text.contains("running"),
             "a state that draws no mark has no row in a legend of marks: {text}"
         );
+    }
+
+    /// Every message the workspace makes is drawn beside the header's own
+    /// controls, and nowhere else. A line pinned over the bottom of the
+    /// pane was a second place to look for something that is usually two
+    /// words, and it sat on top of the agent's own output while it did.
+    #[test]
+    fn a_notice_is_drawn_beside_the_controls_and_never_over_the_pane() {
+        let mut model = agent_with_task(TaskStateView::Ready, 3);
+        model.set_notice("nothing ready".to_owned());
+        let rows = frame_rows(&mut model);
+        let layout = compute_layout(Rect::new(0, 0, 80, 24), model.sidebar_width);
+        assert!(
+            rows[layout.tab_strip.y as usize].contains("nothing ready"),
+            "{:?}",
+            rows[layout.tab_strip.y as usize]
+        );
+        assert!(
+            !rows[layout.pane.bottom() as usize - 1].contains("nothing ready"),
+            "{:?}",
+            rows[layout.pane.bottom() as usize - 1]
+        );
+    }
+
+    /// A notice about the selected tab's own task needs no label — the tab
+    /// already says whose agent this is — and stands left of the actions
+    /// behind the zone divider, not in place of any of them.
+    #[test]
+    fn a_notice_about_the_task_on_screen_needs_no_label() {
+        let mut model = agent_with_task(TaskStateView::Ready, 3);
+        model.set_task_notice("t1", "fix-auth-redirect", "merged → main".to_owned());
+        let (rows, hits) = tab_strip(&model);
+        assert!(rows[0].contains("merged → main │"), "{rows:?}");
+        assert!(!rows[0].contains("fix-auth-redirect"), "{rows:?}");
+        assert!(
+            hits.iter()
+                .any(|(_, hit)| matches!(hit, WorkspaceHit::Deliver(_))),
+            "its own button is still there to press"
+        );
+    }
+
+    /// The header is two zones, and the message is never allowed into the
+    /// other one: whatever the workspace has to say, every action keeps
+    /// the exact rect it had — including one about the very task the
+    /// message is about, which is the case that used to take the button
+    /// away mid-click.
+    #[test]
+    fn a_message_never_moves_an_action() {
+        let mut model = agent_with_task(TaskStateView::Ready, 3);
+        model.git_badge = Some(GitBadge {
+            cwd: PathBuf::from("/repo/.worktrees/ai"),
+            summary: Some(uze_extensions::git::GitChangeSummary {
+                additions: 12,
+                deletions: 3,
+            }),
+            timeline: None,
+            timeline_checked_at: Instant::now(),
+            checked_at: Instant::now(),
+        });
+        let (_, quiet) = tab_strip(&model);
+
+        model.set_busy_task_notice("t1", "fix-auth-redirect", "delivering".to_owned());
+        let (rows, speaking) = tab_strip(&model);
+
+        assert!(rows[0].contains("delivering │"), "{rows:?}");
+        assert_eq!(
+            quiet.len(),
+            speaking.len(),
+            "the same actions are offered either way"
+        );
+        for (quiet, speaking) in quiet.iter().zip(&speaking) {
+            assert_eq!(
+                (quiet.0, format!("{:?}", quiet.1)),
+                (speaking.0, format!("{:?}", speaking.1)),
+                "an action moved under the message"
+            );
+        }
+    }
+
+    /// One about a task that is *not* on screen carries the label, and
+    /// leaves the selected task's own button alone: it is not about it.
+    #[test]
+    fn a_notice_about_another_task_carries_its_label_and_keeps_the_button() {
+        let mut model = agent_with_task(TaskStateView::Ready, 3);
+        model.set_task_notice("t2", "other", "back to its agent".to_owned());
+        let (rows, hits) = tab_strip(&model);
+        assert!(rows[0].contains("other: back to its agent"), "{rows:?}");
+        assert!(rows[0].contains('⇧'), "{rows:?}");
+        assert!(
+            hits.iter()
+                .any(|(_, hit)| matches!(hit, WorkspaceHit::Deliver(_)))
+        );
+    }
+
+    /// Work still running says so by moving: a spinner rides in front of
+    /// it, which is what buys the message the right to be two words.
+    #[test]
+    fn running_work_carries_a_spinner() {
+        let mut model = agent_with_task(TaskStateView::Ready, 3);
+        model.set_busy_task_notice("t1", "fix-auth-redirect", "delivering".to_owned());
+        model.tick = 3;
+        let (rows, _) = tab_strip(&model);
+        assert!(
+            rows[0].contains(&format!("{} delivering", agent_activity_frame(3))),
+            "{rows:?}"
+        );
+        model.set_task_notice("t1", "fix-auth-redirect", "merged → main".to_owned());
+        let (settled, _) = tab_strip(&model);
+        assert!(
+            !settled[0].contains(agent_activity_frame(3)),
+            "an ending does not spin: {settled:?}"
+        );
+    }
+
+    /// A message about work in flight outlives the notice clock — the
+    /// alternative is silence while the thing it announced is still
+    /// running — and is retired by the outcome that replaces it.
+    #[test]
+    fn a_running_notice_outlives_the_deadline_a_finished_one_keeps() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-notice-ttl"));
+        let mut driven = driven(agent_with_task(TaskStateView::Ready, 3), &home);
+        let aged = Instant::now() - NOTICE_TTL - Duration::from_secs(1);
+
+        driven
+            .attach
+            .model
+            .set_busy_notice("delivering all".to_owned());
+        driven.attach.model.notice.as_mut().unwrap().since = aged;
+        driven.pump();
+        assert!(
+            driven.attach.model.notice.is_some(),
+            "work still in flight is not swept"
+        );
+
+        driven.attach.model.set_notice("nothing ready".to_owned());
+        driven.attach.model.notice.as_mut().unwrap().since = aged;
+        driven.pump();
+        assert!(driven.attach.model.notice.is_none(), "an ending ages out");
     }
 
     #[test]
@@ -2052,6 +2425,82 @@ mod workspace_tests {
         assert!(row.contains("feat(tui): a subject"), "{row}");
     }
 
+    /// Folding the timeline is a preference, not a transient: the next
+    /// run is told, rather than opening the section again over the spaces.
+    #[test]
+    fn folding_the_timeline_is_kept_for_the_next_run() {
+        let (recorder, recorded) = std::sync::mpsc::channel();
+        let mut model = session_with_timeline(&["feat: newest"]);
+        model.layout_recorder = Some(recorder);
+        model.timeline_collapsed = false;
+        model.timeline_rows = Some(4);
+
+        toggle_timeline(&mut model);
+
+        let layout = recorded.try_recv().expect("the fold is recorded");
+        assert!(layout.timeline_collapsed);
+        assert_eq!(layout.timeline_rows, Some(4), "the height it was left at");
+        assert_eq!(
+            layout.width, model.sidebar_width,
+            "the whole column's shape, not the one field that changed"
+        );
+    }
+
+    /// A tree taller than the column scrolls rather than ending wherever
+    /// the column ran out: the spaces past the foot — under a long tree,
+    /// or under the timeline that holds that foot — were unreachable, not
+    /// merely out of view.
+    #[test]
+    fn the_space_tree_scrolls_to_what_the_column_cannot_show() {
+        let mut session = Session::new(WorkspaceId("workspace".into()), "/tmp".into(), 80, 24);
+        session.workspace.spaces[0].tabs[0].label = "Agent".into();
+        for index in 1..8 {
+            session.add_space(
+                format!("space {index}"),
+                format!("/tmp/{index}").into(),
+                80,
+                24,
+            );
+            session.workspace.spaces[index].tabs[0].label = "Agent".into();
+        }
+        let mut model = WorkspaceModel {
+            session: Some(session),
+            ..WorkspaceModel::default()
+        };
+
+        let mut metrics = FrameMetrics::default();
+        let rows = sidebar_rows_measured(&model, &mut Vec::new(), &mut metrics);
+        assert!(metrics.tree_overflow > 0, "the tree outgrows the column");
+        assert!(
+            !rows.iter().any(|row| row.contains("space 7")),
+            "the last space starts past the foot: {rows:?}"
+        );
+
+        model.tree_overflow = metrics.tree_overflow;
+        for _ in 0..metrics.tree_overflow {
+            scroll_tree(&mut model, ScrollDirection::Down);
+        }
+        let rows = sidebar_rows(&model, &mut Vec::new());
+        assert!(
+            rows.iter().any(|row| row.contains("space 7")),
+            "scrolled to the foot: {rows:?}"
+        );
+        assert!(
+            !rows.iter().any(|row| row.contains("space 1")),
+            "the head scrolled out of view: {rows:?}"
+        );
+
+        scroll_tree(&mut model, ScrollDirection::Down);
+        assert_eq!(
+            model.tree_scroll, metrics.tree_overflow,
+            "the wheel stops at the foot"
+        );
+        for _ in 0..=metrics.tree_overflow {
+            scroll_tree(&mut model, ScrollDirection::Up);
+        }
+        assert_eq!(model.tree_scroll, 0, "and comes back to the head");
+    }
+
     /// No history, no section — a checkout with nothing committed, or no
     /// checkout at all, leaves the column to the spaces.
     #[test]
@@ -2066,7 +2515,17 @@ mod workspace_tests {
 
     /// The sidebar as text, one string per row.
     fn sidebar_rows(model: &WorkspaceModel, hits: &mut Vec<(Rect, WorkspaceHit)>) -> Vec<String> {
-        let buffer = sidebar_buffer(model, hits);
+        sidebar_rows_measured(model, hits, &mut FrameMetrics::default())
+    }
+
+    /// The same rows, keeping what the frame measured — the tree's own
+    /// scroll bound, which only the render knows.
+    fn sidebar_rows_measured(
+        model: &WorkspaceModel,
+        hits: &mut Vec<(Rect, WorkspaceHit)>,
+        metrics: &mut FrameMetrics,
+    ) -> Vec<String> {
+        let buffer = sidebar_buffer_measured(model, hits, metrics);
         (0..buffer.area.height)
             .map(|row| {
                 (0..buffer.area.width)
@@ -2080,9 +2539,17 @@ mod workspace_tests {
         model: &WorkspaceModel,
         hits: &mut Vec<(Rect, WorkspaceHit)>,
     ) -> ratatui::buffer::Buffer {
+        sidebar_buffer_measured(model, hits, &mut FrameMetrics::default())
+    }
+
+    fn sidebar_buffer_measured(
+        model: &WorkspaceModel,
+        hits: &mut Vec<(Rect, WorkspaceHit)>,
+        metrics: &mut FrameMetrics,
+    ) -> ratatui::buffer::Buffer {
         let mut terminal = Terminal::new(TestBackend::new(40, 24)).unwrap();
         terminal
-            .draw(|frame| render_sidebar(frame, frame.area(), model, &IDENTITIES, hits))
+            .draw(|frame| render_sidebar(frame, frame.area(), model, &IDENTITIES, hits, metrics))
             .unwrap();
         terminal.backend().buffer().clone()
     }
@@ -3263,6 +3730,12 @@ mod workspace_tests {
         }
 
         fn press(&mut self, column: u16, row: u16) {
+            self.mouse(column, row, MouseEventKind::Down(MouseButton::Left));
+        }
+
+        /// Any other mouse event at the same viewport the click helpers
+        /// use — the rest of a drag, which `press` alone cannot say.
+        fn mouse(&mut self, column: u16, row: u16, kind: MouseEventKind) {
             let area = Rect::new(0, 0, 80, 24);
             let layout = compute_layout(area, self.attach.model.sidebar_width);
             let viewport = Viewport {
@@ -3271,11 +3744,7 @@ mod workspace_tests {
                 rows: layout.pane.height,
                 layout,
             };
-            let event = crossterm::event::Event::Mouse(mouse_at(
-                column,
-                row,
-                MouseEventKind::Down(MouseButton::Left),
-            ));
+            let event = crossterm::event::Event::Mouse(mouse_at(column, row, kind));
             let _ = self.attach.handle(event, &viewport);
         }
 
@@ -3599,6 +4068,32 @@ mod workspace_tests {
             )),
             "{sent:?}"
         );
+    }
+
+    /// Where the divider was let go outlives the run, like the timeline's
+    /// own shape: both modes share this column, so both find it at the
+    /// width it was left. Kept on release, not through the drag — the
+    /// widths it swept past are not answers.
+    #[test]
+    fn the_dragged_sidebar_width_is_kept_for_the_next_run() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-sidebar-width"));
+        let (recorder, recorded) = std::sync::mpsc::channel();
+        let mut model = agent_session_in("/repo");
+        model.layout_recorder = Some(recorder);
+        let mut driven = driven(model, &home);
+        driven.frame();
+        let handle = driven.hit(|hit| matches!(hit, WorkspaceHit::ResizeSidebar));
+
+        driven.press(handle.x, handle.y);
+        driven.mouse(20, 5, MouseEventKind::Drag(MouseButton::Left));
+        let dragged = driven.attach.model.sidebar_width;
+        assert!(dragged.is_some(), "the drag moved the divider");
+        assert!(recorded.try_recv().is_err(), "nothing is written mid-drag");
+
+        driven.mouse(20, 5, MouseEventKind::Up(MouseButton::Left));
+
+        let layout = recorded.try_recv().expect("the release is recorded");
+        assert_eq!(layout.width, dragged);
     }
 
     /// An agent that could not be given a checkout of its own starts in

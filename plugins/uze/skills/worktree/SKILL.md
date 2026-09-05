@@ -44,7 +44,7 @@ completion behavior, and it is not yours to perform.
 ## When UZE hands work back to you
 
 UZE rebases your branch onto the target before delivering it, and runs the
-project's checks on the result. Two things come back to you, as a message
+project's checks on the result. Three things come back to you, as a message
 in your own session:
 
 - **A paused rebase.** The target moved and your branch no longer applies
@@ -53,6 +53,14 @@ in your own session:
   `git rebase --continue`, run the project's checks, and end your turn.
   Never abort the rebase to make the message go away.
 - **Failed checks.** Fix them on your branch, commit, and end your turn.
+- **A published branch with no request open for it**, under the `pr`
+  completion. UZE has pushed the branch; opening the pull request — the
+  merge request, on a forge that calls it that — is yours, because the
+  title and the description are the change's argument and you are the one
+  holding it. Name and describe it by this project's convention, do not
+  merge it, and end your turn. UZE finds the request on the remote by
+  itself afterwards, and from then on delivering the task only pushes new
+  commits onto it.
 
 Do not try to deliver again yourself; UZE re-reads your checkout when your
 turn ends.

@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use uze_core::{
     Result, UzeError, checkout,
     landing::{self, Delivered, DeliveryFailure, Readiness},
-    project_lock, prompt_history,
+    project_lock, prompt_history, sidebar_layout,
     task::{self, Base, Task, TaskId, TaskState, TaskStore},
     workspace,
     worktree::{self, CompletionBehavior, WorktreePolicy},
@@ -77,6 +77,17 @@ impl Workspace<'_> {
     /// Forgets every prompt recorded for `root`'s workspace.
     pub fn clear_prompt_history(&self, root: &Path) -> Result<()> {
         prompt_history::clear(&self.0.home, root)
+    }
+
+    /// What the client's sidebar was last left looking like. Best-effort:
+    /// unreadable state answers with the defaults rather than failing.
+    pub fn sidebar_layout(&self) -> sidebar_layout::SidebarLayout {
+        sidebar_layout::load(&self.0.home)
+    }
+
+    /// Remembers the sidebar's shape for the next run.
+    pub fn save_sidebar_layout(&self, layout: &sidebar_layout::SidebarLayout) -> Result<()> {
+        sidebar_layout::save(&self.0.home, layout)
     }
 
     /// Where a newly created agent starts, decided before its harness does.
@@ -553,7 +564,7 @@ impl Repository {
         self.store
             .tasks
             .iter()
-            .map(|task| TaskView::from_task(&self.primary, task))
+            .map(|task| TaskView::from_task(&self.primary, task, self.policy.completion))
             .collect()
     }
 
@@ -572,6 +583,14 @@ impl Repository {
             Ok(Delivered::Published { branch, request }) => {
                 DeliveryOutcome::Published { branch, request }
             }
+            Ok(Delivered::AwaitingRequest {
+                branch: _,
+                instruction,
+            }) => DeliveryOutcome::AwaitingRequest(AgentNotice {
+                task: task.id.as_str().to_owned(),
+                checkout: landing::slot_path(&primary, task).unwrap_or_default(),
+                message: instruction,
+            }),
             Err(DeliveryFailure::Conflict {
                 files,
                 target_moved,
@@ -590,7 +609,7 @@ impl Repository {
             Err(other) => DeliveryOutcome::Refused(other.to_string()),
         };
         Some(DeliveryReport {
-            task: TaskView::from_task(&primary, task),
+            task: TaskView::from_task(&primary, task, completion),
             outcome,
         })
     }
@@ -666,14 +685,27 @@ pub struct TaskView {
     /// the task it was running.
     pub checkout_id: Option<String>,
     pub state: TaskStateView,
+    /// What delivering this task does — the project's own say, carried on
+    /// the task so a surface offering the delivery can name its ending
+    /// instead of showing one verb for three different outcomes.
+    pub completion: CompletionBehavior,
     /// Commits the branch has beyond its base — what a delivery would land.
     pub ahead: usize,
     pub published_as: Option<String>,
+    /// The request open on the forge for the published branch, once there
+    /// is one: what turns the delivery button from an errand into a sync.
+    pub published_request: Option<u32>,
+    /// Commits the published branch does not carry yet — what a sync would
+    /// send. `None` until the branch has been published at all, and
+    /// `Some(0)` once the request is level with the branch: work already
+    /// handed over is not work waiting to be handed over, however far the
+    /// branch still is from the target, which only a merge closes.
+    pub unsynced: Option<usize>,
     pub created_at_unix: u64,
 }
 
 impl TaskView {
-    fn from_task(primary: &Path, task: &Task) -> Self {
+    fn from_task(primary: &Path, task: &Task, completion: CompletionBehavior) -> Self {
         Self {
             id: task.id.as_str().to_owned(),
             label: task.label.clone(),
@@ -685,8 +717,14 @@ impl TaskView {
                 .as_ref()
                 .map(|checkout| checkout.as_str().to_owned()),
             state: TaskStateView::from(&task.state),
+            completion,
             ahead: checkout::commits_ahead(primary, &task.base_commit, &task.branch),
             published_as: task.published_as.clone(),
+            published_request: task.published_request,
+            unsynced: task
+                .published_tip
+                .as_deref()
+                .map(|tip| checkout::commits_ahead(primary, tip, &task.branch)),
             created_at_unix: task.created_at_unix,
         }
     }
@@ -721,16 +759,20 @@ impl TaskStateView {
     /// "not yet" and "already done" are the same refusal to a caller that
     /// only sees a boolean, and a second surface asking the same question
     /// would otherwise write its own second version of these words.
+    ///
+    /// A few words each: these are read in the header's own row, beside
+    /// the button that was just pressed, where the state's mark and the
+    /// tab already carry everything the sentence would repeat.
     pub fn undeliverable_reason(&self) -> Option<&'static str> {
         match self {
             Self::Ready | Self::GateFailed => None,
-            Self::Running => Some("nothing committed yet"),
-            Self::Uncommitted => Some("uncommitted changes in its checkout"),
-            Self::Conflicted { .. } => Some("a rebase is paused; the agent is on it"),
-            Self::Integrating => Some("already being delivered"),
+            Self::Running => Some("nothing committed"),
+            Self::Uncommitted => Some("uncommitted changes"),
+            Self::Conflicted { .. } => Some("rebase paused"),
+            Self::Integrating => Some("already delivering"),
             Self::Integrated => Some("already delivered"),
-            Self::Closed => Some("its branch holds nothing"),
-            Self::Parked => Some("parked; resume it before delivering"),
+            Self::Closed => Some("branch holds nothing"),
+            Self::Parked => Some("parked — resume it first"),
         }
     }
 
@@ -777,10 +819,17 @@ pub struct Evaluation {
 pub enum DeliveryOutcome {
     Handoff,
     Merged,
+    /// The branch was pushed and the forge already has this request
+    /// open for it: from here delivery is a sync, and Git alone.
     Published {
         branch: String,
-        request: Option<String>,
+        request: u32,
     },
+    /// The branch was pushed and has no request yet, so the owning agent
+    /// was handed the words to open one. Carries an [`AgentNotice`] like
+    /// the two failures do, because it reaches the agent the same way: a
+    /// submission into its pane.
+    AwaitingRequest(AgentNotice),
     /// Nothing was written; the reason names why.
     Refused(String),
     /// The target is untouched and the owning agent has been told what to do.

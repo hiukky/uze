@@ -131,8 +131,7 @@ impl Attach<'_> {
             _ if key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Char('I') => {
                 if let Some(cwd) = selected_pane_cwd(&self.model) {
                     spawn_delivery(self.home, cwd, None, self.answers.deliveries.clone());
-                    self.model
-                        .set_notice("delivering every ready task…".to_owned());
+                    self.model.set_busy_notice("delivering all".to_owned());
                 }
             }
             _ if key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Char('p') => {
@@ -755,6 +754,12 @@ impl Attach<'_> {
                     previous == hit && now.duration_since(at) < DOUBLE_CLICK_WINDOW
                 });
                 self.model.last_click = Some((now, hit));
+                // Say the press happened before saying what it did: what
+                // it does can be slow, silent, or drawn somewhere else
+                // entirely, and none of that is the button's answer to
+                // "did it take my click".
+                self.model.pressed = Some((hit, now));
+                self.model.dirty = true;
                 if is_double_click {
                     self.model.last_click = None;
                     self.double_click(hit);
@@ -893,6 +898,13 @@ impl Attach<'_> {
                     before: pending.as_before(),
                 },
             );
+        }
+        if self.model.dragging_timeline || self.model.dragging_sidebar {
+            // Where the drag settled is the user's answer, kept for the
+            // next run; the widths and heights it passed through on the
+            // way there are not, which is why this is the release rather
+            // than the motion above.
+            self.model.remember_sidebar();
         }
         self.model.dragging_sidebar = false;
         self.model.dragging_git_tree = false;
@@ -1045,7 +1057,18 @@ impl Attach<'_> {
                     self.model.dirty = true;
                 }
             }
-            _ => {}
+            // The chrome itself: every button under the pointer reads its
+            // own hover off this, so a control is raised by being pointed
+            // at rather than only by being pressed. Redrawn only when the
+            // hover actually moves to another control — waving the mouse
+            // across the pane must not cost a frame a tick.
+            _ => {
+                let hovered = hit_at(&self.model, mouse.column, mouse.row);
+                if self.model.hovered != hovered {
+                    self.model.hovered = hovered;
+                    self.model.dirty = true;
+                }
+            }
         }
         Flow::Continue
     }
@@ -1098,6 +1121,19 @@ impl Attach<'_> {
                 && self.model.over_timeline(mouse.column, mouse.row) =>
             {
                 scroll_timeline(
+                    &mut self.model,
+                    if mouse.kind == MouseEventKind::ScrollUp {
+                        ScrollDirection::Up
+                    } else {
+                        ScrollDirection::Down
+                    },
+                );
+            }
+            // Anywhere else in the sidebar scrolls the space tree — the
+            // timeline section took the wheel over itself in the branch
+            // above, and the tree is the rest of that column.
+            _ if self.model.no_modal_open() && mouse.column < layout.sidebar.right() => {
+                scroll_tree(
                     &mut self.model,
                     if mouse.kind == MouseEventKind::ScrollUp {
                         ScrollDirection::Up
@@ -1463,8 +1499,7 @@ impl Attach<'_> {
                 return;
             }
             self.model.placement_pending = true;
-            self.model
-                .set_notice(format!("{label}: preparing its checkout…"));
+            self.model.set_busy_notice(format!("{label}: preparing"));
             let occupied: Vec<PathBuf> = self.model.occupied_checkouts.iter().cloned().collect();
             spawn_agent_placement(
                 self.home,
@@ -1542,7 +1577,7 @@ impl Attach<'_> {
         // until this read it.
         let said = match &placement.isolation {
             uze_application::Isolation::Unisolated { reason } => {
-                Some(format!("no checkout of its own: {reason}"))
+                Some(format!("no checkout — {reason}"))
             }
             uze_application::Isolation::Slot { .. } => placement.warnings.first().cloned(),
         };
@@ -1575,10 +1610,8 @@ impl Attach<'_> {
         self.model.occupancy_pending = false;
         let OccupancyResolution { reconciliation } = resolution;
         if let Some(parked) = reconciliation.released.iter().find(|task| task.parked) {
-            self.model.set_notice(format!(
-                "{}: parked, its work is preserved (alt+p)",
-                parked.label
-            ));
+            self.model
+                .set_notice(format!("{}: parked (alt+p)", parked.label));
         }
         for cwd in reconciliation.changed {
             self.model
@@ -1668,7 +1701,12 @@ impl Attach<'_> {
                     &report.task.label,
                     describe_delivery(report),
                 );
-                if let DeliveryOutcome::ReturnedToAgent(notice) = &report.outcome
+                // Two endings are the owning agent's to act on — a
+                // delivery that came back to it, and a published branch
+                // whose request is still unopened — and both reach it the
+                // same way: one submission into its pane.
+                if let DeliveryOutcome::ReturnedToAgent(notice)
+                | DeliveryOutcome::AwaitingRequest(notice) = &report.outcome
                     && let Some(pane) = self.model.pane_for_checkout(&notice.checkout)
                 {
                     let mut bytes = notice.message.clone().into_bytes();
@@ -1677,7 +1715,7 @@ impl Attach<'_> {
                 }
             }
             if resolution.reports.is_empty() {
-                self.model.set_notice("nothing ready to deliver".to_owned());
+                self.model.set_notice("nothing ready".to_owned());
             }
             self.model
                 .schedule_evaluation(self.home, resolution.cwd, &self.answers.tasks);
@@ -1705,11 +1743,14 @@ impl Attach<'_> {
                     .schedule_evaluation(self.home, cwd, &self.answers.tasks);
             }
         }
+        // Work still in flight has no deadline: it is retired by the
+        // outcome that replaces it, never by a clock that would leave the
+        // operator watching nothing while it ran.
         if self
             .model
             .notice
             .as_ref()
-            .is_some_and(|notice| notice.since.elapsed() >= NOTICE_TTL)
+            .is_some_and(|notice| !notice.busy && notice.since.elapsed() >= NOTICE_TTL)
         {
             self.model.notice = None;
             self.model.dirty = true;
@@ -1744,7 +1785,14 @@ impl Attach<'_> {
         if self.model.expire_agent_activity(Instant::now()) {
             self.model.dirty = true;
         }
-        if workspace_has_active_agent_operation(&self.model, &self.identities) {
+        if self.model.expire_press(Instant::now()) {
+            self.model.dirty = true;
+        }
+        // The same clock drives the notice chip's spinner, so it has to
+        // turn for a busy notice even with every agent idle.
+        if workspace_has_active_agent_operation(&self.model, &self.identities)
+            || self.model.notice_is_busy()
+        {
             let now = Instant::now();
             if now >= self.next_tick {
                 self.spinner.inc(1);

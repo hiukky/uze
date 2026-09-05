@@ -8,6 +8,12 @@
 use super::*;
 use crate::ui::{Rows, fill_row_bg};
 
+/// The columns of fill a control keeps on each side of its label. Part of
+/// the button, not a gap beside it: it is filled, hovered and pressed with
+/// the label, which is what gives a one-glyph control something to be a
+/// control *in*.
+const CHIP_PAD: u16 = 1;
+
 pub(super) fn blank_pane(pane: PaneId, columns: u16, rows: u16) -> PaneSnapshot {
     PaneSnapshot {
         pane,
@@ -100,11 +106,24 @@ pub(super) fn compute_layout(
     }
 }
 
+/// What a frame measured that the next event needs back.
+///
+/// Beside `hits` for the same reason those are: only the render knows how
+/// the column came out, and the wheel over the sidebar has to stay inside
+/// what it found there.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct FrameMetrics {
+    /// Rows of the space tree the sidebar could not show — how far the
+    /// tree may be scrolled, and zero when it fits.
+    pub(super) tree_overflow: u16,
+}
+
 pub(super) fn render(
     frame: &mut ratatui::Frame<'_>,
     model: &WorkspaceModel,
     identities: &[AgentIdentity],
     hits: &mut Vec<(Rect, WorkspaceHit)>,
+    metrics: &mut FrameMetrics,
 ) {
     frame.render_widget(
         Block::default().style(
@@ -140,7 +159,7 @@ pub(super) fn render(
         return;
     }
     let layout = compute_layout(frame.area(), model.sidebar_width);
-    render_sidebar(frame, layout.sidebar, model, identities, hits);
+    render_sidebar(frame, layout.sidebar, model, identities, hits, metrics);
     // The sidebar's own hairline right border doubles as a drag handle —
     // it sits just past `inner` (which `render_sidebar` never draws into),
     // so this can't collide with any row hit pushed there.
@@ -160,13 +179,6 @@ pub(super) fn render(
     // `picker.anchor` (the "✦" button's own rect) rather than centered on
     // the whole frame — a dropdown hanging off the thing you clicked, not a
     // modal interrupting the screen.
-    // A notice about the tab already on screen said its piece next to the
-    // deliver button in the header (`render_tab_strip`) — this is only the
-    // fallback for a workspace-wide message, or one about a task that is
-    // not what the operator is currently looking at.
-    if let Some(text) = model.notice_for_footer() {
-        render_notice(frame, layout.pane, &text);
-    }
     if let Some(overlay) = &model.preserved {
         render_preserved(frame, frame.area(), model, overlay);
     }
@@ -454,6 +466,7 @@ pub(super) fn render_sidebar(
     model: &WorkspaceModel,
     identities: &[AgentIdentity],
     hits: &mut Vec<(Rect, WorkspaceHit)>,
+    metrics: &mut FrameMetrics,
 ) {
     let border_color = if model.dragging_sidebar {
         crate::ui::ACCENT
@@ -574,12 +587,25 @@ pub(super) fn render_sidebar(
     let column_bottom = rows.bottom;
     rows.bottom -= reserved;
 
+    // What the column cannot show is scrolled to, not lost: the tree grows
+    // with the work, and a space that fell off the foot of it — under a
+    // long tree above, or under the timeline holding the foot — used to be
+    // unreachable rather than merely out of view. The bound is measured
+    // here, where the tree's own window is known, and handed back for the
+    // wheel to stay inside (see `scroll_tree`).
+    let overflow = tree_rows(session, identities).saturating_sub(rows.remaining());
+    metrics.tree_overflow = overflow;
+    rows.scroll_past(model.tree_scroll.min(overflow));
+
     for space in &session.workspace.spaces {
         let is_active_space = space.id == session.workspace.selected_space;
-        let Some(header_rect) = rows.next(1) else {
+        let header = rows.slot(1);
+        if header.is_full() {
             break;
-        };
-        render_space_header(frame, header_rect, session, space, model, hits);
+        }
+        if let Some(header_rect) = header.visible() {
+            render_space_header(frame, header_rect, session, space, model, hits);
+        }
 
         let agent_tabs: Vec<&Tab> = space
             .tabs
@@ -594,7 +620,7 @@ pub(super) fn render_sidebar(
             // selected tab (its bootstrap shell, absent any agent) rather
             // than the workspace root, so it tracks a plain `cd` the same
             // way an agent tab's own detail line already does.
-            if let Some(cwd_rect) = rows.next(1) {
+            if let Some(cwd_rect) = rows.slot(1).visible() {
                 let cwd = space
                     .tabs
                     .iter()
@@ -622,105 +648,14 @@ pub(super) fn render_sidebar(
             // One extra level of indent versus a flat list — these tabs
             // read as children of the space header row just drawn above.
             let connector = if is_last { "  └─ " } else { "  ├─ " };
-            let Some(label_rect) = rows.next(1) else {
+            let label_slot = rows.slot(1);
+            if label_slot.is_full() {
                 break;
-            };
+            }
 
             let cwd = pane_in_layout(&tab.layout, tab.focus.pane)
                 .map(|pane| pane.cwd.clone())
                 .unwrap_or_default();
-
-            // The agent the space is about, not its `selected_tab`: a
-            // shell opened beside an agent is part of that agent's own
-            // context, and switching into it must not unselect the agent
-            // in this tree (see `space_context_agent`).
-            let selected = Some(tab.id) == space_context_agent(space, identities);
-            // Every space names a context agent, including the ones the
-            // user is not in — so `selected` alone put a `●` on one agent
-            // per open space, each claiming to be the one receiving
-            // keystrokes. Only the active space's selection is that agent.
-            let status = model.agent_tab_status(tab.focus.pane, is_active_space && selected);
-            let renaming_this = model
-                .renaming
-                .as_ref()
-                .filter(|(target, _)| *target == RenameTarget::Tab(tab.id))
-                .map(|(_, buffer)| buffer.as_str());
-            let indicator = status.glyph(model.tick);
-            let indicator_fg = status.color();
-            // Bold belongs to the agent, not the space it runs in (see
-            // `render_space_header`, which never bolds its own label) — the
-            // tab actually receiving keystrokes is the thing worth shouting
-            // about, not the container it happens to sit in. Reserved for
-            // the one tab that is both selected and in the active space
-            // (see the `status` comment above `is_active_space && selected`
-            // for why `selected` alone isn't enough).
-            let mut label_style = Style::default().fg(if selected {
-                crate::ui::TEXT_BRIGHT
-            } else {
-                crate::ui::NAV_INACTIVE
-            });
-            if is_active_space && selected {
-                label_style = label_style.add_modifier(Modifier::BOLD);
-            }
-            let connector_span =
-                Span::styled(connector, Style::default().fg(crate::ui::TEXT_FAINT));
-            let label = match renaming_this {
-                Some(buffer) => Span::styled(
-                    format!("{buffer}▏"),
-                    Style::default()
-                        .fg(crate::ui::TEXT_BRIGHT)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                None => Span::styled(tab.label.clone(), label_style),
-            };
-            // The task mark behind the label is the one click target that
-            // opens the catalog (see `push_trailing_mark`): the status glyph
-            // in front of the name is not, so the row's leading column
-            // stays a plain part of selecting the tab. Pushed before the
-            // row's own `SelectTab` hit below, since the click search takes
-            // the first rect it lands in — a 1-column target inside a
-            // row-wide one only ever wins by being found first.
-            let mut spans = vec![
-                connector_span,
-                Span::styled(indicator, Style::default().fg(indicator_fg)),
-                label,
-            ];
-            if let Some((mark, hue)) = model
-                .tab_task(tab.id)
-                .and_then(|task| task_mark(&task.state))
-            {
-                push_trailing_mark(&mut spans, hits, label_rect, mark, hue);
-            }
-            // The alias in place of the raw process name — this list only
-            // ever holds tabs `agent_identity_for_tab` already resolved, so
-            // it never falls back to showing something like a bare version
-            // string (see that function's doc comment). Right-aligned, not
-            // tacked onto the label behind a "·" — pinning it to the row's
-            // own right edge keeps its column stable as different labels
-            // vary in length. A 1-column trailing pad keeps it off the
-            // sidebar's own flush-right divider (see `render_sidebar`'s
-            // `Padding::new(1, 0, 0, 0)`) — that padding drop suits a
-            // button glued to the edge, not a plain text label.
-            let alias = agent_identity_for_tab(identities, tab).unwrap_or_default();
-            let alias_span =
-                Span::styled(small_caps(alias), Style::default().fg(crate::ui::TEXT_DIM));
-            const TRAILING_PAD: u16 = 1;
-            let used: u16 = spans.iter().map(|span| span.width() as u16).sum::<u16>()
-                + alias_span.width() as u16
-                + TRAILING_PAD;
-            let gap = label_rect.width.saturating_sub(used);
-            spans.push(Span::raw(" ".repeat(gap as usize)));
-            spans.push(alias_span);
-            spans.push(Span::raw(" ".repeat(TRAILING_PAD as usize)));
-            if is_active_space {
-                fill_row_bg(
-                    &mut spans,
-                    label_rect.width,
-                    crate::ui::ACTIVE_SPACE_OVERLAY,
-                );
-            }
-            frame.render_widget(Paragraph::new(Line::from(spans)), label_rect);
-            hits.push((label_rect, WorkspaceHit::SelectTab(tab.id)));
             // A tab-reorder drag in this exact space, resolved to drop
             // right before (or, on the last row, at the end after) this
             // one: an accent bar down the row's own leading column, same
@@ -728,22 +663,115 @@ pub(super) fn render_sidebar(
             // affordances (status glyphs, the active-space tint) already
             // use, in place of a separate line between rows that would
             // need its own row out of an already tightly budgeted list.
-            // Drawn on both this row and the detail row below (see the
-            // second `frame.render_widget` past it) — the tab is a two-row
-            // item, not just its label, so the bar has to run the item's
-            // full height to read as "this whole item" rather than
-            // something clipped to its top row alone.
+            // Drawn on both the label row and the detail row below — the
+            // tab is a two-row item, not just its label, so the bar has to
+            // run the item's full height to read as "this whole item"
+            // rather than something clipped to its top row alone.
             let show_drop_indicator = model.dragging_tab.is_some_and(|dragging| {
                 dragging.is_pending_drop_row(TabDragGroup::Agents(space.id), tab.id, is_last)
             });
-            if show_drop_indicator {
-                frame.render_widget(
-                    Paragraph::new("▍").style(Style::default().fg(crate::ui::ACCENT)),
-                    Rect::new(label_rect.x, label_rect.y, 1, 1),
-                );
+
+            if let Some(label_rect) = label_slot.visible() {
+                // The agent the space is about, not its `selected_tab`: a
+                // shell opened beside an agent is part of that agent's own
+                // context, and switching into it must not unselect the agent
+                // in this tree (see `space_context_agent`).
+                let selected = Some(tab.id) == space_context_agent(space, identities);
+                // Every space names a context agent, including the ones the
+                // user is not in — so `selected` alone put a `●` on one agent
+                // per open space, each claiming to be the one receiving
+                // keystrokes. Only the active space's selection is that agent.
+                let status = model.agent_tab_status(tab.focus.pane, is_active_space && selected);
+                let renaming_this = model
+                    .renaming
+                    .as_ref()
+                    .filter(|(target, _)| *target == RenameTarget::Tab(tab.id))
+                    .map(|(_, buffer)| buffer.as_str());
+                let indicator = status.glyph(model.tick);
+                let indicator_fg = status.color();
+                // Bold belongs to the agent, not the space it runs in (see
+                // `render_space_header`, which never bolds its own label) — the
+                // tab actually receiving keystrokes is the thing worth shouting
+                // about, not the container it happens to sit in. Reserved for
+                // the one tab that is both selected and in the active space
+                // (see the `status` comment above `is_active_space && selected`
+                // for why `selected` alone isn't enough).
+                let mut label_style = Style::default().fg(if selected {
+                    crate::ui::TEXT_BRIGHT
+                } else {
+                    crate::ui::NAV_INACTIVE
+                });
+                if is_active_space && selected {
+                    label_style = label_style.add_modifier(Modifier::BOLD);
+                }
+                let connector_span =
+                    Span::styled(connector, Style::default().fg(crate::ui::TEXT_FAINT));
+                let label = match renaming_this {
+                    Some(buffer) => Span::styled(
+                        format!("{buffer}▏"),
+                        Style::default()
+                            .fg(crate::ui::TEXT_BRIGHT)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    None => Span::styled(tab.label.clone(), label_style),
+                };
+                // The task mark behind the label is the one click target that
+                // opens the catalog (see `push_trailing_mark`): the status glyph
+                // in front of the name is not, so the row's leading column
+                // stays a plain part of selecting the tab. Pushed before the
+                // row's own `SelectTab` hit below, since the click search takes
+                // the first rect it lands in — a 1-column target inside a
+                // row-wide one only ever wins by being found first.
+                let mut spans = vec![
+                    connector_span,
+                    Span::styled(indicator, Style::default().fg(indicator_fg)),
+                    label,
+                ];
+                if let Some((mark, hue)) = model
+                    .tab_task(tab.id)
+                    .and_then(|task| task_mark(&task.state))
+                {
+                    push_trailing_mark(&mut spans, hits, label_rect, mark, hue);
+                }
+                // The alias in place of the raw process name — this list only
+                // ever holds tabs `agent_identity_for_tab` already resolved, so
+                // it never falls back to showing something like a bare version
+                // string (see that function's doc comment). Right-aligned, not
+                // tacked onto the label behind a "·" — pinning it to the row's
+                // own right edge keeps its column stable as different labels
+                // vary in length. A 1-column trailing pad keeps it off the
+                // sidebar's own flush-right divider (see `render_sidebar`'s
+                // `Padding::new(1, 0, 0, 0)`) — that padding drop suits a
+                // button glued to the edge, not a plain text label.
+                let alias = agent_identity_for_tab(identities, tab).unwrap_or_default();
+                let alias_span =
+                    Span::styled(small_caps(alias), Style::default().fg(crate::ui::TEXT_DIM));
+                const TRAILING_PAD: u16 = 1;
+                let used: u16 = spans.iter().map(|span| span.width() as u16).sum::<u16>()
+                    + alias_span.width() as u16
+                    + TRAILING_PAD;
+                let gap = label_rect.width.saturating_sub(used);
+                spans.push(Span::raw(" ".repeat(gap as usize)));
+                spans.push(alias_span);
+                spans.push(Span::raw(" ".repeat(TRAILING_PAD as usize)));
+                if is_active_space {
+                    fill_row_bg(
+                        &mut spans,
+                        label_rect.width,
+                        crate::ui::ACTIVE_SPACE_OVERLAY,
+                    );
+                }
+                frame.render_widget(Paragraph::new(Line::from(spans)), label_rect);
+                hits.push((label_rect, WorkspaceHit::SelectTab(tab.id)));
+                if show_drop_indicator {
+                    frame.render_widget(
+                        Paragraph::new("▍").style(Style::default().fg(crate::ui::ACCENT)),
+                        Rect::new(label_rect.x, label_rect.y, 1, 1),
+                    );
+                }
             }
 
-            if let Some(detail_rect) = rows.next(1) {
+            if let Some(detail_rect) = rows.slot(1).visible() {
                 let continuation = if is_last { "     " } else { "  │  " };
                 // The task's own working branch in place of the cwd path —
                 // what this agent will deliver from. An agent outside any
@@ -863,7 +891,7 @@ pub(super) fn render_sidebar(
             // item a little room to breathe. Skipped for the last tab: it
             // has no sibling below to connect to, and the space loop's own
             // blank row already separates it from whatever comes next.
-            if !is_last && let Some(gap_rect) = rows.next(1) {
+            if !is_last && let Some(gap_rect) = rows.slot(1).visible() {
                 let mut spans = vec![Span::styled(
                     "  │  ",
                     Style::default().fg(crate::ui::TEXT_FAINT),
@@ -884,10 +912,34 @@ pub(super) fn render_sidebar(
     if let Some(timeline) = timeline
         && reserved > 0
     {
+        rows.scroll_past(0);
         rows.bottom = column_bottom;
         rows.y = column_bottom - reserved;
         render_timeline(frame, timeline, model, &mut rows, hits);
     }
+}
+
+/// The rows the space tree comes to, whether or not the column can show
+/// them all: a header per space, the cwd caption a space with no agent
+/// shows in place of its tree, two rows per agent with the connector row
+/// between siblings, and the blank row closing each space. Measured up
+/// front rather than counted while drawing, because how far the tree may
+/// be scrolled has to be known before its first row is laid out.
+fn tree_rows(session: &Session, identities: &[AgentIdentity]) -> u16 {
+    session
+        .workspace
+        .spaces
+        .iter()
+        .map(|space| {
+            let agents = space
+                .tabs
+                .iter()
+                .filter(|tab| agent_identity_for_tab(identities, tab).is_some())
+                .count() as u16;
+            let body = if agents == 0 { 1 } else { agents * 3 - 1 };
+            1 + body + 1
+        })
+        .sum()
 }
 
 /// The rows the tree above the timeline keeps whatever the section is
@@ -1592,11 +1644,106 @@ fn render_root_picker(
     }
 }
 
+/// What the pointer is doing to a control. The same four answers for
+/// every control the header draws, so hovering one and hovering another
+/// mean the same thing on screen.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ChipState {
+    Resting,
+    Hovered,
+    Pressed,
+    /// Not a control at all: drawn in a control's shape because it stands
+    /// where one stands, and recessed rather than raised so the shape
+    /// alone never promises a press ("… delivering" is a report; "⇧6 #20"
+    /// is a button).
+    Static,
+}
+
+fn chip_state(model: &WorkspaceModel, hit: Option<WorkspaceHit>) -> ChipState {
+    let Some(hit) = hit else {
+        return ChipState::Static;
+    };
+    if model.pressed_hit() == Some(hit) {
+        ChipState::Pressed
+    } else if model.hovered == Some(hit) {
+        ChipState::Hovered
+    } else {
+        ChipState::Resting
+    }
+}
+
+/// The label colour and the surface under it, for a chip of `hue` in
+/// `state`. A pressed chip inverts — the hue becomes the fill and the
+/// label drops to the backdrop — which is why this answers with both
+/// rather than leaving the label to whoever drew it: pressing is the one
+/// state that overrules a label's own colour.
+fn chip_skin(state: ChipState, hue: Color) -> (Color, Color) {
+    match state {
+        ChipState::Resting => (hue, crate::ui::SURFACE_OVERLAY),
+        ChipState::Hovered => (hue, crate::ui::SURFACE_HOVER),
+        ChipState::Pressed => (crate::ui::BASE, hue),
+        ChipState::Static => (hue, crate::ui::SURFACE_SUBTLE),
+    }
+}
+
+/// Where a chip carrying `text` sits when its right edge is `right`: the
+/// label with one column of padding on each side. The padding is part of
+/// the button — it is filled, hovered and clicked like the glyphs are —
+/// which is why the rect is measured here once and used for all three.
+fn chip_rect(text: &str, right: u16, row: u16) -> Rect {
+    let width = Span::raw(text).width() as u16 + 2 * CHIP_PAD;
+    Rect::new(right.saturating_sub(width), row, width, 1)
+}
+
+/// One header control: `text` in `hue`, padded and filled per `state`.
+fn draw_chip(frame: &mut ratatui::Frame<'_>, rect: Rect, text: &str, hue: Color, state: ChipState) {
+    let (label, surface) = chip_skin(state, hue);
+    let mut spans = vec![
+        Span::raw(" ".repeat(CHIP_PAD as usize)),
+        Span::styled(
+            text.to_owned(),
+            Style::default().fg(label).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" ".repeat(CHIP_PAD as usize)),
+    ];
+    fill_row_bg(&mut spans, rect.width, surface);
+    frame.render_widget(Paragraph::new(Line::from(spans)), rect);
+}
+
 /// The header's delivery button for a task: text, hue, and whether it is a
 /// button at all rather than a state the header only reports.
+///
+/// A ready task names its ending, not just its size. One verb over three
+/// completions left the button saying the same thing whether it was about
+/// to fast-forward the target under you, open a pull request, or do
+/// nothing to anything but the branch — the one question an operator has
+/// before pressing it (see [`delivery_ending`]).
 fn deliver_button(task: &TaskView) -> Option<(String, Color, bool)> {
     match &task.state {
-        TaskStateView::Ready => Some((format!("⇧{}", task.ahead), crate::ui::ACCENT, true)),
+        TaskStateView::Ready => Some(match task.unsynced {
+            // Level with what was published: pressing sends nothing new,
+            // so the button reports the sync instead of counting commits
+            // the request already carries. It stays pressable — the target
+            // moves, and a re-sync is how the branch follows it.
+            Some(0) => (
+                format!("✓ {}", delivery_ending(task)),
+                crate::ui::MUTED,
+                true,
+            ),
+            // What a press would send, which is not how far the branch is
+            // from the target: that distance is the merge's question and
+            // stays open until the request lands.
+            Some(unsynced) => (
+                format!("⇧{unsynced} {}", delivery_ending(task)),
+                crate::ui::ACCENT,
+                true,
+            ),
+            None => (
+                format!("⇧{} {}", task.ahead, delivery_ending(task)),
+                crate::ui::ACCENT,
+                true,
+            ),
+        }),
         // The hue is the state's own (see `task_mark`), not the button's
         // mood: one meaning, one color, wherever the state is drawn.
         TaskStateView::GateFailed => Some(("⇧ retry".to_owned(), crate::ui::DANGER, true)),
@@ -1608,22 +1755,29 @@ fn deliver_button(task: &TaskView) -> Option<(String, Color, bool)> {
     }
 }
 
-/// One line over the pane's bottom row — the fallback for a notice that
-/// cannot be pinned to the selected tab's own header (see
-/// `WorkspaceModel::notice_for_footer`): a workspace-wide message, or one
-/// about a task that is not what is currently on screen.
-fn render_notice(frame: &mut ratatui::Frame<'_>, pane: Rect, text: &str) {
-    if pane.height == 0 {
-        return;
+/// What delivering a task does, in the words its outcome will use: the
+/// two completions that touch something outside the branch name what they
+/// touch, and the one that does not says so instead of naming a target it
+/// will never write to.
+///
+/// `pr` says two different things over a task's life, because it *is* two
+/// different actions: an errand the first time — publish, and ask the
+/// agent to open the request — and a sync from then on, pushing new
+/// commits onto a request that already exists. Naming the request is how
+/// the button says which of the two it has become.
+fn delivery_ending(task: &TaskView) -> String {
+    match task.completion {
+        CompletionBehavior::Merge => format!("merge → {}", task.target),
+        CompletionBehavior::Pr => match (task.published_request, &task.published_as) {
+            (Some(request), _) => format!("#{request}"),
+            // Published, and the forge publishes no ref this one could be
+            // read from: the branch on the remote is then the only name
+            // the ending has, and it is still not "open a request".
+            (None, Some(branch)) => branch.clone(),
+            (None, None) => format!("pr → {}", task.target),
+        },
+        CompletionBehavior::Handoff => "hand off".to_owned(),
     }
-    let row = Rect::new(pane.x, pane.bottom().saturating_sub(1), pane.width, 1);
-    let mut spans = vec![Span::styled(
-        format!(" {text}"),
-        Style::default().fg(crate::ui::TEXT_BRIGHT),
-    )];
-    fill_row_bg(&mut spans, row.width, crate::ui::SURFACE_OVERLAY_BRIGHT);
-    frame.render_widget(Clear, row);
-    frame.render_widget(Paragraph::new(Line::from(spans)), row);
 }
 
 /// The preserved-work list: every task holding work that no live tab is in
@@ -1888,8 +2042,13 @@ pub(super) fn render_tab_strip(
             ));
         }
         chip.push(Span::raw(" "));
+        // A tab is a control too, and the pointer says so — one shade
+        // under the selected chip's own fill, so hovering an unselected
+        // tab never reads as having already switched to it.
         if selected {
             fill_row_bg(&mut chip, chip_width, crate::ui::SURFACE_OVERLAY);
+        } else if model.hovered == Some(WorkspaceHit::SelectTab(tab.id)) {
+            fill_row_bg(&mut chip, chip_width, crate::ui::ACTIVE_SPACE_OVERLAY);
         }
         hits.push((
             Rect::new(chip_start, inner.y, chip_width, 1),
@@ -1945,30 +2104,50 @@ pub(super) fn render_tab_strip(
     let button_width: u16 = 7; // " + │ ✦ "
     if x + button_width <= inner.right() {
         let action_start = x;
-        let mut actions = vec![
-            Span::raw(" "),
+        // Each half answers the pointer on its own — one button split by a
+        // divider is still two things to press, and a fill that lit both
+        // at once would say the pointer is on either. The resting fill
+        // stays the pair's own brighter surface (above); hover and press
+        // are the same skins every other control in this row wears.
+        let half = |state: ChipState, hue: Color| match state {
+            ChipState::Resting => (hue, crate::ui::SURFACE_OVERLAY_BRIGHT),
+            other => chip_skin(other, hue),
+        };
+        let (plus, plus_surface) = half(
+            chip_state(model, Some(WorkspaceHit::NewTab)),
+            crate::ui::NAV_INACTIVE,
+        );
+        let (star, star_surface) = half(
+            chip_state(model, Some(WorkspaceHit::NewAgentMenu)),
+            crate::ui::ACCENT,
+        );
+        let actions = vec![
+            Span::styled(" ", Style::default().bg(plus_surface)),
             Span::styled(
                 "+",
                 Style::default()
-                    .fg(crate::ui::NAV_INACTIVE)
+                    .fg(plus)
+                    .bg(plus_surface)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::raw(" "),
-            Span::styled("│", Style::default().fg(crate::ui::BORDER_FAINT)),
-            Span::raw(" "),
-            Span::styled("✦", Style::default().fg(crate::ui::ACCENT)),
-            Span::raw(" "),
+            Span::styled(" ", Style::default().bg(plus_surface)),
+            Span::styled(
+                "│",
+                Style::default()
+                    .fg(crate::ui::BORDER_FAINT)
+                    .bg(crate::ui::SURFACE_OVERLAY_BRIGHT),
+            ),
+            Span::styled(" ", Style::default().bg(star_surface)),
+            Span::styled("✦", Style::default().fg(star).bg(star_surface)),
+            Span::styled(" ", Style::default().bg(star_surface)),
         ];
+        // Each half is its own three columns, so what lights up under the
+        // pointer is exactly what a click lands on.
         hits.push((Rect::new(action_start, inner.y, 3, 1), WorkspaceHit::NewTab));
         hits.push((
             Rect::new(action_start + 4, inner.y, 3, 1),
             WorkspaceHit::NewAgentMenu,
         ));
-        fill_row_bg(
-            &mut actions,
-            button_width,
-            crate::ui::SURFACE_OVERLAY_BRIGHT,
-        );
         spans.extend(actions);
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), inner);
@@ -1979,113 +2158,139 @@ pub(super) fn render_tab_strip(
         );
     }
 
+    // The header's right end is two zones, and they are laid out in this
+    // order for a reason: the actions first, from the right edge, so that
+    // nothing the workspace *says* can move something the operator is
+    // about to *press*. A message then takes whatever is left of them,
+    // ending in a divider that keeps the two apart.
+    //
     // The status badge belongs to the active agent/shell tab's `cwd`, not
     // the workspace root. It is intentionally absent for a clean directory
     // or one outside Git; when it is present, it remains the entry point to
-    // the full changes overlay. Unlike the "+"/"✦" pair above, this button
-    // is a bare icon with no filled chip behind it — it sits directly on
-    // the plain backdrop.
+    // the full changes overlay.
+    //
+    // Every control in this zone is drawn by [`draw_chip`]: a filled,
+    // padded surface that lifts under the pointer and inverts while
+    // pressed. Bare glyphs on the plain backdrop are what the message zone
+    // beside them uses, and the whole point of that zone is that a message
+    // is not a control — so the controls cannot look like one too.
     let mut trailing_right = inner.right();
     if selected_agent_context(model, identities).is_some() {
-        let button = vec![Span::styled(
+        // Its own rect is what the dropdown hangs off, so the chip is
+        // measured before it is drawn and the hit carries the same
+        // rectangle the fill covers — pad included, since the padding is
+        // as much of the button as the glyph is.
+        let rect = chip_rect("✦", trailing_right, inner.y);
+        draw_chip(
+            frame,
+            rect,
             "✦",
-            Style::default()
-                .fg(crate::ui::ACCENT)
-                .add_modifier(Modifier::BOLD),
-        )];
-        let button_width = button.iter().map(Span::width).sum::<usize>() as u16;
-        let button_rect = Rect::new(
-            trailing_right.saturating_sub(button_width),
-            inner.y,
-            button_width,
-            1,
+            crate::ui::ACCENT,
+            chip_state(model, Some(WorkspaceHit::OpenAgentSupport(rect))),
         );
-        frame.render_widget(Paragraph::new(Line::from(button)), button_rect);
-        hits.push((button_rect, WorkspaceHit::OpenAgentSupport(button_rect)));
-        trailing_right = button_rect.x.saturating_sub(1);
+        hits.push((rect, WorkspaceHit::OpenAgentSupport(rect)));
+        trailing_right = rect.x.saturating_sub(1);
     }
-    // What last happened to a delivery sits right where its trigger does:
-    // the tab already says whose agent this is, so nothing here repeats
-    // the label the footer needs when the task in question is off screen
-    // (see `WorkspaceModel::notice_for_tab`/`notice_for_footer`). A fresh
-    // notice takes this spot over the button itself — the outcome is more
-    // worth the operator's eye than a button an evaluation tick hasn't
-    // caught up to retiring yet — and gives it back once the notice ages
-    // out or a new one replaces it.
+    // One verb — deliver — whose ending is the project's completion, not a
+    // choice made here. Conditioned, not disabled: when the task cannot be
+    // delivered the button is absent, and the sidebar mark says why. What
+    // is happening to that task is said beside this button, never in place
+    // of it: a button that a message can take away is one the operator has
+    // to find again.
     if let Some(tab) = model.selected_tab()
-        && let Some(detail) = model.notice_for_tab(tab)
-    {
-        let mut chip = vec![
-            Span::raw(" "),
-            Span::styled(
-                detail.to_owned(),
-                Style::default()
-                    .fg(crate::ui::TEXT_BRIGHT)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" "),
-        ];
-        let chip_width = chip.iter().map(Span::width).sum::<usize>() as u16;
-        fill_row_bg(&mut chip, chip_width, crate::ui::SURFACE_OVERLAY_BRIGHT);
-        let chip_rect = Rect::new(
-            trailing_right.saturating_sub(chip_width),
-            inner.y,
-            chip_width,
-            1,
-        );
-        frame.render_widget(Paragraph::new(Line::from(chip)), chip_rect);
-        trailing_right = chip_rect.x.saturating_sub(1);
-    }
-    // Otherwise, one verb — deliver — whose ending is the project's
-    // completion, not a choice made here. Conditioned, not disabled: when
-    // the task cannot be delivered the button is absent, and the sidebar
-    // mark says why.
-    else if let Some(tab) = model.selected_tab()
         && let Some(task) = model.tab_task(tab)
         && let Some((text, hue, clickable)) = deliver_button(task)
     {
-        let button = vec![Span::styled(
-            text,
-            Style::default().fg(hue).add_modifier(Modifier::BOLD),
-        )];
-        let button_width = button.iter().map(Span::width).sum::<usize>() as u16;
-        let button_rect = Rect::new(
-            trailing_right.saturating_sub(button_width),
-            inner.y,
-            button_width,
-            1,
-        );
-        frame.render_widget(Paragraph::new(Line::from(button)), button_rect);
-        if clickable {
-            hits.push((button_rect, WorkspaceHit::Deliver(tab)));
+        let rect = chip_rect(&text, trailing_right, inner.y);
+        let hit = clickable.then_some(WorkspaceHit::Deliver(tab));
+        draw_chip(frame, rect, &text, hue, chip_state(model, hit));
+        if let Some(hit) = hit {
+            hits.push((rect, hit));
         }
-        trailing_right = button_rect.x.saturating_sub(1);
+        trailing_right = rect.x.saturating_sub(1);
     }
     if let Some(summary) = model.git_badge.as_ref().and_then(|badge| badge.summary) {
+        // The one chip whose label is two-hued, so it draws its own spans
+        // rather than taking a single colour: the additions and the
+        // deletions are two numbers, not one label.
+        let state = chip_state(model, Some(WorkspaceHit::OpenGitView));
+        let (label, background) = chip_skin(state, crate::ui::SUCCESS);
+        let (additions, deletions) = match state {
+            // Pressed, the chip is one solid hue: its numbers go dark with
+            // everything else on it, or they vanish into the fill.
+            ChipState::Pressed => (label, label),
+            _ => (crate::ui::SUCCESS, crate::ui::DANGER),
+        };
+        let text = format!("+{} -{}", summary.additions, summary.deletions);
+        let rect = chip_rect(&text, trailing_right, inner.y);
         let mut badge = vec![
             Span::raw(" "),
             Span::styled(
                 format!("+{}", summary.additions),
-                Style::default().fg(crate::ui::SUCCESS),
+                Style::default().fg(additions),
             ),
             Span::raw(" "),
             Span::styled(
                 format!("-{}", summary.deletions),
-                Style::default().fg(crate::ui::DANGER),
+                Style::default().fg(deletions),
             ),
             Span::raw(" "),
         ];
-        let badge_width = badge.iter().map(Span::width).sum::<usize>() as u16;
-        fill_row_bg(&mut badge, badge_width, crate::ui::SURFACE_OVERLAY);
-        let badge_rect = Rect::new(
-            trailing_right.saturating_sub(badge_width),
-            inner.y,
-            badge_width,
-            1,
-        );
-        frame.render_widget(Paragraph::new(Line::from(badge)), badge_rect);
-        hits.push((badge_rect, WorkspaceHit::OpenGitView));
+        fill_row_bg(&mut badge, rect.width, background);
+        frame.render_widget(Paragraph::new(Line::from(badge)), rect);
+        hits.push((rect, WorkspaceHit::OpenGitView));
+        trailing_right = rect.x.saturating_sub(1);
     }
+    render_notice_chip(frame, model, inner, trailing_right);
+}
+
+/// Everything the workspace has to say, in the one place it says it: the
+/// header's own row, left of the actions and divided from them, where the
+/// operator's eye already is. Nothing here is clickable and nothing here
+/// moves a button — the actions were laid out before this was, and this
+/// only takes the room they left.
+fn render_notice_chip(
+    frame: &mut ratatui::Frame<'_>,
+    model: &WorkspaceModel,
+    inner: Rect,
+    actions_left: u16,
+) {
+    let Some(chip) = model.notice_chip() else {
+        return;
+    };
+    let spans = vec![
+        Span::raw(" "),
+        // Work still running says so by moving, which is what buys the
+        // words the right to be two: "delivering", not "delivering every
+        // ready task…".
+        Span::styled(
+            match chip.busy {
+                true => format!("{} ", agent_activity_frame(model.tick)),
+                false => String::new(),
+            },
+            Style::default().fg(crate::ui::ACCENT),
+        ),
+        Span::styled(
+            chip.text,
+            Style::default()
+                .fg(crate::ui::TEXT_BRIGHT)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+        // The zone divider, in the same hue and on the same plain backdrop
+        // as the "/" that separates the tabs from the strip's own buttons.
+        // No filled chip behind any of this: a message is not a control,
+        // and the raised surface is what made it read as one.
+        Span::styled("│", Style::default().fg(crate::ui::MUTED)),
+    ];
+    // Never past the strip's left edge: what does not fit is this
+    // message's own tail, clipped by its rect, not the tabs beside it.
+    let Some(room) = actions_left.checked_sub(inner.x).filter(|room| *room > 0) else {
+        return;
+    };
+    let width = (spans.iter().map(Span::width).sum::<usize>() as u16).min(room);
+    let rect = Rect::new(actions_left.saturating_sub(width), inner.y, width, 1);
+    frame.render_widget(Paragraph::new(Line::from(spans)), rect);
 }
 
 pub(super) fn render_pane(frame: &mut ratatui::Frame<'_>, area: Rect, model: &WorkspaceModel) {

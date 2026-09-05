@@ -29,7 +29,6 @@ use crate::{
 
 /// A gate that has not finished in this long is a hung gate.
 pub const GATE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
-const FORGE_TIMEOUT: Duration = Duration::from_secs(120);
 const REMOTE: &str = "origin";
 
 /// What the task's checkout says about the task.
@@ -60,12 +59,14 @@ pub enum Delivered {
     Handoff,
     /// The target now points at the branch's tip.
     Merged { target_tip: String },
-    /// The branch was pushed under its readable name; `request` is the
-    /// URL the forge answered with, when it did.
-    Published {
-        branch: String,
-        request: Option<String>,
-    },
+    /// The branch was pushed under its readable name and the forge
+    /// already has `request` open for it: a sync, which is Git alone.
+    Published { branch: String, request: u32 },
+    /// The branch was pushed and no request is open for it yet. Opening
+    /// one is the owning agent's, which is why this carries the words to
+    /// hand it: only that agent knows what the change is for, and only it
+    /// can reach whichever forge this remote is.
+    AwaitingRequest { branch: String, instruction: String },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -86,7 +87,6 @@ pub enum DeliveryFailure {
         files: Vec<PathBuf>,
     },
     NoRemote,
-    NoForgeCli,
     Git(String),
 }
 
@@ -111,7 +111,6 @@ impl fmt::Display for DeliveryFailure {
                 join_paths(files)
             ),
             Self::NoRemote => formatter.write_str("the repository has no `origin` remote"),
-            Self::NoForgeCli => formatter.write_str("neither `gh` nor `glab` is on PATH"),
             Self::Git(reason) => formatter.write_str(reason),
         }
     }
@@ -417,8 +416,16 @@ pub fn readable_branch_name(task: &Task) -> String {
     format!("{}{slug}", crate::worktree::BRANCH_PREFIX)
 }
 
+/// Publishes the branch and says whether the forge already has a request
+/// open for it.
+///
+/// The push is all UZE does here. Opening the request is deliberately not
+/// automated: a title and a description are the change's argument, and
+/// the agent that wrote the change is the only party holding it — a
+/// generated one-liner is a worse request than none. It is also the only
+/// half that is not portable, since every forge opens a request its own
+/// way, while a push is a push.
 fn publish(primary: &Path, task: &mut Task) -> Result<Delivered, DeliveryFailure> {
-    let cli = forge_cli().ok_or(DeliveryFailure::NoForgeCli)?;
     let name = task
         .published_as
         .clone()
@@ -438,52 +445,85 @@ fn publish(primary: &Path, task: &mut Task) -> Result<Delivered, DeliveryFailure
     git(primary, &push).map_err(DeliveryFailure::Git)?;
     task.pushed = true;
     task.published_as = Some(name.clone());
-    let slot = slot_path(primary, task).unwrap_or_else(|| primary.to_path_buf());
-    let title = task.label.clone();
-    let body = format!("Delivered by UZE from task `{}`.", task.id);
-    let command = match cli {
-        "gh" => format!(
-            "gh pr create --head {name} --base {target} --title {title} --body {body}",
-            name = shell_quote(&name),
-            target = shell_quote(&task.target),
-            title = shell_quote(&title),
-            body = shell_quote(&body),
-        ),
-        _ => format!(
-            "glab mr create --source-branch {name} --target-branch {target} --title {title} \
-             --description {body} --yes",
-            name = shell_quote(&name),
-            target = shell_quote(&task.target),
-            title = shell_quote(&title),
-            body = shell_quote(&body),
-        ),
-    };
-    let (created, output) = run_shell_bounded(&slot, &command, FORGE_TIMEOUT);
-    let request = output
-        .lines()
-        .map(str::trim)
-        .find(|line| line.starts_with("http://") || line.starts_with("https://"))
-        .map(str::to_owned);
-    if !created && request.is_none() {
-        return Err(DeliveryFailure::Git(format!(
-            "`{cli}` could not open the request: {output}"
-        )));
+    task.published_tip = Some(checkout::tip_of(primary, &task.branch));
+    if task.published_request.is_none() {
+        task.published_request = discover_request(primary, task);
     }
-    Ok(Delivered::Published {
-        branch: name,
-        request,
-    })
+    match task.published_request {
+        Some(request) => Ok(Delivered::Published {
+            branch: name,
+            request,
+        }),
+        None => Ok(Delivered::AwaitingRequest {
+            instruction: open_request_message(task, &name),
+            branch: name,
+        }),
+    }
 }
 
-/// The forge CLI available on this machine, GitHub's first.
-pub fn forge_cli() -> Option<&'static str> {
-    ["gh", "glab"]
-        .into_iter()
-        .find(|program| crate::subprocess::program_on_path(program))
+/// The number of the request open for the published branch, asked of the
+/// remote itself.
+///
+/// Forges publish a request's head as a ref, so `ls-remote` answers this
+/// with no CLI, no token beyond the one the push already used, and no
+/// knowledge of which forge is on the other end: whichever namespace the
+/// remote serves is the one that matches. A request is identified by the
+/// commit it points at, since a ref under these namespaces carries a
+/// number and nothing else.
+///
+/// `None` is the ordinary answer the first time — no request exists yet —
+/// and stays the answer on a forge that publishes no such refs, where the
+/// branch is still pushed and the sync still works, only unnumbered.
+fn discover_request(primary: &Path, task: &Task) -> Option<u32> {
+    let tip = checkout::tip_of(primary, &task.branch);
+    if tip.is_empty() {
+        return None;
+    }
+    let listing = uze_git::read(
+        primary,
+        &[
+            "ls-remote",
+            REMOTE,
+            "refs/pull/*/head",
+            "refs/merge-requests/*/head",
+        ],
+    )
+    .ok()?
+    .successful()
+    .ok()?;
+    listing
+        .lines()
+        .filter_map(|line| line.split_once('\t'))
+        .filter(|(sha, _)| *sha == tip)
+        .filter_map(|(_, reference)| {
+            reference
+                .strip_prefix("refs/pull/")
+                .or_else(|| reference.strip_prefix("refs/merge-requests/"))?
+                .strip_suffix("/head")?
+                .parse()
+                .ok()
+        })
+        // Two requests over the same commits is unusual and the newest is
+        // the one being worked on; taking the smaller would pin the task
+        // to a request somebody already superseded.
+        .max()
 }
 
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
+/// The message written into the owning agent's pane when its branch is
+/// published and the request is still its to open.
+///
+/// Names no forge and no tool: the agent is in the repository and knows
+/// which one this is, and the projects that reach different forges are
+/// the reason this text does not pick one.
+pub fn open_request_message(task: &Task, branch: &str) -> String {
+    format!(
+        "Your branch is published as `{branch}` on `{REMOTE}`, rebased onto `{target}` and past \
+         the project's checks. Open a pull request — a merge request, on a forge that calls it \
+         that — from `{branch}` against `{target}`, naming and describing it by this project's \
+         own convention. Do not merge it and do not integrate the branch yourself: open the \
+         request and end your turn.",
+        target = task.target,
+    )
 }
 
 /// Files changed on `branch` since `tip` that the primary checkout has
@@ -858,10 +898,12 @@ mod tests {
         );
     }
 
-    /// `pr` against a bare remote and a fake forge CLI on `PATH`.
+    /// `pr` against a bare remote, with no forge CLI anywhere: the push
+    /// is UZE's, the request is the agent's, and the branch is rebased
+    /// onto the *remote's* target rather than the operator's local one.
     #[test]
-    fn pr_pushes_under_the_readable_name_and_opens_the_request() {
-        let mut repository = repository("landing-pr");
+    fn pr_publishes_and_leaves_the_request_to_the_agent() {
+        let repository = repository("landing-pr");
         let base = uze_testkit::temp::scratch("landing-pr-remote");
         let origin = base.join("origin.git");
         repository.git(&[
@@ -874,28 +916,6 @@ mod tests {
         ]);
         repository.git(&["remote", "add", REMOTE, origin.to_str().unwrap()]);
         repository.git(&["push", "--quiet", "-u", REMOTE, TARGET]);
-
-        let tools = base.join("bin");
-        fs::create_dir_all(&tools).unwrap();
-        let gh = tools.join("gh");
-        fs::write(
-            &gh,
-            "#!/bin/sh\necho \"$@\" > \"$FAKE_GH_LOG\"\necho https://example.invalid/pull/7\n",
-        )
-        .unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
-        }
-        let path = format!(
-            "{}:{}",
-            tools.display(),
-            std::env::var("PATH").unwrap_or_default()
-        );
-        repository.set_env("PATH", &path);
-        let log = base.join("gh.log");
-        repository.set_env("FAKE_GH_LOG", &log);
 
         let primary = repository.root();
         let mut store = TaskStore::default();
@@ -921,15 +941,20 @@ mod tests {
             completion: CompletionBehavior::Pr,
             gate: Some("test -f remote-only.txt"),
         };
-        let delivered = deliver(primary, &mut task, &policy).unwrap();
-        assert_eq!(
-            delivered,
-            Delivered::Published {
-                branch: "agent/fix-the-auth-redirect".into(),
-                request: Some("https://example.invalid/pull/7".into()),
-            }
+        let Delivered::AwaitingRequest {
+            branch,
+            instruction,
+        } = deliver(primary, &mut task, &policy).unwrap()
+        else {
+            panic!("no request exists yet, so opening one is the agent's");
+        };
+        assert_eq!(branch, "agent/fix-the-auth-redirect");
+        assert!(
+            instruction.contains("agent/fix-the-auth-redirect") && instruction.contains(TARGET),
+            "the agent is told which branch and which target: {instruction}"
         );
         assert!(task.pushed);
+        assert_eq!(task.published_request, None);
         assert_eq!(
             task.published_as.as_deref(),
             Some("agent/fix-the-auth-redirect")
@@ -943,16 +968,79 @@ mod tests {
             !remote_branches.contains(&task.branch),
             "the local id never leaves the machine"
         );
-        let invocation = fs::read_to_string(&log).unwrap();
-        assert!(
-            invocation.contains("--head agent/fix-the-auth-redirect")
-                && invocation.contains("--base main"),
-            "{invocation}"
-        );
         assert_eq!(
             tip_of(primary, TARGET),
             local_target_before,
             "the operator's local target is never pulled"
+        );
+
+        // The agent opened it: the forge now publishes the request's head
+        // under its own namespace, which is the only thing UZE reads to
+        // learn the number — no CLI, no token, no forge named.
+        let tip = tip_of(primary, &task.branch);
+        repository.git(&[
+            "push",
+            "--quiet",
+            REMOTE,
+            &format!("{tip}:refs/pull/11/head"),
+        ]);
+        assert_eq!(
+            deliver(primary, &mut task, &policy).unwrap(),
+            Delivered::Published {
+                branch: "agent/fix-the-auth-redirect".into(),
+                request: 11,
+            },
+            "a published branch with a request open for it is a sync"
+        );
+        assert_eq!(task.published_request, Some(11));
+        assert_eq!(
+            task.published_tip.as_deref(),
+            Some(tip_of(primary, &task.branch).as_str()),
+            "what the request carries, so a surface can tell a sync that \
+             would send something from one that would send nothing"
+        );
+    }
+
+    /// The same discovery, in the namespace the other family of forges
+    /// serves. Nothing but the ref name differs, which is the point.
+    #[test]
+    fn a_merge_request_is_discovered_the_same_way_a_pull_request_is() {
+        let repository = repository("landing-mr");
+        let base = uze_testkit::temp::scratch("landing-mr-remote");
+        let origin = base.join("origin.git");
+        repository.git(&[
+            "init",
+            "--quiet",
+            "--bare",
+            "-b",
+            TARGET,
+            origin.to_str().unwrap(),
+        ]);
+        repository.git(&["remote", "add", REMOTE, origin.to_str().unwrap()]);
+        repository.git(&["push", "--quiet", "-u", REMOTE, TARGET]);
+
+        let primary = repository.root();
+        let mut store = TaskStore::default();
+        let mut task = launch(&repository, &mut store, "Fix the auth redirect");
+        agent_commits(&repository, &task, "auth.rs", "");
+        let policy = Policy {
+            completion: CompletionBehavior::Pr,
+            gate: None,
+        };
+        deliver(primary, &mut task, &policy).unwrap();
+        let tip = tip_of(primary, &task.branch);
+        repository.git(&[
+            "push",
+            "--quiet",
+            REMOTE,
+            &format!("{tip}:refs/merge-requests/4/head"),
+        ]);
+        assert_eq!(
+            deliver(primary, &mut task, &policy).unwrap(),
+            Delivered::Published {
+                branch: "agent/fix-the-auth-redirect".into(),
+                request: 4,
+            }
         );
     }
 

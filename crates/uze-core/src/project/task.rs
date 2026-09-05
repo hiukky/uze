@@ -142,6 +142,17 @@ pub struct Task {
     /// The readable name the branch was published under, once it was.
     #[serde(default)]
     pub published_as: Option<String>,
+    /// The number of the request open on the forge for the published
+    /// branch, once one was found. Read off the remote like every other
+    /// readiness fact, never announced by the agent that opened it.
+    #[serde(default)]
+    pub published_request: Option<u32>,
+    /// The branch's tip as the remote last received it. What a sync would
+    /// send is measured against this and never against the target: the
+    /// request already carries what was pushed, however far the branch
+    /// still is from the target it will land in.
+    #[serde(default)]
+    pub published_tip: Option<String>,
     pub created_at_unix: u64,
 }
 
@@ -163,6 +174,8 @@ impl Task {
             state: TaskState::Running,
             pushed: false,
             published_as: None,
+            published_request: None,
+            published_tip: None,
             created_at_unix: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|elapsed| elapsed.as_secs())

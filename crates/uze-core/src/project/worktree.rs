@@ -77,8 +77,9 @@ impl CompletionBehavior {
                  fast-forwards the target itself; commit on your branch and stop"
             }
             Self::Pr => {
-                "UZE publishes your branch and opens a pull request for it; commit on your \
-                 branch and stop"
+                "UZE rebases your branch onto the target, runs the project's checks and \
+                 publishes it, then asks you to open the request for it; commit on your branch \
+                 and stop until it does"
             }
         }
     }

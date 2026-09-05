@@ -28,7 +28,8 @@ use std::{
 };
 use uze_application::AgentIdentity;
 use uze_application::{
-    DeliveryOutcome, DeliveryReport, Evaluation, TaskStateView, TaskView, UpstreamSync,
+    CompletionBehavior, DeliveryOutcome, DeliveryReport, Evaluation, TaskStateView, TaskView,
+    UpstreamSync,
 };
 use uze_application::{Result, UzeError, UzeHome};
 use uze_extensions::{
@@ -68,6 +69,10 @@ const TIMELINE_REFRESH: Duration = Duration::from_secs(3);
 /// instead of letting indicatif write to stderr.
 const AGENT_ACTIVITY_FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
 const AGENT_ACTIVITY_TICK: Duration = Duration::from_millis(120);
+/// How long a pressed control wears its pressed skin. Long enough to be
+/// seen at a glance, short enough that it reads as the press itself and
+/// never as a state the control got stuck in.
+const PRESS_FLASH: Duration = Duration::from_millis(140);
 /// How long an agent pane must stay quiet before its work reads as
 /// finished. Agent harnesses animate while they work — a spinner, an
 /// elapsed-token counter — so a pane that is genuinely busy keeps emitting
@@ -175,8 +180,14 @@ fn spawn_support_refresh(home: &UzeHome, key: SupportKey, sender: mpsc::Sender<S
 /// pane went quiet — a task delivered from another client, a branch
 /// integrated by hand, a checkout removed.
 const TASK_REFRESH: Duration = Duration::from_secs(20);
-/// How long a one-line notice stays on screen.
+/// How long a finished notice stays on screen. A notice that is still
+/// running has no deadline — it is retired by its own outcome, not by a
+/// clock (see [`Notice::busy`]).
 const NOTICE_TTL: Duration = Duration::from_secs(6);
+/// The widest a notice may draw in the header. Past this it is elided:
+/// the chip shares one row with the tabs, and a message that pushes them
+/// off the strip costs more than it says.
+const NOTICE_WIDTH: usize = 34;
 
 /// What a background evaluation answered.
 struct TaskResolution {
@@ -291,19 +302,18 @@ fn spawn_delivery(
     });
 }
 
-/// The one line a delivery leaves on screen — no label of its own: whoever
-/// shows it decides whether the task it is about still needs naming (see
-/// `WorkspaceModel::notice_for_tab`/`notice_for_footer`).
+/// What a delivery leaves on screen: the ending, in as few words as name
+/// it. No label of its own — whoever shows it decides whether the task it
+/// is about still needs naming (see `WorkspaceModel::notice_chip`) — and
+/// no restatement of what the pane it came from already says at length.
 fn describe_delivery(report: &DeliveryReport) -> String {
     match &report.outcome {
         DeliveryOutcome::Handoff => format!("ready on {}", report.task.branch),
-        DeliveryOutcome::Merged => format!("merged into {}", report.task.target),
-        DeliveryOutcome::Published { branch, request } => match request {
-            Some(url) => url.clone(),
-            None => format!("pushed as {branch}"),
-        },
-        DeliveryOutcome::Refused(reason) => format!("not delivered — {reason}"),
-        DeliveryOutcome::ReturnedToAgent(_) => "returned to its agent to resolve".to_owned(),
+        DeliveryOutcome::Merged => format!("merged → {}", report.task.target),
+        DeliveryOutcome::Published { request, .. } => format!("synced → #{request}"),
+        DeliveryOutcome::AwaitingRequest(_) => "pushed · agent opening pr".to_owned(),
+        DeliveryOutcome::Refused(reason) => reason.clone(),
+        DeliveryOutcome::ReturnedToAgent(_) => "back to its agent".to_owned(),
     }
 }
 
@@ -579,11 +589,25 @@ pub(crate) fn attach_workspace(
             }
         }
     });
+    // The sidebar's own shape, written the same way and for the same
+    // reason: folding a section is a click, and a click never waits on the
+    // filesystem.
+    let (layout_recorder, remembered_layouts) = mpsc::channel::<uze_application::SidebarLayout>();
+    thread::spawn({
+        let home = home.clone();
+        move || {
+            while let Ok(layout) = remembered_layouts.recv() {
+                let _ = tui_application(home.clone())
+                    .and_then(|app| app.workspace().save_sidebar_layout(&layout));
+            }
+        }
+    });
     let mut model = WorkspaceModel {
         dirty: true,
         last_size: (columns, rows),
         sidebar_width: *sidebar_width,
         prompt_recorder: Some(prompt_recorder),
+        layout_recorder: Some(layout_recorder),
         ..WorkspaceModel::recall(std::mem::take(&mut memory.remembered))
     };
     // A registered harness set doesn't change mid-session, so this is built
@@ -726,10 +750,13 @@ pub(crate) fn attach_workspace(
         }
         if attach.model.dirty {
             let mut hits = Vec::new();
+            let mut metrics = render::FrameMetrics::default();
             let model = &attach.model;
             let identities = &attach.identities;
-            terminal.draw(|frame| render(frame, model, identities, &mut hits))?;
+            terminal.draw(|frame| render(frame, model, identities, &mut hits, &mut metrics))?;
             attach.model.hits = hits;
+            attach.model.tree_overflow = metrics.tree_overflow;
+            attach.model.tree_scroll = attach.model.tree_scroll.min(metrics.tree_overflow);
             attach.model.dirty = false;
         }
         // The sidebar width is shared with management (see `super::run`),
@@ -1195,23 +1222,38 @@ fn selected_agent_context(
     Some((integration.to_owned(), cwd))
 }
 
-/// A one-line message on screen, and — for one about a single task —
-/// enough to tell whether that task is the one currently in front of the
+/// A short message on screen, and — for one about a single task — enough
+/// to tell whether that task is the one currently in front of the
 /// operator.
 struct Notice {
     text: String,
     since: Instant,
     owner: Option<NoticeOwner>,
+    /// Whether the thing this is about is still happening. A running
+    /// notice draws a spinner and outlives [`NOTICE_TTL`], because the
+    /// message it would age out into is silence about work still in
+    /// flight; the outcome replaces it when there is one.
+    busy: bool,
 }
 
 /// The task a [`Notice`] is about: its id, for matching the selected tab's
-/// own task (`WorkspaceModel::notice_for_tab`), and its label, for the
-/// footer's fallback when that task is not what is on screen
-/// (`WorkspaceModel::notice_for_footer`) — the header never needs it, since
-/// the tab it lands next to already says whose agent this is.
+/// own task, and its label, for when that task is not what is on screen —
+/// the tab the chip lands next to already says whose agent this is, so the
+/// label is only worth its columns when the message is about somebody else
+/// (`WorkspaceModel::notice_chip`).
 struct NoticeOwner {
     task: String,
     label: String,
+}
+
+/// The active notice as the header draws it, in the message zone left of
+/// the actions — text and whether it is still running, and nothing about
+/// placement: what the workspace says never decides where a button sits.
+pub(super) struct NoticeChip {
+    /// Already elided to [`NOTICE_WIDTH`], and already carrying the label
+    /// of the task it is about when that is not the task on screen.
+    pub(super) text: String,
+    pub(super) busy: bool,
 }
 
 /// One background read's answer channel, kept as a pair so the two ends
@@ -1240,6 +1282,36 @@ impl<T> Default for Answers<T> {
 /// resolved from scratch. What comes from the server (the session, the
 /// pane grids) is deliberately *not* here: the attach re-reads it, and a
 /// stale copy would be worse than a short wait for the real one.
+impl WorkspaceMemory {
+    /// The memory a fresh process starts with: nothing resolved yet, and
+    /// the sidebar as the user last left it (see
+    /// `uze_application::SidebarLayout`). Seeded once, by `super::run` —
+    /// a Ctrl+O round trip carries the live values back in `remembered`,
+    /// and re-reading the file would undo a fold made since.
+    pub(crate) fn restored(layout: uze_application::SidebarLayout) -> Self {
+        Self {
+            remembered: Remembered {
+                timeline_collapsed: layout.timeline_collapsed,
+                timeline_rows: layout.timeline_rows,
+                ..Remembered::default()
+            },
+            ..Self::default()
+        }
+    }
+
+    /// The sidebar as it stands: what this client remembers of the
+    /// timeline, plus the `width` its two modes share (see `super::run`,
+    /// which owns that one and is the only side that knows a drag in
+    /// management moved it).
+    pub(crate) fn sidebar_layout(&self, width: Option<u16>) -> uze_application::SidebarLayout {
+        uze_application::SidebarLayout {
+            width,
+            timeline_collapsed: self.remembered.timeline_collapsed,
+            timeline_rows: self.remembered.timeline_rows,
+        }
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct WorkspaceMemory {
     /// The model's own remembered half, taken by the attach and handed
@@ -1291,9 +1363,10 @@ struct Remembered {
     lost_checkouts: BTreeSet<PaneId>,
     slots_swept: bool,
     roots_shown: BTreeSet<SpaceId>,
-    timeline_collapsed: bool,
     strip_selection: BTreeMap<TabId, TabId>,
+    timeline_collapsed: bool,
     timeline_rows: Option<u16>,
+    tree_scroll: u16,
 }
 
 impl WorkspaceModel {
@@ -1322,9 +1395,10 @@ impl WorkspaceModel {
             lost_checkouts,
             slots_swept,
             roots_shown,
+            strip_selection,
             timeline_collapsed,
             timeline_rows,
-            strip_selection,
+            tree_scroll,
         } = remembered;
         Self {
             agent_activity,
@@ -1349,9 +1423,10 @@ impl WorkspaceModel {
             lost_checkouts,
             slots_swept,
             roots_shown,
+            strip_selection,
             timeline_collapsed,
             timeline_rows,
-            strip_selection,
+            tree_scroll,
             ..Self::default()
         }
     }
@@ -1381,9 +1456,10 @@ impl WorkspaceModel {
             lost_checkouts: self.lost_checkouts,
             slots_swept: self.slots_swept,
             roots_shown: self.roots_shown,
+            strip_selection: self.strip_selection,
             timeline_collapsed: self.timeline_collapsed,
             timeline_rows: self.timeline_rows,
-            strip_selection: self.strip_selection,
+            tree_scroll: self.tree_scroll,
         }
     }
 }
@@ -1414,6 +1490,16 @@ struct WorkspaceModel {
     /// [`AGENT_ECHO_GRACE`] and [`AGENT_PASTE_GRACE`]).
     input_echo_until: BTreeMap<PaneId, Instant>,
     hits: Vec<(Rect, WorkspaceHit)>,
+    /// The piece of chrome the pointer is over, read from the same hit
+    /// list a click reads. Only ever set while no modal is open: what
+    /// sits under an overlay is not what the pointer is on.
+    hovered: Option<WorkspaceHit>,
+    /// The last control pressed, and when. A press flashes for
+    /// [`PRESS_FLASH`] so pressing is visible in itself — most of these
+    /// buttons answer somewhere else on the frame, or after a round trip,
+    /// and a control that looks identical the instant after it is pressed
+    /// is one the operator presses again.
+    pressed: Option<(WorkspaceHit, Instant)>,
     /// Set whenever applying an event (or a resize) changes what should be
     /// on screen; the input loop only redraws when this is true. Redrawing
     /// unconditionally at the input-poll rate was the other half of the
@@ -1490,6 +1576,10 @@ struct WorkspaceModel {
     /// the default, so tests exercise the submission path without writing
     /// to a real UZE home.
     prompt_recorder: Option<mpsc::Sender<(PathBuf, uze_application::PromptOrigin, String)>>,
+    /// Sink for the sidebar's own remembered shape, written when the user
+    /// changes it. `None` leaves the stored layout untouched — the
+    /// default, so tests fold and drag without writing to a real UZE home.
+    layout_recorder: Option<mpsc::Sender<uze_application::SidebarLayout>>,
     /// Every repository's tasks as last evaluated, keyed by its primary
     /// checkout. Display state: the truth is Git and the task store.
     tasks: BTreeMap<PathBuf, Vec<TaskView>>,
@@ -1589,6 +1679,14 @@ struct WorkspaceModel {
     /// scrolled it to. Clamped when drawn, so a history that shrank under
     /// it still shows its tail rather than nothing.
     timeline_scroll: usize,
+    /// The first row of the space tree the sidebar shows — where the wheel
+    /// over it has scrolled to. Held to `tree_overflow`, so the tree can
+    /// never be scrolled off its own foot.
+    tree_scroll: u16,
+    /// Rows of the tree the last frame could not show (see
+    /// `render::FrameMetrics`). Zero while the whole tree fits, which is
+    /// also what makes the wheel a no-op there.
+    tree_overflow: u16,
     /// The open commit popup and the timeline row it hangs off (see
     /// `ViewHit::SelectItem`). Informational and anchored like
     /// `support_dropdown`: any click or key dismisses it.
@@ -1879,6 +1977,28 @@ impl WorkspaceModel {
             .map(|(rect, hit)| (*rect, *hit))
     }
 
+    /// The control still wearing its pressed skin, if any. Read at draw
+    /// time rather than cleared at press time, so the flash ends with the
+    /// clock instead of with whatever the press went on to do.
+    fn pressed_hit(&self) -> Option<WorkspaceHit> {
+        self.pressed
+            .filter(|(_, at)| at.elapsed() < PRESS_FLASH)
+            .map(|(hit, _)| hit)
+    }
+
+    /// Drops a press whose flash has run out, and says whether that
+    /// changed the frame — the one repaint the flash needs to end on,
+    /// since nothing else is necessarily moving when it does.
+    fn expire_press(&mut self, now: Instant) -> bool {
+        let expired = self
+            .pressed
+            .is_some_and(|(_, at)| now.duration_since(at) >= PRESS_FLASH);
+        if expired {
+            self.pressed = None;
+        }
+        expired
+    }
+
     /// Whether `(column, row)` is over the sidebar's timeline section —
     /// any of its rows, since the wheel over a section scrolls that
     /// section wherever inside it the pointer happens to be.
@@ -2012,6 +2132,19 @@ impl WorkspaceModel {
     /// Same, for a redraw this client provoked by resizing the pane.
     fn note_pane_redraw(&mut self, pane: PaneId) {
         self.open_echo_window(pane, Instant::now(), AGENT_REDRAW_GRACE);
+    }
+
+    /// Keeps the sidebar's shape for the next run — sent, never written
+    /// here, so a fold costs a channel send on the input path (see
+    /// `layout_recorder`).
+    fn remember_sidebar(&self) {
+        if let Some(recorder) = self.layout_recorder.as_ref() {
+            let _ = recorder.send(uze_application::SidebarLayout {
+                width: self.sidebar_width,
+                timeline_collapsed: self.timeline_collapsed,
+                timeline_rows: self.timeline_rows,
+            });
+        }
     }
 
     /// Same, for the repaint an attach provokes across every open pane at
@@ -2272,55 +2405,66 @@ impl WorkspaceModel {
     }
 
     fn set_notice(&mut self, text: String) {
-        self.notice = Some(Notice {
-            text,
-            since: Instant::now(),
-            owner: None,
-        });
-        self.dirty = true;
+        self.note(text, None, false);
     }
 
-    /// Same as `set_notice`, but attributed to one task: shown next to
-    /// that task's own tab in the header, label-free, when that tab is the
-    /// one currently in front of the operator — the footer only takes it,
-    /// labeled, when the task the message is about is not what is on
-    /// screen.
+    /// A notice for work that has started and not finished: it keeps a
+    /// spinner and stays until its own outcome replaces it.
+    fn set_busy_notice(&mut self, text: String) {
+        self.note(text, None, true);
+    }
+
+    /// Same as `set_notice`, but attributed to one task: shown label-free
+    /// when that task's tab is the one in front of the operator, since the
+    /// tab already says whose agent this is, and labeled when it is not.
     fn set_task_notice(&mut self, task: &str, label: &str, text: String) {
+        self.note(text, Some((task, label)), false);
+    }
+
+    /// [`Self::set_task_notice`] for work still in flight.
+    fn set_busy_task_notice(&mut self, task: &str, label: &str, text: String) {
+        self.note(text, Some((task, label)), true);
+    }
+
+    fn note(&mut self, text: String, owner: Option<(&str, &str)>, busy: bool) {
         self.notice = Some(Notice {
             text,
             since: Instant::now(),
-            owner: Some(NoticeOwner {
+            owner: owner.map(|(task, label)| NoticeOwner {
                 task: task.to_owned(),
                 label: label.to_owned(),
             }),
+            busy,
         });
         self.dirty = true;
     }
 
-    /// The active notice's text, when it is about `tab`'s own task — what
-    /// the header shows next to that task's deliver button, since the tab
-    /// is already what says whose agent this is.
-    pub(super) fn notice_for_tab(&self, tab: TabId) -> Option<&str> {
-        let notice = self.notice.as_ref()?;
-        let owner = notice.owner.as_ref()?;
-        let selected = self.tab_task(tab)?;
-        (selected.id == owner.task).then_some(notice.text.as_str())
+    /// Whether something the workspace is showing a notice for is still
+    /// running — what keeps the spinner's clock turning (see
+    /// `workspace_has_active_agent_operation`).
+    fn notice_is_busy(&self) -> bool {
+        self.notice.as_ref().is_some_and(|notice| notice.busy)
     }
 
-    /// The active notice as the footer shows it: nothing, when it already
-    /// surfaced in the header next to the selected tab's own task; the
-    /// bare text for a workspace-wide message; `"label: text"` for one
-    /// about a task that is not what is currently on screen.
-    pub(super) fn notice_for_footer(&self) -> Option<String> {
+    /// The active notice as the header's message zone draws it, or nothing
+    /// when there is none. One surface: a message about the task on
+    /// screen, one about a task that is not, and a workspace-wide one all
+    /// land here, the middle one carrying the label that names it.
+    pub(super) fn notice_chip(&self) -> Option<NoticeChip> {
         let notice = self.notice.as_ref()?;
-        let Some(owner) = &notice.owner else {
-            return Some(notice.text.clone());
+        let about_selected_task = notice.owner.as_ref().is_some_and(|owner| {
+            self.selected_tab()
+                .and_then(|tab| self.tab_task(tab))
+                .is_some_and(|selected| selected.id == owner.task)
+        });
+        let text = match &notice.owner {
+            Some(owner) if !about_selected_task => format!("{}: {}", owner.label, notice.text),
+            _ => notice.text.clone(),
         };
-        let shown_in_header = self
-            .selected_tab()
-            .and_then(|tab| self.tab_task(tab))
-            .is_some_and(|selected| selected.id == owner.task);
-        (!shown_in_header).then(|| format!("{}: {}", owner.label, notice.text))
+        Some(NoticeChip {
+            text: crate::ui::elide_tail(&text, NOTICE_WIDTH),
+            busy: notice.busy,
+        })
     }
 
     fn agent_tab_status(&self, pane: PaneId, selected: bool) -> AgentTabStatus {
@@ -2962,11 +3106,11 @@ fn deliver_selected_tab(
         return;
     };
     let Some(task) = model.tab_task(tab).cloned() else {
-        model.set_notice("this tab has no task to deliver".to_owned());
+        model.set_notice("no task on this tab".to_owned());
         return;
     };
     if let Some(reason) = task.state.undeliverable_reason() {
-        model.set_notice(format!("{}: {reason}", task.label));
+        model.set_task_notice(&task.id, &task.label, reason.to_owned());
         return;
     }
     if !model.delivery_pending.insert(task.id.clone()) {
@@ -2975,7 +3119,7 @@ fn deliver_selected_tab(
     let Some(cwd) = tab_cwd(model, tab) else {
         return;
     };
-    model.set_notice(format!("{}: delivering…", task.label));
+    model.set_busy_task_notice(&task.id, &task.label, "delivering".to_owned());
     spawn_delivery(home, cwd, Some(task.id), sender.clone());
 }
 
@@ -3162,6 +3306,7 @@ fn toggle_space_root(model: &mut WorkspaceModel, space: SpaceId) {
 /// up. Local state, same as `toggle_space_root`.
 fn toggle_timeline(model: &mut WorkspaceModel) {
     model.timeline_collapsed = !model.timeline_collapsed;
+    model.remember_sidebar();
     model.dirty = true;
 }
 
@@ -3180,6 +3325,18 @@ fn scroll_timeline(model: &mut WorkspaceModel, direction: ScrollDirection) {
         ScrollDirection::Down => model.timeline_scroll + 1,
     }
     .min(last_first);
+    model.dirty = true;
+}
+
+/// One notch of the wheel over the space tree: a row at a time, held to
+/// what the last frame found it could not show, so the foot of the tree is
+/// as far as it goes.
+fn scroll_tree(model: &mut WorkspaceModel, direction: ScrollDirection) {
+    model.tree_scroll = match direction {
+        ScrollDirection::Up => model.tree_scroll.saturating_sub(1),
+        ScrollDirection::Down => model.tree_scroll.saturating_add(1),
+    }
+    .min(model.tree_overflow);
     model.dirty = true;
 }
 

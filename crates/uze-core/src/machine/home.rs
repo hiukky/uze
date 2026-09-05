@@ -95,6 +95,12 @@ impl UzeHome {
         self.state_dir().join("profiles.json")
     }
 
+    /// What the workspace client's sidebar was left looking like (see
+    /// `sidebar_layout`).
+    pub fn sidebar_layout_path(&self) -> PathBuf {
+        self.state_dir().join("sidebar.json")
+    }
+
     pub fn cache_dir(&self) -> PathBuf {
         self.root.join("cache")
     }
