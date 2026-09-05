@@ -202,7 +202,8 @@ format the API imports.
 
 `main.json` forbids deleting the branch, force-pushing it, merge commits and
 rebase merges — squash only, which is what the history already is — and
-requires the fast checks to be green. The long E2E verticals run and report
+requires the fast checks to be green — the eleven that finish in about four
+minutes, `MSRV` and `Web` among them. The long E2E verticals run and report
 without gating: they only trigger for changes that can reach the Lab image,
 so requiring them would leave every documentation pull request waiting on a
 check that never arrives. `release-tags.json` stops a published `v*` tag

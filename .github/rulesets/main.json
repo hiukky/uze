@@ -4,16 +4,26 @@
   "enforcement": "disabled",
   "conditions": {
     "ref_name": {
-      "include": ["~DEFAULT_BRANCH"],
+      "include": [
+        "~DEFAULT_BRANCH"
+      ],
       "exclude": []
     }
   },
   "bypass_actors": [],
   "rules": [
-    { "type": "deletion" },
-    { "type": "non_fast_forward" },
-    { "type": "required_linear_history" },
-    { "type": "required_signatures" },
+    {
+      "type": "deletion"
+    },
+    {
+      "type": "non_fast_forward"
+    },
+    {
+      "type": "required_linear_history"
+    },
+    {
+      "type": "required_signatures"
+    },
     {
       "type": "pull_request",
       "parameters": {
@@ -22,7 +32,9 @@
         "require_code_owner_review": false,
         "require_last_push_approval": false,
         "required_review_thread_resolution": false,
-        "allowed_merge_methods": ["squash"]
+        "allowed_merge_methods": [
+          "squash"
+        ]
       }
     },
     {
@@ -31,15 +43,39 @@
         "strict_required_status_checks_policy": false,
         "do_not_enforce_on_create": false,
         "required_status_checks": [
-          { "context": "Format" },
-          { "context": "Clippy" },
-          { "context": "Test" },
-          { "context": "Audit" },
-          { "context": "Licences" },
-          { "context": "Secrets" },
-          { "context": "Installer" },
-          { "context": "Python" },
-          { "context": "Coverage" }
+          {
+            "context": "Format"
+          },
+          {
+            "context": "Clippy"
+          },
+          {
+            "context": "Test"
+          },
+          {
+            "context": "Audit"
+          },
+          {
+            "context": "Licences"
+          },
+          {
+            "context": "MSRV"
+          },
+          {
+            "context": "Web"
+          },
+          {
+            "context": "Secrets"
+          },
+          {
+            "context": "Installer"
+          },
+          {
+            "context": "Python"
+          },
+          {
+            "context": "Coverage"
+          }
         ]
       }
     }
