@@ -120,6 +120,10 @@
           "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|@[a-z0-9.-]+)$",
           "type": "string"
         },
+        "surface.hover": {
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|@[a-z0-9.-]+)$",
+          "type": "string"
+        },
         "surface.raised": {
           "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|@[a-z0-9.-]+)$",
           "type": "string"
@@ -696,6 +700,40 @@
             }
           ]
         },
+        "mark.attention": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "frames": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "glyph": {
+                  "type": "string"
+                },
+                "width": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "type": "object"
+            }
+          ]
+        },
         "mark.close": {
           "oneOf": [
             {
@@ -798,40 +836,6 @@
             }
           ]
         },
-        "mark.edited": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
-                "glyph": {
-                  "type": "string"
-                },
-                "width": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "type": "object"
-            }
-          ]
-        },
         "mark.native": {
           "oneOf": [
             {
@@ -867,40 +871,6 @@
           ]
         },
         "mark.official": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "frames": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "minItems": 1,
-                  "type": "array"
-                },
-                "glyph": {
-                  "type": "string"
-                },
-                "width": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "type": "object"
-            }
-          ]
-        },
-        "mark.paused": {
           "oneOf": [
             {
               "type": "string"

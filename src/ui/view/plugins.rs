@@ -29,12 +29,10 @@ use uze_application::application::{DoctorReport, MarketplacePluginSummary};
 
 use super::super::hit::Hit;
 use super::super::model::{ResizablePanel, TuiModel};
-use super::super::{
-    ACCENT, BLUE, BORDER, MUTED, SELECTED_BG, SURFACE_SUBTLE, TEXT_BRIGHT, TEXT_DIM, TEXT_FAINT,
-    TEXT_PRIMARY, TEXT_SECONDARY, WARNING, route_style,
-};
+use super::super::route_style;
 use super::super::{content_area, render_screen_header, side_panel_area};
 use super::{render_status_line, resource_summary};
+use crate::ui::theme::{self, Symbol, Token};
 
 /// Both status labels are 9 characters (`Installed`/`Available`), but that's
 /// incidental — pad explicitly so alignment holds even if a future status
@@ -153,7 +151,7 @@ pub(crate) fn render_plugins(
     let trailer = (sources > 0).then(|| {
         Span::styled(
             format!("{sources} source{}", if sources == 1 { "" } else { "s" }),
-            Style::default().fg(MUTED),
+            theme::fg(Token::TextMuted),
         )
     });
     let content = render_screen_header(
@@ -177,7 +175,7 @@ pub(crate) fn render_plugins(
         frame.render_widget(
             Paragraph::new(Span::styled(
                 "No plugins available.",
-                Style::default().fg(MUTED),
+                theme::fg(Token::TextMuted),
             )),
             list_area,
         );
@@ -206,7 +204,7 @@ pub(crate) fn render_plugins(
             frame.render_widget(
                 Paragraph::new(Span::styled(
                     format!("No plugins match \"{}\".", model.marketplace_filter.trim()),
-                    Style::default().fg(MUTED),
+                    theme::fg(Token::TextMuted),
                 )),
                 list_area,
             );
@@ -288,18 +286,25 @@ fn group_display_name(marketplace: &str) -> &str {
 fn render_filter_box(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
     let block = Block::default()
         .borders(Borders::BOTTOM)
-        .border_style(Style::default().fg(if model.filtering { ACCENT } else { BORDER }));
+        .border_style(Style::default().fg(if model.filtering {
+            theme::color(Token::Accent)
+        } else {
+            theme::color(Token::BorderDefault)
+        }));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let text = if model.marketplace_filter.is_empty() {
-        Line::from(Span::styled("Filter plugins…", Style::default().fg(MUTED)))
+        Line::from(Span::styled("Filter plugins…", theme::fg(Token::TextMuted)))
     } else {
         let mut spans = vec![Span::styled(
             model.marketplace_filter.clone(),
-            Style::default().fg(TEXT_PRIMARY),
+            theme::fg(Token::TextPrimary),
         )];
         if model.filtering {
-            spans.push(Span::styled("▏", Style::default().fg(ACCENT)));
+            spans.push(Span::styled(
+                theme::glyph(Symbol::BarThin),
+                theme::fg(Token::Accent),
+            ));
         }
         Line::from(spans)
     };
@@ -313,7 +318,11 @@ fn header_line(
     is_official: bool,
     label_width: usize,
 ) -> Line<'static> {
-    let chevron = if collapsed { "▸" } else { "▾" };
+    let chevron = theme::glyph(if collapsed {
+        Symbol::ChevronCollapsed
+    } else {
+        Symbol::ChevronExpanded
+    });
     // See `group_display_name` — the header shows the display name, while
     // the underlying value (used for toggling, hit-testing, filtering) is
     // untouched; this only affects what's drawn.
@@ -323,7 +332,7 @@ fn header_line(
     // plugin row's own Status, table-style, rather than trailing right
     // after however long this particular name happens to be.
     let mut spans = vec![
-        Span::styled(format!("{chevron} "), Style::default().fg(TEXT_DIM)),
+        Span::styled(format!("{chevron} "), theme::fg(Token::TextDim)),
         Span::styled(
             format!(
                 "{:<width$}",
@@ -331,17 +340,20 @@ fn header_line(
                 width = label_width.saturating_sub(2)
             ),
             Style::default()
-                .fg(TEXT_BRIGHT)
+                .fg(theme::color(Token::TextBright))
                 .add_modifier(Modifier::BOLD),
         ),
     ];
     if all_installed {
         spans.push(Span::raw("  "));
-        spans.push(Span::styled("Installed", Style::default().fg(ACCENT)));
+        spans.push(Span::styled("Installed", theme::fg(Token::Accent)));
     }
     if is_official {
         spans.push(Span::raw("  "));
-        spans.push(Span::styled("✓ Official", Style::default().fg(BLUE)));
+        spans.push(Span::styled(
+            format!("{} Official", theme::glyph(Symbol::MarkOfficial)),
+            theme::fg(Token::StateInfo),
+        ));
     }
     Line::from(spans)
 }
@@ -359,21 +371,28 @@ fn plugin_line<'a>(
     label_width: usize,
     row_width: u16,
 ) -> Line<'a> {
-    let prefix = if is_last { "└─ " } else { "├─ " };
+    let prefix = format!(
+        "{} ",
+        theme::glyph(if is_last {
+            Symbol::TreeLast
+        } else {
+            Symbol::TreeBranch
+        })
+    );
     // This row's own leading width (border + " " + prefix + name) is
     // `5 + name_width`; when some header's name is longer, `label_width`
     // exceeds that — pad the extra into the gap before Status so it still
     // lands in the same column as every header's own badge.
     let extra_pad = label_width.saturating_sub(5 + name_width);
     let name_style = if selected {
-        Style::default().fg(TEXT_BRIGHT)
+        theme::fg(Token::TextBright)
     } else {
-        Style::default().fg(TEXT_SECONDARY)
+        theme::fg(Token::TextSecondary)
     };
     let status_style = if plugin.installed {
-        Style::default().fg(ACCENT)
+        theme::fg(Token::Accent)
     } else {
-        Style::default().fg(TEXT_DIM)
+        theme::fg(Token::TextDim)
     };
     let name = format!("{:<name_width$}", plugin.name);
     let status = format!(
@@ -390,19 +409,23 @@ fn plugin_line<'a>(
     // The remaining "Update available" therefore always means one uze
     // declined to apply on its own — press `u`.
     let (update, update_style) = if just_updated {
-        ("Updated", Style::default().fg(ACCENT))
+        ("Updated", theme::fg(Token::Accent))
     } else if plugin.update_available == Some(true) {
-        ("Update available", Style::default().fg(WARNING))
+        ("Update available", theme::fg(Token::StateWarning))
     } else {
         ("", Style::default())
     };
     let update = format!("{update:<UPDATE_WIDTH$}");
     let mut spans = vec![
         Span::styled(
-            if selected { "│" } else { " " },
-            Style::default().fg(ACCENT),
+            if selected {
+                theme::glyph(Symbol::TreeColumnDivider)
+            } else {
+                " ".to_owned()
+            },
+            theme::fg(Token::Accent),
         ),
-        Span::styled(format!(" {prefix}"), Style::default().fg(TEXT_FAINT)),
+        Span::styled(format!(" {prefix}"), theme::fg(Token::TextFaint)),
         Span::styled(name, name_style),
         Span::raw(" ".repeat(2 + extra_pad)),
         Span::styled(status, status_style),
@@ -411,13 +434,13 @@ fn plugin_line<'a>(
     ];
     if selected {
         for span in &mut spans {
-            span.style = span.style.bg(SELECTED_BG);
+            span.style = span.style.bg(theme::color(Token::SurfaceSelected));
         }
         let used: usize = spans.iter().map(Span::width).sum();
         let gap = (row_width as usize).saturating_sub(used);
         spans.push(Span::styled(
             " ".repeat(gap),
-            Style::default().bg(SELECTED_BG),
+            theme::bg(Token::SurfaceSelected),
         ));
     }
     Line::from(spans)
@@ -438,12 +461,12 @@ fn render_plugin_drawer(
             .borders(Borders::LEFT)
             .border_style(Style::default().fg(
                 if model.dragging_panel == Some(ResizablePanel::MarketplaceDrawer) {
-                    ACCENT
+                    theme::color(Token::Accent)
                 } else {
-                    SURFACE_SUBTLE
+                    theme::color(Token::SurfaceRecessed)
                 },
             ))
-            .style(Style::default().bg(SURFACE_SUBTLE)),
+            .style(theme::bg(Token::SurfaceRecessed)),
         drawer,
     );
     hits.insert(
@@ -473,13 +496,13 @@ fn render_plugin_drawer(
     let room = body.width as usize;
     let mut lines = vec![Line::from(Span::styled(
         "PLUGIN",
-        Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
+        theme::fg_bold(Token::TextMuted),
     ))];
     lines.extend(fold(&plugin.name, room).into_iter().map(|row| {
         Line::from(Span::styled(
             row,
             Style::default()
-                .fg(TEXT_BRIGHT)
+                .fg(theme::color(Token::TextBright))
                 .add_modifier(Modifier::BOLD),
         ))
     }));
@@ -487,19 +510,19 @@ fn render_plugin_drawer(
     lines.extend(
         fold(plugin.description.as_deref().unwrap_or_default(), room)
             .into_iter()
-            .map(|row| Line::from(Span::styled(row, Style::default().fg(TEXT_SECONDARY)))),
+            .map(|row| Line::from(Span::styled(row, theme::fg(Token::TextSecondary)))),
     );
     if !plugin.keywords.is_empty() {
         lines.extend(
             fold(&plugin.keywords.join(", "), room)
                 .into_iter()
-                .map(|row| Line::from(Span::styled(row, Style::default().fg(TEXT_DIM)))),
+                .map(|row| Line::from(Span::styled(row, theme::fg(Token::TextDim)))),
         );
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "SOURCE",
-        Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
+        theme::fg_bold(Token::TextMuted),
     )));
     let source_row_y = body.y + lines.len() as u16;
     let name = group_display_name(&plugin.marketplace);
@@ -513,7 +536,7 @@ fn render_plugin_drawer(
     // row too made the pair read as two links to the same place.
     lines.push(Line::from(Span::styled(
         name.to_owned(),
-        Style::default().fg(TEXT_PRIMARY),
+        theme::fg(Token::TextPrimary),
     )));
     if source_row_y < body.y + body.height {
         hits.push((
@@ -539,11 +562,11 @@ fn render_plugin_drawer(
         // accent is what answers the pointer.
         let link = if model.source_link_hovered {
             Style::default()
-                .fg(ACCENT)
+                .fg(theme::color(Token::Accent))
                 .add_modifier(Modifier::UNDERLINED)
         } else {
             Style::default()
-                .fg(MUTED)
+                .fg(theme::color(Token::TextMuted))
                 .add_modifier(Modifier::UNDERLINED)
         };
         lines.push(Line::from(vec![
@@ -554,7 +577,7 @@ fn render_plugin_drawer(
             // as a caption.
             Span::styled(crate::ui::elide_tail(url, address_room), link),
             Span::raw(" "),
-            Span::styled("↗", link),
+            Span::styled(theme::glyph(Symbol::ArrowExternal), link),
         ]));
         if url_row_y < body.y + body.height {
             hits.push((
@@ -584,7 +607,7 @@ fn render_plugin_drawer(
 
     lines.push(Line::from(Span::styled(
         "RESOURCES",
-        Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
+        theme::fg_bold(Token::TextMuted),
     )));
     let resources = installed_inspection
         .flatten()
@@ -597,14 +620,14 @@ fn render_plugin_drawer(
         .unwrap_or_else(|| "loading…".to_owned());
     lines.push(Line::from(Span::styled(
         resources,
-        Style::default().fg(TEXT_PRIMARY),
+        theme::fg(Token::TextPrimary),
     )));
 
     if let Some(detail) = installed_inspection.flatten() {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             "AVAILABLE IN",
-            Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
+            theme::fg_bold(Token::TextMuted),
         )));
         for delivery in &detail.deliveries {
             let route = delivery
@@ -622,7 +645,7 @@ fn render_plugin_drawer(
             lines.push(Line::from(vec![
                 Span::styled(
                     format!("  {:<12}", delivery.display_name),
-                    Style::default().fg(TEXT_SECONDARY),
+                    theme::fg(Token::TextSecondary),
                 ),
                 Span::styled(route, route_style(route)),
             ]));
@@ -630,17 +653,17 @@ fn render_plugin_drawer(
         let state = &detail.managed_state;
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
-            Span::styled("Managed  ", Style::default().fg(MUTED)),
+            Span::styled("Managed  ", theme::fg(Token::TextMuted)),
             Span::styled(
                 format!("{} matched", state.matched),
-                Style::default().fg(ACCENT),
+                theme::fg(Token::Accent),
             ),
             Span::styled(
                 format!(
                     " · {} missing · {} drifted · {} conflicts · {} blocked",
                     state.missing, state.drifted, state.conflicts, state.blocked
                 ),
-                Style::default().fg(MUTED),
+                theme::fg(Token::TextMuted),
             ),
         ]));
     }
@@ -660,7 +683,7 @@ fn render_plugin_drawer(
             render_status_line(
                 frame,
                 status_area,
-                ACCENT,
+                theme::color(Token::Accent),
                 "Updated",
                 "Brought up to date automatically when uze started",
             );
@@ -668,18 +691,24 @@ fn render_plugin_drawer(
             render_status_line(
                 frame,
                 status_area,
-                WARNING,
+                theme::color(Token::StateWarning),
                 "Update available",
                 "Needs your confirmation — press u to apply it",
             );
         } else {
-            render_status_line(frame, status_area, ACCENT, "Installed", subtitle);
+            render_status_line(
+                frame,
+                status_area,
+                theme::color(Token::Accent),
+                "Installed",
+                subtitle,
+            );
         }
     } else {
         render_status_line(
             frame,
             status_area,
-            MUTED,
+            theme::color(Token::TextMuted),
             "Not installed",
             "Press i to install this plugin",
         );

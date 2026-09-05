@@ -8,12 +8,11 @@
     "mark.adapted": "~",
     "mark.unsupported": "-",
     "mark.warning": "!",
+    "mark.attention": "!",
     "mark.close": "x",
     "mark.dot": "-",
     "mark.cross": "x",
     "mark.sparkle": "+",
-    "mark.paused": "=",
-    "mark.edited": "~",
     "mark.toggle-off": "o",
     "mark.toggle-on": "@",
 

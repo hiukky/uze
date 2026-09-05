@@ -727,6 +727,21 @@ mod tests {
     }
 
     #[test]
+    fn the_bundled_syntax_theme_list_matches_what_is_actually_bundled() {
+        // This crate names no highlighting library in production — it only
+        // has to be able to tell an author their theme name is a typo. That
+        // makes the list a copy, and a copy needs the test that catches it
+        // drifting.
+        let mut actual: Vec<String> = syntect::highlighting::ThemeSet::load_defaults()
+            .themes
+            .keys()
+            .cloned()
+            .collect();
+        actual.sort();
+        assert_eq!(actual, BUNDLED_SYNTAX_THEMES);
+    }
+
+    #[test]
     fn every_builtin_name_resolves() {
         for name in builtin_names() {
             assert!(builtin(name).is_some(), "`{name}` is listed but absent");

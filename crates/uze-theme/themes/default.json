@@ -9,6 +9,7 @@
     "surface.raised-subtle": "#1b1d1e",
     "surface.raised-bright": "#2c2e2f",
     "surface.recessed": "#101213",
+    "surface.hover": "#3b3d3d",
 
     "text.bright": "#f2f0ea",
     "text.primary": "#e6e4de",
@@ -55,12 +56,11 @@
     "mark.adapted": "≈",
     "mark.unsupported": "—",
     "mark.warning": "⚠",
+    "mark.attention": "!",
     "mark.close": "✕",
     "mark.dot": "•",
     "mark.cross": "×",
     "mark.sparkle": "✦",
-    "mark.paused": "⏸",
-    "mark.edited": "✎",
     "mark.toggle-off": "○",
     "mark.toggle-on": "◉",
 

@@ -746,9 +746,11 @@ impl GitView {
             )
         };
         self.diff = match raw {
-            Ok(output) => {
-                highlight_diff_rows(pair_side_by_side(parse_unified_diff(&output)), &path)
-            }
+            Ok(output) => highlight_diff_rows(
+                pair_side_by_side(parse_unified_diff(&output)),
+                &path,
+                &host.syntax_theme(),
+            ),
             Err(message) => {
                 self.error = Some(message);
                 Vec::new()
@@ -978,6 +980,10 @@ fn syntax_set() -> &'static SyntaxSet {
     SYNTAX_SET.get_or_init(SyntaxSet::load_defaults_newlines)
 }
 
+/// The palette highlighting falls back to when the host names one syntect
+/// does not bundle.
+pub const FALLBACK_SYNTAX_THEME: &str = "base16-ocean.dark";
+
 fn theme_set() -> &'static ThemeSet {
     static THEME_SET: OnceLock<ThemeSet> = OnceLock::new();
     THEME_SET.get_or_init(ThemeSet::load_defaults)
@@ -991,14 +997,20 @@ fn theme_set() -> &'static ThemeSet {
 /// `HighlightLines` — syntect's highlighter carries state (an open block
 /// comment, for instance) across calls, and "before" and "after" are two
 /// separate versions of the file, not one continuous stream.
-fn highlight_diff_rows(rows: Vec<PairedRow>, path: &Path) -> Vec<DiffRow> {
+fn highlight_diff_rows(rows: Vec<PairedRow>, path: &Path, theme_name: &str) -> Vec<DiffRow> {
     let syntax_set = syntax_set();
     let syntax = path
         .extension()
         .and_then(|ext| ext.to_str())
         .and_then(|ext| syntax_set.find_syntax_by_extension(ext))
         .unwrap_or_else(|| syntax_set.find_syntax_plain_text());
-    let theme = &theme_set().themes["base16-ocean.dark"];
+    let themes = &theme_set().themes;
+    // A name the host gave us that syntect does not know would be a panic on
+    // the first diff drawn, which is a poor way to learn about a typo — fall
+    // back and keep rendering.
+    let theme = themes
+        .get(theme_name)
+        .unwrap_or_else(|| &themes[FALLBACK_SYNTAX_THEME]);
     let mut left_highlighter = HighlightLines::new(syntax, theme);
     let mut right_highlighter = HighlightLines::new(syntax, theme);
     rows.into_iter()
@@ -1354,6 +1366,10 @@ mod tests {
         fn display_path(&self, path: &Path) -> String {
             path.display().to_string()
         }
+
+        fn syntax_theme(&self) -> String {
+            FALLBACK_SYNTAX_THEME.to_owned()
+        }
     }
 
     #[test]
@@ -1643,6 +1659,7 @@ mod tests {
                 "@@ -1,2 +1,2 @@\n context\n-old\n+new\n",
             )),
             Path::new("example.rs"),
+            FALLBACK_SYNTAX_THEME,
         );
         let lines = unified_lines(&rows);
         assert_eq!(lines.len(), 3);
@@ -1855,6 +1872,10 @@ mod view_tests {
         fn display_path(&self, path: &Path) -> String {
             path.display().to_string()
         }
+
+        fn syntax_theme(&self) -> String {
+            FALLBACK_SYNTAX_THEME.to_owned()
+        }
     }
 
     fn fixture() -> GitView {
@@ -1879,6 +1900,7 @@ mod view_tests {
                     "@@ -1,3 +1,4 @@\n context\n-removed line\n+added line\n",
                 )),
                 Path::new("/repo/src/ui.rs"),
+                FALLBACK_SYNTAX_THEME,
             ),
             error: None,
             scroll: 0,

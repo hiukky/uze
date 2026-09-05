@@ -7,6 +7,8 @@
 use super::*;
 
 mod workspace_tests {
+    use crate::ui::theme::{self, Token};
+
     use super::WorkspaceHit;
     use super::{
         AGENT_BUSY_REPAINTS, AGENT_ECHO_GRACE, AGENT_PASTE_GRACE, AgentIdentity, AgentTabStatus,
@@ -778,7 +780,7 @@ mod workspace_tests {
             .expect("the agent names its own row: {rows:?}");
         let (ready, _) = task_mark(&TaskStateView::Ready).expect("ready is marked");
         assert!(
-            name_row.contains(ready),
+            name_row.contains(&ready),
             "ready carries its own mark: {name_row}"
         );
         assert!(
@@ -812,21 +814,21 @@ mod workspace_tests {
 
         assert_eq!(
             chip_colors(&model, rect),
-            (crate::ui::ACCENT, crate::ui::SURFACE_OVERLAY),
+            (theme::color(Token::Accent), theme::color(Token::SurfaceRaised)),
             "at rest: the hue, raised off the strip"
         );
 
         model.hovered = Some(deliver);
         assert_eq!(
             chip_colors(&model, rect),
-            (crate::ui::ACCENT, crate::ui::SURFACE_HOVER),
+            (theme::color(Token::Accent), theme::color(Token::SurfaceHover)),
             "under the pointer: one step brighter, and only this control"
         );
 
         model.pressed = Some((deliver, Instant::now()));
         assert_eq!(
             chip_colors(&model, rect),
-            (crate::ui::BASE, crate::ui::ACCENT),
+            (theme::color(Token::SurfaceBackground), theme::color(Token::Accent)),
             "pressed: the hue becomes the button"
         );
     }
@@ -860,7 +862,7 @@ mod workspace_tests {
             .unwrap();
         assert_eq!(
             terminal.backend().buffer()[(column, 0)].bg,
-            crate::ui::SURFACE_SUBTLE,
+            theme::color(Token::SurfaceRecessed),
             "recessed, not raised"
         );
     }
@@ -1036,7 +1038,7 @@ mod workspace_tests {
             .find(|row| row.contains("Agent"))
             .expect("the agent names its own row");
         assert!(
-            !name_row.contains(delivered),
+            !name_row.contains(&delivered),
             "a new agent delivered nothing: {name_row}"
         );
     }
@@ -1108,13 +1110,13 @@ mod workspace_tests {
     }
 
     /// Color is what tells the marks apart at a glance — three states
-    /// sharing `TEXT_DIM` meant the column read as one undifferentiated
+    /// sharing `theme::color(Token::TextDim)` meant the column read as one undifferentiated
     /// smudge. The glyphs are distinct for the same reason, and `Ready`
     /// specifically must not reuse the `✓` the agent column already spends
     /// on `Completed`.
     #[test]
     fn each_status_mark_carries_a_glyph_and_a_hue_of_its_own() {
-        let marks: Vec<(&str, Color)> = every_task_state().iter().filter_map(task_mark).collect();
+        let marks: Vec<(String, Color)> = every_task_state().iter().filter_map(task_mark).collect();
         for (index, (mark, hue)) in marks.iter().enumerate() {
             for (other_mark, other_hue) in &marks[index + 1..] {
                 assert_ne!(mark, other_mark, "two states share a glyph");
@@ -1512,7 +1514,7 @@ mod workspace_tests {
         }
         for state in every_task_state() {
             if let Some((mark, _)) = task_mark(&state) {
-                assert!(text.contains(mark), "{mark} is missing from: {text}");
+                assert!(text.contains(&mark), "{mark} is missing from: {text}");
             }
         }
         assert!(
@@ -1632,7 +1634,7 @@ mod workspace_tests {
         model.set_task_notice("t1", "fix-auth-redirect", "merged → main".to_owned());
         let (settled, _) = tab_strip(&model);
         assert!(
-            !settled[0].contains(agent_activity_frame(3)),
+            !settled[0].contains(&agent_activity_frame(3)),
             "an ending does not spin: {settled:?}"
         );
     }
@@ -1693,7 +1695,7 @@ mod workspace_tests {
         let name_row = rows.iter().find(|row| row.contains("Agent")).unwrap();
         let (conflict, _) = task_mark(&TaskStateView::Conflicted { files: Vec::new() })
             .expect("a conflict is marked");
-        assert!(name_row.contains(conflict), "{name_row}");
+        assert!(name_row.contains(&conflict), "{name_row}");
         let (rows, hits) = tab_strip(&model);
         assert!(rows.iter().any(|row| row.contains("conflict")), "{rows:?}");
         assert!(
@@ -2201,9 +2203,9 @@ mod workspace_tests {
             let column = rows[row].find(needle).unwrap() + 1;
             buffer[(column as u16, row as u16)].bg
         };
-        assert_eq!(bg_of("agent/task"), crate::ui::BLUE);
-        assert_eq!(bg_of(" main "), crate::ui::WARNING);
-        assert_eq!(bg_of("origin/main"), crate::ui::WARNING);
+        assert_eq!(bg_of("agent/task"), theme::color(Token::StateInfo));
+        assert_eq!(bg_of(" main "), theme::color(Token::StateWarning));
+        assert_eq!(bg_of("origin/main"), theme::color(Token::StateWarning));
     }
 
     /// A long message scrolls inside the popup rather than growing it
@@ -2298,9 +2300,15 @@ mod workspace_tests {
                 buffer[(column as u16, row as u16)].fg,
             )
         };
-        assert_eq!(dot_of("feat: ahead"), ('◉', crate::ui::BLUE));
-        assert_eq!(dot_of("fix: also ahead"), ('●', crate::ui::BLUE));
-        assert_eq!(dot_of("chore: landed"), ('●', crate::ui::WARNING));
+        assert_eq!(dot_of("feat: ahead"), ('◉', theme::color(Token::StateInfo)));
+        assert_eq!(
+            dot_of("fix: also ahead"),
+            ('●', theme::color(Token::StateInfo))
+        );
+        assert_eq!(
+            dot_of("chore: landed"),
+            ('●', theme::color(Token::StateWarning))
+        );
     }
 
     /// The header is the section's one heading: filled and bold, where the
@@ -2317,10 +2325,10 @@ mod workspace_tests {
         let column = rows[header].chars().position(|c| c == 't').unwrap() as u16;
 
         let cell = &buffer[(column, header as u16)];
-        assert_eq!(cell.bg, crate::ui::SURFACE_OVERLAY);
+        assert_eq!(cell.bg, theme::color(Token::SurfaceRaised));
         assert!(cell.modifier.contains(ratatui::style::Modifier::BOLD));
         let commit = &buffer[(column, header as u16 + 2)];
-        assert_ne!(commit.bg, crate::ui::SURFACE_OVERLAY);
+        assert_ne!(commit.bg, theme::color(Token::SurfaceRaised));
     }
 
     /// The timeline keeps the foot of the column, under the spaces, with
@@ -2586,7 +2594,7 @@ mod workspace_tests {
             .expect("the agent is named in the tree");
         assert_eq!(
             caption_color_of(&model, "/repo"),
-            crate::ui::TEXT_DIM,
+            theme::color(Token::TextDim),
             "a slot is the rule and draws dim: {name_row}"
         );
 
@@ -2616,12 +2624,18 @@ mod workspace_tests {
             name_row.contains('\u{25cb}') || name_row.contains('\u{25cf}'),
             "the status glyph still leads: {name_row}"
         );
-        assert_eq!(caption_color_of(&model, "/repo/src"), crate::ui::WARNING);
+        assert_eq!(
+            caption_color_of(&model, "/repo/src"),
+            theme::color(Token::StateWarning)
+        );
 
         model
             .branches
             .insert(PathBuf::from("/repo/src"), "main".into());
-        assert_eq!(caption_color_of(&model, "main"), crate::ui::WARNING);
+        assert_eq!(
+            caption_color_of(&model, "main"),
+            theme::color(Token::StateWarning)
+        );
     }
 
     /// An agent outside any slot has no task to take a branch from, so
@@ -2684,9 +2698,18 @@ mod workspace_tests {
             caption.ends_with("\u{21e3}\u{2081} \u{21e1}\u{2081}\u{2082} \u{2502}"),
             "⇣₁ ⇡₁₂ sit at the right edge, one pad off the divider: {caption:?}"
         );
-        assert_eq!(caption_color_of(&model, "main"), crate::ui::WARNING);
-        assert_eq!(caption_color_of(&model, "\u{21e3}"), crate::ui::DANGER);
-        assert_eq!(caption_color_of(&model, "\u{21e1}"), crate::ui::SUCCESS);
+        assert_eq!(
+            caption_color_of(&model, "main"),
+            theme::color(Token::StateWarning)
+        );
+        assert_eq!(
+            caption_color_of(&model, "\u{21e3}"),
+            theme::color(Token::StateDanger)
+        );
+        assert_eq!(
+            caption_color_of(&model, "\u{21e1}"),
+            theme::color(Token::StateSuccess)
+        );
 
         model
             .upstream_syncs
@@ -3011,8 +3034,11 @@ mod workspace_tests {
         for (index, glyph) in glyphs.iter().enumerate() {
             assert!(!glyphs[index + 1..].contains(glyph), "duplicate {glyph}");
         }
-        assert_eq!(AgentTabStatus::Idle.color(), crate::ui::TEXT_FAINT);
-        assert_eq!(AgentTabStatus::Selected.color(), crate::ui::ACCENT);
+        assert_eq!(AgentTabStatus::Idle.color(), theme::color(Token::TextFaint));
+        assert_eq!(
+            AgentTabStatus::Selected.color(),
+            theme::color(Token::Accent)
+        );
     }
 
     #[test]

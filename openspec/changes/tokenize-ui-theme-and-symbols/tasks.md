@@ -19,35 +19,35 @@
 
 ## 3. The migration rule, before the migration
 
-- [ ] 3.1 Add a rule to `tests/architecture/layering.rs`: `Color::Rgb` may not appear in `src/` outside `src/ui/theme.rs`, with the current count as the starting `budget` and the reason/remedy written for someone hitting it cold
-- [ ] 3.2 Add a second rule for symbols once §5 lands: no chrome glyph literal in `src/ui/**` outside the symbol adapter (scan for the inventoried glyph set), same budget mechanism
+- [x] 3.1 Add a rule to `tests/architecture/layering.rs`: `Color::Rgb` may not appear in `src/` outside `src/ui/theme.rs`, with the current count as the starting `budget` and the reason/remedy written for someone hitting it cold
+- [x] 3.2 Add a second rule for symbols once §5 lands: no chrome glyph literal in `src/ui/**` outside the symbol adapter (scan for the inventoried glyph set), same budget mechanism
 
 ## 4. The ratatui adapter
 
-- [ ] 4.1 `src/ui/theme.rs`: the one place converting `uze_theme::Rgb` to `ratatui::style::Color`, exposing `fg(Token)`, `bg(Token)`, `style(Token)` and the symbol lookups the render code will call
-- [ ] 4.2 An inverse lookup (`Color → Token`) used only by tests, so render assertions name meanings and stop asserting RGB triples
-- [ ] 4.3 Delete the palette block in `src/ui.rs` and `NAV_INACTIVE`/`LINE_ADDED_BG`/`LINE_REMOVED_BG`, leaving the adapter as the only definition
+- [x] 4.1 `src/ui/theme.rs`: the one place converting `uze_theme::Rgb` to `ratatui::style::Color`, exposing `fg(Token)`, `bg(Token)`, `style(Token)` and the symbol lookups the render code will call
+- [x] 4.2 An inverse lookup (`Color → Token`) used only by tests, so render assertions name meanings and stop asserting RGB triples
+- [x] 4.3 Delete the palette block in `src/ui.rs` and `NAV_INACTIVE`/`LINE_ADDED_BG`/`LINE_REMOVED_BG`, leaving the adapter as the only definition
 
 ## 5. Migrating the TUI, file by file
 
 Each task below is one file taken to zero raw colours and zero chrome glyph literals, lowering both architecture budgets, with its own tests updated to assert tokens:
 
-- [ ] 5.1 `src/ui.rs` (chrome shared by both modes) and `src/ui/view.rs`
-- [ ] 5.2 `src/ui/orchestrator/render.rs` — the largest surface (95 style call sites); take the six meaning→colour helpers (`caption_color`, `AgentTabStatus::color`/`glyph`, `task_mark`) to tokens and symbols first, since they are the shape every other site should end in
-- [ ] 5.3 `src/ui/orchestrator.rs` and `src/ui/orchestrator/session.rs`
-- [ ] 5.4 `src/ui/overlay.rs` and `src/ui/agent_support.rs`
-- [ ] 5.5 `src/ui/management.rs` and `src/ui/root_picker.rs`
-- [ ] 5.6 `src/ui/view/plugins.rs`, `harnesses.rs`, `overview.rs`, `profiles.rs`, `extensions.rs`, `health.rs`
-- [ ] 5.7 `src/ui/extension_view.rs`: map `uze_extensions::view::Role` → `Token` (the crate itself stays untouched and gains no dependency), and move `LINE_ADDED_BG`/`LINE_REMOVED_BG` to `state.diff-added`/`state.diff-removed`
-- [ ] 5.8 Consolidate the duplicated geometry constants the migration touched — `TRAILING_PAD` (4 definitions), `H_PAD` (5), and the two conflicting `MIN_CONTENT_WIDTH` values — into one named constant each, in code, not in the schema
-- [ ] 5.9 Both architecture budgets reach zero; delete the budget entries rather than leaving them at `0`
+- [x] 5.1 `src/ui.rs` (chrome shared by both modes) and `src/ui/view.rs`
+- [x] 5.2 `src/ui/orchestrator/render.rs` — the largest surface (95 style call sites); take the six meaning→colour helpers (`caption_color`, `AgentTabStatus::color`/`glyph`, `task_mark`) to tokens and symbols first, since they are the shape every other site should end in
+- [x] 5.3 `src/ui/orchestrator.rs` and `src/ui/orchestrator/session.rs`
+- [x] 5.4 `src/ui/overlay.rs` and `src/ui/agent_support.rs`
+- [x] 5.5 `src/ui/management.rs` and `src/ui/root_picker.rs`
+- [x] 5.6 `src/ui/view/plugins.rs`, `harnesses.rs`, `overview.rs`, `profiles.rs`, `extensions.rs`, `health.rs`
+- [x] 5.7 `src/ui/extension_view.rs`: map `uze_extensions::view::Role` → `Token` (the crate itself stays untouched and gains no dependency), and move `LINE_ADDED_BG`/`LINE_REMOVED_BG` to `state.diff-added`/`state.diff-removed`
+- [x] 5.8 Consolidate the duplicated geometry constants the migration touched — `TRAILING_PAD` (4 definitions) and the popup inset `H_PAD`/`V_PAD` (5) become one shared pair in `src/ui.rs`. Correction to the survey this task came from: the two `MIN_CONTENT_WIDTH` values are not a duplication but two different measurements sharing a name (the sidebar's content floor, the extension navigator's), so the extension's is renamed rather than merged; and the status catalog's inset of 1 is deliberate, so it keeps its own name
+- [x] 5.9 The TUI's colour budget reaches zero; `src/progress.rs` keeps its 5 until §6.1. The symbol rule is a dedicated test rather than a `Rule` — one needle per glyph would have meant twenty-odd rules, and the arrows and middot in hint lines are authored notation the renderer translates, which a blanket scan cannot tell from a mark
 
 ## 6. The other three surfaces
 
-- [ ] 6.1 `src/progress.rs`: resolve the same tokens through a small `anstyle` adapter and delete its five palette constants; `NO_COLOR`/non-TTY behaviour unchanged, with a test that the CLI and the TUI report the same value for a shared token
-- [ ] 6.2 `crates/uze-terminal`: add `default_foreground`/`default_background`/`ansi_palette` to the runtime's construction config, delete `REPLY_BACKGROUND`/`REPLY_FOREGROUND`, and answer OSC 10/11 from the configured values — no protocol change, no new workspace dependency
-- [ ] 6.3 The workspace client passes the active theme's values on attach, and `TerminalColor::Indexed` resolves through `ansi.*` instead of `Color::Indexed` passthrough
-- [ ] 6.4 `crates/uze-extensions/src/git.rs`: take the syntect theme name as an argument instead of `base16-ocean.dark`; the host passes the active theme's `syntax.theme`
+- [x] 6.1 `src/progress.rs`: resolve the same tokens through a small `anstyle` adapter and delete its five palette constants; `NO_COLOR`/non-TTY behaviour unchanged, with a test that the CLI and the TUI report the same value for a shared token
+- [x] 6.2 `crates/uze-terminal`: add `default_foreground`/`default_background`/`ansi_palette` to the runtime's construction config, delete `REPLY_BACKGROUND`/`REPLY_FOREGROUND`, and answer OSC 10/11 from the configured values — no protocol change, no new workspace dependency
+- [x] 6.3 The workspace client passes the active theme's values on attach, and `TerminalColor::Indexed` resolves through `ansi.*` instead of `Color::Indexed` passthrough
+- [x] 6.4 `crates/uze-extensions/src/git.rs`: take the syntect theme name as an argument instead of `base16-ocean.dark`; the host passes the active theme's `syntax.theme`
 
 ## 7. Selection, storage and product surface
 
@@ -61,6 +61,6 @@ Each task below is one file taken to zero raw colours and zero chrome glyph lite
 
 - [ ] 8.1 Cover each spec scenario with a test: partial theme, malformed theme falls back with a named error, alias/alpha resolution, symbol replacement and width, ASCII theme, one token reaching all three surfaces, OSC 10/11 reporting the active background, the extension's chrome following the theme while its own `Rgb` content passes through
 - [ ] 8.2 Update `docs/architecture/invariants.md` with the appearance invariant and the test that proves it, in the form the file already uses
-- [ ] 8.3 Add the `designSystem` component and its edges to `docs/architecture/likec4/model.c4`, and validate the model (no `arch:validate` script exists in this repo — run `likec4 validate docs/architecture/likec4` directly, or record that the toolchain was unavailable)
+- [x] 8.3 Add the `designSystem` component and its edges to `docs/architecture/likec4/model.c4`, and validate the model (no `arch:validate` script exists in this repo — run `likec4 validate docs/architecture/likec4` directly, or record that the toolchain was unavailable)
 - [ ] 8.4 Document authoring a theme — the schema, the three colour forms, the symbol set — as one page with a canonical owner, and update `AGENTS.md`'s workspace layout with the new crate and its rule
 - [ ] 8.5 `make check` green: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, the full workspace suite, `cargo deny check`, `make attributions`, and `openspec validate --all --strict`

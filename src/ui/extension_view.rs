@@ -23,23 +23,15 @@ use uze_extensions::view::{
     Span, View, ViewHit,
 };
 
-use crate::ui::{
-    ACCENT, BASE, BLUE, BORDER, BORDER_FAINT, DANGER, MUTED, NAV_INACTIVE, SUCCESS,
-    SURFACE_OVERLAY, TEXT_BRIGHT, TEXT_DIM, TEXT_FAINT, TEXT_SECONDARY, WARNING, hint_spans,
-};
+use crate::ui::hint_spans;
+use crate::ui::theme::{self, Symbol, Token};
 
 /// Narrowest/widest the navigator can be dragged, and the floor left for
 /// the content column — the same shape as the host TUI's own
 /// `clamp_sidebar_width`, scoped to an extension overlay.
 const MIN_NAVIGATOR_WIDTH: u16 = 20;
 const MAX_NAVIGATOR_WIDTH: u16 = 50;
-const MIN_CONTENT_WIDTH: u16 = 40;
-
-/// A subtle wash behind a removed line — same family as `SURFACE_OVERLAY`
-/// (barely-there tints over `BASE`), just red-leaning.
-const LINE_REMOVED_BG: Color = Color::Rgb(38, 22, 20);
-/// The added counterpart — green-leaning, same family and strength.
-const LINE_ADDED_BG: Color = Color::Rgb(18, 32, 23);
+const MIN_EXTENSION_CONTENT_WIDTH: u16 = 40;
 
 const GUTTER_WIDTH: u16 = 7;
 
@@ -47,25 +39,25 @@ const GUTTER_WIDTH: u16 = 7;
 /// names colour, exactly once, here.
 fn color(role: Role) -> Color {
     match role {
-        Role::Default => TEXT_BRIGHT,
-        Role::Muted => MUTED,
-        Role::Secondary => TEXT_SECONDARY,
-        Role::Bright => TEXT_BRIGHT,
-        Role::Inactive => NAV_INACTIVE,
-        Role::Accent => ACCENT,
-        Role::Dim => TEXT_DIM,
-        Role::Faint => TEXT_FAINT,
-        Role::Info => BLUE,
-        Role::Success => SUCCESS,
-        Role::Warning => WARNING,
-        Role::Danger => DANGER,
+        Role::Default => theme::color(Token::TextBright),
+        Role::Muted => theme::color(Token::TextMuted),
+        Role::Secondary => theme::color(Token::TextSecondary),
+        Role::Bright => theme::color(Token::TextBright),
+        Role::Inactive => theme::color(Token::TextInactive),
+        Role::Accent => theme::color(Token::Accent),
+        Role::Dim => theme::color(Token::TextDim),
+        Role::Faint => theme::color(Token::TextFaint),
+        Role::Info => theme::color(Token::StateInfo),
+        Role::Success => theme::color(Token::StateSuccess),
+        Role::Warning => theme::color(Token::StateWarning),
+        Role::Danger => theme::color(Token::StateDanger),
     }
 }
 
 fn styled(span: &Span) -> TextSpan<'static> {
     let mut style = Style::default().fg(span
         .color
-        .map(|rgb| Color::Rgb(rgb.0, rgb.1, rgb.2))
+        .map(|rgb| theme::content(rgb.0, rgb.1, rgb.2))
         .unwrap_or_else(|| color(span.role)));
     if span.bold {
         style = style.add_modifier(Modifier::BOLD);
@@ -75,7 +67,7 @@ fn styled(span: &Span) -> TextSpan<'static> {
 
 pub(crate) fn clamp_navigator_width(width: u16, total_width: u16) -> u16 {
     let max = total_width
-        .saturating_sub(MIN_CONTENT_WIDTH)
+        .saturating_sub(MIN_EXTENSION_CONTENT_WIDTH)
         .clamp(MIN_NAVIGATOR_WIDTH, MAX_NAVIGATOR_WIDTH);
     width.clamp(MIN_NAVIGATOR_WIDTH, max)
 }
@@ -158,18 +150,21 @@ pub(crate) fn render(
     frame.render_widget(
         Block::default()
             .title(view.title.clone())
-            .title_style(Style::default().fg(ACCENT).add_modifier(Modifier::BOLD))
+            .title_style(theme::fg_bold(Token::Accent))
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(BORDER))
+            .border_style(theme::fg(Token::BorderDefault))
             .padding(Padding::new(1, 1, 1, 1))
-            .style(Style::default().bg(BASE)),
+            .style(theme::bg(Token::SurfaceBackground)),
         area,
     );
     // This closes the whole overlay, so make it an explicit, comfortably
     // clickable control rather than the compact tab-close glyph.
     let close_rect = Rect::new(area.right().saturating_sub(10), area.y, 9, 1);
     frame.render_widget(
-        Paragraph::new(TextSpan::styled(" ✕ close ", Style::default().fg(DANGER))),
+        Paragraph::new(TextSpan::styled(
+            format!(" {} close ", theme::glyph(Symbol::MarkClose)),
+            theme::fg(Token::StateDanger),
+        )),
         close_rect,
     );
     hits.push((close_rect, ViewHit::Close));
@@ -216,19 +211,24 @@ fn render_navigator(
 ) {
     let panel = Block::default()
         .borders(Borders::RIGHT)
-        .border_style(Style::default().fg(BORDER))
+        .border_style(theme::fg(Token::BorderDefault))
         .padding(Padding::new(1, 1, 0, 0))
-        .style(Style::default().bg(BASE));
+        .style(theme::bg(Token::SurfaceBackground));
     let inner = panel.inner(area);
     frame.render_widget(panel, area);
 
     let mut heading = vec![TextSpan::styled(
         navigator.heading.clone(),
         Style::default()
-            .fg(TEXT_SECONDARY)
+            .fg(theme::color(Token::TextSecondary))
             .add_modifier(Modifier::BOLD),
     )];
-    push_right_aligned(&mut heading, navigator.badge.clone(), inner.width, MUTED);
+    push_right_aligned(
+        &mut heading,
+        navigator.badge.clone(),
+        inner.width,
+        theme::color(Token::TextMuted),
+    );
     frame.render_widget(
         Paragraph::new(Line::from(heading)),
         Rect::new(inner.x, inner.y, inner.width, 1),
@@ -249,7 +249,7 @@ fn render_navigator(
                 frame.render_widget(
                     Paragraph::new(Line::from(vec![
                         TextSpan::raw("  ".repeat(*depth)),
-                        TextSpan::styled(name.clone(), Style::default().fg(TEXT_SECONDARY)),
+                        TextSpan::styled(name.clone(), theme::fg(Token::TextSecondary)),
                     ])),
                     rect,
                 );
@@ -263,10 +263,10 @@ fn render_navigator(
             } => {
                 let label_style = match (*selected, navigator.focused) {
                     (true, true) => Style::default()
-                        .fg(TEXT_BRIGHT)
+                        .fg(theme::color(Token::TextBright))
                         .add_modifier(Modifier::BOLD),
-                    (true, false) => Style::default().fg(TEXT_BRIGHT),
-                    (false, _) => Style::default().fg(NAV_INACTIVE),
+                    (true, false) => theme::fg(Token::TextBright),
+                    (false, _) => theme::fg(Token::TextInactive),
                 };
                 let mut spans = vec![
                     TextSpan::raw("  ".repeat(*depth)),
@@ -277,7 +277,7 @@ fn render_navigator(
                     TextSpan::styled(name.clone(), label_style),
                 ];
                 if *selected {
-                    fill_row_bg(&mut spans, rect.width, SURFACE_OVERLAY);
+                    fill_row_bg(&mut spans, rect.width, theme::color(Token::SurfaceRaised));
                 }
                 frame.render_widget(Paragraph::new(Line::from(spans)), rect);
                 hits.push((rect, ViewHit::SelectItem(*id)));
@@ -296,7 +296,7 @@ fn render_lines(
     frame.render_widget(
         Paragraph::new(TextSpan::styled(
             heading.to_owned(),
-            Style::default().fg(TEXT_SECONDARY),
+            theme::fg(Token::TextSecondary),
         )),
         Rect::new(area.x, area.y, area.width, 1),
     );
@@ -327,9 +327,15 @@ fn line_height(line: &ContentLine, width: u16) -> u16 {
 /// to the width that is left.
 fn render_line(frame: &mut ratatui::Frame<'_>, area: Rect, line: &ContentLine) {
     let (marker_style, background) = match line.tone {
-        LineTone::Neutral => (Style::default().fg(TEXT_FAINT), None),
-        LineTone::Added => (Style::default().fg(SUCCESS), Some(LINE_ADDED_BG)),
-        LineTone::Removed => (Style::default().fg(DANGER), Some(LINE_REMOVED_BG)),
+        LineTone::Neutral => (theme::fg(Token::TextFaint), None),
+        LineTone::Added => (
+            theme::fg(Token::StateSuccess),
+            Some(theme::color(Token::StateDiffAdded)),
+        ),
+        LineTone::Removed => (
+            theme::fg(Token::StateDanger),
+            Some(theme::color(Token::StateDiffRemoved)),
+        ),
     };
     let mut content_spans: Vec<TextSpan<'static>> = line.spans.iter().map(styled).collect();
     if let Some(background) = background {
@@ -344,18 +350,17 @@ fn render_line(frame: &mut ratatui::Frame<'_>, area: Rect, line: &ContentLine) {
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             TextSpan::styled(format!("{} ", line.gutter), marker_style),
-            TextSpan::styled(
-                format!("{:>4} ", line.number),
-                Style::default().fg(TEXT_DIM),
-            ),
+            TextSpan::styled(format!("{:>4} ", line.number), theme::fg(Token::TextDim)),
         ]))
-        .style(Style::default().bg(background.unwrap_or(BASE))),
+        .style(Style::default().bg(background.unwrap_or(theme::color(Token::SurfaceBackground)))),
         columns[0],
     );
     frame.render_widget(
         Paragraph::new(Line::from(content_spans))
             .wrap(Wrap { trim: false })
-            .style(Style::default().bg(background.unwrap_or(BASE))),
+            .style(
+                Style::default().bg(background.unwrap_or(theme::color(Token::SurfaceBackground))),
+            ),
         columns[1],
     );
 }
@@ -365,7 +370,7 @@ fn render_line(frame: &mut ratatui::Frame<'_>, area: Rect, line: &ContentLine) {
 fn render_footer(frame: &mut ratatui::Frame<'_>, area: Rect, hint: &str) {
     let block = Block::default()
         .borders(Borders::TOP)
-        .border_style(Style::default().fg(BORDER_FAINT));
+        .border_style(theme::fg(Token::BorderFaint));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     frame.render_widget(Paragraph::new(Line::from(hint_spans(hint))), inner);
@@ -412,15 +417,19 @@ pub(crate) fn render_section(
     let Some(header_rect) = rows.next(1) else {
         return;
     };
-    let fold = if section.collapsed { "▸" } else { "▾" };
+    let fold = theme::glyph(if section.collapsed {
+        Symbol::ChevronCollapsed
+    } else {
+        Symbol::ChevronExpanded
+    });
     // Bold on a filled row: the one section header in a column of tree
     // rows, so it reads as a heading rather than as one more item.
     let mut spans = vec![
-        TextSpan::styled(format!("{fold} "), Style::default().fg(TEXT_SECONDARY)),
+        TextSpan::styled(format!("{fold} "), theme::fg(Token::TextSecondary)),
         TextSpan::styled(
             section.title.clone(),
             Style::default()
-                .fg(TEXT_SECONDARY)
+                .fg(theme::color(Token::TextSecondary))
                 .add_modifier(Modifier::BOLD),
         ),
     ];
@@ -430,7 +439,11 @@ pub(crate) fn render_section(
         section.caption.text.clone(),
         color(section.caption.role),
     );
-    crate::ui::fill_row_bg(&mut spans, header_rect.width, SURFACE_OVERLAY);
+    crate::ui::fill_row_bg(
+        &mut spans,
+        header_rect.width,
+        theme::color(Token::SurfaceRaised),
+    );
     frame.render_widget(Paragraph::new(Line::from(spans)), header_rect);
     hits.push((header_rect, ViewHit::ToggleSection));
     if section.collapsed {
@@ -442,10 +455,14 @@ pub(crate) fn render_section(
     if section.resizable
         && let Some(handle_rect) = rows.next(1)
     {
-        let hue = if dragging { ACCENT } else { BORDER_FAINT };
+        let hue = if dragging {
+            theme::color(Token::Accent)
+        } else {
+            theme::color(Token::BorderFaint)
+        };
         frame.render_widget(
             Paragraph::new(TextSpan::styled(
-                "─".repeat(handle_rect.width as usize),
+                theme::glyph(Symbol::TreeDivider).repeat(handle_rect.width as usize),
                 Style::default().fg(hue),
             )),
             handle_rect,
@@ -615,10 +632,14 @@ mod tests {
         );
         assert_eq!(
             cell_at("CHANGES").unwrap().fg,
-            TEXT_SECONDARY,
+            theme::color(Token::TextSecondary),
             "a heading is chrome, so it resolves through the palette"
         );
-        assert_eq!(cell_at("M ").unwrap().fg, WARNING, "Role::Warning");
+        assert_eq!(
+            cell_at("M ").unwrap().fg,
+            theme::color(Token::StateWarning),
+            "Role::Warning"
+        );
     }
 
     /// Wrapping is the host's, so the row a long line occupies is too —

@@ -34,6 +34,12 @@ vocabulary! {
         /// Recessed rather than lifted: an unselected card or drawer, distinct
         /// from the backdrop but sitting below it.
         SurfaceRecessed = "surface.recessed",
+        /// What a control takes while the pointer is on it — one step above
+        /// every resting surface. One tone for every hovered control,
+        /// whatever its resting fill: hover is the frame answering "yes,
+        /// this one", and an answer that differs per control is one the eye
+        /// has to learn twice.
+        SurfaceHover = "surface.hover",
 
         // ── text ───────────────────────────────────────────────────────
         /// Headings and the active state — the brightest text there is.
@@ -143,6 +149,7 @@ impl Token {
                 | Token::SurfaceRaisedSubtle
                 | Token::SurfaceRaisedBright
                 | Token::SurfaceRecessed
+                | Token::SurfaceHover
                 | Token::StateDiffAdded
                 | Token::StateDiffRemoved
                 | Token::BorderDefault

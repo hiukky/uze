@@ -125,6 +125,20 @@ need to).
 - `crates/uze-terminal` — the local terminal runtime: a server owning the
   pseudoterminals and a versioned client protocol, so a pane survives a
   client leaving. Depends on nothing else in the workspace.
+- `crates/uze-theme` — the design vocabulary: colour `Token`s, named
+  `Symbol`s, the theme file schema, and the resolver that completes a
+  partial theme from the built-in default. A leaf crate — it resolves no
+  path, reads no environment, and names no rendering library, so every
+  consumer adapts `uze_theme::Rgb` to what it draws with (`src/ui/theme.rs`
+  for ratatui, `src/progress.rs` for the CLI). **Nothing outside
+  `src/ui/theme.rs` may name a colour value or write a chrome glyph
+  inline** — two rules in `tests/architecture/layering.rs` fail the build
+  over it. Name the meaning (`Token::TextMuted`, `Symbol::MarkOfficial`)
+  and let the active theme decide what it looks like; add a token or a
+  symbol when none of the existing ones says what yours means. Colour that
+  genuinely comes from content rather than from the design system — a
+  pane's own output, syntax highlighting an extension ships — goes through
+  `theme::content`.
 - `crates/uze-extensions` — built-in TUI extensions. An extension answers
   with a `view::View` (a full-frame surface) or a `view::Section` (a
   collapsible block of one of the host's own columns) and never draws,

@@ -6,6 +6,8 @@
 //! `&WorkspaceModel` and paint it, which is what makes them one module.
 
 use super::*;
+use crate::ui::theme::{self, Symbol, Token};
+use crate::ui::{POPUP_H_PAD, POPUP_V_PAD, TRAILING_PAD};
 use crate::ui::{Rows, fill_row_bg};
 
 /// The columns of fill a control keeps on each side of its label. Part of
@@ -128,8 +130,8 @@ pub(super) fn render(
     frame.render_widget(
         Block::default().style(
             Style::default()
-                .bg(crate::ui::BASE)
-                .fg(crate::ui::TEXT_PRIMARY),
+                .bg(theme::color(Token::SurfaceBackground))
+                .fg(theme::color(Token::TextPrimary)),
         ),
         frame.area(),
     );
@@ -236,12 +238,12 @@ pub(super) fn render_agent_picker(
         .title(" new agent ")
         .title_style(
             Style::default()
-                .fg(crate::ui::ACCENT)
+                .fg(theme::color(Token::Accent))
                 .add_modifier(Modifier::BOLD),
         )
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(crate::ui::BORDER))
-        .style(Style::default().bg(crate::ui::BASE));
+        .border_style(theme::fg(Token::BorderDefault))
+        .style(theme::bg(Token::SurfaceBackground));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
@@ -249,7 +251,7 @@ pub(super) fn render_agent_picker(
         frame.render_widget(
             Paragraph::new(Span::styled(
                 "no harnesses found",
-                Style::default().fg(crate::ui::MUTED),
+                theme::fg(Token::TextMuted),
             )),
             inner,
         );
@@ -267,8 +269,8 @@ pub(super) fn render_agent_picker(
         // reason: a keyboard-navigable menu needs the affordance.
         let (style, text) = if selected {
             let style = Style::default()
-                .bg(crate::ui::ACCENT)
-                .fg(crate::ui::BASE)
+                .bg(theme::color(Token::Accent))
+                .fg(theme::color(Token::SurfaceBackground))
                 .add_modifier(Modifier::BOLD);
             let text = format!(
                 " {:<width$}",
@@ -277,7 +279,7 @@ pub(super) fn render_agent_picker(
             );
             (style, text)
         } else {
-            let style = Style::default().fg(crate::ui::NAV_INACTIVE);
+            let style = theme::fg(Token::TextInactive);
             (style, format!(" {}", option.display_name))
         };
         frame.render_widget(Paragraph::new(Span::styled(text, style)), row);
@@ -299,7 +301,6 @@ pub(super) fn render_context_menu(
     menu: &ContextMenu,
     hits: &mut Vec<(Rect, WorkspaceHit)>,
 ) {
-    const H_PAD: u16 = 2;
     const MIN_WIDTH: u16 = 14;
     let content_width = menu
         .items
@@ -307,7 +308,7 @@ pub(super) fn render_context_menu(
         .map(|action| action.label().len())
         .max()
         .unwrap_or(0) as u16;
-    let width = (content_width + 2 * H_PAD + 2)
+    let width = (content_width + 2 * POPUP_H_PAD + 2)
         .max(MIN_WIDTH)
         .min(area.width);
     let height = (menu.items.len() as u16 + 2).min(area.height);
@@ -322,8 +323,8 @@ pub(super) fn render_context_menu(
     frame.render_widget(Clear, popup);
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(crate::ui::BORDER))
-        .style(Style::default().bg(crate::ui::BASE));
+        .border_style(theme::fg(Token::BorderDefault))
+        .style(theme::bg(Token::SurfaceBackground));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
@@ -334,17 +335,17 @@ pub(super) fn render_context_menu(
         let row = Rect::new(inner.x, inner.y + index as u16, inner.width, 1);
         let selected = index == menu.selected;
         // A filled bar for the selected row, same affordance
-        // `render_agent_picker` uses — always in `ACCENT`, never a red
+        // `render_agent_picker` uses — always in `theme::color(Token::Accent)`, never a red
         // fill; every row shares the same neutral color otherwise.
         let style = if selected {
             Style::default()
-                .bg(crate::ui::ACCENT)
-                .fg(crate::ui::BASE)
+                .bg(theme::color(Token::Accent))
+                .fg(theme::color(Token::SurfaceBackground))
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(crate::ui::NAV_INACTIVE)
+            theme::fg(Token::TextInactive)
         };
-        let label = format!("{:pad$}{}", "", action.label(), pad = H_PAD as usize);
+        let label = format!("{:pad$}{}", "", action.label(), pad = POPUP_H_PAD as usize);
         let text = format!("{label:<width$}", width = inner.width as usize);
         frame.render_widget(Paragraph::new(Span::styled(text, style)), row);
         hits.push((row, WorkspaceHit::ContextMenuAction(index)));
@@ -416,9 +417,9 @@ fn is_unisolated(cwd: &Path) -> bool {
 /// detail, except for an agent working in the operator's own tree.
 fn caption_color(cwd: &Path) -> Color {
     if is_unisolated(cwd) {
-        crate::ui::WARNING
+        theme::color(Token::StateWarning)
     } else {
-        crate::ui::TEXT_DIM
+        theme::color(Token::TextDim)
     }
 }
 
@@ -429,7 +430,7 @@ fn push_trailing_mark(
     spans: &mut Vec<Span<'_>>,
     hits: &mut Vec<(Rect, WorkspaceHit)>,
     label_rect: Rect,
-    mark: &'static str,
+    mark: &str,
     hue: Color,
 ) {
     let mark_x = label_rect.x + spans.iter().map(|span| span.width() as u16).sum::<u16>() + 1; // the space this mark is drawn behind
@@ -469,9 +470,9 @@ pub(super) fn render_sidebar(
     metrics: &mut FrameMetrics,
 ) {
     let border_color = if model.dragging_sidebar {
-        crate::ui::ACCENT
+        theme::color(Token::Accent)
     } else {
-        crate::ui::BORDER_FAINT
+        theme::color(Token::BorderFaint)
     };
     // No top padding: the header must land on the exact row the tab strip's
     // own content does (that block has none either), or the two panes'
@@ -503,7 +504,7 @@ pub(super) fn render_sidebar(
             Paragraph::new(Span::styled(
                 error.clone(),
                 Style::default()
-                    .fg(crate::ui::DANGER)
+                    .fg(theme::color(Token::StateDanger))
                     .add_modifier(Modifier::BOLD),
             )),
             rect,
@@ -512,8 +513,8 @@ pub(super) fn render_sidebar(
     if let Some(rect) = rows.next(1) {
         frame.render_widget(
             Paragraph::new(Span::styled(
-                "─".repeat(rect.width as usize),
-                Style::default().fg(crate::ui::BORDER_FAINT),
+                theme::glyph(Symbol::TreeDivider).repeat(rect.width as usize),
+                theme::fg(Token::BorderFaint),
             )),
             rect,
         );
@@ -539,16 +540,13 @@ pub(super) fn render_sidebar(
             if agent_count == 1 { "" } else { "s" }
         );
         frame.render_widget(
-            Paragraph::new(Span::styled(
-                count_label,
-                Style::default().fg(crate::ui::TEXT_DIM),
-            )),
+            Paragraph::new(Span::styled(count_label, theme::fg(Token::TextDim))),
             rect,
         );
         let label = "+ new";
         let label_x = rect.x + rect.width.saturating_sub(label.len() as u16);
         frame.render_widget(
-            Paragraph::new(Span::styled(label, Style::default().fg(crate::ui::ACCENT)))
+            Paragraph::new(Span::styled(label, theme::fg(Token::Accent)))
                 .alignment(Alignment::Right),
             rect,
         );
@@ -628,12 +626,13 @@ pub(super) fn render_sidebar(
                     .and_then(|tab| pane_in_layout(&tab.layout, tab.focus.pane))
                     .map(|pane| crate::ui::display_project_path(&pane.cwd))
                     .unwrap_or_default();
-                let mut spans = vec![Span::styled(
-                    format!("  {cwd}"),
-                    Style::default().fg(crate::ui::TEXT_DIM),
-                )];
+                let mut spans = vec![Span::styled(format!("  {cwd}"), theme::fg(Token::TextDim))];
                 if is_active_space {
-                    fill_row_bg(&mut spans, cwd_rect.width, crate::ui::ACTIVE_SPACE_OVERLAY);
+                    fill_row_bg(
+                        &mut spans,
+                        cwd_rect.width,
+                        theme::color(Token::SurfaceRaisedSubtle),
+                    );
                 }
                 frame.render_widget(Paragraph::new(Line::from(spans)), cwd_rect);
                 // The header and its cwd caption read as one tree item —
@@ -647,7 +646,14 @@ pub(super) fn render_sidebar(
             let is_last = index + 1 == agent_tabs.len();
             // One extra level of indent versus a flat list — these tabs
             // read as children of the space header row just drawn above.
-            let connector = if is_last { "  └─ " } else { "  ├─ " };
+            let connector = format!(
+                "  {} ",
+                theme::glyph(if is_last {
+                    Symbol::TreeLast
+                } else {
+                    Symbol::TreeBranch
+                })
+            );
             let label_slot = rows.slot(1);
             if label_slot.is_full() {
                 break;
@@ -697,20 +703,19 @@ pub(super) fn render_sidebar(
                 // (see the `status` comment above `is_active_space && selected`
                 // for why `selected` alone isn't enough).
                 let mut label_style = Style::default().fg(if selected {
-                    crate::ui::TEXT_BRIGHT
+                    theme::color(Token::TextBright)
                 } else {
-                    crate::ui::NAV_INACTIVE
+                    theme::color(Token::TextInactive)
                 });
                 if is_active_space && selected {
                     label_style = label_style.add_modifier(Modifier::BOLD);
                 }
-                let connector_span =
-                    Span::styled(connector, Style::default().fg(crate::ui::TEXT_FAINT));
+                let connector_span = Span::styled(connector, theme::fg(Token::TextFaint));
                 let label = match renaming_this {
                     Some(buffer) => Span::styled(
-                        format!("{buffer}▏"),
+                        format!("{buffer}{}", theme::glyph(Symbol::CursorText)),
                         Style::default()
-                            .fg(crate::ui::TEXT_BRIGHT)
+                            .fg(theme::color(Token::TextBright))
                             .add_modifier(Modifier::BOLD),
                     ),
                     None => Span::styled(tab.label.clone(), label_style),
@@ -731,7 +736,7 @@ pub(super) fn render_sidebar(
                     .tab_task(tab.id)
                     .and_then(|task| task_mark(&task.state))
                 {
-                    push_trailing_mark(&mut spans, hits, label_rect, mark, hue);
+                    push_trailing_mark(&mut spans, hits, label_rect, &mark, hue);
                 }
                 // The alias in place of the raw process name — this list only
                 // ever holds tabs `agent_identity_for_tab` already resolved, so
@@ -744,9 +749,7 @@ pub(super) fn render_sidebar(
                 // `Padding::new(1, 0, 0, 0)`) — that padding drop suits a
                 // button glued to the edge, not a plain text label.
                 let alias = agent_identity_for_tab(identities, tab).unwrap_or_default();
-                let alias_span =
-                    Span::styled(small_caps(alias), Style::default().fg(crate::ui::TEXT_DIM));
-                const TRAILING_PAD: u16 = 1;
+                let alias_span = Span::styled(small_caps(alias), theme::fg(Token::TextDim));
                 let used: u16 = spans.iter().map(|span| span.width() as u16).sum::<u16>()
                     + alias_span.width() as u16
                     + TRAILING_PAD;
@@ -758,21 +761,26 @@ pub(super) fn render_sidebar(
                     fill_row_bg(
                         &mut spans,
                         label_rect.width,
-                        crate::ui::ACTIVE_SPACE_OVERLAY,
+                        theme::color(Token::SurfaceRaisedSubtle),
                     );
                 }
                 frame.render_widget(Paragraph::new(Line::from(spans)), label_rect);
                 hits.push((label_rect, WorkspaceHit::SelectTab(tab.id)));
                 if show_drop_indicator {
                     frame.render_widget(
-                        Paragraph::new("▍").style(Style::default().fg(crate::ui::ACCENT)),
+                        Paragraph::new(theme::glyph(Symbol::BarThick))
+                            .style(theme::fg(Token::Accent)),
                         Rect::new(label_rect.x, label_rect.y, 1, 1),
                     );
                 }
             }
 
             if let Some(detail_rect) = rows.slot(1).visible() {
-                let continuation = if is_last { "     " } else { "  │  " };
+                let continuation = if is_last {
+                    "     ".to_owned()
+                } else {
+                    format!("  {}  ", theme::glyph(Symbol::TreeVertical))
+                };
                 // The task's own working branch in place of the cwd path —
                 // what this agent will deliver from. An agent outside any
                 // slot has no task, so its branch is the one its
@@ -794,10 +802,9 @@ pub(super) fn render_sidebar(
                         .or_else(|| unisolated_branch(model, &cwd))
                         .unwrap_or_else(|| caption_path(&cwd))
                 };
-                let continuation_span =
-                    Span::styled(continuation, Style::default().fg(crate::ui::TEXT_FAINT));
+                let continuation_span = Span::styled(continuation, theme::fg(Token::TextFaint));
                 let detail_color = if lost {
-                    crate::ui::WARNING
+                    theme::color(Token::StateWarning)
                 } else {
                     caption_color(&cwd)
                 };
@@ -812,7 +819,7 @@ pub(super) fn render_sidebar(
                 const RESUME: &str = "resume";
                 let resumable = lost && model.lost_task(tab.focus.pane).is_some();
                 let sync: Vec<Span<'_>> = if resumable {
-                    vec![Span::styled(RESUME, Style::default().fg(crate::ui::ACCENT))]
+                    vec![Span::styled(RESUME, theme::fg(Token::Accent))]
                 } else {
                     unisolated_sync_caption(model, &cwd)
                         .into_iter()
@@ -844,7 +851,6 @@ pub(super) fn render_sidebar(
                     ));
                 }
                 if !sync.is_empty() {
-                    const TRAILING_PAD: u16 = 1;
                     if resumable {
                         let x = detail_rect
                             .right()
@@ -869,7 +875,7 @@ pub(super) fn render_sidebar(
                     fill_row_bg(
                         &mut spans,
                         detail_rect.width,
-                        crate::ui::ACTIVE_SPACE_OVERLAY,
+                        theme::color(Token::SurfaceRaisedSubtle),
                     );
                 }
                 frame.render_widget(Paragraph::new(Line::from(spans)), detail_rect);
@@ -879,7 +885,8 @@ pub(super) fn render_sidebar(
                 hits.push((detail_rect, WorkspaceHit::SelectTab(tab.id)));
                 if show_drop_indicator {
                     frame.render_widget(
-                        Paragraph::new("▍").style(Style::default().fg(crate::ui::ACCENT)),
+                        Paragraph::new(theme::glyph(Symbol::BarThick))
+                            .style(theme::fg(Token::Accent)),
                         Rect::new(detail_rect.x, detail_rect.y, 1, 1),
                     );
                 }
@@ -893,11 +900,15 @@ pub(super) fn render_sidebar(
             // blank row already separates it from whatever comes next.
             if !is_last && let Some(gap_rect) = rows.slot(1).visible() {
                 let mut spans = vec![Span::styled(
-                    "  │  ",
-                    Style::default().fg(crate::ui::TEXT_FAINT),
+                    format!("  {}  ", theme::glyph(Symbol::TreeVertical)),
+                    theme::fg(Token::TextFaint),
                 )];
                 if is_active_space {
-                    fill_row_bg(&mut spans, gap_rect.width, crate::ui::ACTIVE_SPACE_OVERLAY);
+                    fill_row_bg(
+                        &mut spans,
+                        gap_rect.width,
+                        theme::color(Token::SurfaceRaisedSubtle),
+                    );
                 }
                 frame.render_widget(Paragraph::new(Line::from(spans)), gap_rect);
             }
@@ -1039,8 +1050,6 @@ impl CommitDetailLayout {
 /// or taller than a hover card ought to be: a long message scrolls
 /// inside it rather than growing it over the pane.
 pub(super) fn commit_detail_layout(area: Rect, popup: &CommitDetailPopup) -> CommitDetailLayout {
-    const H_PAD: u16 = 2;
-    const V_PAD: u16 = 1;
     const MAX_WIDTH: u16 = 72;
     const MAX_HEIGHT: u16 = 20;
     const MIN_BESIDE_WIDTH: u16 = 40;
@@ -1053,26 +1062,26 @@ pub(super) fn commit_detail_layout(area: Rect, popup: &CommitDetailPopup) -> Com
         let width = area.width.saturating_sub(4).clamp(1, MAX_WIDTH);
         (area.x + (area.width - width) / 2, width)
     };
-    let inner_width = usize::from(width.saturating_sub(2 + 2 * H_PAD).max(1));
+    let inner_width = usize::from(width.saturating_sub(2 + 2 * POPUP_H_PAD).max(1));
 
     let mut lines = vec![
         crate::ui::title_row("commit", "esc", inner_width),
         Line::default(),
         Line::from(vec![
-            Span::styled("◉ ", Style::default().fg(crate::ui::BLUE)),
             Span::styled(
-                detail.author.clone(),
-                Style::default().fg(crate::ui::TEXT_PRIMARY),
+                format!("{} ", theme::glyph(Symbol::MarkToggleOn)),
+                theme::fg(Token::StateInfo),
             ),
+            Span::styled(detail.author.clone(), theme::fg(Token::TextPrimary)),
             Span::styled(
                 format!(" · {} · {}", detail.age, detail.date),
-                Style::default().fg(crate::ui::TEXT_SECONDARY),
+                theme::fg(Token::TextSecondary),
             ),
         ]),
         Line::from(Span::styled(
             detail.subject.clone(),
             Style::default()
-                .fg(crate::ui::TEXT_BRIGHT)
+                .fg(theme::color(Token::TextBright))
                 .add_modifier(Modifier::BOLD),
         )),
     ];
@@ -1081,7 +1090,7 @@ pub(super) fn commit_detail_layout(area: Rect, popup: &CommitDetailPopup) -> Com
         lines.extend(detail.body.lines().map(|line| {
             Line::from(Span::styled(
                 line.to_owned(),
-                Style::default().fg(crate::ui::TEXT_SECONDARY),
+                theme::fg(Token::TextSecondary),
             ))
         }));
     }
@@ -1093,15 +1102,15 @@ pub(super) fn commit_detail_layout(area: Rect, popup: &CommitDetailPopup) -> Com
                 detail.files_changed,
                 if detail.files_changed == 1 { "" } else { "s" }
             ),
-            Style::default().fg(crate::ui::TEXT_SECONDARY),
+            theme::fg(Token::TextSecondary),
         ),
         Span::styled(
             format!("  +{}", detail.insertions),
-            Style::default().fg(crate::ui::SUCCESS),
+            theme::fg(Token::StateSuccess),
         ),
         Span::styled(
             format!("  −{}", detail.deletions),
-            Style::default().fg(crate::ui::DANGER),
+            theme::fg(Token::StateDanger),
         ),
     ]));
     // The target's label wears the target's gold — the hue the timeline
@@ -1121,13 +1130,13 @@ pub(super) fn commit_detail_layout(area: Rect, popup: &CommitDetailPopup) -> Com
             footer.push(Span::raw(" "));
         }
         let hue = if is_target(reference) {
-            crate::ui::WARNING
+            theme::color(Token::StateWarning)
         } else {
-            crate::ui::BLUE
+            theme::color(Token::StateInfo)
         };
         footer.push(Span::styled(
             format!(" {reference} "),
-            Style::default().fg(crate::ui::BASE).bg(hue),
+            theme::fg(Token::SurfaceBackground).bg(hue),
         ));
     }
     let used: usize = footer.iter().map(Span::width).sum();
@@ -1135,7 +1144,7 @@ pub(super) fn commit_detail_layout(area: Rect, popup: &CommitDetailPopup) -> Com
     footer.push(Span::raw(" ".repeat(gap.max(1))));
     footer.push(Span::styled(
         detail.short_hash.clone(),
-        Style::default().fg(crate::ui::MUTED),
+        theme::fg(Token::TextMuted),
     ));
     lines.push(Line::from(footer));
 
@@ -1143,7 +1152,7 @@ pub(super) fn commit_detail_layout(area: Rect, popup: &CommitDetailPopup) -> Com
         .iter()
         .map(|line| line.width().max(1).div_ceil(inner_width) as u16)
         .sum();
-    let height = (content_rows + 2 + 2 * V_PAD)
+    let height = (content_rows + 2 + 2 * POPUP_V_PAD)
         .min(area.height)
         .clamp(1, MAX_HEIGHT);
     let rect = Rect::new(
@@ -1153,7 +1162,12 @@ pub(super) fn commit_detail_layout(area: Rect, popup: &CommitDetailPopup) -> Com
         height,
     );
     let inner = commit_detail_block()
-        .padding(Padding::new(H_PAD, H_PAD, V_PAD, V_PAD))
+        .padding(Padding::new(
+            POPUP_H_PAD,
+            POPUP_H_PAD,
+            POPUP_V_PAD,
+            POPUP_V_PAD,
+        ))
         .inner(rect);
     CommitDetailLayout {
         rect,
@@ -1166,8 +1180,8 @@ pub(super) fn commit_detail_layout(area: Rect, popup: &CommitDetailPopup) -> Com
 fn commit_detail_block() -> Block<'static> {
     Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(crate::ui::BORDER))
-        .style(Style::default().bg(crate::ui::BASE))
+        .border_style(theme::fg(Token::BorderDefault))
+        .style(theme::bg(Token::SurfaceBackground))
 }
 
 pub(super) fn render_commit_detail(
@@ -1200,10 +1214,10 @@ pub(super) fn render_commit_detail(
 /// [`render_sidebar`]) gets a neutral background instead of a left accent
 /// bar, so the highlight reads as "this whole block is where you are"
 /// rather than a thin per-row marker or an on-brand "selected" tint
-/// (deliberately not `SELECTED_BG` — that one borrows the accent hue for a
+/// (deliberately not `theme::color(Token::SurfaceSelected)` — that one borrows the accent hue for a
 /// different kind of selection). This header row itself stays at the
-/// lighter [`crate::ui::SURFACE_OVERLAY`] while the rows it anchors go one
-/// step darker, [`crate::ui::ACTIVE_SPACE_OVERLAY`] — the title lifts
+/// lighter [`theme::color(Token::SurfaceRaised)`] while the rows it anchors go one
+/// step darker, [`theme::color(Token::SurfaceRaisedSubtle)`] — the title lifts
 /// slightly above the block it names instead of blending into it. Its own
 /// small function (unlike the tab row, which stays inline in
 /// [`render_sidebar`]) purely to keep that function's now-nested loop
@@ -1225,13 +1239,13 @@ pub(super) fn render_space_header(
     // Never bright, never bold, selected or not — the background fill
     // below already carries "this is where you are"; the label itself
     // stays out of the way of the agent name bolded underneath it.
-    let label_style = Style::default().fg(crate::ui::NAV_INACTIVE);
+    let label_style = theme::fg(Token::TextInactive);
     let mut spans = vec![Span::raw(" ")];
     match renaming_this {
         Some(buffer) => spans.push(Span::styled(
-            format!("{buffer}▏"),
+            format!("{buffer}{}", theme::glyph(Symbol::CursorText)),
             Style::default()
-                .fg(crate::ui::TEXT_BRIGHT)
+                .fg(theme::color(Token::TextBright))
                 .add_modifier(Modifier::BOLD),
         )),
         None => {
@@ -1245,7 +1259,7 @@ pub(super) fn render_space_header(
             if model.roots_shown.contains(&space.id) {
                 spans.push(Span::styled(
                     crate::ui::display_project_path(&space.root),
-                    Style::default().fg(crate::ui::TEXT_DIM),
+                    theme::fg(Token::TextDim),
                 ));
             } else {
                 spans.push(Span::styled(space.label.clone(), label_style));
@@ -1254,7 +1268,7 @@ pub(super) fn render_space_header(
         }
     }
     if selected {
-        fill_row_bg(&mut spans, rect.width, crate::ui::SURFACE_OVERLAY);
+        fill_row_bg(&mut spans, rect.width, theme::color(Token::SurfaceRaised));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), rect);
     hits.push((rect, WorkspaceHit::SelectSpace(space.id)));
@@ -1274,7 +1288,6 @@ fn push_root_toggle(
     rect: Rect,
     space: SpaceId,
 ) {
-    const TRAILING_PAD: u16 = 1;
     let used: u16 = spans.iter().map(|span| span.width() as u16).sum::<u16>() + 1 + TRAILING_PAD;
     let Some(gap) = rect.width.checked_sub(used) else {
         return;
@@ -1282,8 +1295,8 @@ fn push_root_toggle(
     let toggle_x = rect.right() - 1 - TRAILING_PAD;
     spans.push(Span::raw(" ".repeat(gap as usize)));
     spans.push(Span::styled(
-        "⇄",
-        Style::default().fg(crate::ui::TEXT_SECONDARY),
+        theme::glyph(Symbol::ArrowSwap),
+        theme::fg(Token::TextSecondary),
     ));
     spans.push(Span::raw(" ".repeat(TRAILING_PAD as usize)));
     hits.push((
@@ -1301,32 +1314,35 @@ fn push_root_toggle(
 /// everything around it, double-width in some terminals and not others,
 /// and immune to the hue this returns — it would ignore the color that
 /// carries the meaning. Each state also gets a hue of its own rather than
-/// three sharing `TEXT_DIM`: color is what tells these apart at a glance,
+/// three sharing `theme::color(Token::TextDim)`: color is what tells these apart at a glance,
 /// the glyph is what tells them apart once you look. `Ready` deliberately
 /// does *not* reuse `✓` — that is `AgentTabStatus::Completed`'s glyph one
 /// column to the left, and the same mark in the same accent meaning two
 /// different things is what made the second column read as an echo of the
 /// first. It wears the `⇧` of the delivery button it enables instead.
 /// [`render_status_catalog`] is this table's legend and must move with it.
-pub(super) fn task_mark(state: &TaskStateView) -> Option<(&'static str, Color)> {
-    match state {
+pub(super) fn task_mark(state: &TaskStateView) -> Option<(String, Color)> {
+    let (symbol, hue) = match state {
         // Nothing to report, and for the same reason: a task that has not
         // committed yet and one whose agent left with nothing both hold
         // no work. `Closed` in particular must not wear `Integrated`'s
         // arrow — that arrow claims a delivery.
-        TaskStateView::Running | TaskStateView::Closed => None,
-        TaskStateView::Uncommitted => Some(("±", crate::ui::BLUE)),
-        TaskStateView::Ready => Some(("⇧", crate::ui::ACCENT)),
-        TaskStateView::Integrating => Some(("…", crate::ui::CYAN)),
-        // Split, where one `⚠` used to cover both: a paused rebase wants
-        // your hands in the slot, a failed gate wants the code fixed —
+        TaskStateView::Running | TaskStateView::Closed => return None,
+        TaskStateView::Uncommitted => (Symbol::PlusMinus, theme::color(Token::StateInfo)),
+        TaskStateView::Ready => (Symbol::ArrowShift, theme::color(Token::Accent)),
+        TaskStateView::Integrating => (Symbol::Ellipsis, theme::color(Token::StateInFlight)),
+        // Split, where one warning mark used to cover both: a paused rebase
+        // wants your hands in the slot, a failed gate wants the code fixed —
         // different work, and the sidebar was the one surface that never
         // said which (the strip's own button already did).
-        TaskStateView::Conflicted { .. } => Some(("!", crate::ui::WARNING)),
-        TaskStateView::GateFailed => Some(("×", crate::ui::DANGER)),
-        TaskStateView::Integrated => Some(("↑", crate::ui::VIOLET)),
-        TaskStateView::Parked => Some(("≡", crate::ui::MUTED)),
-    }
+        TaskStateView::Conflicted { .. } => {
+            (Symbol::MarkAttention, theme::color(Token::StateWarning))
+        }
+        TaskStateView::GateFailed => (Symbol::MarkCross, theme::color(Token::StateDanger)),
+        TaskStateView::Integrated => (Symbol::ArrowUp, theme::color(Token::StateLanded)),
+        TaskStateView::Parked => (Symbol::Menu, theme::color(Token::TextMuted)),
+    };
+    Some((theme::glyph(symbol), hue))
 }
 
 /// The legend for the two status columns an agent row carries, opened by
@@ -1427,7 +1443,9 @@ pub(super) fn render_status_catalog(
     })
     .collect();
 
-    const H_PAD: u16 = 1;
+    /// Tighter than a popup's own inset: the catalog is a table, and its
+    /// columns carry the separation an inset would otherwise provide.
+    const CATALOG_H_PAD: u16 = 1;
     const GLYPH_COLUMN: usize = 3;
     let name_column = agent_rows
         .iter()
@@ -1447,7 +1465,7 @@ pub(super) fn render_status_catalog(
         |title: &str, rows: &[(String, Color, &str, &str)], lines: &mut Vec<Line<'static>>| {
             lines.push(Line::from(Span::styled(
                 title.to_owned(),
-                Style::default().fg(crate::ui::MUTED),
+                theme::fg(Token::TextMuted),
             )));
             for (glyph, hue, name, meaning) in rows {
                 lines.push(Line::from(vec![
@@ -1457,12 +1475,9 @@ pub(super) fn render_status_catalog(
                     ),
                     Span::styled(
                         format!("{name:<name_column$}  "),
-                        Style::default().fg(crate::ui::TEXT_PRIMARY),
+                        theme::fg(Token::TextPrimary),
                     ),
-                    Span::styled(
-                        (*meaning).to_owned(),
-                        Style::default().fg(crate::ui::TEXT_SECONDARY),
-                    ),
+                    Span::styled((*meaning).to_owned(), theme::fg(Token::TextSecondary)),
                 ]));
             }
         };
@@ -1470,7 +1485,7 @@ pub(super) fn render_status_catalog(
     lines.push(Line::from(""));
     section("TASK", &task_rows, &mut lines);
 
-    let width = (content_width + 2 * H_PAD + 2).min(area.width);
+    let width = (content_width + 2 * CATALOG_H_PAD + 2).min(area.width);
     let height = (lines.len() as u16 + 2).min(area.height);
     // Anchored to the glyph that was clicked, like every other dropdown
     // here — and pulled back inside the frame when that glyph sits too
@@ -1486,13 +1501,13 @@ pub(super) fn render_status_catalog(
         .title(" status ")
         .title_style(
             Style::default()
-                .fg(crate::ui::ACCENT)
+                .fg(theme::color(Token::Accent))
                 .add_modifier(Modifier::BOLD),
         )
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(crate::ui::BORDER))
-        .padding(Padding::new(H_PAD, H_PAD, 0, 0))
-        .style(Style::default().bg(crate::ui::BASE));
+        .border_style(theme::fg(Token::BorderDefault))
+        .padding(Padding::new(CATALOG_H_PAD, CATALOG_H_PAD, 0, 0))
+        .style(theme::bg(Token::SurfaceBackground));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     frame.render_widget(Paragraph::new(lines), inner);
@@ -1524,8 +1539,8 @@ fn unisolated_sync_caption(model: &WorkspaceModel, cwd: &Path) -> Vec<(String, C
         return Vec::new();
     };
     [
-        ('\u{21e3}', sync.pull, crate::ui::DANGER),
-        ('\u{21e1}', sync.push, crate::ui::SUCCESS),
+        ('\u{21e3}', sync.pull, theme::color(Token::StateDanger)),
+        ('\u{21e1}', sync.push, theme::color(Token::StateSuccess)),
     ]
     .into_iter()
     .filter(|(_, count, _)| *count > 0)
@@ -1569,7 +1584,7 @@ fn render_root_picker(
                 picker.input().split_at(separator + 1)
             });
         let mut spans = vec![
-            Span::styled(" at ", Style::default().fg(crate::ui::MUTED)),
+            Span::styled(" at ", theme::fg(Token::TextMuted)),
             Span::styled(
                 // What is being typed must stay visible in a column this
                 // narrow, so the directory in front of it is the part that
@@ -1578,16 +1593,16 @@ fn render_root_picker(
                     directory,
                     (rect.width as usize).saturating_sub(" at ".len() + needle.chars().count() + 1),
                 ),
-                Style::default().fg(crate::ui::TEXT_DIM),
+                theme::fg(Token::TextDim),
             ),
             Span::styled(
-                format!("{needle}▏"),
+                format!("{needle}{}", theme::glyph(Symbol::CursorText)),
                 Style::default()
-                    .fg(crate::ui::TEXT_BRIGHT)
+                    .fg(theme::color(Token::TextBright))
                     .add_modifier(Modifier::BOLD),
             ),
         ];
-        fill_row_bg(&mut spans, rect.width, crate::ui::SURFACE_OVERLAY);
+        fill_row_bg(&mut spans, rect.width, theme::color(Token::SurfaceRaised));
         frame.render_widget(Paragraph::new(Line::from(spans)), rect);
     }
     if picker.match_count() == 0 {
@@ -1595,7 +1610,7 @@ fn render_root_picker(
             frame.render_widget(
                 Paragraph::new(Span::styled(
                     "    no directory matches",
-                    Style::default().fg(crate::ui::TEXT_FAINT),
+                    theme::fg(Token::TextFaint),
                 )),
                 rect,
             );
@@ -1613,19 +1628,19 @@ fn render_root_picker(
         let mut spans = vec![
             Span::styled(
                 if selected { "  › " } else { "    " },
-                Style::default().fg(crate::ui::ACCENT),
+                theme::fg(Token::Accent),
             ),
             Span::styled(
                 candidate.name.clone(),
                 Style::default().fg(if selected {
-                    crate::ui::TEXT_BRIGHT
+                    theme::color(Token::TextBright)
                 } else {
-                    crate::ui::NAV_INACTIVE
+                    theme::color(Token::TextInactive)
                 }),
             ),
         ];
         if selected {
-            fill_row_bg(&mut spans, rect.width, crate::ui::SURFACE_OVERLAY);
+            fill_row_bg(&mut spans, rect.width, theme::color(Token::SurfaceRaised));
         }
         frame.render_widget(Paragraph::new(Line::from(spans)), rect);
         hits.push((rect, WorkspaceHit::PickSpaceRoot(index)));
@@ -1637,7 +1652,7 @@ fn render_root_picker(
         frame.render_widget(
             Paragraph::new(Span::styled(
                 format!("    +{hidden} more"),
-                Style::default().fg(crate::ui::TEXT_FAINT),
+                theme::fg(Token::TextFaint),
             )),
             rect,
         );
@@ -1679,10 +1694,10 @@ fn chip_state(model: &WorkspaceModel, hit: Option<WorkspaceHit>) -> ChipState {
 /// state that overrules a label's own colour.
 fn chip_skin(state: ChipState, hue: Color) -> (Color, Color) {
     match state {
-        ChipState::Resting => (hue, crate::ui::SURFACE_OVERLAY),
-        ChipState::Hovered => (hue, crate::ui::SURFACE_HOVER),
-        ChipState::Pressed => (crate::ui::BASE, hue),
-        ChipState::Static => (hue, crate::ui::SURFACE_SUBTLE),
+        ChipState::Resting => (hue, theme::color(Token::SurfaceRaised)),
+        ChipState::Hovered => (hue, theme::color(Token::SurfaceHover)),
+        ChipState::Pressed => (theme::color(Token::SurfaceBackground), hue),
+        ChipState::Static => (hue, theme::color(Token::SurfaceRecessed)),
     }
 }
 
@@ -1726,31 +1741,54 @@ fn deliver_button(task: &TaskView) -> Option<(String, Color, bool)> {
             // the request already carries. It stays pressable — the target
             // moves, and a re-sync is how the branch follows it.
             Some(0) => (
-                format!("✓ {}", delivery_ending(task)),
-                crate::ui::MUTED,
+                format!(
+                    "{} {}",
+                    theme::glyph(Symbol::MarkOfficial),
+                    delivery_ending(task)
+                ),
+                theme::color(Token::TextMuted),
                 true,
             ),
             // What a press would send, which is not how far the branch is
             // from the target: that distance is the merge's question and
             // stays open until the request lands.
             Some(unsynced) => (
-                format!("⇧{unsynced} {}", delivery_ending(task)),
-                crate::ui::ACCENT,
+                format!(
+                    "{}{unsynced} {}",
+                    theme::glyph(Symbol::ArrowShift),
+                    delivery_ending(task)
+                ),
+                theme::color(Token::Accent),
                 true,
             ),
             None => (
-                format!("⇧{} {}", task.ahead, delivery_ending(task)),
-                crate::ui::ACCENT,
+                format!(
+                    "{}{} {}",
+                    theme::glyph(Symbol::ArrowShift),
+                    task.ahead,
+                    delivery_ending(task)
+                ),
+                theme::color(Token::Accent),
                 true,
             ),
         }),
         // The hue is the state's own (see `task_mark`), not the button's
         // mood: one meaning, one color, wherever the state is drawn.
-        TaskStateView::GateFailed => Some(("⇧ retry".to_owned(), crate::ui::DANGER, true)),
-        TaskStateView::Conflicted { .. } => {
-            Some(("! conflict".to_owned(), crate::ui::WARNING, false))
-        }
-        TaskStateView::Integrating => Some(("… delivering".to_owned(), crate::ui::CYAN, false)),
+        TaskStateView::GateFailed => Some((
+            format!("{} retry", theme::glyph(Symbol::ArrowShift)),
+            theme::color(Token::StateDanger),
+            true,
+        )),
+        TaskStateView::Conflicted { .. } => Some((
+            "! conflict".to_owned(),
+            theme::color(Token::StateWarning),
+            false,
+        )),
+        TaskStateView::Integrating => Some((
+            "… delivering".to_owned(),
+            theme::color(Token::StateInFlight),
+            false,
+        )),
         _ => None,
     }
 }
@@ -1788,21 +1826,21 @@ pub(super) fn render_preserved(
     model: &WorkspaceModel,
     overlay: &PreservedOverlay,
 ) {
-    const H_PAD: u16 = 2;
     let preserved = model.preserved_tasks();
     let mut lines = vec![Line::from(Span::styled(
         "PRESERVED WORK",
-        Style::default().fg(crate::ui::MUTED),
+        theme::fg(Token::TextMuted),
     ))];
     if preserved.is_empty() {
         lines.push(Line::from(Span::styled(
             "nothing preserved — every task is either live or delivered",
-            Style::default().fg(crate::ui::TEXT_SECONDARY),
+            theme::fg(Token::TextSecondary),
         )));
     }
     for (index, (_, task)) in preserved.iter().enumerate() {
         let selected = index == overlay.selected;
-        let (mark, hue) = task_mark(&task.state).unwrap_or(("·", crate::ui::TEXT_DIM));
+        let (mark, hue) = task_mark(&task.state)
+            .unwrap_or_else(|| (theme::glyph(Symbol::MarkDot), theme::color(Token::TextDim)));
         let what = match &task.state {
             TaskStateView::Ready => format!(
                 "{} commit{}, not delivered",
@@ -1828,25 +1866,26 @@ pub(super) fn render_preserved(
         };
         let mut spans = vec![
             Span::styled(
-                if selected { "▸ " } else { "  " },
-                Style::default().fg(crate::ui::ACCENT),
+                if selected {
+                    format!("{} ", theme::glyph(Symbol::ChevronCollapsed))
+                } else {
+                    "  ".to_owned()
+                },
+                theme::fg(Token::Accent),
             ),
             Span::styled(format!("{mark} "), Style::default().fg(hue)),
             Span::styled(
                 task.label.clone(),
                 Style::default().fg(if selected {
-                    crate::ui::TEXT_BRIGHT
+                    theme::color(Token::TextBright)
                 } else {
-                    crate::ui::TEXT_PRIMARY
+                    theme::color(Token::TextPrimary)
                 }),
             ),
-            Span::styled(
-                format!("  {what}"),
-                Style::default().fg(crate::ui::TEXT_SECONDARY),
-            ),
+            Span::styled(format!("  {what}"), theme::fg(Token::TextSecondary)),
         ];
         if selected {
-            fill_row_bg(&mut spans, area.width, crate::ui::SELECTED_BG);
+            fill_row_bg(&mut spans, area.width, theme::color(Token::SurfaceSelected));
         }
         lines.push(Line::from(spans));
     }
@@ -1858,13 +1897,13 @@ pub(super) fn render_preserved(
             "[r] resume   [i] deliver   [f] mark done   [d] discard   [esc] close"
         },
         Style::default().fg(if overlay.confirm_discard {
-            crate::ui::WARNING
+            theme::color(Token::StateWarning)
         } else {
-            crate::ui::MUTED
+            theme::color(Token::TextMuted)
         }),
     )));
     let content = lines.iter().map(Line::width).max().unwrap_or(0) as u16;
-    let width = (content + 2 + 2 * H_PAD).min(area.width).max(1);
+    let width = (content + 2 + 2 * POPUP_H_PAD).min(area.width).max(1);
     let height = (lines.len() as u16 + 2).min(area.height).max(1);
     let popup = Rect::new(
         area.x + area.width.saturating_sub(width) / 2,
@@ -1875,16 +1914,16 @@ pub(super) fn render_preserved(
     frame.render_widget(Clear, popup);
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(crate::ui::BORDER))
-        .style(Style::default().bg(crate::ui::BASE))
-        .padding(Padding::new(H_PAD, H_PAD, 0, 0));
+        .border_style(theme::fg(Token::BorderDefault))
+        .style(theme::bg(Token::SurfaceBackground))
+        .padding(Padding::new(POPUP_H_PAD, POPUP_H_PAD, 0, 0));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-pub(super) fn agent_activity_frame(tick: usize) -> &'static str {
-    AGENT_ACTIVITY_FRAMES[tick % AGENT_ACTIVITY_FRAMES.len()]
+pub(super) fn agent_activity_frame(tick: usize) -> String {
+    theme::frame(Symbol::StatusWorking, tick % AGENT_ACTIVITY_FRAMES)
 }
 
 /// The horizontal tab strip above the pane: the *selected space's* shell
@@ -1892,8 +1931,8 @@ pub(super) fn agent_activity_frame(tick: usize) -> &'static str {
 /// [`render_sidebar`]), so a tab [`agent_identity_for_tab`] recognizes
 /// never appears here, the same way a shell tab never appears in the
 /// sidebar; other spaces' shell tabs don't appear here either, only the
-/// currently selected space's. An active-tab marker in `ACCENT`/bold-bright
-/// text, wrapped in the same neutral [`crate::ui::SURFACE_OVERLAY`] chip the
+/// currently selected space's. An active-tab marker in `theme::color(Token::Accent)`/bold-bright
+/// text, wrapped in the same neutral [`theme::color(Token::SurfaceRaised)`] chip the
 /// sidebar already uses for "this is where you are" (its active space's
 /// envelope, its agent tab rows) — this strip used to skip that fill and
 /// lean on text weight alone, which read as a lighter kind of "selected"
@@ -1914,17 +1953,14 @@ pub(super) fn render_tab_strip(
     // — a shell prompt in particular, which starts flush at column 0 too.
     let block = Block::default()
         .borders(Borders::BOTTOM)
-        .border_style(Style::default().fg(crate::ui::BORDER_FAINT))
+        .border_style(theme::fg(Token::BorderFaint))
         .padding(Padding::new(0, 1, 0, 0));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
     let Some(session) = &model.session else {
         frame.render_widget(
-            Paragraph::new(Span::styled(
-                "connecting…",
-                Style::default().fg(crate::ui::MUTED),
-            )),
+            Paragraph::new(Span::styled("connecting…", theme::fg(Token::TextMuted))),
             inner,
         );
         return;
@@ -1968,28 +2004,31 @@ pub(super) fn render_tab_strip(
         let is_agent = Some(tab.id) == context;
         let selected = tab.id == space.selected_tab;
         let marker_fg = if selected {
-            crate::ui::ACCENT
+            theme::color(Token::Accent)
         } else {
-            crate::ui::TEXT_FAINT
+            theme::color(Token::TextFaint)
         };
         let label_style = if selected {
             Style::default()
-                .fg(crate::ui::TEXT_BRIGHT)
+                .fg(theme::color(Token::TextBright))
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(crate::ui::NAV_INACTIVE)
+            theme::fg(Token::TextInactive)
         };
         let marker = Span::styled(
-            // The agent leading the strip wears the same "✦" the button
+            // The agent leading the strip wears the same mark the button
             // that creates one does, so the first chip reads as the agent
             // this context is about rather than another shell.
-            match (is_agent, selected) {
-                (true, _) => "✦ ",
-                (false, true) => "● ",
-                (false, false) => "○ ",
-            },
+            format!(
+                "{} ",
+                theme::glyph(match (is_agent, selected) {
+                    (true, _) => Symbol::MarkSparkle,
+                    (false, true) => Symbol::StatusSelected,
+                    (false, false) => Symbol::StatusIdle,
+                })
+            ),
             Style::default().fg(if is_agent && !selected {
-                crate::ui::NAV_INACTIVE
+                theme::color(Token::TextInactive)
             } else {
                 marker_fg
             }),
@@ -2001,9 +2040,9 @@ pub(super) fn render_tab_strip(
             .map(|(_, buffer)| buffer.as_str());
         let tab_label = match renaming_this {
             Some(buffer) => Span::styled(
-                format!("{buffer}▏"),
+                format!("{buffer}{}", theme::glyph(Symbol::CursorText)),
                 Style::default()
-                    .fg(crate::ui::TEXT_BRIGHT)
+                    .fg(theme::color(Token::TextBright))
                     .add_modifier(Modifier::BOLD),
             ),
             // One name per agent across the whole frame: the tab's own
@@ -2021,7 +2060,7 @@ pub(super) fn render_tab_strip(
         let content_width =
             marker.width() as u16 + tab_label.width() as u16 + if show_close { 2 } else { 0 }; // " ×"
         // 1 column of padding on each side, reserved whether or not this
-        // tab is selected — only the SURFACE_OVERLAY fill toggles with
+        // tab is selected — only the theme::color(Token::SurfaceRaised) fill toggles with
         // `selected`, never the width. Sizing the chip itself to
         // `selected` used to mean every tab shifted horizontally the
         // moment selection moved past it, reading as the whole strip
@@ -2035,7 +2074,7 @@ pub(super) fn render_tab_strip(
         chip.push(tab_label);
         if show_close {
             chip.push(Span::raw(" "));
-            chip.push(Span::styled("×", Style::default().fg(crate::ui::TEXT_DIM)));
+            chip.push(Span::styled("×", theme::fg(Token::TextDim)));
             hits.push((
                 Rect::new(chip_start + PAD + content_width - 1, inner.y, 1, 1),
                 WorkspaceHit::CloseTab(tab.id),
@@ -2046,9 +2085,13 @@ pub(super) fn render_tab_strip(
         // under the selected chip's own fill, so hovering an unselected
         // tab never reads as having already switched to it.
         if selected {
-            fill_row_bg(&mut chip, chip_width, crate::ui::SURFACE_OVERLAY);
+            fill_row_bg(&mut chip, chip_width, theme::color(Token::SurfaceRaised));
         } else if model.hovered == Some(WorkspaceHit::SelectTab(tab.id)) {
-            fill_row_bg(&mut chip, chip_width, crate::ui::ACTIVE_SPACE_OVERLAY);
+            fill_row_bg(
+                &mut chip,
+                chip_width,
+                theme::color(Token::SurfaceRaisedSubtle),
+            );
         }
         hits.push((
             Rect::new(chip_start, inner.y, chip_width, 1),
@@ -2078,12 +2121,12 @@ pub(super) fn render_tab_strip(
     // chip's trailing gap) — only a trailing one, so it sits exactly 1
     // neutral column off the tab side and 1 off the button side; baking a
     // space into both ends of `" / "` double-counted the left side and
-    // left it looking closer to the buttons than to the tabs. `MUTED`, not
-    // `BORDER_FAINT` — sitting on the plain backdrop out here (not a
-    // filled chip the way the "│" below does), `BORDER_FAINT` read as a
+    // left it looking closer to the buttons than to the tabs. `theme::color(Token::TextMuted)`, not
+    // `theme::color(Token::BorderFaint)` — sitting on the plain backdrop out here (not a
+    // filled chip the way the "│" below does), `theme::color(Token::BorderFaint)` read as a
     // near-invisible hairline.
     if x < inner.right() {
-        spans.push(Span::styled("/", Style::default().fg(crate::ui::MUTED)));
+        spans.push(Span::styled("/", theme::fg(Token::TextMuted)));
         spans.push(Span::raw(" "));
         x += 2;
     }
@@ -2092,13 +2135,13 @@ pub(super) fn render_tab_strip(
     // beside it opens the agent picker for anything else. "✦" carries the
     // accent (it's the one that summons an agent); "+" stays neutral,
     // just bolder, since it's the plain/default action. The divider stays
-    // `BORDER_FAINT`, unlike the "/" above — it sits on this button's own
-    // `SURFACE_OVERLAY_BRIGHT` fill, not the plain backdrop, so it already
-    // has contrast `BORDER_FAINT` alone doesn't get out on the strip;
-    // `MUTED` here read as too bright against that lighter background,
+    // `theme::color(Token::BorderFaint)`, unlike the "/" above — it sits on this button's own
+    // `theme::color(Token::SurfaceRaisedBright)` fill, not the plain backdrop, so it already
+    // has contrast `theme::color(Token::BorderFaint)` alone doesn't get out on the strip;
+    // `theme::color(Token::TextMuted)` here read as too bright against that lighter background,
     // clashing with the plain "+"/"✦" glyphs it separates.
-    // `SURFACE_OVERLAY_BRIGHT` backs the whole pair: at the plain
-    // `SURFACE_OVERLAY` strength the icons read as barely there, since
+    // `theme::color(Token::SurfaceRaisedBright)` backs the whole pair: at the plain
+    // `theme::color(Token::SurfaceRaised)` strength the icons read as barely there, since
     // unlike the sidebar's filled rows this pair has no bold/color weight
     // of its own otherwise carrying it.
     let button_width: u16 = 7; // " + │ ✦ "
@@ -2110,16 +2153,16 @@ pub(super) fn render_tab_strip(
         // stays the pair's own brighter surface (above); hover and press
         // are the same skins every other control in this row wears.
         let half = |state: ChipState, hue: Color| match state {
-            ChipState::Resting => (hue, crate::ui::SURFACE_OVERLAY_BRIGHT),
+            ChipState::Resting => (hue, theme::color(Token::SurfaceRaisedBright)),
             other => chip_skin(other, hue),
         };
         let (plus, plus_surface) = half(
             chip_state(model, Some(WorkspaceHit::NewTab)),
-            crate::ui::NAV_INACTIVE,
+            theme::color(Token::TextInactive),
         );
         let (star, star_surface) = half(
             chip_state(model, Some(WorkspaceHit::NewAgentMenu)),
-            crate::ui::ACCENT,
+            theme::color(Token::Accent),
         );
         let actions = vec![
             Span::styled(" ", Style::default().bg(plus_surface)),
@@ -2132,13 +2175,16 @@ pub(super) fn render_tab_strip(
             ),
             Span::styled(" ", Style::default().bg(plus_surface)),
             Span::styled(
-                "│",
+                theme::glyph(Symbol::TreeColumnDivider),
                 Style::default()
-                    .fg(crate::ui::BORDER_FAINT)
-                    .bg(crate::ui::SURFACE_OVERLAY_BRIGHT),
+                    .fg(theme::color(Token::BorderFaint))
+                    .bg(theme::color(Token::SurfaceRaisedBright)),
             ),
             Span::styled(" ", Style::default().bg(star_surface)),
-            Span::styled("✦", Style::default().fg(star).bg(star_surface)),
+            Span::styled(
+                theme::glyph(Symbol::MarkSparkle),
+                Style::default().fg(star).bg(star_surface),
+            ),
             Span::styled(" ", Style::default().bg(star_surface)),
         ];
         // Each half is its own three columns, so what lights up under the
@@ -2153,7 +2199,7 @@ pub(super) fn render_tab_strip(
     frame.render_widget(Paragraph::new(Line::from(spans)), inner);
     if let Some(rect) = drop_indicator {
         frame.render_widget(
-            Paragraph::new("▍").style(Style::default().fg(crate::ui::ACCENT)),
+            Paragraph::new(theme::glyph(Symbol::BarThick)).style(theme::fg(Token::Accent)),
             rect,
         );
     }
@@ -2180,12 +2226,13 @@ pub(super) fn render_tab_strip(
         // measured before it is drawn and the hit carries the same
         // rectangle the fill covers — pad included, since the padding is
         // as much of the button as the glyph is.
-        let rect = chip_rect("✦", trailing_right, inner.y);
+        let sparkle = theme::glyph(Symbol::MarkSparkle);
+        let rect = chip_rect(&sparkle, trailing_right, inner.y);
         draw_chip(
             frame,
             rect,
-            "✦",
-            crate::ui::ACCENT,
+            &sparkle,
+            theme::color(Token::Accent),
             chip_state(model, Some(WorkspaceHit::OpenAgentSupport(rect))),
         );
         hits.push((rect, WorkspaceHit::OpenAgentSupport(rect)));
@@ -2214,12 +2261,15 @@ pub(super) fn render_tab_strip(
         // rather than taking a single colour: the additions and the
         // deletions are two numbers, not one label.
         let state = chip_state(model, Some(WorkspaceHit::OpenGitView));
-        let (label, background) = chip_skin(state, crate::ui::SUCCESS);
+        let (label, background) = chip_skin(state, theme::color(Token::StateSuccess));
         let (additions, deletions) = match state {
             // Pressed, the chip is one solid hue: its numbers go dark with
             // everything else on it, or they vanish into the fill.
             ChipState::Pressed => (label, label),
-            _ => (crate::ui::SUCCESS, crate::ui::DANGER),
+            _ => (
+                theme::color(Token::StateSuccess),
+                theme::color(Token::StateDanger),
+            ),
         };
         let text = format!("+{} -{}", summary.additions, summary.deletions);
         let rect = chip_rect(&text, trailing_right, inner.y);
@@ -2268,12 +2318,12 @@ fn render_notice_chip(
                 true => format!("{} ", agent_activity_frame(model.tick)),
                 false => String::new(),
             },
-            Style::default().fg(crate::ui::ACCENT),
+            theme::fg(Token::Accent),
         ),
         Span::styled(
             chip.text,
             Style::default()
-                .fg(crate::ui::TEXT_BRIGHT)
+                .fg(theme::color(Token::TextBright))
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" "),
@@ -2281,7 +2331,10 @@ fn render_notice_chip(
         // as the "/" that separates the tabs from the strip's own buttons.
         // No filled chip behind any of this: a message is not a control,
         // and the raised surface is what made it read as one.
-        Span::styled("│", Style::default().fg(crate::ui::MUTED)),
+        Span::styled(
+            theme::glyph(Symbol::TreeColumnDivider),
+            theme::fg(Token::TextMuted),
+        ),
     ];
     // Never past the strip's left edge: what does not fit is this
     // message's own tail, clipped by its rect, not the tabs beside it.
@@ -2297,7 +2350,7 @@ pub(super) fn render_pane(frame: &mut ratatui::Frame<'_>, area: Rect, model: &Wo
     let Some(snapshot) = model.panes.get(&model.focused_pane()) else {
         frame.render_widget(
             Paragraph::new(model.error.as_deref().unwrap_or(" starting shell…"))
-                .style(Style::default().fg(crate::ui::MUTED)),
+                .style(theme::fg(Token::TextMuted)),
             area,
         );
         return;
@@ -2323,8 +2376,8 @@ pub(super) fn render_pane(frame: &mut ratatui::Frame<'_>, area: Rect, model: &Wo
         )]
             .set_style(
                 Style::default()
-                    .bg(crate::ui::TEXT_BRIGHT)
-                    .fg(crate::ui::BASE),
+                    .bg(theme::color(Token::TextBright))
+                    .fg(theme::color(Token::SurfaceBackground)),
             );
     }
 }
@@ -2359,9 +2412,16 @@ pub(super) fn cell_style(cell: &uze_terminal::RenderCell) -> Style {
 
 pub(super) fn color(color: TerminalColor) -> Color {
     match color {
-        TerminalColor::DefaultForeground => crate::ui::TEXT_PRIMARY,
-        TerminalColor::DefaultBackground => crate::ui::BASE,
-        TerminalColor::Rgb { red, green, blue } => Color::Rgb(red, green, blue),
-        TerminalColor::Indexed(index) => Color::Indexed(index),
+        TerminalColor::DefaultForeground => theme::color(Token::TextPrimary),
+        TerminalColor::DefaultBackground => theme::color(Token::SurfaceBackground),
+        TerminalColor::Rgb { red, green, blue } => theme::content(red, green, blue),
+        // The 16 a program can name by index are the theme's, so a pane
+        // cannot contradict the chrome drawn around it. Above 15 are the
+        // 240 extended entries no theme defines — passed through as the
+        // index they are.
+        TerminalColor::Indexed(index) => match uze_theme::active().ansi(index) {
+            Some(rgb) => theme::content(rgb.0, rgb.1, rgb.2),
+            None => Color::Indexed(index),
+        },
     }
 }

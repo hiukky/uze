@@ -23,8 +23,8 @@ use thiserror::Error;
 
 use crate::{
     CellAttributes, ClientEvent, ClientRequest, Cursor, MouseMode, OpenedSpace, PROTOCOL_VERSION,
-    PaneDamage, PaneId, PaneSnapshot, RenderCell, Session, SpaceId, SpaceSeed, TabId, TabSeed,
-    TerminalColor, WorkspaceId,
+    Palette, PaneDamage, PaneId, PaneSnapshot, RenderCell, Session, SpaceId, SpaceSeed, TabId,
+    TabSeed, TerminalColor, WorkspaceId,
 };
 
 /// ADR-038: the endpoint is local and user-private; no network transport is
@@ -422,6 +422,11 @@ struct Server {
     /// Cloned into every [`PaneRuntime`] so its PTY reader thread can report
     /// new output; [`spawn_damage_broadcaster`] owns the matching receiver.
     damage: mpsc::Sender<PaneId>,
+    /// What a pane's own program is told when it asks the terminal what
+    /// colours it is drawn in. Shared with every pane already running, so a
+    /// client changing theme changes the answer everywhere at once rather
+    /// than only for panes opened afterwards.
+    palette: Arc<Mutex<Palette>>,
 }
 
 impl Server {
@@ -472,6 +477,7 @@ impl Server {
             stopped: Mutex::new(false),
             endpoint,
             damage,
+            palette: Arc::new(Mutex::new(Palette::default())),
         };
         if restoring && let Some(persisted) = &persisted {
             // Zip the restored session's freshly-allocated tabs back up
@@ -657,6 +663,7 @@ impl Server {
                     let _ = events.send(ClientEvent::Detached);
                     break;
                 }
+                ClientRequest::SetPalette(palette) => self.set_palette(palette),
                 ClientRequest::Input { pane, bytes } => self.write_input(pane, &bytes),
                 ClientRequest::Scroll { pane, lines } => self.scroll_pane(pane, lines),
                 ClientRequest::Resize {
@@ -901,6 +908,16 @@ impl Server {
     fn selected_pane_of(&self, client: u64) -> PaneId {
         self.view_of(client).selected_tab().focus.pane
     }
+    /// Takes the attached client's palette. Every pane shares the one
+    /// `Arc`, so panes that were already running answer with it too — a
+    /// theme switch that only reached panes opened afterwards would leave
+    /// the older ones telling their programs a colour nobody draws.
+    fn set_palette(&self, palette: Palette) {
+        if let Ok(mut held) = self.palette.lock() {
+            *held = palette;
+        }
+    }
+
     fn spawn_pane(&self, pane_id: PaneId, command: Option<&[String]>) -> Result<(), RuntimeError> {
         let pane = find_pane(&self.session.lock().expect("session poisoned"), pane_id)
             .ok_or_else(|| RuntimeError::Protocol("unknown pane".into()))?;
@@ -911,6 +928,7 @@ impl Server {
             pane.rows,
             self.damage.clone(),
             command,
+            Arc::clone(&self.palette),
         )?;
         // Best-effort: label the sidebar tree with the real shell name
         // immediately instead of leaving the "shell" placeholder until the
@@ -1158,33 +1176,42 @@ struct PaneRuntime {
     last_sent: Mutex<Option<PaneSnapshot>>,
 }
 
+/// Answers a pane's own program, including its OSC 10/11 colour queries.
+///
+/// The palette is shared rather than copied: a client that changes theme
+/// sends the new one, and every pane already running has to start answering
+/// with it. Two hardcoded colours used to live here, transcribed from the
+/// TUI's palette — a program asking what the background is would have been
+/// told a colour nobody was drawing the moment either copy moved.
 #[derive(Clone)]
-struct ReplySink(mpsc::Sender<Vec<u8>>);
+struct ReplySink {
+    replies: mpsc::Sender<Vec<u8>>,
+    palette: Arc<Mutex<Palette>>,
+}
 
-/// Mirrors `src/ui.rs`'s `BASE`/`TEXT_PRIMARY` — the exact colors a cell's
-/// `TerminalColor::Default{Background,Foreground}` renders as on screen (see
-/// `orchestrator::color`). A pane's own program can ask the terminal what
-/// its background/foreground actually is (OSC 10/11 — e.g. to pick a light-
-/// or dark-adapted UI, the way Codex's input surface does); answering with
-/// anything other than what's truly drawn would tell it a color that
-/// doesn't match, which is exactly what happens if the query goes
-/// unanswered and the asker falls back to its own default guess.
-const REPLY_BACKGROUND: Rgb = Rgb {
-    r: 10,
-    g: 12,
-    b: 13,
-};
-const REPLY_FOREGROUND: Rgb = Rgb {
-    r: 230,
-    g: 228,
-    b: 222,
-};
+impl ReplySink {
+    fn new(replies: mpsc::Sender<Vec<u8>>, palette: Arc<Mutex<Palette>>) -> Self {
+        Self { replies, palette }
+    }
+
+    fn color(&self, index: usize) -> Option<Rgb> {
+        let palette = self.palette.lock().ok()?;
+        let (r, g, b) = if index == NamedColor::Foreground as usize {
+            palette.foreground
+        } else if index == NamedColor::Background as usize {
+            palette.background
+        } else {
+            *palette.ansi.get(index)?
+        };
+        Some(Rgb { r, g, b })
+    }
+}
 
 impl EventListener for ReplySink {
     fn send_event(&self, event: Event) {
         match event {
             Event::PtyWrite(reply) => {
-                let _ = self.0.send(reply.into_bytes());
+                let _ = self.replies.send(reply.into_bytes());
             }
             // `Term::dynamic_color_sequence` (OSC 10/11/12 queries) never
             // sends a `PtyWrite` itself — it hands back a formatting
@@ -1193,15 +1220,8 @@ impl EventListener for ReplySink {
             // background probe just hangs until it times out server-side,
             // so the query answers here instead of falling through.
             Event::ColorRequest(index, format) => {
-                let color = if index == NamedColor::Foreground as usize {
-                    Some(REPLY_FOREGROUND)
-                } else if index == NamedColor::Background as usize {
-                    Some(REPLY_BACKGROUND)
-                } else {
-                    None
-                };
-                if let Some(color) = color {
-                    let _ = self.0.send(format(color).into_bytes());
+                if let Some(color) = self.color(index) {
+                    let _ = self.replies.send(format(color).into_bytes());
                 }
             }
             _ => {}
@@ -1217,6 +1237,7 @@ impl PaneRuntime {
         rows: u16,
         damage: mpsc::Sender<PaneId>,
         command: Option<&[String]>,
+        palette: Arc<Mutex<Palette>>,
     ) -> Result<Self, RuntimeError> {
         let spawn_command = command
             .filter(|command| !command.is_empty())
@@ -1265,7 +1286,7 @@ impl PaneRuntime {
         let terminal = Arc::new(Mutex::new(Term::new(
             Config::default(),
             &TermSize::new(columns as usize, rows as usize),
-            ReplySink(reply_sender),
+            ReplySink::new(reply_sender, palette),
         )));
         let parser_terminal = Arc::clone(&terminal);
         thread::spawn(move || {
@@ -1614,11 +1635,19 @@ fn identity_of(root: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        Endpoint, PaneRuntime, PersistedSpace, PersistedTab, PersistedWorkspace, REPLY_BACKGROUND,
-        REPLY_FOREGROUND, ReplySink, Selection, Server, identity_of, persisted_state_path,
-        relaunch_command_for_process, replace_incompatible_server, server_protocol_version,
-        snapshot, view_for,
+        Endpoint, PaneRuntime, PersistedSpace, PersistedTab, PersistedWorkspace, ReplySink,
+        Selection, Server, identity_of, persisted_state_path, relaunch_command_for_process,
+        replace_incompatible_server, server_protocol_version, snapshot, view_for,
     };
+    use std::sync::{Arc, Mutex};
+
+    use crate::Palette;
+
+    /// A sink over the default palette, for the tests that only need a
+    /// terminal to parse into.
+    fn reply_sink(sender: std::sync::mpsc::Sender<Vec<u8>>) -> ReplySink {
+        ReplySink::new(sender, Arc::new(Mutex::new(Palette::default())))
+    }
     use crate::{MouseMode, PaneId, TerminalColor};
     use crate::{Session, SpaceId, TabId, WorkspaceId};
     use alacritty_terminal::{
@@ -1759,7 +1788,7 @@ mod tests {
     #[test]
     fn transcript_preserves_style_cursor_and_alternate_screen() {
         let (sender, _receiver) = std::sync::mpsc::channel();
-        let mut terminal = Term::new(Config::default(), &TermSize::new(12, 3), ReplySink(sender));
+        let mut terminal = Term::new(Config::default(), &TermSize::new(12, 3), reply_sink(sender));
         let mut parser: Processor = Processor::new();
         parser.advance(&mut terminal, b"\x1b[31mred\x1b[0m\x1b[2;5H!");
         let normal = snapshot(PaneId(1), &terminal);
@@ -1777,7 +1806,7 @@ mod tests {
     #[test]
     fn mouse_mode_reflects_what_the_pane_actually_asked_for() {
         let (sender, _receiver) = std::sync::mpsc::channel();
-        let mut terminal = Term::new(Config::default(), &TermSize::new(12, 3), ReplySink(sender));
+        let mut terminal = Term::new(Config::default(), &TermSize::new(12, 3), reply_sink(sender));
         let mut parser: Processor = Processor::new();
         assert_eq!(snapshot(PaneId(1), &terminal).mouse, MouseMode::default());
 
@@ -1813,7 +1842,7 @@ mod tests {
         // way the program expects, instead of arriving as a flood of
         // individual keystrokes a plain shell would.
         let (sender, _receiver) = std::sync::mpsc::channel();
-        let mut terminal = Term::new(Config::default(), &TermSize::new(12, 3), ReplySink(sender));
+        let mut terminal = Term::new(Config::default(), &TermSize::new(12, 3), reply_sink(sender));
         let mut parser: Processor = Processor::new();
         assert!(!snapshot(PaneId(1), &terminal).bracketed_paste);
 
@@ -1835,36 +1864,48 @@ mod tests {
         // probe — used by adaptive TUIs like Codex to pick a light- or
         // dark-themed surface — unanswered.
         let (sender, receiver) = std::sync::mpsc::channel();
-        let mut terminal = Term::new(Config::default(), &TermSize::new(12, 3), ReplySink(sender));
+        // A palette no default would ever produce, so the reply can only be
+        // coming from what the client set.
+        let palette = Arc::new(Mutex::new(Palette {
+            foreground: (0x11, 0x22, 0x33),
+            background: (0x44, 0x55, 0x66),
+            ..Palette::default()
+        }));
+        let mut terminal = Term::new(
+            Config::default(),
+            &TermSize::new(12, 3),
+            ReplySink::new(sender, Arc::clone(&palette)),
+        );
         let mut parser: Processor = Processor::new();
 
         parser.advance(&mut terminal, b"\x1b]10;?\x1b\\");
-        let foreground_reply = receiver.try_recv().expect("OSC 10 reply");
         assert_eq!(
-            foreground_reply,
-            format!(
-                "\x1b]10;rgb:{0:02x}{0:02x}/{1:02x}{1:02x}/{2:02x}{2:02x}\x1b\\",
-                REPLY_FOREGROUND.r, REPLY_FOREGROUND.g, REPLY_FOREGROUND.b
-            )
-            .into_bytes()
+            receiver.try_recv().expect("OSC 10 reply"),
+            b"\x1b]10;rgb:1111/2222/3333\x1b\\".to_vec()
         );
 
         parser.advance(&mut terminal, b"\x1b]11;?\x1b\\");
-        let background_reply = receiver.try_recv().expect("OSC 11 reply");
         assert_eq!(
-            background_reply,
-            format!(
-                "\x1b]11;rgb:{0:02x}{0:02x}/{1:02x}{1:02x}/{2:02x}{2:02x}\x1b\\",
-                REPLY_BACKGROUND.r, REPLY_BACKGROUND.g, REPLY_BACKGROUND.b
-            )
-            .into_bytes()
+            receiver.try_recv().expect("OSC 11 reply"),
+            b"\x1b]11;rgb:4444/5555/6666\x1b\\".to_vec()
+        );
+
+        // A theme changed after the pane started reaches it too: the palette
+        // is shared, not copied into the sink.
+        palette.lock().expect("palette").background = (0xaa, 0xbb, 0xcc);
+        parser.advance(&mut terminal, b"\x1b]11;?\x1b\\");
+        assert_eq!(
+            receiver
+                .try_recv()
+                .expect("OSC 11 reply after a theme change"),
+            b"\x1b]11;rgb:aaaa/bbbb/cccc\x1b\\".to_vec()
         );
     }
 
     #[test]
     fn resize_changes_snapshot_dimensions() {
         let (sender, _receiver) = std::sync::mpsc::channel();
-        let mut terminal = Term::new(Config::default(), &TermSize::new(8, 2), ReplySink(sender));
+        let mut terminal = Term::new(Config::default(), &TermSize::new(8, 2), reply_sink(sender));
         terminal.resize(TermSize::new(20, 4));
         let rendered = snapshot(PaneId(1), &terminal);
         assert_eq!((rendered.columns, rendered.rows), (20, 4));
@@ -1873,7 +1914,7 @@ mod tests {
     #[test]
     fn snapshot_renders_the_scrollback_viewport() {
         let (sender, _receiver) = std::sync::mpsc::channel();
-        let mut terminal = Term::new(Config::default(), &TermSize::new(8, 2), ReplySink(sender));
+        let mut terminal = Term::new(Config::default(), &TermSize::new(8, 2), reply_sink(sender));
         let mut parser: Processor = Processor::new();
         parser.advance(&mut terminal, b"first\r\nsecond\r\nthird");
 
@@ -1892,8 +1933,16 @@ mod tests {
     #[test]
     fn damage_since_last_is_sparse_after_a_small_change() {
         let (damage, _damage_events) = std::sync::mpsc::channel();
-        let pane =
-            PaneRuntime::spawn(PaneId(9), PathBuf::from("/tmp"), 80, 24, damage, None).unwrap();
+        let pane = PaneRuntime::spawn(
+            PaneId(9),
+            PathBuf::from("/tmp"),
+            80,
+            24,
+            damage,
+            None,
+            Arc::new(Mutex::new(Palette::default())),
+        )
+        .unwrap();
         // Baseline covers every cell — a fresh client has nothing to diff against.
         let baseline = pane.damage_since_last();
         assert_eq!(baseline.changed.len(), 80 * 24);
@@ -1926,8 +1975,16 @@ mod tests {
     #[test]
     fn pane_process_keeps_output_until_explicit_stop() {
         let (damage, _damage_events) = std::sync::mpsc::channel();
-        let pane =
-            PaneRuntime::spawn(PaneId(7), PathBuf::from("/tmp"), 80, 24, damage, None).unwrap();
+        let pane = PaneRuntime::spawn(
+            PaneId(7),
+            PathBuf::from("/tmp"),
+            80,
+            24,
+            damage,
+            None,
+            Arc::new(Mutex::new(Palette::default())),
+        )
+        .unwrap();
         pane.write(b"printf uze-runtime-live\\r");
         let mut rendered = String::new();
         for _ in 0..50 {
@@ -1961,8 +2018,16 @@ mod tests {
         let mut env = uze_testkit::env::scope();
         env.remove("UZE_SHIM_NAME");
         let (damage, _damage_events) = std::sync::mpsc::channel();
-        let pane =
-            PaneRuntime::spawn(PaneId(11), PathBuf::from("/tmp"), 80, 24, damage, None).unwrap();
+        let pane = PaneRuntime::spawn(
+            PaneId(11),
+            PathBuf::from("/tmp"),
+            80,
+            24,
+            damage,
+            None,
+            Arc::new(Mutex::new(Palette::default())),
+        )
+        .unwrap();
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
         let expected_name = Path::new(&shell)
             .file_name()
@@ -2027,6 +2092,7 @@ mod tests {
                     versioned_binary.display()
                 ),
             ]),
+            Arc::new(Mutex::new(Palette::default())),
         )
         .unwrap();
 

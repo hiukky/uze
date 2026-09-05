@@ -179,6 +179,39 @@ const RULES: &[Rule] = &[
         sanctioned: &[],
         budget: &[],
     },
+    Rule {
+        name: "only a theme adapter names a colour value",
+        scope: "src",
+        // The construction, not the name: a pane's own `TerminalColor::Rgb`
+        // is a *pattern* being read, and matching on what content already
+        // carries is not the same act as writing a colour down.
+        forbidden: "Color::Rgb(",
+        reason: "appearance is data. A colour written at the point of drawing is a \
+                 colour nobody can theme, and the four hand-kept copies of one \
+                 palette this replaced are what happens next: a value changed in \
+                 one of them is silently wrong in the others.",
+        remedy: "name what the thing *is* — `theme::fg(Token::TextMuted)`, \
+                 `theme::bg(Token::SurfaceSelected)` — and let \
+                 `uze_theme` resolve it. A colour that genuinely came from \
+                 content rather than from the design system (a pane's own \
+                 output, syntax highlighting an extension ships) goes through \
+                 `theme::content`.",
+        sanctioned: &[
+            (
+                "src/ui/theme.rs",
+                "an adapter: the one place a token becomes a ratatui colour, \
+                 for everything the TUI draws",
+            ),
+            (
+                "src/progress.rs",
+                "the CLI's adapter, for the same reason and to the same \
+                 tokens — anstyle instead of ratatui. Two adapters, one \
+                 vocabulary, which is what keeps `uze status` and the \
+                 workspace client from drifting",
+            ),
+        ],
+        budget: &[],
+    },
 ];
 
 /// Every reach for the extension host in the workspace client sits inside
@@ -232,6 +265,82 @@ fn the_workspace_client_reaches_for_git_only_from_a_thread() {
          through a channel — see `spawn_git_read` and `WorkspaceModel::absorb_git_read`. \
          Reading inline is what made a keystroke wait on `git status`.\n",
         escaped.join("\n")
+    );
+}
+
+/// No chrome glyph is written where it is drawn.
+///
+/// The companion to the colour rule, and the same argument: a mark typed
+/// into a render function is a mark nobody can change, and it is what made a
+/// terminal without a Nerd Font — or an operator who simply wants ASCII —
+/// something UZE had no answer for. Every one of these is a
+/// `uze_theme::Symbol` now, resolved through `src/ui/theme.rs`.
+///
+/// Deliberately not the whole set of non-ASCII characters. Arrows, the
+/// middot and the ellipsis appear in hint lines as *notation* — "↑↓ select"
+/// reads as itself in the source and is translated to the active theme's
+/// glyphs by `hint_spans` — so what this scans for is the marks, which have
+/// no such reading.
+#[test]
+fn no_chrome_glyph_is_written_where_it_is_drawn() {
+    const MARKS: &[char] = &[
+        '\u{2726}', // ✦ sparkle
+        '\u{25cf}', // ● filled dot
+        '\u{25cb}', // ○ hollow dot
+        '\u{25c9}', // ◉ target
+        '\u{2713}', // ✓ check
+        '\u{2715}', // ✕ close
+        '\u{221a}', // √ native
+        '\u{2248}', // ≈ adapted
+        '\u{26a0}', // ⚠ warning
+        '\u{258d}', // ▍ thick bar
+        '\u{258e}', // ▎ medium bar
+        '\u{258f}', // ▏ thin bar
+        '\u{251c}', // ├ tree branch
+        '\u{2514}', // └ tree last
+        '\u{2500}', // ─ divider
+        '\u{2502}', // │ column divider
+        '\u{25b8}', // ▸ collapsed
+        '\u{25be}', // ▾ expanded
+        '\u{276f}', // ❯ prompt
+        '\u{2261}', // ≡ menu
+        '\u{21c4}', // ⇄ swap
+        '\u{21e1}', // ⇡ ahead
+        '\u{21e3}', // ⇣ behind
+        '\u{2197}', // ↗ external
+    ];
+
+    let root = repository_root();
+    let mut written = Vec::new();
+    for (path, contents) in production_sources(&root.join("src/ui")) {
+        let relative = path
+            .strip_prefix(&root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        // The adapter is where a glyph legitimately becomes a string.
+        if relative == "src/ui/theme.rs" {
+            continue;
+        }
+        for (number, line) in contents.lines().enumerate() {
+            let code = line.split("//").next().unwrap_or_default();
+            for mark in MARKS {
+                if code.contains(*mark) {
+                    written.push(format!("  {relative}:{}: {mark}", number + 1));
+                }
+            }
+        }
+    }
+
+    assert!(
+        written.is_empty(),
+        "\n\nchrome glyphs written inline:\n\n{}\n\n\
+         Name the meaning instead — `theme::glyph(Symbol::MarkOfficial)` — and \
+         let the active theme decide what it looks like. Add a `Symbol` if none \
+         of the existing ones says what this mark means. A column laid out \
+         from the glyph needs `theme::width(..)` too: a theme may have \
+         replaced it with a wider one.\n",
+        written.join("\n")
     );
 }
 

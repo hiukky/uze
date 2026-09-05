@@ -1,13 +1,14 @@
 //! Workspace client for the persistent local terminal runtime (ADR-038).
 //!
 //! Presentation deliberately reuses the management TUI's palette and layout
-//! conventions (`super::BASE`/`ACCENT`/`BORDER`/…, hairline dividers, no
+//! conventions (`theme::color(Token::SurfaceBackground)`/`theme::color(Token::Accent)`/`theme::color(Token::BorderDefault)`/…, hairline dividers, no
 //! filled panels) so switching between the workspace and management
 //! contexts with Ctrl+O reads as one product, not two.
 
 use super::tui_application;
 use crate::ui::extension_host::WorkspaceHost;
 use crate::ui::root_picker::RootPicker;
+use crate::ui::theme::{self, Symbol, Token};
 use crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
@@ -67,7 +68,10 @@ const TIMELINE_REFRESH: Duration = Duration::from_secs(3);
 /// The same frames configure the hidden `indicatif` spinner that schedules
 /// this animation. Ratatui owns the alternate screen, so it paints the frame
 /// instead of letting indicatif write to stderr.
-const AGENT_ACTIVITY_FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
+/// How many of `status.working`'s frames the sidebar's own activity mark
+/// runs through. Kept shorter than the theme may declare so the mark reads
+/// as a faster, smaller motion than a full-width spinner.
+const AGENT_ACTIVITY_FRAMES: usize = 8;
 const AGENT_ACTIVITY_TICK: Duration = Duration::from_millis(120);
 /// How long a pressed control wears its pressed skin. Long enough to be
 /// seen at a glance, short enough that it reads as the press itself and
@@ -525,6 +529,21 @@ fn spawn_git_view_reload(
     });
 }
 
+/// The active theme, in the shape the terminal runtime speaks: plain
+/// triples, since that crate holds no opinion about appearance.
+fn active_palette() -> uze_terminal::Palette {
+    let theme = uze_theme::active();
+    let triple = |token| {
+        let rgb = theme.color(token);
+        (rgb.0, rgb.1, rgb.2)
+    };
+    uze_terminal::Palette {
+        foreground: triple(Token::TextPrimary),
+        background: triple(Token::SurfaceBackground),
+        ansi: std::array::from_fn(|index| triple(Token::ANSI[index])),
+    }
+}
+
 pub(crate) fn attach_workspace(
     terminal: &mut super::TerminalSession,
     root: &Path,
@@ -565,6 +584,13 @@ pub(crate) fn attach_workspace(
         },
     )
     .map_err(runtime_error)?;
+    // The server owns what a pane's program is told when it asks the
+    // terminal what colours it is drawn in, but not what those colours are —
+    // this client does. Sent on every attach, because the server outlives
+    // any one client and must not keep answering with a palette nobody is
+    // drawing any more.
+    send_request(&mut stream, &ClientRequest::SetPalette(active_palette()))
+        .map_err(runtime_error)?;
     let (events, receiver) = mpsc::channel();
     thread::spawn(move || {
         let mut reader = BufReader::new(read_stream);
@@ -648,8 +674,9 @@ pub(crate) fn attach_workspace(
     let placement_receiver = &memory.placements.receiver;
     let activity_spinner = ProgressBar::new_spinner();
     activity_spinner.set_draw_target(ProgressDrawTarget::hidden());
-    activity_spinner
-        .set_style(ProgressStyle::default_spinner().tick_strings(&AGENT_ACTIVITY_FRAMES));
+    let activity_frames = theme::frames(Symbol::StatusWorking);
+    let activity_ticks: Vec<&str> = activity_frames.iter().map(String::as_str).collect();
+    activity_spinner.set_style(ProgressStyle::default_spinner().tick_strings(&activity_ticks));
     let next_activity_tick = Instant::now();
     // The server's session/pane state is persistent — reattaching after a
     // Ctrl+O round trip to management finds the same shells exactly as they
@@ -1089,9 +1116,9 @@ impl AgentTabStatus {
     pub(super) fn glyph(self, tick: usize) -> String {
         match self {
             AgentTabStatus::Working => format!("{} ", agent_activity_frame(tick)),
-            AgentTabStatus::Completed => "\u{2713} ".to_owned(),
-            AgentTabStatus::Selected => "\u{25cf} ".to_owned(),
-            AgentTabStatus::Idle => "\u{25cb} ".to_owned(),
+            AgentTabStatus::Completed => format!("{} ", theme::glyph(Symbol::StatusCompleted)),
+            AgentTabStatus::Selected => format!("{} ", theme::glyph(Symbol::StatusSelected)),
+            AgentTabStatus::Idle => format!("{} ", theme::glyph(Symbol::StatusIdle)),
         }
     }
 
@@ -1099,8 +1126,8 @@ impl AgentTabStatus {
     /// something the user asked for or needs to notice.
     pub(super) fn color(self) -> Color {
         match self {
-            AgentTabStatus::Idle => crate::ui::TEXT_FAINT,
-            _ => crate::ui::ACCENT,
+            AgentTabStatus::Idle => theme::color(Token::TextFaint),
+            _ => theme::color(Token::Accent),
         }
     }
 }

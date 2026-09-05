@@ -34,4 +34,10 @@ impl uze_extensions::Host for WorkspaceHost {
     fn display_path(&self, path: &Path) -> String {
         crate::ui::display_project_path(path)
     }
+
+    /// The active theme's, so highlighted content is drawn for the same
+    /// background the chrome around it is.
+    fn syntax_theme(&self) -> String {
+        uze_theme::active().syntax_theme().to_owned()
+    }
 }

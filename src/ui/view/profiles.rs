@@ -14,11 +14,8 @@ use uze_application::{Autonomy, ModelPreference, PreferenceApplyOutcome, Sandbox
 
 use super::super::hit::Hit;
 use super::super::model::{ProfilePanel, ResizablePanel, TuiModel};
-use super::super::{
-    ACCENT, BASE, BLUE, BORDER, DANGER, MUTED, SURFACE_OVERLAY, SURFACE_SUBTLE, TEXT_BRIGHT,
-    TEXT_SECONDARY, TEXT_TERTIARY, WARNING,
-};
 use super::super::{content_area, side_panel_area};
+use crate::ui::theme::{self, Symbol, Token};
 
 pub(crate) fn render_profiles(
     frame: &mut ratatui::Frame<'_>,
@@ -55,8 +52,11 @@ pub(crate) fn render_profiles(
     if model.dragging_panel == Some(ResizablePanel::ProfileColumns) {
         frame.render_widget(
             Paragraph::new(Span::styled(
-                "│\n".repeat(divider.height.saturating_sub(1) as usize) + "│",
-                Style::default().fg(ACCENT),
+                {
+                    let rule = theme::glyph(Symbol::TreeColumnDivider);
+                    format!("{rule}\n").repeat(divider.height.saturating_sub(1) as usize) + &rule
+                },
+                theme::fg(Token::Accent),
             )),
             divider,
         );
@@ -74,12 +74,16 @@ fn panel(right_border: bool, background: Color) -> Block<'static> {
         } else {
             Borders::NONE
         })
-        .border_style(Style::default().fg(BORDER))
+        .border_style(theme::fg(Token::BorderDefault))
         .style(Style::default().bg(background))
 }
 
 fn focus_color(focused: bool) -> Color {
-    if focused { ACCENT } else { MUTED }
+    if focused {
+        theme::color(Token::Accent)
+    } else {
+        theme::color(Token::TextMuted)
+    }
 }
 
 fn autonomy_label(value: Autonomy) -> &'static str {
@@ -93,8 +97,8 @@ fn autonomy_label(value: Autonomy) -> &'static str {
 
 fn autonomy_color(value: Autonomy) -> Color {
     match value {
-        Autonomy::Manual | Autonomy::Balanced => ACCENT,
-        Autonomy::Auto | Autonomy::Unattended => WARNING,
+        Autonomy::Manual | Autonomy::Balanced => theme::color(Token::Accent),
+        Autonomy::Auto | Autonomy::Unattended => theme::color(Token::StateWarning),
     }
 }
 
@@ -108,8 +112,8 @@ fn sandbox_label(value: SandboxScope) -> &'static str {
 
 fn sandbox_color(value: SandboxScope) -> Color {
     match value {
-        SandboxScope::ReadOnly | SandboxScope::WorkspaceWrite => ACCENT,
-        SandboxScope::FullAccess => WARNING,
+        SandboxScope::ReadOnly | SandboxScope::WorkspaceWrite => theme::color(Token::Accent),
+        SandboxScope::FullAccess => theme::color(Token::StateWarning),
     }
 }
 
@@ -127,7 +131,7 @@ fn render_profile_tree(
     model: &TuiModel,
     hits: &mut Vec<(Rect, Hit)>,
 ) {
-    let block = panel(false, BASE);
+    let block = panel(false, theme::color(Token::SurfaceBackground));
     let panel_inner = block.inner(area);
     // The panel reaches one row above the content inset so its edge meets
     // the frame; the text inside starts where every other screen's
@@ -152,21 +156,20 @@ fn render_profile_tree(
         Paragraph::new(Span::styled(
             "Profiles",
             Style::default()
-                .fg(TEXT_BRIGHT)
+                .fg(theme::color(Token::TextBright))
                 .add_modifier(Modifier::BOLD),
         )),
         header[0],
     );
     frame.render_widget(
-        Paragraph::new(Span::styled("+ new", Style::default().fg(ACCENT)))
-            .alignment(Alignment::Right),
+        Paragraph::new(Span::styled("+ new", theme::fg(Token::Accent))).alignment(Alignment::Right),
         header[1],
     );
     hits.push((header[1], Hit::NewProfile));
     frame.render_widget(
         Paragraph::new(Span::styled(
             "Configure preferences and apply them across harnesses",
-            Style::default().fg(MUTED),
+            theme::fg(Token::TextMuted),
         )),
         Rect::new(inner.x, inner.y.saturating_add(1), inner.width, 1),
     );
@@ -175,7 +178,7 @@ fn render_profile_tree(
         frame.render_widget(
             Paragraph::new(Span::styled(
                 "No profiles yet — press n",
-                Style::default().fg(MUTED),
+                theme::fg(Token::TextMuted),
             )),
             Rect::new(inner.x, inner.y.saturating_add(4), inner.width, 1),
         );
@@ -198,27 +201,31 @@ fn render_profile_tree(
             if h > 0 {
                 let bg_rect = Rect::new(inner.x, y0, inner.width, h);
                 frame.render_widget(
-                    Block::default().style(Style::default().bg(SURFACE_OVERLAY)),
+                    Block::default().style(theme::bg(Token::SurfaceRaised)),
                     bg_rect,
                 );
             }
         }
         let mut name_style = Style::default().fg(if profile.active {
-            ACCENT
+            theme::color(Token::Accent)
         } else if selected {
-            TEXT_BRIGHT
+            theme::color(Token::TextBright)
         } else {
-            TEXT_TERTIARY
+            theme::color(Token::TextTertiary)
         });
         if selected {
-            name_style = name_style.bg(SURFACE_OVERLAY);
+            name_style = name_style.bg(theme::color(Token::SurfaceRaised));
         }
         if selected || profile.active {
             name_style = name_style.add_modifier(Modifier::BOLD);
         }
         let mut spans = vec![
             Span::styled(
-                if selected { "▾" } else { "▸" },
+                theme::glyph(if selected {
+                    Symbol::ChevronExpanded
+                } else {
+                    Symbol::ChevronCollapsed
+                }),
                 Style::default().fg(focus_color(
                     selected && model.profile_panel == ProfilePanel::List,
                 )),
@@ -228,8 +235,8 @@ fn render_profile_tree(
         spans.push(Span::styled(profile.id.clone(), name_style));
         if profile.active {
             spans.push(Span::styled(
-                " (✓ active)",
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                format!(" ({} active)", theme::glyph(Symbol::MarkOfficial)),
+                theme::fg_bold(Token::Accent),
             ));
         }
         let row = Rect::new(inner.x, y, inner.width, 1);
@@ -252,29 +259,38 @@ fn render_profile_tree(
         frame.render_widget(Paragraph::new(Line::from(spans)), profile_rect);
         if let Some(parts) = controls {
             frame.render_widget(
-                Paragraph::new(Span::styled("✕ remove", Style::default().fg(DANGER)))
-                    .alignment(Alignment::Right),
+                Paragraph::new(Span::styled(
+                    format!("{} remove", theme::glyph(Symbol::MarkClose)),
+                    theme::fg(Token::StateDanger),
+                ))
+                .alignment(Alignment::Right),
                 parts[1],
             );
             frame.render_widget(
-                Paragraph::new(Span::styled("│", Style::default().fg(BORDER)))
-                    .alignment(Alignment::Center),
+                Paragraph::new(Span::styled(
+                    theme::glyph(Symbol::TreeColumnDivider),
+                    theme::fg(Token::BorderDefault),
+                ))
+                .alignment(Alignment::Center),
                 parts[2],
             );
             hits.push((parts[1], Hit::DeleteSelectedProfile));
             if profile.active {
                 frame.render_widget(
                     Paragraph::new(Span::styled(
-                        "● active",
-                        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                        format!("{} active", theme::glyph(Symbol::StatusSelected)),
+                        theme::fg_bold(Token::Accent),
                     ))
                     .alignment(Alignment::Left),
                     parts[3],
                 );
             } else {
                 frame.render_widget(
-                    Paragraph::new(Span::styled("○ apply", Style::default().fg(ACCENT)))
-                        .alignment(Alignment::Left),
+                    Paragraph::new(Span::styled(
+                        format!("{} apply", theme::glyph(Symbol::StatusIdle)),
+                        theme::fg(Token::Accent),
+                    ))
+                    .alignment(Alignment::Left),
                     parts[3],
                 );
                 hits.push((parts[3], Hit::ApplySelectedProfile));
@@ -295,7 +311,11 @@ fn render_profile_tree(
                     sandbox_label(profile.preferences.sandbox),
                     sandbox_color(profile.preferences.sandbox),
                 ),
-                ("model", model_label(profile.preferences.model), BLUE),
+                (
+                    "model",
+                    model_label(profile.preferences.model),
+                    theme::color(Token::StateInfo),
+                ),
             ];
             for (preference_index, (label, value, color)) in preferences.into_iter().enumerate() {
                 if y >= bottom {
@@ -312,15 +332,15 @@ fn render_profile_tree(
                     Paragraph::new(Line::from(vec![
                         Span::styled(
                             if editing { "  › " } else { "    " },
-                            Style::default().fg(ACCENT).bg(SURFACE_OVERLAY),
+                            theme::on(Token::Accent, Token::SurfaceRaised),
                         ),
                         Span::styled(
                             format!("{label:<20}"),
-                            Style::default().fg(TEXT_SECONDARY).bg(SURFACE_OVERLAY),
+                            theme::on(Token::TextSecondary, Token::SurfaceRaised),
                         ),
-                        Span::styled(value, value_style.bg(SURFACE_OVERLAY)),
+                        Span::styled(value, value_style.bg(theme::color(Token::SurfaceRaised))),
                     ]))
-                    .style(Style::default().bg(SURFACE_OVERLAY)),
+                    .style(theme::bg(Token::SurfaceRaised)),
                     rect,
                 );
                 hits.push((rect, Hit::PreferenceRow(preference_index)));
@@ -333,10 +353,14 @@ fn render_profile_tree(
 
 fn outcome_badge(outcome: &PreferenceApplyOutcome) -> (&'static str, Color) {
     match outcome {
-        PreferenceApplyOutcome::Applied { .. } => ("Applied", ACCENT),
-        PreferenceApplyOutcome::AppliedWithApproximation { .. } => ("Applied~", WARNING),
-        PreferenceApplyOutcome::Unsupported { .. } => ("Unsupported", MUTED),
-        PreferenceApplyOutcome::Failed { .. } => ("Failed", DANGER),
+        PreferenceApplyOutcome::Applied { .. } => ("Applied", theme::color(Token::Accent)),
+        PreferenceApplyOutcome::AppliedWithApproximation { .. } => {
+            ("Applied~", theme::color(Token::StateWarning))
+        }
+        PreferenceApplyOutcome::Unsupported { .. } => {
+            ("Unsupported", theme::color(Token::TextMuted))
+        }
+        PreferenceApplyOutcome::Failed { .. } => ("Failed", theme::color(Token::StateDanger)),
     }
 }
 
@@ -358,7 +382,7 @@ fn render_harnesses(
                 .collect()
         })
         .unwrap_or_default();
-    let block = panel(false, SURFACE_SUBTLE);
+    let block = panel(false, theme::color(Token::SurfaceRecessed));
     let panel_inner = block.inner(area);
     let inner = Rect::new(
         panel_inner.x.saturating_add(2),
@@ -375,7 +399,7 @@ fn render_harnesses(
         Paragraph::new(Span::styled(
             "Harnesses",
             Style::default()
-                .fg(TEXT_BRIGHT)
+                .fg(theme::color(Token::TextBright))
                 .add_modifier(Modifier::BOLD),
         )),
         header[0],
@@ -400,7 +424,7 @@ fn render_harnesses(
         frame.render_widget(
             Paragraph::new(Span::styled(
                 "No harnesses detected",
-                Style::default().fg(MUTED),
+                theme::fg(Token::TextMuted),
             )),
             Rect::new(inner.x, inner.y.saturating_add(3), inner.width, 1),
         );
@@ -414,18 +438,23 @@ fn render_harnesses(
         let checked = model
             .profile_harness_selection
             .contains(&harness.integration);
-        let mut name_style = Style::default().fg(if cursor { TEXT_BRIGHT } else { TEXT_TERTIARY });
+        let mut name_style = Style::default().fg(if cursor {
+            theme::color(Token::TextBright)
+        } else {
+            theme::color(Token::TextTertiary)
+        });
         if cursor {
             name_style = name_style.add_modifier(Modifier::BOLD);
         }
         let mut spans = vec![
-            Span::styled(
-                if cursor { "› " } else { "  " },
-                Style::default().fg(ACCENT),
-            ),
+            Span::styled(if cursor { "› " } else { "  " }, theme::fg(Token::Accent)),
             Span::styled(
                 if checked { "[x] " } else { "[ ] " },
-                Style::default().fg(if checked { ACCENT } else { MUTED }),
+                Style::default().fg(if checked {
+                    theme::color(Token::Accent)
+                } else {
+                    theme::color(Token::TextMuted)
+                }),
             ),
             Span::styled(harness.display_name.clone(), name_style),
         ];

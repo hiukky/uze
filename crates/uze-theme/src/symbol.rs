@@ -93,8 +93,15 @@ vocabulary! {
         MarkAdapted = "mark.adapted",
         /// No route exists at all.
         MarkUnsupported = "mark.unsupported",
-        /// Needs attention but is not broken.
+        /// Needs attention but is not broken. A pictograph by default, so it
+        /// belongs in a label that has room for one — never in a
+        /// one-column status mark, where terminals draw the emoji family at
+        /// a width that varies and a glyph that ignores the hue carrying
+        /// the meaning. Use [`MarkAttention`](Self::MarkAttention) there.
         MarkWarning = "mark.warning",
+        /// The one-column form of "this needs you": a paused rebase, a
+        /// capability the environment is shadowing, an alert worth reading.
+        MarkAttention = "mark.attention",
         /// Dismisses what it sits on.
         MarkClose = "mark.close",
         /// A list bullet in running text.
@@ -103,10 +110,6 @@ vocabulary! {
         MarkCross = "mark.cross",
         /// Something new is created here.
         MarkSparkle = "mark.sparkle",
-        /// Suspended rather than stopped.
-        MarkPaused = "mark.paused",
-        /// Uncommitted or edited.
-        MarkEdited = "mark.edited",
         /// Selectable, currently off.
         MarkToggleOff = "mark.toggle-off",
         /// Selectable, currently on.

@@ -74,4 +74,14 @@ pub trait Host {
     /// The path as a person would recognise it — `~/relative/path` when it
     /// sits under their home directory.
     fn display_path(&self, path: &std::path::Path) -> String;
+
+    /// The palette to render syntax-highlighted content with.
+    ///
+    /// Highlighting is the one thing an extension draws that carries its own
+    /// colours rather than the host's roles (see [`view::Rgb`]) — so it is
+    /// also the one thing that can end up unreadable against a background it
+    /// knows nothing about. Naming the palette is the host's call for the
+    /// same reason every other colour is, and it arrives here rather than as
+    /// a constant so a light theme does not leave a diff illegible.
+    fn syntax_theme(&self) -> String;
 }
