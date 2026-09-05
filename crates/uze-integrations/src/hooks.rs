@@ -2850,10 +2850,6 @@ mod tests {
         assert!(!environment.contains_key("HOOK_COMMAND"));
     }
 
-    fn transform_pair(outcome: HookDispatchOutcome) -> HookNativeOutput {
-        claude_render_output(&outcome, HookEvent::PreToolUse).unwrap()
-    }
-
     #[test]
     fn bridge_path_lives_in_the_auto_discovered_global_plugin_directory() {
         let root = uze_testkit::temp::scratch("hooks-path");
@@ -2937,7 +2933,7 @@ mod wrapper_tests {
         fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
     }
 
-    fn group(root: &Path, effect: HookEffect, handlers: &[&str]) -> PortableHook {
+    fn group(effect: HookEffect, handlers: &[&str]) -> PortableHook {
         PortableHook {
             id: "protect-env".into(),
             event: HookEvent::PreToolUse,
@@ -3074,7 +3070,7 @@ mod wrapper_tests {
     fn a_denial_is_relayed_in_each_harnesss_own_dialect() {
         for target in TARGETS {
             let root = package(&format!("wrapper-deny-{target}"));
-            let hook = group(&root, HookEffect::Deny, &["guard", "audit"]);
+            let hook = group(HookEffect::Deny, &["guard", "audit"]);
             let answer = run_wrapper(target, &root, &hook, &payload(target, "cat .env"), None);
             assert_eq!(
                 answer.exit,
@@ -3112,7 +3108,7 @@ mod wrapper_tests {
     fn an_allowance_lets_the_next_handler_run() {
         for target in TARGETS {
             let root = package(&format!("wrapper-allow-{target}"));
-            let hook = group(&root, HookEffect::Deny, &["guard", "audit"]);
+            let hook = group(HookEffect::Deny, &["guard", "audit"]);
             let answer = run_wrapper(target, &root, &hook, &payload(target, "ls -la"), None);
             assert_eq!(answer.exit, 0, "{target}: nothing was denied");
             assert_eq!(
@@ -3128,7 +3124,7 @@ mod wrapper_tests {
     fn a_handler_that_cannot_run_follows_the_groups_effect() {
         for target in TARGETS {
             let root = package(&format!("wrapper-fail-{target}"));
-            let closed = group(&root, HookEffect::Deny, &["absent"]);
+            let closed = group(HookEffect::Deny, &["absent"]);
             let answer = run_wrapper(target, &root, &closed, &payload(target, "ls"), None);
             assert_eq!(
                 answer.exit,
@@ -3137,7 +3133,7 @@ mod wrapper_tests {
             );
             assert!(answer.stderr.contains("handler failed"));
 
-            let open = group(&root, HookEffect::Observe, &["absent"]);
+            let open = group(HookEffect::Observe, &["absent"]);
             let answer = run_wrapper(target, &root, &open, &payload(target, "ls"), None);
             assert_eq!(answer.exit, 0, "{target}: an observe group fails open");
             assert!(answer.stderr.contains("handler failed"));
@@ -3149,7 +3145,7 @@ mod wrapper_tests {
     fn a_missing_wrapper_dependency_follows_the_groups_effect() {
         for target in TARGETS {
             let root = package(&format!("wrapper-jq-{target}"));
-            let closed = group(&root, HookEffect::Deny, &["guard"]);
+            let closed = group(HookEffect::Deny, &["guard"]);
             let answer = run_wrapper(
                 target,
                 &root,
@@ -3164,7 +3160,7 @@ mod wrapper_tests {
             );
             assert!(answer.stderr.contains("jq is not installed"));
 
-            let open = group(&root, HookEffect::Observe, &["guard"]);
+            let open = group(HookEffect::Observe, &["guard"]);
             let answer = run_wrapper(
                 target,
                 &root,
@@ -3188,7 +3184,7 @@ mod wrapper_tests {
             "printf '%s|%s|%s' \"$HOOK_TOOL\" \"$HOOK_TOOL_NATIVE\" \"$HOOK_INPUT\" \
              > \"$PLUGIN_ROOT/seen.txt\"\nexit 0",
         );
-        let hook = group(&root, HookEffect::Observe, &["probe"]);
+        let hook = group(HookEffect::Observe, &["probe"]);
         let payload = serde_json::json!({
             "tool_name": "SomeVendorOnlyTool",
             "tool_input": {"anything": "x"},
@@ -3236,7 +3232,7 @@ mod wrapper_tests {
                 ("ls", HookEffect::Observe, &["absent"][..]),
             ] {
                 let root = package(&format!("equiv-{target}"));
-                let hook = group(&root, effect, handlers);
+                let hook = group(effect, handlers);
                 let raw = payload(target, command);
                 let through_wrapper = run_wrapper(target, &root, &hook, &raw, None);
 

@@ -5,6 +5,13 @@
 # Playwright MCP debug output (screenshots, snapshots, console logs)
 /.playwright-mcp/
 lcov.info
+
+# SBOM: generated at release time from the tag's own Cargo.lock and published
+# with the tarballs. A copy in the tree would date from whenever someone last
+# ran the command. Both spellings: cargo-cyclonedx names the file after the
+# crate unless `--override-filename` says otherwise.
+*.cdx.json
+uze-sbom.json
 .worktrees/
 
 # Local exploration labs — never committed

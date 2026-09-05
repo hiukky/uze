@@ -72,7 +72,7 @@ jobs:
           - harness: opencode
             label: OpenCode
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # The Lab image bakes the real harness binaries (channel-latest),
       # the `uze` binary and the fixture tree; `lab.py` runs each vertical
       # against it in a disposable `--internal` network — zero Internet,
@@ -89,7 +89,7 @@ jobs:
           UZE_EVIDENCE_DIR: /tmp/harness-conformance/${{ matrix.harness }}/run1/evidence
       - name: Upload evidence
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: conformance-evidence-${{ matrix.harness }}
           path: /tmp/harness-conformance/${{ matrix.harness }}/run1/

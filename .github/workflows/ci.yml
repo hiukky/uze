@@ -29,9 +29,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
         with:
+          toolchain: stable
           components: rustfmt
       - run: cargo fmt --check
 
@@ -40,11 +41,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
         with:
+          toolchain: stable
           components: clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - run: cargo clippy --all-targets -- -D warnings
 
   test:
@@ -52,10 +54,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace --no-fail-fast
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - run: cargo test --workspace --no-fail-fast --locked
 
   audit:
     name: Audit
@@ -64,7 +68,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # A prebuilt binary, not `rustsec/audit-check`: that action builds
       # cargo-audit from source on every run with a fresh resolution, so
       # any crate in cargo-audit's own tree publishing a broken release
@@ -72,7 +76,7 @@ jobs:
       # 2026-09-03). The audit itself is unchanged: our Cargo.lock
       # against the RustSec advisory database.
       - name: Install cargo-audit
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8 # v2
         with:
           tool: cargo-audit
       - run: cargo audit
@@ -84,15 +88,17 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       # Its own job, not a step of Audit: this one answers whether the
       # project may ship what it links, which is a different question from
       # whether what it links has a known defect, and a red one here is
       # read by a different person.
       - name: Install cargo-deny and cargo-about
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8 # v2
         with:
           tool: cargo-deny,cargo-about
       # Licences, advisories, bans and sources — the policy lives in
@@ -116,7 +122,7 @@ jobs:
       GITLEAKS_VERSION: 8.30.0
       GITLEAKS_SHA256: 79a3ab579b53f71efd634f3aaf7e04a0fa0cf206b7ed434638d1547a2470a66e
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # gitleaks walks commits, not the worktree; a shallow clone would
           # silently scan almost nothing and still report success.
@@ -144,7 +150,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Install shellcheck
         run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
       - name: Lint the installer
@@ -157,9 +163,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Install ruff
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8 # v2
         with:
           tool: ruff
       - run: ruff format --check conformance/
@@ -167,6 +173,44 @@ jobs:
       - run: python3 -m pip install --user pexpect
       - name: Conformance unit tests (no Docker, no harness)
         run: for t in conformance/tests/test_*.py; do python3 "$t" || exit 1; done
+
+  msrv:
+    name: MSRV
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # `rust-version` in Cargo.toml is a promise to anyone pinned to that
+      # release. Every other job runs `stable`, so without this one the
+      # promise is never tested and a newer language feature breaks it
+      # silently.
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
+        with:
+          toolchain: "1.97"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          key: msrv
+      # `check`, not `test`: the question is whether the declared version can
+      # build the tree, and running the suite twice answers nothing new.
+      - run: cargo check --workspace --all-targets --locked
+
+  web:
+    name: Web
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: web/package.json
+      # The site is part of the product and had no job at all: a broken
+      # build reached a red Vercel deploy and nothing before it.
+      - run: bun install --frozen-lockfile
+      - run: bun run types:check
+      - run: bun run build
 
   coverage:
     name: Coverage
@@ -178,15 +222,16 @@ jobs:
     env:
       CARGO_BUILD_JOBS: 2
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
         with:
+          toolchain: stable
           components: llvm-tools-preview
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           cache-on-failure: true
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8 # v2
         with:
           tool: cargo-llvm-cov
       # `--skip` filters out tests that fail due to environment issues,
@@ -197,7 +242,7 @@ jobs:
       # Re-enable any of these when the environment supports them.
       - run: cargo llvm-cov --workspace --summary-only --fail-under-lines 68 --fail-under-regions 69 -- --skip real_codex_dogfood --skip foreground_status_reports --skip acquisition
       - run: cargo llvm-cov report --lcov --output-path lcov.info
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: lcov
           path: lcov.info

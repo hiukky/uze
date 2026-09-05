@@ -41,12 +41,12 @@ jobs:
       version: ${{ steps.release.outputs.version }}
       tag: ${{ steps.release.outputs.tag }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # git-cliff needs the full history plus existing tags;
           # cargo-release needs to push branch + tag afterwards.
           fetch-depth: 0
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8 # v2
         with:
           # cargo-release and git-cliff are pinned: the release changelog
           # depends on `git-cliff -t` naming. The rest are what the
@@ -55,7 +55,7 @@ jobs:
           # workflow has never been exercised, so nothing here has ever
           # caught it.
           tool: cargo-release@1.1.5,git-cliff@2.13.1,cargo-deny,cargo-about,ruff
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: release-prepare
       - name: Configure git identity
@@ -103,14 +103,15 @@ jobs:
           - target: aarch64-unknown-linux-musl
             runner: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # Build exactly what was released and pushed by `prepare`.
           ref: ${{ needs.prepare.outputs.tag }}
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: release-${{ matrix.target }}
       - run: cargo build --locked --release --bin uze --target ${{ matrix.target }}
@@ -127,7 +128,7 @@ jobs:
           cp LICENSE NOTICE CREDITS.md staging/
           tar -C staging -czf "dist/uze-${{ matrix.target }}.tar.gz" \
             uze LICENSE NOTICE CREDITS.md
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: uze-${{ matrix.target }}
           path: dist/uze-${{ matrix.target }}.tar.gz
@@ -137,19 +138,48 @@ jobs:
     name: Publish release
     needs: [prepare, package]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      # Signing the provenance: `id-token` mints the OIDC token that proves
+      # the claim came from this workflow, `attestations` records it.
+      id-token: write
+      attestations: write
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           path: dist
           merge-multiple: true
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # The tag, so the SBOM describes the tree the binaries were built
+          # from rather than whatever `main` has moved on to.
+          ref: ${{ needs.prepare.outputs.tag }}
+      - uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8 # v2
+        with:
+          tool: cargo-cyclonedx
+      # CREDITS.md answers "may I ship this" for a human; an SBOM answers
+      # "what is in here" for a scanner, and a user auditing a CVE should not
+      # have to parse prose to find out whether they are exposed.
+      # One document for the binary crate, without build-time dependencies:
+      # what ships is what a scanner should be asked about.
+      - name: Generate the SBOM
+        run: cargo cyclonedx --format json --spec-version 1.5 --no-build-deps
       - name: Collect assets and checksums
         run: |
           set -euo pipefail
           mkdir -p assets
           mv dist/uze-*.tar.gz assets/
-          (cd assets && sha256sum *.tar.gz > SHASUMS256.txt)
+          cp uze.cdx.json assets/uze-sbom.cdx.json
+          (cd assets && sha256sum *.tar.gz *.cdx.json > SHASUMS256.txt)
           ls -l assets/
           cat assets/SHASUMS256.txt
+      # Signed provenance for each asset: which workflow, which commit, which
+      # runner built it. Without it a tarball claiming to be uze is only as
+      # trustworthy as the page it was downloaded from. Verified with
+      # `gh attestation verify uze-<target>.tar.gz --repo hiukky/uze`.
+      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: "assets/uze-*.tar.gz, assets/uze-sbom.cdx.json"
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}

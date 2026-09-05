@@ -227,3 +227,6 @@ what a usable report contains, and what happens after — is in
 Be direct and be kind. Review the code, not the person. Disagreements are
 settled by evidence: a failing test, a measurement, a recorded decision.
 Anyone who cannot do that is asked to leave.
+
+The formal version, and how to report someone, is
+[`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) — Contributor Covenant 2.1.
