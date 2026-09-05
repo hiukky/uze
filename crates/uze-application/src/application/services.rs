@@ -43,6 +43,17 @@ impl UzeApplication {
     }
 }
 
+/// Which theme is active, and which themes this machine has.
+pub struct Themes<'a>(pub(super) &'a UzeApplication);
+
+impl UzeApplication {
+    /// Selecting a theme. Only the selection: what a theme *is* belongs to
+    /// the design system, which the domain does not name.
+    pub fn themes(&self) -> Themes<'_> {
+        Themes(self)
+    }
+}
+
 /// Marketplaces this machine knows, and the plugins they publish.
 pub struct Marketplace<'a>(pub(super) &'a UzeApplication);
 

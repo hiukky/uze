@@ -8,11 +8,11 @@ use ratatui::{
 };
 use uze_application::{CapabilityKind, HarnessCapabilities};
 
+use crate::ui::theme::{self, Symbol, Token};
+use crate::ui::{POPUP_H_PAD, POPUP_V_PAD};
 use uze_application::application::{
     AgentContextStatus, HarnessHealth, ProfileSummary, ResourceDelivery, UndeliveredReason,
 };
-
-use super::{ACCENT, BASE, BORDER, MUTED, TEXT_BRIGHT, WARNING};
 
 /// The small, immutable slice of the read model one workspace agent tab
 /// needs. Capabilities come from `HarnessHealth` (machine-scoped, the same
@@ -99,11 +99,9 @@ pub(super) fn render(
     // against the frame, which read as cramped once the horizontal rules
     // below were removed and had nothing to separate the sections but
     // whitespace.
-    const H_PAD: u16 = 2;
-    const V_PAD: u16 = 1;
 
     let width = 40.min(area.width).max(1);
-    let inner_width = width.saturating_sub(2 + 2 * H_PAD) as usize;
+    let inner_width = width.saturating_sub(2 + 2 * POPUP_H_PAD) as usize;
 
     // "agent", not "support": what this panel answers is what the agent
     // in front of the operator is running on and what reaches it here —
@@ -165,7 +163,9 @@ pub(super) fn render(
         }
     }
 
-    let height = (lines.len() as u16 + 2 + 2 * V_PAD).min(area.height).max(1);
+    let height = (lines.len() as u16 + 2 + 2 * POPUP_V_PAD)
+        .min(area.height)
+        .max(1);
     let popup = Rect::new(
         anchor
             .x
@@ -178,9 +178,14 @@ pub(super) fn render(
     frame.render_widget(Clear, popup);
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(BORDER))
-        .style(Style::default().bg(BASE))
-        .padding(Padding::new(H_PAD, H_PAD, V_PAD, V_PAD));
+        .border_style(theme::fg(Token::BorderDefault))
+        .style(theme::bg(Token::SurfaceBackground))
+        .padding(Padding::new(
+            POPUP_H_PAD,
+            POPUP_H_PAD,
+            POPUP_V_PAD,
+            POPUP_V_PAD,
+        ));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
@@ -196,10 +201,7 @@ fn harness_state(support: &AgentSupport) -> State {
 }
 
 fn section_header(label: &'static str) -> Line<'static> {
-    Line::from(Span::styled(
-        label,
-        Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
-    ))
+    Line::from(Span::styled(label, theme::fg_bold(Token::TextMuted)))
 }
 
 /// Lays out one `<icon> <label> ... <value>` row, right-aligning `value`
@@ -231,7 +233,7 @@ fn styled_row(
 /// the leading icon carries state color — used for things like the active
 /// profile, never anything the user needs to act on.
 fn fact_line(state: State, label: &str, value: &str, width: usize) -> Line<'static> {
-    let plain = Style::default().fg(TEXT_BRIGHT);
+    let plain = theme::fg(Token::TextBright);
     styled_row(state, label, plain, value, plain, width)
 }
 
@@ -242,14 +244,14 @@ fn fact_line(state: State, label: &str, value: &str, width: usize) -> Line<'stat
 fn capability_line(state: State, label: &str, value: &str, width: usize) -> Line<'static> {
     let label_style = match state {
         State::Error => Style::default()
-            .fg(MUTED)
+            .fg(theme::color(Token::TextMuted))
             .add_modifier(Modifier::CROSSED_OUT),
-        _ => Style::default().fg(TEXT_BRIGHT),
+        _ => theme::fg(Token::TextBright),
     };
     let value_style = match state {
-        State::Ready | State::Neutral | State::Warning => Style::default().fg(MUTED),
+        State::Ready | State::Neutral | State::Warning => theme::fg(Token::TextMuted),
         State::Error => Style::default()
-            .fg(super::DANGER)
+            .fg(theme::color(Token::StateDanger))
             .add_modifier(Modifier::BOLD),
     };
     styled_row(state, label, label_style, value, value_style, width)
@@ -263,17 +265,18 @@ fn reason_line(support: &AgentSupport, capability: CapabilityKind, width: usize)
     );
     Line::from(Span::styled(
         format!("  {}", clip(&text, width.saturating_sub(2))),
-        Style::default().fg(MUTED),
+        theme::fg(Token::TextMuted),
     ))
 }
 
-fn icon_for(state: State) -> (&'static str, ratatui::style::Color) {
-    match state {
-        State::Ready => ("✓", ACCENT),
-        State::Neutral => ("·", MUTED),
-        State::Warning => ("!", WARNING),
-        State::Error => ("✕", super::DANGER),
-    }
+fn icon_for(state: State) -> (String, ratatui::style::Color) {
+    let (symbol, color) = match state {
+        State::Ready => (Symbol::MarkOfficial, theme::color(Token::Accent)),
+        State::Neutral => (Symbol::MarkDot, theme::color(Token::TextMuted)),
+        State::Warning => (Symbol::MarkAttention, theme::color(Token::StateWarning)),
+        State::Error => (Symbol::MarkClose, theme::color(Token::StateDanger)),
+    };
+    (theme::glyph(symbol), color)
 }
 
 /// A harness capability's support level. Deliberately its own enum rather

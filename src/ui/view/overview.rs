@@ -13,12 +13,9 @@ use ratatui::{
 
 use super::super::hit::Hit;
 use super::super::model::{Focus, Route, TuiModel};
-use super::super::{
-    ACCENT, BLUE, BORDER_FAINT, DANGER, MUTED, SELECTED_BG, SUCCESS, SURFACE_OVERLAY, TEXT_BRIGHT,
-    TEXT_DIM, TEXT_FAINT, TEXT_PRIMARY, TEXT_SECONDARY, WARNING,
-};
 use super::super::{content_area, render_screen_header};
 use super::health::Severity;
+use crate::ui::theme::{self, Symbol, Token};
 use uze_application::{PromptAge, PromptClock};
 
 pub(crate) fn render_overview(
@@ -40,9 +37,9 @@ pub(crate) fn render_overview(
     // Status line: dot + headline + detail, matching the design's single
     // "All systems healthy — N harnesses detected, ..." summary row.
     let (color, headline) = if alerts.is_empty() {
-        (SUCCESS, "All systems healthy")
+        (theme::color(Token::StateSuccess), "All systems healthy")
     } else {
-        (WARNING, "Attention needed")
+        (theme::color(Token::StateWarning), "Attention needed")
     };
     let detail = if alerts.is_empty() {
         format!(
@@ -54,13 +51,16 @@ pub(crate) fn render_overview(
     };
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled("● ", Style::default().fg(color)),
+            Span::styled(
+                format!("{} ", theme::glyph(Symbol::StatusSelected)),
+                Style::default().fg(color),
+            ),
             Span::styled(
                 headline,
                 Style::default().fg(color).add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
-            Span::styled(detail, Style::default().fg(MUTED)),
+            Span::styled(detail, theme::fg(Token::TextMuted)),
         ])),
         Rect::new(content.x, y, content.width, 1),
     );
@@ -72,12 +72,12 @@ pub(crate) fn render_overview(
         (
             "Harnesses detected",
             format!("{harness_detected}/{harness_total}"),
-            TEXT_BRIGHT,
+            theme::color(Token::TextBright),
         ),
         (
             "Plugins installed",
             model.plugins.len().to_string(),
-            TEXT_BRIGHT,
+            theme::color(Token::TextBright),
         ),
         (
             "Active profile",
@@ -86,7 +86,7 @@ pub(crate) fn render_overview(
                 .iter()
                 .find(|profile| profile.active)
                 .map_or_else(|| "none".to_owned(), |profile| profile.id.clone()),
-            SUCCESS,
+            theme::color(Token::StateSuccess),
         ),
     ];
     if y + 1 < content.y + content.height {
@@ -101,7 +101,7 @@ pub(crate) fn render_overview(
         for (cell, (label, value, color)) in columns.iter().zip(stats) {
             let block = Block::default()
                 .borders(Borders::LEFT)
-                .border_style(Style::default().fg(BORDER_FAINT));
+                .border_style(theme::fg(Token::BorderFaint));
             let inner = block.inner(*cell);
             frame.render_widget(block, *cell);
             let rows = Layout::default()
@@ -111,7 +111,7 @@ pub(crate) fn render_overview(
             frame.render_widget(
                 Paragraph::new(Span::styled(
                     format!(" {label}"),
-                    Style::default().fg(MUTED),
+                    theme::fg(Token::TextMuted),
                 )),
                 rows[0],
             );
@@ -152,7 +152,7 @@ pub(crate) fn render_overview(
         frame.render_widget(
             Paragraph::new(Span::styled(
                 "Needs attention",
-                Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
+                theme::fg_bold(Token::TextMuted),
             )),
             Rect::new(content.x, y, content.width, 1),
         );
@@ -162,16 +162,17 @@ pub(crate) fn render_overview(
         .iter()
         .take((content.y + content.height).saturating_sub(y) as usize)
     {
-        let (glyph, color) = match alert.severity {
-            Severity::High => ("✕", DANGER),
-            Severity::Medium => ("!", WARNING),
-            Severity::Low => ("•", ACCENT),
+        let (symbol, color) = match alert.severity {
+            Severity::High => (Symbol::MarkClose, theme::color(Token::StateDanger)),
+            Severity::Medium => (Symbol::MarkAttention, theme::color(Token::StateWarning)),
+            Severity::Low => (Symbol::MarkDot, theme::color(Token::Accent)),
         };
+        let glyph = theme::glyph(symbol);
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled(format!("{glyph} "), Style::default().fg(color)),
-                Span::styled(alert.label.clone(), Style::default().fg(TEXT_BRIGHT)),
-                Span::styled(format!(" — {}", alert.detail), Style::default().fg(MUTED)),
+                Span::styled(alert.label.clone(), theme::fg(Token::TextBright)),
+                Span::styled(format!(" — {}", alert.detail), theme::fg(Token::TextMuted)),
             ])),
             Rect::new(content.x, y, content.width, 1),
         );
@@ -212,7 +213,7 @@ fn render_prompt_history(
         Span::styled(
             "Recent prompts",
             Style::default()
-                .fg(TEXT_BRIGHT)
+                .fg(theme::color(Token::TextBright))
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
@@ -221,7 +222,7 @@ fn render_prompt_history(
             } else {
                 format!(" — {} recorded", entries.len())
             },
-            Style::default().fg(MUTED),
+            theme::fg(Token::TextMuted),
         ),
     ]);
     let tally = harness_tally(entries);
@@ -241,7 +242,7 @@ fn render_prompt_history(
             frame.render_widget(
                 Paragraph::new(Span::styled(
                     "Prompts submitted to an agent tab appear here. Click one to jump back to its tab.",
-                    Style::default().fg(TEXT_DIM),
+                    theme::fg(Token::TextDim),
                 )),
                 Rect::new(area.x, y, area.width, 1),
             );
@@ -269,7 +270,7 @@ fn render_prompt_history(
             "WHEN",
             "WORKSPACE",
             "PROMPT",
-            Style::default().fg(MUTED),
+            theme::fg(Token::TextMuted),
         );
         super::super::management::clip_line(&mut header, area.width as usize);
         frame.render_widget(Paragraph::new(header), Rect::new(area.x, y, area.width, 1));
@@ -287,15 +288,15 @@ fn render_prompt_history(
                     y += 1;
                 }
                 let label = age.label().unwrap_or_default().to_uppercase();
-                let lead = "── ";
+                let lead = format!("{} ", theme::glyph(Symbol::TreeDivider).repeat(2));
                 let rule = (area.width as usize)
                     .saturating_sub(lead.chars().count() + label.chars().count() + 1);
                 let mut line = Line::from(vec![
-                    Span::styled(lead, Style::default().fg(TEXT_FAINT)),
-                    Span::styled(label, Style::default().fg(MUTED)),
+                    Span::styled(lead, theme::fg(Token::TextFaint)),
+                    Span::styled(label, theme::fg(Token::TextMuted)),
                     Span::styled(
-                        format!(" {}", "─".repeat(rule)),
-                        Style::default().fg(TEXT_FAINT),
+                        format!(" {}", theme::glyph(Symbol::TreeDivider).repeat(rule)),
+                        theme::fg(Token::TextFaint),
                     ),
                 ]);
                 super::super::management::clip_line(&mut line, area.width as usize);
@@ -309,9 +310,9 @@ fn render_prompt_history(
                     && model.focus == Focus::Content
                     && model.route == Route::Overview;
                 let background = if selected {
-                    Some(SELECTED_BG)
+                    Some(theme::color(Token::SurfaceSelected))
                 } else if model.overview_prompt_hovered == Some(index) {
-                    Some(SURFACE_OVERLAY)
+                    Some(theme::color(Token::SurfaceRaised))
                 } else {
                     None
                 };
@@ -322,7 +323,10 @@ fn render_prompt_history(
                     );
                 }
                 let marker = if selected {
-                    Span::styled("❯ ", Style::default().fg(ACCENT))
+                    Span::styled(
+                        format!("{} ", theme::glyph(Symbol::Prompt)),
+                        theme::fg(Token::Accent),
+                    )
                 } else {
                     Span::raw(" ".repeat(MARKER_WIDTH))
                 };
@@ -337,17 +341,17 @@ fn render_prompt_history(
                 let (harness_style, when_style, workspace_style, prompt_style) = if selected {
                     let bold = Modifier::BOLD;
                     (
-                        Style::default().fg(ACCENT).add_modifier(bold),
-                        Style::default().fg(TEXT_SECONDARY),
-                        Style::default().fg(BLUE),
-                        Style::default().fg(TEXT_BRIGHT).add_modifier(bold),
+                        theme::fg(Token::Accent).add_modifier(bold),
+                        theme::fg(Token::TextSecondary),
+                        theme::fg(Token::StateInfo),
+                        theme::fg(Token::TextBright).add_modifier(bold),
                     )
                 } else {
                     (
-                        Style::default().fg(TEXT_SECONDARY),
-                        Style::default().fg(TEXT_DIM),
-                        Style::default().fg(BLUE),
-                        Style::default().fg(TEXT_PRIMARY),
+                        theme::fg(Token::TextSecondary),
+                        theme::fg(Token::TextDim),
+                        theme::fg(Token::StateInfo),
+                        theme::fg(Token::TextPrimary),
                     )
                 };
                 for (span, style) in line.spans.iter_mut().skip(1).zip([
@@ -385,11 +389,11 @@ fn harness_tally(entries: &[uze_application::PromptEntry]) -> Line<'static> {
     let mut spans = Vec::new();
     for (position, (binary, count)) in counts.into_iter().enumerate() {
         if position > 0 {
-            spans.push(Span::styled(" · ", Style::default().fg(TEXT_FAINT)));
+            spans.push(Span::styled(" · ", theme::fg(Token::TextFaint)));
         }
         spans.push(Span::styled(
             format!("{binary} {count}"),
-            Style::default().fg(MUTED),
+            theme::fg(Token::TextMuted),
         ));
     }
     Line::from(spans)

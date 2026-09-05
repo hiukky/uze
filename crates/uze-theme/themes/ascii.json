@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "name": "uze ascii",
+  "description": "UZE's colours with every glyph inside ASCII, for a terminal with no Unicode font. Declares symbols only — every colour comes from the built-in default, which is what a partial theme is for.",
+  "symbols": {
+    "mark.native": "+",
+    "mark.official": "*",
+    "mark.adapted": "~",
+    "mark.unsupported": "-",
+    "mark.attention": "!",
+    "mark.close": "x",
+    "mark.dot": "-",
+    "mark.cross": "x",
+    "mark.sparkle": "+",
+    "mark.toggle-off": "o",
+    "mark.toggle-on": "@",
+
+    "status.working": ["|", "/", "-", "\\"],
+    "status.completed": "*",
+    "status.selected": "@",
+    "status.idle": ".",
+
+    "tree.branch": "|-",
+    "tree.last": "`-",
+    "tree.vertical": "|",
+    "tree.divider": "-",
+    "tree.column-divider": "|",
+
+    "bar.thick": "|",
+    "bar.medium": "|",
+    "bar.thin": "|",
+    "cursor.text": "_",
+
+    "arrow.up": "^",
+    "arrow.down": "v",
+    "arrow.external": ">",
+    "arrow.swap": "~",
+    "arrow.shift": "^",
+    "arrow.ahead": ">",
+    "arrow.behind": "<",
+    "arrow.to": "->",
+    "chevron.right": ">",
+    "chevron.collapsed": ">",
+    "chevron.expanded": "v",
+    "prompt": ">",
+    "menu": "=",
+
+    "text.ellipsis": "...",
+    "text.em-dash": "--",
+    "text.separator": " | ",
+    "text.plus-minus": "+-"
+  }
+}

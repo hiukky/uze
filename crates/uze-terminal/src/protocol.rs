@@ -42,10 +42,60 @@ use crate::{PaneId, Session, SpaceId, TabId, WorkspaceId};
 ///
 /// Bumped again for `ReorderTab`, a new request moving a tab within its
 /// own space's `tabs` order.
-pub const PROTOCOL_VERSION: u16 = 10;
+pub const PROTOCOL_VERSION: u16 = 11;
+
+/// The colours a client draws a pane's default and indexed cells in. Plain
+/// `(r, g, b)` triples: this runtime holds no opinion about appearance, it
+/// only repeats what it was told.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Palette {
+    pub foreground: (u8, u8, u8),
+    pub background: (u8, u8, u8),
+    /// The sixteen a program can name by index.
+    pub ansi: [(u8, u8, u8); 16],
+}
+
+impl Default for Palette {
+    /// UZE's own dark palette, so a server no client has spoken to yet still
+    /// answers with something matching what UZE draws by default.
+    fn default() -> Self {
+        Self {
+            foreground: (230, 228, 222),
+            background: (10, 12, 13),
+            ansi: [
+                (10, 12, 13),
+                (224, 118, 95),
+                (143, 209, 158),
+                (224, 181, 103),
+                (125, 151, 201),
+                (163, 143, 201),
+                (125, 190, 194),
+                (201, 199, 192),
+                (91, 96, 101),
+                (235, 150, 130),
+                (175, 226, 187),
+                (238, 205, 148),
+                (157, 178, 219),
+                (190, 175, 220),
+                (159, 213, 216),
+                (242, 240, 234),
+            ],
+        }
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ClientRequest {
+    /// The colours the attached client actually draws with.
+    ///
+    /// A program running inside a pane can ask the terminal what its default
+    /// foreground and background are (OSC 10/11) — Codex does it to pick a
+    /// light- or dark-adapted input surface. The server owns the answer but
+    /// not the appearance, so the client tells it; sent on attach and again
+    /// whenever the client changes theme, since the server outlives any one
+    /// client and must not keep answering with a palette nobody is drawing
+    /// any more.
+    SetPalette(Palette),
     Attach {
         version: u16,
         workspace: WorkspaceId,

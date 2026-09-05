@@ -19,12 +19,9 @@ use ratatui::{
 
 use super::super::hit::Hit;
 use super::super::model::{ResizablePanel, TuiModel};
-use super::super::{
-    ACCENT, BLUE, BORDER, MUTED, SELECTED_BG, SURFACE_SUBTLE, TEXT_BRIGHT, TEXT_PRIMARY,
-    TEXT_SECONDARY,
-};
 use super::super::{content_area, render_screen_header, side_panel_area};
 use super::render_status_line;
+use crate::ui::theme::{self, Symbol, Token};
 
 pub(crate) fn render_extensions(
     frame: &mut ratatui::Frame<'_>,
@@ -52,7 +49,7 @@ pub(crate) fn render_extensions(
         "official tool extensions",
         Some(Span::styled(
             format!("{} bundled", model.extensions.len()),
-            Style::default().fg(MUTED),
+            theme::fg(Token::TextMuted),
         )),
     );
     let filter_area = Rect::new(content.x, content.y, content.width, 2);
@@ -68,7 +65,7 @@ pub(crate) fn render_extensions(
         frame.render_widget(
             Paragraph::new(Span::styled(
                 "No extensions available.",
-                Style::default().fg(MUTED),
+                theme::fg(Token::TextMuted),
             )),
             catalog_area,
         );
@@ -78,7 +75,7 @@ pub(crate) fn render_extensions(
             frame.render_widget(
                 Paragraph::new(Span::styled(
                     format!("No extensions match \"{}\".", model.extension_filter.trim()),
-                    Style::default().fg(MUTED),
+                    theme::fg(Token::TextMuted),
                 )),
                 catalog_area,
             );
@@ -132,21 +129,28 @@ pub(crate) fn render_extensions(
 fn render_filter_box(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
     let block = Block::default()
         .borders(Borders::BOTTOM)
-        .border_style(Style::default().fg(if model.filtering { ACCENT } else { BORDER }));
+        .border_style(Style::default().fg(if model.filtering {
+            theme::color(Token::Accent)
+        } else {
+            theme::color(Token::BorderDefault)
+        }));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let text = if model.extension_filter.is_empty() {
         Line::from(Span::styled(
             "Filter extensions…",
-            Style::default().fg(MUTED),
+            theme::fg(Token::TextMuted),
         ))
     } else {
         let mut spans = vec![Span::styled(
             model.extension_filter.clone(),
-            Style::default().fg(TEXT_PRIMARY),
+            theme::fg(Token::TextPrimary),
         )];
         if model.filtering {
-            spans.push(Span::styled("▏", Style::default().fg(ACCENT)));
+            spans.push(Span::styled(
+                theme::glyph(Symbol::BarThin),
+                theme::fg(Token::Accent),
+            ));
         }
         Line::from(spans)
     };
@@ -162,9 +166,9 @@ fn render_extension_card(
     index: usize,
 ) {
     let background = if selected {
-        SELECTED_BG
+        theme::color(Token::SurfaceSelected)
     } else {
-        SURFACE_SUBTLE
+        theme::color(Token::SurfaceRecessed)
     };
     frame.render_widget(
         Paragraph::new("").style(Style::default().bg(background)),
@@ -179,10 +183,17 @@ fn render_extension_card(
     let name = Span::styled(
         extension.name,
         Style::default()
-            .fg(if selected { TEXT_BRIGHT } else { TEXT_PRIMARY })
+            .fg(if selected {
+                theme::color(Token::TextBright)
+            } else {
+                theme::color(Token::TextPrimary)
+            })
             .add_modifier(Modifier::BOLD),
     );
-    let badge = Span::styled("✓ Official", Style::default().fg(BLUE));
+    let badge = Span::styled(
+        format!("{} Official", theme::glyph(Symbol::MarkOfficial)),
+        theme::fg(Token::StateInfo),
+    );
     let gap = inner
         .width
         .saturating_sub((name.width() + badge.width()) as u16);
@@ -194,15 +205,15 @@ fn render_extension_card(
     frame.render_widget(
         Paragraph::new(Span::styled(
             extension.description,
-            Style::default().fg(TEXT_SECONDARY),
+            theme::fg(Token::TextSecondary),
         ))
         .wrap(Wrap { trim: true }),
         Rect::new(inner.x, inner.y + 1, inner.width, 2),
     );
     let tags = Line::from(vec![
-        Span::styled(extension.surface, Style::default().fg(MUTED)),
+        Span::styled(extension.surface, theme::fg(Token::TextMuted)),
         Span::raw("  "),
-        Span::styled("Built-in", Style::default().fg(MUTED)),
+        Span::styled("Built-in", theme::fg(Token::TextMuted)),
     ]);
     frame.render_widget(
         Paragraph::new(tags),
@@ -226,12 +237,12 @@ fn render_extension_drawer(
             .borders(Borders::LEFT)
             .border_style(Style::default().fg(
                 if model.dragging_panel == Some(ResizablePanel::ExtensionDrawer) {
-                    ACCENT
+                    theme::color(Token::Accent)
                 } else {
-                    SURFACE_SUBTLE
+                    theme::color(Token::SurfaceRecessed)
                 },
             ))
-            .style(Style::default().bg(SURFACE_SUBTLE)),
+            .style(theme::bg(Token::SurfaceRecessed)),
         drawer,
     );
     hits.insert(
@@ -261,38 +272,32 @@ fn render_extension_drawer(
     );
 
     let lines = vec![
-        Line::from(Span::styled(
-            "EXTENSION",
-            Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
-        )),
+        Line::from(Span::styled("EXTENSION", theme::fg_bold(Token::TextMuted))),
         Line::from(Span::styled(
             extension.name,
             Style::default()
-                .fg(TEXT_BRIGHT)
+                .fg(theme::color(Token::TextBright))
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(Span::styled(
             extension.description,
-            Style::default().fg(TEXT_SECONDARY),
+            theme::fg(Token::TextSecondary),
         )),
         Line::from(""),
-        Line::from(Span::styled(
-            "SURFACE",
-            Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
-        )),
+        Line::from(Span::styled("SURFACE", theme::fg_bold(Token::TextMuted))),
         Line::from(Span::styled(
             extension.surface,
-            Style::default().fg(TEXT_PRIMARY),
+            theme::fg(Token::TextPrimary),
         )),
         Line::from(""),
         Line::from(Span::styled(
             "HOW TO OPEN",
-            Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
+            theme::fg_bold(Token::TextMuted),
         )),
         Line::from(Span::styled(
             extension.usage,
-            Style::default().fg(TEXT_SECONDARY),
+            theme::fg(Token::TextSecondary),
         )),
     ];
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), body);
@@ -300,7 +305,7 @@ fn render_extension_drawer(
     render_status_line(
         frame,
         status,
-        ACCENT,
+        theme::color(Token::Accent),
         "Bundled",
         "Ships with uze — always available",
     );

@@ -10,7 +10,8 @@ use ratatui::{
 
 use super::model::{Focus, Overlay, TrustedRetry, TuiModel};
 use super::worker::{Intent, TrustGrant};
-use super::{ACCENT, BASE, BORDER, DANGER, MUTED, TEXT_BRIGHT, WARNING};
+use crate::ui::hint_aside;
+use crate::ui::theme::{self, Symbol, Token};
 
 impl TuiModel {
     pub(crate) fn overlay_key(&mut self, key: KeyEvent) -> Intent {
@@ -82,6 +83,34 @@ impl TuiModel {
                 Intent::None
             }
             (Overlay::ConfirmDeleteProfile { .. }, _) => Intent::None,
+            (Overlay::ThemePicker { themes, selected }, KeyCode::Down | KeyCode::Char('j')) => {
+                let last = themes.len().saturating_sub(1);
+                self.overlay = Overlay::ThemePicker {
+                    themes: themes.clone(),
+                    selected: (*selected + 1).min(last),
+                };
+                Intent::None
+            }
+            (Overlay::ThemePicker { themes, selected }, KeyCode::Up | KeyCode::Char('k')) => {
+                self.overlay = Overlay::ThemePicker {
+                    themes: themes.clone(),
+                    selected: selected.saturating_sub(1),
+                };
+                Intent::None
+            }
+            (Overlay::ThemePicker { themes, selected }, KeyCode::Enter) => {
+                let Some((id, _)) = themes.get(*selected).cloned() else {
+                    self.close_overlay();
+                    return Intent::None;
+                };
+                self.close_overlay();
+                Intent::SelectTheme(id)
+            }
+            (Overlay::ThemePicker { .. }, KeyCode::Esc | KeyCode::Char('q')) => {
+                self.close_overlay();
+                Intent::None
+            }
+            (Overlay::ThemePicker { .. }, _) => Intent::None,
             (Overlay::ConfirmClearPromptHistory, KeyCode::Char('y' | 'Y') | KeyCode::Enter) => {
                 self.close_overlay();
                 Intent::ClearPromptHistory
@@ -211,24 +240,40 @@ pub(crate) fn render_help(frame: &mut ratatui::Frame<'_>, area: Rect) {
         area,
         "Help",
         vec![
-            Line::from("↑↓ / j k     Navigate"),
-            Line::from("Tab          Switch focus (sidebar ↔ content)"),
+            Line::from(format!(
+                "{}{} / j k     Navigate",
+                theme::glyph(Symbol::ArrowUp),
+                theme::glyph(Symbol::ArrowDown)
+            )),
+            Line::from(format!(
+                "Tab          Switch focus (sidebar {} content)",
+                theme::glyph(Symbol::ArrowSwap)
+            )),
             Line::from("Enter        Open / Inspect"),
             Line::from("Mouse click  Select sidebar route or list row"),
             Line::from("Scroll       Move selection"),
-            Line::from("r            Remove plugin (Plugins) · Refresh elsewhere"),
+            Line::from(hint_aside(
+                "r            Remove plugin (Plugins)",
+                "Refresh elsewhere",
+            )),
             Line::from("u            Update plugin (Plugins, when available)"),
             Line::from("i            Install plugin (Plugins)"),
             Line::from("/            Filter plugin list"),
-            Line::from("a            Add marketplace · Analyze context (Harnesses)"),
+            Line::from(hint_aside(
+                "a            Add marketplace",
+                "Analyze context (Harnesses)",
+            )),
             Line::from("p            Apply context plan (Harnesses)"),
             Line::from("s            Setup harness (Harnesses)"),
             Line::from("g            Refresh"),
             Line::from("q            Quit"),
             Line::from(""),
-            Line::from(Span::styled("any key to close", Style::default().fg(MUTED))),
+            Line::from(Span::styled(
+                "any key to close",
+                theme::fg(Token::TextMuted),
+            )),
         ],
-        ACCENT,
+        theme::color(Token::Accent),
     );
 }
 
@@ -241,95 +286,98 @@ pub(crate) fn render_harness_help(frame: &mut ratatui::Frame<'_>, area: Rect) {
     // least one separating space — `{:<N}` never truncates or forces a gap
     // once content already reaches N, so anything shorter than the longest
     // label here would glue straight into the detail text that follows.
-    let entry = |glyph: &str, label: &str, color: Color, detail: &str| {
+    let entry = |symbol: Symbol, label: &str, color: Color, detail: &str| {
         Line::from(vec![
             Span::styled(
-                format!("{glyph} {label:<18}"),
+                format!("{} {label:<18}", theme::glyph(symbol)),
                 Style::default().fg(color).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(detail.to_owned(), Style::default().fg(MUTED)),
+            Span::styled(detail.to_owned(), theme::fg(Token::TextMuted)),
         ])
     };
     let heading = |text: &str| {
         Line::from(Span::styled(
             text.to_owned(),
             Style::default()
-                .fg(TEXT_BRIGHT)
+                .fg(theme::color(Token::TextBright))
                 .add_modifier(Modifier::BOLD),
         ))
     };
     let lines = vec![
         heading("STATUS"),
         entry(
-            "✕",
+            Symbol::MarkClose,
             "Not installed",
-            MUTED,
+            theme::color(Token::TextMuted),
             "The harness isn't on this machine at all.",
         ),
         entry(
-            "●",
+            Symbol::StatusSelected,
             "Installed",
-            WARNING,
+            theme::color(Token::StateWarning),
             "Detected, but UZE hasn't configured it — press s to run setup.",
         ),
         entry(
-            "✓",
+            Symbol::MarkOfficial,
             "Configured",
-            ACCENT,
+            theme::color(Token::Accent),
             "UZE has set it up — ready to receive plugins.",
         ),
         Line::from(""),
         heading("COMPATIBILITY (per capability, in the detail panel)"),
         entry(
-            "√",
+            Symbol::MarkNative,
             "Native",
-            ACCENT,
+            theme::color(Token::Accent),
             "Works directly, no adaptation needed.",
         ),
         entry(
-            "√",
+            Symbol::MarkNative,
             "Bridged",
-            ACCENT,
+            theme::color(Token::Accent),
             "Routed through UZE's managed AGENTS.md bridge file.",
         ),
         entry(
-            "⚠",
+            Symbol::MarkAttention,
             "Missing/Drifted",
-            WARNING,
+            theme::color(Token::StateWarning),
             "AGENTS.md bridge needs reconciliation — a to analyze, p to apply.",
         ),
         entry(
-            "✕",
+            Symbol::MarkClose,
             "Conflict/Blocked",
-            DANGER,
+            theme::color(Token::StateDanger),
             "AGENTS.md bridge has unresolved content UZE won't overwrite.",
         ),
         entry(
-            "≈",
+            Symbol::MarkAdapted,
             "Adapted",
-            WARNING,
+            theme::color(Token::StateWarning),
             "Works, converted from a different format.",
         ),
         entry(
-            "≈",
+            Symbol::MarkAdapted,
             "Degraded",
-            WARNING,
+            theme::color(Token::StateWarning),
             "Works, but with reduced fidelity.",
         ),
         entry(
-            "—",
+            Symbol::MarkUnsupported,
             "Not supported",
-            DANGER,
+            theme::color(Token::StateDanger),
             "This harness has no route for it.",
         ),
         entry(
-            "—",
+            Symbol::MarkUnsupported,
             "Not implemented",
-            MUTED,
+            theme::color(Token::TextMuted),
             "UZE doesn't route this capability anywhere yet.",
         ),
         Line::from(""),
-        Line::from(Span::styled("any key to close", Style::default().fg(MUTED))),
+        Line::from(Span::styled(
+            "any key to close",
+            theme::fg(Token::TextMuted),
+        )),
     ];
     // `render_modal`'s fixed 76-column cap was built for the short one-line
     // confirmations every other overlay uses — this glossary's longest
@@ -347,7 +395,7 @@ pub(crate) fn render_harness_help(frame: &mut ratatui::Frame<'_>, area: Rect) {
     frame.render_widget(Clear, popup);
     frame.render_widget(
         Paragraph::new(lines)
-            .block(modal_block(" Harness status ", ACCENT))
+            .block(modal_block(" Harness status ", theme::color(Token::Accent)))
             .wrap(ratatui::widgets::Wrap { trim: true }),
         popup,
     );
@@ -374,31 +422,28 @@ pub(crate) fn render_confirm_remove(
     let cancel_style = if focus == 0 {
         Style::default()
             .fg(Color::Black)
-            .bg(TEXT_BRIGHT)
+            .bg(theme::color(Token::TextBright))
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(MUTED)
+        theme::fg(Token::TextMuted)
     };
     let remove_style = if focus == 1 {
         Style::default()
-            .fg(TEXT_BRIGHT)
-            .bg(DANGER)
+            .fg(theme::color(Token::TextBright))
+            .bg(theme::color(Token::StateDanger))
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(DANGER).add_modifier(Modifier::BOLD)
+        theme::fg_bold(Token::StateDanger)
     };
 
     let message = Line::from(vec![
         Span::raw("Remove "),
-        Span::styled(
-            id.to_owned(),
-            Style::default().fg(DANGER).add_modifier(Modifier::BOLD),
-        ),
+        Span::styled(id.to_owned(), theme::fg_bold(Token::StateDanger)),
         Span::raw("?"),
     ]);
     let hint = Line::from(Span::styled(
         "Only matched artifacts will be detached.",
-        Style::default().fg(MUTED),
+        theme::fg(Token::TextMuted),
     ));
     // Centered button row with clear visual hierarchy; destructive action is
     // red, safe action is muted, focused button gets solid background.
@@ -409,10 +454,10 @@ pub(crate) fn render_confirm_remove(
     ]);
     let footer = Line::from(Span::styled(
         "tab switch · enter confirm · esc cancel · y/n",
-        Style::default().fg(MUTED),
+        theme::fg(Token::TextMuted),
     ));
 
-    let block = modal_block(" Remove plugin? ", DANGER);
+    let block = modal_block(" Remove plugin? ", theme::color(Token::StateDanger));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     // Layout inside popup: message, hint, empty, buttons, footer
@@ -456,28 +501,28 @@ pub(crate) fn render_protected_plugin(frame: &mut ratatui::Frame<'_>, area: Rect
     frame.render_widget(Clear, popup);
     let lines = vec![
         Line::from(vec![
-            Span::styled(
-                id.to_owned(),
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-            ),
+            Span::styled(id.to_owned(), theme::fg_bold(Token::Accent)),
             Span::raw(" is an official marketplace plugin"),
         ]),
         Line::from(Span::styled(
             "and cannot be removed from the TUI.",
-            Style::default().fg(MUTED),
+            theme::fg(Token::TextMuted),
         )),
         Line::from(Span::styled(
             "Use a custom source for removable plugins.",
-            Style::default().fg(MUTED),
+            theme::fg(Token::TextMuted),
         )),
         Line::from(Span::styled(
             "esc / enter to dismiss",
-            Style::default().fg(MUTED),
+            theme::fg(Token::TextMuted),
         )),
     ];
     frame.render_widget(
         Paragraph::new(lines)
-            .block(modal_block(" Protected plugin ", WARNING))
+            .block(modal_block(
+                " Protected plugin ",
+                theme::color(Token::StateWarning),
+            ))
             .wrap(ratatui::widgets::Wrap { trim: true })
             .alignment(Alignment::Center),
         popup,
@@ -492,18 +537,15 @@ pub(crate) fn render_confirm_update(frame: &mut ratatui::Frame<'_>, area: Rect, 
         vec![
             Line::from(vec![
                 Span::raw("Update "),
-                Span::styled(
-                    id.to_owned(),
-                    Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-                ),
+                Span::styled(id.to_owned(), theme::fg_bold(Token::Accent)),
                 Span::raw(" to the latest marketplace revision?"),
             ]),
             Line::from(Span::styled(
                 "enter/y update · esc/n cancel",
-                Style::default().fg(MUTED),
+                theme::fg(Token::TextMuted),
             )),
         ],
-        WARNING,
+        theme::color(Token::StateWarning),
     );
 }
 
@@ -518,10 +560,10 @@ pub(crate) fn render_confirm_clear_prompt_history(frame: &mut ratatui::Frame<'_>
             )),
             Line::from(Span::styled(
                 "enter/y clear · esc/n cancel",
-                Style::default().fg(MUTED),
+                theme::fg(Token::TextMuted),
             )),
         ],
-        DANGER,
+        theme::color(Token::StateDanger),
     );
 }
 
@@ -538,20 +580,17 @@ pub(crate) fn render_confirm_install(
         vec![
             Line::from(vec![
                 Span::raw("Install "),
-                Span::styled(
-                    name.to_owned(),
-                    Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-                ),
+                Span::styled(name.to_owned(), theme::fg_bold(Token::Accent)),
                 Span::raw(" from "),
-                Span::styled(marketplace.to_owned(), Style::default().fg(MUTED)),
+                Span::styled(marketplace.to_owned(), theme::fg(Token::TextMuted)),
                 Span::raw("?"),
             ]),
             Line::from(Span::styled(
                 "enter/y install · esc/n cancel",
-                Style::default().fg(MUTED),
+                theme::fg(Token::TextMuted),
             )),
         ],
-        ACCENT,
+        theme::color(Token::Accent),
     );
 }
 
@@ -565,7 +604,7 @@ pub(crate) fn render_add_marketplace(frame: &mut ratatui::Frame<'_>, area: Rect,
         height,
     );
     frame.render_widget(Clear, popup);
-    let block = modal_block(" Add marketplace ", ACCENT);
+    let block = modal_block(" Add marketplace ", theme::color(Token::Accent));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     let rows = Layout::default()
@@ -580,23 +619,20 @@ pub(crate) fn render_add_marketplace(frame: &mut ratatui::Frame<'_>, area: Rect,
     frame.render_widget(
         Paragraph::new(Span::styled(
             "Local path or https://... source",
-            Style::default().fg(MUTED),
+            theme::fg(Token::TextMuted),
         )),
         rows[0],
     );
     let field = Line::from(vec![
         Span::raw("› "),
-        Span::styled(
-            input.to_owned(),
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled("▏", Style::default().fg(ACCENT)),
+        Span::styled(input.to_owned(), theme::fg_bold(Token::Accent)),
+        Span::styled(theme::glyph(Symbol::BarThin), theme::fg(Token::Accent)),
     ]);
     frame.render_widget(Paragraph::new(field), rows[1]);
     frame.render_widget(
         Paragraph::new(Span::styled(
             "enter add · esc cancel",
-            Style::default().fg(MUTED),
+            theme::fg(Token::TextMuted),
         )),
         rows[3],
     );
@@ -625,6 +661,68 @@ fn slugify(input: &str) -> String {
     slug
 }
 
+/// The theme picker: what UZE can be drawn in, and which it is drawn in now.
+///
+/// Deliberately a plain list with no preview. A preview would have to draw a
+/// second palette inside a frame already painted in the first one, which is
+/// the one thing a terminal cannot do convincingly — and the real preview is
+/// free: pressing enter repaints everything.
+pub(crate) fn render_theme_picker(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    themes: &[(String, bool)],
+    selected: usize,
+) {
+    let width = 46.min(area.width.saturating_sub(4));
+    let height = (themes.len() as u16 + 4).min(area.height.saturating_sub(2));
+    let popup = Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    );
+    frame.render_widget(Clear, popup);
+    let block = modal_block(" Theme ", theme::color(Token::Accent));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let mut lines: Vec<Line<'static>> = themes
+        .iter()
+        .enumerate()
+        .map(|(index, (id, in_force))| {
+            let cursor = if index == selected {
+                theme::glyph(Symbol::ChevronCollapsed)
+            } else {
+                " ".to_owned()
+            };
+            Line::from(vec![
+                Span::styled(format!("{cursor} "), theme::fg(Token::Accent)),
+                Span::styled(
+                    id.clone(),
+                    if index == selected {
+                        theme::fg_bold(Token::TextBright)
+                    } else {
+                        theme::fg(Token::TextPrimary)
+                    },
+                ),
+                Span::styled(
+                    if *in_force {
+                        format!("  {} in use", theme::glyph(Symbol::StatusSelected))
+                    } else {
+                        String::new()
+                    },
+                    theme::fg(Token::TextDim),
+                ),
+            ])
+        })
+        .collect();
+    lines.push(Line::from(""));
+    lines.push(Line::from(crate::ui::hint_spans(
+        "↑↓ select · enter apply · esc close",
+    )));
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
 pub(crate) fn render_new_profile(frame: &mut ratatui::Frame<'_>, area: Rect, input: &str) {
     let width = 60.min(area.width.saturating_sub(4));
     let height = 7.min(area.height.saturating_sub(2));
@@ -635,7 +733,7 @@ pub(crate) fn render_new_profile(frame: &mut ratatui::Frame<'_>, area: Rect, inp
         height,
     );
     frame.render_widget(Clear, popup);
-    let block = modal_block(" New profile ", ACCENT);
+    let block = modal_block(" New profile ", theme::color(Token::Accent));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     let rows = Layout::default()
@@ -648,22 +746,19 @@ pub(crate) fn render_new_profile(frame: &mut ratatui::Frame<'_>, area: Rect, inp
         ])
         .split(inner);
     frame.render_widget(
-        Paragraph::new(Span::styled("Profile name", Style::default().fg(MUTED))),
+        Paragraph::new(Span::styled("Profile name", theme::fg(Token::TextMuted))),
         rows[0],
     );
     let field = Line::from(vec![
         Span::raw("› "),
-        Span::styled(
-            input.to_owned(),
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled("▏", Style::default().fg(ACCENT)),
+        Span::styled(input.to_owned(), theme::fg_bold(Token::Accent)),
+        Span::styled(theme::glyph(Symbol::BarThin), theme::fg(Token::Accent)),
     ]);
     frame.render_widget(Paragraph::new(field), rows[1]);
     frame.render_widget(
         Paragraph::new(Span::styled(
             "enter create · esc cancel",
-            Style::default().fg(MUTED),
+            theme::fg(Token::TextMuted),
         )),
         rows[3],
     );
@@ -688,31 +783,28 @@ pub(crate) fn render_confirm_delete_profile(
     let cancel_style = if focus == 0 {
         Style::default()
             .fg(Color::Black)
-            .bg(TEXT_BRIGHT)
+            .bg(theme::color(Token::TextBright))
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(MUTED)
+        theme::fg(Token::TextMuted)
     };
     let delete_style = if focus == 1 {
         Style::default()
-            .fg(TEXT_BRIGHT)
-            .bg(DANGER)
+            .fg(theme::color(Token::TextBright))
+            .bg(theme::color(Token::StateDanger))
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(DANGER).add_modifier(Modifier::BOLD)
+        theme::fg_bold(Token::StateDanger)
     };
 
     let message = Line::from(vec![
         Span::raw("Delete profile "),
-        Span::styled(
-            id.to_owned(),
-            Style::default().fg(DANGER).add_modifier(Modifier::BOLD),
-        ),
+        Span::styled(id.to_owned(), theme::fg_bold(Token::StateDanger)),
         Span::raw("?"),
     ]);
     let hint = Line::from(Span::styled(
         "This only removes UZE's own record — no harness config is touched.",
-        Style::default().fg(MUTED),
+        theme::fg(Token::TextMuted),
     ));
     let buttons = Line::from(vec![
         Span::styled("  Cancel  ", cancel_style),
@@ -721,10 +813,10 @@ pub(crate) fn render_confirm_delete_profile(
     ]);
     let footer = Line::from(Span::styled(
         "tab switch · enter confirm · esc cancel · y/n",
-        Style::default().fg(MUTED),
+        theme::fg(Token::TextMuted),
     ));
 
-    let block = modal_block(" Delete profile? ", DANGER);
+    let block = modal_block(" Delete profile? ", theme::color(Token::StateDanger));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     let inner_layout = Layout::default()
@@ -764,10 +856,10 @@ pub(crate) fn render_confirm_context_apply(frame: &mut ratatui::Frame<'_>, area:
             Line::from("This reconciles AGENTS.md and its harness bridges."),
             Line::from(Span::styled(
                 "enter/y apply · esc/n cancel",
-                Style::default().fg(MUTED),
+                theme::fg(Token::TextMuted),
             )),
         ],
-        WARNING,
+        theme::color(Token::StateWarning),
     );
 }
 
@@ -783,20 +875,17 @@ pub(crate) fn render_trust_required(
         "Trust required",
         vec![
             Line::from(vec![
-                Span::styled(
-                    plugin.to_owned(),
-                    Style::default().fg(WARNING).add_modifier(Modifier::BOLD),
-                ),
+                Span::styled(plugin.to_owned(), theme::fg_bold(Token::StateWarning)),
                 Span::raw(" declares an executable capability that was not previously trusted:"),
             ]),
-            Line::from(Span::styled(detail.to_owned(), Style::default().fg(MUTED))),
+            Line::from(Span::styled(detail.to_owned(), theme::fg(Token::TextMuted))),
             Line::from(""),
             Line::from(Span::styled(
                 "enter/y trust and continue · esc/n cancel",
-                Style::default().fg(MUTED),
+                theme::fg(Token::TextMuted),
             )),
         ],
-        WARNING,
+        theme::color(Token::StateWarning),
     );
 }
 
@@ -824,7 +913,7 @@ fn render_modal(
     );
 }
 
-/// The modal dialog surface: `BASE`-colored (so it reads as "still part of
+/// The modal dialog surface: `theme::color(Token::SurfaceBackground)`-colored (so it reads as "still part of
 /// this app", not a different layer) with a thin hairline border — the
 /// only place in the whole UI a content box gets a full border, since a
 /// dialog genuinely needs to visually separate from whatever is behind it.
@@ -835,7 +924,7 @@ fn modal_block(title: impl Into<Line<'static>>, color: Color) -> Block<'static> 
         .title(title)
         .title_style(Style::default().fg(color).add_modifier(Modifier::BOLD))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(BORDER))
-        .style(Style::default().bg(BASE))
+        .border_style(theme::fg(Token::BorderDefault))
+        .style(theme::bg(Token::SurfaceBackground))
         .padding(Padding::new(1, 1, 1, 0))
 }

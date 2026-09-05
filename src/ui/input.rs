@@ -31,6 +31,9 @@ impl TuiModel {
                 Intent::None
             }
             KeyCode::Char('q') => Intent::Quit,
+            // Appearance is machine-wide, so it is not a route's own key:
+            // every screen answers `t` the same way.
+            KeyCode::Char('t') => Intent::OpenThemePicker,
             // Profiles cycles its three sub-panels on Tab while Content is
             // focused, instead of the generic Sidebar/Content toggle below —
             // scoped tightly to this route so every other screen's Tab

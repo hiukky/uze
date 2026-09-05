@@ -189,6 +189,17 @@ pub(crate) enum Overlay {
     /// Deleting the workspace's recorded prompts. Destructive and not
     /// undoable, so it is confirmed like any other removal.
     ConfirmClearPromptHistory,
+    /// Choosing what UZE looks like. Carries the list rather than reading
+    /// it per frame: it is a directory listing, and a list that changed
+    /// under the cursor between two frames would move the selection out
+    /// from under the operator.
+    ThemePicker {
+        /// Each theme's id and whether it is the one in force. The id, not
+        /// the theme's display name: a theme is selected by its file's own
+        /// stem, and `dawn.json` is free to call itself anything.
+        themes: Vec<(String, bool)>,
+        selected: usize,
+    },
     /// A mutation needs consent it wasn't given non-interactively. Confirming
     /// re-runs the *same* action with explicit trust — never a silent
     /// bypass; the operator sees exactly what would newly execute.

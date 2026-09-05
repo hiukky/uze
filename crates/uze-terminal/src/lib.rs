@@ -9,8 +9,8 @@ mod runtime;
 mod state;
 
 pub use protocol::{
-    CellAttributes, ClientEvent, ClientRequest, Cursor, MouseMode, PROTOCOL_VERSION, PaneDamage,
-    PaneSnapshot, RenderCell, TerminalColor,
+    CellAttributes, ClientEvent, ClientRequest, Cursor, MouseMode, PROTOCOL_VERSION, Palette,
+    PaneDamage, PaneSnapshot, RenderCell, TerminalColor,
 };
 pub use runtime::{
     RuntimeError, attach, open_space, read_event, send_request, serve, socket_path, stop,

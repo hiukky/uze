@@ -66,6 +66,10 @@ model {
         description 'Rust crate: uze-application. Package-centric product facade that composes Store, Engine, plans, receipts, reconciliation, and peer integrations without duplicating lifecycle logic. Explicit setup coordinates an integration-owned official executable provision path.'
       }
 
+      designSystem = component 'Design System' {
+        description 'Rust crate: uze-theme. The one vocabulary of colour tokens and named symbols, the theme file schema, and the resolver that completes a partial theme from the built-in default. It resolves no path, reads no environment, and knows no rendering library: every surface adapts the vocabulary to what it draws with.'
+      }
+
       terminalUi = component 'Terminal UI' {
         description 'Root uze crate: keyboard-first Ratatui presentation. It owns only view state and terminal cleanup; short workers create the Application facade for product actions.'
       }
@@ -82,6 +86,7 @@ model {
       application -> integrationContract 'delivery, inspection, safe detach, and optional official provision'
       application -> integrationState 'receipt ledger and reconciliation'
       terminalUi -> application 'list, inspect, doctor, add, setup, and remove'
+      terminalUi -> designSystem 'resolves colour tokens and symbols against the active theme'
     }
 
     claudeIntegration = container 'Claude Integration' {
@@ -118,6 +123,7 @@ model {
   uze.codexIntegration -> codex 'prefers standard local marketplace/native plugin delivery and skips consumed components'
   uze.opencodeIntegration -> opencode 'decomposes unknown plugin envelopes into global Skill discovery and managed MCP config'
   developer -> uze.workspaceClient 'opens workspace tabs and panes'
+  uze.workspaceClient -> uze.core.designSystem 'resolves chrome appearance, and configures the runtime with the theme a pane reports'
   uze.workspaceClient -> uze.terminalRuntime 'private local attach, input, resize, and detach protocol'
   uze.terminalRuntime -> agentClient 'owns interactive shell or agent process PTYs'
 

@@ -123,6 +123,11 @@ pub enum UzeError {
     ReservedMarketplace(String),
     #[error("invalid plugin spec: {0}")]
     InvalidPluginSpec(String),
+    /// A theme that will not load. Its own variant rather than a borrowed
+    /// one: an operator told their theme file could not be *acquired* would
+    /// go looking for a network problem.
+    #[error("{0}")]
+    UnusableTheme(String),
     /// `uze remove` is strictly project-scoped (no fallback to machine-level
     /// removal) — see ADR-019. Distinct from `PluginNotUsedByProject`: this
     /// is "there is no project here to remove anything from."

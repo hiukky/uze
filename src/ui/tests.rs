@@ -8,6 +8,7 @@ use uze_application::application::{
     DoctorReport, MaintenanceReport, MarketplacePluginSummary, MarketplaceSummary, PluginSummary,
 };
 
+use super::hint_spans;
 use super::hit::Hit;
 use super::management::{clip_line, render};
 use super::model::{
@@ -16,7 +17,7 @@ use super::model::{
 };
 use super::view::health::{Severity, actionable_alerts};
 use super::worker::{Intent, TrustGrant};
-use super::{ACCENT, MUTED, hint_spans};
+use crate::ui::theme::{self, Token};
 
 fn plugin(id: &str) -> PluginSummary {
     PluginSummary {
@@ -1296,10 +1297,7 @@ fn attachment_health_is_never_unknown_after_a_refresh() {
 
 #[test]
 fn footer_hint_styles_commands_with_accent_and_descriptions_muted() {
-    use ratatui::{
-        style::{Modifier, Style},
-        text::Line,
-    };
+    use ratatui::text::Line;
 
     let line = Line::from(hint_spans("↑↓ select · enter inspect · esc back"));
     let content: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
@@ -1307,22 +1305,19 @@ fn footer_hint_styles_commands_with_accent_and_descriptions_muted() {
     // Chunks split as key/description: command accent+bold, verb muted,
     // with raw " · " separators between chunks.
     assert_eq!(line.spans.len(), 8);
-    assert_eq!(
-        line.spans[0].style,
-        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
-    );
+    assert_eq!(line.spans[0].style, theme::fg_bold(Token::Accent));
     assert_eq!(line.spans[0].content.as_ref(), "↑↓");
-    assert_eq!(line.spans[1].style, Style::default().fg(MUTED));
+    assert_eq!(line.spans[1].style, theme::fg(Token::TextMuted));
     assert_eq!(line.spans[1].content.as_ref(), " select");
     assert_eq!(line.spans[2].content.as_ref(), " · ");
     assert_eq!(line.spans[6].content.as_ref(), "esc");
-    assert_eq!(line.spans[6].style.fg, Some(ACCENT));
+    assert_eq!(line.spans[6].style.fg, Some(theme::color(Token::Accent)));
 
     // A command-only chunk (no verb) still carries the accent.
     let line = Line::from(hint_spans("tab switch · y/n"));
     assert_eq!(line.spans.len(), 4);
     assert_eq!(line.spans[3].content.as_ref(), "y/n");
-    assert_eq!(line.spans[3].style.fg, Some(ACCENT));
+    assert_eq!(line.spans[3].style.fg, Some(theme::color(Token::Accent)));
 }
 
 #[test]
@@ -1489,7 +1484,7 @@ fn a_trailing_caption_is_elided_to_the_room_the_row_has_left() {
         &mut spans,
         20,
         "agent/a-very-long-branch-name".to_owned(),
-        MUTED,
+        theme::color(Token::TextMuted),
     );
     let row: String = spans.iter().map(|span| span.content.as_ref()).collect();
     assert!(
@@ -1502,7 +1497,12 @@ fn a_trailing_caption_is_elided_to_the_room_the_row_has_left() {
     );
 
     let mut spans = vec![Span::raw("▾ Git")];
-    super::push_trailing(&mut spans, 20, "main".to_owned(), MUTED);
+    super::push_trailing(
+        &mut spans,
+        20,
+        "main".to_owned(),
+        theme::color(Token::TextMuted),
+    );
     let row: String = spans.iter().map(|span| span.content.as_ref()).collect();
     assert!(
         row.contains("main"),
@@ -2228,4 +2228,29 @@ fn an_overview_with_no_room_for_the_history_still_renders() {
     terminal
         .draw(|frame| render(frame, &model, &mut hits))
         .unwrap();
+}
+
+/// A row eliding text stays inside the width it was given, whatever the
+/// active theme's elision marker costs.
+///
+/// The ASCII theme spends three cells on `...` where the default spends one
+/// on `…`, and the old code reserved a hard-coded `1` — so this is the
+/// property that says a theme can replace a symbol without shearing every
+/// row that draws it.
+#[test]
+fn eliding_reserves_the_active_themes_own_marker_width() {
+    let marker = theme::glyph(theme::Symbol::Ellipsis);
+    let marker_width = usize::from(theme::width(theme::Symbol::Ellipsis));
+    for width in (marker_width + 1)..12usize {
+        let elided = super::elide_tail("a subject line long enough to be cut", width);
+        let cells = elided.chars().count() - marker.chars().count() + marker_width;
+        assert!(
+            cells <= width,
+            "elided to {elided:?} ({cells} cells) for a width of {width}"
+        );
+        assert!(
+            elided.ends_with(&marker),
+            "an elided row has to say it was cut: {elided:?}"
+        );
+    }
 }

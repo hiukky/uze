@@ -7,9 +7,8 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 
+use crate::ui::theme::{self, Symbol, Token};
 use uze_application::application::PluginCapability;
-
-use super::{BORDER, MUTED};
 
 pub mod extensions;
 pub mod harnesses;
@@ -28,7 +27,7 @@ pub(crate) const DRAWER_DEFAULT_WIDTH: u16 = 52;
 /// weight the way it would in a package-manager UI.
 pub(crate) fn resource_summary(capabilities: &[PluginCapability]) -> String {
     if capabilities.is_empty() {
-        return "—".to_owned();
+        return theme::glyph(Symbol::MarkUnsupported);
     }
     capabilities
         .iter()
@@ -37,7 +36,7 @@ pub(crate) fn resource_summary(capabilities: &[PluginCapability]) -> String {
         .join(", ")
 }
 
-/// The drawer's bottom status block: a `BORDER`-colored top divider, then a
+/// The drawer's bottom status block: a `theme::color(Token::BorderDefault)`-colored top divider, then a
 /// colored dot + bold status text, then a muted note beneath — exactly the
 /// design's `border-top` + dot + text status footer, no card, no box.
 pub(crate) fn render_status_line(
@@ -49,12 +48,15 @@ pub(crate) fn render_status_line(
 ) {
     let block = Block::default()
         .borders(Borders::TOP)
-        .border_style(Style::default().fg(BORDER));
+        .border_style(theme::fg(Token::BorderDefault));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let lines = vec![
         Line::from(vec![
-            Span::styled("● ", Style::default().fg(color)),
+            Span::styled(
+                format!("{} ", theme::glyph(Symbol::StatusSelected)),
+                Style::default().fg(color),
+            ),
             Span::styled(
                 headline.to_owned(),
                 Style::default().fg(color).add_modifier(Modifier::BOLD),
@@ -62,7 +64,7 @@ pub(crate) fn render_status_line(
         ]),
         Line::from(Span::styled(
             subtitle.to_owned(),
-            Style::default().fg(MUTED),
+            theme::fg(Token::TextMuted),
         )),
     ];
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);

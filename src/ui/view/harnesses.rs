@@ -18,11 +18,8 @@ use uze_application::{
 
 use super::super::hit::Hit;
 use super::super::model::{ResizablePanel, Route, TuiModel};
-use super::super::{
-    ACCENT, BORDER, DANGER, MUTED, SELECTED_BG, SURFACE_SUBTLE, TEXT_BRIGHT, TEXT_DIM,
-    TEXT_PRIMARY, TEXT_SECONDARY, TEXT_TERTIARY, WARNING,
-};
 use super::super::{content_area, render_screen_header, side_panel_area};
+use crate::ui::theme::{self, Symbol, Token};
 
 /// A harness's state collapses onto exactly one of three buckets for this
 /// list — `HarnessHealth` itself tracks a finer distinction (whether the
@@ -59,12 +56,12 @@ impl HarnessStatus {
         }
     }
 
-    fn glyph(self) -> &'static str {
+    fn glyph(self) -> String {
         match self {
-            Self::NotInstalled => "✕",
-            Self::Installed => "●",
-            Self::Configured => "✓",
-            Self::NeedsPath => "!",
+            Self::NotInstalled => theme::glyph(Symbol::MarkClose),
+            Self::Installed => theme::glyph(Symbol::StatusSelected),
+            Self::Configured => theme::glyph(Symbol::MarkOfficial),
+            Self::NeedsPath => theme::glyph(Symbol::MarkAttention),
         }
     }
 
@@ -79,10 +76,10 @@ impl HarnessStatus {
 
     fn color(self) -> Color {
         match self {
-            Self::NotInstalled => MUTED,
-            Self::Installed => WARNING,
-            Self::Configured => ACCENT,
-            Self::NeedsPath => WARNING,
+            Self::NotInstalled => theme::color(Token::TextMuted),
+            Self::Installed => theme::color(Token::StateWarning),
+            Self::Configured => theme::color(Token::Accent),
+            Self::NeedsPath => theme::color(Token::StateWarning),
         }
     }
 }
@@ -132,7 +129,7 @@ pub(crate) fn render_harnesses(
         "detected agents",
         Some(Span::styled(
             format!("{count} installed"),
-            Style::default().fg(MUTED),
+            theme::fg(Token::TextMuted),
         )),
     );
 
@@ -145,9 +142,9 @@ pub(crate) fn render_harnesses(
             .borders(Borders::BOTTOM)
             .border_style(Style::default().fg(
                 if model.filtering && model.route == Route::Harnesses {
-                    ACCENT
+                    theme::color(Token::Accent)
                 } else {
-                    BORDER
+                    theme::color(Token::BorderDefault)
                 },
             ));
         let inner = block.inner(filter_area);
@@ -155,15 +152,18 @@ pub(crate) fn render_harnesses(
         let text = if model.harnesses_filter.is_empty() {
             Line::from(Span::styled(
                 "Filter integrations…",
-                Style::default().fg(MUTED),
+                theme::fg(Token::TextMuted),
             ))
         } else {
             let mut spans = vec![Span::styled(
                 model.harnesses_filter.clone(),
-                Style::default().fg(TEXT_PRIMARY),
+                theme::fg(Token::TextPrimary),
             )];
             if model.filtering && model.route == Route::Harnesses {
-                spans.push(Span::styled("▏", Style::default().fg(ACCENT)));
+                spans.push(Span::styled(
+                    theme::glyph(Symbol::BarThin),
+                    theme::fg(Token::Accent),
+                ));
             }
             Line::from(spans)
         };
@@ -175,7 +175,7 @@ pub(crate) fn render_harnesses(
         None => {
             if y < bottom {
                 frame.render_widget(
-                    Paragraph::new(Span::styled("Loading…", Style::default().fg(MUTED))),
+                    Paragraph::new(Span::styled("Loading…", theme::fg(Token::TextMuted))),
                     Rect::new(content.x, y, content.width, bottom.saturating_sub(y)),
                 );
             }
@@ -190,7 +190,7 @@ pub(crate) fn render_harnesses(
                                 "No integrations match \"{}\".",
                                 model.harnesses_filter.trim()
                             ),
-                            Style::default().fg(MUTED),
+                            theme::fg(Token::TextMuted),
                         )),
                         Rect::new(content.x, y, content.width, 1),
                     );
@@ -233,7 +233,7 @@ pub(crate) fn render_harnesses(
                     frame.render_widget(
                         Paragraph::new(Span::styled(
                             format!("! {warning}"),
-                            Style::default().fg(WARNING),
+                            theme::fg(Token::StateWarning),
                         )),
                         Rect::new(content.x, y, content.width, 1),
                     );
@@ -258,9 +258,9 @@ fn render_harness_card(
     index: usize,
 ) {
     let background = if selected {
-        SELECTED_BG
+        theme::color(Token::SurfaceSelected)
     } else {
-        SURFACE_SUBTLE
+        theme::color(Token::SurfaceRecessed)
     };
     frame.render_widget(
         Paragraph::new("").style(Style::default().bg(background)),
@@ -276,9 +276,9 @@ fn render_harness_card(
         harness.display_name.clone(),
         Style::default()
             .fg(if selected {
-                TEXT_BRIGHT
+                theme::color(Token::TextBright)
             } else {
-                TEXT_SECONDARY
+                theme::color(Token::TextSecondary)
             })
             .add_modifier(Modifier::BOLD),
     );
@@ -300,7 +300,7 @@ fn render_harness_card(
     frame.render_widget(
         Paragraph::new(Span::styled(
             harness.description.clone(),
-            Style::default().fg(TEXT_DIM),
+            theme::fg(Token::TextDim),
         ))
         .wrap(Wrap { trim: true }),
         Rect::new(inner.x, inner.y + 1, inner.width, 2),
@@ -308,7 +308,7 @@ fn render_harness_card(
     frame.render_widget(
         Paragraph::new(Span::styled(
             harness.integration.clone(),
-            Style::default().fg(MUTED),
+            theme::fg(Token::TextMuted),
         )),
         Rect::new(inner.x, inner.y + 4, inner.width, 1),
     );
@@ -333,12 +333,12 @@ fn render_harness_drawer(
             .borders(ratatui::widgets::Borders::LEFT)
             .border_style(Style::default().fg(
                 if model.dragging_panel == Some(ResizablePanel::HarnessDrawer) {
-                    ACCENT
+                    theme::color(Token::Accent)
                 } else {
-                    SURFACE_SUBTLE
+                    theme::color(Token::SurfaceRecessed)
                 },
             ))
-            .style(Style::default().bg(SURFACE_SUBTLE)),
+            .style(theme::bg(Token::SurfaceRecessed)),
         drawer,
     );
     hits.insert(
@@ -356,64 +356,61 @@ fn render_harness_drawer(
     );
 
     let mut lines = vec![
-        Line::from(Span::styled(
-            "HARNESS",
-            Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
-        )),
+        Line::from(Span::styled("HARNESS", theme::fg_bold(Token::TextMuted))),
         Line::from(Span::styled(
             harness.display_name.clone(),
             Style::default()
-                .fg(TEXT_BRIGHT)
+                .fg(theme::color(Token::TextBright))
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(vec![
-            label_span("Version", Style::default().fg(MUTED)),
+            label_span("Version", theme::fg(Token::TextMuted)),
             Span::styled(
                 harness
                     .detection
                     .version
                     .clone()
                     .unwrap_or_else(|| "unknown".to_owned()),
-                Style::default().fg(TEXT_TERTIARY),
+                theme::fg(Token::TextTertiary),
             ),
         ]),
         Line::from(vec![
-            label_span("Status", Style::default().fg(MUTED)),
+            label_span("Status", theme::fg(Token::TextMuted)),
             Span::styled(
                 format!("{} {}", status.glyph(), status.label()),
                 Style::default().fg(status.color()),
             ),
         ]),
         Line::from(vec![
-            label_span("Delivery", Style::default().fg(MUTED)),
+            label_span("Delivery", theme::fg(Token::TextMuted)),
             Span::styled(
                 harness
                     .strategy
                     .as_deref()
                     .map(friendly_delivery)
                     .unwrap_or("Not configured yet"),
-                Style::default().fg(TEXT_TERTIARY),
+                theme::fg(Token::TextTertiary),
             ),
         ]),
     ];
     if let Some(provisioning) = &harness.provisioning {
         lines.push(Line::from(vec![
-            label_span("Provisioning", Style::default().fg(MUTED)),
+            label_span("Provisioning", theme::fg(Token::TextMuted)),
             Span::styled(
                 format!("{:?} ({:?})", provisioning.status, provisioning.action),
-                Style::default().fg(TEXT_TERTIARY),
+                theme::fg(Token::TextTertiary),
             ),
         ]));
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "COMPATIBILITY",
-        Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
+        theme::fg_bold(Token::TextMuted),
     )));
     for (label, status, style) in compatibility_rows(harness) {
         lines.push(Line::from(vec![
-            label_span(label, Style::default().fg(TEXT_SECONDARY)),
+            label_span(label, theme::fg(Token::TextSecondary)),
             Span::styled(status, style),
         ]));
     }
@@ -457,7 +454,7 @@ fn friendly_delivery(strategy: &str) -> &str {
 /// per-agent support popup's question, answered against that pane's own
 /// cwd — asking it here, against the TUI's launch directory, is how the
 /// screen used to report "none in project" about `$HOME`.
-fn compatibility_rows(harness: &HarnessHealth) -> Vec<(&'static str, &'static str, Style)> {
+fn compatibility_rows(harness: &HarnessHealth) -> Vec<(&'static str, String, Style)> {
     let routed = [
         ("Skills", CapabilityKind::AgentSkill),
         ("MCP", CapabilityKind::Mcp),
@@ -481,7 +478,7 @@ fn compatibility_rows(harness: &HarnessHealth) -> Vec<(&'static str, &'static st
 /// old "— Not needed" (which meant only that no installed package had
 /// contributed a managed region — a fact about plugins, never about
 /// whether the harness could see a project's instructions).
-fn context_rows(support: &HarnessContextSupport) -> Vec<(&'static str, &'static str, Style)> {
+fn context_rows(support: &HarnessContextSupport) -> Vec<(&'static str, String, Style)> {
     let (instructions, instructions_style) = context_row(support.instructions);
     let (agents_directory, agents_directory_style) = context_row(support.agents_directory);
     vec![
@@ -490,28 +487,52 @@ fn context_rows(support: &HarnessContextSupport) -> Vec<(&'static str, &'static 
     ]
 }
 
-fn context_row(mechanism: ContextMechanism) -> (&'static str, Style) {
+fn context_row(mechanism: ContextMechanism) -> (String, Style) {
     match mechanism {
-        ContextMechanism::Native => ("√ Native", Style::default().fg(ACCENT)),
-        ContextMechanism::RuntimeShim => ("√ Runtime shim", Style::default().fg(ACCENT)),
-        ContextMechanism::Bridge => ("√ Bridged", Style::default().fg(ACCENT)),
-        ContextMechanism::ShimShadowed => ("⚠ PATH shadowed", Style::default().fg(WARNING)),
-        ContextMechanism::Unsupported => ("— Not supported", Style::default().fg(DANGER)),
+        ContextMechanism::Native => (
+            format!("{} Native", theme::glyph(Symbol::MarkNative)),
+            theme::fg(Token::Accent),
+        ),
+        ContextMechanism::RuntimeShim => (
+            format!("{} Runtime shim", theme::glyph(Symbol::MarkNative)),
+            theme::fg(Token::Accent),
+        ),
+        ContextMechanism::Bridge => (
+            format!("{} Bridged", theme::glyph(Symbol::MarkNative)),
+            theme::fg(Token::Accent),
+        ),
+        ContextMechanism::ShimShadowed => (
+            format!("{} PATH shadowed", theme::glyph(Symbol::MarkAttention)),
+            theme::fg(Token::StateWarning),
+        ),
+        ContextMechanism::Unsupported => (
+            format!("{} Not supported", theme::glyph(Symbol::MarkUnsupported)),
+            theme::fg(Token::StateDanger),
+        ),
     }
 }
 
-fn capability_status(
-    capabilities: &HarnessCapabilities,
-    kind: CapabilityKind,
-) -> (&'static str, Style) {
+fn capability_status(capabilities: &HarnessCapabilities, kind: CapabilityKind) -> (String, Style) {
     if capabilities.direct_standard.contains(&kind) || capabilities.native.contains(&kind) {
-        ("√ Native", Style::default().fg(ACCENT))
+        (
+            format!("{} Native", theme::glyph(Symbol::MarkNative)),
+            theme::fg(Token::Accent),
+        )
     } else if capabilities.adaptable.contains(&kind) {
-        ("≈ Adapted", Style::default().fg(WARNING))
+        (
+            format!("{} Adapted", theme::glyph(Symbol::MarkAdapted)),
+            theme::fg(Token::StateWarning),
+        )
     } else if capabilities.degraded.contains(&kind) {
-        ("≈ Degraded", Style::default().fg(WARNING))
+        (
+            format!("{} Degraded", theme::glyph(Symbol::MarkAdapted)),
+            theme::fg(Token::StateWarning),
+        )
     } else {
-        ("— Not supported", Style::default().fg(DANGER))
+        (
+            format!("{} Not supported", theme::glyph(Symbol::MarkUnsupported)),
+            theme::fg(Token::StateDanger),
+        )
     }
 }
 
@@ -546,7 +567,7 @@ mod tests {
         let status = HarnessStatus::from(&configured_harness(false));
         assert_eq!(status, HarnessStatus::NeedsPath);
         assert_eq!(status.label(), "PATH shadowed");
-        assert_eq!(status.color(), WARNING);
+        assert_eq!(status.color(), theme::color(Token::StateWarning));
     }
 
     fn support(
@@ -570,10 +591,16 @@ mod tests {
             ContextMechanism::RuntimeShim,
         ));
         assert_eq!(rows[0].0, "AGENTS.md");
-        assert_eq!(rows[0].1, "√ Runtime shim");
-        assert_eq!(rows[0].2.fg, Some(ACCENT));
+        assert_eq!(
+            rows[0].1,
+            format!("{} Runtime shim", theme::glyph(Symbol::MarkNative))
+        );
+        assert_eq!(rows[0].2.fg, Some(theme::color(Token::Accent)));
         assert_eq!(rows[1].0, ".agents");
-        assert_eq!(rows[1].1, "√ Runtime shim");
+        assert_eq!(
+            rows[1].1,
+            format!("{} Runtime shim", theme::glyph(Symbol::MarkNative))
+        );
     }
 
     #[test]
@@ -581,8 +608,14 @@ mod tests {
         // A harness may discover `.agents/` on its own while still needing
         // a bridge file for `AGENTS.md`.
         let rows = context_rows(&support(ContextMechanism::Bridge, ContextMechanism::Native));
-        assert_eq!(rows[0].1, "√ Bridged");
-        assert_eq!(rows[1].1, "√ Native");
+        assert_eq!(
+            rows[0].1,
+            format!("{} Bridged", theme::glyph(Symbol::MarkNative))
+        );
+        assert_eq!(
+            rows[1].1,
+            format!("{} Native", theme::glyph(Symbol::MarkNative))
+        );
     }
 
     #[test]
@@ -591,8 +624,11 @@ mod tests {
             ContextMechanism::ShimShadowed,
             ContextMechanism::ShimShadowed,
         ));
-        assert_eq!(rows[0].1, "⚠ PATH shadowed");
-        assert_eq!(rows[0].2.fg, Some(WARNING));
+        assert_eq!(
+            rows[0].1,
+            format!("{} PATH shadowed", theme::glyph(Symbol::MarkAttention))
+        );
+        assert_eq!(rows[0].2.fg, Some(theme::color(Token::StateWarning)));
     }
 
     #[test]
@@ -602,7 +638,7 @@ mod tests {
             ContextMechanism::Unsupported,
         ));
         assert_eq!(rows[0].1, "— Not supported");
-        assert_eq!(rows[0].2.fg, Some(DANGER));
+        assert_eq!(rows[0].2.fg, Some(theme::color(Token::StateDanger)));
     }
 
     // The drawer is machine-scoped: the same harness reads identically no

@@ -62,6 +62,9 @@ mod model;
 mod orchestrator;
 mod overlay;
 mod root_picker;
+pub(crate) mod theme;
+
+use theme::{Symbol, Token};
 pub mod view;
 mod worker;
 
@@ -94,79 +97,6 @@ impl ProcessRunner for SilentProcessRunner {
 fn tui_application(home: UzeHome) -> Result<UzeApplication> {
     UzeApplication::from_env_with_runner(home, Box::new(SilentProcessRunner))
 }
-
-// Exact palette from the imported design (`UZE TUI.dc.html`), not a
-// generic terminal-app palette: a near-black backdrop, warm off-white
-// text, and one signature accent (soft sage green) doubling as the
-// success/native/pass color everywhere, per the design's own `levelColor`.
-// Structure comes from thin hairline dividers (1px rgba-white borders in
-// the source), never from filled surface slabs or boxed panels.
-const BASE: Color = Color::Rgb(10, 12, 13); // #0a0c0d
-const TEXT_BRIGHT: Color = Color::Rgb(242, 240, 234); // #f2f0ea — headings, active state
-const TEXT_PRIMARY: Color = Color::Rgb(230, 228, 222); // #e6e4de — body default
-const TEXT_SECONDARY: Color = Color::Rgb(168, 166, 160); // #a8a6a0 — descriptions
-const TEXT_TERTIARY: Color = Color::Rgb(201, 199, 192); // #c9c7c0 — key/value content
-const MUTED: Color = Color::Rgb(107, 113, 118); // #6b7176 — labels, eyebrows
-const TEXT_DIM: Color = Color::Rgb(91, 96, 101); // #5b6065 — versions, source tags
-const TEXT_FAINT: Color = Color::Rgb(61, 66, 71); // #3d4247 — tree-prefix glyphs
-const ACCENT: Color = Color::Rgb(143, 209, 158); // #8fd19e — the one signature hue
-const SUCCESS: Color = ACCENT;
-const WARNING: Color = Color::Rgb(224, 181, 103); // #e0b567 (amber)
-const DANGER: Color = Color::Rgb(224, 118, 95); // #e0765f (red)
-const BLUE: Color = Color::Rgb(125, 151, 201); // #7d97c9 — badges and tags
-/// The two hues that exist only so a task's state reads by color alone
-/// (see `orchestrator::render::task_mark`): every state a slot can be in
-/// needs a hue of its own, and the five above were already spoken for by
-/// meanings that would misreport it — an in-flight delivery is not a
-/// warning, and delivered work is not a badge. Same saturation and
-/// lightness as `BLUE`, so the sidebar still reads as one palette.
-const CYAN: Color = Color::Rgb(125, 190, 194); // #7dbec2 — work in flight
-const VIOLET: Color = Color::Rgb(163, 143, 201); // #a38fc9 — work that landed
-
-/// Hairline dividers — solid approximations of the design's
-/// `rgba(255,255,255,a)` borders, pre-blended over `BASE` since ratatui has
-/// no alpha compositing. `BORDER_FAINT` (a≈0.05) separates list rows;
-/// `BORDER` (a≈0.08) sits under the titlebar and around the sidebar/inputs.
-const BORDER_FAINT: Color = Color::Rgb(22, 24, 25);
-const BORDER: Color = Color::Rgb(30, 31, 32);
-/// The Marketplace/Harnesses selected-row tint — `rgba(143,209,158,0.09)`
-/// (the accent itself, barely-there) pre-blended over `BASE`.
-const SELECTED_BG: Color = Color::Rgb(22, 30, 26);
-/// A hue-neutral highlight overlay — `rgba(255,255,255,0.09)` pre-blended
-/// over `BASE`, the same strength as `SELECTED_BG` but white instead of
-/// accent-tinted. For a highlight that marks "this whole block is where
-/// you are" without borrowing the accent's meaning (e.g. the active
-/// workspace space's envelope) — not every raised surface should read as
-/// "on-brand selected", just "raised above the background".
-const SURFACE_OVERLAY: Color = Color::Rgb(32, 34, 35);
-/// A touch darker than `SURFACE_OVERLAY` — `rgba(255,255,255,0.07)` instead
-/// of `0.09`, pre-blended the same way. Fills the active space's tab/
-/// detail/cwd rows in the sidebar tree, one shade below the lighter
-/// `SURFACE_OVERLAY` its own title row keeps — so the header lifts
-/// slightly above the block it names instead of blending into it.
-const ACTIVE_SPACE_OVERLAY: Color = Color::Rgb(27, 29, 30);
-/// A subtler, darker surface — `rgba(255,255,255,0.025)` pre-blended over
-/// `BASE`. Used for unselected cards and detail drawers so `SELECTED_BG`
-/// pops with higher contrast while unselected surfaces stay distinct from
-/// the backdrop but visually recessed.
-const SURFACE_SUBTLE: Color = Color::Rgb(16, 18, 19);
-/// A brighter variant of `SURFACE_OVERLAY` — `rgba(255,255,255,0.14)`
-/// instead of `0.09`, pre-blended the same way — for the tab strip's
-/// "+"/"✦" pair. At the plain overlay's strength the icons read as barely
-/// there against the strip's own backdrop; unlike the sidebar surfaces
-/// `SURFACE_OVERLAY` marks (which sit next to plain unfilled rows and so
-/// only need to read as "raised" by a little), this pair is plain
-/// decoration with no bold/color weight otherwise carrying it, so it needs
-/// the extra contrast.
-const SURFACE_OVERLAY_BRIGHT: Color = Color::Rgb(44, 46, 47);
-/// The surface a control takes while the pointer is on it —
-/// `rgba(255,255,255,0.20)` pre-blended over `BASE`, one step above every
-/// resting surface above it. One tone for every hovered control, whatever
-/// its resting fill: hover is the frame answering "yes, this one", and an
-/// answer that differs per control is one the eye has to learn twice.
-const SURFACE_HOVER: Color = Color::Rgb(59, 61, 61);
-
-const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 /// Runs the TUI. `home` is passed to workers, which construct the same
 /// production application composition root as the CLI.
@@ -309,11 +239,11 @@ pub(crate) fn title_row(name: &str, dismiss: &str, width: usize) -> ratatui::tex
         Span::styled(
             name.to_owned(),
             Style::default()
-                .fg(TEXT_BRIGHT)
+                .fg(theme::color(Token::TextBright))
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" ".repeat(gap)),
-        Span::styled(dismiss.to_owned(), Style::default().fg(MUTED)),
+        Span::styled(dismiss.to_owned(), theme::fg(Token::TextMuted)),
     ])
 }
 
@@ -346,11 +276,6 @@ pub(crate) fn display_project_path(root: &std::path::Path) -> String {
     }
     root.display().to_string()
 }
-
-/// The inactive nav label color (`#9a9892` in the design) — close to but
-/// distinct from the other muted tones used elsewhere, so it's its own
-/// constant rather than reusing `MUTED`/`TEXT_SECONDARY`.
-const NAV_INACTIVE: Color = Color::Rgb(154, 152, 146);
 
 // --- Shared helpers ---------------------------------------------------------
 
@@ -404,10 +329,10 @@ fn render_mode_toggle(
     workspace_active: bool,
 ) -> (Rect, Rect) {
     let filled = Style::default()
-        .bg(ACCENT)
-        .fg(BASE)
+        .bg(theme::color(Token::Accent))
+        .fg(theme::color(Token::SurfaceBackground))
         .add_modifier(Modifier::BOLD);
-    let ghost = Style::default().bg(SURFACE_SUBTLE).fg(NAV_INACTIVE);
+    let ghost = theme::on(Token::TextInactive, Token::SurfaceRecessed);
     let button_width = "Manage".len() as u16 + 2;
     let centered = |label: &str| {
         let extra = button_width.saturating_sub(label.len() as u16);
@@ -449,13 +374,54 @@ fn render_mode_toggle(
 /// description stays muted — the shortcut bar reads as "keys + what they
 /// do" instead of one uniform wall of gray text. Chunks without a verb
 /// (e.g. `y/n`) render as a command alone.
+/// What a hint string is *written* with to mark where one clause ends and
+/// the next begins. It is notation, not output: [`hint_spans`] replaces it
+/// with whatever the active theme draws a separator as, so a hint stays
+/// readable in the source without pinning the glyph.
+const HINT_SEPARATOR: &str = " · ";
+
+/// The key glyphs a hint line is *written* with, and the symbols they stand
+/// for. Same idea as [`HINT_SEPARATOR`]: "↑↓ select" reads as itself in the
+/// source, and comes out of [`hint_spans`] in whatever the active theme
+/// draws those keys as — `^v select` under the ASCII theme.
+const HINT_NOTATION: &[(char, Symbol)] = &[
+    ('\u{2191}', Symbol::ArrowUp),
+    ('\u{2193}', Symbol::ArrowDown),
+    ('\u{21e7}', Symbol::ArrowShift),
+];
+
+fn hint_notation(chunk: &str) -> String {
+    if !chunk
+        .chars()
+        .any(|c| HINT_NOTATION.iter().any(|(k, _)| *k == c))
+    {
+        return chunk.to_owned();
+    }
+    chunk
+        .chars()
+        .map(|c| match HINT_NOTATION.iter().find(|(key, _)| *key == c) {
+            Some((_, symbol)) => theme::glyph(*symbol),
+            None => c.to_string(),
+        })
+        .collect()
+}
+
+/// Two clauses of one help line, joined by whatever the active theme draws
+/// a separator as — the same join [`hint_spans`] makes, for the lines that
+/// are plain text rather than key/action pairs.
+pub(crate) fn hint_aside(first: &str, second: &str) -> String {
+    format!("{first}{}{second}", theme::glyph(Symbol::HintSeparator))
+}
+
 fn hint_spans(hint: &str) -> Vec<Span<'static>> {
-    let command = Style::default().fg(ACCENT).add_modifier(Modifier::BOLD);
-    let muted = Style::default().fg(MUTED);
+    let command = theme::fg_bold(Token::Accent);
+    let muted = theme::fg(Token::TextMuted);
     let mut spans = Vec::new();
-    for (i, chunk) in hint.split(" · ").enumerate() {
+    let separator = theme::glyph(Symbol::HintSeparator);
+    for (i, chunk) in hint.split(HINT_SEPARATOR).enumerate() {
+        let chunk = &hint_notation(chunk);
         if i > 0 {
-            spans.push(Span::raw(" · "));
+            spans.push(Span::raw(separator.clone()));
         }
         match chunk.split_once(' ') {
             Some((key, action)) => {
@@ -518,7 +484,7 @@ pub(crate) fn render_screen_header(
     trailer: Option<Span<'static>>,
 ) -> Rect {
     let title_style = Style::default()
-        .fg(TEXT_BRIGHT)
+        .fg(theme::color(Token::TextBright))
         .add_modifier(Modifier::BOLD);
     let title_row = Rect::new(area.x, area.y, area.width.saturating_sub(1), 1);
     if let Some(trailer) = trailer {
@@ -538,7 +504,7 @@ pub(crate) fn render_screen_header(
     if area.height > 1 {
         let subtitle_row = Rect::new(area.x, area.y + 1, area.width, 1);
         frame.render_widget(
-            Paragraph::new(Span::styled(subtitle, Style::default().fg(MUTED))),
+            Paragraph::new(Span::styled(subtitle, theme::fg(Token::TextMuted))),
             subtitle_row,
         );
     }
@@ -553,10 +519,10 @@ pub(crate) fn render_screen_header(
 
 fn route_style(route: &str) -> Style {
     match route {
-        "native" => Style::default().fg(SUCCESS),
-        "adapted" | "decomposed" => Style::default().fg(ACCENT),
-        "degraded" => Style::default().fg(WARNING),
-        _ => Style::default().fg(DANGER),
+        "native" => theme::fg(Token::StateSuccess),
+        "adapted" | "decomposed" => theme::fg(Token::Accent),
+        "degraded" => theme::fg(Token::StateWarning),
+        _ => theme::fg(Token::StateDanger),
     }
 }
 
@@ -659,7 +625,17 @@ impl Rows {
     }
 }
 
+/// The gap a row keeps between its right-most content and the divider (or
+/// the frame) beside it. One place, because a row that reserves a different
+/// amount than the row above it reads as ragged rather than as deliberate.
 pub(crate) const TRAILING_PAD: u16 = 1;
+
+/// The inset every anchored popup keeps between its border and its content.
+/// Four popups had grown their own copy of this pair; they were all the same
+/// number, which is the point — a popup that pads differently reads as a
+/// different kind of surface.
+pub(crate) const POPUP_H_PAD: u16 = 2;
+pub(crate) const POPUP_V_PAD: u16 = 1;
 
 /// Appends `text` pinned to the row's right edge, `TRAILING_PAD` off the
 /// divider — the column the agent rows keep their alias in.
@@ -688,13 +664,12 @@ pub(crate) fn elide_tail(text: &str, width: usize) -> String {
     if text.chars().count() <= width {
         return text.to_owned();
     }
-    let Some(kept) = width.checked_sub(1) else {
+    let Some(kept) = width.checked_sub(theme::width(Symbol::Ellipsis) as usize) else {
         return String::new();
     };
-    text.chars()
-        .take(kept)
-        .chain(std::iter::once('…'))
-        .collect()
+    let mut kept: String = text.chars().take(kept).collect();
+    kept.push_str(&theme::glyph(Symbol::Ellipsis));
+    kept
 }
 
 /// Stamps `bg` onto every span already in the row, then appends a

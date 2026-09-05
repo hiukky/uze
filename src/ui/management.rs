@@ -22,6 +22,7 @@ use super::hit::Hit;
 use super::model::{self, Focus, Overlay, ROUTES, Route, Status, TuiModel};
 use super::worker::{Intent, dispatch, drain_worker_results, spawn_startup};
 use super::{TerminalSession, overlay, small_digits, view};
+use crate::ui::theme::{self, Symbol, Token};
 
 pub(crate) fn run_management(
     terminal: &mut TerminalSession,
@@ -167,7 +168,7 @@ pub(crate) fn render(
     // paints its own background; every division is a hairline border or
     // padding, never a filled slab.
     frame.render_widget(
-        Block::default().style(Style::default().bg(super::BASE).fg(super::TEXT_PRIMARY)),
+        Block::default().style(theme::on(Token::TextPrimary, Token::SurfaceBackground)),
         frame.area(),
     );
     // Only two areas span the full frame height — menu (sidebar) and main
@@ -223,6 +224,9 @@ pub(crate) fn render(
         Overlay::AddMarketplace(input) => {
             overlay::render_add_marketplace(frame, frame.area(), input)
         }
+        Overlay::ThemePicker { themes, selected } => {
+            overlay::render_theme_picker(frame, frame.area(), themes, *selected)
+        }
         Overlay::NewProfile(input) => overlay::render_new_profile(frame, frame.area(), input),
         Overlay::ConfirmDeleteProfile { id, focus } => {
             overlay::render_confirm_delete_profile(frame, frame.area(), id, *focus)
@@ -271,9 +275,9 @@ fn render_sidebar(
     // in `render`), so it picks up the same accent-while-dragging feedback
     // the workspace sidebar uses.
     let border_color = if model.dragging_sidebar {
-        super::ACCENT
+        theme::color(Token::Accent)
     } else {
-        super::BORDER_FAINT
+        theme::color(Token::BorderFaint)
     };
     let block = Block::default()
         .borders(Borders::RIGHT)
@@ -305,8 +309,8 @@ fn render_sidebar(
     if let Some(rect) = row(1) {
         frame.render_widget(
             Paragraph::new(Span::styled(
-                "─".repeat(rect.width as usize),
-                Style::default().fg(super::BORDER_FAINT),
+                theme::glyph(Symbol::TreeDivider).repeat(rect.width as usize),
+                theme::fg(Token::BorderFaint),
             )),
             rect,
         );
@@ -318,33 +322,40 @@ fn render_sidebar(
         if narrow {
             let Some(rect) = row(1) else { break };
             let fg = if selected {
-                super::TEXT_BRIGHT
+                theme::color(Token::TextBright)
             } else {
-                super::NAV_INACTIVE
+                theme::color(Token::TextInactive)
             };
             let mut style = Style::default().fg(fg);
             if selected {
                 style = style
                     .add_modifier(Modifier::BOLD)
-                    .bg(super::SURFACE_OVERLAY);
+                    .bg(theme::color(Token::SurfaceRaised));
             }
             if selected {
                 frame.render_widget(
-                    Block::default().style(Style::default().bg(super::SURFACE_OVERLAY)),
+                    Block::default().style(theme::bg(Token::SurfaceRaised)),
                     rect,
                 );
             }
-            let bar_fg = if selected { super::ACCENT } else { super::BASE };
-            let bar_bg = if selected {
-                super::SURFACE_OVERLAY
+            let bar_fg = if selected {
+                theme::color(Token::Accent)
             } else {
-                super::BASE
+                theme::color(Token::SurfaceBackground)
+            };
+            let bar_bg = if selected {
+                theme::color(Token::SurfaceRaised)
+            } else {
+                theme::color(Token::SurfaceBackground)
             };
             let bar = Rect::new(rect.x, rect.y, 1, rect.height);
             for dy in 0..bar.height {
                 let cell = Rect::new(bar.x, bar.y + dy, 1, 1);
                 frame.render_widget(
-                    Paragraph::new(Span::styled("▎", Style::default().fg(bar_fg).bg(bar_bg))),
+                    Paragraph::new(Span::styled(
+                        theme::glyph(Symbol::BarMedium),
+                        Style::default().fg(bar_fg).bg(bar_bg),
+                    )),
                     cell,
                 );
             }
@@ -363,10 +374,10 @@ fn render_sidebar(
                     .split(text_rect);
                 let count_style = if selected {
                     Style::default()
-                        .fg(super::ACCENT)
-                        .bg(super::SURFACE_OVERLAY)
+                        .fg(theme::color(Token::Accent))
+                        .bg(theme::color(Token::SurfaceRaised))
                 } else {
-                    Style::default().fg(super::ACCENT)
+                    theme::fg(Token::Accent)
                 };
                 frame.render_widget(Paragraph::new(Span::styled(route.label(), style)), cols[0]);
                 frame.render_widget(
@@ -392,20 +403,27 @@ fn render_sidebar(
         let block_rect = Rect::new(label_rect.x, label_rect.y, label_rect.width, height);
         if selected {
             frame.render_widget(
-                Block::default().style(Style::default().bg(super::SURFACE_OVERLAY)),
+                Block::default().style(theme::bg(Token::SurfaceRaised)),
                 block_rect,
             );
         }
-        let bar_fg = if selected { super::ACCENT } else { super::BASE };
-        let bar_bg = if selected {
-            super::SURFACE_OVERLAY
+        let bar_fg = if selected {
+            theme::color(Token::Accent)
         } else {
-            super::BASE
+            theme::color(Token::SurfaceBackground)
+        };
+        let bar_bg = if selected {
+            theme::color(Token::SurfaceRaised)
+        } else {
+            theme::color(Token::SurfaceBackground)
         };
         for dy in 0..height {
             let cell = Rect::new(block_rect.x, block_rect.y + dy, 1, 1);
             frame.render_widget(
-                Paragraph::new(Span::styled("▎", Style::default().fg(bar_fg).bg(bar_bg))),
+                Paragraph::new(Span::styled(
+                    theme::glyph(Symbol::BarMedium),
+                    Style::default().fg(bar_fg).bg(bar_bg),
+                )),
                 cell,
             );
         }
@@ -413,9 +431,9 @@ fn render_sidebar(
         let text_w = block_rect.width.saturating_sub(3);
         if selected {
             let label_style = Style::default()
-                .fg(super::TEXT_BRIGHT)
+                .fg(theme::color(Token::TextBright))
                 .add_modifier(Modifier::BOLD)
-                .bg(super::SURFACE_OVERLAY);
+                .bg(theme::color(Token::SurfaceRaised));
             let inner_label = Rect::new(text_x, block_rect.y, text_w, 1);
             if let Some(count) = route_count(route, model) {
                 let count_str = small_digits(count);
@@ -425,8 +443,8 @@ fn render_sidebar(
                     .constraints([Constraint::Min(1), Constraint::Length(count_w)])
                     .split(inner_label);
                 let count_style = Style::default()
-                    .fg(super::ACCENT)
-                    .bg(super::SURFACE_OVERLAY);
+                    .fg(theme::color(Token::Accent))
+                    .bg(theme::color(Token::SurfaceRaised));
                 frame.render_widget(
                     Paragraph::new(Span::styled(route.label(), label_style)),
                     cols[0],
@@ -446,17 +464,17 @@ fn render_sidebar(
             if let Some(sub_rect) = subtitle_rect {
                 let inner_sub = Rect::new(text_x, block_rect.y + 1, text_w, 1);
                 let sub_style = Style::default()
-                    .fg(super::TEXT_DIM)
-                    .bg(super::SURFACE_OVERLAY);
+                    .fg(theme::color(Token::TextDim))
+                    .bg(theme::color(Token::SurfaceRaised));
                 frame.render_widget(
                     Paragraph::new(Span::styled(route_subtitle(route), sub_style))
-                        .style(Style::default().bg(super::SURFACE_OVERLAY)),
+                        .style(theme::bg(Token::SurfaceRaised)),
                     inner_sub,
                 );
                 hits.push((sub_rect, Hit::Route(route)));
             }
         } else {
-            let label_style = Style::default().fg(super::NAV_INACTIVE);
+            let label_style = theme::fg(Token::TextInactive);
             let inner_label = Rect::new(text_x, block_rect.y, text_w, 1);
             if let Some(count) = route_count(route, model) {
                 let count_str = small_digits(count);
@@ -465,7 +483,7 @@ fn render_sidebar(
                     .direction(Direction::Horizontal)
                     .constraints([Constraint::Min(1), Constraint::Length(count_w)])
                     .split(inner_label);
-                let count_style = Style::default().fg(super::ACCENT);
+                let count_style = theme::fg(Token::Accent);
                 frame.render_widget(
                     Paragraph::new(Span::styled(route.label(), label_style)),
                     cols[0],
@@ -486,7 +504,7 @@ fn render_sidebar(
                 let inner_sub = Rect::new(text_x, block_rect.y + 1, text_w, 1);
                 let line = Line::from(vec![Span::styled(
                     route_subtitle(route),
-                    Style::default().fg(super::TEXT_DIM),
+                    theme::fg(Token::TextDim),
                 )]);
                 frame.render_widget(Paragraph::new(line), inner_sub);
                 hits.push((sub_rect, Hit::Route(route)));
@@ -498,7 +516,7 @@ fn render_sidebar(
 fn render_footer(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
     let block = Block::default()
         .borders(Borders::TOP)
-        .border_style(Style::default().fg(super::BORDER_FAINT))
+        .border_style(theme::fg(Token::BorderFaint))
         .padding(Padding::new(1, 1, 0, 0));
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -524,7 +542,7 @@ fn render_footer(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {
     }
     frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: true }), columns[0]);
     frame.render_widget(
-        Paragraph::new(Span::styled(version, Style::default().fg(super::TEXT_DIM)))
+        Paragraph::new(Span::styled(version, theme::fg(Token::TextDim)))
             .alignment(ratatui::layout::Alignment::Right),
         columns[1],
     );
@@ -548,9 +566,12 @@ pub(crate) fn clip_line(line: &mut Line<'static>, max: usize) {
     let Some(i) = cut else {
         return;
     };
-    let keep = max.saturating_sub(used).saturating_sub(1); // room for "…"
+    // Room for however wide this theme's elision marker actually is.
+    let keep = max
+        .saturating_sub(used)
+        .saturating_sub(theme::width(Symbol::Ellipsis) as usize);
     let mut truncated: String = line.spans[i].content.chars().take(keep).collect();
-    truncated.push('…');
+    truncated.push_str(&theme::glyph(Symbol::Ellipsis));
     line.spans[i].content = std::borrow::Cow::Owned(truncated);
     line.spans.truncate(i + 1);
 }
@@ -576,19 +597,19 @@ fn footer(model: &TuiModel) -> Text<'static> {
     match &model.status {
         model::Status::Idle => Text::from(Line::from(super::hint_spans(hint))),
         model::Status::Working(value) => {
-            let frame = super::SPINNER_FRAMES[model.tick % super::SPINNER_FRAMES.len()];
+            let frame = theme::frame(theme::Symbol::StatusWorking, model.tick);
             Text::from(vec![
                 Line::from(vec![
                     Span::styled(
                         format!("{frame} "),
                         Style::default()
-                            .fg(super::WARNING)
+                            .fg(theme::color(Token::StateWarning))
                             .add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
                         value.clone(),
                         Style::default()
-                            .fg(super::WARNING)
+                            .fg(theme::color(Token::StateWarning))
                             .add_modifier(Modifier::BOLD),
                     ),
                 ]),
@@ -599,7 +620,7 @@ fn footer(model: &TuiModel) -> Text<'static> {
             Line::from(Span::styled(
                 value.clone(),
                 Style::default()
-                    .fg(super::SUCCESS)
+                    .fg(theme::color(Token::StateSuccess))
                     .add_modifier(Modifier::BOLD),
             )),
             Line::from(super::hint_spans(hint)),
@@ -608,7 +629,7 @@ fn footer(model: &TuiModel) -> Text<'static> {
             Line::from(Span::styled(
                 value.clone(),
                 Style::default()
-                    .fg(super::DANGER)
+                    .fg(theme::color(Token::StateDanger))
                     .add_modifier(Modifier::BOLD),
             )),
             Line::from(super::hint_spans(hint)),

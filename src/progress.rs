@@ -8,26 +8,46 @@ use std::{io::IsTerminal, time::Duration};
 
 use anstyle::{Color, RgbColor, Style};
 use indicatif::{ProgressBar, ProgressStyle};
+use uze_theme::{Symbol, Token};
 
-// The single palette definition for the whole CLI. `clap_styles()` below
-// hands these exact same `anstyle::Style` values to `clap`'s own Styles
-// builder, so `--help`/usage/error text generated *by clap* never drifts
-// from the text this module renders by hand.
-const BRIGHT: Style = Style::new()
-    .bold()
-    .fg_color(Some(Color::Rgb(RgbColor(242, 240, 234))));
-// No `.dimmed()` here: SGR-faint stacked on an already-muted RGB color
-// renders inconsistently across terminals (many blend it further toward
-// the background), which is what made every gray line look washed out.
-// The TUI (`src/ui.rs`) never combines dim with a color for this reason —
-// it only ever reaches for a darker RGB value.
-const MUTED: Style = Style::new().fg_color(Some(Color::Rgb(RgbColor(107, 113, 118))));
-// Bold gray: section headings need to read as structure, not as another
-// muted label, so they get weight instead of a brighter/different hue.
-const HEADING: Style = MUTED.bold();
-const ACCENT: Style = Style::new().fg_color(Some(Color::Rgb(RgbColor(143, 209, 158))));
-const WARNING: Style = Style::new().fg_color(Some(Color::Rgb(RgbColor(224, 181, 103))));
-const DANGER: Style = Style::new().fg_color(Some(Color::Rgb(RgbColor(224, 118, 95))));
+// The CLI's half of the design system. Every style below resolves the same
+// `uze_theme` token the TUI draws with, so `uze status` and the workspace
+// client cannot drift the way two hand-kept palettes always did — and
+// `clap_styles()` hands these very values to clap's own Styles builder, so
+// even the usage and error text clap generates speaks in one voice.
+//
+// Functions rather than constants: a theme is resolved at runtime, and the
+// active one can change between two invocations of the same process.
+fn styled(token: Token) -> Style {
+    let rgb = uze_theme::active().color(token);
+    Style::new().fg_color(Some(Color::Rgb(RgbColor(rgb.0, rgb.1, rgb.2))))
+}
+
+fn bright() -> Style {
+    styled(Token::TextBright).bold()
+}
+// No `.dimmed()` anywhere here: SGR-faint stacked on an already-muted RGB
+// color renders inconsistently across terminals (many blend it further
+// toward the background), which is what made every gray line look washed
+// out. The TUI never combines dim with a color for the same reason — it
+// only ever reaches for a darker token.
+fn muted() -> Style {
+    styled(Token::TextMuted)
+}
+// Bold muted: section headings need to read as structure, not as another
+// muted label, so they get weight instead of a brighter or different hue.
+fn heading() -> Style {
+    muted().bold()
+}
+fn accent_style() -> Style {
+    styled(Token::Accent)
+}
+fn warning() -> Style {
+    styled(Token::StateWarning)
+}
+fn danger() -> Style {
+    styled(Token::StateDanger)
+}
 
 fn color_enabled() -> bool {
     std::io::stdout().is_terminal()
@@ -45,35 +65,35 @@ fn paint(text: impl AsRef<str>, style: Style) -> String {
 }
 
 pub fn title(text: impl AsRef<str>) -> String {
-    paint(text, BRIGHT)
+    paint(text, bright())
 }
 pub fn section(text: impl AsRef<str>) -> String {
-    paint(text, HEADING)
+    paint(text, heading())
 }
 pub fn label(text: impl AsRef<str>) -> String {
-    paint(text, MUTED)
+    paint(text, muted())
 }
 pub fn accent(text: impl AsRef<str>) -> String {
-    paint(text, ACCENT)
+    paint(text, accent_style())
 }
 pub fn success_text(text: impl AsRef<str>) -> String {
-    paint(text, ACCENT)
+    paint(text, styled(Token::StateSuccess))
 }
 pub fn warning_text(text: impl AsRef<str>) -> String {
-    paint(text, WARNING)
+    paint(text, warning())
 }
 pub fn error_text(text: impl AsRef<str>) -> String {
-    paint(text, DANGER)
+    paint(text, danger())
 }
 /// The single most important line in a report (a status headline, a final
 /// pass/fail) — bold, matching the TUI's status line (`ui.rs`'s
 /// `Status::Success`/`Status::Error`, which are always bold), so the verdict
 /// outweighs the incidental success/warning text sprinkled through the body.
 pub fn success_heading(text: impl AsRef<str>) -> String {
-    paint(text, ACCENT.bold())
+    paint(text, styled(Token::StateSuccess).bold())
 }
 pub fn warning_heading(text: impl AsRef<str>) -> String {
-    paint(text, WARNING.bold())
+    paint(text, warning().bold())
 }
 
 /// The same palette, handed to `clap`'s own Styles builder so a missing
@@ -81,13 +101,13 @@ pub fn warning_heading(text: impl AsRef<str>) -> String {
 /// every hand-written report in this module, instead of clap's defaults.
 pub fn clap_styles() -> clap::builder::Styles {
     clap::builder::Styles::styled()
-        .header(HEADING)
-        .usage(HEADING)
-        .literal(ACCENT)
-        .placeholder(MUTED)
-        .error(DANGER.bold())
-        .valid(ACCENT)
-        .invalid(DANGER)
+        .header(heading())
+        .usage(heading())
+        .literal(accent_style())
+        .placeholder(muted())
+        .error(danger().bold())
+        .valid(accent_style())
+        .invalid(danger())
 }
 
 /// A borderless, ANSI-aware table: aligned columns without the box-drawing
@@ -254,14 +274,61 @@ pub fn step_header(step: usize, total: usize, harness: &str) -> String {
 }
 
 pub fn success_icon() -> String {
-    success_text("✓")
+    success_text(glyph(Symbol::MarkOfficial))
 }
 pub fn warning_icon() -> String {
-    warning_text("!")
+    warning_text(glyph(Symbol::MarkAttention))
 }
 pub fn error_icon() -> String {
-    error_text("×")
+    error_text(glyph(Symbol::MarkCross))
 }
 pub fn log_prefix() -> String {
-    label("│")
+    label(glyph(Symbol::TreeColumnDivider))
+}
+
+/// The CLI's half of the symbol library. Same set the TUI draws from, for
+/// the same reason: a terminal without a Unicode font is not a terminal UZE
+/// should be unusable in, and the marks the CLI prints are as much chrome as
+/// the ones the TUI does.
+fn glyph(symbol: Symbol) -> String {
+    uze_theme::active().glyph(symbol).to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_cli_and_the_tui_resolve_a_shared_token_to_the_same_colour() {
+        // The point of the whole exercise. These two surfaces used to hold
+        // separate copies of the palette, in different style types, and a
+        // colour changed in one was silently wrong in the other.
+        for token in [
+            Token::TextBright,
+            Token::TextMuted,
+            Token::Accent,
+            Token::StateWarning,
+            Token::StateDanger,
+        ] {
+            let cli = styled(token).get_fg_color();
+            let tui = uze_theme::active().color(token);
+            assert_eq!(
+                cli,
+                Some(Color::Rgb(RgbColor(tui.0, tui.1, tui.2))),
+                "`{token}` differs between the CLI and the TUI"
+            );
+        }
+    }
+
+    #[test]
+    fn colour_is_dropped_rather_than_approximated_when_the_terminal_will_not_take_it() {
+        // `paint` is the only place that decides, and it decides by asking
+        // the terminal — a themed CLI must still pipe cleanly.
+        let plain = paint("text", accent_style());
+        if color_enabled() {
+            assert!(plain.contains("text"));
+        } else {
+            assert_eq!(plain, "text");
+        }
+    }
 }

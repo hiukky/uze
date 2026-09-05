@@ -795,6 +795,47 @@ it.
 
 > `tests/architecture/layering.rs::architecture_rules_hold`
 
+### Appearance is data, and one vocabulary is the only way to name it
+
+Nothing UZE draws carries a colour value or a glyph of its own. A surface
+names what it *is* — a `uze_theme::Token`, a `uze_theme::Symbol` — and the
+active theme decides what that looks like, so the TUI's chrome, the CLI's
+output, a pane's default and indexed colours, and the palette syntax
+highlighting is rendered with cannot drift apart the way four hand-kept
+copies of one palette always did. Two adapters translate the vocabulary
+into what each surface draws with (ratatui, anstyle) and are the only
+places allowed to construct a colour; a colour that genuinely came from
+content rather than from the design system passes through
+`theme::content`, named so it cannot be mistaken for chrome.
+
+A theme is a file, and a partial one is a whole one. Appearance resolves
+as a stack — the built-in default, then any theme a theme is a variation
+of, then the theme, then the operator's own overrides — and merging
+happens between *declarations* at every level, never between resolved
+colours. That is what keeps an ancestor's references alive: repaint the
+accent in a variation and everything two layers down written `@accent`
+follows. Surfaces and borders are declared as a separation from the
+theme's own background rather than as the value they resolve to, which is
+what lets a background declaration alone carry a light theme.
+
+UZE's own themes carry no emoji — an emoji is a different font family, a
+width that varies by terminal, and a picture that ignores the hue carrying
+the meaning. Colours bound to a hue by contract are the one thing that does
+not follow a meaning: the sixteen a program inside a pane names by index are literal,
+because index 2 is *green* to whatever emitted it.
+
+> `tests/architecture/layering.rs::architecture_rules_hold`
+> `tests/architecture/layering.rs::no_chrome_glyph_is_written_where_it_is_drawn`
+> `crates/uze-theme/src/load.rs::the_default_carries_the_palette_that_shipped`
+> `crates/uze-theme/src/load.rs::a_light_theme_gets_light_surfaces_from_the_background_alone`
+> `crates/uze-theme/src/load.rs::the_terminals_own_sixteen_keep_their_hues_when_a_theme_repaints_a_meaning`
+> `crates/uze-theme/src/load.rs::no_bundled_glyph_is_an_emoji`
+> `src/theme.rs::a_variation_resolves_over_the_theme_it_varies`
+> `src/theme.rs::the_operators_overrides_outlast_the_theme_they_are_applied_over`
+> `src/progress.rs::the_cli_and_the_tui_resolve_a_shared_token_to_the_same_colour`
+> `src/ui/orchestrator/tests.rs::the_palette_a_pane_is_told_about_is_the_one_being_drawn`
+> `crates/uze-terminal/src/runtime.rs::osc_background_and_foreground_queries_get_answered_instead_of_hanging`
+
 ### An extension describes; the host draws
 
 An extension answers with a `view::View` and never receives a frame,

@@ -56,6 +56,12 @@ pub mod prompt_history;
 /// read by the one client that draws it.
 pub mod sidebar_layout;
 
+/// Which theme is active, and which theme files exist. Only the selection —
+/// what a theme *is* belongs to the design system, which this crate does
+/// not name. Root-level for the same reason [`profile_state`] is: it is
+/// UZE-owned state under `UzeHome` that belongs to no portable concern.
+pub mod theme_state;
+
 // Flat public API. Each line also says which concern the module belongs to,
 // which is the second reason for keeping them: the crate root is where a
 // reader looks first.
