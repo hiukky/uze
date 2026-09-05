@@ -39,9 +39,10 @@ make attributions                                          # regenerate CREDITS.
 ```
 
 `Makefile` wraps all of the above (`make build`, `make test`, `make check`,
-etc. — run `make help` for the full list). `ci.yml` is the source of truth
-for what actually gates a merge; treat `make check` as a close local proxy,
-not a guarantee of parity.
+etc. — run `make help` for the full list). `ci.yml` (the fast gate) and
+`conformance.yml` (the Lab, on Lab-affecting paths and nightly) are the
+source of truth for what actually gates a merge; treat `make check` as a
+close local proxy, not a guarantee of parity.
 
 ### Test execution on WSL (history of the "session dies mid-test" bug)
 
@@ -150,10 +151,12 @@ need to).
   `tests/_fixtures`; per-harness synthetic seeds under
   `conformance/harnesses/<vendor>/fixtures/`. Run with
   `python3 conformance/lab.py --harness <h>`; replay a recorded run with
-  `make lab-replay`. The CI `conformance` job runs all four verticals
-  (matrix). Debugging a failure: see the `conformance-debug` skill (fast
-  `--sandbox` reproduction loop, seconds not minutes) before iterating
-  against the full gate run.
+  `make lab-replay`. `conformance.yml` runs all four verticals (matrix) —
+  its own workflow, on the paths that reach the Lab image plus nightly, so
+  a docs or web change no longer pays 34 runner-minutes to prove nothing.
+  Debugging a failure: see the `conformance-debug` skill (fast `--sandbox`
+  reproduction loop, seconds not minutes) before iterating against the full
+  gate run.
 - `tests/` — domain-organized integration suites (one `main.rs` per
   domain: `cli/`, `memory/`, `packages/`, `workspace/`, `lifecycle/`,
   `projection/`, `integrations/`, `acceptance/`), shared test

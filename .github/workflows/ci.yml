@@ -9,6 +9,17 @@ on:
     - cron: "0 3 * * *"
   workflow_dispatch:
 
+# One run per ref. A pull request superseded by its next push is cancelled;
+# a run on `main` or from the nightly schedule is not, because those two are
+# the record of whether that commit was green.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Read-only by default; a job that needs more says so itself.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -16,6 +27,7 @@ jobs:
   fmt:
     name: Format
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -26,6 +38,7 @@ jobs:
   lint:
     name: Clippy
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -37,6 +50,7 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -46,6 +60,7 @@ jobs:
   audit:
     name: Audit
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
@@ -65,6 +80,7 @@ jobs:
   licences:
     name: Licences
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
@@ -91,6 +107,7 @@ jobs:
   secrets:
     name: Secrets
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
     env:
@@ -125,6 +142,7 @@ jobs:
   installer:
     name: Installer
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - name: Install shellcheck
@@ -137,6 +155,7 @@ jobs:
   python:
     name: Python
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - name: Install ruff
@@ -182,105 +201,3 @@ jobs:
         with:
           name: lcov
           path: lcov.info
-
-  conformance:
-    name: E2E - ${{ matrix.label }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - harness: antigravity
-            label: Antigravity
-          - harness: claude
-            label: Claude
-          - harness: codex
-            label: Codex
-          - harness: opencode
-            label: OpenCode
-    steps:
-      - uses: actions/checkout@v7
-      # The Lab image bakes the real harness binaries (channel-latest),
-      # the `uze` binary and the fixture tree; `lab.py` runs each vertical
-      # against it in a disposable `--internal` network — zero Internet,
-      # zero tokens.
-      - name: Build the Lab harness image
-        run: docker build -f conformance/Dockerfile -t conformance-harness:latest .
-      - name: Install Lab runner dependency
-        run: python3 -m pip install --user pexpect
-      - name: Run the ${{ matrix.harness }} vertical
-        run: |
-          python3 conformance/lab.py --harness ${{ matrix.harness }} --write-summary --retry-once
-        env:
-          AGY_OUTDIR: /tmp/harness-conformance/${{ matrix.harness }}/run1
-          UZE_EVIDENCE_DIR: /tmp/harness-conformance/${{ matrix.harness }}/run1/evidence
-      - name: Upload evidence
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: conformance-evidence-${{ matrix.harness }}
-          path: /tmp/harness-conformance/${{ matrix.harness }}/run1/
-          retention-days: 90
-          if-no-files-found: ignore
-      # Evidence lives in Actions artifacts (downloadable via UI/API,
-      # retention-days above); summaries are written beside them instead of
-      # being pushed to main — the parallel jobs raced each other on git
-      # pushes, and artifact storage carries the same audit trail without
-      # the commit churn (ADR-035 revised).
-
-  conformance-stability:
-    name: Stability - ${{ matrix.label }}
-    runs-on: ubuntu-latest
-    if: github.event_name == 'schedule'
-    permissions:
-      contents: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - harness: antigravity
-            label: Antigravity
-          - harness: claude
-            label: Claude
-          - harness: codex
-            label: Codex
-          - harness: opencode
-            label: OpenCode
-    steps:
-      - uses: actions/checkout@v7
-      - name: Build the Lab harness image
-        run: docker build -f conformance/Dockerfile -t conformance-harness:latest .
-      - name: Install Lab runner dependency
-        run: python3 -m pip install --user pexpect
-      # ADR-035 promotion gate: 3 consecutive clean runs per vertical.
-      # A run counts clean when the gate line reports PASS == total, no
-      # check failure (❌), and no run-level crash.
-      - name: Run 3 consecutive gate runs
-        run: |
-          mkdir -p /tmp/stability/${{ matrix.harness }}
-          fails=0
-          for i in 1 2 3; do
-            python3 conformance/lab.py --harness ${{ matrix.harness }} --write-summary \
-              > /tmp/stability/${{ matrix.harness }}/run$i.log 2>&1 || true
-            log=/tmp/stability/${{ matrix.harness }}/run$i.log
-            if grep -q "RUN CRASH\|❌" "$log" \
-               || ! grep -q "=== [0-9]*/[0-9]* asserted PASS" "$log"; then
-              echo "flake in run $i:"; tail -n 12 "$log"; fails=$((fails+1))
-            else
-              echo "run $i clean"
-            fi
-          done
-          echo "stability: $((3-fails))/3 clean for ${{ matrix.harness }}"
-          exit $fails
-      - name: Upload stability logs
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: conformance-stability-${{ matrix.harness }}
-          path: /tmp/stability/${{ matrix.harness }}/
-          retention-days: 30
-          if-no-files-found: ignore
-      # Evidence lives in Actions artifacts (see the conformance job);
-      # summaries are written beside the run evidence, never pushed.
