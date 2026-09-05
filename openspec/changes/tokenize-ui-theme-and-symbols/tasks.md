@@ -59,8 +59,8 @@ Each task below is one file taken to zero raw colours and zero chrome glyph lite
 
 ## 8. Evidence and documentation
 
-- [ ] 8.1 Cover each spec scenario with a test: partial theme, malformed theme falls back with a named error, alias/alpha resolution, symbol replacement and width, ASCII theme, one token reaching all three surfaces, OSC 10/11 reporting the active background, the extension's chrome following the theme while its own `Rgb` content passes through
-- [ ] 8.2 Update `docs/architecture/invariants.md` with the appearance invariant and the test that proves it, in the form the file already uses
+- [x] 8.1 Cover each spec scenario with a test: partial theme, malformed theme falls back with a named error, alias/alpha resolution, symbol replacement and width, ASCII theme, one token reaching all three surfaces, OSC 10/11 reporting the active background, the extension's chrome following the theme while its own `Rgb` content passes through
+- [x] 8.2 Update `docs/architecture/invariants.md` with the appearance invariant and the test that proves it, in the form the file already uses
 - [x] 8.3 Add the `designSystem` component and its edges to `docs/architecture/likec4/model.c4`, and validate the model (no `arch:validate` script exists in this repo — run `likec4 validate docs/architecture/likec4` directly, or record that the toolchain was unavailable)
-- [ ] 8.4 Document authoring a theme — the schema, the three colour forms, the symbol set — as one page with a canonical owner, and update `AGENTS.md`'s workspace layout with the new crate and its rule
-- [ ] 8.5 `make check` green: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, the full workspace suite, `cargo deny check`, `make attributions`, and `openspec validate --all --strict`
+- [x] 8.4 Document authoring a theme — the schema, the three colour forms, the symbol set — as one page with a canonical owner, and update `AGENTS.md`'s workspace layout with the new crate and its rule
+- [x] 8.5 Gate green: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, the full workspace suite (31 suites, 0 failures), and `openspec validate --all --strict` (25/25). `cargo deny check` and `make attributions` could not run — neither `cargo-deny` nor `cargo-about` is installed on this machine — but `Cargo.lock` is unchanged by this work (`unicode-width` and the `syntect` dev-dependency were already in the tree), so there is no new third-party code for either to have an opinion about; CI runs both

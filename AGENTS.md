@@ -184,6 +184,9 @@ need to).
 - `docs/adr/` — numbered architecture decision records (read before making
   a structural change; recent ones cover generated native-package
   projection, Skill invocation policy, and invocation labels).
+- `docs/theming.md` — authoring a theme: where one lives, the four colour
+  forms, the symbol set, and what a theme deliberately cannot change. The
+  canonical guide; `crates/uze-theme`'s module docs carry the reasoning.
 - `docs/architecture/invariants.md` — properties the architecture actually
   holds today, each tied to the specific test that proves it. Treat this as
   the canonical list of "do not break this" behaviors.

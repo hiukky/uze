@@ -9,6 +9,28 @@ use super::*;
 mod workspace_tests {
     use crate::ui::theme::{self, Token};
 
+    /// What a pane's own program is told the terminal's colours are is the
+    /// theme's, not a transcription of it.
+    ///
+    /// The two constants this replaced lived in another crate, copied from
+    /// the palette by hand — so a colour changed here left a program inside
+    /// a pane picking a light- or dark-adapted UI against a background
+    /// nobody was drawing.
+    #[test]
+    fn the_palette_a_pane_is_told_about_is_the_one_being_drawn() {
+        let theme = uze_theme::active();
+        let palette = super::super::active_palette();
+        let triple = |token| {
+            let rgb = theme.color(token);
+            (rgb.0, rgb.1, rgb.2)
+        };
+        assert_eq!(palette.foreground, triple(Token::TextPrimary));
+        assert_eq!(palette.background, triple(Token::SurfaceBackground));
+        for (index, entry) in palette.ansi.iter().enumerate() {
+            assert_eq!(*entry, triple(Token::ANSI[index]), "ansi.{index}");
+        }
+    }
+
     use super::WorkspaceHit;
     use super::{
         AGENT_BUSY_REPAINTS, AGENT_ECHO_GRACE, AGENT_PASTE_GRACE, AgentIdentity, AgentTabStatus,

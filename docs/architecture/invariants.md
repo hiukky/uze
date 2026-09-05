@@ -795,6 +795,33 @@ it.
 
 > `tests/architecture/layering.rs::architecture_rules_hold`
 
+### Appearance is data, and one vocabulary is the only way to name it
+
+Nothing UZE draws carries a colour value or a glyph of its own. A surface
+names what it *is* — a `uze_theme::Token`, a `uze_theme::Symbol` — and the
+active theme decides what that looks like, so the TUI's chrome, the CLI's
+output, a pane's default and indexed colours, and the palette syntax
+highlighting is rendered with cannot drift apart the way four hand-kept
+copies of one palette always did. Two adapters translate the vocabulary
+into what each surface draws with (ratatui, anstyle) and are the only
+places allowed to construct a colour; a colour that genuinely came from
+content rather than from the design system passes through
+`theme::content`, named so it cannot be mistaken for chrome.
+
+A theme is a file, and a partial one is a whole one: anything it leaves
+out resolves from the built-in default. Surfaces and borders are declared
+as a separation from the theme's own background rather than as the value
+they resolve to, which is what lets a background declaration alone carry a
+light theme.
+
+> `tests/architecture/layering.rs::architecture_rules_hold`
+> `tests/architecture/layering.rs::no_chrome_glyph_is_written_where_it_is_drawn`
+> `crates/uze-theme/src/load.rs::the_default_carries_the_palette_that_shipped`
+> `crates/uze-theme/src/load.rs::a_light_theme_gets_light_surfaces_from_the_background_alone`
+> `src/progress.rs::the_cli_and_the_tui_resolve_a_shared_token_to_the_same_colour`
+> `src/ui/orchestrator/tests.rs::the_palette_a_pane_is_told_about_is_the_one_being_drawn`
+> `crates/uze-terminal/src/runtime.rs::osc_background_and_foreground_queries_get_answered_instead_of_hanging`
+
 ### An extension describes; the host draws
 
 An extension answers with a `view::View` and never receives a frame,

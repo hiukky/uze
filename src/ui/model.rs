@@ -194,7 +194,10 @@ pub(crate) enum Overlay {
     /// under the cursor between two frames would move the selection out
     /// from under the operator.
     ThemePicker {
-        themes: Vec<String>,
+        /// Each theme's id and whether it is the one in force. The id, not
+        /// the theme's display name: a theme is selected by its file's own
+        /// stem, and `dawn.json` is free to call itself anything.
+        themes: Vec<(String, bool)>,
         selected: usize,
     },
     /// A mutation needs consent it wasn't given non-interactively. Confirming

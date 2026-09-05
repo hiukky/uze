@@ -99,7 +99,7 @@ impl TuiModel {
                 Intent::None
             }
             (Overlay::ThemePicker { themes, selected }, KeyCode::Enter) => {
-                let Some(id) = themes.get(*selected).cloned() else {
+                let Some((id, _)) = themes.get(*selected).cloned() else {
                     self.close_overlay();
                     return Intent::None;
                 };
@@ -670,7 +670,7 @@ fn slugify(input: &str) -> String {
 pub(crate) fn render_theme_picker(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
-    themes: &[String],
+    themes: &[(String, bool)],
     selected: usize,
 ) {
     let width = 46.min(area.width.saturating_sub(4));
@@ -686,17 +686,15 @@ pub(crate) fn render_theme_picker(
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
-    let active = uze_theme::active();
     let mut lines: Vec<Line<'static>> = themes
         .iter()
         .enumerate()
-        .map(|(index, id)| {
+        .map(|(index, (id, in_force))| {
             let cursor = if index == selected {
                 theme::glyph(Symbol::ChevronCollapsed)
             } else {
                 " ".to_owned()
             };
-            let in_force = id == active.name();
             Line::from(vec![
                 Span::styled(format!("{cursor} "), theme::fg(Token::Accent)),
                 Span::styled(
@@ -708,7 +706,7 @@ pub(crate) fn render_theme_picker(
                     },
                 ),
                 Span::styled(
-                    if in_force {
+                    if *in_force {
                         format!("  {} in use", theme::glyph(Symbol::StatusSelected))
                     } else {
                         String::new()

@@ -123,20 +123,21 @@ pub(crate) fn dispatch(
             // Cheap enough to read here rather than on a thread: a JSON
             // read and a directory listing, the same work `uze theme list`
             // is budgeted for.
-            let themes = tui_application(home.clone())
+            let themes: Vec<(String, bool)> = tui_application(home.clone())
                 .and_then(|app| app.themes().list(uze_theme::builtin_names()))
-                .map(|themes| themes.into_iter().map(|theme| theme.id).collect::<Vec<_>>())
+                .map(|themes| {
+                    themes
+                        .into_iter()
+                        .map(|theme| (theme.id, theme.active))
+                        .collect()
+                })
                 .unwrap_or_else(|_| {
                     uze_theme::builtin_names()
                         .iter()
-                        .map(|id| (*id).to_owned())
+                        .map(|id| ((*id).to_owned(), false))
                         .collect()
                 });
-            let active = uze_theme::active();
-            let selected = themes
-                .iter()
-                .position(|id| id == active.name())
-                .unwrap_or(0);
+            let selected = themes.iter().position(|(_, active)| *active).unwrap_or(0);
             model.overlay = crate::ui::model::Overlay::ThemePicker { themes, selected };
         }
         Intent::SelectTheme(id) => match select_theme(home, &id) {

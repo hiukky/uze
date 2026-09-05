@@ -14,10 +14,16 @@
 
 use uze_application::{UzeApplication, UzeHome};
 
-/// Selects the theme the operator chose. Returns what is worth telling
-/// them: a problem with their theme file, or a warning the loader raised
-/// (an unknown token, text that will be unreadable). Empty when the theme
-/// loaded cleanly, and when no theme is selected at all.
+/// Selects the theme the operator chose, and reports only what stopped it
+/// from being applied.
+///
+/// Deliberately not the loader's warnings. Those are worth hearing when you
+/// ask about a theme — `uze theme show` prints them, and `uze theme use`
+/// prints them as you choose it — but printing eight contrast notes above
+/// the output of every `uze status` for the rest of the theme's life is how
+/// a useful warning becomes noise the operator learns to scroll past.
+/// A theme that will not load at all is different: it silently is not in
+/// force, so it has to say so every time until it is fixed.
 pub fn install(home: &UzeHome) -> Vec<String> {
     let application = match UzeApplication::from_env(home.clone()) {
         Ok(application) => application,
@@ -54,13 +60,8 @@ pub fn install(home: &UzeHome) -> Vec<String> {
         },
     };
 
-    let warnings = loaded
-        .warnings
-        .iter()
-        .map(|warning| format!("theme `{id}`: {warning}"))
-        .collect();
     uze_theme::set_active(loaded.theme);
-    warnings
+    Vec::new()
 }
 
 #[cfg(test)]

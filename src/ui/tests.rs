@@ -2229,3 +2229,28 @@ fn an_overview_with_no_room_for_the_history_still_renders() {
         .draw(|frame| render(frame, &model, &mut hits))
         .unwrap();
 }
+
+/// A row eliding text stays inside the width it was given, whatever the
+/// active theme's elision marker costs.
+///
+/// The ASCII theme spends three cells on `...` where the default spends one
+/// on `…`, and the old code reserved a hard-coded `1` — so this is the
+/// property that says a theme can replace a symbol without shearing every
+/// row that draws it.
+#[test]
+fn eliding_reserves_the_active_themes_own_marker_width() {
+    let marker = theme::glyph(theme::Symbol::Ellipsis);
+    let marker_width = usize::from(theme::width(theme::Symbol::Ellipsis));
+    for width in (marker_width + 1)..12usize {
+        let elided = super::elide_tail("a subject line long enough to be cut", width);
+        let cells = elided.chars().count() - marker.chars().count() + marker_width;
+        assert!(
+            cells <= width,
+            "elided to {elided:?} ({cells} cells) for a width of {width}"
+        );
+        assert!(
+            elided.ends_with(&marker),
+            "an elided row has to say it was cut: {elided:?}"
+        );
+    }
+}
