@@ -13,8 +13,9 @@ changes nothing else about how UZE behaves.
 ## Where a theme lives
 
 ```
-~/.uze/themes/<id>.json     a theme you wrote; the file's own stem is its id
-~/.uze/state/theme.json     which one is active
+~/.uze/themes/<id>.json      a theme you wrote; the file's own stem is its id
+~/.uze/theme-overrides.json  your own last word, over whichever theme is on
+~/.uze/state/theme.json      which one is active
 ```
 
 Two themes are built in and need no file: `default` (UZE's own look) and
@@ -59,7 +60,59 @@ for completion over every token and symbol name. `default.json` and
 `ascii.json` beside it are the worked examples: UZE loads them through the
 same resolver it loads yours with.
 
-## The four ways to write a colour
+## Variations
+
+A theme can be a variation of another. `extends` names the parent by id;
+everything the child does not declare comes from the nearest ancestor that
+does.
+
+```json
+{
+  "extends": "dracula",
+  "name": "Dracula Soft",
+  "colors": { "surface.background": "#343746" }
+}
+```
+
+That is a whole theme. Because merging happens between *declarations* rather
+than between resolved colours, everything the parent expressed as a
+reference still follows: change the background and every surface the parent
+derived from it is recomputed against the new one; change the accent and
+everything written `@accent` moves with it.
+
+You can extend a theme UZE carries, too — `"extends": "ascii"` gives you its
+glyphs and leaves the colours to you. A chain that loops is refused with the
+loop written out, and UZE stops following one more than eight deep.
+
+`uze theme show` prints what a theme resolved from:
+
+```
+resolved from the built-in default → `dracula` → `dracula-soft` → ~/.uze/theme-overrides.json
+```
+
+## Your own overrides
+
+`~/.uze/theme-overrides.json` is the same format, applied last, over
+whichever theme is active — and it keeps applying when you switch themes.
+It is the right place for anything that belongs to *your machine* rather
+than to a palette:
+
+```json
+{
+  "symbols": {
+    "status.idle": "◌",
+    "mark.official": "󰄬"
+  }
+}
+```
+
+A Nerd Font is the case this exists for. Your glyphs are a fact about the
+font you installed, not about whether you are on Dracula today — so they
+live here instead of being copied into every theme you might switch to. It
+is not a theme: it never appears in `uze theme list`, and there is nothing
+to select.
+
+## The five ways to write a colour
 
 | Form | Means |
 |---|---|
@@ -67,6 +120,7 @@ same resolver it loads yours with.
 | `#rrggbbaa` | this colour at that alpha, composited over the theme's own `surface.background` |
 | `~aa` | separated from the background by that much, in whichever direction is visible against it |
 | `@another.token` | whatever that token resolves to |
+| `@another.token/aa` | that token's value, at that alpha, over the background |
 
 `~aa` is the one worth understanding. A terminal has no alpha channel, so a
 raised surface has to be a real colour — and on a near-black backdrop that
@@ -77,7 +131,17 @@ enough to get a light theme's whole surface stack.
 
 Aliases follow through your theme, not the default's values: `state.success`
 is `@accent` in the built-in theme, so repainting the accent repaints
-success with it.
+success with it. `@token/aa` is what lets a *tint* do the same — the
+selected row is `@accent/17`, so it follows your accent instead of carrying
+UZE's own green into your theme.
+
+**The terminal's own sixteen are the exception.** `ansi.1`–`ansi.6` and
+their bright forms are literal colours, not references, because a program
+inside a pane that emits index 2 means *green* — whatever your theme calls
+green. Only the four that are genuinely a role (`ansi.0`, `ansi.7`,
+`ansi.8`, `ansi.15` — background, foreground and its dim and bright forms)
+follow your tokens. Declare the rest if you want a pane to match your
+palette; a full third-party palette usually ships all sixteen anyway.
 
 Two rules the loader enforces: `surface.background` must be an opaque
 `#rrggbb` (it is what everything else composites over), and an alias loop is

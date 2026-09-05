@@ -14,7 +14,7 @@
 //! breaks the first time the vocabulary grows.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fmt, fs,
     path::{Path, PathBuf},
     sync::OnceLock,
@@ -168,19 +168,34 @@ pub fn builtin(id: &str) -> Option<&'static Theme> {
     }
 }
 
+/// A bundled theme *as written*, for a caller assembling a stack that ends
+/// on one. `default` is the bottom of every stack already, so what this is
+/// really for is `ascii`, whose glyphs are the reason to extend it.
+pub fn builtin_file(id: &str) -> &'static ThemeFile {
+    static ASCII: OnceLock<ThemeFile> = OnceLock::new();
+    match id {
+        "ascii" => ASCII.get_or_init(|| {
+            serde_json::from_str(BUILTIN_ASCII).expect("the bundled ascii theme is valid JSON")
+        }),
+        _ => default_file(),
+    }
+}
+
 /// The theme every partial theme is completed from, and the one UZE falls
 /// back to whenever a selected theme cannot be loaded.
 pub fn default_theme() -> &'static Theme {
     static DEFAULT: OnceLock<Theme> = OnceLock::new();
     DEFAULT.get_or_init(|| {
-        resolve("default", default_file().clone(), None)
-            .expect("the bundled default theme resolves and is complete")
-            .theme
+        resolve_stack(
+            &Identity::from_file("default", default_file()),
+            &[default_file()],
+        )
+        .expect("the bundled default theme resolves and is complete")
+        .theme
     })
 }
 
-/// The default theme *as written*, which is what a partial theme is completed
-/// from.
+/// The default theme *as written*, which is the bottom of every stack.
 ///
 /// Merging happens between declarations rather than between resolved colours,
 /// and that is not an implementation detail: `state.success` is written
@@ -188,61 +203,139 @@ pub fn default_theme() -> &'static Theme {
 /// repaint success with it. Completing from an already-resolved theme would
 /// hand it the old accent's value and quietly break every alias the default
 /// relies on.
-fn default_file() -> &'static ThemeFile {
+pub fn default_file() -> &'static ThemeFile {
     static FILE: OnceLock<ThemeFile> = OnceLock::new();
     FILE.get_or_init(|| {
         serde_json::from_str(BUILTIN_DEFAULT).expect("the bundled default theme is valid JSON")
     })
 }
 
-/// Reads and resolves a theme file. Its id is the file's stem, which is what
-/// a user selects it by.
-pub fn load_file(path: &Path) -> Result<Loaded, LoadError> {
+/// Reads a theme file, without resolving it.
+///
+/// Parsing and resolving are separate because a theme can name a parent, and
+/// only the caller knows where a theme id lives — this crate resolves no
+/// path. Read the file, follow its [`ThemeFile::extends`], and hand the
+/// whole stack to [`resolve_stack`].
+pub fn parse_file(path: &Path) -> Result<ThemeFile, LoadError> {
     let contents = fs::read_to_string(path).map_err(|source| LoadError::Read {
         path: path.to_path_buf(),
         source,
     })?;
-    let id = path
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .unwrap_or("theme");
-    let file: ThemeFile = serde_json::from_str(&contents).map_err(|source| LoadError::Parse {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    resolve(id, file, Some(default_file()))
+    parse_str(&path.to_string_lossy(), &contents)
 }
 
-/// Resolves a theme from its text, completing it from the built-in default.
-pub fn load_str(id: &str, contents: &str) -> Result<Loaded, LoadError> {
-    let file: ThemeFile = serde_json::from_str(contents).map_err(|source| LoadError::Parse {
+pub fn parse_str(id: &str, contents: &str) -> Result<ThemeFile, LoadError> {
+    serde_json::from_str(contents).map_err(|source| LoadError::Parse {
         path: PathBuf::from(id),
         source,
-    })?;
-    resolve(id, file, Some(default_file()))
+    })
 }
 
-/// The resolver itself. `base` is the theme file unstated entries are
-/// completed from; `None` demands a complete file, which is what the
-/// built-in default is held to.
-pub fn resolve(id: &str, file: ThemeFile, base: Option<&ThemeFile>) -> Result<Loaded, LoadError> {
-    let mut warnings = Vec::new();
+/// A theme with no ancestry of its own, resolved over the built-in default.
+/// The common case, and what the bundled themes and the tests use.
+pub fn load_str(id: &str, contents: &str) -> Result<Loaded, LoadError> {
+    let file = parse_str(id, contents)?;
+    resolve_stack(&Identity::from_file(id, &file), &[default_file(), &file])
+}
 
-    if let Some(version) = file.version
-        && version > CURRENT_VERSION
-    {
-        warnings.push(Warning::UnsupportedVersion {
-            found: version,
-            supported: CURRENT_VERSION,
-        });
+/// Who a resolved theme says it is.
+///
+/// Explicit rather than inferred from the layers, because the layers cannot
+/// answer it: an ancestor naming itself must not name its variation, and the
+/// operator's overrides — the outermost layer of all — must not rename the
+/// theme they are applied over. Only the caller knows which file *is* the
+/// theme, so the caller says.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Identity {
+    pub id: String,
+    pub name: Option<String>,
+    pub description: Option<String>,
+}
+
+impl Identity {
+    /// A theme identified only by the id it is selected with.
+    pub fn of(id: &str) -> Self {
+        Self {
+            id: id.to_owned(),
+            ..Self::default()
+        }
     }
 
-    let colors_written = merged(base.map(|base| &base.colors), &file.colors);
-    let symbols_written = merged(base.map(|base| &base.symbols), &file.symbols);
-    // Only the author's own file earns a warning: a name the base uses is
-    // one this build put there.
-    let declared = known_by_name(&colors_written, &file.colors, "colour token", &mut warnings);
-    let symbols_declared = known_by_name(&symbols_written, &file.symbols, "symbol", &mut warnings);
+    /// The identity a theme file declares for itself, falling back to its id.
+    pub fn from_file(id: &str, file: &ThemeFile) -> Self {
+        Self {
+            id: id.to_owned(),
+            name: file.name.clone(),
+            description: file.description.clone(),
+        }
+    }
+}
+
+/// Resolves a theme from the layers it is made of, nearest last.
+///
+/// A stack rather than a file and a base, because appearance arrives in
+/// layers and always did: the built-in default underneath, a theme that may
+/// itself be a variation of another theme, and — last, so it wins — whatever
+/// the operator overrode for themselves. Merging happens between
+/// *declarations* at every level, which is what keeps an ancestor's aliases
+/// alive: repaint `accent` in a variation and everything written `@accent`
+/// two layers down follows.
+///
+/// `layers[0]` has to be complete; every other layer may declare as little
+/// as one token.
+pub fn resolve_stack(identity: &Identity, layers: &[&ThemeFile]) -> Result<Loaded, LoadError> {
+    let id = identity.id.as_str();
+    let mut warnings = Vec::new();
+    let Some((base, authored)) = layers.split_first() else {
+        return Err(LoadError::Incomplete {
+            id: id.to_owned(),
+            missing: vec!["everything: no layers were given".to_owned()],
+        });
+    };
+
+    for layer in authored {
+        if let Some(version) = layer.version
+            && version > CURRENT_VERSION
+        {
+            warnings.push(Warning::UnsupportedVersion {
+                found: version,
+                supported: CURRENT_VERSION,
+            });
+        }
+    }
+
+    let mut colors_written = base.colors.clone();
+    let mut symbols_written = base.symbols.clone();
+    for layer in authored {
+        for (name, value) in &layer.colors {
+            colors_written.insert(name.clone(), value.clone());
+        }
+        for (name, value) in &layer.symbols {
+            symbols_written.insert(name.clone(), value.clone());
+        }
+    }
+
+    // A name only the built-in layer uses is one this build put there; a
+    // name someone wrote is worth telling them about.
+    let authored_names = |pick: fn(&ThemeFile) -> Vec<&String>| -> BTreeSet<String> {
+        authored
+            .iter()
+            .flat_map(|layer| pick(layer))
+            .cloned()
+            .collect()
+    };
+    let declared = known_by_name(
+        &colors_written,
+        &authored_names(|layer| layer.colors.keys().collect()),
+        "colour token",
+        &mut warnings,
+    );
+    let symbols_declared = known_by_name(
+        &symbols_written,
+        &authored_names(|layer| layer.symbols.keys().collect()),
+        "symbol",
+        &mut warnings,
+    );
 
     let missing = missing_entries(&declared, &symbols_declared);
     if !missing.is_empty() {
@@ -255,7 +348,7 @@ pub fn resolve(id: &str, file: ThemeFile, base: Option<&ThemeFile>) -> Result<Lo
     let background = resolve_background(&declared)?;
     let colors = resolve_colors(&declared, background)?;
     let symbols = resolve_symbols(&symbols_declared)?;
-    let syntax_theme = resolve_syntax_theme(&file, base)?;
+    let syntax_theme = resolve_syntax_theme(layers)?;
 
     for token in Token::ALL {
         // A surface is not read against itself, and a pane's own 16 belong
@@ -277,26 +370,12 @@ pub fn resolve(id: &str, file: ThemeFile, base: Option<&ThemeFile>) -> Result<Lo
         }
     }
 
-    let name = file.name.unwrap_or_else(|| id.to_owned());
-    let description = file.description.unwrap_or_default();
+    let name = identity.name.clone().unwrap_or_else(|| id.to_owned());
+    let description = identity.description.clone().unwrap_or_default();
     Ok(Loaded {
         theme: Theme::new(name, description, colors, symbols, syntax_theme),
         warnings,
     })
-}
-
-/// What the author wrote, over what they inherited. Merging declarations
-/// rather than resolved values is what keeps the base's aliases alive: a
-/// theme that repaints `accent` repaints everything written `@accent`.
-fn merged<'a, V: Clone>(
-    base: Option<&'a BTreeMap<String, V>>,
-    file: &'a BTreeMap<String, V>,
-) -> BTreeMap<String, V> {
-    let mut merged = base.cloned().unwrap_or_default();
-    for (name, value) in file {
-        merged.insert(name.clone(), value.clone());
-    }
-    merged
 }
 
 /// Drops the entries this build has no vocabulary for, warning about each
@@ -304,7 +383,7 @@ fn merged<'a, V: Clone>(
 /// possibility of a name that means nothing.
 fn known_by_name<K: Ord + Copy + Named, V: Clone>(
     written: &BTreeMap<String, V>,
-    authored: &BTreeMap<String, V>,
+    authored: &BTreeSet<String>,
     kind: &'static str,
     warnings: &mut Vec<Warning>,
 ) -> BTreeMap<K, V> {
@@ -314,7 +393,7 @@ fn known_by_name<K: Ord + Copy + Named, V: Clone>(
             Some(key) => {
                 known.insert(key, value.clone());
             }
-            None if authored.contains_key(name) => warnings.push(Warning::UnknownName {
+            None if authored.contains(name) => warnings.push(Warning::UnknownName {
                 kind,
                 name: name.clone(),
             }),
@@ -400,24 +479,42 @@ fn resolve_one(
             Ok(separator.over(background, alpha))
         }
         Some(Declaration::Alias(target)) => {
-            let Some(target) = Token::from_name(&target) else {
-                return Err(LoadError::Color {
-                    token: token.name().to_owned(),
-                    value: value.clone(),
-                    reason: "it aliases a token that does not exist",
-                });
-            };
-            chain.push(token);
-            let resolved = resolve_one(target, declared, background, chain);
-            chain.pop();
-            resolved
+            follow(token, &target, value, declared, background, chain)
+        }
+        Some(Declaration::TintedAlias(target, alpha)) => {
+            follow(token, &target, value, declared, background, chain)
+                .map(|rgb| rgb.over(background, alpha))
         }
         None => Err(LoadError::Color {
             token: token.name().to_owned(),
             value: value.clone(),
-            reason: "expected `#rrggbb`, `#rrggbbaa`, `~aa`, or `@another.token`",
+            reason: "expected `#rrggbb`, `#rrggbbaa`, `~aa`, `@another.token`, \
+                     or `@another.token/aa`",
         }),
     }
+}
+
+/// Resolves the token an alias points at, keeping the chain so a loop is
+/// reported as the loop it is.
+fn follow(
+    token: Token,
+    target: &str,
+    value: &str,
+    declared: &BTreeMap<Token, ColorValue>,
+    background: Rgb,
+    chain: &mut Vec<Token>,
+) -> Result<Rgb, LoadError> {
+    let Some(target) = Token::from_name(target) else {
+        return Err(LoadError::Color {
+            token: token.name().to_owned(),
+            value: value.to_owned(),
+            reason: "it aliases a token that does not exist",
+        });
+    };
+    chain.push(token);
+    let resolved = resolve_one(target, declared, background, chain);
+    chain.pop();
+    resolved
 }
 
 enum Declaration {
@@ -427,10 +524,22 @@ enum Declaration {
     /// visible against it.
     Contrast(u8),
     Alias(String),
+    /// Another token's colour, at this alpha, over the background.
+    ///
+    /// Without this a tint had to be written as a literal — which is how
+    /// the selected row and the diff washes ended up carrying UZE's own
+    /// sage green into every theme that repainted the accent.
+    TintedAlias(String, u8),
 }
 
 fn parse_color(value: &str) -> Option<Declaration> {
     if let Some(target) = value.strip_prefix('@') {
+        if let Some((target, alpha)) = target.split_once('/') {
+            return (!target.is_empty() && alpha.len() == 2)
+                .then(|| u8::from_str_radix(alpha, 16).ok())
+                .flatten()
+                .map(|alpha| Declaration::TintedAlias(target.to_owned(), alpha));
+        }
         return (!target.is_empty()).then(|| Declaration::Alias(target.to_owned()));
     }
     if let Some(alpha) = value.strip_prefix('~') {
@@ -491,9 +600,16 @@ fn build_symbol(name: &str, value: &SymbolValue) -> Result<SymbolDef, LoadError>
     Ok(def)
 }
 
-fn resolve_syntax_theme(file: &ThemeFile, base: Option<&ThemeFile>) -> Result<String, LoadError> {
-    let theme_of = |file: &ThemeFile| file.syntax.as_ref().and_then(|syntax| syntax.theme.clone());
-    let Some(name) = theme_of(file).or_else(|| base.and_then(theme_of)) else {
+/// The nearest layer that named a syntax palette wins, so a variation
+/// inherits its parent's unless it says otherwise.
+fn resolve_syntax_theme(layers: &[&ThemeFile]) -> Result<String, LoadError> {
+    let named = layers.iter().rev().find_map(|layer| {
+        layer
+            .syntax
+            .as_ref()
+            .and_then(|syntax| syntax.theme.clone())
+    });
+    let Some(name) = named else {
         return Ok(BUNDLED_SYNTAX_THEMES[0].to_owned());
     };
     if BUNDLED_SYNTAX_THEMES.contains(&name.as_str()) {
@@ -609,6 +725,128 @@ mod tests {
         assert_eq!(theme.color(Token::SurfaceRaisedBright), Rgb(45, 46, 47)); // was (44, 46, 47)
         assert_eq!(theme.color(Token::StateDiffAdded), Rgb(24, 32, 28)); // was (18, 32, 23)
         assert_eq!(theme.color(Token::StateDiffRemoved), Rgb(32, 23, 21)); // was (38, 22, 20)
+    }
+
+    #[test]
+    fn a_tint_follows_the_token_it_tints() {
+        // The defect a real third-party palette exposed: the selected row
+        // and the diff washes were written as literal alpha values of UZE's
+        // own sage, so a theme that repainted the accent got a green
+        // selection anyway.
+        let loaded = load(r##"{ "colors": { "accent": "#bd93f9" } }"##);
+        let background = loaded.theme.background();
+        assert_eq!(
+            loaded.theme.color(Token::SurfaceSelected),
+            Rgb(0xbd, 0x93, 0xf9).over(background, 0x17)
+        );
+        let repainted = load(r##"{ "colors": { "state.danger": "#ff5555" } }"##);
+        assert_eq!(
+            repainted.theme.color(Token::StateDiffRemoved),
+            Rgb(0xff, 0x55, 0x55).over(repainted.theme.background(), 0x1a)
+        );
+    }
+
+    #[test]
+    fn the_terminals_own_sixteen_keep_their_hues_when_a_theme_repaints_a_meaning() {
+        // `ansi.2` is the *green* a program asks for by index. It used to
+        // alias `accent`, which is green in UZE's own palette and purple in
+        // Dracula's — so a pane printing green came out purple.
+        let loaded = load(r##"{ "colors": { "accent": "#bd93f9", "state.info": "#ff79c6" } }"##);
+        assert_eq!(loaded.theme.color(Token::Accent), Rgb(0xbd, 0x93, 0xf9));
+        assert_eq!(
+            loaded.theme.ansi(2),
+            default_theme().ansi(2),
+            "the terminal's green followed a meaning instead of staying green"
+        );
+        assert_eq!(loaded.theme.ansi(4), default_theme().ansi(4));
+        // The four that genuinely are a role still follow it.
+        let dark = load(r##"{ "colors": { "surface.background": "#282a36" } }"##);
+        assert_eq!(dark.theme.ansi(0), Some(Rgb(0x28, 0x2a, 0x36)));
+    }
+
+    #[test]
+    fn a_tinted_alias_that_names_nothing_is_refused() {
+        let error = load_str(
+            "test",
+            r##"{ "colors": { "surface.selected": "@nope/17" } }"##,
+        )
+        .expect_err("an alias to nothing cannot resolve");
+        assert!(error.to_string().contains("surface.selected"));
+    }
+
+    #[test]
+    fn an_ancestors_name_never_becomes_its_variations_name() {
+        // A variation that does not name itself is called by its id. Letting
+        // the layer underneath answer would have every unnamed variation of
+        // Dracula reporting as "Dracula".
+        let parent = parse_str("parent", r##"{ "name": "Parent" }"##).expect("parent parses");
+        let child = parse_str("child", r##"{ "colors": {} }"##).expect("child parses");
+        let loaded = resolve_stack(
+            &Identity::from_file("child", &child),
+            &[default_file(), &parent, &child],
+        )
+        .expect("resolves");
+        assert_eq!(loaded.theme.name(), "child");
+    }
+
+    #[test]
+    fn a_variation_inherits_its_parents_declarations_and_overrides_a_few() {
+        // What `extends` buys, resolved here as the stack it becomes: the
+        // parent's aliases stay alive, so repainting the accent in the child
+        // moves everything written `@accent` in the parent.
+        let parent = parse_str(
+            "parent",
+            r##"{ "name": "parent", "colors": { "accent": "#112233", "text.muted": "#445566" } }"##,
+        )
+        .expect("parent parses");
+        let child = parse_str(
+            "child",
+            r##"{ "name": "child", "colors": { "accent": "#aabbcc" } }"##,
+        )
+        .expect("child parses");
+
+        let loaded = resolve_stack(
+            &Identity::from_file("child", &child),
+            &[default_file(), &parent, &child],
+        )
+        .expect("resolves");
+        assert_eq!(loaded.theme.name(), "child");
+        assert_eq!(loaded.theme.color(Token::Accent), Rgb(0xaa, 0xbb, 0xcc));
+        // Inherited from the parent, which the child never mentioned.
+        assert_eq!(loaded.theme.color(Token::TextMuted), Rgb(0x44, 0x55, 0x66));
+        // Written `@accent` two layers down, and it followed the child.
+        assert_eq!(
+            loaded.theme.color(Token::StateSuccess),
+            Rgb(0xaa, 0xbb, 0xcc)
+        );
+    }
+
+    #[test]
+    fn the_last_layer_wins_whatever_the_theme_underneath_it_says() {
+        // The operator's own overrides: a Nerd Font's glyphs, kept across
+        // every theme they switch to.
+        let theme = parse_str(
+            "theme",
+            r##"{ "name": "theme", "symbols": { "status.idle": "o" } }"##,
+        )
+        .expect("theme parses");
+        let nerd_font_dot = "\u{f111}";
+        let overrides = parse_str(
+            "overrides",
+            &format!(r##"{{ "symbols": {{ "status.idle": "{nerd_font_dot}" }} }}"##),
+        )
+        .expect("overrides parse");
+
+        // The identity is the theme's own — the overrides layer sits on top
+        // of it without renaming it.
+        let loaded = resolve_stack(
+            &Identity::from_file("theme", &theme),
+            &[default_file(), &theme, &overrides],
+        )
+        .expect("resolves");
+        assert_eq!(loaded.theme.glyph(Symbol::StatusIdle), nerd_font_dot);
+        // And the overrides did not rename the theme out from under it.
+        assert_eq!(loaded.theme.name(), "theme");
     }
 
     #[test]

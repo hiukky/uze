@@ -37,6 +37,66 @@ SHALL NOT be required to declare anything at all in order to load.
 - **THEN** it is validated against the theme schema UZE publishes, and a
   value of the wrong shape is reported as a named error against that schema
 
+### Requirement: A theme can be a variation of another, and the operator's own overrides outlast whichever theme is on
+
+A theme SHALL be able to name another theme it varies, inheriting every
+declaration that theme makes and overriding only what it states itself.
+Resolution SHALL merge declarations rather than resolved values, so an
+ancestor's references still follow a descendant that repaints what they
+point at. A chain that loops back on itself SHALL be refused, naming the
+loop.
+
+Separately from any theme, the operator SHALL be able to declare overrides
+that apply over whichever theme is active, and those SHALL keep applying
+when the active theme changes.
+
+#### Scenario: A variation states only what it changes
+
+- **WHEN** a theme names another theme it varies and declares one colour
+- **THEN** every other colour and symbol resolves from the theme it varies
+  (and, beneath that, from the built-in default), and any token that theme
+  expressed as a reference to the changed colour follows the change
+
+#### Scenario: A variation derives against its own background
+
+- **WHEN** a variation changes only the background of the theme it varies
+- **THEN** every surface and border its ancestors expressed as a separation
+  from the background is recomputed against the new one
+
+#### Scenario: A loop in the ancestry is refused
+
+- **WHEN** a theme's ancestry leads back to a theme already in the chain, or
+  goes further than UZE will follow
+- **THEN** UZE reports it, naming the chain, and continues on the built-in
+  default
+
+#### Scenario: The operator's overrides survive a change of theme
+
+- **WHEN** the operator declares overrides — a Nerd Font's glyphs, say — and
+  then selects a different theme
+- **THEN** the overrides still apply over the newly selected theme, without
+  either theme having been edited
+
+#### Scenario: UZE reports what a theme was assembled from
+
+- **WHEN** the operator asks UZE about a theme
+- **THEN** UZE names the layers it resolved from, in the order they applied
+
+### Requirement: A colour bound to a hue by contract does not follow a meaning
+
+A colour whose consumer expects a specific hue SHALL NOT be derived from a
+token whose meaning a theme is free to repaint. The indexed colours a
+program inside a terminal pane names are such colours: index 2 is *green* to
+the program that emits it, whatever the surrounding theme calls green.
+
+#### Scenario: Repainting a meaning does not repaint the terminal's palette
+
+- **WHEN** a theme paints the accent, or any other semantic colour, in a hue
+  unlike the default's
+- **THEN** the indexed colours a pane emits keep their own hues, except the
+  four that are genuinely a role — the background, the foreground, and its
+  dim and bright forms
+
 ### Requirement: Colour is named by meaning, never by value, everywhere UZE draws
 
 Every colour UZE draws SHALL be selected by a semantic token — what the
@@ -54,10 +114,19 @@ its own copy of the vocabulary.
 #### Scenario: A theme can define any colour
 
 - **WHEN** a theme declares a token as an opaque colour, as a translucent
-  colour over the theme's own background, or as an alias of another token
+  colour over the theme's own background, as a separation from that
+  background in whichever direction is visible against it, as another
+  token's value, or as another token's value at a given translucency
 - **THEN** the token resolves to a single concrete colour in every case, and
   a translucent declaration resolves to the same colour a hand-composited
   opaque declaration of the same value would
+
+#### Scenario: A tint follows the colour it tints
+
+- **WHEN** a theme repaints a colour that another token is expressed as a
+  translucent form of — the selected row's tint, a diff's wash
+- **THEN** that token resolves from the repainted colour, not from whatever
+  the built-in default's was
 
 ### Requirement: Symbols are a named set a theme can replace
 

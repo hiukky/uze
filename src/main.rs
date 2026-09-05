@@ -5,7 +5,6 @@
 #[cfg(test)]
 mod command_performance;
 mod progress;
-mod theme;
 use crate::progress::Colorize;
 mod shim;
 
@@ -556,7 +555,7 @@ fn run(cli: Cli) -> Result<()> {
     // TUI's first frame are already in the operator's theme. A theme that
     // will not load reports itself here and is otherwise ignored — see
     // `theme::install`.
-    for problem in theme::install(&home) {
+    for problem in uze::theme::install(&home) {
         eprintln!("uze: {problem}");
     }
     let verbose = cli.verbose;
@@ -914,7 +913,7 @@ fn run_theme(app: &UzeApplication, home: &UzeHome, action: ThemeAction) -> Resul
             // Load it before recording the choice: a theme that will not
             // resolve should be refused here, where the operator is looking,
             // rather than accepted and complained about on every later run.
-            let resolved = resolve_theme(app, home, &id)?;
+            let resolved = uze::theme::resolve(app, home, &id)?;
             for warning in &resolved.warnings {
                 progress::warn(&warning.to_string());
             }
@@ -930,35 +929,14 @@ fn run_theme(app: &UzeApplication, home: &UzeHome, action: ThemeAction) -> Resul
                     .active()?
                     .unwrap_or_else(|| uze_theme::builtin_names()[0].to_owned()),
             };
-            let resolved = resolve_theme(app, home, &id)?;
+            let (resolved, layers) = uze::theme::resolve_with_layers(app, home, &id)?;
             match format {
-                OutputFormat::Text => print!("{}", render_theme(&id, &resolved)),
-                OutputFormat::Json => print_json(&theme_report(&id, &resolved)),
+                OutputFormat::Text => print!("{}", render_theme(&id, layers.clone(), &resolved)),
+                OutputFormat::Json => print_json(&theme_report(&id, layers, &resolved)),
             }
         }
     }
     Ok(())
-}
-
-/// A theme by id, whether the operator wrote it or UZE carries it. Their own
-/// file wins, the same way `Themes::list` shows it.
-fn resolve_theme(app: &UzeApplication, home: &UzeHome, id: &str) -> Result<uze_theme::Loaded> {
-    if let Some(path) = app.themes().path_of(id)? {
-        return uze_theme::load_file(&path).map_err(|error| {
-            uze_application::UzeError::UnusableTheme(format!("theme `{id}`: {error}"))
-        });
-    }
-    match uze_theme::builtin(id) {
-        Some(theme) => Ok(uze_theme::Loaded {
-            theme: theme.clone(),
-            warnings: Vec::new(),
-        }),
-        None => Err(uze_application::UzeError::UnusableTheme(format!(
-            "no theme `{id}` — UZE carries {}, and found none by that name in {}",
-            uze_theme::builtin_names().join(", "),
-            home.themes_dir().display()
-        ))),
-    }
 }
 
 fn render_theme_list(themes: &[uze_application::application::ThemeSummary]) -> String {
@@ -990,18 +968,23 @@ struct ThemeReport {
     id: String,
     name: String,
     description: String,
+    /// The layers this resolved from, bottom-up. With `extends` and the
+    /// operator's own overrides in play, "where did this colour come from"
+    /// is the first thing an author asks.
+    layers: Vec<String>,
     syntax_theme: String,
     colors: std::collections::BTreeMap<String, String>,
     symbols: std::collections::BTreeMap<String, Vec<String>>,
     warnings: Vec<String>,
 }
 
-fn theme_report(id: &str, loaded: &uze_theme::Loaded) -> ThemeReport {
+fn theme_report(id: &str, layers: Vec<String>, loaded: &uze_theme::Loaded) -> ThemeReport {
     let theme = &loaded.theme;
     ThemeReport {
         id: id.to_owned(),
         name: theme.name().to_owned(),
         description: theme.description().to_owned(),
+        layers,
         syntax_theme: theme.syntax_theme().to_owned(),
         colors: uze_theme::Token::ALL
             .iter()
@@ -1019,13 +1002,17 @@ fn theme_report(id: &str, loaded: &uze_theme::Loaded) -> ThemeReport {
     }
 }
 
-fn render_theme(id: &str, loaded: &uze_theme::Loaded) -> String {
-    let report = theme_report(id, loaded);
+fn render_theme(id: &str, layers: Vec<String>, loaded: &uze_theme::Loaded) -> String {
+    let report = theme_report(id, layers, loaded);
     let mut out = String::new();
     out.push_str(&progress::title(format!("{} ({id})\n", report.name)));
     if !report.description.is_empty() {
         out.push_str(&progress::label(format!("{}\n", report.description)));
     }
+    out.push_str(&progress::label(format!(
+        "resolved from {}\n",
+        report.layers.join(" → ")
+    )));
     out.push('\n');
     out.push_str(&progress::section("Colours\n"));
     out.push_str(&progress::aligned_rows(

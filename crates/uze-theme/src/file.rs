@@ -21,6 +21,16 @@ pub struct ThemeFile {
     /// [`CURRENT_VERSION`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<u32>,
+    /// The theme this one is a variation of, by id. Absent means the
+    /// built-in default, which every theme completes from anyway.
+    ///
+    /// A variation is the common case — a softer Dracula, a Gruvbox with
+    /// your own accent — and copying the parent to make one is how two
+    /// files drift apart. Resolution walks the chain from the built-in
+    /// default outward, so a token this file does not declare comes from
+    /// the nearest ancestor that does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extends: Option<String>,
     /// Display name. Defaults to the file's own stem, so a theme need not
     /// repeat its filename.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -77,6 +87,13 @@ pub enum SymbolValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_variation_names_what_it_varies() {
+        let file: ThemeFile = serde_json::from_str(r##"{ "extends": "dracula", "colors": {} }"##)
+            .expect("a variation is a valid theme");
+        assert_eq!(file.extends.as_deref(), Some("dracula"));
+    }
 
     #[test]
     fn a_five_line_theme_parses() {

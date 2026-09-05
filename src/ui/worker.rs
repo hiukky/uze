@@ -786,20 +786,12 @@ fn open_in_browser(url: &str) -> Option<String> {
 /// changing what UZE looks like is not an event in the work it is hosting.
 fn select_theme(home: &UzeHome, id: &str) -> std::result::Result<(), String> {
     let application = tui_application(home.clone()).map_err(|error| error.to_string())?;
-    let themes = application.themes();
-    let loaded = match themes.path_of(id).map_err(|error| error.to_string())? {
-        Some(path) => {
-            uze_theme::load_file(&path).map_err(|error| format!("theme `{id}`: {error}"))?
-        }
-        None => match uze_theme::builtin(id) {
-            Some(theme) => uze_theme::Loaded {
-                theme: theme.clone(),
-                warnings: Vec::new(),
-            },
-            None => return Err(format!("no theme `{id}`")),
-        },
-    };
-    themes.select(id).map_err(|error| error.to_string())?;
+    let loaded =
+        crate::theme::resolve(&application, home, id).map_err(|error| error.to_string())?;
+    application
+        .themes()
+        .select(id)
+        .map_err(|error| error.to_string())?;
     uze_theme::set_active(loaded.theme);
     Ok(())
 }

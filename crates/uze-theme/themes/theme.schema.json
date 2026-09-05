@@ -6,180 +6,184 @@
   "properties": {
     "colors": {
       "additionalProperties": false,
-      "description": "Token name to colour. A colour is `#rrggbb`; `#rrggbbaa`, composited over this theme's own `surface.background`; `~aa`, separated from that background by `aa` in whichever direction is visible against it (white on a dark theme, black on a light one); or `@another.token`, taking another token's value.",
+      "description": "Token name to colour. A colour is `#rrggbb`; `#rrggbbaa`, composited over this theme's own `surface.background`; `~aa`, separated from that background by `aa` in whichever direction is visible against it (white on a dark theme, black on a light one); `@another.token`, taking another token's value; or `@another.token/aa`, that token's value at that alpha over the background.",
       "properties": {
         "accent": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
           "type": "string"
         },
         "ansi.0": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
           "type": "string"
         },
         "ansi.1": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
           "type": "string"
         },
         "ansi.10": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
           "type": "string"
         },
         "ansi.11": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
           "type": "string"
         },
         "ansi.12": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
           "type": "string"
         },
         "ansi.13": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
           "type": "string"
         },
         "ansi.14": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
           "type": "string"
         },
         "ansi.15": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
           "type": "string"
         },
         "ansi.2": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
           "type": "string"
         },
         "ansi.3": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
           "type": "string"
         },
         "ansi.4": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
           "type": "string"
         },
         "ansi.5": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
           "type": "string"
         },
         "ansi.6": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
           "type": "string"
         },
         "ansi.7": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
           "type": "string"
         },
         "ansi.8": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
           "type": "string"
         },
         "ansi.9": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
           "type": "string"
         },
         "border.default": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
           "type": "string"
         },
         "border.faint": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
           "type": "string"
         },
         "state.danger": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
           "type": "string"
         },
         "state.diff-added": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
           "type": "string"
         },
         "state.diff-removed": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
           "type": "string"
         },
         "state.in-flight": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
           "type": "string"
         },
         "state.info": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
           "type": "string"
         },
         "state.landed": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
           "type": "string"
         },
         "state.success": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
           "type": "string"
         },
         "state.warning": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
           "type": "string"
         },
         "surface.background": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
           "type": "string"
         },
         "surface.hover": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
           "type": "string"
         },
         "surface.raised": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
           "type": "string"
         },
         "surface.raised-bright": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
           "type": "string"
         },
         "surface.raised-subtle": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
           "type": "string"
         },
         "surface.recessed": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
           "type": "string"
         },
         "surface.selected": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
           "type": "string"
         },
         "text.bright": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
           "type": "string"
         },
         "text.dim": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
           "type": "string"
         },
         "text.faint": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
           "type": "string"
         },
         "text.inactive": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
           "type": "string"
         },
         "text.muted": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
           "type": "string"
         },
         "text.primary": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
           "type": "string"
         },
         "text.secondary": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
           "type": "string"
         },
         "text.tertiary": {
-          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+          "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
           "type": "string"
         }
       },
       "type": "object"
     },
     "description": {
+      "type": "string"
+    },
+    "extends": {
+      "description": "The theme this one is a variation of, by id. Absent means the built-in default. Anything this file does not declare comes from the nearest ancestor that does.",
       "type": "string"
     },
     "name": {

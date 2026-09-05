@@ -206,6 +206,52 @@ mechanical migration safe to do incrementally without a half-migrated state
 becoming permanent — the same technique the suite already uses for the
 `uze_core::` reaches.
 
+### 12. Appearance resolves as a stack, and the operator's overrides are not a theme
+
+Added after the first implementation, when writing a real third-party
+palette (Dracula) showed that "a theme file, completed from the default" is
+not enough for two things people obviously want: a *variation* of a theme,
+and per-machine tweaks that survive switching themes.
+
+**Chosen:** one resolver over an ordered stack of `ThemeFile` layers —
+built-in default, the ancestry a theme declares with `extends`, the theme,
+then `~/.uze/theme-overrides.json`. Merging stays at the *declaration*
+level at every level, which is what carries an ancestor's references
+through a descendant that repaints what they point at.
+
+*Prior art, and why not the alternatives.* VS Code keeps a theme in one
+large JSON contributed by an extension, with `include` for reuse inside
+that extension and a *separate* user-settings layer
+(`workbench.colorCustomizations`) that overrides whichever theme is
+active — two mechanisms, because authoring a variant and tweaking your own
+machine are different acts. Helix does the first with a single
+`inherits = "…"` key in the theme file; Zed does it by shipping a *family*
+file carrying several named variants. Terminals (Alacritty, Ghostty) do the
+second with a `theme = name` plus explicit palette overrides in the user's
+own config.
+
+We take Helix's `extends` for authoring and VS Code's separate layer for
+the operator, and skip Zed's family file: a family is expressible as two
+files where one extends the other, and one-file-many-themes would mean an
+id that is a path into a document rather than a filename.
+
+*Why the overrides file is not simply a theme with `extends: "<active>"`:*
+because the active theme changes, and the whole point is that they do not
+have to edit anything when it does. It also never becomes selectable, which
+is right — it is not a look, it is their machine.
+
+### 13. A colour bound to a hue by contract does not follow a meaning
+
+The sixteen indexed colours a program inside a pane can name were aliased
+to semantic tokens (`ansi.2` was `@accent`), which reads well and is wrong:
+UZE's accent is green, so it worked by coincidence. Under Dracula, whose
+accent is purple, a pane printing green came out purple.
+
+**Chosen:** the twelve hue-bound entries are literals in the default;
+only the four that are genuinely a role — background, foreground, and its
+dim and bright forms — stay aliases. A theme wanting a coherent pane
+declares its own sixteen, which any real third-party palette already has.
+
 ## Candidate ADRs
 
 - **A design system is a crate, not a module** — new crate boundary,

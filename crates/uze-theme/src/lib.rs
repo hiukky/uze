@@ -39,8 +39,8 @@ pub use active::{active, set_active};
 pub use color::{Rgb, contrast_ratio};
 pub use file::{CURRENT_VERSION, ColorValue, SymbolValue, SyntaxSection, ThemeFile};
 pub use load::{
-    BUNDLED_SYNTAX_THEMES, LoadError, Loaded, Warning, builtin, builtin_names, default_theme,
-    load_file, load_str, resolve,
+    BUNDLED_SYNTAX_THEMES, Identity, LoadError, Loaded, Warning, builtin, builtin_file,
+    builtin_names, default_file, default_theme, load_str, parse_file, parse_str, resolve_stack,
 };
 pub use schema::{SCHEMA_ID, json_schema};
 pub use symbol::{Symbol, SymbolDef};

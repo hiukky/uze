@@ -38,6 +38,13 @@ pub fn json_schema() -> Value {
                 "minimum": 1,
                 "default": CURRENT_VERSION,
             },
+            "extends": {
+                "description":
+                    "The theme this one is a variation of, by id. Absent means the \
+                     built-in default. Anything this file does not declare comes \
+                     from the nearest ancestor that does.",
+                "type": "string",
+            },
             "name": { "type": "string", "description": "Display name. Defaults to the file's stem." },
             "description": { "type": "string" },
             "colors": {
@@ -46,8 +53,9 @@ pub fn json_schema() -> Value {
                      composited over this theme's own `surface.background`; \
                      `~aa`, separated from that background by `aa` in whichever \
                      direction is visible against it (white on a dark theme, \
-                     black on a light one); or `@another.token`, taking another \
-                     token's value.",
+                     black on a light one); `@another.token`, taking another \
+                     token's value; or `@another.token/aa`, that token's value at \
+                     that alpha over the background.",
                 "type": "object",
                 "additionalProperties": false,
                 "properties": color_properties(),
@@ -83,7 +91,7 @@ fn color_properties() -> Value {
             token.name().to_owned(),
             json!({
                 "type": "string",
-                "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+)$",
+                "pattern": "^(#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?|~[0-9a-fA-F]{2}|@[a-z0-9.-]+(/[0-9a-fA-F]{2})?)$",
             }),
         );
     }

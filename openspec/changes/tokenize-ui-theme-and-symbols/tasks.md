@@ -64,3 +64,22 @@ Each task below is one file taken to zero raw colours and zero chrome glyph lite
 - [x] 8.3 Add the `designSystem` component and its edges to `docs/architecture/likec4/model.c4`, and validate the model (no `arch:validate` script exists in this repo — run `likec4 validate docs/architecture/likec4` directly, or record that the toolchain was unavailable)
 - [x] 8.4 Document authoring a theme — the schema, the three colour forms, the symbol set — as one page with a canonical owner, and update `AGENTS.md`'s workspace layout with the new crate and its rule
 - [x] 8.5 Gate green: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, the full workspace suite (31 suites, 0 failures), and `openspec validate --all --strict` (25/25). `cargo deny check` and `make attributions` could not run — neither `cargo-deny` nor `cargo-about` is installed on this machine — but `Cargo.lock` is unchanged by this work (`unicode-width` and the `syntect` dev-dependency were already in the tree), so there is no new third-party code for either to have an opinion about; CI runs both
+
+## 9. Review, and what a third-party palette exposed
+
+Writing a real Dracula theme found three defects the built-in palette could not, because in it `accent` and `state.success` are the same green:
+
+- [x] 9.1 A fifth colour form, `@token/aa` — another token's value at that alpha over the background. Its absence is why the next two existed: a tint had no way to name what it tinted
+- [x] 9.2 `surface.selected` and both diff washes were literal alpha values of UZE's own sage and red, so a theme that repainted the accent still got a green selected row. They now name the token they tint
+- [x] 9.3 `ansi.1`–`ansi.6` aliased semantic tokens, so a theme with a purple accent made the terminal's *green* purple. The sixteen are bound to a hue by contract; only the four that are genuinely a role (background, foreground, dim, bright) stay aliases
+- [x] 9.4 Theme resolution existed in three places (`theme::install`, `main.rs::resolve_theme`, `worker.rs::select_theme`). One `theme::resolve` now, in the library half so both surfaces reach it
+
+## 10. Themes as layers: variations and the operator's own overrides
+
+- [x] 10.1 `resolve_stack(id, layers)` replaces the file-plus-base resolver: appearance arrives in layers, and merging still happens between declarations so an ancestor's references survive a descendant repainting what they point at
+- [x] 10.2 `extends` in a theme file, walked in `src/theme.rs` (which owns path resolution; `uze-theme` still resolves none). Loop detection naming the loop, and a depth cap
+- [x] 10.3 Extending a built-in works — `extends: "ascii"` gives a theme ASCII glyphs and keeps its own colours
+- [x] 10.4 `~/.uze/theme-overrides.json`: the operator's last word, applied over whichever theme is active and surviving a change of theme. Beside `themes/` rather than in it, because it is not selectable and never stops applying
+- [x] 10.5 Overrides apply even with no theme selected — a Nerd Font belongs to the machine, not to having chosen a palette
+- [x] 10.6 `uze theme show` reports the layers it resolved from, and a resolution failure names the theme (and its ancestry) rather than only the token
+- [x] 10.7 Schema, spec, `docs/theming.md` and tests for all of it
