@@ -83,3 +83,18 @@ Writing a real Dracula theme found three defects the built-in palette could not,
 - [x] 10.5 Overrides apply even with no theme selected — a Nerd Font belongs to the machine, not to having chosen a palette
 - [x] 10.6 `uze theme show` reports the layers it resolved from, and a resolution failure names the theme (and its ancestry) rather than only the token
 - [x] 10.7 Schema, spec, `docs/theming.md` and tests for all of it
+
+## 11. Rebase onto the sidebar work, and bringing it up to the standard
+
+`main` moved while this was in flight (#20 restructured the sidebar, the tab
+strip and the header controls). Conflicts were resolved by taking main's
+structure whole and re-applying the migration to it, not by stitching the
+twelve hunks — and then auditing what it introduced against the standard
+rather than only converting it mechanically:
+
+- [x] 11.1 `SURFACE_HOVER` — the tone a control takes under the pointer — joins the vocabulary as `surface.hover`, declared `~33`, which reproduces its exact value and follows a light theme instead of staying grey
+- [x] 11.2 `→` in the delivery labels was a drawn glyph the rule did not catch (arrows are notation *inside hint lines*, translated at render time; this one is a mark). It is `arrow.to` now, and the architecture rule scans for it
+- [x] 11.3 A drawn `" · "` in the commit popup and a drawn `"…"` in the delivery chip, both missed by the original migration for the same reason — neither passes through `hint_spans`
+- [x] 11.4 An anonymous `const PAD: u16 = 1` beside the existing `CHIP_PAD`, same value and same meaning
+- [x] 11.5 Verified nothing was lost: both architecture rules green, no palette constant left in `src/`, and `src/theme.rs`, the application facade, `theme_state` and the docs byte-identical to their pre-rebase form
+- [x] 11.6 The published schema had drifted to two validation patterns — `surface.hover` was written at a mid-rebase commit, before `@token/aa` existed. Regenerated

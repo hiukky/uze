@@ -313,8 +313,14 @@ fn spawn_delivery(
 fn describe_delivery(report: &DeliveryReport) -> String {
     match &report.outcome {
         DeliveryOutcome::Handoff => format!("ready on {}", report.task.branch),
-        DeliveryOutcome::Merged => format!("merged → {}", report.task.target),
-        DeliveryOutcome::Published { request, .. } => format!("synced → #{request}"),
+        DeliveryOutcome::Merged => format!(
+            "merged {} {}",
+            theme::glyph(Symbol::ArrowTo),
+            report.task.target
+        ),
+        DeliveryOutcome::Published { request, .. } => {
+            format!("synced {} #{request}", theme::glyph(Symbol::ArrowTo))
+        }
         DeliveryOutcome::AwaitingRequest(_) => "pushed · agent opening pr".to_owned(),
         DeliveryOutcome::Refused(reason) => reason.clone(),
         DeliveryOutcome::ReturnedToAgent(_) => "back to its agent".to_owned(),

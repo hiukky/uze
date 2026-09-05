@@ -1074,7 +1074,10 @@ pub(super) fn commit_detail_layout(area: Rect, popup: &CommitDetailPopup) -> Com
             ),
             Span::styled(detail.author.clone(), theme::fg(Token::TextPrimary)),
             Span::styled(
-                format!(" · {} · {}", detail.age, detail.date),
+                {
+                    let separator = theme::glyph(Symbol::HintSeparator);
+                    format!("{separator}{}{separator}{}", detail.age, detail.date)
+                },
                 theme::fg(Token::TextSecondary),
             ),
         ]),
@@ -1785,7 +1788,7 @@ fn deliver_button(task: &TaskView) -> Option<(String, Color, bool)> {
             false,
         )),
         TaskStateView::Integrating => Some((
-            "… delivering".to_owned(),
+            format!("{} delivering", theme::glyph(Symbol::Ellipsis)),
             theme::color(Token::StateInFlight),
             false,
         )),
@@ -1805,14 +1808,16 @@ fn deliver_button(task: &TaskView) -> Option<(String, Color, bool)> {
 /// the button says which of the two it has become.
 fn delivery_ending(task: &TaskView) -> String {
     match task.completion {
-        CompletionBehavior::Merge => format!("merge → {}", task.target),
+        CompletionBehavior::Merge => {
+            format!("merge {} {}", theme::glyph(Symbol::ArrowTo), task.target)
+        }
         CompletionBehavior::Pr => match (task.published_request, &task.published_as) {
             (Some(request), _) => format!("#{request}"),
             // Published, and the forge publishes no ref this one could be
             // read from: the branch on the remote is then the only name
             // the ending has, and it is still not "open a request".
             (None, Some(branch)) => branch.clone(),
-            (None, None) => format!("pr → {}", task.target),
+            (None, None) => format!("pr {} {}", theme::glyph(Symbol::ArrowTo), task.target),
         },
         CompletionBehavior::Handoff => "hand off".to_owned(),
     }
@@ -2065,9 +2070,8 @@ pub(super) fn render_tab_strip(
         // `selected` used to mean every tab shifted horizontally the
         // moment selection moved past it, reading as the whole strip
         // "resizing" on every tab switch instead of just recoloring.
-        const PAD: u16 = 1;
         let chip_start = x;
-        let chip_width = content_width + 2 * PAD;
+        let chip_width = content_width + 2 * CHIP_PAD;
 
         let mut chip = vec![Span::raw(" ")];
         chip.push(marker);
@@ -2076,7 +2080,7 @@ pub(super) fn render_tab_strip(
             chip.push(Span::raw(" "));
             chip.push(Span::styled("×", theme::fg(Token::TextDim)));
             hits.push((
-                Rect::new(chip_start + PAD + content_width - 1, inner.y, 1, 1),
+                Rect::new(chip_start + CHIP_PAD + content_width - 1, inner.y, 1, 1),
                 WorkspaceHit::CloseTab(tab.id),
             ));
         }

@@ -157,6 +157,9 @@ vocabulary! {
         ArrowAhead = "arrow.ahead",
         /// Commits behind the upstream.
         ArrowBehind = "arrow.behind",
+        /// Points from a thing to where it is going — a delivery's target,
+        /// a mapping's right-hand side.
+        ArrowTo = "arrow.to",
         /// Points at the item under discussion.
         ChevronRight = "chevron.right",
         /// A section that is folded shut.

@@ -308,6 +308,7 @@ fn no_chrome_glyph_is_written_where_it_is_drawn() {
         '\u{21e1}', // ⇡ ahead
         '\u{21e3}', // ⇣ behind
         '\u{2197}', // ↗ external
+        '\u{2192}', // → toward
     ];
 
     let root = repository_root();
