@@ -36,12 +36,21 @@ function Route({ value }: { value: string }) {
   );
 }
 
+// Where a name links to: the vendor's own page, carried by the same
+// generated matrix the table below is built from (each integration declares
+// it — `IntegrationPort::homepage`), so the site never holds a second copy
+// of a URL only the integration knows.
+function homepageOf(name: string) {
+  return matrix.harnesses.find((harness) => harness.name === name)?.url;
+}
+
 // Icon sources: Claude Code / OpenCode are simple-icons paths (recolored to
 // the theme, since an <image>-embedded SVG renders in its own document and
 // can't inherit currentColor); Codex / Antigravity have no distinct mark of
 // their own — these are OpenAI's and Google Antigravity's actual favicons,
 // fetched from their own sites (public/harnesses/, not redistributed by a
-// third party), shown at their real brand colors.
+// third party), shown at their real brand colors. Terms for all four:
+// CREDITS.md.
 const harnesses = [
   {
     name: 'Claude Code',
@@ -156,15 +165,22 @@ export default function HomePage() {
         <h2 className="text-center font-mono text-xs text-muted">Delivers natively to</h2>
         <ul className="mt-10 grid grid-cols-2 gap-x-6 gap-y-10 sm:grid-cols-4">
           {harnesses.map((harness) => (
-            <li key={harness.name} className="flex flex-col items-center gap-2.5 text-center">
-              <svg viewBox="0 0 24 24" className="size-7" aria-hidden>
-                {harness.icon.type === 'path' ? (
-                  <path d={harness.icon.d} fill="var(--color-ink)" />
-                ) : (
-                  <image href={harness.icon.href} width="24" height="24" />
-                )}
-              </svg>
-              <span className="font-mono text-sm font-semibold text-ink">{harness.name}</span>
+            <li key={harness.name} className="text-center">
+              <a
+                href={homepageOf(harness.name)}
+                target="_blank"
+                rel="noreferrer noopener"
+                className="flex flex-col items-center gap-2.5 text-ink transition-colors hover:text-accent"
+              >
+                <svg viewBox="0 0 24 24" className="size-7" aria-hidden>
+                  {harness.icon.type === 'path' ? (
+                    <path d={harness.icon.d} fill="currentColor" />
+                  ) : (
+                    <image href={harness.icon.href} width="24" height="24" />
+                  )}
+                </svg>
+                <span className="font-mono text-sm font-semibold">{harness.name}</span>
+              </a>
             </li>
           ))}
         </ul>
@@ -218,14 +234,17 @@ export default function HomePage() {
               {matrix.harnesses.map((harness) => (
                 <tr key={harness.name} className="border-b border-line/70">
                   <th scope="row" className="py-4 pe-4 font-normal">
-                    <span className="flex items-center gap-2.5">
+                    <a
+                      href={harness.url}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      className="flex items-center gap-2.5 text-ink transition-colors hover:text-accent"
+                    >
                       {harness.icon ? (
                         <img src={harness.icon} alt="" className="size-4 shrink-0 rounded-[2px]" />
                       ) : null}
-                      <span className="font-mono text-sm font-semibold text-ink">
-                        {harness.name}
-                      </span>
-                    </span>
+                      <span className="font-mono text-sm font-semibold">{harness.name}</span>
+                    </a>
                   </th>
                   {columns.map(([key]) => (
                     <td key={key} className="px-3 py-4">

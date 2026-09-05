@@ -33,12 +33,16 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings                  # CI uses --all-targets; plain `clippy -- -D warnings` is the Makefile default
 cargo llvm-cov --workspace --summary-only --fail-under-lines 68 --fail-under-regions 69 \
   -- --skip real_codex_dogfood --skip foreground_status_reports --skip acquisition
+
+cargo deny check                                           # licences, advisories, bans, sources (deny.toml); part of `make check`
+make attributions                                          # regenerate CREDITS.md (about.hbs + Cargo.lock); CI fails when it drifts
 ```
 
 `Makefile` wraps all of the above (`make build`, `make test`, `make check`,
-etc. — run `make help` for the full list). `ci.yml` is the source of truth
-for what actually gates a merge; treat `make check` as a close local proxy,
-not a guarantee of parity.
+etc. — run `make help` for the full list). `ci.yml` (the fast gate) and
+`conformance.yml` (the Lab, on Lab-affecting paths and nightly) are the
+source of truth for what actually gates a merge; treat `make check` as a
+close local proxy, not a guarantee of parity.
 
 ### Test execution on WSL (history of the "session dies mid-test" bug)
 
@@ -147,10 +151,14 @@ need to).
   `tests/_fixtures`; per-harness synthetic seeds under
   `conformance/harnesses/<vendor>/fixtures/`. Run with
   `python3 conformance/lab.py --harness <h>`; replay a recorded run with
-  `make lab-replay`. The CI `conformance` job runs all four verticals
-  (matrix). Debugging a failure: see the `conformance-debug` skill (fast
-  `--sandbox` reproduction loop, seconds not minutes) before iterating
-  against the full gate run.
+  `make lab-replay`. `conformance.yml` runs all four verticals (matrix) —
+  its own workflow, on the paths that reach the Lab image plus nightly, so
+  a docs or web change no longer pays 34 runner-minutes to prove nothing.
+  `conformance-stability.yml` is ADR-035's promotion gate (3 clean runs per
+  vertical), nightly only.
+  Debugging a failure: see the `conformance-debug` skill (fast `--sandbox`
+  reproduction loop, seconds not minutes) before iterating against the full
+  gate run.
 - `tests/` — domain-organized integration suites (one `main.rs` per
   domain: `cli/`, `memory/`, `packages/`, `workspace/`, `lifecycle/`,
   `projection/`, `integrations/`, `acceptance/`), shared test

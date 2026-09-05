@@ -48,8 +48,13 @@ jobs:
           fetch-depth: 0
       - uses: taiki-e/install-action@v2
         with:
-          # Pinned: the release changelog depends on `git-cliff -t` naming.
-          tool: cargo-release@1.1.5,git-cliff@2.13.1
+          # cargo-release and git-cliff are pinned: the release changelog
+          # depends on `git-cliff -t` naming. The rest are what the
+          # `make check` pre-release-hook shells out to (see release.toml) —
+          # a gate that cannot run is a gate that does not gate, and this
+          # workflow has never been exercised, so nothing here has ever
+          # caught it.
+          tool: cargo-release@1.1.5,git-cliff@2.13.1,cargo-deny,cargo-about,ruff
       - uses: Swatinem/rust-cache@v2
         with:
           key: release-prepare
@@ -112,14 +117,16 @@ jobs:
       # Apache-2.0 4(a) and 4(d): whoever receives the binary has to receive
       # the licence and the NOTICE with it. Staging them beside the binary is
       # what puts them inside the tarball - the archive used to carry the
-      # executable alone.
+      # executable alone. CREDITS.md travels with them because the NOTICE
+      # points at it, and a pointer to a file the recipient does not have is
+      # worse than no pointer.
       - name: Package release archive
         run: |
           mkdir -p dist staging
           cp "target/${{ matrix.target }}/release/uze" staging/
-          cp LICENSE NOTICE staging/
+          cp LICENSE NOTICE CREDITS.md staging/
           tar -C staging -czf "dist/uze-${{ matrix.target }}.tar.gz" \
-            uze LICENSE NOTICE
+            uze LICENSE NOTICE CREDITS.md
       - uses: actions/upload-artifact@v7
         with:
           name: uze-${{ matrix.target }}

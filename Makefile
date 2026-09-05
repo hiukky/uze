@@ -5,7 +5,7 @@ UZE_BIN ?= target/debug/uze
 RELEASE_BIN ?= target/release/uze
 INSTALL_ARGS ?= --force
 
-.PHONY: help build release install wsl-lab run test test-acceptance test-conformance test-installer harness-test harness-matrix check fmt lint coverage version clean changelog lab-image lab-run lab-evidence lab-sandbox lab-experiment lab-matrix lab-replay python-fmt python-lint
+.PHONY: help build release install wsl-lab run test test-acceptance test-conformance test-installer harness-test harness-matrix check fmt lint deny attributions attributions-check coverage version clean changelog lab-image lab-run lab-evidence lab-sandbox lab-experiment lab-matrix lab-replay python-fmt python-lint
 
 help: ## Show the available local-development targets.
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z0-9_.-]+:.*##/ { printf "  %-12s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -56,6 +56,17 @@ fmt: ## Check formatting (cargo fmt --check).
 lint: ## Lint with clippy, warnings denied.
 	$(CARGO) clippy --all-targets -- -D warnings
 
+deny: ## Audit dependency licences, advisories, bans and sources (cargo-deny).
+	$(CARGO) deny check
+
+attributions: ## Regenerate CREDITS.md from about.hbs + Cargo.lock (cargo-about).
+	$(CARGO) about generate about.hbs -o CREDITS.md
+
+attributions-check: ## Fail if CREDITS.md is stale relative to Cargo.lock.
+	$(CARGO) about generate about.hbs -o /tmp/uze-credits-check.md
+	diff -u CREDITS.md /tmp/uze-credits-check.md || \
+		{ printf 'CREDITS.md is stale - run `make attributions` and commit.\n' >&2; exit 1; }
+
 python-fmt: ## Check Python formatting with ruff (conformance/).
 	ruff format --check conformance/
 
@@ -66,7 +77,7 @@ coverage: ## Run workspace tests with LLVM coverage (skips env-failing tests).
 	cargo llvm-cov --workspace --summary-only --fail-under-lines 68 --fail-under-regions 69 -- --skip real_codex_dogfood --skip foreground_status_reports --skip acquisition
 	cargo llvm-cov report --lcov --output-path lcov.info
 
-check: fmt lint test python-fmt python-lint ## Local proxy for the CI gate; also cargo-release's pre-release-hook.
+check: fmt lint deny test python-fmt python-lint ## Local proxy for the CI gate; also cargo-release's pre-release-hook.
 
 
 # --- Harness Conformance Lab (Python, Real Harness + Synthetic World) ---

@@ -109,9 +109,13 @@ impl IntegrationPort for OpenCodeIntegration {
         "/"
     }
 
-    /// simple-icons' `opencode` mark (MIT), recolored to `currentColor`.
+    /// simple-icons' `opencode` mark (CC0-1.0), recolored to `currentColor`.
     fn icon_path(&self) -> Option<&'static str> {
         Some("/harnesses/opencode.svg")
+    }
+
+    fn homepage(&self) -> Option<&'static str> {
+        Some("https://opencode.ai")
     }
 
     /// Reads the shared `AGENTS.md` natively (preferred over `CLAUDE.md`

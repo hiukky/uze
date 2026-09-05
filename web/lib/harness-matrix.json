@@ -4,6 +4,7 @@
     {
       "name": "Claude Code",
       "icon": "/harnesses/claude-code.svg",
+      "url": "https://code.claude.com",
       "context": "bridge",
       "skills": "native",
       "mcp": "native",
@@ -14,6 +15,7 @@
     {
       "name": "Codex",
       "icon": "/harnesses/codex.png",
+      "url": "https://chatgpt.com/codex",
       "context": "native",
       "skills": "native",
       "mcp": "native",
@@ -24,6 +26,7 @@
     {
       "name": "OpenCode",
       "icon": "/harnesses/opencode.svg",
+      "url": "https://opencode.ai",
       "context": "native",
       "skills": "native",
       "mcp": "native",
@@ -34,6 +37,7 @@
     {
       "name": "Antigravity",
       "icon": "/harnesses/antigravity.png",
+      "url": "https://antigravity.google",
       "context": "native",
       "skills": "native",
       "mcp": "native",

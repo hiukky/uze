@@ -247,6 +247,31 @@ fn effective_route(
     fallback
 }
 
+/// The name cell both generated tables open with: the harness's mark, its
+/// name, and — where the vendor has a public home — a link to it, opened in
+/// a tab of its own so a reader chasing "what is Antigravity" does not lose
+/// the page they were reading.
+///
+/// Raw HTML in MDX is parsed as JSX, not HTML — `style` must be an object
+/// there, so a plain CSS string 500s the build. className
+/// (harness-table-icon/-cell, styled in app/global.css) instead. The icon
+/// and name are wrapped in one inline-flex element so they never wrap onto
+/// separate lines in a narrow column.
+fn harness_cell(integration: &dyn IntegrationPort) -> String {
+    let name = integration.display_name();
+    let icon = integration
+        .icon_path()
+        .map(|icon| format!("<img src=\"{icon}\" alt=\"\" className=\"harness-table-icon\" />"))
+        .unwrap_or_default();
+    match integration.homepage() {
+        Some(homepage) => format!(
+            "<a className=\"harness-table-cell\" href=\"{homepage}\" target=\"_blank\" rel=\"noreferrer noopener\">{icon}{name}</a>"
+        ),
+        None if icon.is_empty() => name.to_owned(),
+        None => format!("<span className=\"harness-table-cell\">{icon}{name}</span>"),
+    }
+}
+
 fn matrix_block() -> String {
     let default_skill = skill(
         "---\nname: commit\ndescription: Matrix fixture skill.\n---\n\nBody.\n",
@@ -271,18 +296,7 @@ fn matrix_block() -> String {
     for harness in harnesses() {
         let integration = harness.integration.as_ref();
         let package = package_route(integration).map(route_symbol).unwrap_or("⚪");
-        let label = match integration.icon_path() {
-            // Raw HTML in MDX is parsed as JSX, not HTML — `style` must be an
-            // object there, so a plain CSS string 500s the build. className
-            // (harness-table-icon/-cell, styled in app/global.css) instead.
-            // The icon and label are wrapped in one inline-flex span so they
-            // never wrap onto separate lines in a narrow column.
-            Some(icon) => format!(
-                "<span className=\"harness-table-cell\"><img src=\"{icon}\" alt=\"\" className=\"harness-table-icon\" />{}</span>",
-                integration.display_name()
-            ),
-            None => integration.display_name().to_owned(),
-        };
+        let label = harness_cell(integration);
         out.push_str(&format!(
             "| {label} | 🟢 | {} | {} | {} | {} | {} | {} | {} |\n",
             route_symbol(effective_route(
@@ -362,7 +376,7 @@ fn matrix_block() -> String {
             .unwrap_or_else(|| "review".to_owned());
         out.push_str(&format!(
             "| {} | `{}{}` | `{}{}` |\n",
-            integration.display_name(),
+            harness_cell(integration),
             prefix,
             default_name,
             prefix,
@@ -403,10 +417,14 @@ fn matrix_json() -> String {
         };
         let package = package_route(integration).map(route_name).unwrap_or("none");
         rows.push(format!(
-            "    {{\n      \"name\": {},\n      \"icon\": {},\n      \"context\": \"{context}\",\n      \"skills\": \"{}\",\n      \"mcp\": \"{}\",\n      \"agents\": \"{}\",\n      \"hooks\": \"{}\",\n      \"package\": \"{package}\"\n    }}",
+            "    {{\n      \"name\": {},\n      \"icon\": {},\n      \"url\": {},\n      \"context\": \"{context}\",\n      \"skills\": \"{}\",\n      \"mcp\": \"{}\",\n      \"agents\": \"{}\",\n      \"hooks\": \"{}\",\n      \"package\": \"{package}\"\n    }}",
             json_string(integration.display_name()),
             match integration.icon_path() {
                 Some(icon) => json_string(icon),
+                None => "null".to_owned(),
+            },
+            match integration.homepage() {
+                Some(homepage) => json_string(homepage),
                 None => "null".to_owned(),
             },
             route_name(effective_route(

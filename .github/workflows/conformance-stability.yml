@@ -1,0 +1,77 @@
+name: Conformance stability
+
+# ADR-035's promotion gate: three consecutive clean runs of a vertical.
+#
+# Nightly only, and its own workflow rather than a job that skips itself on
+# every pull request. A check that can never run on a pull request is noise
+# on one — and a skipped matrix job is not even legible, since GitHub does
+# not expand the matrix of a job it did not run.
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: conformance-stability
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  conformance-stability:
+    name: Stability - ${{ matrix.label }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - harness: antigravity
+            label: Antigravity
+          - harness: claude
+            label: Claude
+          - harness: codex
+            label: Codex
+          - harness: opencode
+            label: OpenCode
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build the Lab harness image
+        run: docker build -f conformance/Dockerfile -t conformance-harness:latest .
+      - name: Install Lab runner dependency
+        run: python3 -m pip install --user pexpect
+      # ADR-035 promotion gate: 3 consecutive clean runs per vertical.
+      # A run counts clean when the gate line reports PASS == total, no
+      # check failure (❌), and no run-level crash.
+      - name: Run 3 consecutive gate runs
+        run: |
+          mkdir -p /tmp/stability/${{ matrix.harness }}
+          fails=0
+          for i in 1 2 3; do
+            python3 conformance/lab.py --harness ${{ matrix.harness }} --write-summary \
+              > /tmp/stability/${{ matrix.harness }}/run$i.log 2>&1 || true
+            log=/tmp/stability/${{ matrix.harness }}/run$i.log
+            if grep -q "RUN CRASH\|❌" "$log" \
+               || ! grep -q "=== [0-9]*/[0-9]* asserted PASS" "$log"; then
+              echo "flake in run $i:"; tail -n 12 "$log"; fails=$((fails+1))
+            else
+              echo "run $i clean"
+            fi
+          done
+          echo "stability: $((3-fails))/3 clean for ${{ matrix.harness }}"
+          exit $fails
+      - name: Upload stability logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: conformance-stability-${{ matrix.harness }}
+          path: /tmp/stability/${{ matrix.harness }}/
+          retention-days: 30
+          if-no-files-found: ignore
+      # Evidence lives in Actions artifacts (see the conformance job);
+      # summaries are written beside the run evidence, never pushed.
