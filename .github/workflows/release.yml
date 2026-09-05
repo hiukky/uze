@@ -1,13 +1,21 @@
 name: Release
 
-# One-click release publisher. Run from Actions -> Release -> Run workflow.
-# Everything happens here, in order: the make check gate (fmt + clippy +
-# tests), the cargo-release bump of every workspace crate in lockstep, the
-# `chore(release): bump workspace version to <v>` commit, CHANGELOG.md
-# regeneration folded into that same commit, the annotated `v<v>` tag, the
-# branch + tag push, the four Linux artifacts built from the tag on native
-# runners, and the GitHub Release with tarballs + SHASUMS256.txt that
-# install.sh consumes. See docs/versioning.md for the full flow.
+# A release enters `main` through the same door as everything else.
+#
+# Two halves, and the merge button between them. `Run workflow` proposes:
+# cargo-release bumps every crate in lockstep, git-cliff writes the changelog
+# into the same commit, and the whole thing arrives as a
+# `chore(release): v<version>` pull request on a branch. Nothing is tagged and
+# nothing reaches `main` until you merge it.
+#
+# Merging is what publishes. The push to `main` is read for a version with no
+# tag behind it; when there is one, this workflow tags that commit, builds the
+# four Linux artifacts on native runners, generates the SBOM, signs the
+# provenance, and creates the GitHub Release with the tarballs and
+# SHASUMS256.txt that install.sh consumes.
+#
+# It used to push the release commit straight to `main`, which a branch
+# ruleset refuses — correctly. See docs/versioning.md for the full flow.
 
 on:
   workflow_dispatch:
@@ -22,6 +30,11 @@ on:
           - patch
           - minor
           - major
+  push:
+    branches: [main]
+    # The bump touches it. Any other change to it reaches the version check
+    # below, finds the tag already there, and stops.
+    paths: ["Cargo.toml"]
 
 permissions:
   contents: write
@@ -34,61 +47,120 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  prepare:
-    name: Bump, changelog, tag, push
+  propose:
+    name: Propose the release
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.release.outputs.version }}
-      tag: ${{ steps.release.outputs.tag }}
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          # git-cliff needs the full history plus existing tags;
-          # cargo-release needs to push branch + tag afterwards.
+          # git-cliff needs the full history plus existing tags.
           fetch-depth: 0
       - uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8 # v2
         with:
           # cargo-release and git-cliff are pinned: the release changelog
           # depends on `git-cliff -t` naming. The rest are what the
           # `make check` pre-release-hook shells out to (see release.toml) —
-          # a gate that cannot run is a gate that does not gate, and this
-          # workflow has never been exercised, so nothing here has ever
-          # caught it.
+          # a gate that cannot run is a gate that does not gate.
           tool: cargo-release@1.1.5,git-cliff@2.13.1,cargo-deny,cargo-about,ruff
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
+        with:
+          toolchain: stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
-          key: release-prepare
+          key: release-propose
       - name: Configure git identity
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-      - name: Bump, changelog, tag and push
+      - name: Bump, changelog, branch
         id: release
         run: |
           set -euo pipefail
+          # On a branch from the start: `cargo release` commits, and this one
+          # is going to be reviewed like any other change.
+          git switch -c "release/pending"
           # Runs the `make check` pre-release-hook first (see release.toml):
-          # if the gate fails, nothing is bumped, committed or tagged.
-          # `--no-tag` defers the tag so the changelog can be folded into
-          # the release commit before the tag is created on it.
+          # if the gate fails, nothing is bumped or committed. `--no-tag`
+          # because the tag belongs on the merge commit, not on this branch.
           cargo release "${{ inputs.bump }}" --execute --no-confirm --no-tag
           version="$(sed -n 's/^version = "\([^"]*\)"$/\1/p' Cargo.toml | head -n 1)"
           [ -n "$version" ] || { echo "could not read version from Cargo.toml" >&2; exit 1; }
           tag="v${version}"
           # `-t` names the release section before the tag physically exists;
-          # with the tag already present (and pointing at HEAD) git-cliff
-          # would see an empty range and omit the section entirely.
+          # with the tag already present git-cliff would see an empty range
+          # and omit the section entirely.
           git-cliff -t "$tag" -o CHANGELOG.md
           git add CHANGELOG.md
           git commit --amend --no-edit
-          git tag -a "$tag" -m "uze $version"
-          git push origin main
-          git push origin "$tag"
+          git branch -m "release/${tag}"
+          git push origin "release/${tag}"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: Open the release pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ steps.release.outputs.tag }}"
+          gh pr create \
+            --base main \
+            --head "release/${tag}" \
+            --title "chore(release): ${tag}" \
+            --body "$(printf '%s\n' \
+              "Version bump across every workspace crate, with the changelog for \`${tag}\` folded into the same commit." \
+              "" \
+              "Merging this tags the merge commit \`${tag}\` and publishes the release: four Linux tarballs, the SBOM, signed provenance and SHASUMS256.txt." \
+              "" \
+              "Generated by the Release workflow.")"
+
+  tag:
+    name: Tag the release commit
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.detect.outputs.version }}
+      tag: ${{ steps.detect.outputs.tag }}
+      release: ${{ steps.detect.outputs.release }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      # `Cargo.toml` changes for many reasons; a release is the one where the
+      # version it carries has no tag behind it yet. Reading the tree rather
+      # than the commit message means a bump that arrived some other way is
+      # still released, and a dependency bump is not.
+      - name: Is this a version with no tag?
+        id: detect
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = "\([^"]*\)"$/\1/p' Cargo.toml | head -n 1)"
+          [ -n "$version" ] || { echo "could not read version from Cargo.toml" >&2; exit 1; }
+          tag="v${version}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+            echo "${tag} already exists — nothing to release"
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Create the tag
+        if: steps.detect.outputs.release == 'true'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.detect.outputs.tag }}" -m "uze ${{ steps.detect.outputs.version }}"
+          git push origin "${{ steps.detect.outputs.tag }}"
 
   package:
     name: Package ${{ matrix.target }}
-    needs: prepare
+    needs: tag
+    if: needs.tag.outputs.release == 'true'
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -106,7 +178,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # Build exactly what was released and pushed by `prepare`.
-          ref: ${{ needs.prepare.outputs.tag }}
+          ref: ${{ needs.tag.outputs.tag }}
       - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
         with:
           toolchain: stable
@@ -136,7 +208,7 @@ jobs:
 
   publish:
     name: Publish release
-    needs: [prepare, package]
+    needs: [tag, package]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -153,7 +225,7 @@ jobs:
         with:
           # The tag, so the SBOM describes the tree the binaries were built
           # from rather than whatever `main` has moved on to.
-          ref: ${{ needs.prepare.outputs.tag }}
+          ref: ${{ needs.tag.outputs.tag }}
       - uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8 # v2
         with:
           tool: cargo-cyclonedx
@@ -185,8 +257,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          tag="${{ needs.prepare.outputs.tag }}"
-          version="${{ needs.prepare.outputs.version }}"
+          tag="${{ needs.tag.outputs.tag }}"
+          version="${{ needs.tag.outputs.version }}"
           if gh release view "$tag" >/dev/null 2>&1; then
             echo "release $tag exists — uploading assets"
             gh release upload "$tag" assets/* --clobber

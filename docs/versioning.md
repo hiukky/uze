@@ -32,29 +32,47 @@ target/release/uze --version
 
 UZE's official Linux distribution channel is GitHub Releases, consumed by
 `install.sh` (`curl -fsSL https://uze.hiukky.com/i | sh`).
-Releasing is a single manual action — no local cargo-release, no manual
-push:
+A release enters `main` through the same door as every other change: a pull
+request. No local cargo-release, no manual push, and nothing that a branch
+ruleset has to make an exception for.
 
-1. Run the **Release** workflow (Actions → Release → Run workflow). The
-   `bump` input defaults to `alpha`; use `patch`/`minor`/`major` for
-   deliberate milestones. Everything else happens in the workflow, in
-   order:
+**1. Propose it.** Run the **Release** workflow (Actions → Release → Run
+workflow). The `bump` input defaults to `alpha`; use `patch`/`minor`/`major`
+for deliberate milestones. The workflow, on a branch of its own:
+
    - `cargo release … --execute --no-tag` runs the `make check`
-     pre-release-hook (fmt + clippy + tests — the gate; nothing is bumped
-     if it fails) and bumps every workspace crate in lockstep
-     (`shared-version`, see `release.toml`), producing the
+     pre-release-hook (fmt, clippy, cargo-deny, tests, ruff — the gate;
+     nothing is bumped if it fails) and bumps every workspace crate in
+     lockstep (`shared-version`, see `release.toml`), producing the
      `chore(release): bump workspace version to <v>` commit;
    - `git-cliff -t <v>` regenerates `CHANGELOG.md` — `-t` names the new
      section before the tag physically exists (with the tag already in
      place git-cliff would see an empty range and omit it) — and the
      changelog is folded into the release commit;
-   - the annotated `v<v>` tag is created on that final commit — the tag
-     always points at the commit carrying version bump + changelog +
-     lockfile — then branch and tag are pushed;
-   - the four Linux artifacts (`x86_64`/`aarch64` × `gnu`/`musl`) are
-     built from the tag on native runners and published with
-     `SHASUMS256.txt` to the `v<v>` GitHub Release. Re-runs upload assets
-     with `--clobber`, so a failed publish can be repaired in place.
+   - the branch is pushed and opened as a `chore(release): v<v>` pull
+     request. Nothing is tagged and nothing has reached `main`.
+
+**2. Merge it.** The release is reviewed and gated like anything else, and
+the merge is the decision to publish.
+
+**3. Publishing happens on that push.** The same workflow, on `push` to
+`main` touching `Cargo.toml`, reads the version in the tree and asks whether
+a tag already exists for it. When one does — an ordinary dependency bump,
+say — it stops there. When none does:
+
+   - the annotated `v<v>` tag is created on the merge commit, which is the
+     commit carrying version bump + changelog + lockfile;
+   - the four Linux artifacts (`x86_64`/`aarch64` × `gnu`/`musl`) are built
+     from that tag on native runners;
+   - a CycloneDX SBOM is generated from the tag's own lockfile, provenance
+     is signed for every asset (`gh attestation verify <file> --repo
+     hiukky/uze`), and the `v<v>` GitHub Release is created with the
+     tarballs, the SBOM and `SHASUMS256.txt`. Re-runs upload assets with
+     `--clobber`, so a failed publish can be repaired in place.
+
+Each tarball carries `LICENSE`, `NOTICE` and `CREDITS.md` beside the binary:
+Apache-2.0 §4(a) obliges whoever receives the binary to receive the licence
+with it.
 
 `install.sh` picks the artifact for the host (`uname -s`/`uname -m`, musl
 detection via `ldd --version`), verifies the SHA-256 against `SHASUMS256.txt`
