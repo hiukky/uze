@@ -14,9 +14,10 @@ Base document: the Apache Individual Contributor License Agreement V2.2,
 
 Departures from that text, all of them deliberate:
 
-1. **"The Apache Software Foundation" / "the Foundation" become
-   `{{COPYRIGHT_HOLDER}}`.** Without this the agreement grants rights to
-   the ASF, which has nothing to do with this project.
+1. **"The Apache Software Foundation" / "the Foundation" are replaced
+   throughout by Romullo Sousa (hiukky)**, the copyright holder named in
+   `LICENSE` and `NOTICE`. Without this the agreement grants rights to the
+   ASF, which has nothing to do with this project.
 2. **The nonprofit undertaking is removed.** The ASF text promises in
    return not to use Contributions "in a way that is contrary to the public
    benefit or inconsistent with its nonprofit status and bylaws". uze has
@@ -40,16 +41,16 @@ Departures from that text, all of them deliberate:
 
 You accept and agree to the following terms and conditions for Your
 Contributions (present and future) that you submit to
-`{{COPYRIGHT_HOLDER}}`. Except for the license granted herein to
-`{{COPYRIGHT_HOLDER}}` and recipients of software distributed by
-`{{COPYRIGHT_HOLDER}}`, You reserve all right, title, and interest in and
+Romullo Sousa (hiukky). Except for the license granted herein to
+Romullo Sousa (hiukky) and recipients of software distributed by
+Romullo Sousa (hiukky), You reserve all right, title, and interest in and
 to Your Contributions.
 
 **1. Definitions.**
 
 "You" (or "Your") shall mean the copyright owner or legal entity authorized
 by the copyright owner that is making this Agreement with
-`{{COPYRIGHT_HOLDER}}`. For legal entities, the entity making a
+Romullo Sousa (hiukky). For legal entities, the entity making a
 Contribution and all other entities that control, are controlled by, or are
 under common control with that entity are considered to be a single
 Contributor. For the purposes of this definition, "control" means (i) the
@@ -60,36 +61,36 @@ ownership of such entity.
 
 "Contribution" shall mean any original work of authorship, including any
 modifications or additions to an existing work, that is intentionally
-submitted by You to `{{COPYRIGHT_HOLDER}}` for inclusion in, or
+submitted by You to Romullo Sousa (hiukky) for inclusion in, or
 documentation of, any of the products owned or managed by
-`{{COPYRIGHT_HOLDER}}` (the "Work"). For the purposes of this definition,
+Romullo Sousa (hiukky) (the "Work"). For the purposes of this definition,
 "submitted" means any form of electronic, verbal, or written communication
-sent to `{{COPYRIGHT_HOLDER}}` or its representatives, including but not
+sent to Romullo Sousa (hiukky) or its representatives, including but not
 limited to communication on electronic mailing lists, source code control
 systems, and issue tracking systems that are managed by, or on behalf of,
-`{{COPYRIGHT_HOLDER}}` for the purpose of discussing and improving the
+Romullo Sousa (hiukky) for the purpose of discussing and improving the
 Work, but excluding communication that is conspicuously marked or otherwise
 designated in writing by You as "Not a Contribution."
 
 **2. Grant of Copyright License.**
 
 Subject to the terms and conditions of this Agreement, You hereby grant to
-`{{COPYRIGHT_HOLDER}}` and to recipients of software distributed by
-`{{COPYRIGHT_HOLDER}}` a perpetual, worldwide, non-exclusive, no-charge,
+Romullo Sousa (hiukky) and to recipients of software distributed by
+Romullo Sousa (hiukky) a perpetual, worldwide, non-exclusive, no-charge,
 royalty-free, irrevocable copyright license to reproduce, prepare
 derivative works of, publicly display, publicly perform, sublicense, and
 distribute Your Contributions and such derivative works.
 
 You further agree that Your Contributions may be included in future
 versions of the Work distributed under any licence chosen by
-`{{COPYRIGHT_HOLDER}}`, including a commercial licence, and that no further
+Romullo Sousa (hiukky), including a commercial licence, and that no further
 permission from You is required for that.
 
 **3. Grant of Patent License.**
 
 Subject to the terms and conditions of this Agreement, You hereby grant to
-`{{COPYRIGHT_HOLDER}}` and to recipients of software distributed by
-`{{COPYRIGHT_HOLDER}}` a perpetual, worldwide, non-exclusive, no-charge,
+Romullo Sousa (hiukky) and to recipients of software distributed by
+Romullo Sousa (hiukky) a perpetual, worldwide, non-exclusive, no-charge,
 royalty-free, irrevocable (except as stated in this section) patent license
 to make, have made, use, offer to sell, sell, import, and otherwise
 transfer the Work, where such license applies only to those patent claims
@@ -108,8 +109,8 @@ license. If your employer(s) has rights to intellectual property that you
 create that includes your Contributions, you represent that you have
 received permission to make Contributions on behalf of that employer, that
 your employer has waived such rights for your Contributions to
-`{{COPYRIGHT_HOLDER}}`, or that your employer has executed a separate
-Corporate CLA with `{{COPYRIGHT_HOLDER}}`.
+Romullo Sousa (hiukky), or that your employer has executed a separate
+Corporate CLA with Romullo Sousa (hiukky).
 
 **5.** You represent that each of Your Contributions is Your original
 creation (see section 7 for submissions on behalf of others). You represent
@@ -127,14 +128,14 @@ including, without limitation, any warranties or conditions of TITLE,
 NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A PARTICULAR PURPOSE.
 
 **7.** Should You wish to submit work that is not Your original creation,
-You may submit it to `{{COPYRIGHT_HOLDER}}` separately from any
+You may submit it to Romullo Sousa (hiukky) separately from any
 Contribution, identifying the complete details of its source and of any
 license or other restriction (including, but not limited to, related
 patents, trademarks, and license agreements) of which you are personally
 aware, and conspicuously marking the work as "Submitted on behalf of a
 third-party: [named here]".
 
-**8.** You agree to notify `{{COPYRIGHT_HOLDER}}` of any facts or
+**8.** You agree to notify Romullo Sousa (hiukky) of any facts or
 circumstances of which you become aware that would make these
 representations inaccurate in any respect.
 
@@ -143,7 +144,7 @@ representations inaccurate in any respect.
 This Agreement grants a licence and transfers nothing. You remain the
 copyright owner of Your Contributions. You may use, licence and distribute
 Your Contributions for any other purpose, on any terms, without restriction
-by or obligation to `{{COPYRIGHT_HOLDER}}`. Nothing in this Agreement
+by or obligation to Romullo Sousa (hiukky). Nothing in this Agreement
 assigns ownership of Your Contributions or of any intellectual property
 right in them.
 
