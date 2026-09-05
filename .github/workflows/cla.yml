@@ -16,7 +16,10 @@ on:
 # signature file to another repository.
 permissions:
   actions: write
-  contents: read
+  # The signature file lands on this repository's own `cla-signatures`
+  # branch, so the workflow's token is enough — no personal access token to
+  # mint, to scope, or to find expired on the day someone tries to sign.
+  contents: write
   pull-requests: write
   statuses: write
 
@@ -25,32 +28,30 @@ jobs:
     name: CLA signed
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # Inert until the maintainer sets both variables to the repository that
-    # will hold the signatures, and adds a token that can write to it.
-    # Signatures do not live in this repository: a contributor signing must
-    # not mean a commit on `main` of the project they are contributing to.
+    # Inert until `CLA_ACTIVE` is set to `true`. It stays unset while CLA.md
+    # is marked DO NOT PUBLISH: nobody should be asked to agree to a document
+    # that is still awaiting legal review.
     if: >-
-      vars.CLA_SIGNATURES_ORG != '' && vars.CLA_SIGNATURES_REPO != '' &&
+      vars.CLA_ACTIVE == 'true' &&
       (github.event_name == 'pull_request_target' ||
        github.event.comment.body == 'recheck' ||
        github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA')
     steps:
-      - uses: contributor-assistant/github-action@v2.6.1
+      - uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08 # v2.6.1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Needs `repo` scope on the signatures repository, and nothing
-          # else. Added by the maintainer; it cannot come from `secrets
-          # .GITHUB_TOKEN`, which is scoped to this repository alone.
-          PERSONAL_ACCESS_TOKEN: ${{ secrets.CLA_SIGNATURES_TOKEN }}
         with:
           # Versioned on purpose: a change to CLA.md that alters what a
           # signature means starts a new path, so nobody is recorded as
           # having agreed to a document they never read.
           path-to-signatures: signatures/v1/cla.json
           path-to-document: https://github.com/${{ github.repository }}/blob/main/CLA.md
-          remote-organization-name: ${{ vars.CLA_SIGNATURES_ORG }}
-          remote-repository-name: ${{ vars.CLA_SIGNATURES_REPO }}
-          branch: main
+          # An orphan branch of this repository, sharing no history with
+          # `main`: signing a document should not put a commit in the history
+          # of the project you are contributing to. It must stay unprotected,
+          # which is why the ruleset targets the default branch rather than a
+          # pattern that would catch this one too.
+          branch: cla-signatures
           # Bots cannot agree to anything, and the maintainer is the party
           # the agreement is with. Without this, every dependency bump
           # blocks on a signature that will never come.
