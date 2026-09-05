@@ -248,8 +248,15 @@ place() {
     echo "cannot create directory: $bin_dir" >&2
     return 1
   }
-  tar -xzf "${tmpdir}/${archive}" -C "$tmpdir" &&
-    install -m 0755 "${tmpdir}/uze" "${bin_dir}/uze" || {
+  # Unpacking and placing are asked separately: chained with `&&` before a
+  # shared `||`, an unpack that failed was reported as an install that
+  # could not write — the one message the reader would have acted on was
+  # the one thing that had not gone wrong.
+  tar -xzf "${tmpdir}/${archive}" -C "$tmpdir" || {
+    echo "cannot unpack: ${archive}" >&2
+    return 1
+  }
+  install -m 0755 "${tmpdir}/uze" "${bin_dir}/uze" || {
     echo "cannot install into: ${bin_dir}/uze" >&2
     return 1
   }
