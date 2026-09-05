@@ -723,6 +723,40 @@ mod workspace_tests {
         );
     }
 
+    /// A branch too long for the column is elided, not cut. It used to run
+    /// under the row's own right-aligned caption and off the sidebar,
+    /// taking that caption's meaning with it and ending mid-word with
+    /// nothing to say it had been shortened.
+    #[test]
+    fn a_long_branch_is_elided_rather_than_run_off_the_sidebar() {
+        let mut model = agent_with_task(TaskStateView::Ready, 3);
+        let long = "agent/a-branch-name-longer-than-any-sidebar-column-could-hold";
+        for tasks in model.tasks.values_mut() {
+            tasks[0].branch = long.to_owned();
+        }
+
+        let rows = sidebar_rows(&model, &mut Vec::new());
+        let caption = rows
+            .iter()
+            .find(|row| row.contains("agent/a-branch"))
+            .expect("the branch reads under the agent's name");
+
+        // Past the caption sits the sidebar's own divider, which is the
+        // proof nothing ran over the column's edge.
+        assert!(
+            caption
+                .trim_end()
+                .trim_end_matches('│')
+                .trim_end()
+                .ends_with('…'),
+            "the name is elided, and says so: {caption}"
+        );
+        assert!(
+            !caption.contains(long),
+            "so the whole name cannot be on the row: {caption}"
+        );
+    }
+
     /// A slot outlives the tasks that run in it, and a task that ended
     /// keeps naming the slot it ran in — so a reused directory is named by
     /// two tasks at once. The row belongs to whoever is in it now; reading

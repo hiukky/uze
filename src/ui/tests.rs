@@ -1476,6 +1476,41 @@ fn sidebar_resize_drag_clamps_to_bounds() {
     );
 }
 
+/// A caption pinned to the right edge is elided to what is left of the
+/// row. It used to be appended whole and cut by the frame, which is how a
+/// long branch name on the Git section header lost both its ending and any
+/// sign that it had one.
+#[test]
+fn a_trailing_caption_is_elided_to_the_room_the_row_has_left() {
+    use ratatui::text::Span;
+
+    let mut spans = vec![Span::raw("▾ Git")];
+    super::push_trailing(
+        &mut spans,
+        20,
+        "agent/a-very-long-branch-name".to_owned(),
+        MUTED,
+    );
+    let row: String = spans.iter().map(|span| span.content.as_ref()).collect();
+    assert!(
+        row.ends_with("… "),
+        "the caption says it was shortened: {row}"
+    );
+    assert!(
+        Span::raw(&row).width() <= 20,
+        "and the row still fits the column: {row}"
+    );
+
+    let mut spans = vec![Span::raw("▾ Git")];
+    super::push_trailing(&mut spans, 20, "main".to_owned(), MUTED);
+    let row: String = spans.iter().map(|span| span.content.as_ref()).collect();
+    assert!(
+        row.contains("main"),
+        "a caption that fits is left alone: {row}"
+    );
+    assert!(!row.contains('…'), "{row}");
+}
+
 #[test]
 fn clip_line_truncates_long_status_with_ellipsis() {
     use ratatui::text::Line;

@@ -585,10 +585,19 @@ pub(crate) const TRAILING_PAD: u16 = 1;
 
 /// Appends `text` pinned to the row's right edge, `TRAILING_PAD` off the
 /// divider — the column the agent rows keep their alias in.
+///
+/// `text` is elided rather than allowed to overflow. It is the row's
+/// caption, and a caption that does not fit used to run past the edge and
+/// be cut there by the frame — which is how a long branch name on the Git
+/// section header became an unreadable fragment with no "…" to say it had
+/// been shortened.
 pub(crate) fn push_trailing<'a>(spans: &mut Vec<Span<'a>>, width: u16, text: String, hue: Color) {
-    let used: u16 = spans.iter().map(|span| span.width() as u16).sum::<u16>()
-        + text.chars().count() as u16
-        + TRAILING_PAD;
+    let leading: u16 = spans.iter().map(|span| span.width() as u16).sum();
+    // One column of gap between the leading spans and the caption, so the
+    // two never read as one word.
+    let room = width.saturating_sub(leading + TRAILING_PAD + 1).max(1);
+    let text = elide_tail(&text, room as usize);
+    let used = leading + text.chars().count() as u16 + TRAILING_PAD;
     let gap = width.saturating_sub(used).max(1);
     spans.push(Span::raw(" ".repeat(gap as usize)));
     spans.push(Span::styled(text, Style::default().fg(hue)));
