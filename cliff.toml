@@ -10,21 +10,31 @@ header = """
 All notable changes to UZE are documented here, generated from Conventional
 Commits by `git-cliff` (`make changelog`). Until v1, UZE ships only SemVer
 pre-releases — see `docs/versioning.md`.
+
 """
+# A changelog nobody can navigate is a list of sentences. Every short SHA is a
+# link to its commit, and every version heading is the diff against the one
+# before it — which is the question a reader actually arrives with.
 body = """
+{% set repo = "https://github.com/hiukky/uze" %}\
 {% if version %}\
-    ## [{{ version | trim_start_matches(pat="v") }}]\
-    {%- if release_timestamp %} - {{ release_timestamp | date(format="%Y-%m-%d") }}{% endif %}
+    {% if previous.version %}\
+        ## [{{ version | trim_start_matches(pat="v") }}]({{ repo }}/compare/{{ previous.version }}...{{ version }})\
+    {% else %}\
+        ## [{{ version | trim_start_matches(pat="v") }}]({{ repo }}/releases/tag/{{ version }})\
+    {% endif %}\
+    {%- if timestamp %} - {{ timestamp | date(format="%Y-%m-%d") }}{% endif %}
 {% else %}\
     ## [Unreleased]
 {% endif %}\
 {% for group, commits in commits | group_by(attribute="group") %}
-    ### {{ group | striptags | trim | upper_first }}
-    {% for commit in commits %}
-        - {{ commit.message | upper_first }}\
-            {%- if commit.breaking %} [**breaking**]{% endif %} \
-            ({{ commit.id | truncate(length=7, end="") }})
-    {% endfor %}
+### {{ group | striptags | trim | upper_first }}
+
+{% for commit in commits %}\
+- {{ commit.message | upper_first }}\
+    {%- if commit.breaking %} [**breaking**]{% endif %} \
+    ([{{ commit.id | truncate(length=7, end="") }}]({{ repo }}/commit/{{ commit.id }}))
+{% endfor %}\
 {% endfor %}
 """
 trim = true
@@ -41,19 +51,21 @@ topo_order = false
 sort_commits = "oldest"
 
 # Matches the types actually used in this repo's history (feat, fix, chore,
-# docs, refactor, test, style, ci) — grouped in changelog reading order.
+# docs, refactor, test, style, ci). The `<!-- n -->` prefixes are sort keys:
+# `group_by` orders alphabetically, which put CI above Features, and the
+# template's `striptags` removes them again before printing.
 # `chore(release): ...` commits are the release-bump commits themselves;
 # skipped so a release entry never lists its own bump.
 commit_parsers = [
-  { message = "^feat", group = "Features" },
-  { message = "^fix", group = "Fixes" },
-  { message = "^refactor", group = "Refactor" },
-  { message = "^perf", group = "Performance" },
-  { message = "^docs", group = "Documentation" },
-  { message = "^test", group = "Tests" },
-  { message = "^style", group = "Style" },
-  { message = "^ci", group = "CI" },
+  { message = "^feat", group = "<!-- 0 -->Features" },
+  { message = "^fix", group = "<!-- 1 -->Fixes" },
+  { message = "^refactor", group = "<!-- 3 -->Refactor" },
+  { message = "^perf", group = "<!-- 2 -->Performance" },
+  { message = "^docs", group = "<!-- 4 -->Documentation" },
+  { message = "^test", group = "<!-- 5 -->Tests" },
+  { message = "^style", group = "<!-- 8 -->Style" },
+  { message = "^ci", group = "<!-- 6 -->CI" },
   { message = "^chore\\(release\\)", skip = true },
-  { message = "^chore", group = "Chore" },
-  { message = ".*", group = "Other" },
+  { message = "^chore", group = "<!-- 7 -->Chore" },
+  { message = ".*", group = "<!-- 9 -->Other" },
 ]

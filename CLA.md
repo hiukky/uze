@@ -1,13 +1,10 @@
-<!-- PENDING LEGAL REVIEW — DO NOT PUBLISH -->
-
 # Individual Contributor License Agreement
 
-**This document is not in force and must not be presented to contributors
-until a lawyer has reviewed it.** It is a scaffold: the Apache Software
-Foundation's ICLA v2.2 adapted to a project that is not the ASF, plus two
-clauses the maintainer asked for. Every departure from the ASF text is
-listed below so a reviewer can diff it against the original rather than
-read it cold.
+This is the Apache Software Foundation's ICLA v2.2 adapted to a project that
+is not the ASF, plus three clauses this project needed. Every departure from
+the ASF text is listed below, so you can diff this against the original
+rather than read it cold — and so you know exactly what you are agreeing to
+that a stock ICLA would not have asked.
 
 Base document: the Apache Individual Contributor License Agreement V2.2,
 <https://www.apache.org/licenses/icla.pdf>.

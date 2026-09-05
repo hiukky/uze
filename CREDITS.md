@@ -57,15 +57,16 @@ serves is under `web/public/` or comes from a package above.
 
 ## Rust dependencies
 
-The published binary statically links every crate below. The graph is the one
-the release build resolves — default features, no optional backend nobody
+The published binary statically links every crate below. uze's own crates are
+not among them — they are this project, not third-party material. The graph is
+the one the release build resolves — default features, no optional backend nobody
 enables — which is also what `cargo deny` audits (`deny.toml`). A crate
 offered under more than one licence is counted under the first one `about.toml`
 accepts, which is why the table sums to more than the number of crates.
 
 | Licence | Crates |
 | --- | --- |
-| Apache License 2.0 (`Apache-2.0`) | 187 |
+| Apache License 2.0 (`Apache-2.0`) | 179 |
 | MIT License (`MIT`) | 61 |
 | Unicode License v3 (`Unicode-3.0`) | 1 |
 | zlib License (`Zlib`) | 1 |
@@ -275,14 +276,6 @@ accepts, which is why the table sums to more than the number of crates.
 | `unit-prefix` | 0.5.2 | MIT |
 | `utf8parse` | 0.2.2 | Apache-2.0 OR MIT |
 | `uuid` | 1.25.0 | Apache-2.0 OR MIT |
-| `uze` | 0.0.0-alpha.0 | Apache-2.0 |
-| `uze-application` | 0.0.0-alpha.0 | Apache-2.0 |
-| `uze-core` | 0.0.0-alpha.0 | Apache-2.0 |
-| `uze-extensions` | 0.0.0-alpha.0 | Apache-2.0 |
-| `uze-git` | 0.0.0-alpha.0 | Apache-2.0 |
-| `uze-integrations` | 0.0.0-alpha.0 | Apache-2.0 |
-| `uze-terminal` | 0.0.0-alpha.0 | Apache-2.0 |
-| `uze-testkit` | 0.0.0-alpha.0 | Apache-2.0 |
 | `vte` | 0.15.0 | Apache-2.0 OR MIT |
 | `walkdir` | 2.5.0 | Unlicense OR MIT |
 | `wasi` | 0.11.1+wasi-snapshot-preview1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
