@@ -318,11 +318,11 @@ trait proven by conformance tests across all four harnesses, rather than
 split into per-capability traits (`PackageDelivery`, `SkillDelivery`, …) —
 that fragmentation has been considered and rejected absent a concrete
 implementation problem forcing it.
-<!-- uze:begin project:worktree-policy/a86231f79b1ebe71 -->
+<!-- uze:begin project:worktree-policy/2983a9794698389c -->
 ## Concurrent work isolation
 
 - Every agent UZE launches works in a checkout of its own under `.worktrees/<id>`, on branch `agent/<id>`. If your working directory is inside `.worktrees/`, you are already isolated: do not create another worktree, and do not switch branches.
-- Commit your work on your own branch, as you go. Never commit to, merge into, rebase, or reset the target branch: delivery is UZE's — UZE rebases your branch onto the target, runs the project's checks, and fast-forwards the target itself; commit on your branch and stop.
+- Commit your work on your own branch, as you go. Never commit to, merge into, rebase, or reset the target branch: delivery is UZE's — UZE publishes your branch and opens a pull request for it; commit on your branch and stop.
 - If UZE tells you a rebase is paused in your checkout, resolve the conflicts preserving the intent of your change, run `git rebase --continue`, run the project's checks, and end your turn.
 - Before spawning parallel subagents that write files, give each its own checkout so they cannot collide:
 
@@ -331,4 +331,4 @@ git worktree add -b agent/<topic> "$(git rev-parse --path-format=absolute --git-
 ```
 
 - The path above is resolved against the *primary* checkout on purpose — a path relative to your own would nest one worktree inside another.
-<!-- uze:end project:worktree-policy/a86231f79b1ebe71 -->
+<!-- uze:end project:worktree-policy/2983a9794698389c -->
