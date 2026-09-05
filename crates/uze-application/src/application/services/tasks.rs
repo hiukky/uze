@@ -583,6 +583,14 @@ impl Repository {
             Ok(Delivered::Published { branch, request }) => {
                 DeliveryOutcome::Published { branch, request }
             }
+            Ok(Delivered::AwaitingRequest {
+                branch: _,
+                instruction,
+            }) => DeliveryOutcome::AwaitingRequest(AgentNotice {
+                task: task.id.as_str().to_owned(),
+                checkout: landing::slot_path(&primary, task).unwrap_or_default(),
+                message: instruction,
+            }),
             Err(DeliveryFailure::Conflict {
                 files,
                 target_moved,
@@ -684,6 +692,9 @@ pub struct TaskView {
     /// Commits the branch has beyond its base — what a delivery would land.
     pub ahead: usize,
     pub published_as: Option<String>,
+    /// The request open on the forge for the published branch, once there
+    /// is one: what turns the delivery button from an errand into a sync.
+    pub published_request: Option<u32>,
     pub created_at_unix: u64,
 }
 
@@ -703,6 +714,7 @@ impl TaskView {
             completion,
             ahead: checkout::commits_ahead(primary, &task.base_commit, &task.branch),
             published_as: task.published_as.clone(),
+            published_request: task.published_request,
             created_at_unix: task.created_at_unix,
         }
     }
@@ -793,10 +805,17 @@ pub struct Evaluation {
 pub enum DeliveryOutcome {
     Handoff,
     Merged,
+    /// The branch was pushed and the forge already has this request
+    /// open for it: from here delivery is a sync, and Git alone.
     Published {
         branch: String,
-        request: Option<String>,
+        request: u32,
     },
+    /// The branch was pushed and has no request yet, so the owning agent
+    /// was handed the words to open one. Carries an [`AgentNotice`] like
+    /// the two failures do, because it reaches the agent the same way: a
+    /// submission into its pane.
+    AwaitingRequest(AgentNotice),
     /// Nothing was written; the reason names why.
     Refused(String),
     /// The target is untouched and the owning agent has been told what to do.

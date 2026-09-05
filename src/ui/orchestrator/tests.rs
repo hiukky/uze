@@ -168,6 +168,7 @@ mod workspace_tests {
             completion: CompletionBehavior::Merge,
             ahead,
             published_as: None,
+            published_request: None,
             created_at_unix: 1,
         }
     }
@@ -772,6 +773,31 @@ mod workspace_tests {
             ending(CompletionBehavior::Handoff).contains("⇧3 hand off"),
             "a completion that writes to nothing names no target: {}",
             ending(CompletionBehavior::Handoff)
+        );
+    }
+
+    /// `pr` is two actions over a task's life, and the button is how the
+    /// operator tells them apart: an errand while no request exists, a
+    /// sync onto a named one once it does.
+    #[test]
+    fn a_published_request_turns_the_delivery_button_into_a_sync() {
+        let mut model = agent_with_task(TaskStateView::Ready, 4);
+        for task in model.tasks.values_mut().flatten() {
+            task.completion = CompletionBehavior::Pr;
+        }
+        let (before, _) = tab_strip(&model);
+        let before = before.join("\n");
+        assert!(before.contains("⇧4 pr → main"), "{before}");
+
+        for task in model.tasks.values_mut().flatten() {
+            task.published_request = Some(11);
+        }
+        let (after, _) = tab_strip(&model);
+        let after = after.join("\n");
+        assert!(after.contains("⇧4 #11"), "{after}");
+        assert!(
+            !after.contains("pr → main"),
+            "a request that exists is not opened again: {after}"
         );
     }
 

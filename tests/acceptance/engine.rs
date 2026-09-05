@@ -685,8 +685,11 @@ fn a_server_restart_loses_no_task_and_a_dirty_orphan_is_parked() {
     );
 }
 
+/// `pr` end to end, with no forge CLI on `PATH` at all: UZE publishes and
+/// hands the request to the agent, the agent opens it, and the next
+/// delivery is a sync that names it.
 #[test]
-fn pr_publishes_against_a_fake_forge_without_pulling_the_local_target() {
+fn pr_publishes_then_hands_the_request_to_its_agent_and_syncs_it_after() {
     let mut engine = Engine::start("  completion: pr\n");
     let project = engine.project().to_path_buf();
     let origin = engine.env.root().join("origin.git");
@@ -706,41 +709,63 @@ fn pr_publishes_against_a_fake_forge_without_pulling_the_local_target() {
         &["remote", "add", "origin", origin.to_str().unwrap()],
     );
     engine.git(&project, &["push", "--quiet", "-u", "origin", "main"]);
-    let gh_log = engine.env.root().join("gh.log");
-    let gh = engine.env.fake_bin.join("gh");
-    fs::write(
-        &gh,
-        format!(
-            "#!/bin/sh\necho \"$@\" > '{}'\necho https://example.invalid/pull/1\n",
-            gh_log.display()
-        ),
-    )
-    .unwrap();
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
-    }
 
-    let (id, _) = engine.launch(&commit_script("feature.rs", "feature\\n"));
+    let (id, slot) = engine.launch(&commit_script("feature.rs", "feature\\n"));
     wait_for_states(&engine, &[&id], &TaskStateView::Ready);
     let local_target = engine.git(&project, &["rev-parse", "main"]);
+
     let report = engine
         .app()
         .workspace()
         .deliver_task(&project, &id)
         .unwrap();
-    let DeliveryOutcome::Published { branch, request } = &report.outcome else {
-        panic!("{report:?}");
+    let DeliveryOutcome::AwaitingRequest(notice) = &report.outcome else {
+        panic!("nothing has opened a request yet: {report:?}");
     };
-    assert_eq!(request.as_deref(), Some("https://example.invalid/pull/1"));
+    assert_eq!(notice.checkout, slot);
+    let branch = report.task.published_as.clone().unwrap();
     let remote = engine.git(&project, &["ls-remote", "--heads", "origin"]);
     assert!(remote.contains(&format!("refs/heads/{branch}")), "{remote}");
-    let invocation = fs::read_to_string(&gh_log).unwrap();
-    assert!(invocation.contains("--base main"), "{invocation}");
+    assert_eq!(report.task.published_request, None);
     assert_eq!(
         engine.git(&project, &["rev-parse", "main"]),
         local_target,
         "never pulled"
+    );
+
+    // The agent takes the message and opens the request; the forge
+    // publishes its head, which is all UZE reads to learn the number.
+    let name = slot.file_name().unwrap().to_string_lossy().into_owned();
+    let tip = engine.git(&project, &["rev-parse", &format!("agent/{id}")]);
+    fs::write(
+        engine.scripts.join(format!("{name}.request.sh")),
+        format!("git push --quiet origin {tip}:refs/pull/7/head\n"),
+    )
+    .unwrap();
+    let pane = engine.pane_in(&slot);
+    engine.tell(pane, &notice.message);
+    let opened = engine.scripts.join(format!("{name}.opened"));
+    wait_until("the agent opened the request", || opened.exists());
+
+    let report = engine
+        .app()
+        .workspace()
+        .deliver_task(&project, &id)
+        .unwrap();
+    assert_eq!(
+        report.outcome,
+        DeliveryOutcome::Published { branch, request: 7 },
+        "{report:?}"
+    );
+    assert_eq!(
+        report.task.published_request,
+        Some(7),
+        "the task carries it, so the button can name it without asking the remote again"
+    );
+    assert_eq!(
+        engine.git(&project, &["rev-parse", "main"]),
+        local_target,
+        "a sync still writes nothing local"
     );
 }
 

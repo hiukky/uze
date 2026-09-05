@@ -299,10 +299,12 @@ fn describe_delivery(report: &DeliveryReport) -> String {
     match &report.outcome {
         DeliveryOutcome::Handoff => format!("ready on {}", report.task.branch),
         DeliveryOutcome::Merged => format!("merged into {}", report.task.target),
-        DeliveryOutcome::Published { branch, request } => match request {
-            Some(url) => url.clone(),
-            None => format!("pushed as {branch}"),
-        },
+        DeliveryOutcome::Published { branch, request } => {
+            format!("#{request} synced from {branch}")
+        }
+        DeliveryOutcome::AwaitingRequest(_) => {
+            "published — its agent was asked to open the request".to_owned()
+        }
         DeliveryOutcome::Refused(reason) => format!("not delivered — {reason}"),
         DeliveryOutcome::ReturnedToAgent(_) => "returned to its agent to resolve".to_owned(),
     }

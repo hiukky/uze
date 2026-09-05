@@ -142,6 +142,11 @@ pub struct Task {
     /// The readable name the branch was published under, once it was.
     #[serde(default)]
     pub published_as: Option<String>,
+    /// The number of the request open on the forge for the published
+    /// branch, once one was found. Read off the remote like every other
+    /// readiness fact, never announced by the agent that opened it.
+    #[serde(default)]
+    pub published_request: Option<u32>,
     pub created_at_unix: u64,
 }
 
@@ -163,6 +168,7 @@ impl Task {
             state: TaskState::Running,
             pushed: false,
             published_as: None,
+            published_request: None,
             created_at_unix: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|elapsed| elapsed.as_secs())

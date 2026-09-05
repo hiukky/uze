@@ -1675,10 +1675,19 @@ fn deliver_button(task: &TaskView) -> Option<(String, Color, bool)> {
 /// two completions that touch something outside the branch name what they
 /// touch, and the one that does not says so instead of naming a target it
 /// will never write to.
+///
+/// `pr` says two different things over a task's life, because it *is* two
+/// different actions: an errand the first time — publish, and ask the
+/// agent to open the request — and a sync from then on, pushing new
+/// commits onto a request that already exists. Naming the request is how
+/// the button says which of the two it has become.
 fn delivery_ending(task: &TaskView) -> String {
     match task.completion {
         CompletionBehavior::Merge => format!("merge → {}", task.target),
-        CompletionBehavior::Pr => format!("pr → {}", task.target),
+        CompletionBehavior::Pr => match task.published_request {
+            Some(request) => format!("#{request}"),
+            None => format!("pr → {}", task.target),
+        },
         CompletionBehavior::Handoff => "hand off".to_owned(),
     }
 }

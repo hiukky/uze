@@ -1688,7 +1688,12 @@ impl Attach<'_> {
                     &report.task.label,
                     describe_delivery(report),
                 );
-                if let DeliveryOutcome::ReturnedToAgent(notice) = &report.outcome
+                // Two endings are the owning agent's to act on — a
+                // delivery that came back to it, and a published branch
+                // whose request is still unopened — and both reach it the
+                // same way: one submission into its pane.
+                if let DeliveryOutcome::ReturnedToAgent(notice)
+                | DeliveryOutcome::AwaitingRequest(notice) = &report.outcome
                     && let Some(pane) = self.model.pane_for_checkout(&notice.checkout)
                 {
                     let mut bytes = notice.message.clone().into_bytes();
