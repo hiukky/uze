@@ -131,8 +131,7 @@ impl Attach<'_> {
             _ if key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Char('I') => {
                 if let Some(cwd) = selected_pane_cwd(&self.model) {
                     spawn_delivery(self.home, cwd, None, self.answers.deliveries.clone());
-                    self.model
-                        .set_notice("delivering every ready task…".to_owned());
+                    self.model.set_busy_notice("delivering all".to_owned());
                 }
             }
             _ if key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Char('p') => {
@@ -1483,8 +1482,7 @@ impl Attach<'_> {
                 return;
             }
             self.model.placement_pending = true;
-            self.model
-                .set_notice(format!("{label}: preparing its checkout…"));
+            self.model.set_busy_notice(format!("{label}: preparing"));
             let occupied: Vec<PathBuf> = self.model.occupied_checkouts.iter().cloned().collect();
             spawn_agent_placement(
                 self.home,
@@ -1562,7 +1560,7 @@ impl Attach<'_> {
         // until this read it.
         let said = match &placement.isolation {
             uze_application::Isolation::Unisolated { reason } => {
-                Some(format!("no checkout of its own: {reason}"))
+                Some(format!("no checkout — {reason}"))
             }
             uze_application::Isolation::Slot { .. } => placement.warnings.first().cloned(),
         };
@@ -1595,10 +1593,8 @@ impl Attach<'_> {
         self.model.occupancy_pending = false;
         let OccupancyResolution { reconciliation } = resolution;
         if let Some(parked) = reconciliation.released.iter().find(|task| task.parked) {
-            self.model.set_notice(format!(
-                "{}: parked, its work is preserved (alt+p)",
-                parked.label
-            ));
+            self.model
+                .set_notice(format!("{}: parked (alt+p)", parked.label));
         }
         for cwd in reconciliation.changed {
             self.model
@@ -1702,7 +1698,7 @@ impl Attach<'_> {
                 }
             }
             if resolution.reports.is_empty() {
-                self.model.set_notice("nothing ready to deliver".to_owned());
+                self.model.set_notice("nothing ready".to_owned());
             }
             self.model
                 .schedule_evaluation(self.home, resolution.cwd, &self.answers.tasks);
@@ -1730,11 +1726,14 @@ impl Attach<'_> {
                     .schedule_evaluation(self.home, cwd, &self.answers.tasks);
             }
         }
+        // Work still in flight has no deadline: it is retired by the
+        // outcome that replaces it, never by a clock that would leave the
+        // operator watching nothing while it ran.
         if self
             .model
             .notice
             .as_ref()
-            .is_some_and(|notice| notice.since.elapsed() >= NOTICE_TTL)
+            .is_some_and(|notice| !notice.busy && notice.since.elapsed() >= NOTICE_TTL)
         {
             self.model.notice = None;
             self.model.dirty = true;
@@ -1769,7 +1768,11 @@ impl Attach<'_> {
         if self.model.expire_agent_activity(Instant::now()) {
             self.model.dirty = true;
         }
-        if workspace_has_active_agent_operation(&self.model, &self.identities) {
+        // The same clock drives the notice chip's spinner, so it has to
+        // turn for a busy notice even with every agent idle.
+        if workspace_has_active_agent_operation(&self.model, &self.identities)
+            || self.model.notice_is_busy()
+        {
             let now = Instant::now();
             if now >= self.next_tick {
                 self.spinner.inc(1);

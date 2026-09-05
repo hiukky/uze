@@ -173,13 +173,6 @@ pub(super) fn render(
     // `picker.anchor` (the "✦" button's own rect) rather than centered on
     // the whole frame — a dropdown hanging off the thing you clicked, not a
     // modal interrupting the screen.
-    // A notice about the tab already on screen said its piece next to the
-    // deliver button in the header (`render_tab_strip`) — this is only the
-    // fallback for a workspace-wide message, or one about a task that is
-    // not what the operator is currently looking at.
-    if let Some(text) = model.notice_for_footer() {
-        render_notice(frame, layout.pane, &text);
-    }
     if let Some(overlay) = &model.preserved {
         render_preserved(frame, frame.area(), model, overlay);
     }
@@ -1692,24 +1685,6 @@ fn delivery_ending(task: &TaskView) -> String {
     }
 }
 
-/// One line over the pane's bottom row — the fallback for a notice that
-/// cannot be pinned to the selected tab's own header (see
-/// `WorkspaceModel::notice_for_footer`): a workspace-wide message, or one
-/// about a task that is not what is currently on screen.
-fn render_notice(frame: &mut ratatui::Frame<'_>, pane: Rect, text: &str) {
-    if pane.height == 0 {
-        return;
-    }
-    let row = Rect::new(pane.x, pane.bottom().saturating_sub(1), pane.width, 1);
-    let mut spans = vec![Span::styled(
-        format!(" {text}"),
-        Style::default().fg(crate::ui::TEXT_BRIGHT),
-    )];
-    fill_row_bg(&mut spans, row.width, crate::ui::SURFACE_OVERLAY_BRIGHT);
-    frame.render_widget(Clear, row);
-    frame.render_widget(Paragraph::new(Line::from(spans)), row);
-}
-
 /// The preserved-work list: every task holding work that no live tab is in
 /// front of, with the keys that move it on. Discard asks twice.
 pub(super) fn render_preserved(
@@ -2063,6 +2038,12 @@ pub(super) fn render_tab_strip(
         );
     }
 
+    // The header's right end is two zones, and they are laid out in this
+    // order for a reason: the actions first, from the right edge, so that
+    // nothing the workspace *says* can move something the operator is
+    // about to *press*. A message then takes whatever is left of them,
+    // ending in a divider that keeps the two apart.
+    //
     // The status badge belongs to the active agent/shell tab's `cwd`, not
     // the workspace root. It is intentionally absent for a clean directory
     // or one outside Git; when it is present, it remains the entry point to
@@ -2088,43 +2069,13 @@ pub(super) fn render_tab_strip(
         hits.push((button_rect, WorkspaceHit::OpenAgentSupport(button_rect)));
         trailing_right = button_rect.x.saturating_sub(1);
     }
-    // What last happened to a delivery sits right where its trigger does:
-    // the tab already says whose agent this is, so nothing here repeats
-    // the label the footer needs when the task in question is off screen
-    // (see `WorkspaceModel::notice_for_tab`/`notice_for_footer`). A fresh
-    // notice takes this spot over the button itself — the outcome is more
-    // worth the operator's eye than a button an evaluation tick hasn't
-    // caught up to retiring yet — and gives it back once the notice ages
-    // out or a new one replaces it.
+    // One verb — deliver — whose ending is the project's completion, not a
+    // choice made here. Conditioned, not disabled: when the task cannot be
+    // delivered the button is absent, and the sidebar mark says why. What
+    // is happening to that task is said beside this button, never in place
+    // of it: a button that a message can take away is one the operator has
+    // to find again.
     if let Some(tab) = model.selected_tab()
-        && let Some(detail) = model.notice_for_tab(tab)
-    {
-        let mut chip = vec![
-            Span::raw(" "),
-            Span::styled(
-                detail.to_owned(),
-                Style::default()
-                    .fg(crate::ui::TEXT_BRIGHT)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" "),
-        ];
-        let chip_width = chip.iter().map(Span::width).sum::<usize>() as u16;
-        fill_row_bg(&mut chip, chip_width, crate::ui::SURFACE_OVERLAY_BRIGHT);
-        let chip_rect = Rect::new(
-            trailing_right.saturating_sub(chip_width),
-            inner.y,
-            chip_width,
-            1,
-        );
-        frame.render_widget(Paragraph::new(Line::from(chip)), chip_rect);
-        trailing_right = chip_rect.x.saturating_sub(1);
-    }
-    // Otherwise, one verb — deliver — whose ending is the project's
-    // completion, not a choice made here. Conditioned, not disabled: when
-    // the task cannot be delivered the button is absent, and the sidebar
-    // mark says why.
-    else if let Some(tab) = model.selected_tab()
         && let Some(task) = model.tab_task(tab)
         && let Some((text, hue, clickable)) = deliver_button(task)
     {
@@ -2169,7 +2120,58 @@ pub(super) fn render_tab_strip(
         );
         frame.render_widget(Paragraph::new(Line::from(badge)), badge_rect);
         hits.push((badge_rect, WorkspaceHit::OpenGitView));
+        trailing_right = badge_rect.x.saturating_sub(1);
     }
+    render_notice_chip(frame, model, inner, trailing_right);
+}
+
+/// Everything the workspace has to say, in the one place it says it: the
+/// header's own row, left of the actions and divided from them, where the
+/// operator's eye already is. Nothing here is clickable and nothing here
+/// moves a button — the actions were laid out before this was, and this
+/// only takes the room they left.
+fn render_notice_chip(
+    frame: &mut ratatui::Frame<'_>,
+    model: &WorkspaceModel,
+    inner: Rect,
+    actions_left: u16,
+) {
+    let Some(chip) = model.notice_chip() else {
+        return;
+    };
+    let spans = vec![
+        Span::raw(" "),
+        // Work still running says so by moving, which is what buys the
+        // words the right to be two: "delivering", not "delivering every
+        // ready task…".
+        Span::styled(
+            match chip.busy {
+                true => format!("{} ", agent_activity_frame(model.tick)),
+                false => String::new(),
+            },
+            Style::default().fg(crate::ui::ACCENT),
+        ),
+        Span::styled(
+            chip.text,
+            Style::default()
+                .fg(crate::ui::TEXT_BRIGHT)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+        // The zone divider, in the same hue and on the same plain backdrop
+        // as the "/" that separates the tabs from the strip's own buttons.
+        // No filled chip behind any of this: a message is not a control,
+        // and the raised surface is what made it read as one.
+        Span::styled("│", Style::default().fg(crate::ui::MUTED)),
+    ];
+    // Never past the strip's left edge: what does not fit is this
+    // message's own tail, clipped by its rect, not the tabs beside it.
+    let Some(room) = actions_left.checked_sub(inner.x).filter(|room| *room > 0) else {
+        return;
+    };
+    let width = (spans.iter().map(Span::width).sum::<usize>() as u16).min(room);
+    let rect = Rect::new(actions_left.saturating_sub(width), inner.y, width, 1);
+    frame.render_widget(Paragraph::new(Line::from(spans)), rect);
 }
 
 pub(super) fn render_pane(frame: &mut ratatui::Frame<'_>, area: Rect, model: &WorkspaceModel) {

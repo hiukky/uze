@@ -12,12 +12,13 @@ mod workspace_tests {
         AGENT_BUSY_REPAINTS, AGENT_ECHO_GRACE, AGENT_PASTE_GRACE, AgentIdentity, AgentTabStatus,
         Attach, AttachAnswers, AttachInbox, CommitDetailPopup, CommitDetailResolution,
         CompletionBehavior, DeliveryResolution, DraggingTab, ExtensionHit, GitAnswer, GitBadge,
-        GitResolution, GitViewResolution, OccupancyResolution, PendingDrop, PlacementResolution,
-        PreservedOverlay, RootPicker, ScrollDirection, SupportResolution, TabDragGroup,
-        TaskResolution, TaskStateView, TaskView, UpstreamSync, Viewport, WorkspaceModel,
-        adopt_agent_labels, agent_identity_for_tab, blank_pane, can_close_tab_from_menu,
-        checkout_lost, encode_mouse, evaluation_key, forward_paste, forward_scroll,
-        next_agent_label, next_shell_label, open_commit_detail, pane_relative, pending_tab_drop,
+        GitResolution, GitViewResolution, NOTICE_TTL, OccupancyResolution, PendingDrop,
+        PlacementResolution, PreservedOverlay, RootPicker, ScrollDirection, SupportResolution,
+        TabDragGroup, TaskResolution, TaskStateView, TaskView, UpstreamSync, Viewport,
+        WorkspaceModel, adopt_agent_labels, agent_activity_frame, agent_identity_for_tab,
+        blank_pane, can_close_tab_from_menu, checkout_lost, encode_mouse, evaluation_key,
+        forward_paste, forward_scroll, next_agent_label, next_shell_label, open_commit_detail,
+        pane_relative, pending_tab_drop,
         render::{
             self, FrameMetrics, WorkspaceLayout, compute_layout, render_commit_detail,
             render_preserved, render_sidebar, render_status_catalog, render_tab_strip, task_mark,
@@ -386,6 +387,32 @@ mod workspace_tests {
             .unwrap();
         model.hits = hits;
         compute_layout(area, model.sidebar_width)
+    }
+
+    /// The whole frame as text, row by row — for asserting not just that
+    /// something was drawn, but where.
+    fn frame_rows(model: &mut WorkspaceModel) -> Vec<String> {
+        let area = Rect::new(0, 0, 80, 24);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|frame| {
+                render::render(
+                    frame,
+                    model,
+                    &IDENTITIES,
+                    &mut Vec::new(),
+                    &mut render::FrameMetrics::default(),
+                )
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..buffer.area.height)
+            .map(|row| {
+                (0..buffer.area.width)
+                    .map(|column| buffer[(column, row)].symbol())
+                    .collect()
+            })
+            .collect()
     }
 
     /// A hit's rect alone says which drag group it belongs to: a sidebar
@@ -1366,6 +1393,144 @@ mod workspace_tests {
             !text.contains("running"),
             "a state that draws no mark has no row in a legend of marks: {text}"
         );
+    }
+
+    /// Every message the workspace makes is drawn beside the header's own
+    /// controls, and nowhere else. A line pinned over the bottom of the
+    /// pane was a second place to look for something that is usually two
+    /// words, and it sat on top of the agent's own output while it did.
+    #[test]
+    fn a_notice_is_drawn_beside_the_controls_and_never_over_the_pane() {
+        let mut model = agent_with_task(TaskStateView::Ready, 3);
+        model.set_notice("nothing ready".to_owned());
+        let rows = frame_rows(&mut model);
+        let layout = compute_layout(Rect::new(0, 0, 80, 24), model.sidebar_width);
+        assert!(
+            rows[layout.tab_strip.y as usize].contains("nothing ready"),
+            "{:?}",
+            rows[layout.tab_strip.y as usize]
+        );
+        assert!(
+            !rows[layout.pane.bottom() as usize - 1].contains("nothing ready"),
+            "{:?}",
+            rows[layout.pane.bottom() as usize - 1]
+        );
+    }
+
+    /// A notice about the selected tab's own task needs no label — the tab
+    /// already says whose agent this is — and stands left of the actions
+    /// behind the zone divider, not in place of any of them.
+    #[test]
+    fn a_notice_about_the_task_on_screen_needs_no_label() {
+        let mut model = agent_with_task(TaskStateView::Ready, 3);
+        model.set_task_notice("t1", "fix-auth-redirect", "merged → main".to_owned());
+        let (rows, hits) = tab_strip(&model);
+        assert!(rows[0].contains("merged → main │"), "{rows:?}");
+        assert!(!rows[0].contains("fix-auth-redirect"), "{rows:?}");
+        assert!(
+            hits.iter()
+                .any(|(_, hit)| matches!(hit, WorkspaceHit::Deliver(_))),
+            "its own button is still there to press"
+        );
+    }
+
+    /// The header is two zones, and the message is never allowed into the
+    /// other one: whatever the workspace has to say, every action keeps
+    /// the exact rect it had — including one about the very task the
+    /// message is about, which is the case that used to take the button
+    /// away mid-click.
+    #[test]
+    fn a_message_never_moves_an_action() {
+        let mut model = agent_with_task(TaskStateView::Ready, 3);
+        model.git_badge = Some(GitBadge {
+            cwd: PathBuf::from("/repo/.worktrees/ai"),
+            summary: Some(uze_extensions::git::GitChangeSummary {
+                additions: 12,
+                deletions: 3,
+            }),
+            timeline: None,
+            timeline_checked_at: Instant::now(),
+            checked_at: Instant::now(),
+        });
+        let (_, quiet) = tab_strip(&model);
+
+        model.set_busy_task_notice("t1", "fix-auth-redirect", "delivering".to_owned());
+        let (rows, speaking) = tab_strip(&model);
+
+        assert!(rows[0].contains("delivering │"), "{rows:?}");
+        assert_eq!(
+            quiet.len(),
+            speaking.len(),
+            "the same actions are offered either way"
+        );
+        for (quiet, speaking) in quiet.iter().zip(&speaking) {
+            assert_eq!(
+                (quiet.0, format!("{:?}", quiet.1)),
+                (speaking.0, format!("{:?}", speaking.1)),
+                "an action moved under the message"
+            );
+        }
+    }
+
+    /// One about a task that is *not* on screen carries the label, and
+    /// leaves the selected task's own button alone: it is not about it.
+    #[test]
+    fn a_notice_about_another_task_carries_its_label_and_keeps_the_button() {
+        let mut model = agent_with_task(TaskStateView::Ready, 3);
+        model.set_task_notice("t2", "other", "back to its agent".to_owned());
+        let (rows, hits) = tab_strip(&model);
+        assert!(rows[0].contains("other: back to its agent"), "{rows:?}");
+        assert!(rows[0].contains('⇧'), "{rows:?}");
+        assert!(
+            hits.iter()
+                .any(|(_, hit)| matches!(hit, WorkspaceHit::Deliver(_)))
+        );
+    }
+
+    /// Work still running says so by moving: a spinner rides in front of
+    /// it, which is what buys the message the right to be two words.
+    #[test]
+    fn running_work_carries_a_spinner() {
+        let mut model = agent_with_task(TaskStateView::Ready, 3);
+        model.set_busy_task_notice("t1", "fix-auth-redirect", "delivering".to_owned());
+        model.tick = 3;
+        let (rows, _) = tab_strip(&model);
+        assert!(
+            rows[0].contains(&format!("{} delivering", agent_activity_frame(3))),
+            "{rows:?}"
+        );
+        model.set_task_notice("t1", "fix-auth-redirect", "merged → main".to_owned());
+        let (settled, _) = tab_strip(&model);
+        assert!(
+            !settled[0].contains(agent_activity_frame(3)),
+            "an ending does not spin: {settled:?}"
+        );
+    }
+
+    /// A message about work in flight outlives the notice clock — the
+    /// alternative is silence while the thing it announced is still
+    /// running — and is retired by the outcome that replaces it.
+    #[test]
+    fn a_running_notice_outlives_the_deadline_a_finished_one_keeps() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-notice-ttl"));
+        let mut driven = driven(agent_with_task(TaskStateView::Ready, 3), &home);
+        let aged = Instant::now() - NOTICE_TTL - Duration::from_secs(1);
+
+        driven
+            .attach
+            .model
+            .set_busy_notice("delivering all".to_owned());
+        driven.attach.model.notice.as_mut().unwrap().since = aged;
+        driven.pump();
+        assert!(
+            driven.attach.model.notice.is_some(),
+            "work still in flight is not swept"
+        );
+
+        driven.attach.model.set_notice("nothing ready".to_owned());
+        driven.attach.model.notice.as_mut().unwrap().since = aged;
+        driven.pump();
+        assert!(driven.attach.model.notice.is_none(), "an ending ages out");
     }
 
     #[test]

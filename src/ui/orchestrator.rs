@@ -176,8 +176,14 @@ fn spawn_support_refresh(home: &UzeHome, key: SupportKey, sender: mpsc::Sender<S
 /// pane went quiet — a task delivered from another client, a branch
 /// integrated by hand, a checkout removed.
 const TASK_REFRESH: Duration = Duration::from_secs(20);
-/// How long a one-line notice stays on screen.
+/// How long a finished notice stays on screen. A notice that is still
+/// running has no deadline — it is retired by its own outcome, not by a
+/// clock (see [`Notice::busy`]).
 const NOTICE_TTL: Duration = Duration::from_secs(6);
+/// The widest a notice may draw in the header. Past this it is elided:
+/// the chip shares one row with the tabs, and a message that pushes them
+/// off the strip costs more than it says.
+const NOTICE_WIDTH: usize = 34;
 
 /// What a background evaluation answered.
 struct TaskResolution {
@@ -292,21 +298,18 @@ fn spawn_delivery(
     });
 }
 
-/// The one line a delivery leaves on screen — no label of its own: whoever
-/// shows it decides whether the task it is about still needs naming (see
-/// `WorkspaceModel::notice_for_tab`/`notice_for_footer`).
+/// What a delivery leaves on screen: the ending, in as few words as name
+/// it. No label of its own — whoever shows it decides whether the task it
+/// is about still needs naming (see `WorkspaceModel::notice_chip`) — and
+/// no restatement of what the pane it came from already says at length.
 fn describe_delivery(report: &DeliveryReport) -> String {
     match &report.outcome {
         DeliveryOutcome::Handoff => format!("ready on {}", report.task.branch),
-        DeliveryOutcome::Merged => format!("merged into {}", report.task.target),
-        DeliveryOutcome::Published { branch, request } => {
-            format!("#{request} synced from {branch}")
-        }
-        DeliveryOutcome::AwaitingRequest(_) => {
-            "published — its agent was asked to open the request".to_owned()
-        }
-        DeliveryOutcome::Refused(reason) => format!("not delivered — {reason}"),
-        DeliveryOutcome::ReturnedToAgent(_) => "returned to its agent to resolve".to_owned(),
+        DeliveryOutcome::Merged => format!("merged → {}", report.task.target),
+        DeliveryOutcome::Published { request, .. } => format!("synced → #{request}"),
+        DeliveryOutcome::AwaitingRequest(_) => "pushed · agent opening pr".to_owned(),
+        DeliveryOutcome::Refused(reason) => reason.clone(),
+        DeliveryOutcome::ReturnedToAgent(_) => "back to its agent".to_owned(),
     }
 }
 
@@ -1215,23 +1218,38 @@ fn selected_agent_context(
     Some((integration.to_owned(), cwd))
 }
 
-/// A one-line message on screen, and — for one about a single task —
-/// enough to tell whether that task is the one currently in front of the
+/// A short message on screen, and — for one about a single task — enough
+/// to tell whether that task is the one currently in front of the
 /// operator.
 struct Notice {
     text: String,
     since: Instant,
     owner: Option<NoticeOwner>,
+    /// Whether the thing this is about is still happening. A running
+    /// notice draws a spinner and outlives [`NOTICE_TTL`], because the
+    /// message it would age out into is silence about work still in
+    /// flight; the outcome replaces it when there is one.
+    busy: bool,
 }
 
 /// The task a [`Notice`] is about: its id, for matching the selected tab's
-/// own task (`WorkspaceModel::notice_for_tab`), and its label, for the
-/// footer's fallback when that task is not what is on screen
-/// (`WorkspaceModel::notice_for_footer`) — the header never needs it, since
-/// the tab it lands next to already says whose agent this is.
+/// own task, and its label, for when that task is not what is on screen —
+/// the tab the chip lands next to already says whose agent this is, so the
+/// label is only worth its columns when the message is about somebody else
+/// (`WorkspaceModel::notice_chip`).
 struct NoticeOwner {
     task: String,
     label: String,
+}
+
+/// The active notice as the header draws it, in the message zone left of
+/// the actions — text and whether it is still running, and nothing about
+/// placement: what the workspace says never decides where a button sits.
+pub(super) struct NoticeChip {
+    /// Already elided to [`NOTICE_WIDTH`], and already carrying the label
+    /// of the task it is about when that is not the task on screen.
+    pub(super) text: String,
+    pub(super) busy: bool,
 }
 
 /// One background read's answer channel, kept as a pair so the two ends
@@ -2351,55 +2369,66 @@ impl WorkspaceModel {
     }
 
     fn set_notice(&mut self, text: String) {
-        self.notice = Some(Notice {
-            text,
-            since: Instant::now(),
-            owner: None,
-        });
-        self.dirty = true;
+        self.note(text, None, false);
     }
 
-    /// Same as `set_notice`, but attributed to one task: shown next to
-    /// that task's own tab in the header, label-free, when that tab is the
-    /// one currently in front of the operator — the footer only takes it,
-    /// labeled, when the task the message is about is not what is on
-    /// screen.
+    /// A notice for work that has started and not finished: it keeps a
+    /// spinner and stays until its own outcome replaces it.
+    fn set_busy_notice(&mut self, text: String) {
+        self.note(text, None, true);
+    }
+
+    /// Same as `set_notice`, but attributed to one task: shown label-free
+    /// when that task's tab is the one in front of the operator, since the
+    /// tab already says whose agent this is, and labeled when it is not.
     fn set_task_notice(&mut self, task: &str, label: &str, text: String) {
+        self.note(text, Some((task, label)), false);
+    }
+
+    /// [`Self::set_task_notice`] for work still in flight.
+    fn set_busy_task_notice(&mut self, task: &str, label: &str, text: String) {
+        self.note(text, Some((task, label)), true);
+    }
+
+    fn note(&mut self, text: String, owner: Option<(&str, &str)>, busy: bool) {
         self.notice = Some(Notice {
             text,
             since: Instant::now(),
-            owner: Some(NoticeOwner {
+            owner: owner.map(|(task, label)| NoticeOwner {
                 task: task.to_owned(),
                 label: label.to_owned(),
             }),
+            busy,
         });
         self.dirty = true;
     }
 
-    /// The active notice's text, when it is about `tab`'s own task — what
-    /// the header shows next to that task's deliver button, since the tab
-    /// is already what says whose agent this is.
-    pub(super) fn notice_for_tab(&self, tab: TabId) -> Option<&str> {
-        let notice = self.notice.as_ref()?;
-        let owner = notice.owner.as_ref()?;
-        let selected = self.tab_task(tab)?;
-        (selected.id == owner.task).then_some(notice.text.as_str())
+    /// Whether something the workspace is showing a notice for is still
+    /// running — what keeps the spinner's clock turning (see
+    /// `workspace_has_active_agent_operation`).
+    fn notice_is_busy(&self) -> bool {
+        self.notice.as_ref().is_some_and(|notice| notice.busy)
     }
 
-    /// The active notice as the footer shows it: nothing, when it already
-    /// surfaced in the header next to the selected tab's own task; the
-    /// bare text for a workspace-wide message; `"label: text"` for one
-    /// about a task that is not what is currently on screen.
-    pub(super) fn notice_for_footer(&self) -> Option<String> {
+    /// The active notice as the header's message zone draws it, or nothing
+    /// when there is none. One surface: a message about the task on
+    /// screen, one about a task that is not, and a workspace-wide one all
+    /// land here, the middle one carrying the label that names it.
+    pub(super) fn notice_chip(&self) -> Option<NoticeChip> {
         let notice = self.notice.as_ref()?;
-        let Some(owner) = &notice.owner else {
-            return Some(notice.text.clone());
+        let about_selected_task = notice.owner.as_ref().is_some_and(|owner| {
+            self.selected_tab()
+                .and_then(|tab| self.tab_task(tab))
+                .is_some_and(|selected| selected.id == owner.task)
+        });
+        let text = match &notice.owner {
+            Some(owner) if !about_selected_task => format!("{}: {}", owner.label, notice.text),
+            _ => notice.text.clone(),
         };
-        let shown_in_header = self
-            .selected_tab()
-            .and_then(|tab| self.tab_task(tab))
-            .is_some_and(|selected| selected.id == owner.task);
-        (!shown_in_header).then(|| format!("{}: {}", owner.label, notice.text))
+        Some(NoticeChip {
+            text: crate::ui::elide_tail(&text, NOTICE_WIDTH),
+            busy: notice.busy,
+        })
     }
 
     fn agent_tab_status(&self, pane: PaneId, selected: bool) -> AgentTabStatus {
@@ -3041,11 +3070,11 @@ fn deliver_selected_tab(
         return;
     };
     let Some(task) = model.tab_task(tab).cloned() else {
-        model.set_notice("this tab has no task to deliver".to_owned());
+        model.set_notice("no task on this tab".to_owned());
         return;
     };
     if let Some(reason) = task.state.undeliverable_reason() {
-        model.set_notice(format!("{}: {reason}", task.label));
+        model.set_task_notice(&task.id, &task.label, reason.to_owned());
         return;
     }
     if !model.delivery_pending.insert(task.id.clone()) {
@@ -3054,7 +3083,7 @@ fn deliver_selected_tab(
     let Some(cwd) = tab_cwd(model, tab) else {
         return;
     };
-    model.set_notice(format!("{}: delivering…", task.label));
+    model.set_busy_task_notice(&task.id, &task.label, "delivering".to_owned());
     spawn_delivery(home, cwd, Some(task.id), sender.clone());
 }
 

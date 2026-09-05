@@ -749,16 +749,20 @@ impl TaskStateView {
     /// "not yet" and "already done" are the same refusal to a caller that
     /// only sees a boolean, and a second surface asking the same question
     /// would otherwise write its own second version of these words.
+    ///
+    /// A few words each: these are read in the header's own row, beside
+    /// the button that was just pressed, where the state's mark and the
+    /// tab already carry everything the sentence would repeat.
     pub fn undeliverable_reason(&self) -> Option<&'static str> {
         match self {
             Self::Ready | Self::GateFailed => None,
-            Self::Running => Some("nothing committed yet"),
-            Self::Uncommitted => Some("uncommitted changes in its checkout"),
-            Self::Conflicted { .. } => Some("a rebase is paused; the agent is on it"),
-            Self::Integrating => Some("already being delivered"),
+            Self::Running => Some("nothing committed"),
+            Self::Uncommitted => Some("uncommitted changes"),
+            Self::Conflicted { .. } => Some("rebase paused"),
+            Self::Integrating => Some("already delivering"),
             Self::Integrated => Some("already delivered"),
-            Self::Closed => Some("its branch holds nothing"),
-            Self::Parked => Some("parked; resume it before delivering"),
+            Self::Closed => Some("branch holds nothing"),
+            Self::Parked => Some("parked — resume it first"),
         }
     }
 
