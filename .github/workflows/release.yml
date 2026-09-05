@@ -8,11 +8,14 @@ name: Release
 # `chore(release): v<version>` pull request on a branch. Nothing is tagged and
 # nothing reaches `main` until you merge it.
 #
-# Merging is what publishes. The push to `main` is read for a version with no
-# tag behind it; when there is one, this workflow tags that commit, builds the
-# four Linux artifacts on native runners, generates the SBOM, signs the
+# Merging is what publishes. Every push to `main` asks whether the version in
+# the tree has a release yet; when it does not, this workflow tags the commit
+# if needed, builds
+# the four Linux artifacts on native runners, generates the SBOM, signs the
 # provenance, and creates the GitHub Release with the tarballs and
-# SHASUMS256.txt that install.sh consumes.
+# SHASUMS256.txt that install.sh consumes. Asking about the release rather
+# than the tag is what lets a publish that failed halfway be finished by the
+# commit that fixes it.
 #
 # It used to push the release commit straight to `main`, which a branch
 # ruleset refuses — correctly. See docs/versioning.md for the full flow.
@@ -32,9 +35,12 @@ on:
           - major
   push:
     branches: [main]
-    # The bump touches it. Any other change to it reaches the version check
-    # below, finds the tag already there, and stops.
-    paths: ["Cargo.toml"]
+    # No path filter. The check below is a checkout and one API call, and it
+    # answers "is this version released yet" — so every push is allowed to
+    # ask. A filter on `Cargo.toml` looked cheaper and had a failure mode
+    # that cost a release: the fix for a broken publish does not touch
+    # `Cargo.toml`, so merging it would not have retried the publish it
+    # fixed.
 
 permissions:
   contents: write
@@ -129,12 +135,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
-      # `Cargo.toml` changes for many reasons; a release is the one where the
-      # version it carries has no tag behind it yet. Reading the tree rather
-      # than the commit message means a bump that arrived some other way is
-      # still released, and a dependency bump is not.
-      - name: Is this a version with no tag?
+      # `Cargo.toml` changes for many reasons; a release is the one whose
+      # version has no *published release* behind it. Asking about the
+      # release rather than the tag is what lets a half-finished attempt
+      # finish: the first one tagged `v0.0.0-alpha.1` and then failed to
+      # build two of its four targets, which under a tag-only check would
+      # have left that version unpublishable forever.
+      - name: Is this a version with no release?
         id: detect
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           version="$(sed -n 's/^version = "\([^"]*\)"$/\1/p' Cargo.toml | head -n 1)"
@@ -142,20 +152,27 @@ jobs:
           tag="v${version}"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
-            echo "${tag} already exists — nothing to release"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "${tag} is already released — nothing to do"
             echo "release=false" >> "$GITHUB_OUTPUT"
           else
             echo "release=true" >> "$GITHUB_OUTPUT"
           fi
+      # Only when it is missing: a tag that already points at this commit is
+      # the earlier attempt's, and moving it would change what a `v*` means.
       - name: Create the tag
         if: steps.detect.outputs.release == 'true'
         run: |
           set -euo pipefail
+          tag="${{ steps.detect.outputs.tag }}"
+          if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+            echo "${tag} already exists — reusing it"
+            exit 0
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "${{ steps.detect.outputs.tag }}" -m "uze ${{ steps.detect.outputs.version }}"
-          git push origin "${{ steps.detect.outputs.tag }}"
+          git tag -a "$tag" -m "uze ${{ steps.detect.outputs.version }}"
+          git push origin "$tag"
 
   package:
     name: Package ${{ matrix.target }}
@@ -186,6 +203,20 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: release-${{ matrix.target }}
+      # syntect pulls `onig_sys`, which compiles Oniguruma from C, so a musl
+      # target needs a musl C toolchain — the gnu ones use the runner's own
+      # gcc and were the two that passed. cc-rs looks for
+      # `<target>-linux-musl-gcc`, a name musl-tools does not install, so
+      # point it at the one that exists. Each musl target builds on a runner
+      # of its own architecture, which is why plain `musl-gcc` is right for
+      # both.
+      - name: Install the musl C toolchain
+        if: endsWith(matrix.target, '-musl')
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq musl-tools
+          echo "CC_$(echo '${{ matrix.target }}' | tr '-' '_')=musl-gcc" >> "$GITHUB_ENV"
       - run: cargo build --locked --release --bin uze --target ${{ matrix.target }}
       # Apache-2.0 4(a) and 4(d): whoever receives the binary has to receive
       # the licence and the NOTICE with it. Staging them beside the binary is
