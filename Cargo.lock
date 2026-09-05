@@ -2468,6 +2468,7 @@ dependencies = [
  "uze-integrations",
  "uze-terminal",
  "uze-testkit",
+ "uze-theme",
 ]
 
 [[package]]
@@ -2542,6 +2543,16 @@ version = "0.0.0-alpha.1"
 dependencies = [
  "serde_json",
  "uze-git",
+]
+
+[[package]]
+name = "uze-theme"
+version = "0.0.0-alpha.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "unicode-width",
 ]
 
 [[package]]
