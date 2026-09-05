@@ -1181,9 +1181,26 @@ impl Attach<'_> {
                         .iter()
                         .any(|space| space.selected_tab == tab)
                 });
+                // Walking into an agent from the sidebar resumes it where
+                // it was left: the shell opened beside it, if that is
+                // where the user was working, rather than the agent's own
+                // tab every time. Only when travelling — clicking the
+                // agent already in context is a deliberate move back to
+                // the agent itself, and the strip is right there for
+                // anything else.
+                let selected = if hit_rect.x < layout.sidebar.right()
+                    && !self.model.is_context_agent(tab, &self.identities)
+                {
+                    self.model.strip_tab_for(tab)
+                } else {
+                    tab
+                };
                 self.model.acknowledge_completed_agent_tab(tab);
-                let _ = send_request(&mut self.stream, &ClientRequest::SelectTab { tab });
-                if let Some(pane) = self.model.pane_for_tab(tab) {
+                let _ = send_request(
+                    &mut self.stream,
+                    &ClientRequest::SelectTab { tab: selected },
+                );
+                if let Some(pane) = self.model.pane_for_tab(selected) {
                     resize_pane(&mut self.stream, &mut self.model, pane, columns, rows);
                 }
                 if already_selected

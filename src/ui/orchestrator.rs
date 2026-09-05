@@ -1292,6 +1292,7 @@ struct Remembered {
     slots_swept: bool,
     roots_shown: BTreeSet<SpaceId>,
     timeline_collapsed: bool,
+    strip_selection: BTreeMap<TabId, TabId>,
     timeline_rows: Option<u16>,
 }
 
@@ -1323,6 +1324,7 @@ impl WorkspaceModel {
             roots_shown,
             timeline_collapsed,
             timeline_rows,
+            strip_selection,
         } = remembered;
         Self {
             agent_activity,
@@ -1349,6 +1351,7 @@ impl WorkspaceModel {
             roots_shown,
             timeline_collapsed,
             timeline_rows,
+            strip_selection,
             ..Self::default()
         }
     }
@@ -1380,6 +1383,7 @@ impl WorkspaceModel {
             roots_shown: self.roots_shown,
             timeline_collapsed: self.timeline_collapsed,
             timeline_rows: self.timeline_rows,
+            strip_selection: self.strip_selection,
         }
     }
 }
@@ -1565,6 +1569,16 @@ struct WorkspaceModel {
     /// `ViewHit::ToggleSection`). Remembered across attaches for
     /// the same reason `roots_shown` is.
     timeline_collapsed: bool,
+    /// Which tab each agent was last left on: the agent's own tab, or one
+    /// of the shells opened beside it in its strip.
+    ///
+    /// A space holds one `selected_tab`, so walking from agent A to agent
+    /// B and back used to land on A's own tab — the shell the user had
+    /// been working in beside it was forgotten the moment they looked at
+    /// something else. This is what puts them back where they were.
+    /// Rebuilt from every session update rather than maintained by hand,
+    /// so an agent that closes takes its entry with it.
+    strip_selection: BTreeMap<TabId, TabId>,
     /// How many commit rows the user dragged the timeline section to;
     /// `None` leaves it to `render::timeline_height`'s own default.
     /// Mirrors `sidebar_width`/`dragging_sidebar`, remembered across
@@ -1693,15 +1707,18 @@ impl WorkspaceModel {
         match event {
             ClientEvent::Attached { session } => {
                 self.session = Some(session);
+                self.note_strip_selection(identities);
                 self.occupancy_stale = true;
             }
             ClientEvent::Snapshot { session, panes } => {
                 self.session = Some(session);
                 self.panes = panes.into_iter().map(|pane| (pane.pane, pane)).collect();
+                self.note_strip_selection(identities);
                 self.occupancy_stale = true;
             }
             ClientEvent::SessionUpdated { session } => {
                 self.session = Some(session);
+                self.note_strip_selection(identities);
                 self.prune_dragging_tab();
                 self.occupancy_stale = true;
             }
@@ -1750,6 +1767,76 @@ impl WorkspaceModel {
         if !still_exists {
             self.dragging_tab = None;
         }
+    }
+
+    /// Records, for every open space, which tab its context agent is
+    /// currently on — the agent's own tab, or a shell opened beside it.
+    ///
+    /// Rebuilt wholesale from the session rather than updated at the point
+    /// of each selection: selection also moves for reasons this client
+    /// never sees a click for (a tab opening, a tab closing, another
+    /// client attached to the same session), and a map maintained by hand
+    /// would quietly drift from all three. Agents that no longer exist are
+    /// dropped in the same pass.
+    fn note_strip_selection(&mut self, identities: &[AgentIdentity]) {
+        let Some(session) = self.session.as_ref() else {
+            return;
+        };
+        let mut live = BTreeMap::new();
+        for space in &session.workspace.spaces {
+            if let Some(agent) = space_context_agent(space, identities) {
+                live.insert(agent, space.selected_tab);
+            }
+        }
+        // A space the user is not looking at keeps whatever it had: only
+        // the spaces this update actually described are re-stated, and an
+        // agent that has gone is one no space names any more.
+        let known: BTreeSet<TabId> = session
+            .workspace
+            .spaces
+            .iter()
+            .flat_map(|space| space.tabs.iter().map(|tab| tab.id))
+            .collect();
+        self.strip_selection
+            .retain(|agent, _| known.contains(agent));
+        self.strip_selection.extend(live);
+    }
+
+    /// Whether `tab` is the agent its own space is currently in context of
+    /// — true while the user is inside that agent, including from one of
+    /// the shells opened beside it.
+    fn is_context_agent(&self, tab: TabId, identities: &[AgentIdentity]) -> bool {
+        self.session.as_ref().is_some_and(|session| {
+            session.workspace.spaces.iter().any(|space| {
+                space.tabs.iter().any(|candidate| candidate.id == tab)
+                    && space_context_agent(space, identities) == Some(tab)
+            })
+        })
+    }
+
+    /// Where selecting `agent` from the sidebar should actually land — the
+    /// tab it was last left on, when that tab is still open beside it, and
+    /// otherwise the agent itself.
+    fn strip_tab_for(&self, agent: TabId) -> TabId {
+        let Some(remembered) = self.strip_selection.get(&agent).copied() else {
+            return agent;
+        };
+        if remembered == agent {
+            return agent;
+        }
+        // The remembered tab has to still be one of this agent's own: a
+        // shell can be dragged into another strip, and following it there
+        // would silently move the user to a different agent than the one
+        // they clicked.
+        let belongs = self.session.as_ref().is_some_and(|session| {
+            session.workspace.spaces.iter().any(|space| {
+                space
+                    .tabs
+                    .iter()
+                    .any(|tab| tab.id == remembered && tab.agent == Some(agent))
+            })
+        });
+        if belongs { remembered } else { agent }
     }
     /// None of the modal overlays that own mouse input while they're open
     /// (rename buffer, new-space root picker, agent picker, support

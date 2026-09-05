@@ -3384,6 +3384,94 @@ mod workspace_tests {
         }
     }
 
+    /// Walking away from an agent and coming back returns to the tab it
+    /// was left on. A space holds one selection, so a shell opened beside
+    /// an agent used to be forgotten the moment the user looked at
+    /// another agent — they came back to the agent's own tab and had to
+    /// find their shell again in the strip.
+    #[test]
+    fn an_agent_is_re_entered_on_the_tab_it_was_left_on() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-strip-memory"));
+        let (mut model, first, second) = two_agents_with_shells();
+        let shell = model.session.as_ref().expect("session").workspace.spaces[0]
+            .tabs
+            .iter()
+            .find(|tab| tab.agent == Some(first))
+            .expect("the first agent has a shell")
+            .id;
+
+        // Left working in the first agent's shell, then away to the second.
+        for tab in [shell, second] {
+            let mut session = model.session.clone().expect("session");
+            session.select_tab(tab);
+            model.apply(ClientEvent::SessionUpdated { session }, &IDENTITIES);
+        }
+
+        let mut driven = driven(model, &home);
+        driven.frame();
+        let layout = compute_layout(Rect::new(0, 0, 80, 24), driven.attach.model.sidebar_width);
+        let row = driven
+            .attach
+            .model
+            .hits
+            .iter()
+            .find(|(rect, hit)| {
+                rect.x < layout.sidebar.right()
+                    && matches!(hit, WorkspaceHit::SelectTab(tab) if *tab == first)
+            })
+            .map(|(rect, _)| *rect)
+            .expect("the first agent has a sidebar row");
+        driven.press(row.x + 4, row.y);
+
+        assert!(
+            driven.sent().iter().any(
+                |request| matches!(request, ClientRequest::SelectTab { tab } if *tab == shell)
+            ),
+            "the shell it was left in, not the agent tab"
+        );
+    }
+
+    /// The same click, when the user is already inside that agent: it
+    /// means the agent's own tab, and the strip is right there for
+    /// anything else.
+    #[test]
+    fn clicking_the_agent_you_are_already_in_selects_the_agent_itself() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-strip-same-agent"));
+        let (mut model, first, _second) = two_agents_with_shells();
+        let shell = model.session.as_ref().expect("session").workspace.spaces[0]
+            .tabs
+            .iter()
+            .find(|tab| tab.agent == Some(first))
+            .expect("the first agent has a shell")
+            .id;
+        let mut session = model.session.clone().expect("session");
+        session.select_tab(shell);
+        model.apply(ClientEvent::SessionUpdated { session }, &IDENTITIES);
+
+        let mut driven = driven(model, &home);
+        driven.frame();
+        let layout = compute_layout(Rect::new(0, 0, 80, 24), driven.attach.model.sidebar_width);
+        let row = driven
+            .attach
+            .model
+            .hits
+            .iter()
+            .find(|(rect, hit)| {
+                rect.x < layout.sidebar.right()
+                    && matches!(hit, WorkspaceHit::SelectTab(tab) if *tab == first)
+            })
+            .map(|(rect, _)| *rect)
+            .expect("the first agent has a sidebar row");
+        driven.press(row.x + 4, row.y);
+
+        assert!(
+            driven.sent().iter().any(
+                |request| matches!(request, ClientRequest::SelectTab { tab } if *tab == first)
+            ),
+            "the agent's own tab"
+        );
+    }
+
     /// A session whose one agent sits in `checkout`, removed from under
     /// it and bound to `task` — the state the "resume" is drawn from.
     fn agent_over_a_lost_checkout(
