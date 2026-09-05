@@ -11,13 +11,13 @@ mod workspace_tests {
     use super::{
         AGENT_BUSY_REPAINTS, AGENT_ECHO_GRACE, AGENT_PASTE_GRACE, AgentIdentity, AgentTabStatus,
         Attach, AttachAnswers, AttachInbox, CommitDetailPopup, CommitDetailResolution,
-        DeliveryResolution, DraggingTab, ExtensionHit, GitAnswer, GitBadge, GitResolution,
-        GitViewResolution, OccupancyResolution, PendingDrop, PlacementResolution, PreservedOverlay,
-        RootPicker, ScrollDirection, SupportResolution, TabDragGroup, TaskResolution,
-        TaskStateView, TaskView, UpstreamSync, Viewport, WorkspaceModel, adopt_agent_labels,
-        agent_identity_for_tab, blank_pane, can_close_tab_from_menu, checkout_lost, encode_mouse,
-        evaluation_key, forward_paste, forward_scroll, next_agent_label, next_shell_label,
-        open_commit_detail, pane_relative, pending_tab_drop,
+        CompletionBehavior, DeliveryResolution, DraggingTab, ExtensionHit, GitAnswer, GitBadge,
+        GitResolution, GitViewResolution, OccupancyResolution, PendingDrop, PlacementResolution,
+        PreservedOverlay, RootPicker, ScrollDirection, SupportResolution, TabDragGroup,
+        TaskResolution, TaskStateView, TaskView, UpstreamSync, Viewport, WorkspaceModel,
+        adopt_agent_labels, agent_identity_for_tab, blank_pane, can_close_tab_from_menu,
+        checkout_lost, encode_mouse, evaluation_key, forward_paste, forward_scroll,
+        next_agent_label, next_shell_label, open_commit_detail, pane_relative, pending_tab_drop,
         render::{
             self, FrameMetrics, WorkspaceLayout, compute_layout, render_commit_detail,
             render_preserved, render_sidebar, render_status_catalog, render_tab_strip, task_mark,
@@ -165,6 +165,7 @@ mod workspace_tests {
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned()),
             state,
+            completion: CompletionBehavior::Merge,
             ahead,
             published_as: None,
             created_at_unix: 1,
@@ -739,6 +740,38 @@ mod workspace_tests {
             hits.iter()
                 .any(|(_, hit)| matches!(hit, WorkspaceHit::Deliver(_))),
             "the button is a hit"
+        );
+    }
+
+    /// The button says what pressing it does. One verb over three
+    /// completions read the same whether it was about to fast-forward the
+    /// target under you, open a pull request against it, or touch nothing
+    /// outside the branch.
+    #[test]
+    fn the_delivery_button_names_the_ending_the_project_asked_for() {
+        let ending = |completion| {
+            let mut model = agent_with_task(TaskStateView::Ready, 3);
+            for task in model.tasks.values_mut().flatten() {
+                task.completion = completion;
+            }
+            let (rows, _) = tab_strip(&model);
+            rows.join("\n")
+        };
+
+        assert!(
+            ending(CompletionBehavior::Merge).contains("⇧3 merge → main"),
+            "{}",
+            ending(CompletionBehavior::Merge)
+        );
+        assert!(
+            ending(CompletionBehavior::Pr).contains("⇧3 pr → main"),
+            "{}",
+            ending(CompletionBehavior::Pr)
+        );
+        assert!(
+            ending(CompletionBehavior::Handoff).contains("⇧3 hand off"),
+            "a completion that writes to nothing names no target: {}",
+            ending(CompletionBehavior::Handoff)
         );
     }
 

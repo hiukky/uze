@@ -37,7 +37,7 @@ pub use uze_core::{
     sidebar_layout::SidebarLayout,
     trust::{AlwaysTrust, NoTrustAuthority, TrustAuthority, TrustOutcome, TrustRequest},
     workspace::workspace_root_or_self,
-    worktree::{IsolatedCheckout, isolated_checkout},
+    worktree::{CompletionBehavior, IsolatedCheckout, isolated_checkout},
 };
 
 /// The repository a directory's tasks hang off, resolved lexically.

@@ -564,7 +564,7 @@ impl Repository {
         self.store
             .tasks
             .iter()
-            .map(|task| TaskView::from_task(&self.primary, task))
+            .map(|task| TaskView::from_task(&self.primary, task, self.policy.completion))
             .collect()
     }
 
@@ -601,7 +601,7 @@ impl Repository {
             Err(other) => DeliveryOutcome::Refused(other.to_string()),
         };
         Some(DeliveryReport {
-            task: TaskView::from_task(&primary, task),
+            task: TaskView::from_task(&primary, task, completion),
             outcome,
         })
     }
@@ -677,6 +677,10 @@ pub struct TaskView {
     /// the task it was running.
     pub checkout_id: Option<String>,
     pub state: TaskStateView,
+    /// What delivering this task does — the project's own say, carried on
+    /// the task so a surface offering the delivery can name its ending
+    /// instead of showing one verb for three different outcomes.
+    pub completion: CompletionBehavior,
     /// Commits the branch has beyond its base — what a delivery would land.
     pub ahead: usize,
     pub published_as: Option<String>,
@@ -684,7 +688,7 @@ pub struct TaskView {
 }
 
 impl TaskView {
-    fn from_task(primary: &Path, task: &Task) -> Self {
+    fn from_task(primary: &Path, task: &Task, completion: CompletionBehavior) -> Self {
         Self {
             id: task.id.as_str().to_owned(),
             label: task.label.clone(),
@@ -696,6 +700,7 @@ impl TaskView {
                 .as_ref()
                 .map(|checkout| checkout.as_str().to_owned()),
             state: TaskStateView::from(&task.state),
+            completion,
             ahead: checkout::commits_ahead(primary, &task.base_commit, &task.branch),
             published_as: task.published_as.clone(),
             created_at_unix: task.created_at_unix,

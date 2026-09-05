@@ -28,7 +28,8 @@ use std::{
 };
 use uze_application::AgentIdentity;
 use uze_application::{
-    DeliveryOutcome, DeliveryReport, Evaluation, TaskStateView, TaskView, UpstreamSync,
+    CompletionBehavior, DeliveryOutcome, DeliveryReport, Evaluation, TaskStateView, TaskView,
+    UpstreamSync,
 };
 use uze_application::{Result, UzeError, UzeHome};
 use uze_extensions::{

@@ -1647,9 +1647,19 @@ fn render_root_picker(
 
 /// The header's delivery button for a task: text, hue, and whether it is a
 /// button at all rather than a state the header only reports.
+///
+/// A ready task names its ending, not just its size. One verb over three
+/// completions left the button saying the same thing whether it was about
+/// to fast-forward the target under you, open a pull request, or do
+/// nothing to anything but the branch — the one question an operator has
+/// before pressing it (see [`delivery_ending`]).
 fn deliver_button(task: &TaskView) -> Option<(String, Color, bool)> {
     match &task.state {
-        TaskStateView::Ready => Some((format!("⇧{}", task.ahead), crate::ui::ACCENT, true)),
+        TaskStateView::Ready => Some((
+            format!("⇧{} {}", task.ahead, delivery_ending(task)),
+            crate::ui::ACCENT,
+            true,
+        )),
         // The hue is the state's own (see `task_mark`), not the button's
         // mood: one meaning, one color, wherever the state is drawn.
         TaskStateView::GateFailed => Some(("⇧ retry".to_owned(), crate::ui::DANGER, true)),
@@ -1658,6 +1668,18 @@ fn deliver_button(task: &TaskView) -> Option<(String, Color, bool)> {
         }
         TaskStateView::Integrating => Some(("… delivering".to_owned(), crate::ui::CYAN, false)),
         _ => None,
+    }
+}
+
+/// What delivering a task does, in the words its outcome will use: the
+/// two completions that touch something outside the branch name what they
+/// touch, and the one that does not says so instead of naming a target it
+/// will never write to.
+fn delivery_ending(task: &TaskView) -> String {
+    match task.completion {
+        CompletionBehavior::Merge => format!("merge → {}", task.target),
+        CompletionBehavior::Pr => format!("pr → {}", task.target),
+        CompletionBehavior::Handoff => "hand off".to_owned(),
     }
 }
 
