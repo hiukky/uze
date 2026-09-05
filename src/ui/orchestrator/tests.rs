@@ -19,11 +19,13 @@ mod workspace_tests {
         evaluation_key, forward_paste, forward_scroll, next_agent_label, next_shell_label,
         open_commit_detail, pane_relative, pending_tab_drop,
         render::{
-            self, WorkspaceLayout, compute_layout, render_commit_detail, render_preserved,
-            render_sidebar, render_status_catalog, render_tab_strip, task_mark, timeline_height,
+            self, FrameMetrics, WorkspaceLayout, compute_layout, render_commit_detail,
+            render_preserved, render_sidebar, render_status_catalog, render_tab_strip, task_mark,
+            timeline_height,
         },
-        scroll_timeline, selected_pane_cwd, space_own_tab, sync_slot_occupancy, tab_drag_group,
-        tab_drag_group_members, tab_needs_replacement_shell, workspace_has_active_agent_operation,
+        scroll_timeline, scroll_tree, selected_pane_cwd, space_own_tab, sync_slot_occupancy,
+        tab_drag_group, tab_drag_group_members, tab_needs_replacement_shell, toggle_timeline,
+        workspace_has_active_agent_operation,
     };
     use crossterm::event::{MouseButton, MouseEventKind};
     use ratatui::layout::Rect;
@@ -126,7 +128,16 @@ mod workspace_tests {
         let mut terminal = Terminal::new(TestBackend::new(40, 24)).unwrap();
         let mut hits = Vec::new();
         terminal
-            .draw(|frame| render_sidebar(frame, frame.area(), &model, &IDENTITIES, &mut hits))
+            .draw(|frame| {
+                render_sidebar(
+                    frame,
+                    frame.area(),
+                    &model,
+                    &IDENTITIES,
+                    &mut hits,
+                    &mut FrameMetrics::default(),
+                )
+            })
             .unwrap();
         let glyphs = |needle: &str| {
             terminal
@@ -361,7 +372,15 @@ mod workspace_tests {
         let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
         let mut hits = Vec::new();
         terminal
-            .draw(|frame| render::render(frame, model, &IDENTITIES, &mut hits))
+            .draw(|frame| {
+                render::render(
+                    frame,
+                    model,
+                    &IDENTITIES,
+                    &mut hits,
+                    &mut render::FrameMetrics::default(),
+                )
+            })
             .unwrap();
         model.hits = hits;
         compute_layout(area, model.sidebar_width)
@@ -2052,6 +2071,82 @@ mod workspace_tests {
         assert!(row.contains("feat(tui): a subject"), "{row}");
     }
 
+    /// Folding the timeline is a preference, not a transient: the next
+    /// run is told, rather than opening the section again over the spaces.
+    #[test]
+    fn folding_the_timeline_is_kept_for_the_next_run() {
+        let (recorder, recorded) = std::sync::mpsc::channel();
+        let mut model = session_with_timeline(&["feat: newest"]);
+        model.layout_recorder = Some(recorder);
+        model.timeline_collapsed = false;
+        model.timeline_rows = Some(4);
+
+        toggle_timeline(&mut model);
+
+        let layout = recorded.try_recv().expect("the fold is recorded");
+        assert!(layout.timeline_collapsed);
+        assert_eq!(layout.timeline_rows, Some(4), "the height it was left at");
+        assert_eq!(
+            layout.width, model.sidebar_width,
+            "the whole column's shape, not the one field that changed"
+        );
+    }
+
+    /// A tree taller than the column scrolls rather than ending wherever
+    /// the column ran out: the spaces past the foot — under a long tree,
+    /// or under the timeline that holds that foot — were unreachable, not
+    /// merely out of view.
+    #[test]
+    fn the_space_tree_scrolls_to_what_the_column_cannot_show() {
+        let mut session = Session::new(WorkspaceId("workspace".into()), "/tmp".into(), 80, 24);
+        session.workspace.spaces[0].tabs[0].label = "Agent".into();
+        for index in 1..8 {
+            session.add_space(
+                format!("space {index}"),
+                format!("/tmp/{index}").into(),
+                80,
+                24,
+            );
+            session.workspace.spaces[index].tabs[0].label = "Agent".into();
+        }
+        let mut model = WorkspaceModel {
+            session: Some(session),
+            ..WorkspaceModel::default()
+        };
+
+        let mut metrics = FrameMetrics::default();
+        let rows = sidebar_rows_measured(&model, &mut Vec::new(), &mut metrics);
+        assert!(metrics.tree_overflow > 0, "the tree outgrows the column");
+        assert!(
+            !rows.iter().any(|row| row.contains("space 7")),
+            "the last space starts past the foot: {rows:?}"
+        );
+
+        model.tree_overflow = metrics.tree_overflow;
+        for _ in 0..metrics.tree_overflow {
+            scroll_tree(&mut model, ScrollDirection::Down);
+        }
+        let rows = sidebar_rows(&model, &mut Vec::new());
+        assert!(
+            rows.iter().any(|row| row.contains("space 7")),
+            "scrolled to the foot: {rows:?}"
+        );
+        assert!(
+            !rows.iter().any(|row| row.contains("space 1")),
+            "the head scrolled out of view: {rows:?}"
+        );
+
+        scroll_tree(&mut model, ScrollDirection::Down);
+        assert_eq!(
+            model.tree_scroll, metrics.tree_overflow,
+            "the wheel stops at the foot"
+        );
+        for _ in 0..=metrics.tree_overflow {
+            scroll_tree(&mut model, ScrollDirection::Up);
+        }
+        assert_eq!(model.tree_scroll, 0, "and comes back to the head");
+    }
+
     /// No history, no section — a checkout with nothing committed, or no
     /// checkout at all, leaves the column to the spaces.
     #[test]
@@ -2066,7 +2161,17 @@ mod workspace_tests {
 
     /// The sidebar as text, one string per row.
     fn sidebar_rows(model: &WorkspaceModel, hits: &mut Vec<(Rect, WorkspaceHit)>) -> Vec<String> {
-        let buffer = sidebar_buffer(model, hits);
+        sidebar_rows_measured(model, hits, &mut FrameMetrics::default())
+    }
+
+    /// The same rows, keeping what the frame measured — the tree's own
+    /// scroll bound, which only the render knows.
+    fn sidebar_rows_measured(
+        model: &WorkspaceModel,
+        hits: &mut Vec<(Rect, WorkspaceHit)>,
+        metrics: &mut FrameMetrics,
+    ) -> Vec<String> {
+        let buffer = sidebar_buffer_measured(model, hits, metrics);
         (0..buffer.area.height)
             .map(|row| {
                 (0..buffer.area.width)
@@ -2080,9 +2185,17 @@ mod workspace_tests {
         model: &WorkspaceModel,
         hits: &mut Vec<(Rect, WorkspaceHit)>,
     ) -> ratatui::buffer::Buffer {
+        sidebar_buffer_measured(model, hits, &mut FrameMetrics::default())
+    }
+
+    fn sidebar_buffer_measured(
+        model: &WorkspaceModel,
+        hits: &mut Vec<(Rect, WorkspaceHit)>,
+        metrics: &mut FrameMetrics,
+    ) -> ratatui::buffer::Buffer {
         let mut terminal = Terminal::new(TestBackend::new(40, 24)).unwrap();
         terminal
-            .draw(|frame| render_sidebar(frame, frame.area(), model, &IDENTITIES, hits))
+            .draw(|frame| render_sidebar(frame, frame.area(), model, &IDENTITIES, hits, metrics))
             .unwrap();
         terminal.backend().buffer().clone()
     }
@@ -3263,6 +3376,12 @@ mod workspace_tests {
         }
 
         fn press(&mut self, column: u16, row: u16) {
+            self.mouse(column, row, MouseEventKind::Down(MouseButton::Left));
+        }
+
+        /// Any other mouse event at the same viewport the click helpers
+        /// use — the rest of a drag, which `press` alone cannot say.
+        fn mouse(&mut self, column: u16, row: u16, kind: MouseEventKind) {
             let area = Rect::new(0, 0, 80, 24);
             let layout = compute_layout(area, self.attach.model.sidebar_width);
             let viewport = Viewport {
@@ -3271,11 +3390,7 @@ mod workspace_tests {
                 rows: layout.pane.height,
                 layout,
             };
-            let event = crossterm::event::Event::Mouse(mouse_at(
-                column,
-                row,
-                MouseEventKind::Down(MouseButton::Left),
-            ));
+            let event = crossterm::event::Event::Mouse(mouse_at(column, row, kind));
             let _ = self.attach.handle(event, &viewport);
         }
 
@@ -3599,6 +3714,32 @@ mod workspace_tests {
             )),
             "{sent:?}"
         );
+    }
+
+    /// Where the divider was let go outlives the run, like the timeline's
+    /// own shape: both modes share this column, so both find it at the
+    /// width it was left. Kept on release, not through the drag — the
+    /// widths it swept past are not answers.
+    #[test]
+    fn the_dragged_sidebar_width_is_kept_for_the_next_run() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-sidebar-width"));
+        let (recorder, recorded) = std::sync::mpsc::channel();
+        let mut model = agent_session_in("/repo");
+        model.layout_recorder = Some(recorder);
+        let mut driven = driven(model, &home);
+        driven.frame();
+        let handle = driven.hit(|hit| matches!(hit, WorkspaceHit::ResizeSidebar));
+
+        driven.press(handle.x, handle.y);
+        driven.mouse(20, 5, MouseEventKind::Drag(MouseButton::Left));
+        let dragged = driven.attach.model.sidebar_width;
+        assert!(dragged.is_some(), "the drag moved the divider");
+        assert!(recorded.try_recv().is_err(), "nothing is written mid-drag");
+
+        driven.mouse(20, 5, MouseEventKind::Up(MouseButton::Left));
+
+        let layout = recorded.try_recv().expect("the release is recorded");
+        assert_eq!(layout.width, dragged);
     }
 
     /// An agent that could not be given a checkout of its own starts in

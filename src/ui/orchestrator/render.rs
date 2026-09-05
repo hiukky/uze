@@ -100,11 +100,24 @@ pub(super) fn compute_layout(
     }
 }
 
+/// What a frame measured that the next event needs back.
+///
+/// Beside `hits` for the same reason those are: only the render knows how
+/// the column came out, and the wheel over the sidebar has to stay inside
+/// what it found there.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct FrameMetrics {
+    /// Rows of the space tree the sidebar could not show — how far the
+    /// tree may be scrolled, and zero when it fits.
+    pub(super) tree_overflow: u16,
+}
+
 pub(super) fn render(
     frame: &mut ratatui::Frame<'_>,
     model: &WorkspaceModel,
     identities: &[AgentIdentity],
     hits: &mut Vec<(Rect, WorkspaceHit)>,
+    metrics: &mut FrameMetrics,
 ) {
     frame.render_widget(
         Block::default().style(
@@ -140,7 +153,7 @@ pub(super) fn render(
         return;
     }
     let layout = compute_layout(frame.area(), model.sidebar_width);
-    render_sidebar(frame, layout.sidebar, model, identities, hits);
+    render_sidebar(frame, layout.sidebar, model, identities, hits, metrics);
     // The sidebar's own hairline right border doubles as a drag handle —
     // it sits just past `inner` (which `render_sidebar` never draws into),
     // so this can't collide with any row hit pushed there.
@@ -454,6 +467,7 @@ pub(super) fn render_sidebar(
     model: &WorkspaceModel,
     identities: &[AgentIdentity],
     hits: &mut Vec<(Rect, WorkspaceHit)>,
+    metrics: &mut FrameMetrics,
 ) {
     let border_color = if model.dragging_sidebar {
         crate::ui::ACCENT
@@ -574,12 +588,25 @@ pub(super) fn render_sidebar(
     let column_bottom = rows.bottom;
     rows.bottom -= reserved;
 
+    // What the column cannot show is scrolled to, not lost: the tree grows
+    // with the work, and a space that fell off the foot of it — under a
+    // long tree above, or under the timeline holding the foot — used to be
+    // unreachable rather than merely out of view. The bound is measured
+    // here, where the tree's own window is known, and handed back for the
+    // wheel to stay inside (see `scroll_tree`).
+    let overflow = tree_rows(session, identities).saturating_sub(rows.remaining());
+    metrics.tree_overflow = overflow;
+    rows.scroll_past(model.tree_scroll.min(overflow));
+
     for space in &session.workspace.spaces {
         let is_active_space = space.id == session.workspace.selected_space;
-        let Some(header_rect) = rows.next(1) else {
+        let header = rows.slot(1);
+        if header.is_full() {
             break;
-        };
-        render_space_header(frame, header_rect, session, space, model, hits);
+        }
+        if let Some(header_rect) = header.visible() {
+            render_space_header(frame, header_rect, session, space, model, hits);
+        }
 
         let agent_tabs: Vec<&Tab> = space
             .tabs
@@ -594,7 +621,7 @@ pub(super) fn render_sidebar(
             // selected tab (its bootstrap shell, absent any agent) rather
             // than the workspace root, so it tracks a plain `cd` the same
             // way an agent tab's own detail line already does.
-            if let Some(cwd_rect) = rows.next(1) {
+            if let Some(cwd_rect) = rows.slot(1).visible() {
                 let cwd = space
                     .tabs
                     .iter()
@@ -622,105 +649,14 @@ pub(super) fn render_sidebar(
             // One extra level of indent versus a flat list — these tabs
             // read as children of the space header row just drawn above.
             let connector = if is_last { "  └─ " } else { "  ├─ " };
-            let Some(label_rect) = rows.next(1) else {
+            let label_slot = rows.slot(1);
+            if label_slot.is_full() {
                 break;
-            };
+            }
 
             let cwd = pane_in_layout(&tab.layout, tab.focus.pane)
                 .map(|pane| pane.cwd.clone())
                 .unwrap_or_default();
-
-            // The agent the space is about, not its `selected_tab`: a
-            // shell opened beside an agent is part of that agent's own
-            // context, and switching into it must not unselect the agent
-            // in this tree (see `space_context_agent`).
-            let selected = Some(tab.id) == space_context_agent(space, identities);
-            // Every space names a context agent, including the ones the
-            // user is not in — so `selected` alone put a `●` on one agent
-            // per open space, each claiming to be the one receiving
-            // keystrokes. Only the active space's selection is that agent.
-            let status = model.agent_tab_status(tab.focus.pane, is_active_space && selected);
-            let renaming_this = model
-                .renaming
-                .as_ref()
-                .filter(|(target, _)| *target == RenameTarget::Tab(tab.id))
-                .map(|(_, buffer)| buffer.as_str());
-            let indicator = status.glyph(model.tick);
-            let indicator_fg = status.color();
-            // Bold belongs to the agent, not the space it runs in (see
-            // `render_space_header`, which never bolds its own label) — the
-            // tab actually receiving keystrokes is the thing worth shouting
-            // about, not the container it happens to sit in. Reserved for
-            // the one tab that is both selected and in the active space
-            // (see the `status` comment above `is_active_space && selected`
-            // for why `selected` alone isn't enough).
-            let mut label_style = Style::default().fg(if selected {
-                crate::ui::TEXT_BRIGHT
-            } else {
-                crate::ui::NAV_INACTIVE
-            });
-            if is_active_space && selected {
-                label_style = label_style.add_modifier(Modifier::BOLD);
-            }
-            let connector_span =
-                Span::styled(connector, Style::default().fg(crate::ui::TEXT_FAINT));
-            let label = match renaming_this {
-                Some(buffer) => Span::styled(
-                    format!("{buffer}▏"),
-                    Style::default()
-                        .fg(crate::ui::TEXT_BRIGHT)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                None => Span::styled(tab.label.clone(), label_style),
-            };
-            // The task mark behind the label is the one click target that
-            // opens the catalog (see `push_trailing_mark`): the status glyph
-            // in front of the name is not, so the row's leading column
-            // stays a plain part of selecting the tab. Pushed before the
-            // row's own `SelectTab` hit below, since the click search takes
-            // the first rect it lands in — a 1-column target inside a
-            // row-wide one only ever wins by being found first.
-            let mut spans = vec![
-                connector_span,
-                Span::styled(indicator, Style::default().fg(indicator_fg)),
-                label,
-            ];
-            if let Some((mark, hue)) = model
-                .tab_task(tab.id)
-                .and_then(|task| task_mark(&task.state))
-            {
-                push_trailing_mark(&mut spans, hits, label_rect, mark, hue);
-            }
-            // The alias in place of the raw process name — this list only
-            // ever holds tabs `agent_identity_for_tab` already resolved, so
-            // it never falls back to showing something like a bare version
-            // string (see that function's doc comment). Right-aligned, not
-            // tacked onto the label behind a "·" — pinning it to the row's
-            // own right edge keeps its column stable as different labels
-            // vary in length. A 1-column trailing pad keeps it off the
-            // sidebar's own flush-right divider (see `render_sidebar`'s
-            // `Padding::new(1, 0, 0, 0)`) — that padding drop suits a
-            // button glued to the edge, not a plain text label.
-            let alias = agent_identity_for_tab(identities, tab).unwrap_or_default();
-            let alias_span =
-                Span::styled(small_caps(alias), Style::default().fg(crate::ui::TEXT_DIM));
-            const TRAILING_PAD: u16 = 1;
-            let used: u16 = spans.iter().map(|span| span.width() as u16).sum::<u16>()
-                + alias_span.width() as u16
-                + TRAILING_PAD;
-            let gap = label_rect.width.saturating_sub(used);
-            spans.push(Span::raw(" ".repeat(gap as usize)));
-            spans.push(alias_span);
-            spans.push(Span::raw(" ".repeat(TRAILING_PAD as usize)));
-            if is_active_space {
-                fill_row_bg(
-                    &mut spans,
-                    label_rect.width,
-                    crate::ui::ACTIVE_SPACE_OVERLAY,
-                );
-            }
-            frame.render_widget(Paragraph::new(Line::from(spans)), label_rect);
-            hits.push((label_rect, WorkspaceHit::SelectTab(tab.id)));
             // A tab-reorder drag in this exact space, resolved to drop
             // right before (or, on the last row, at the end after) this
             // one: an accent bar down the row's own leading column, same
@@ -728,22 +664,115 @@ pub(super) fn render_sidebar(
             // affordances (status glyphs, the active-space tint) already
             // use, in place of a separate line between rows that would
             // need its own row out of an already tightly budgeted list.
-            // Drawn on both this row and the detail row below (see the
-            // second `frame.render_widget` past it) — the tab is a two-row
-            // item, not just its label, so the bar has to run the item's
-            // full height to read as "this whole item" rather than
-            // something clipped to its top row alone.
+            // Drawn on both the label row and the detail row below — the
+            // tab is a two-row item, not just its label, so the bar has to
+            // run the item's full height to read as "this whole item"
+            // rather than something clipped to its top row alone.
             let show_drop_indicator = model.dragging_tab.is_some_and(|dragging| {
                 dragging.is_pending_drop_row(TabDragGroup::Agents(space.id), tab.id, is_last)
             });
-            if show_drop_indicator {
-                frame.render_widget(
-                    Paragraph::new("▍").style(Style::default().fg(crate::ui::ACCENT)),
-                    Rect::new(label_rect.x, label_rect.y, 1, 1),
-                );
+
+            if let Some(label_rect) = label_slot.visible() {
+                // The agent the space is about, not its `selected_tab`: a
+                // shell opened beside an agent is part of that agent's own
+                // context, and switching into it must not unselect the agent
+                // in this tree (see `space_context_agent`).
+                let selected = Some(tab.id) == space_context_agent(space, identities);
+                // Every space names a context agent, including the ones the
+                // user is not in — so `selected` alone put a `●` on one agent
+                // per open space, each claiming to be the one receiving
+                // keystrokes. Only the active space's selection is that agent.
+                let status = model.agent_tab_status(tab.focus.pane, is_active_space && selected);
+                let renaming_this = model
+                    .renaming
+                    .as_ref()
+                    .filter(|(target, _)| *target == RenameTarget::Tab(tab.id))
+                    .map(|(_, buffer)| buffer.as_str());
+                let indicator = status.glyph(model.tick);
+                let indicator_fg = status.color();
+                // Bold belongs to the agent, not the space it runs in (see
+                // `render_space_header`, which never bolds its own label) — the
+                // tab actually receiving keystrokes is the thing worth shouting
+                // about, not the container it happens to sit in. Reserved for
+                // the one tab that is both selected and in the active space
+                // (see the `status` comment above `is_active_space && selected`
+                // for why `selected` alone isn't enough).
+                let mut label_style = Style::default().fg(if selected {
+                    crate::ui::TEXT_BRIGHT
+                } else {
+                    crate::ui::NAV_INACTIVE
+                });
+                if is_active_space && selected {
+                    label_style = label_style.add_modifier(Modifier::BOLD);
+                }
+                let connector_span =
+                    Span::styled(connector, Style::default().fg(crate::ui::TEXT_FAINT));
+                let label = match renaming_this {
+                    Some(buffer) => Span::styled(
+                        format!("{buffer}▏"),
+                        Style::default()
+                            .fg(crate::ui::TEXT_BRIGHT)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    None => Span::styled(tab.label.clone(), label_style),
+                };
+                // The task mark behind the label is the one click target that
+                // opens the catalog (see `push_trailing_mark`): the status glyph
+                // in front of the name is not, so the row's leading column
+                // stays a plain part of selecting the tab. Pushed before the
+                // row's own `SelectTab` hit below, since the click search takes
+                // the first rect it lands in — a 1-column target inside a
+                // row-wide one only ever wins by being found first.
+                let mut spans = vec![
+                    connector_span,
+                    Span::styled(indicator, Style::default().fg(indicator_fg)),
+                    label,
+                ];
+                if let Some((mark, hue)) = model
+                    .tab_task(tab.id)
+                    .and_then(|task| task_mark(&task.state))
+                {
+                    push_trailing_mark(&mut spans, hits, label_rect, mark, hue);
+                }
+                // The alias in place of the raw process name — this list only
+                // ever holds tabs `agent_identity_for_tab` already resolved, so
+                // it never falls back to showing something like a bare version
+                // string (see that function's doc comment). Right-aligned, not
+                // tacked onto the label behind a "·" — pinning it to the row's
+                // own right edge keeps its column stable as different labels
+                // vary in length. A 1-column trailing pad keeps it off the
+                // sidebar's own flush-right divider (see `render_sidebar`'s
+                // `Padding::new(1, 0, 0, 0)`) — that padding drop suits a
+                // button glued to the edge, not a plain text label.
+                let alias = agent_identity_for_tab(identities, tab).unwrap_or_default();
+                let alias_span =
+                    Span::styled(small_caps(alias), Style::default().fg(crate::ui::TEXT_DIM));
+                const TRAILING_PAD: u16 = 1;
+                let used: u16 = spans.iter().map(|span| span.width() as u16).sum::<u16>()
+                    + alias_span.width() as u16
+                    + TRAILING_PAD;
+                let gap = label_rect.width.saturating_sub(used);
+                spans.push(Span::raw(" ".repeat(gap as usize)));
+                spans.push(alias_span);
+                spans.push(Span::raw(" ".repeat(TRAILING_PAD as usize)));
+                if is_active_space {
+                    fill_row_bg(
+                        &mut spans,
+                        label_rect.width,
+                        crate::ui::ACTIVE_SPACE_OVERLAY,
+                    );
+                }
+                frame.render_widget(Paragraph::new(Line::from(spans)), label_rect);
+                hits.push((label_rect, WorkspaceHit::SelectTab(tab.id)));
+                if show_drop_indicator {
+                    frame.render_widget(
+                        Paragraph::new("▍").style(Style::default().fg(crate::ui::ACCENT)),
+                        Rect::new(label_rect.x, label_rect.y, 1, 1),
+                    );
+                }
             }
 
-            if let Some(detail_rect) = rows.next(1) {
+            if let Some(detail_rect) = rows.slot(1).visible() {
                 let continuation = if is_last { "     " } else { "  │  " };
                 // The task's own working branch in place of the cwd path —
                 // what this agent will deliver from. An agent outside any
@@ -863,7 +892,7 @@ pub(super) fn render_sidebar(
             // item a little room to breathe. Skipped for the last tab: it
             // has no sibling below to connect to, and the space loop's own
             // blank row already separates it from whatever comes next.
-            if !is_last && let Some(gap_rect) = rows.next(1) {
+            if !is_last && let Some(gap_rect) = rows.slot(1).visible() {
                 let mut spans = vec![Span::styled(
                     "  │  ",
                     Style::default().fg(crate::ui::TEXT_FAINT),
@@ -884,10 +913,34 @@ pub(super) fn render_sidebar(
     if let Some(timeline) = timeline
         && reserved > 0
     {
+        rows.scroll_past(0);
         rows.bottom = column_bottom;
         rows.y = column_bottom - reserved;
         render_timeline(frame, timeline, model, &mut rows, hits);
     }
+}
+
+/// The rows the space tree comes to, whether or not the column can show
+/// them all: a header per space, the cwd caption a space with no agent
+/// shows in place of its tree, two rows per agent with the connector row
+/// between siblings, and the blank row closing each space. Measured up
+/// front rather than counted while drawing, because how far the tree may
+/// be scrolled has to be known before its first row is laid out.
+fn tree_rows(session: &Session, identities: &[AgentIdentity]) -> u16 {
+    session
+        .workspace
+        .spaces
+        .iter()
+        .map(|space| {
+            let agents = space
+                .tabs
+                .iter()
+                .filter(|tab| agent_identity_for_tab(identities, tab).is_some())
+                .count() as u16;
+            let body = if agents == 0 { 1 } else { agents * 3 - 1 };
+            1 + body + 1
+        })
+        .sum()
 }
 
 /// The rows the tree above the timeline keeps whatever the section is

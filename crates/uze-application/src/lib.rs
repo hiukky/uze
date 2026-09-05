@@ -34,6 +34,7 @@ pub use uze_core::{
     provisioning::{ProcessOutput, ProcessResult, ProcessRunner, ProcessSpec, SystemProcessRunner},
     router::CompatibilityRoute,
     router::HarnessCapabilities,
+    sidebar_layout::SidebarLayout,
     trust::{AlwaysTrust, NoTrustAuthority, TrustAuthority, TrustOutcome, TrustRequest},
     workspace::workspace_root_or_self,
     worktree::{IsolatedCheckout, isolated_checkout},

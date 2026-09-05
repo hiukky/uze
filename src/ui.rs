@@ -166,16 +166,22 @@ const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦
 /// production application composition root as the CLI.
 pub fn run(home: UzeHome) -> Result<()> {
     let mut terminal = TerminalSession::start()?;
+    // The sidebar as this user last left it — read once, here, because
+    // both modes share the column and neither owns it (see
+    // `uze_application::SidebarLayout`).
+    let stored = tui_application(home.clone())
+        .map(|app| app.workspace().sidebar_layout())
+        .unwrap_or_default();
     // Shared across both modes for the whole run() call, not owned by
     // either model: a drag in one sidebar must still be there — same
     // width — when Ctrl+O switches to the other, not reset back to the
     // responsive default every round trip.
-    let mut sidebar_width: Option<u16> = None;
+    let mut sidebar_width: Option<u16> = stored.width;
     // Likewise what the workspace client resolved for itself — the
     // sidebar's tasks, branches and agent statuses among them — which each
     // attach takes over from the last instead of deriving again in front
     // of the user (see `orchestrator::WorkspaceMemory`).
-    let mut workspace_memory = orchestrator::WorkspaceMemory::default();
+    let mut workspace_memory = orchestrator::WorkspaceMemory::restored(stored);
     // Set when management asks to return to a specific tab (activating a
     // prompt-history row); consumed by the next attach.
     let mut pending_tab: Option<uze_terminal::TabId> = None;
@@ -191,7 +197,14 @@ pub fn run(home: UzeHome) -> Result<()> {
         )? {
             orchestrator::WorkspaceExit::Quit => return Ok(()),
             orchestrator::WorkspaceExit::Management => {
-                match management::run_management(&mut terminal, home.clone(), &mut sidebar_width)? {
+                let exit =
+                    management::run_management(&mut terminal, home.clone(), &mut sidebar_width)?;
+                // The workspace client writes its own changes as they
+                // happen; management has no such sink, so a drag there is
+                // kept on the way out of it — the one moment this side
+                // holds both halves of the layout.
+                remember_sidebar(&home, workspace_memory.sidebar_layout(sidebar_width));
+                match exit {
                     management::ManagementExit::Quit => return Ok(()),
                     management::ManagementExit::Workspace => {}
                     management::ManagementExit::WorkspaceTab(tab) => {
@@ -201,6 +214,13 @@ pub fn run(home: UzeHome) -> Result<()> {
             }
         }
     }
+}
+
+/// Keeps the sidebar's shape for the next run. Best-effort: a layout that
+/// cannot be written is a preference lost, never a session lost.
+fn remember_sidebar(home: &UzeHome, layout: uze_application::SidebarLayout) {
+    let _ =
+        tui_application(home.clone()).and_then(|app| app.workspace().save_sidebar_layout(&layout));
 }
 
 // --- Terminal lifecycle ------------------------------------------------------
@@ -550,6 +570,39 @@ pub(crate) struct Rows {
     width: u16,
     y: u16,
     bottom: u16,
+    /// Rows still to be scrolled past before anything lands on screen. A
+    /// column that is scrolled still asks for the rows above its window —
+    /// a list only knows what it is showing by walking what comes before
+    /// it — and gets [`Slot::Hidden`] for them instead of a rectangle.
+    skipped: u16,
+}
+
+/// Where a row landed once the column it belongs to is scrolled.
+///
+/// [`Rows::next`] flattens this back to an `Option` for the columns that
+/// never scroll; a scrolled one has to tell "above the window" (keep
+/// laying out) from "past the foot" (stop), which one `None` cannot say.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Slot {
+    /// Scrolled out above the window: laid out, never drawn.
+    Hidden,
+    Visible(Rect),
+    /// The column is full — nothing after this one fits either.
+    Full,
+}
+
+impl Slot {
+    /// The rectangle to draw into, if this row is on screen at all.
+    pub(crate) fn visible(self) -> Option<Rect> {
+        match self {
+            Self::Visible(rect) => Some(rect),
+            Self::Hidden | Self::Full => None,
+        }
+    }
+
+    pub(crate) fn is_full(self) -> bool {
+        self == Self::Full
+    }
 }
 
 impl Rows {
@@ -559,6 +612,24 @@ impl Rows {
             width: area.width,
             y: area.y,
             bottom: area.y + area.height,
+            skipped: 0,
+        }
+    }
+
+    /// Scrolls the next `rows` out above the window. Whole rows only: a
+    /// column scrolls by its own items, never by half of one.
+    pub(crate) fn scroll_past(&mut self, rows: u16) {
+        self.skipped = rows;
+    }
+
+    pub(crate) fn slot(&mut self, height: u16) -> Slot {
+        if self.skipped >= height {
+            self.skipped -= height;
+            return Slot::Hidden;
+        }
+        match self.next(height) {
+            Some(rect) => Slot::Visible(rect),
+            None => Slot::Full,
         }
     }
 
@@ -571,9 +642,10 @@ impl Rows {
         Some(rect)
     }
 
-    /// One blank row, when the column still has one to spare.
+    /// One blank row, when the column still has one to spare — scrolled
+    /// past like any other row when the column is scrolled.
     pub(crate) fn gap(&mut self) {
-        let _ = self.next(1);
+        let _ = self.slot(1);
     }
 
     pub(crate) fn remaining(&self) -> u16 {

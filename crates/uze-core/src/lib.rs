@@ -51,6 +51,11 @@ pub mod profile_state;
 /// than filed under a concern it does not belong to.
 pub mod prompt_history;
 
+/// What the workspace client's sidebar keeps between runs. Here for the
+/// same reason [`prompt_history`] is: UZE-owned state under `UzeHome`,
+/// read by the one client that draws it.
+pub mod sidebar_layout;
+
 // Flat public API. Each line also says which concern the module belongs to,
 // which is the second reason for keeping them: the crate root is where a
 // reader looks first.

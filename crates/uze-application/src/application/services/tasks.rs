@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use uze_core::{
     Result, UzeError, checkout,
     landing::{self, Delivered, DeliveryFailure, Readiness},
-    project_lock, prompt_history,
+    project_lock, prompt_history, sidebar_layout,
     task::{self, Base, Task, TaskId, TaskState, TaskStore},
     workspace,
     worktree::{self, CompletionBehavior, WorktreePolicy},
@@ -77,6 +77,17 @@ impl Workspace<'_> {
     /// Forgets every prompt recorded for `root`'s workspace.
     pub fn clear_prompt_history(&self, root: &Path) -> Result<()> {
         prompt_history::clear(&self.0.home, root)
+    }
+
+    /// What the client's sidebar was last left looking like. Best-effort:
+    /// unreadable state answers with the defaults rather than failing.
+    pub fn sidebar_layout(&self) -> sidebar_layout::SidebarLayout {
+        sidebar_layout::load(&self.0.home)
+    }
+
+    /// Remembers the sidebar's shape for the next run.
+    pub fn save_sidebar_layout(&self, layout: &sidebar_layout::SidebarLayout) -> Result<()> {
+        sidebar_layout::save(&self.0.home, layout)
     }
 
     /// Where a newly created agent starts, decided before its harness does.

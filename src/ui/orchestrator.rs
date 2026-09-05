@@ -579,11 +579,25 @@ pub(crate) fn attach_workspace(
             }
         }
     });
+    // The sidebar's own shape, written the same way and for the same
+    // reason: folding a section is a click, and a click never waits on the
+    // filesystem.
+    let (layout_recorder, remembered_layouts) = mpsc::channel::<uze_application::SidebarLayout>();
+    thread::spawn({
+        let home = home.clone();
+        move || {
+            while let Ok(layout) = remembered_layouts.recv() {
+                let _ = tui_application(home.clone())
+                    .and_then(|app| app.workspace().save_sidebar_layout(&layout));
+            }
+        }
+    });
     let mut model = WorkspaceModel {
         dirty: true,
         last_size: (columns, rows),
         sidebar_width: *sidebar_width,
         prompt_recorder: Some(prompt_recorder),
+        layout_recorder: Some(layout_recorder),
         ..WorkspaceModel::recall(std::mem::take(&mut memory.remembered))
     };
     // A registered harness set doesn't change mid-session, so this is built
@@ -726,10 +740,13 @@ pub(crate) fn attach_workspace(
         }
         if attach.model.dirty {
             let mut hits = Vec::new();
+            let mut metrics = render::FrameMetrics::default();
             let model = &attach.model;
             let identities = &attach.identities;
-            terminal.draw(|frame| render(frame, model, identities, &mut hits))?;
+            terminal.draw(|frame| render(frame, model, identities, &mut hits, &mut metrics))?;
             attach.model.hits = hits;
+            attach.model.tree_overflow = metrics.tree_overflow;
+            attach.model.tree_scroll = attach.model.tree_scroll.min(metrics.tree_overflow);
             attach.model.dirty = false;
         }
         // The sidebar width is shared with management (see `super::run`),
@@ -1240,6 +1257,36 @@ impl<T> Default for Answers<T> {
 /// resolved from scratch. What comes from the server (the session, the
 /// pane grids) is deliberately *not* here: the attach re-reads it, and a
 /// stale copy would be worse than a short wait for the real one.
+impl WorkspaceMemory {
+    /// The memory a fresh process starts with: nothing resolved yet, and
+    /// the sidebar as the user last left it (see
+    /// `uze_application::SidebarLayout`). Seeded once, by `super::run` —
+    /// a Ctrl+O round trip carries the live values back in `remembered`,
+    /// and re-reading the file would undo a fold made since.
+    pub(crate) fn restored(layout: uze_application::SidebarLayout) -> Self {
+        Self {
+            remembered: Remembered {
+                timeline_collapsed: layout.timeline_collapsed,
+                timeline_rows: layout.timeline_rows,
+                ..Remembered::default()
+            },
+            ..Self::default()
+        }
+    }
+
+    /// The sidebar as it stands: what this client remembers of the
+    /// timeline, plus the `width` its two modes share (see `super::run`,
+    /// which owns that one and is the only side that knows a drag in
+    /// management moved it).
+    pub(crate) fn sidebar_layout(&self, width: Option<u16>) -> uze_application::SidebarLayout {
+        uze_application::SidebarLayout {
+            width,
+            timeline_collapsed: self.remembered.timeline_collapsed,
+            timeline_rows: self.remembered.timeline_rows,
+        }
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct WorkspaceMemory {
     /// The model's own remembered half, taken by the attach and handed
@@ -1291,9 +1338,10 @@ struct Remembered {
     lost_checkouts: BTreeSet<PaneId>,
     slots_swept: bool,
     roots_shown: BTreeSet<SpaceId>,
-    timeline_collapsed: bool,
     strip_selection: BTreeMap<TabId, TabId>,
+    timeline_collapsed: bool,
     timeline_rows: Option<u16>,
+    tree_scroll: u16,
 }
 
 impl WorkspaceModel {
@@ -1322,9 +1370,10 @@ impl WorkspaceModel {
             lost_checkouts,
             slots_swept,
             roots_shown,
+            strip_selection,
             timeline_collapsed,
             timeline_rows,
-            strip_selection,
+            tree_scroll,
         } = remembered;
         Self {
             agent_activity,
@@ -1349,9 +1398,10 @@ impl WorkspaceModel {
             lost_checkouts,
             slots_swept,
             roots_shown,
+            strip_selection,
             timeline_collapsed,
             timeline_rows,
-            strip_selection,
+            tree_scroll,
             ..Self::default()
         }
     }
@@ -1381,9 +1431,10 @@ impl WorkspaceModel {
             lost_checkouts: self.lost_checkouts,
             slots_swept: self.slots_swept,
             roots_shown: self.roots_shown,
+            strip_selection: self.strip_selection,
             timeline_collapsed: self.timeline_collapsed,
             timeline_rows: self.timeline_rows,
-            strip_selection: self.strip_selection,
+            tree_scroll: self.tree_scroll,
         }
     }
 }
@@ -1490,6 +1541,10 @@ struct WorkspaceModel {
     /// the default, so tests exercise the submission path without writing
     /// to a real UZE home.
     prompt_recorder: Option<mpsc::Sender<(PathBuf, uze_application::PromptOrigin, String)>>,
+    /// Sink for the sidebar's own remembered shape, written when the user
+    /// changes it. `None` leaves the stored layout untouched — the
+    /// default, so tests fold and drag without writing to a real UZE home.
+    layout_recorder: Option<mpsc::Sender<uze_application::SidebarLayout>>,
     /// Every repository's tasks as last evaluated, keyed by its primary
     /// checkout. Display state: the truth is Git and the task store.
     tasks: BTreeMap<PathBuf, Vec<TaskView>>,
@@ -1589,6 +1644,14 @@ struct WorkspaceModel {
     /// scrolled it to. Clamped when drawn, so a history that shrank under
     /// it still shows its tail rather than nothing.
     timeline_scroll: usize,
+    /// The first row of the space tree the sidebar shows — where the wheel
+    /// over it has scrolled to. Held to `tree_overflow`, so the tree can
+    /// never be scrolled off its own foot.
+    tree_scroll: u16,
+    /// Rows of the tree the last frame could not show (see
+    /// `render::FrameMetrics`). Zero while the whole tree fits, which is
+    /// also what makes the wheel a no-op there.
+    tree_overflow: u16,
     /// The open commit popup and the timeline row it hangs off (see
     /// `ViewHit::SelectItem`). Informational and anchored like
     /// `support_dropdown`: any click or key dismisses it.
@@ -2012,6 +2075,19 @@ impl WorkspaceModel {
     /// Same, for a redraw this client provoked by resizing the pane.
     fn note_pane_redraw(&mut self, pane: PaneId) {
         self.open_echo_window(pane, Instant::now(), AGENT_REDRAW_GRACE);
+    }
+
+    /// Keeps the sidebar's shape for the next run — sent, never written
+    /// here, so a fold costs a channel send on the input path (see
+    /// `layout_recorder`).
+    fn remember_sidebar(&self) {
+        if let Some(recorder) = self.layout_recorder.as_ref() {
+            let _ = recorder.send(uze_application::SidebarLayout {
+                width: self.sidebar_width,
+                timeline_collapsed: self.timeline_collapsed,
+                timeline_rows: self.timeline_rows,
+            });
+        }
     }
 
     /// Same, for the repaint an attach provokes across every open pane at
@@ -3162,6 +3238,7 @@ fn toggle_space_root(model: &mut WorkspaceModel, space: SpaceId) {
 /// up. Local state, same as `toggle_space_root`.
 fn toggle_timeline(model: &mut WorkspaceModel) {
     model.timeline_collapsed = !model.timeline_collapsed;
+    model.remember_sidebar();
     model.dirty = true;
 }
 
@@ -3180,6 +3257,18 @@ fn scroll_timeline(model: &mut WorkspaceModel, direction: ScrollDirection) {
         ScrollDirection::Down => model.timeline_scroll + 1,
     }
     .min(last_first);
+    model.dirty = true;
+}
+
+/// One notch of the wheel over the space tree: a row at a time, held to
+/// what the last frame found it could not show, so the foot of the tree is
+/// as far as it goes.
+fn scroll_tree(model: &mut WorkspaceModel, direction: ScrollDirection) {
+    model.tree_scroll = match direction {
+        ScrollDirection::Up => model.tree_scroll.saturating_sub(1),
+        ScrollDirection::Down => model.tree_scroll.saturating_add(1),
+    }
+    .min(model.tree_overflow);
     model.dirty = true;
 }
 

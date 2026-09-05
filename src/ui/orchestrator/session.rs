@@ -894,6 +894,13 @@ impl Attach<'_> {
                 },
             );
         }
+        if self.model.dragging_timeline || self.model.dragging_sidebar {
+            // Where the drag settled is the user's answer, kept for the
+            // next run; the widths and heights it passed through on the
+            // way there are not, which is why this is the release rather
+            // than the motion above.
+            self.model.remember_sidebar();
+        }
         self.model.dragging_sidebar = false;
         self.model.dragging_git_tree = false;
         self.model.dragging_timeline = false;
@@ -1098,6 +1105,19 @@ impl Attach<'_> {
                 && self.model.over_timeline(mouse.column, mouse.row) =>
             {
                 scroll_timeline(
+                    &mut self.model,
+                    if mouse.kind == MouseEventKind::ScrollUp {
+                        ScrollDirection::Up
+                    } else {
+                        ScrollDirection::Down
+                    },
+                );
+            }
+            // Anywhere else in the sidebar scrolls the space tree — the
+            // timeline section took the wheel over itself in the branch
+            // above, and the tree is the rest of that column.
+            _ if self.model.no_modal_open() && mouse.column < layout.sidebar.right() => {
+                scroll_tree(
                     &mut self.model,
                     if mouse.kind == MouseEventKind::ScrollUp {
                         ScrollDirection::Up
