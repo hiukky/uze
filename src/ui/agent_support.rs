@@ -105,8 +105,13 @@ pub(super) fn render(
     let width = 40.min(area.width).max(1);
     let inner_width = width.saturating_sub(2 + 2 * H_PAD) as usize;
 
+    // "agent", not "support": what this panel answers is what the agent
+    // in front of the operator is running on and what reaches it here —
+    // the harness, this checkout's context, the capabilities delivered.
+    // "Support" named the read model behind it (`AgentSupport`), which is
+    // this codebase's word, not the operator's question.
     let mut lines = vec![
-        super::title_row("support", "esc", inner_width),
+        super::title_row("agent", "esc", inner_width),
         Line::default(),
     ];
 
