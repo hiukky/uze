@@ -881,7 +881,12 @@ class Checker:
 
     def _process(self, spec: dict) -> tuple[bool, str]:
         pattern = spec["process"]["matching"]
-        alive = False
+        # `cwd` narrows to where the process is standing, which is the whole
+        # question when what is being asked is "is somebody still in this
+        # checkout". Scoped to this world either way: a bare `pgrep` counts
+        # the developer's own shells and every other world's.
+        where = spec["process"].get("cwd")
+        found = []
         for pid in subprocess.run(
             ["pgrep", "-f", pattern], capture_output=True, text=True
         ).stdout.split():
@@ -889,8 +894,24 @@ class Checker:
                 environ = Path(f"/proc/{pid}/environ").read_bytes()
             except OSError:
                 continue
-            if f"HOME={self.world.home}".encode() in environ:
-                alive = True
+            if f"HOME={self.world.home}".encode() not in environ:
+                continue
+            if where:
+                try:
+                    cwd = str(Path(f"/proc/{pid}/cwd").resolve())
+                except OSError:
+                    continue
+                if where not in cwd:
+                    continue
+                found.append(f"{pid} in {cwd}")
+            else:
+                found.append(pid)
+        alive = bool(found)
+        if "count" in spec["process"] and len(found) != spec["process"]["count"]:
+            return (
+                False,
+                f"{pattern}: expected {spec['process']['count']}, found {found}",
+            )
         if alive != spec["process"].get("alive", True):
             return (
                 False,
