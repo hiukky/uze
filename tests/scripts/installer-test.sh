@@ -44,7 +44,7 @@ make_fake_bin() { # $1=fake dir  $2=version string printed by `uze --version`
   chmod +x "$1/uze"
 }
 
-mk_tarball() { # $1=dest dir  $2=target triple  $3=fake bin dir
+mk_tarball() { # $1=dest dir  $2=platform  $3=fake bin dir
   (cd "$3" && tar -czf "$1/uze-$2.tar.gz" uze)
 }
 
@@ -58,10 +58,10 @@ make_fake_bin "$work/musl/fake-bin" "9.9.9-musl"
 make_fake_bin "$work/pinned/fake-bin" "9.9.9-pinned"
 make_fake_bin "$work/corrupt/fake-bin" "9.9.9-corrupt"
 
-mk_tarball "$latest" x86_64-unknown-linux-gnu "$work/glibc/fake-bin"
-mk_tarball "$latest" x86_64-unknown-linux-musl "$work/musl/fake-bin"
-mk_tarball "$pinned" x86_64-unknown-linux-gnu "$work/pinned/fake-bin"
-mk_tarball "$bad" x86_64-unknown-linux-gnu "$work/corrupt/fake-bin"
+mk_tarball "$latest" x86_64-linux-gnu "$work/glibc/fake-bin"
+mk_tarball "$latest" x86_64-linux-musl "$work/musl/fake-bin"
+mk_tarball "$pinned" x86_64-linux-gnu "$work/pinned/fake-bin"
+mk_tarball "$bad" x86_64-linux-gnu "$work/corrupt/fake-bin"
 mk_sums "$latest"
 mk_sums "$pinned"
 mk_sums "$bad"
@@ -118,7 +118,7 @@ fake_uname() { # $1=fake bin dir  $2=os  $3=arch
   chmod +x "$1/uname"
 }
 
-archive_glibc="uze-$(uname -m | sed 's/^amd64$/x86_64/;s/^arm64$/aarch64/')-unknown-linux-gnu.tar.gz"
+archive_glibc="uze-$(uname -m | sed 's/^amd64$/x86_64/;s/^arm64$/aarch64/')-linux-gnu.tar.gz"
 
 # Syntax door check.
 sh -n "$installer"
@@ -159,8 +159,8 @@ run_installer "$work/out2.log" UZE_BASE_URL="$base" UZE_BIN_DIR="$work/bin2" \
 check "musl install succeeds" $?
 "$work/bin2/uze" --version | grep -q "9.9.9-musl"
 check "installed binary is the musl artifact" $?
-grep -q "unknown-linux-musl" "$work/out2.log"
-check "musl target triple is selected" $?
+grep -q "linux-musl" "$work/out2.log"
+check "the musl platform is selected" $?
 
 # Pinned version resolves the /v<version>/ path.
 run_installer "$work/out3.log" UZE_BASE_URL="$base" UZE_BIN_DIR="$work/bin3" \

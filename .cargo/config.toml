@@ -8,3 +8,18 @@
 # `RUST_TEST_THREADS=N` on hosts that need to cap it (e.g. memory-constrained WSL).
 [build]
 jobs = 2
+
+# syntect pulls `onig_sys`, which compiles Oniguruma from C: a musl target
+# therefore needs a musl C compiler, not just the Rust musl std. cc-rs looks
+# for `<target>-linux-musl-gcc`, a name `musl-tools` does not install, and the
+# build fails with `failed to find tool "x86_64-linux-musl-gcc"` — which cost
+# a release two of its four artifacts before CI set these by hand. Declared
+# here so a musl build works the same way locally and in CI. `[env]` does not
+# force: an exported CC_* still wins, and a cross toolchain named differently
+# can be pointed at without editing this file.
+#
+# Building musl locally still needs the compiler itself (`apt install
+# musl-tools`) and the target (`rustup target add x86_64-unknown-linux-musl`).
+[env]
+CC_x86_64_unknown_linux_musl = "musl-gcc"
+CC_aarch64_unknown_linux_musl = "musl-gcc"

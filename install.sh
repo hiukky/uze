@@ -175,8 +175,13 @@ if command -v ldd >/dev/null 2>&1 && ldd --version 2>&1 | grep -qi musl; then
   libc="musl"
 fi
 
-target="${target_arch}-unknown-linux-${libc}"
-archive="uze-${target}.tar.gz"
+# The asset is named after the Rust target triple with its vendor field
+# dropped: `unknown` is what a triple says when there is no vendor, and a
+# download named after nothing is a download the reader has to decode before
+# trusting. What remains — `<arch>-linux-<libc>` — is the Debian multiarch
+# triplet, and it still answers the only two questions the choice turns on.
+platform="${target_arch}-linux-${libc}"
+archive="uze-${platform}.tar.gz"
 
 # --- workspace ----------------------------------------------------------------
 tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/uze-install.XXXXXX")"
@@ -202,11 +207,11 @@ else
   path="latest/download"
 fi
 
-# The version slot carries the target instead: which build this machine
+# The version slot carries the platform instead: which build this machine
 # gets is the one fact the header can state before the download resolves
 # what "latest" currently means.
 printf '%s%s%s\n' "$BRIGHT" "$(centred UZE)" "$RESET"
-printf '%s%s%s\n' "$MUTED" "$(centred "$target")" "$RESET"
+printf '%s%s%s\n' "$MUTED" "$(centred "$platform")" "$RESET"
 printf '%s%s%s\n' "$MUTED" "$(centred 'Agent environment manager')" "$RESET"
 say ""
 note "${base_url}/${path}/${archive}"

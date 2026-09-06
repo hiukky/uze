@@ -5,7 +5,7 @@ UZE_BIN ?= target/debug/uze
 RELEASE_BIN ?= target/release/uze
 INSTALL_ARGS ?= --force
 
-.PHONY: help build release install wsl-lab run test test-acceptance test-conformance test-installer harness-test harness-matrix check ci fmt lint deny msrv web audit secrets installer attributions attributions-check coverage version clean changelog lab-image lab-run lab-evidence lab-sandbox lab-experiment lab-matrix lab-replay python-fmt python-lint
+.PHONY: help build release install wsl-lab run test test-acceptance test-conformance test-installer harness-test harness-matrix check ci fmt lint deny msrv web audit secrets installer attributions attributions-check coverage version clean changelog release-notes lab-image lab-run lab-evidence lab-sandbox lab-experiment lab-matrix lab-replay python-fmt python-lint
 
 help: ## Show the available local-development targets.
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z0-9_.-]+:.*##/ { printf "  %-12s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -21,6 +21,9 @@ version: ## Print the single workspace version carried by the UZE binary.
 
 changelog: ## Regenerate CHANGELOG.md from Conventional Commits (git-cliff; see cliff.toml).
 	git-cliff -o CHANGELOG.md
+
+release-notes: ## Preview the GitHub Release page for the latest tag (cliff.release.toml); set GITHUB_TOKEN for contributor handles.
+	git-cliff --config cliff.release.toml --latest
 
 install: ## Force-rebuild (no version bump) and install/replace `uze` in Cargo's configured binary directory.
 	$(CARGO) install --path . --bin uze --locked $(INSTALL_ARGS)
