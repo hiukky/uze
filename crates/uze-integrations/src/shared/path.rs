@@ -134,3 +134,27 @@ mod normalize_declared_relative_path_tests {
         );
     }
 }
+
+/// Removes the directory `artifact` was staged in, when detaching `artifact`
+/// left it empty — never climbing past `root`.
+///
+/// Every integration stages a generated artifact two levels deep,
+/// `<root>/<package>/<capability>`, so detaching a package's last capability
+/// used to leave the package's own directory behind: empty, covered by no
+/// receipt, and accumulating one per removed plugin per harness. It is UZE's
+/// own state rather than anything a harness reads, which is why it went
+/// unnoticed — and why it is worth removing, since "every managed artifact is
+/// tracked by a receipt" is either true or it is not.
+///
+/// `remove_dir` is the guard as much as the action: it refuses a directory
+/// that still holds another of the package's capabilities, so no check for
+/// siblings is needed and none can go stale.
+pub fn prune_empty_package_dir(artifact: &Path, root: &Path) {
+    let Some(parent) = artifact.parent() else {
+        return;
+    };
+    if parent == root || !parent.starts_with(root) {
+        return;
+    }
+    let _ = std::fs::remove_dir(parent);
+}

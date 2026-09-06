@@ -145,6 +145,15 @@ impl OpenCodeIntegration {
         }
         if target.join("SKILL.md").is_file() {
             fs_remove_dir_all(target)?;
+            crate::shared::path::prune_empty_package_dir(
+                target,
+                &self
+                    .uze_home
+                    .state_dir()
+                    .join("attachments")
+                    .join("opencode")
+                    .join("skills"),
+            );
         }
         Ok(())
     }
