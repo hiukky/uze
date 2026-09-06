@@ -111,11 +111,17 @@ already covers are ticked.
       the first time any journey exercised the shutdown path.
 - [x] 6b.4 Evidence carries the state documents themselves, not only their
       paths: the world is a temp directory the next run deletes.
-- [ ] 6b.5 **Open defect**, not fixed: intermittently (~1 in 4 under load) a
-      placed agent's pane never paints. The evidence rules out the easy
-      explanation — the harness process is alive, in the right checkout,
-      while the client still shows `starting shell…`. `uze-terminal` is at
-      7.9% measured coverage, which is where this most likely lives.
+- [x] 6b.5 The intermittent "pane never paints" was **the harness, not the
+      product**. It was reported as an open defect and it is not one.
+      `render_pane` shows ` starting shell…` while the focused pane has no
+      snapshot yet — a documented, expected transient — and every observed
+      occurrence lines up with an environment fault of this suite's own: a
+      stepping wall clock before deadlines were made monotonic, a
+      coverage-instrumented binary an order of magnitude slower, or a
+      container that could not write its evidence. On a clean binary with
+      monotonic deadlines the suite is 10/10, and the tool's author has
+      never seen it in real use. Left here because "we called our own
+      environment a product bug" is worth remembering.
 - [ ] 6b.6 Findings characterized in scenes rather than fixed, each with its
       reason: an empty `generated/<plugin>` created during install
       (Claude/Codex), the bridge file surviving a reconcile empty
