@@ -948,13 +948,19 @@ impl TuiModel {
     }
 
     /// The path the workspace-aware read models resolve against: the
-    /// detected workspace root when there is one, else the cwd (which
-    /// `NoWorkspace`'s summary itself canonicalizes).
+    /// detected workspace root when there is one, else the same answer
+    /// resolved directly.
+    ///
+    /// The fallback resolves rather than handing back the raw cwd, because
+    /// this keys UZE-owned state — the prompt history a screen clears is
+    /// the one it is listing, and that listing is seeded before the
+    /// workspace summary lands (see `worker::recent_prompts`). Reached
+    /// only from a key press, never from a frame.
     pub(crate) fn workspace_root(&self) -> PathBuf {
         self.workspace
             .as_ref()
             .map(|workspace| workspace.root.clone())
-            .unwrap_or_else(|| self.context_root.clone())
+            .unwrap_or_else(|| uze_application::workspace_root_or_self(&self.context_root))
     }
 
     /// `Some(root)` exactly when the Application reports the project

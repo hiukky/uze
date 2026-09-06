@@ -13,7 +13,7 @@ use std::{
 use uze_application::Preferences;
 
 use uze_application::{
-    Result, UzeApplication, UzeError, UzeHome,
+    PromptEntry, Result, UzeApplication, UzeError, UzeHome,
     application::{
         ContextPlan, ContextReconciliationReport, InstallReport, ProfileApplyResult,
         ProjectContextStatus, RemovePluginReport, UpdatePluginReport,
@@ -456,6 +456,30 @@ pub(crate) fn spawn_startup(home: UzeHome, sender: Sender<WorkerResult>, context
     });
 }
 
+/// How many prompts a listing carries.
+const PROMPT_HISTORY_LIMIT: usize = 20;
+
+/// The workspace's recent prompts, read on the caller's thread.
+///
+/// One small owner-only file under `UzeHome`, and the one part of a
+/// refresh with no reason to wait on the rest of it. `spawn_startup` seeds
+/// default plugins and runs the official-snapshot auto-update — harness
+/// detection, possibly the network — before it composes a `RefreshData`,
+/// so a management screen that learned its history only from that worker
+/// opened reading "no history yet" for as long as those took. That is the
+/// same words the Overview says when there genuinely is none, which made
+/// prompts already on disk look lost.
+pub(crate) fn recent_prompts(home: UzeHome, context_root: &std::path::Path) -> Vec<PromptEntry> {
+    let Ok(app) = tui_application(home) else {
+        return Vec::new();
+    };
+    // The root the workspace client records against — resolved the same
+    // way `load_refresh_data` resolves it, so the seed and the refresh
+    // that replaces it read one file.
+    let root = app.workspace().root(context_root);
+    app.workspace().prompt_history(&root, PROMPT_HISTORY_LIMIT)
+}
+
 fn load_refresh_data(home: UzeHome, context_root: &std::path::Path) -> Result<RefreshData> {
     let app = tui_application(home)?;
     let mut plugins = app.plugins().list()?;
@@ -482,7 +506,9 @@ fn load_refresh_data(home: UzeHome, context_root: &std::path::Path) -> Result<Re
     let context_status = app.context().inspect(status_root).ok();
     // Same root the workspace client records against, so a uze launched
     // from a subdirectory still reads back its own history.
-    let prompt_history = app.workspace().prompt_history(status_root, 20);
+    let prompt_history = app
+        .workspace()
+        .prompt_history(status_root, PROMPT_HISTORY_LIMIT);
     Ok(RefreshData {
         plugins,
         doctor: Some(doctor),
