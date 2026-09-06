@@ -66,12 +66,14 @@ pub mod theme_state;
 // which is the second reason for keeping them: the crate root is where a
 // reader looks first.
 pub use capability::{hook, skill};
-pub use delivery::{engine, exposure, integration, persistence, reconciliation, router, state};
+pub use delivery::{
+    continuity, engine, exposure, integration, persistence, reconciliation, router, state,
+};
 pub use machine::{detection_cache, harness_runtime, home, provisioning, shell_path, subprocess};
 pub use package::{acquisition, bundle, importer, importers, naming, store, trust};
 pub use project::{
-    checkout, context, landing, manifest, project_context, project_lock, project_root, task,
-    text_region, workspace, worktree,
+    checkout, context, conversation, landing, manifest, project_context, project_lock,
+    project_root, task, text_region, workspace, worktree,
 };
 
 pub use acquisition::{MaterializedPackage, PackageSource, Provenance, ResolvedSource};

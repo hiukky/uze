@@ -1,11 +1,17 @@
 //! Harness-agnostic integration and managed-attachment contracts.
 
-use std::{collections::BTreeMap, fs, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    ffi::OsString,
+    fs,
+    path::{Path, PathBuf},
+};
 
 use serde::{Deserialize, Serialize};
 
 use crate::{
     capability::CapabilityKind,
+    conversation::SessionId,
     error::Result,
     exposure::{ExposureMechanism, ExposurePlan, McpEnvironmentReference, PackageExposurePlan},
     harness_runtime::{HarnessRuntimeContribution, RuntimeContext},
@@ -173,6 +179,39 @@ pub enum ContextDelivery {
     None,
 }
 
+/// How a harness lets a conversation be picked up again.
+///
+/// Declared, never assumed: a harness UZE has no mechanism for says so, and
+/// its agents start fresh with the reason stated, rather than quietly
+/// looking like they carried something over.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SessionContinuity {
+    /// UZE names the conversation at launch and resumes by the same name.
+    /// The identifier is known before the process starts, so nothing has to
+    /// be read back and no vendor record is ever parsed.
+    Assigned,
+    /// The harness names its own conversation; UZE reads the name back from
+    /// that harness's records afterwards.
+    Observed,
+    /// No mechanism UZE can drive.
+    Unsupported,
+}
+
+/// What a read-back is allowed to accept, gathered at the launch it answers
+/// for.
+pub struct ObservationContext<'a> {
+    /// The checkout the agent was launched in — the only directory whose
+    /// conversations belong to this task.
+    pub cwd: &'a Path,
+    /// Nothing older than this launch is a candidate.
+    pub since_unix: u64,
+    /// What this harness's records already pointed at for `cwd` when the
+    /// launch started, for a harness that keeps one entry per directory
+    /// rather than timestamping conversations: reading that same value back
+    /// means nothing new was started.
+    pub preceded_by: Option<&'a SessionId>,
+}
+
 pub trait IntegrationPort {
     fn id(&self) -> &'static str;
 
@@ -229,6 +268,51 @@ pub trait IntegrationPort {
     /// contribution performs writes.
     fn runtime_contribution_would_activate(&self, ctx: &RuntimeContext) -> bool {
         !self.runtime_contribution(ctx).is_passthrough()
+    }
+
+    /// How this harness lets an agent's conversation be picked up again.
+    /// The vendor-neutral default is that it does not: an integration that
+    /// says nothing here contributes no argument and reports no
+    /// conversation, which is what makes a fifth harness safe before anyone
+    /// has looked into its mechanism.
+    fn session_continuity(&self) -> SessionContinuity {
+        SessionContinuity::Unsupported
+    }
+
+    /// Arguments that start a conversation UZE has named. Only
+    /// [`SessionContinuity::Assigned`] answers this.
+    fn start_session_args(&self, _session: &SessionId) -> Vec<OsString> {
+        Vec::new()
+    }
+
+    /// Arguments that continue a conversation already recorded.
+    fn resume_session_args(&self, _session: &SessionId) -> Vec<OsString> {
+        Vec::new()
+    }
+
+    /// What this harness's own records already point at for `cwd`, read at
+    /// launch so a later read-back can tell a new conversation from the one
+    /// that was already there. `None` where the launch time is guard enough.
+    fn session_recorded_for(&self, _cwd: &Path) -> Option<SessionId> {
+        None
+    }
+
+    /// The conversation this harness started for `ctx`, read from its own
+    /// records. Only [`SessionContinuity::Observed`] answers this, and
+    /// `None` — nothing started yet, records unreadable, nothing new since
+    /// the launch — is always a valid answer: the caller waits rather than
+    /// guesses.
+    fn observe_session(&self, _ctx: &ObservationContext) -> Option<SessionId> {
+        None
+    }
+
+    /// Whether the harness still holds `session`, asked before resuming
+    /// into it. The default is `true`: `exec` cannot retry, so a harness
+    /// that cannot answer cheaply is taken at its word, and a resume that
+    /// then fails is the harness's own error rather than a pane UZE killed
+    /// by guessing.
+    fn session_exists(&self, _session: &SessionId, _cwd: &Path) -> bool {
+        true
     }
 
     /// Whether this harness's [`Self::runtime_contribution`] is the
@@ -1108,4 +1192,63 @@ pub fn managed_artifact_present(artifact: &ManagedArtifact) -> bool {
         return fs::read_link(path).is_ok_and(|resolved| resolved == *target);
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::router::HarnessCapabilities;
+
+    /// A harness nobody has looked into yet.
+    struct UndeclaredIntegration;
+    impl IntegrationPort for UndeclaredIntegration {
+        fn id(&self) -> &'static str {
+            "undeclared"
+        }
+        fn capabilities(&self) -> HarnessCapabilities {
+            HarnessCapabilities::default()
+        }
+        fn exposure_plan(&self, _resource: &crate::Resource) -> ExposurePlan {
+            panic!("not used")
+        }
+        fn detect(&self) -> HarnessDetection {
+            HarnessDetection::default()
+        }
+    }
+
+    /// The whole point of the default: a fifth harness is safe before
+    /// anyone has answered the continuity questions for it.
+    #[test]
+    fn an_integration_that_declares_nothing_contributes_no_session_argument() {
+        let integration = UndeclaredIntegration;
+        let session = SessionId::new("whatever");
+        let cwd = std::path::Path::new("/tmp");
+
+        assert_eq!(
+            integration.session_continuity(),
+            SessionContinuity::Unsupported
+        );
+        assert!(integration.start_session_args(&session).is_empty());
+        assert!(integration.resume_session_args(&session).is_empty());
+        assert_eq!(integration.session_recorded_for(cwd), None);
+        assert_eq!(
+            integration.observe_session(&ObservationContext {
+                cwd,
+                since_unix: 0,
+                preceded_by: None,
+            }),
+            None
+        );
+    }
+
+    /// `exec` cannot retry, so "I cannot tell you cheaply" must not read as
+    /// "it is gone" — that would start a fresh conversation over a resume
+    /// that would have worked.
+    #[test]
+    fn a_harness_that_cannot_answer_cheaply_is_taken_at_its_word() {
+        assert!(
+            UndeclaredIntegration
+                .session_exists(&SessionId::new("s"), std::path::Path::new("/tmp"))
+        );
+    }
 }

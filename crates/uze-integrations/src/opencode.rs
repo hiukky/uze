@@ -44,6 +44,7 @@ use uze_core::{
 mod mcp;
 mod preferences;
 mod provision;
+mod session;
 mod skills;
 
 use crate::hooks as hook_projection;
@@ -76,6 +77,14 @@ impl OpenCodeIntegration {
             uze_home,
         }
     }
+    /// What a conversation query needs: the real binary to ask, and the
+    /// `HOME` to ask it under. `None` when the harness is not installed.
+    fn session_query(&self) -> Option<(PathBuf, PathBuf)> {
+        let executable = session::executable(&self.uze_home.shims_dir())?;
+        let home = resolve_home_and_xdg(&self.config_path).0?;
+        Some((executable, home))
+    }
+
     /// Env-based constructor for the CLI composition root (`registry.rs`).
     pub fn from_env(uze_home: UzeHome) -> Result<Self> {
         let home = PathBuf::from(std::env::var_os("HOME").ok_or(UzeError::MissingHomeDirectory)?);
@@ -151,6 +160,38 @@ impl IntegrationPort for OpenCodeIntegration {
     fn hook_capabilities(&self) -> uze_core::hook::HookCapabilities {
         hook_projection::opencode_capabilities()
     }
+    fn session_continuity(&self) -> uze_core::integration::SessionContinuity {
+        uze_core::integration::SessionContinuity::Observed
+    }
+
+    fn resume_session_args(
+        &self,
+        session: &uze_core::conversation::SessionId,
+    ) -> Vec<std::ffi::OsString> {
+        session::resume_args(session)
+    }
+
+    fn session_recorded_for(&self, cwd: &Path) -> Option<uze_core::conversation::SessionId> {
+        session::recorded_for(cwd)
+    }
+
+    fn observe_session(
+        &self,
+        ctx: &uze_core::integration::ObservationContext,
+    ) -> Option<uze_core::conversation::SessionId> {
+        let (executable, home) = self.session_query()?;
+        session::observe(&executable, &home, ctx)
+    }
+
+    fn session_exists(&self, session: &uze_core::conversation::SessionId, _cwd: &Path) -> bool {
+        match self.session_query() {
+            Some((executable, home)) => session::exists(&executable, &home, session),
+            // Nothing to ask: an uninstalled harness is not evidence that a
+            // conversation is gone.
+            None => true,
+        }
+    }
+
     fn detect(&self) -> HarnessDetection {
         resolve_opencode_binary(&self.uze_home.shims_dir())
             .map(|(_, detection)| detection)

@@ -120,11 +120,21 @@ impl UzeApplication {
 /// caller has to reach the registry — naming a concrete harness is what
 /// `cli_and_tui_never_name_a_vendor_harness` forbids, and a descriptor is
 /// how presentation stays on the right side of it.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AgentIdentity {
     pub binary: &'static str,
     pub integration: &'static str,
     pub display_name: &'static str,
+    /// The program an agent of this harness is launched by: UZE's own
+    /// launcher when the operator has one for this harness, the plain
+    /// binary otherwise. Naming it here rather than leaving it to `PATH`
+    /// is what keeps a conversation carrying over without asking the
+    /// operator to reorder their own environment.
+    pub launch: std::path::PathBuf,
+    /// Why an agent of this harness starts a conversation it will not be
+    /// able to continue, when that is the case. `None` is the ordinary
+    /// answer; a value is meant to be said once, on the tab.
+    pub continuity_gap: Option<String>,
 }
 
 /// The workspace service's own file — named for what it holds rather
@@ -168,6 +178,19 @@ impl Hooks<'_> {
         let input = adapter
             .normalize_input(native, event)
             .map_err(UzeError::HookDispatch)?;
+        // A dispatch is the harness itself saying which conversation it is
+        // in, through the surface its vendor documents — the one channel
+        // that needs no records read and no guessing at all. Recorded
+        // before the handlers run, so a handler that denies the operation
+        // does not also lose the fact.
+        if let (Some(cwd), Some(session)) = (&input.context.cwd, &input.context.session_id) {
+            uze_core::continuity::record_observed(
+                &self.0.home,
+                std::path::Path::new(cwd),
+                &input.harness,
+                uze_core::conversation::SessionId::new(session.clone()),
+            );
+        }
         let authored = hook::PortableHook {
             id: "dispatch".to_owned(),
             event,

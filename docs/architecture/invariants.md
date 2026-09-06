@@ -806,6 +806,61 @@ inside a client.
 
 ---
 
+## Agent session continuity (`add-agent-session-continuity`)
+
+### A conversation belongs to a task, never to a directory
+
+What an agent resumes is recorded against the task, in UZE's own state
+outside every checkout. A slot reset keeps it, a slot recycled for the next
+task never inherits it, and a task given its checkout back finds what it
+left.
+
+> `crates/uze-core/src/project/conversation.rs::a_recycled_slots_new_task_finds_nothing_the_previous_one_left`
+> `crates/uze-core/src/project/conversation.rs::the_newest_task_naming_a_checkout_owns_it`
+
+### A relaunch resumes; the decision is made where every relaunch passes
+
+Resume-or-start is decided inside the launched process, on the launch
+boundary — the only place the terminal runtime's own restore reaches, with
+no client present. A first launch names or records the conversation; the
+next one continues it.
+
+> `tests/acceptance/session_continuity.rs::a_relaunched_agent_resumes_the_conversation_its_task_was_left_in`
+> `crates/uze-core/src/delivery/continuity.rs::a_second_launch_resumes_what_the_first_recorded`
+
+### Continuity never rewrites an invocation and never blocks a launch
+
+An invocation carrying anything of the operator's own is launched exactly as
+typed, a directory no task owns is untouched, and every failure — a
+conversation the harness no longer holds, unreadable state, a harness that
+declares no mechanism — starts the agent anyway.
+
+> `tests/acceptance/session_continuity.rs::an_invocation_the_operator_composed_is_launched_exactly_as_typed`
+> `tests/acceptance/session_continuity.rs::a_directory_no_task_owns_launches_the_harness_untouched`
+> `crates/uze-core/src/delivery/continuity.rs::a_conversation_the_harness_no_longer_holds_starts_a_new_one_and_says_so`
+> `crates/uze-core/src/delivery/continuity.rs::unreadable_state_still_launches_the_agent`
+
+### The record follows the agent, not the assignment
+
+An identifier written once at launch goes stale the moment the person
+clears, forks or switches the conversation. What is recorded is the last one
+observed for the task, so what resumes is where the work was left.
+
+> `crates/uze-core/src/delivery/continuity.rs::a_conversation_the_agent_moved_to_replaces_the_one_it_started_in`
+> `crates/uze-core/src/delivery/continuity.rs::an_answer_to_a_replaced_launch_is_dropped`
+
+### Continuity is declared per harness, and the matrix is derived from it
+
+A harness says whether UZE may name its conversation, must read the name
+back, or has no mechanism at all; the default is none, so a harness nobody
+has looked into contributes no argument and reports no conversation. The
+published matrix reads that declaration rather than restating it.
+
+> `crates/uze-core/src/delivery/integration.rs::an_integration_that_declares_nothing_contributes_no_session_argument`
+> `src/bin/uze-harness-matrix.rs --check` (pre-push; stale docs fail the push)
+
+---
+
 ## Runtime projection lifecycle (ADR-014)
 
 ### A projection belongs to a project root, and no two share one

@@ -10,5 +10,6 @@ mod fresh_project;
 mod lifecycle;
 mod multi_harness;
 mod runtime_shim;
+mod session_continuity;
 mod util;
 mod workspace_health;

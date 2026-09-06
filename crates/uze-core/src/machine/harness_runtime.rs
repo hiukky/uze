@@ -279,6 +279,18 @@ fn write_marker(project_dir: &Path, canonical_project_root: &Path) -> Result<()>
 
 #[cfg(test)]
 mod tests {
+    /// The Conformance Lab reproduces this digest in Python to write a task
+    /// document by hand (`conformance/contract/continuity.py::project_id`).
+    /// A drift here makes that scene fail rather than pass wrongly, and this
+    /// is where the two are pinned to one another.
+    #[test]
+    fn the_lab_reproduces_this_digest() {
+        assert_eq!(
+            super::project_id_for(std::path::Path::new("/work/project")),
+            "9f033b4e78300849"
+        );
+    }
+
     use super::*;
     use std::fs;
 

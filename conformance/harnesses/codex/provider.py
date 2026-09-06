@@ -37,6 +37,11 @@ LEAF_KEY = os.environ.get("LEAF_KEY", "/app/leaf.key")
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 ISOLATION_MARKERS = ["already isolated", "UZE_CONFORMANCE_REBASE"]
+#: One turn each. A single request carrying both is what proves a relaunched
+#: process was given the conversation the first one made — the union across
+#: requests cannot say that, since the first process's own request already
+#: carried the first of them.
+CONTINUITY_MARKERS = ["UZE_CONFORMANCE_ACORN", "UZE_CONFORMANCE_WALNUT"]
 SKILL_MARKERS = [
     "flow:commit",
     "flow:review",
@@ -102,6 +107,7 @@ def structural_summary(body_text):
     return {
         "skill_markers": {m: (m in body) for m in SKILL_MARKERS},
         "isolation_markers": {m: (m in body) for m in ISOLATION_MARKERS},
+        "continuity_markers": {m: (m in body) for m in CONTINUITY_MARKERS},
         "custom_tools": tools,
         "preview": body[:900],
         "has_available_skills": "### Available skills" in body,

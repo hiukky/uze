@@ -2,6 +2,7 @@
 
 import time
 
+from contract import continuity
 from contract.bindings import Bindings
 from contract.tui import Tui
 
@@ -25,6 +26,22 @@ class OpenCodeBindings(Bindings):
     def session_in(self, cfg, prov_ip, cwd, prelude):
         final = f"{prelude}\ncd {cwd} && {self.launch}"
         return Tui(cfg, opencode_container(cfg, prov_ip, final), "opencode-isolation")
+
+    def relaunch_in(self, cfg, prov_ip, cwd, prelude):
+        """Two launches in one terminal, back to back, through the scene's
+        own launcher rather than the image's — the task record this contract
+        writes lives under the run's `UZE_HOME`, and the launcher has to read
+        the same one."""
+        launcher = f"{continuity.launcher(self.launcher_name())} --standalone"
+        final = f"{prelude}\ncd {cwd} && {launcher}; {launcher}"
+        return Tui(cfg, opencode_container(cfg, prov_ip, final), "opencode-continuity")
+
+    def quit(self, tui):
+        """The two interrupts every scene in this vertical ends on."""
+        tui.child.send("\x03")
+        time.sleep(0.5)
+        tui.child.send("\x03")
+        time.sleep(2.0)
 
     def skill_catalog(self, tui):
         time.sleep(self.warmup)

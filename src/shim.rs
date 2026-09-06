@@ -27,7 +27,7 @@ use std::{
 };
 
 use uze_core::{
-    UzeHome,
+    UzeHome, continuity,
     harness_runtime::{self, HarnessRuntimeContribution, RuntimeContext},
 };
 use uze_integrations::registry::IntegrationRegistry;
@@ -108,14 +108,12 @@ pub fn run(shim_name: &str) -> ! {
         );
     }
 
-    let contribution = match &integration {
-        Some(integration) => {
-            let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-            integration.runtime_contribution(&RuntimeContext {
-                cwd: &cwd,
-                home: &home,
-            })
-        }
+    let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let mut contribution = match &integration {
+        Some(integration) => integration.runtime_contribution(&RuntimeContext {
+            cwd: &cwd,
+            home: &home,
+        }),
         None => HarnessRuntimeContribution::passthrough(),
     };
 
@@ -124,6 +122,27 @@ pub fn run(shim_name: &str) -> ! {
             "uze: runtime projection unavailable ({note}); launching {shim_name} without \
              portable context."
         );
+    }
+
+    // Only a launch the caller composed nothing of. It is the cheapest rule
+    // that keeps every promise: the harness's own session arguments win
+    // because UZE never competes with them, a prompt on the command line
+    // still starts what was asked for, and a resume spelled as a subcommand
+    // is only ever prepended where nothing sits in front of it to break.
+    if original_args.is_empty()
+        && let Some(integration) = &integration
+    {
+        let session = continuity::plan(&home, &cwd, *integration);
+        if let Some(note) = &session.note {
+            eprintln!("uze: {note}.");
+        }
+        // Ahead of the contribution's own arguments: a harness whose resume
+        // is a subcommand needs it at the front of the line.
+        contribution.extra_args = session
+            .args
+            .into_iter()
+            .chain(contribution.extra_args)
+            .collect();
     }
 
     exec_or_die(&executable, &original_args, &contribution, shim_name);

@@ -18,6 +18,10 @@ class Bindings:
     #: Registry id, matching the integration's own.
     harness = ""
 
+    #: The name UZE's launcher is installed under for this harness, when it
+    #: differs from the registry id (`shim_name()` on the integration).
+    launcher = ""
+
     #: The command run inside the container to start the TUI.
     launch = ""
 
@@ -47,6 +51,28 @@ class Bindings:
     def session_in(self, cfg, prov_ip, cwd, prelude):
         """A live TUI started in `cwd` after `prelude` — a shell script the
         contract wrote to lay a scene down — has run in the container."""
+        raise NotImplementedError
+
+    def launcher_name(self):
+        """The launcher's file name — the id unless the harness declares
+        another, the same rule the integration's own `shim_name` follows."""
+        return self.launcher or self.harness
+
+    def relaunch_in(self, cfg, prov_ip, cwd, prelude):
+        """A terminal in `cwd` that runs this harness, and then runs it
+        again when the first one ends — what the terminal runtime does when
+        it restores a workspace after a restart.
+
+        Both launches go through UZE's own launcher, because that is where
+        the resume-or-start decision is made. A harness that cannot be
+        driven this way declines through `unsupported("relaunch_in")`.
+        """
+        raise NotImplementedError
+
+    def quit(self, tui):
+        """Ends the running process the way a person would, so the next one
+        starts in its place. Mechanics: every harness spells this
+        differently, and none of them spells it in a contract."""
         raise NotImplementedError
 
     def skill_catalog(self, tui):

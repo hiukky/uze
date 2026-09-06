@@ -1,0 +1,134 @@
+journey: an agent that comes back after a restart comes back to its own conversation
+tags: [gate, tui, recovery]
+proves: web/content/docs/workspace.mdx
+about: |
+  The process holding the panes is a daemon, and daemons die — a machine
+  reboots, a session is logged out, somebody kills the wrong thing. What
+  comes back is a workspace with the same spaces, the same tabs and the same
+  agents relaunched into the same checkouts, which is the whole reason the
+  terminal runtime outlives its client.
+
+  What must come back with them is the conversation. An agent relaunched
+  into a fresh conversation has kept its checkout and its branch and lost
+  everything it was told: the plan, the constraints, what it already tried.
+  So a launch decides, at the moment the process starts, whether it resumes
+  the conversation recorded for this task or begins one — and it decides it
+  in UZE's own launcher, because that is the only thing on the path of a
+  relaunch nobody asked for, with no client in the room to compose a
+  command.
+
+  Read off the machine, the claim is two facts about the harness's own
+  files: the identifier the second launch was given is the one the first
+  launch created, and there is still exactly one conversation in that
+  checkout — a second transcript is precisely what starting over leaves
+  behind.
+
+world:
+  project: demo-app
+  manifest: |
+    worktrees:
+      target: main
+      completion: handoff
+      slots: 3
+
+scenes:
+  - scene: an agent placed through UZE's own launcher names the conversation it starts
+    when:
+      - shell: "{uze} setup"
+        say: the operator provisions their harnesses, which is what installs the launcher
+        check: false
+      - open: "{uze}"
+        expect: demo-app
+        expect_timeout: 20
+        pause: 1.0
+      - click: "│"
+        say: open the new-agent picker
+        in: strip
+        occurrence: 2
+        offset: 2
+        expect: new agent
+      - click: " new agent "
+        say: place a Claude agent
+        in: pane
+        row_offset: 1
+        offset: 3
+        expect: Claude Code v
+        expect_timeout: 45
+        pause: 2.0
+    then:
+      - link: "{uze_home}/shims/claude"
+        resolves_to: uze
+        about: |
+          the launcher exists because provisioning created it, and it is
+          UZE's own binary — the presence of this one symlink is the whole
+          opt-in, and nothing places an agent through it without it
+      - tasks: { count: 1, states: [running] }
+      - dir: "{project}/.worktrees/*"
+        count: 1
+        about: one agent, in one checkout of its own
+      - capture: { name: first_slot, dirs: "{project}/.worktrees/*" }
+      - file: "{world}/bin/.invocations/claude.log"
+        contains: "--session-id"
+        about: |
+          the harness was told which conversation to open rather than left
+          to name one UZE would then have to go looking for
+      - file: "{home}/.claude/projects/*/*.jsonl"
+        count: 1
+        about: and it wrote exactly one conversation for this checkout
+
+  - scene: the process holding the panes dies, and the workspace comes back with it
+    when:
+      # `$$` and the bracketed letter keep this from matching itself:
+      # `pgrep -f` reads the whole command line, and the command line of the
+      # shell running these very words contains the pattern it is looking
+      # for — a loop that kills its own shell before reaching the daemon.
+      - shell: |
+          for pid in $(pgrep -f '{uze}'); do
+            [ "$pid" = "$$" ] && continue
+            tr '\0' '\n' < /proc/$pid/environ 2>/dev/null \
+              | grep -qx 'HOME={home}' && kill -9 "$pid"
+          done
+        say: kill everything holding this workspace, the way a reboot does it
+        check: false
+      - wait: shell
+        until: "! pgrep -f 'terminal [s]erve --root {project}' > /dev/null"
+        timeout: 20
+        say: nothing is holding the panes any more
+      - open: "{uze}"
+        say: open the workspace again, which starts a server and restores what it held
+        expect: demo-app
+        expect_timeout: 25
+        pause: 3.0
+      - click: agent 1
+        say: walk into the agent that came back
+        in: sidebar
+        expect: Claude Code v
+        expect_timeout: 30
+        pause: 1.5
+    then:
+      - dir: "{project}/.worktrees/*"
+        same_as: first_slot
+        about: |
+          the agent came back into the same checkout — a relaunch into a
+          different slot would be a different task, and the conversation
+          question would not even arise
+      - tasks: { count: 1 }
+        about: and it is still the one task, not a second one standing in for it
+      - file: "{world}/bin/.invocations/claude.log"
+        contains: "--resume"
+        about: the relaunch asked to continue a conversation rather than open one
+      - cmd:
+          run: >
+            log={world}/bin/.invocations/claude.log;
+            started=$(sed -n 's/^--session-id //p' "$log" | head -1);
+            resumed=$(sed -n 's/^--resume //p' "$log" | tail -1);
+            test -n "$started" && test "$started" = "$resumed"
+        about: |
+          and the identifier it resumed is the one the first launch created
+          — the same conversation, not merely the same shape of argument
+      - file: "{home}/.claude/projects/*/*.jsonl"
+        count: 1
+        about: |
+          still one conversation in this checkout. A second transcript here
+          is what a relaunch that started over would have left, which is why
+          this count is the check and not the presence of the first

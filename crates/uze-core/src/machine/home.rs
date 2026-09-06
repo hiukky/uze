@@ -66,6 +66,17 @@ impl UzeHome {
             .join(format!("{project_id}.json"))
     }
 
+    /// One task's recorded conversations, beside the task store and keyed
+    /// the same way. A directory per project rather than a flat
+    /// `<project>-<task>.json`, so forgetting a project is one removal and
+    /// a task's own document is one write.
+    pub fn conversation_path(&self, project_id: &str, task_id: &str) -> PathBuf {
+        self.state_dir()
+            .join("conversations")
+            .join(project_id)
+            .join(format!("{task_id}.json"))
+    }
+
     /// Per-harness machine integration setup facts. Ownership of individual
     /// package attachments lives exclusively in `attachments.json`.
     pub fn integrations_state_path(&self) -> PathBuf {
