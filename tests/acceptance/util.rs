@@ -68,45 +68,15 @@ pub(crate) fn marketplace_json(name: &str, plugin: &str) -> String {
 pub(crate) fn install_fake_harnesses(
     env: &TestEnvironment,
 ) -> Vec<uze_testkit::fake_harness::FakeHarness> {
-    use uze_testkit::fake_harness::{Action, FakeHarness, MarketplaceVendor};
-
-    let claude_state = env.root().join("fake-state/claude");
-    let codex_state = env.root().join("fake-state/codex");
-    let agy_state = env.root().join("fake-state/agy");
-
-    vec![
-        FakeHarness::new(&env.fake_bin, "claude")
-            .version_line("9.9.9 (Fake Claude)")
-            .on_prefix(
-                ["plugin"],
-                Action::VendorMarketplace {
-                    state_dir: claude_state,
-                    vendor: MarketplaceVendor::Claude,
-                },
-            )
-            .build(),
-        FakeHarness::new(&env.fake_bin, "codex")
-            .version_line("codex-cli 9.9.9")
-            .on_prefix(
-                ["plugin"],
-                Action::VendorMarketplace {
-                    state_dir: codex_state,
-                    vendor: MarketplaceVendor::Codex,
-                },
-            )
-            .build(),
-        FakeHarness::new(&env.fake_bin, "opencode2")
-            .version_line("opencode2 v9.9.9")
-            .build(),
-        FakeHarness::new(&env.fake_bin, "agy")
-            .version_line("agy 9.9.9")
-            .on_prefix(
-                ["plugin"],
-                Action::VendorAgy {
-                    state_dir: agy_state,
-                    dest: env.home.join(".gemini/config/plugins"),
-                },
-            )
-            .build(),
-    ]
+    // `opencode2` on purpose: the legacy v2 binary name is a path UZE still
+    // probes, and this suite is where that stays proven.
+    uze_testkit::fake_harness::Standard {
+        bin_dir: &env.fake_bin,
+        home: &env.home,
+        state_root: &env.root().join("fake-state"),
+        // This suite drives the CLI, never a pane.
+        interactive: false,
+        opencode_binary: "opencode2",
+    }
+    .install()
 }
