@@ -20,20 +20,24 @@ already covers are ticked.
 - [~] 1.4 Check vocabulary. Present: `file`, `dir`, `git`, `tasks`,
       `process`, `cmd`, `capture`. Missing: `link`, `json`, `toml`,
       `yaml`, `unchanged`.
-- [ ] 1.5 Three CLI journeys: install a plugin, reconcile project context,
+- [x] 1.5 Three CLI journeys: install a plugin, reconcile project context,
       remove a plugin.
 
 ## 2. One fake harness
 
-- [ ] 2.1 `uze-fake-harness` bin in `crates/uze-testkit`, driven by a JSON
-      rule file.
-- [ ] 2.2 `FakeHarness` emits that rule file; the Rust suite keeps passing
+- [x] 2.1 `uze-fake-harness` bin in `crates/uze-testkit`. Writes the scripts
+      `fake_harness::Standard` composes rather than reading a rule file: the
+      generator already existed, and a second serialization of it would be
+      the drift this task exists to prevent.
+- [x] 2.2 `FakeHarness` emits that rule file; the Rust suite keeps passing
       unchanged.
-- [ ] 2.3 The journey world builder provisions harnesses from the same rules.
+- [x] 2.3 The journey world builder provisions harnesses from the same rules.
 
 ## 3. The TUI drive
 
-- [ ] 3.0 Spike both drives against the same three workspace journeys:
+- [~] 3.0 Half done: the tmux drive is built and green across ten journeys.
+      `microsoft/tui-test` is still unspiked. Spike both drives against the
+      same three workspace journeys:
       `microsoft/tui-test` (pinned exactly) and tmux `capture-pane` + SGR
       1006. Decide on whether `tui-test` drives this TUI headlessly in CI;
       record the verdict in design.md.
@@ -71,8 +75,12 @@ already covers are ticked.
 - [ ] 5.1 `journeys/world/atlas/<vendor>.yaml` per harness, owned beside the
       integration.
 - [ ] 5.2 `delivered:` check resolving through the atlas and reading bytes.
-- [ ] 5.3 `no_orphans:` tree snapshot/diff across install → remove.
-- [ ] 5.4 Journeys: one plugin reaches every harness; removal leaves nothing;
+- [x] 5.3 A `tree:` capture/compare by digest across install → remove,
+      scoped to the trees a harness reads. Not named `no_orphans`: the name
+      would claim more than the check does, since UZE's own
+      `state/attachments` keeps empty staging directories (characterized in
+      the journey).
+- [x] 5.4 Journeys: one plugin reaches every harness; removal leaves nothing;
       drift blocks a destructive remove.
 
 ## 6. Evidence and gate
@@ -90,6 +98,31 @@ already covers are ticked.
 - [x] 6.4 `make journey`, `journey-probe`, `journey-image`,
       `journey-docker` in the Makefile, plus `journeys/Dockerfile`.
 
+## 6b. What the first CI runs taught, and what is still open
+
+- [x] 6b.1 The container runs what CI asks it to: `proves` is a
+      repository-level lint that announces when it cannot run, both binaries
+      are mounted, and the run happens as whoever owns the evidence mount.
+- [x] 6b.2 Every deadline is monotonic. A stepping wall clock turned an
+      `expect_timeout` into a wait that never ends or one that fired early
+      and blamed the product.
+- [x] 6b.3 The app is quit rather than killed, so exit handlers run — which
+      is what took measured coverage of `src/ui` from 0% to 26.3%, and is
+      the first time any journey exercised the shutdown path.
+- [x] 6b.4 Evidence carries the state documents themselves, not only their
+      paths: the world is a temp directory the next run deletes.
+- [ ] 6b.5 **Open defect**, not fixed: intermittently (~1 in 4 under load) a
+      placed agent's pane never paints. The evidence rules out the easy
+      explanation — the harness process is alive, in the right checkout,
+      while the client still shows `starting shell…`. `uze-terminal` is at
+      7.9% measured coverage, which is where this most likely lives.
+- [ ] 6b.6 Findings characterized in scenes rather than fixed, each with its
+      reason: an empty `generated/<plugin>` created during install
+      (Claude/Codex), the bridge file surviving a reconcile empty
+      (deliberate; the file's existence is the one managed artifact with no
+      receipt), `~/.claude/skills` created empty, and a blocked
+      `plugin remove` exiting 0.
+
 ## 7. Documentation and model
 
 - [x] 7.1 `tests/README.md`: the tier (L3.5), its boundary against
@@ -99,4 +132,4 @@ already covers are ticked.
       the evidence contract, the container, debugging a failure.
 - [ ] 7.3 `docs/architecture/likec4/model.c4`: add `journeyRunner` and its
       relation; run the project's arch-validate script.
-- [ ] 7.4 `openspec validate --all --strict` passes.
+- [x] 7.4 `openspec validate --all --strict` passes.
