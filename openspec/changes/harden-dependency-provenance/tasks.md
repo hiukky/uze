@@ -9,7 +9,7 @@
 - [x] 2.2 Guarded by tests rather than by a one-off comparison: `crates/uze-extensions/src/git.rs`'s `tests::highlighting` module pins the two properties that separate working highlighting from silently collapsed highlighting — across rs/py/js/go/md/yaml/json/sh, a line comes back in more than one colour, and the spans reconstruct the source byte for byte — plus block-comment state carrying across lines, and unknown-extension fallback. A control test asserts plain text comes back in a *single* colour, so the multi-colour assertion demonstrably discriminates.
 - [ ] 2.2b Not claimed: no A/B run against the `onig` backend was performed, so historical parity is unproven. The tests above guard the failure mode going forward, which is what matters for a backend that is now pure Rust; close this out by running the comparison once if a highlighting regression is ever reported.
 - [ ] 2.3 Confirm `onig`/`onig_sys` are gone from `Cargo.lock`, and drop the musl toolchain workaround in `release.yml` if nothing else needs it.
-- [ ] 2.4 `make attributions` (CREDITS.md drifts when the tree changes).
+- [x] 2.4 `make attributions` run; `CREDITS.md` regenerated. Caught by CI, not locally — the `Licences` job runs `attributions-check` and the tree changed in both directions (Oniguruma chain out, `sha2` chain in).
 
 ## 3. bincode — evaluated, staying
 
