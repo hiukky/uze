@@ -244,6 +244,53 @@ need to).
 - `openspec/` — active/archived change proposals (spec-driven work log);
   `openspec validate --all --strict` is part of the full gate set.
 
+## Product journeys
+
+`journeys/` is the third test tier: a user's flow performed through the real
+CLI and the real TUI in a disposable world, then checked against the machine
+it left behind. See `journeys/README.md` for the vocabulary and the
+`journey-author` skill for how to write one; the rules that decide *what* a
+journey is are here because they govern the shape of the suite.
+
+- **Never validate UZE with UZE.** Every `then` check reads the filesystem,
+  Git, the recorded task state or the process table. UZE's own report is the
+  subject of a `cmd` step, asserted *against* those checks — never the source
+  of truth for another one. This tier exists to catch "exited zero, reported
+  the artifact, wrote nothing", and an assertion on UZE's own output cannot.
+- **Screen text is a gate, never an assertion.** `expect` proves a gesture
+  landed. A claim about what the screen *says* belongs in `src/ui/`'s own
+  `TestBackend` tests, where it is cheaper and more precise.
+- **Every gesture states its `expect`** — `journey validate` fails a click
+  that does not. An untimed gesture is where a suite like this dies, so the
+  linter refuses it rather than the reviewer.
+- **Chapters are the order a person meets the product**, not subsystems:
+  `01-first-run`, `02-packages`, `03-context`, `04-workspace`,
+  `05-delivery`, `06-recovery`. The numbers are reading order only — every
+  journey builds its own world, so none depends on a lower number having run.
+  A chapter appears when its first journey does.
+- **A scene continues the story; a file starts one over.** Joined by "and
+  then" it is a scene; by "also" it is a file. Four things force a file: a
+  different world, a claim that does not depend on the story so far, a
+  different cadence, and — a property of the runner, not of taste — that a
+  run stops at the first failure, so claims sharing a file share a fate.
+- **A scene must be load-bearing.** Delete it: a later scene must break, or
+  its checks must be the only proof of its own claim. Otherwise it was a
+  step, not a claim, and belongs folded into its neighbour.
+- **Tags say when it runs, numbers say where it sits.** `gate` is the
+  pull-request set; everything runs nightly. A journey that becomes slow
+  changes its tag, never its chapter.
+- **The index is `journey list`**, read from the files themselves. Do not
+  keep a table of what the suite proves — that is the trap the per-harness
+  conformance matrix was in until it was parameterized.
+
+A journey that backs a user-facing claim names the page it backs in its
+`proves:` field, the way `docs/architecture/invariants.md` names the test
+behind each property. `journey validate` fails a `proves:` that no longer
+resolves, so a page that moved or was deleted surfaces as a red build, and
+whoever changes a flow is told which page to re-read. It catches structural
+drift and directs attention; it cannot tell you the prose went wrong, and
+nothing can.
+
 ## Architecture
 
 Dependency direction is one-way and enforced by tests, not just convention:

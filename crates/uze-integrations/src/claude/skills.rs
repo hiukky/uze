@@ -41,6 +41,7 @@ impl ClaudeIntegration {
                 path: shim_root.to_path_buf(),
                 source,
             })?;
+            crate::shared::path::prune_empty_package_dir(shim_root, &managed_root);
         }
         Ok(())
     }

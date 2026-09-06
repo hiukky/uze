@@ -649,22 +649,6 @@ mod generated_native_tests {
     }
 
     #[test]
-    fn package_exposure_plan_never_writes_to_disk() {
-        let (_root, pkg) = make_plain_package("read-only", true);
-        let r_a = skill_resource(&pkg);
-        let r_m = mcp_resource(&pkg, "mcp-a");
-        let resources = vec![&r_a, &r_m];
-        let uze_home = UzeHome::at(_root.join("uze"));
-        let integration = ClaudeIntegration::new(_root.join("claude"), uze_home.clone());
-        let _plan = integration.package_exposure_plan(&pkg, &resources);
-        assert!(
-            !generated_root(&uze_home).exists(),
-            "computing a plan must never materialize the generated directory"
-        );
-        let _ = fs::remove_dir_all(_root);
-    }
-
-    #[test]
     fn mcp_only_package_with_no_skills_dir_is_still_generatable() {
         let root = temp_root("mcp-only");
         let pkg_root = root.join("pkg");

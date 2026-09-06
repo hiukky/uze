@@ -1,0 +1,105 @@
+name: Journeys
+
+# A product journey performs a user's flow through the real CLI and the real
+# TUI, then checks the machine it left behind. Its own workflow, like the
+# Lab's — but on a very different budget: the Lab is ~34 runner-minutes of
+# vendor binaries, and a journey is ~30 seconds on top of a build CI already
+# pays for. That is why this gates a pull request rather than a release: the
+# regressions it catches arrive in ordinary pull requests touching `src/ui`,
+# and finding one at release time means bisecting a range instead of reading
+# a diff.
+on:
+  push:
+    branches: [main]
+    # Repeated rather than anchored: GitHub Actions does not resolve YAML
+    # aliases, and a filter it silently ignores is a filter that does not
+    # filter. Keep the two lists identical.
+    paths:
+      - "src/**"
+      - "crates/**"
+      - "journeys/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/journeys.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "crates/**"
+      - "journeys/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/journeys.yml"
+  # Nightly runs everything, not just the gate tag, and records a cast.
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: journeys-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  journeys:
+    name: Journeys
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+
+      # The journey drives a rendered screen, so the terminal is part of the
+      # contract: the pinned image is what keeps a runner-image bump from
+      # moving a glyph out from under a selector.
+      - name: Build the journey runtime image
+        run: docker build -f journeys/Dockerfile -t uze-journeys:ci journeys/
+
+      # Both binaries: the one under test, and the one that writes the
+      # harness stand-ins. They come from the same workspace on purpose —
+      # a second stand-in implementation is how two tiers come to disagree
+      # about what a harness does while both stay green.
+      - name: Build the binary under test, and the stand-in writer
+        run: cargo build --locked --bin uze && cargo build --locked -p uze-testkit --bin uze-fake-harness
+
+      # Cheap, and it fails on the two things a run would not reach: a
+      # gesture with no `expect`, and a `proves:` pointing at a page that
+      # moved.
+      - name: Validate the journeys
+        run: python3 journeys/journey.py validate journeys/suites
+
+      - name: Run the journeys
+        run: |
+          mkdir -p journeys/.evidence
+          docker run --rm --init \
+            --user "$(id -u):$(id -g)" -e HOME=/tmp/journey-home \
+            -v "$PWD/journeys:/journeys:ro" \
+            -v "$PWD/target/debug/uze:/usr/local/bin/uze:ro" \
+            -v "$PWD/target/debug/uze-fake-harness:/usr/local/bin/uze-fake-harness:ro" \
+            -v "$PWD/journeys/.evidence:/evidence" \
+            uze-journeys:ci run /journeys/suites \
+            ${{ github.event_name == 'schedule' && '--record' || '--tag gate' }}
+
+      # Named, because "No files were found" on the upload below is how a
+      # failing run lost its own evidence once: the artifact is silent about
+      # an empty directory, and the reason it was empty is not visible
+      # anywhere else.
+      - name: Show what evidence was written
+        if: always()
+        run: ls -la journeys/.evidence/ || echo "no evidence directory at all"
+
+      # Uploaded on failure and on the nightly: a journey's evidence is what
+      # it read off the machine, and it is the whole point of having run it.
+      - name: Keep the evidence
+        if: failure() || github.event_name == 'schedule'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: journey-evidence-${{ github.run_id }}
+          path: journeys/.evidence/
+          retention-days: 14
+          if-no-files-found: error

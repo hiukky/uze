@@ -2046,8 +2046,15 @@ mod tests {
         // `Some` therefore made this assert against the developer's own
         // session at random.
         let pane_cwd = PathBuf::from("/tmp");
+        // Five seconds, not five hundred milliseconds: what is being waited
+        // on is another process being scheduled and reaching `exec`, and the
+        // assertion below is about *what* it reports, never about how fast.
+        // Under the full workspace suite on a small machine the old budget
+        // ran out before the shell was up, turning a loaded runner into a
+        // red build — which is why `make coverage` already skips this test
+        // by name instead of trusting it.
         let mut status = None;
-        for _ in 0..50 {
+        for _ in 0..500 {
             status = pane.foreground_status().filter(|(cwd, _)| *cwd == pane_cwd);
             if status.is_some() {
                 break;

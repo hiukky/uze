@@ -157,6 +157,7 @@ impl CodexIntegration {
                 path: target.to_path_buf(),
                 source,
             })?;
+            crate::shared::path::prune_empty_package_dir(target, &generated_root(&self.uze_home));
         }
         Ok(())
     }

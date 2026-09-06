@@ -23,3 +23,10 @@ uze-sbom.json
 /.demo/*.gif
 /.demo/*.png
 /.demo/*.cast
+
+# journey runner: disposable worlds live in /tmp; evidence is per-run
+journeys/.evidence/
+
+# coverage counter files (cargo llvm-cov writes these; a manual run can drop
+# them wherever the instrumented process happened to be standing)
+*.profraw

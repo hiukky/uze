@@ -1,0 +1,119 @@
+journey: a checkout deleted from under an agent costs the checkout, never the work
+tags: [gate, tui, recovery]
+proves: web/content/docs/workspace.mdx
+about: |
+  Checkouts get deleted. A cleanup script, a full disk, a person tidying
+  `.worktrees` by hand — and the agent that was working there is suddenly
+  standing on nothing.
+
+  What must survive is the work, and it does, because the commits were never
+  in the checkout to begin with: they are on a branch in the repository the
+  checkout was a view of. The workspace's job is to say so plainly instead of
+  showing a broken row, and to be able to give the task somewhere to stand
+  again — with its branch as it stands, not re-cut from the target, which
+  would silently throw away exactly what was being protected.
+
+world:
+  project: demo-app
+  manifest: |
+    worktrees:
+      target: main
+      completion: handoff
+      slots: 3
+
+scenes:
+  - scene: an agent with work committed in its own checkout
+    when:
+      - open: "{uze}"
+        expect: demo-app
+        expect_timeout: 20
+        pause: 1.0
+      - click: "│"
+        in: strip
+        occurrence: 2
+        offset: 2
+        expect: new agent
+      - click: " new agent "
+        say: place an agent
+        in: pane
+        row_offset: 1
+        offset: 3
+        expect: Claude Code v
+        expect_timeout: 45
+        pause: 1.5
+      - shell: |
+          set -e
+          slot=$(ls -d {project}/.worktrees/*/ | head -1)
+          printf 'work in progress\n' > "$slot/notes.md"
+          git -C "$slot" add -A
+          git -C "$slot" commit -qm 'feat: work nobody wants to lose'
+        say: it commits something worth keeping
+    then:
+      - tasks: { count: 1 }
+      - git: { branches: "agent/*", count: 1 }
+        about: one task, on one branch of its own
+      - dir: "{project}/.worktrees/*"
+        count: 1
+
+  - scene: the checkout is deleted from under it
+    when:
+      - shell: |
+          set -e
+          rm -rf {project}/.worktrees/*
+          git -C {project} worktree prune
+        say: delete the checkout the way a cleanup script would
+      - wait: screen
+        until: checkout removed
+        in: sidebar
+        timeout: 40
+        settle: 1.0
+        say: the workspace says what happened instead of showing a broken row
+    then:
+      - dir: "{project}/.worktrees/*"
+        count: 0
+        about: the checkout really is gone
+      - tasks: { count: 1 }
+        about: the task is not forgotten with it
+      - git: { branches: "agent/*", count: 1 }
+        about: and its branch is still in the repository
+      - cmd:
+          run: "git -C {project} log --oneline --all"
+          stdout_contains: "feat: work nobody wants to lose"
+        about: |
+          with the commit on it — the work was never in the checkout, which
+          is why deleting the checkout could not take it
+
+  - scene: resuming gives the task somewhere to stand, with its branch as it stands
+    when:
+      - click: resume
+        say: resume the task from its row
+        in: sidebar
+        expect: new agent
+        expect_timeout: 20
+      # No band: this picker is anchored under the sidebar row that raised
+      # it, not under the tab strip, so it starts left of where `in: pane`
+      # begins looking.
+      - click: " new agent "
+        say: pick a harness for it to run in again
+        row_offset: 1
+        offset: 3
+        expect: Claude Code v
+        expect_timeout: 45
+        pause: 2.5
+    then:
+      - dir: "{project}/.worktrees/*"
+        count: 1
+        about: a checkout exists again
+      - tasks: { count: 1 }
+        about: and it is the same task, not a second one standing in for it
+      - git: { branches: "agent/*", count: 1 }
+        about: on the same single branch
+      - cmd:
+          run: "git -C {project} log --oneline --all"
+          stdout_contains: "feat: work nobody wants to lose"
+        about: |
+          still carrying the commit — the branch was checked out as it stood,
+          never re-cut from the target, which would have discarded the work
+          this whole scene exists to keep
+      - tasks: { any_state: ready }
+        about: and the task is deliverable again, exactly as it was

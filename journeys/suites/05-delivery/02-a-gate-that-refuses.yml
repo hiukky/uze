@@ -1,0 +1,96 @@
+journey: work that fails the project's own checks never reaches the target branch
+tags: [gate, tui, delivery]
+proves: web/content/docs/agents-lock.mdx
+about: |
+  A project declares the checks its work must pass before landing. The value
+  of that declaration is entirely in the failing case: a gate that only ever
+  runs when it would pass is decoration.
+
+  So this journey makes the gate fail on purpose, presses deliver, and then
+  looks at the branch. What must be true afterwards is unglamorous and
+  absolute — the target is exactly where it was, the commit is still on the
+  agent's own branch, and the task says the gate failed rather than saying
+  nothing.
+
+world:
+  project: demo-app
+  manifest: |
+    worktrees:
+      target: main
+      completion: merge
+      slots: 3
+      gate:
+        - sh -c 'test ! -f src/ping.rs'
+
+scenes:
+  - scene: an agent whose work the project's checks will reject
+    when:
+      - open: "{uze}"
+        expect: demo-app
+        expect_timeout: 20
+        pause: 1.0
+      - click: "│"
+        in: strip
+        occurrence: 2
+        offset: 2
+        expect: new agent
+      - click: " new agent "
+        say: place an agent
+        in: pane
+        row_offset: 1
+        offset: 3
+        expect: Claude Code v
+        expect_timeout: 45
+        pause: 1.5
+      - shell: |
+          set -e
+          slot=$(ls -d {project}/.worktrees/*/ | head -1)
+          printf 'pub fn ping() {}\n' > "$slot/src/ping.rs"
+          git -C "$slot" add -A
+          git -C "$slot" commit -qm 'feat(api): add the file the gate refuses'
+        say: it commits exactly what the gate is declared to reject
+      - wait: screen
+        until: "merge → main"
+        in: strip
+        timeout: 40
+        settle: 1.0
+    then:
+      - tasks: { any_state: ready }
+        about: the work is deliverable as far as Git is concerned
+      - cmd:
+          run: "git -C {project} log --oneline -1"
+          stdout_contains: "chore: declare the worktree policy"
+        about: and the target is where it has always been
+      - capture: { name: target, dirs: "{project}/.git/refs/heads" }
+
+  - scene: delivery runs the checks, they refuse, and nothing lands
+    when:
+      - click: "merge → main"
+        say: press deliver
+        in: strip
+        # The gate carries weight because it is exact: the failure is
+        # reported back into the agent's own pane, naming the command that
+        # refused. A looser pattern here would pass on any `✕` anywhere.
+        expect: "checks failed on your branch after it was rebased onto main"
+        expect_timeout: 90
+        pause: 3.0
+      - wait: screen
+        until: "retry"
+        in: strip
+        timeout: 30
+        say: and the button becomes the next thing to do, not a dead end
+    then:
+      - cmd:
+          run: "git -C {project} log --oneline -1"
+          stdout_contains: "chore: declare the worktree policy"
+        about: the target branch did not move
+      - cmd:
+          run: "git -C {project} log --oneline --all"
+          stdout_contains: "feat(api): add the file the gate refuses"
+        about: |
+          and the commit still exists — since the target does not carry it,
+          it is where it should be: on the agent's own branch, waiting
+      - tasks: { any_state: gate_failed }
+        about: the task says the gate failed, rather than saying nothing
+      - git: { in: "{project}", dirty: false }
+        about: with the project's checkout untouched by the attempt

@@ -29,10 +29,10 @@ pre-push:
       run: cargo clippy --all-targets -- -D warnings
     python-fmt:
       glob: "*.py"
-      run: ruff format --check conformance/
+      run: ruff format --check conformance/ journeys/
     python-lint:
       glob: "*.py"
-      run: ruff check conformance/
+      run: ruff check conformance/ journeys/
     harness-matrix:
       # Deterministic docs matrix (web/content/docs/harnesses.mdx):
       # regenerates via `make harness-matrix`; a stale matrix fails the push.

@@ -1,0 +1,114 @@
+journey: a managed artifact somebody changed is never destroyed to make a removal succeed
+tags: [gate, cli, recovery]
+proves: web/content/docs/cli.mdx
+about: |
+  Receipts exist for this moment. Something UZE delivered has been changed by
+  a person or another tool — repointed, replaced, edited — and UZE is now
+  asked to remove the package it belongs to. The safe answer is to refuse:
+  the alternative is deleting whatever the artifact has become, which is by
+  definition something UZE did not put there and cannot put back.
+
+  A refusal has to be complete to be worth anything, so what this journey
+  reads afterwards is that *nothing at all* happened: the drifted artifact
+  points exactly where the tamperer left it, the three that were fine are
+  untouched, and the package is still installed rather than half-removed.
+
+world:
+  project: demo-app
+  files:
+    market/marketplace.json: |
+      {
+        "name": "demo",
+        "plugins": [
+          { "name": "flow", "source": "./plugins/flow", "description": "Canonical skill plugin." }
+        ]
+      }
+    market/plugins/flow/plugin.json: |
+      {
+        "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+        "name": "flow",
+        "version": "1.0.0",
+        "description": "Canonical."
+      }
+    market/plugins/flow/skills/commit/SKILL.md: |
+      ---
+      name: commit
+      description: Write a commit message from the staged diff.
+      ---
+
+      The body a harness would read.
+
+scenes:
+  - scene: a delivered plugin, whole
+    when:
+      - shell: "{uze} setup"
+        check: false
+      - shell: "{uze} market add {world}/market"
+      - shell: "{uze} plugin install flow@demo"
+        say: install and deliver it
+    then:
+      - link: "{home}/.agents/skills/flow:commit"
+        resolves_to: "/state/attachments/opencode/skills/flow/commit"
+        about: the shared skill root points into the artifact UZE generated
+
+  - scene: somebody repoints one of the artifacts at something else
+    when:
+      - shell: |
+          set -e
+          mkdir -p {home}/somewhere-else
+          rm -rf "{home}/.agents/skills/flow:commit"
+          ln -s {home}/somewhere-else "{home}/.agents/skills/flow:commit"
+        say: repoint the managed symlink, the way a person or another tool would
+    then:
+      - link: "{home}/.agents/skills/flow:commit"
+        resolves_to: somewhere-else
+        about: the artifact now points where the tamperer put it
+      - capture:
+          name: tampered
+          tree:
+            - "{home}/.agents"
+            - "{home}/.gemini"
+            - "{home}/.claude"
+        about: remember the world exactly as they left it
+
+  - scene: removal refuses, and refuses completely
+    when:
+      - shell: "{uze} plugin remove flow"
+        say: ask UZE to remove the package the artifact belongs to
+    then:
+      - cmd:
+          run: "{uze} plugin remove flow"
+          stdout_contains: Removal blocked
+        about: UZE says it will not, and why
+      - cmd:
+          run: "{uze} plugin remove flow"
+          stdout_contains: BlockedByDrift
+        about: naming drift as the reason rather than failing vaguely
+      - link: "{home}/.agents/skills/flow:commit"
+        resolves_to: somewhere-else
+        about: the drifted artifact is exactly where the tamperer left it
+      - tree:
+          - "{home}/.agents"
+          - "{home}/.gemini"
+          - "{home}/.claude"
+        same_as: tampered
+        about: |
+          and so is everything else — a blocked removal is a no-op, not a
+          partial one. The three artifacts that were fine were not taken
+          away to get closer to a removal that could never finish
+      - file: "{uze_home}/store/plugins/demo/flow/plugin.json"
+        exists: true
+        about: with the package still installed, rather than half-gone
+
+  - scene: what the refusal does not do, stated rather than glossed over
+    then:
+      - cmd:
+          run: "{uze} plugin remove flow"
+          exit: 0
+        about: |
+          a blocked removal exits 0 — a characterization, not an endorsement.
+          The report on screen is honest and complete, but a script that runs
+          `uze plugin remove x && …` is told the removal happened. Nothing in
+          the code states this either way, so it is recorded here rather than
+          changed: an exit status is a contract, and this one deserves a
+          decision rather than a patch from whoever noticed it.

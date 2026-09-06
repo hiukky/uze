@@ -6,12 +6,14 @@
 mod agents;
 mod capability_conformance;
 mod contract;
+mod fixtures;
 mod hooks;
 mod identity;
 mod lifecycle_conformance;
 mod policy;
 mod runtime_boundary;
 mod runtime_projection;
+mod subjects;
 mod vendor_neutral;
 
 pub(crate) mod harness {

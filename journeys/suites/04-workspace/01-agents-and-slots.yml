@@ -1,0 +1,190 @@
+journey: agents, their checkouts, and the slot the next one takes
+tags: [gate, tui, workspace]
+proves: web/content/docs/workspace.mdx
+about: |
+  Placing an agent gives it a checkout of its own. A change inside that
+  checkout becomes the task's recorded status. Closing an agent frees its
+  slot without destroying it, and the next agent takes that slot rather
+  than a fresh directory.
+
+  Every check reads the machine: the directories under `.worktrees`, what
+  Git registers as a worktree and a branch, and the task store UZE writes
+  under its own state directory. Screen text appears only as `expect` —
+  the gate that a gesture landed.
+
+world:
+  project: demo-app
+  manifest: |
+    worktrees:
+      target: main
+      completion: handoff
+      slots: 4
+
+scenes:
+  - scene: the workspace opens on the project, with no agent placed
+    when:
+      - open: "{uze}"
+        say: uze opens on the project
+        expect: demo-app
+        expect_timeout: 20
+        pause: 1.0
+    then:
+      - dir: "{project}/.worktrees/*"
+        count: 0
+        about: no checkout exists before an agent is placed
+      - git: { worktrees: 1 }
+        about: the project has only its primary checkout
+      - tasks: { count: 0 }
+        about: no task is recorded for a project nobody has placed an agent in
+
+  - scene: the first agent gets a checkout, a branch and a task of its own
+    when:
+      - click: "│"
+        say: open the new-agent picker from the tab strip
+        in: strip
+        occurrence: 2
+        offset: 2
+        expect: new agent
+      - click: " new agent "
+        say: pick Claude Code
+        in: pane
+        row_offset: 1
+        offset: 3
+        expect: Claude Code v
+        expect_timeout: 45
+        pause: 1.5
+    then:
+      - dir: "{project}/.worktrees/*"
+        count: 1
+        about: one checkout exists, named by its slot
+      - git: { worktrees: 2 }
+        about: Git registers the checkout as a worktree of the project
+      - git: { branches: "agent/*", count: 1 }
+        about: the agent works on a branch of its own
+      - tasks: { count: 1, states: [running] }
+        about: one task is recorded, running
+      - tasks: { checkouts: 1 }
+        about: the task holds a slot
+      - git: { in: "{project}", dirty: false }
+        about: the primary checkout was not touched
+
+  - scene: a second agent, on a different harness, gets a second checkout
+    when:
+      - click: "│"
+        say: open the picker again
+        in: strip
+        occurrence: 2
+        offset: 2
+        expect: new agent
+      - click: " new agent "
+        say: pick Codex
+        in: pane
+        row_offset: 2
+        offset: 3
+        expect: Codex v
+        expect_timeout: 45
+        pause: 1.5
+    then:
+      - dir: "{project}/.worktrees/*"
+        count: 2
+        about: a second checkout, not a shared one
+      - git: { worktrees: 3 }
+      - git: { branches: "agent/*", count: 2 }
+        about: two branches, one per agent
+      - tasks: { count: 2, states: [running, running], checkouts: 2 }
+        about: two live tasks in two distinct slots
+
+  - scene: a change inside an agent's checkout becomes that task's status
+    when:
+      - shell: |
+          set -e
+          slot=$(ls -d {project}/.worktrees/*/ | head -1)
+          printf 'pub fn ping() -> &str { "pong" }\n' > "$slot/src/router.rs"
+        say: the agent edits a file in its own checkout
+      - wait: screen
+        until: "±"
+        in: sidebar
+        timeout: 30
+        say: the sidebar marks the agent as holding uncommitted work
+    then:
+      - tasks: { any_state: uncommitted }
+        about: the task store records the change as uncommitted work
+      - tasks: { count: 2 }
+        about: no task was created or lost by an edit
+      - git: { in: "{project}", dirty: false }
+        about: the primary checkout is still clean — the work is isolated
+
+  - scene: a third agent takes a third slot
+    when:
+      - click: "│"
+        in: strip
+        occurrence: 2
+        offset: 2
+        expect: new agent
+      - click: " new agent "
+        say: pick OpenCode
+        in: pane
+        row_offset: 3
+        offset: 3
+        expect: OpenCode v
+        expect_timeout: 45
+        pause: 1.5
+    then:
+      - dir: "{project}/.worktrees/*"
+        count: 3
+      - git: { worktrees: 4 }
+      - tasks: { count: 3, checkouts: 3 }
+        about: three tasks, three distinct slots
+      - capture: { name: slots, dirs: "{project}/.worktrees/*" }
+        about: remember the three slots by name
+
+  - scene: closing the third agent ends its task and keeps its slot
+    when:
+      - rclick: ""
+        glyph: "●○"
+        say: right-click the newest agent's row
+        in: sidebar
+        occurrence: last
+        expect: close
+      - click: close
+        in: sidebar
+        say: confirm close
+        expect: "2 agents"
+        expect_timeout: 20
+        pause: 2.0
+    then:
+      - tasks: { count: 3, newest_state: closed }
+        about: the task ended, and is still recorded
+      - dir: "{project}/.worktrees/*"
+        same_as: slots
+        about: the slot survives its agent — a checkout is reused, not destroyed
+      - git: { worktrees: 4 }
+        about: Git still registers the freed checkout
+
+  - scene: the next agent takes the freed slot, not a new directory
+    when:
+      - click: "│"
+        in: strip
+        occurrence: 2
+        offset: 2
+        expect: new agent
+      - click: " new agent "
+        say: pick Codex again
+        in: pane
+        row_offset: 2
+        offset: 3
+        expect: Codex v
+        expect_timeout: 45
+        pause: 2.0
+    then:
+      - dir: "{project}/.worktrees/*"
+        same_as: slots
+        about: no fourth directory was created
+      - tasks: { count: 4 }
+        about: a fourth task was recorded
+      - tasks: { newest_checkout_in: slots }
+        about: the new agent took a slot that already existed
+      - tasks: { checkouts: 3 }
+        about: four tasks have passed through three slots
+      - git: { worktrees: 4 }
+        about: Git registers no new worktree

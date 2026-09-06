@@ -44,13 +44,11 @@ use std::{
 // `uze_core::harness_runtime`'s own `PATH_ENV_GUARD`.
 
 use uze_core::{
-    acquisition::{PackageSource, Provenance, ResolvedSource},
     capability::{Capability, CapabilityKind, Representation},
     home::UzeHome,
     integration::{AttachmentState, IntegrationPort, ManagedArtifact},
     project::Resource,
     state,
-    store::{PackageId, StoredPackage},
 };
 
 use uze_integrations::{
@@ -58,87 +56,15 @@ use uze_integrations::{
     opencode::OpenCodeIntegration,
 };
 
+use super::{
+    fixtures::{build_package, mark_setup, skill_resource, temp},
+    subjects::subjects,
+};
+
 // ============================================================================
 // Fixture plumbing — plain functions, not a framework.
 // ============================================================================
 
-fn temp(label: &str) -> PathBuf {
-    uze_testkit::temp::scratch(label)
-}
-
-/// Writes a canonical `plugin.json` plus every `(relative_path, content)`
-/// pair, then builds the `StoredPackage` those bytes describe. Deliberately
-/// mirrors a real `Store::ingest` result closely enough for
-/// `package_exposure_plan`/`exposure_plan` to behave identically, without
-/// pulling acquisition/Store machinery into this file — every fixture
-/// still lives entirely under a throwaway temp root, never a real
-/// `$UZE_HOME/store`.
-fn build_package(
-    label: &str,
-    name: &str,
-    extra_files: &[(&str, &str)],
-) -> (PathBuf, StoredPackage) {
-    let root = temp(label);
-    let pkg_root = root.join("pkg");
-    fs::create_dir_all(&pkg_root).unwrap();
-    fs::write(
-        pkg_root.join("plugin.json"),
-        format!(r#"{{"name":"{name}","version":"1.0.0","description":"Conformance fixture"}}"#),
-    )
-    .unwrap();
-    for (relative, content) in extra_files {
-        let path = pkg_root.join(relative);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, content).unwrap();
-    }
-    let id = PackageId::from_plugin_name(name, &pkg_root.join("plugin.json")).unwrap();
-    let package = StoredPackage {
-        active_name: id.plugin_name().to_owned(),
-        id,
-        root: pkg_root.clone(),
-        manifest: pkg_root.join("plugin.json"),
-        provenance: Provenance {
-            requested: PackageSource::Local {
-                path: PathBuf::from("/tmp/fake"),
-            },
-            resolved: ResolvedSource::Local {
-                path: PathBuf::from("/tmp/fake"),
-            },
-        },
-    };
-    (root, package)
-}
-
-/// Writes `<dir>/<name>/SKILL.md` under the package root and returns the
-/// discovered `Resource` for it — the same shape `UzeEngine` would produce.
-fn skill_resource(package: &StoredPackage, dir: &str, name: &str) -> Resource {
-    let path = package.root.join(dir).join(name).join("SKILL.md");
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write(&path, format!("---\nname: {name}\n---\n\nBody.\n")).unwrap();
-    Resource::from_package(
-        package.id.clone(),
-        package.root.clone(),
-        Capability {
-            kind: CapabilityKind::AgentSkill,
-            representation: Representation::Standard,
-            path,
-            payload: Vec::new(),
-        },
-    )
-}
-
-fn mark_setup(home: &UzeHome, integration: &dyn IntegrationPort) {
-    state::record(
-        home,
-        state::IntegrationRecord {
-            harness: integration.id().to_owned(),
-            version: None,
-            strategy: "conformance-fixture".to_owned(),
-            installed: true,
-        },
-    )
-    .unwrap();
-}
 fn assert_skill_lifecycle_and_drift_safety(integration: &dyn IntegrationPort, resource: &Resource) {
     let receipt = integration
         .attach_receipt(resource)
@@ -226,62 +152,18 @@ fn symlink(source: &Path, target: &Path) {
 
 #[cfg(unix)]
 #[test]
-fn claude_skill_lifecycle_and_drift_safety() {
-    let (pkg_root, package) = build_package("lifecycle-claude-pkg", "flow", &[]);
-    let skill = skill_resource(&package, "skills", "commit");
-    let root = temp("lifecycle-claude");
-    let home = UzeHome::at(root.join("uze"));
-    let integration = ClaudeIntegration::new(root.join("claude"), home.clone());
-    mark_setup(&home, &integration);
-    assert_skill_lifecycle_and_drift_safety(&integration, &skill);
-    let _ = fs::remove_dir_all(root);
-    let _ = fs::remove_dir_all(pkg_root);
-}
-
-#[cfg(unix)]
-#[test]
-fn codex_skill_lifecycle_and_drift_safety() {
-    let (pkg_root, package) = build_package("lifecycle-codex-pkg", "flow", &[]);
-    let skill = skill_resource(&package, "skills", "commit");
-    let root = temp("lifecycle-codex");
-    let home = UzeHome::at(root.join("uze"));
-    let integration = CodexIntegration::new(root.join("agents"), home.clone());
-    mark_setup(&home, &integration);
-    assert_skill_lifecycle_and_drift_safety(&integration, &skill);
-    let _ = fs::remove_dir_all(root);
-    let _ = fs::remove_dir_all(pkg_root);
-}
-
-#[cfg(unix)]
-#[test]
-fn antigravity_skill_lifecycle_and_drift_safety() {
-    let (pkg_root, package) = build_package("lifecycle-antigravity-pkg", "flow", &[]);
-    let skill = skill_resource(&package, "skills", "commit");
-    let root = temp("lifecycle-antigravity");
-    let home = UzeHome::at(root.join("uze"));
-    let integration = AntigravityIntegration::new(root.join("agents"), home.clone());
-    mark_setup(&home, &integration);
-    assert_skill_lifecycle_and_drift_safety(&integration, &skill);
-    let _ = fs::remove_dir_all(root);
-    let _ = fs::remove_dir_all(pkg_root);
-}
-
-#[cfg(unix)]
-#[test]
-fn opencode_skill_lifecycle_and_drift_safety() {
-    let (pkg_root, package) = build_package("lifecycle-opencode-pkg", "flow", &[]);
-    let skill = skill_resource(&package, "skills", "commit");
-    let root = temp("lifecycle-opencode");
-    let home = UzeHome::at(root.join("uze"));
-    let integration = OpenCodeIntegration::new(
-        root.join("agents"),
-        root.join("opencode-config/opencode.json"),
-        home.clone(),
-    );
-    mark_setup(&home, &integration);
-    assert_skill_lifecycle_and_drift_safety(&integration, &skill);
-    let _ = fs::remove_dir_all(root);
-    let _ = fs::remove_dir_all(pkg_root);
+fn every_harness_attaches_inspects_detaches_and_refuses_to_destroy_drift() {
+    // One assertion, asked of every registered harness. It used to be four
+    // hand-written callers differing only in a constructor; the fifth
+    // harness would have had none until someone remembered to add it.
+    for subject in subjects("lifecycle") {
+        let (pkg_root, package) =
+            build_package(&format!("lifecycle-pkg-{}", subject.id), "flow", &[]);
+        let skill = skill_resource(&package, "skills", "commit");
+        mark_setup(&subject.home, subject.integration.as_ref());
+        assert_skill_lifecycle_and_drift_safety(subject.integration.as_ref(), &skill);
+        let _ = fs::remove_dir_all(pkg_root);
+    }
 }
 
 // ============================================================================

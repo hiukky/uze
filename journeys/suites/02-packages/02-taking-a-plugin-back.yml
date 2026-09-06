@@ -1,0 +1,100 @@
+journey: removing a plugin takes back everything it put there, and nothing else
+tags: [gate, cli, packages]
+proves: web/content/docs/cli.mdx
+about: |
+  The other half of installing once. A managed artifact is tracked by a
+  receipt, so removal is supposed to be exact: every byte four harnesses were
+  given comes back, the plugin that was not removed keeps everything it has,
+  and the harness-owned trees return to the shape they had before the install
+  — measured by digest, because an artifact that survives with different
+  content is still an orphan.
+
+world:
+  project: demo-app
+  files:
+    market/marketplace.json: |
+      {
+        "name": "demo",
+        "description": "A marketplace this journey stages.",
+        "plugins": [
+          { "name": "flow", "source": "./plugins/flow", "description": "Canonical skill plugin." }
+        ]
+      }
+    market/plugins/flow/plugin.json: |
+      {
+        "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+        "name": "flow",
+        "version": "1.0.0",
+        "description": "Canonical: one package, no vendor manifests."
+      }
+    market/plugins/flow/skills/commit/SKILL.md: |
+      ---
+      name: commit
+      description: Write a commit message from the staged diff.
+      ---
+
+      The body a harness would read.
+
+scenes:
+  - scene: a provisioned machine, with the default plugin and nothing else
+    when:
+      - shell: "{uze} setup"
+        say: provision every registered harness
+        check: false
+      - shell: "{uze} market add {world}/market"
+        say: register the staged marketplace
+    then:
+      - capture:
+          name: before
+          tree:
+            - "{home}/.agents"
+            - "{home}/.gemini"
+            - "{home}/.claude"
+        about: remember every tree a harness reads, by digest, before anything arrives
+
+  - scene: installing puts something in every one of those trees
+    when:
+      - shell: "{uze} plugin install flow@demo"
+        say: install the plugin
+    then:
+      - file: "{home}/.agents/skills/flow:commit/SKILL.md"
+        exists: true
+      - file: "{home}/.gemini/config/plugins/flow/plugin.json"
+        exists: true
+      - dir: "{uze_home}/state/attachments/claude/generated/flow@demo"
+        exists: true
+        about: the three harness-owned trees each gained this plugin
+
+  - scene: removing it takes every one of them back
+    when:
+      - shell: "{uze} plugin remove flow"
+        say: remove the plugin from the machine
+    then:
+      - dir: "{uze_home}/store/plugins/demo/flow"
+        exists: false
+        about: the Store no longer holds its bytes
+      - file: "{home}/.agents/skills/flow:commit/SKILL.md"
+        exists: false
+        about: the shared skill root gave it back
+      - dir: "{home}/.gemini/config/plugins/flow"
+        exists: false
+        about: the byte copy staged by the vendor CLI is gone
+      - dir: "{uze_home}/state/attachments/claude/generated/flow@demo"
+        exists: false
+        about: the generated native package is gone
+      - json: "{uze_home}/state/attachments.json"
+        at: receipts.*.package_id
+        includes: [uze@uze-official]
+        about: and the receipts that were not this plugin's are untouched
+
+  - scene: nothing at all was left behind
+    then:
+      - tree:
+          - "{home}/.agents"
+          - "{home}/.gemini"
+          - "{home}/.claude"
+        same_as: before
+        about: every tree a harness reads is byte-identical to before the install
+      - file: "{world}/market/plugins/flow/skills/commit/SKILL.md"
+        exists: true
+        about: and the marketplace it came from was never touched

@@ -56,6 +56,14 @@ pub enum Action {
         state_dir: PathBuf,
         vendor: MarketplaceVendor,
     },
+    /// Hold the terminal the way an interactive agent session does: print
+    /// `banner`, then echo back whatever is typed until `/exit`.
+    ///
+    /// A harness binary is two things — a CLI its vendor's verbs are run
+    /// through, and a session that occupies a pane — and a stand-in that
+    /// models only the first exits immediately when UZE launches it into a
+    /// checkout, which is not what the real one does.
+    InteractiveSession { banner: String },
     /// Antigravity's stub-install lifecycle: `plugin install <root>`
     /// stages a byte copy under `dest/<basename>` and `plugin list`
     /// answers `{"imports":[{"name":...}]}` from persisted state.
@@ -280,6 +288,15 @@ fn emit_action(action: &Action) -> String {
             dest.display(),
             arg_index,
             arg_index
+        ),
+        Action::InteractiveSession { banner } => format!(
+            "    printf '%s\\n' '{banner}'\n\
+             \x20   printf 'cwd %s\\n' \"$PWD\"\n\
+             \x20   while IFS= read -r line; do\n\
+             \x20     [ \"$line\" = '/exit' ] && exit 0\n\
+             \x20     printf '> %s\\n' \"$line\"\n\
+             \x20   done\n\
+             \x20   exit 0\n"
         ),
         Action::VendorMarketplace { state_dir, vendor } => {
             emit_vendor_marketplace(state_dir, *vendor)
@@ -527,5 +544,113 @@ impl FakeHarness {
                     .zip(argv.iter())
                     .all(|(actual, expected)| actual == expected)
         })
+    }
+}
+
+// ============================================================================
+// The standard set — one composition, every consumer.
+// ============================================================================
+
+/// The stand-ins a test or a journey needs to exercise UZE's delivery against
+/// every harness the product knows.
+///
+/// This composition lives here, and not in whichever suite happens to need it
+/// first, because a second stand-in for the same vendor drifting from the
+/// first is a way for two tiers to disagree about what a harness does while
+/// both stay green — the failure they exist to catch.
+///
+/// What a stand-in emulates is only ever the side effect UZE *reads back*.
+/// Where a harness merely has to exit zero, it exits zero. Real vendor
+/// behaviour is the conformance Lab's verdict — it runs the actual binary
+/// against a synthetic provider — never this file's.
+pub struct Standard<'a> {
+    /// Where the executables are written; belongs at the head of `PATH`.
+    pub bin_dir: &'a Path,
+    /// The HOME the stand-ins write their vendor state under.
+    pub home: &'a Path,
+    /// Where each stand-in keeps the state that makes its own invocations
+    /// agree with each other across separate `uze` runs.
+    pub state_root: &'a Path,
+    /// Whether a bare invocation holds the terminal the way an interactive
+    /// agent session does. A journey launches these into panes and gates on
+    /// the banner; a CLI-only suite does not need it and pays nothing for
+    /// leaving it off.
+    pub interactive: bool,
+    /// The name OpenCode's binary is installed under. `opencode` is what a
+    /// current install produces; the acceptance suite pins `opencode2` on
+    /// purpose, because that legacy v2 name is a path UZE still probes
+    /// (`opencode/provision.rs`).
+    pub opencode_binary: &'a str,
+}
+
+impl Standard<'_> {
+    /// Writes every stand-in and returns them in registration order.
+    pub fn install(&self) -> Vec<FakeHarness> {
+        let session = |display: &str, version: &str| Action::InteractiveSession {
+            banner: format!("{display} {version}"),
+        };
+        vec![
+            self.interactive(
+                FakeHarness::new(self.bin_dir, "claude")
+                    .version_line("9.9.9 (Fake Claude)")
+                    .on_prefix(
+                        ["plugin"],
+                        Action::VendorMarketplace {
+                            state_dir: self.state_root.join("claude"),
+                            vendor: MarketplaceVendor::Claude,
+                        },
+                    ),
+                session("Claude Code", "v9.9.9 (fake)"),
+            )
+            .build(),
+            self.interactive(
+                FakeHarness::new(self.bin_dir, "codex")
+                    .version_line("codex-cli 9.9.9")
+                    .on_prefix(
+                        ["plugin"],
+                        Action::VendorMarketplace {
+                            state_dir: self.state_root.join("codex"),
+                            vendor: MarketplaceVendor::Codex,
+                        },
+                    ),
+                session("Codex", "v9.9.9 (fake)"),
+            )
+            .build(),
+            self.interactive(
+                FakeHarness::new(self.bin_dir, self.opencode_binary)
+                    .version_line("opencode2 v9.9.9"),
+                session("OpenCode", "v9.9.9 (fake)"),
+            )
+            .build(),
+            self.interactive(
+                // A bare token, because that is what `agy --version` prints
+                // (`1.1.19` in dogfood — see antigravity/provision.rs). A
+                // stand-in that answered `agy 9.9.9` made UZE record the
+                // version as `agy`, which is what its first-token parse is
+                // right to do and what the real vendor never produces.
+                FakeHarness::new(self.bin_dir, "agy")
+                    .version_line("9.9.9")
+                    .on_prefix(
+                        ["plugin"],
+                        Action::VendorAgy {
+                            state_dir: self.state_root.join("agy"),
+                            dest: self.home.join(".gemini/config/plugins"),
+                        },
+                    ),
+                session("Antigravity CLI", "v9.9.9 (fake)"),
+            )
+            .build(),
+        ]
+    }
+
+    /// Attaches the bare-invocation session rule, when this set is
+    /// interactive. Last, so every vendor verb above still claims its own
+    /// argv first.
+    fn interactive(&self, builder: FakeHarnessBuilder, action: Action) -> FakeHarnessBuilder {
+        if self.interactive {
+            builder.on([""], action)
+        } else {
+            builder
+        }
     }
 }
