@@ -234,10 +234,23 @@ def materialize_marketplace(cfg):
 
     The checked-in conformance marketplace is the complete product input for
     every vertical. Only its MCP executable and proof are run-specific.
+
+    Committed, because a marketplace is a Git repository: UZE reads one at a
+    commit so it can say whether the bytes it installed are still the bytes
+    there. The Lab's market is a real one in that respect, not a special
+    case — the substitutions above land in the commit, so what the harness
+    receives is what the repository holds.
     """
+    git = (
+        "git -c init.defaultBranch=main -c user.name='UZE Lab' "
+        "-c user.email=lab@uze.invalid -c commit.gpgsign=false -C /work/market"
+    )
     return f"""
 cp -r {cfg.marketplace} /work/market
 sed -i 's|__UZE_MCP_FIXTURE_BINARY__|{cfg.mcp_fixture_bin}|g; s|__UZE_MCP_CONFORMANCE_PROOF__|{cfg.mcp_proof}|g' /work/market/plugins/mcp-plugin/mcp.json
+{git} init -q
+{git} add -A
+{git} commit -q -m 'lab marketplace'
 """
 
 
