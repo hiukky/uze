@@ -322,6 +322,12 @@ fn add_and_inspect_use_the_same_injected_uze_home() {
 /// attempt, exits non-zero so a scripted caller (an image build) cannot read
 /// success over a missing binary, and never creates harness-owned
 /// directories under the isolated `HOME`.
+///
+/// Also the other half of the interactive contract: a bare `uze setup` asks
+/// a terminal which harnesses to provision, and takes the whole catalog
+/// anywhere the question cannot be answered. Piped output is exactly that
+/// case, so this run must reach both harnesses rather than block on a
+/// prompt nobody can see.
 #[test]
 fn setup_reports_absent_harnesses_as_failure_without_writing_state() {
     let home = temporary_home("cli-setup-absent");

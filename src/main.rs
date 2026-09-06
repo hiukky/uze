@@ -6,6 +6,7 @@
 mod command_performance;
 mod progress;
 use crate::progress::Colorize;
+mod prompt;
 mod shim;
 
 use std::{collections::BTreeMap, io::IsTerminal, path::Path, path::PathBuf};
@@ -836,10 +837,27 @@ fn print_setup_help() {
     );
     println!();
     println!("{}", progress::section("Usage"));
-    println!("  uze setup");
-    println!("  uze setup <harness>...");
-    println!("  uze setup list");
-    println!("  uze setup inspect <harness>");
+    println!(
+        "{}",
+        progress::aligned_rows(vec![
+            vec![
+                "uze setup".to_owned(),
+                "Choose harnesses interactively".to_owned(),
+            ],
+            vec![
+                "uze setup <harness>...".to_owned(),
+                "Provision exactly these".to_owned(),
+            ],
+            vec![
+                "uze setup list".to_owned(),
+                "Show every harness and its integration health".to_owned(),
+            ],
+            vec![
+                "uze setup inspect <harness>".to_owned(),
+                "Show one harness's detection and delivery".to_owned(),
+            ],
+        ])
+    );
     println!();
     println!("{}", progress::section("Options"));
     println!(
@@ -858,9 +876,11 @@ fn print_setup_help() {
 }
 
 /// `uze setup` is the single machine-level harness surface. With no
-/// arguments it provisions every registered harness; with one or more ids it
-/// provisions exactly those ids. `list` and `inspect` remain read-only views
-/// under the same verb, so users do not need to learn a redundant namespace.
+/// arguments in a terminal it asks which harnesses to provision (see
+/// `choose_harnesses`) and provisions every registered one anywhere a
+/// question cannot be answered; with one or more ids it provisions exactly
+/// those ids. `list` and `inspect` remain read-only views under the same
+/// verb, so users do not need to learn a redundant namespace.
 ///
 /// Progress contract: `setup` runs harnesses **sequentially
 /// in registration order**, one opaque container per harness. The vendor
@@ -1217,6 +1237,62 @@ fn run_plugin(app: &UzeApplication, action: PluginAction, verbose: bool) -> Resu
     Ok(())
 }
 
+/// Answers "which harnesses?" when `uze setup` was given none.
+///
+/// A terminal is asked, because provisioning every harness the catalog
+/// knows about is a decision about someone's machine that nobody made —
+/// installing three vendors' CLIs to use one. Anything else (a pipe, an
+/// image build, a CI job) still gets the whole catalog: a caller that
+/// cannot answer must not be blocked on the question, and a script that
+/// wrote `uze setup` meant all of them.
+///
+/// The detected harnesses come pre-checked, so the common answer —
+/// "provision what I already use" — is one keystroke, while a fresh
+/// machine has to say what it wants. `None` is the run being called off,
+/// which is never the same as an empty selection.
+fn choose_harnesses(app: &UzeApplication) -> Option<Vec<String>> {
+    let catalog = app.health().harnesses();
+    if catalog.is_empty() || !prompt::interactive() {
+        return Some(catalog.into_iter().map(|h| h.integration).collect());
+    }
+    let choices: Vec<prompt::Choice> = catalog
+        .iter()
+        .map(|harness| prompt::Choice {
+            label: harness.display_name.clone(),
+            hint: harness_hint(harness),
+            selected: harness.detection.present,
+        })
+        .collect();
+    match prompt::multi_select("Harnesses to provision", &choices) {
+        // No second line: the question's own answer line already reads
+        // `Harnesses to provision: nothing`, and saying it twice is how a
+        // report teaches people to skip it.
+        prompt::Answer::Chosen(picked) if picked.is_empty() => None,
+        prompt::Answer::Chosen(picked) => Some(
+            picked
+                .into_iter()
+                .map(|index| catalog[index].integration.clone())
+                .collect(),
+        ),
+        prompt::Answer::Declined => {
+            println!("{}", progress::label("Setup cancelled"));
+            None
+        }
+    }
+}
+
+/// What a person needs in order to choose one row: whether the harness is
+/// already on this machine, and which version answered.
+fn harness_hint(harness: &HarnessHealth) -> String {
+    if !harness.detection.present {
+        return "not installed".to_owned();
+    }
+    match &harness.detection.version {
+        Some(version) => format!("installed {version}"),
+        None => "installed".to_owned(),
+    }
+}
+
 fn run_setup(
     app: &UzeApplication,
     home: &UzeHome,
@@ -1224,11 +1300,10 @@ fn run_setup(
     verbose: bool,
 ) -> Result<()> {
     let targets: Vec<String> = if harnesses.is_empty() {
-        app.health()
-            .harnesses()
-            .into_iter()
-            .map(|h| h.integration)
-            .collect()
+        match choose_harnesses(app) {
+            Some(chosen) => chosen,
+            None => return Ok(()),
+        }
     } else {
         harnesses.to_vec()
     };
@@ -1737,7 +1812,7 @@ fn trust_authority(trusted: bool) -> Box<dyn uze_application::TrustAuthority> {
     if trusted {
         return Box::new(uze_application::AlwaysTrust);
     }
-    if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
+    if prompt::interactive() {
         return Box::new(PromptingAuthority);
     }
     Box::new(uze_application::NoTrustAuthority)
@@ -1769,15 +1844,13 @@ impl uze_application::TrustAuthority for PromptingAuthority {
                 capability.arguments.join(" ")
             );
         }
-        println!();
-        match dialoguer::Confirm::new()
-            .with_prompt("Trust and install?")
-            .default(false)
-            .interact()
-        {
-            Ok(true) => uze_application::TrustOutcome::Granted,
-            Ok(false) => uze_application::TrustOutcome::Denied,
-            Err(_) => uze_application::TrustOutcome::Unavailable,
+        match prompt::confirm("Trust and install?", false) {
+            Some(true) => uze_application::TrustOutcome::Granted,
+            Some(false) => uze_application::TrustOutcome::Denied,
+            // Withdrawn, or a terminal that would not carry the question.
+            // Neither is a person declining, and the caller has its own
+            // ending for that.
+            None => uze_application::TrustOutcome::Unavailable,
         }
     }
 }
@@ -1802,7 +1875,7 @@ fn name_collision_authority(
             uze_application::NameCollisionResolution::Replace,
         ));
     }
-    if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
+    if prompt::interactive() {
         return Box::new(PromptingCollisionAuthority);
     }
     Box::new(uze_application::NoNameCollisionAuthority)
@@ -1821,24 +1894,29 @@ impl uze_application::NameCollisionAuthority for PromptingCollisionAuthority {
              shadow it in every harness.",
             request.name, request.existing, request.requested
         );
-        println!();
-        let choice = dialoguer::Select::new()
-            .with_prompt("How should this be resolved?")
-            .items([
-                "Keep existing (default)",
-                "Replace it",
-                "Alias this install to a new name",
-            ])
-            .default(0)
-            .interact_opt();
-        match choice {
-            Ok(Some(1)) => uze_application::NameCollisionResolution::Replace,
-            Ok(Some(2)) => match dialoguer::Input::<String>::new()
-                .with_prompt("New local name")
-                .interact_text()
-            {
-                Ok(alias) if !alias.trim().is_empty() => {
-                    uze_application::NameCollisionResolution::Alias(alias.trim().to_owned())
+        let resolutions = [
+            prompt::Choice {
+                label: "Keep existing".to_owned(),
+                hint: format!("`{}` stays the one under this name", request.existing),
+                selected: true,
+            },
+            prompt::Choice {
+                label: "Replace it".to_owned(),
+                hint: format!("`{}` takes the name over", request.requested),
+                selected: false,
+            },
+            prompt::Choice {
+                label: "Alias this install".to_owned(),
+                hint: "both stay, under names of their own".to_owned(),
+                selected: false,
+            },
+        ];
+        match prompt::select("How should this be resolved?", &resolutions) {
+            Some(1) => uze_application::NameCollisionResolution::Replace,
+            Some(2) => match prompt::ask("New local name") {
+                // An alias nobody typed is not a name to install under.
+                Some(alias) if !alias.is_empty() => {
+                    uze_application::NameCollisionResolution::Alias(alias)
                 }
                 _ => uze_application::NameCollisionResolution::Abort,
             },

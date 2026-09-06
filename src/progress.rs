@@ -290,8 +290,15 @@ pub fn log_prefix() -> String {
 /// the same reason: a terminal without a Unicode font is not a terminal UZE
 /// should be unusable in, and the marks the CLI prints are as much chrome as
 /// the ones the TUI does.
-fn glyph(symbol: Symbol) -> String {
+pub fn glyph(symbol: Symbol) -> String {
     uze_theme::active().glyph(symbol).to_owned()
+}
+
+/// The columns a glyph occupies. A caller laying a column out from a mark
+/// — an interactive prompt's cursor gutter, say — must ask rather than
+/// assume one: a theme may have replaced it with something wider.
+pub fn glyph_width(symbol: Symbol) -> usize {
+    uze_theme::active().symbol(symbol).width().into()
 }
 
 #[cfg(test)]
