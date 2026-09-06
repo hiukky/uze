@@ -219,11 +219,34 @@ def build_world(spec: dict, slug: str, binary: Path, keep: bool) -> World:
         staged.parent.mkdir(parents=True, exist_ok=True)
         staged.write_text(content)
 
+    commit_staged_marketplaces(root, env)
+
     name = world_spec.get("project", "demo-app")
     project = root / "projects" / name
     if not project.exists():
         seed_project(project, world_spec, env)
     return World(root=root, project=project, env=env)
+
+
+def commit_staged_marketplaces(root: Path, env: dict) -> None:
+    """Makes every staged marketplace the repository a marketplace is.
+
+    UZE reads a marketplace at a commit — that is what lets it say whether
+    the bytes it installed are still the bytes there, and whether anything
+    newer exists — so a loose directory of files is refused before any
+    install. A journey stages its market as files, so the world commits
+    them, exactly as a person would have before pointing UZE at it.
+    """
+    for manifest in sorted(root.rglob("marketplace.json")):
+        market = manifest.parent
+        if (market / ".git").exists():
+            continue
+        for args in (
+            ("git", "init", "-q", "-b", "main"),
+            ("git", "add", "-A"),
+            ("git", "commit", "-q", "-m", "chore: publish the marketplace"),
+        ):
+            subprocess.run(args, cwd=market, env=env, check=True, capture_output=True)
 
 
 def seed_project(project: Path, world_spec: dict, env: dict) -> None:
