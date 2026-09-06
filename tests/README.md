@@ -13,6 +13,11 @@ which cell of the matrices below is covered by which test file.
 - `conformance/` = **external harness conformance** (the Lab): L2
   real-harness/model-free evidence, L4 optional model behavior, CONTROL
   when needed. Vendor-specific by design; never linked into `tests/`.
+- `journeys/` = **product journeys**: a user's flow performed through the
+  real CLI *and* the real TUI in a disposable world, then checked against
+  the machine it left behind. Not named `e2e/` on purpose — "E2E" already
+  labels the Lab's CI job and L3's own description, and a third claimant
+  makes all three vaguer.
 
 ## Levels
 
@@ -22,6 +27,7 @@ which cell of the matrices below is covered by which test file.
 | **L1 — Component/Contract** | a subsystem's contract on a real isolated filesystem, with a *fake* process boundary | isolated temp HOME/UZE_HOME, no developer state, fake harness CLIs only | `tests/{cli,memory,packages,workspace,lifecycle,projection}/**`, `tests/integrations/**` |
 | **L2 — Harness Conformance** | real vendor binary semantics, isolated HOME/UZE_HOME, no model calls | real vendor binary, skipped cleanly when absent (`UZE_REAL_HARNESS_TESTS`-style probe-and-skip) | `tests/integrations/harness/codex.rs::real_codex_dogfood...`; the `conformance/` container lab (Tiers 1-2) |
 | **L3 — Acceptance** | public user-level scenario end-to-end through the real `uze` binary | clean isolated `TestEnvironment` (real UZE binary, fake or controlled harness CLIs) | `tests/acceptance/**` |
+| **L3.5 — Journey** | a user's flow performed through the real CLI and the real TUI, checked against real machine state (files, Git, recorded task state, processes) — never against UZE's own report | disposable sandbox HOME/UZE_HOME/XDG_RUNTIME_DIR, generated harness stand-ins, offline; a pinned container in CI | `journeys/suites/*.yml` (see `journeys/README.md`) |
 | **L4 — Manual/Model behavioral** | model-invocation or interactive-only behavior | manual/agentic eval, never CI | `tests/_fixtures/scenarios/eval/` (see `docs/capabilities/uze-skill.md`) |
 
 Rules:
@@ -56,6 +62,29 @@ layout); the `.rs` files are its modules. `tests/` files that predate the
 refactor (consumer.rs's historically-named tests, canonical_package.rs)
 live inside their domain with behavior-descriptive test names.
 
+## Per-harness conformance is asked, not copied
+
+`tests/integrations/capability_conformance.rs` and
+`lifecycle_conformance.rs` take their subjects from
+`IntegrationRegistry::isolated` — the product's own composition root — so a
+harness added to UZE enters both suites automatically. Each question is a
+single loop over every registered harness, and the vendor knowledge those
+loops need (where an envelope lives, how one is spelled) is held in exactly
+one place, `tests/integrations/subjects.rs`.
+
+A harness with no binding there fails by name, with the fix in the message.
+A harness that genuinely has no surface for a question declares
+`Support::NotApplicable("<reason>")`, which
+`every_exemption_from_this_suite_states_its_reason` checks — the same
+discipline the Lab's `bindings.unsupported` enforces, for the same reason: a
+matrix cannot tell a deliberate exemption from a forgotten one unless the
+exemption is written down.
+
+This replaced 19 hand-copied per-harness tests. Do not add a
+`<vendor>_<scenario>` test to those two files: add the question to the loop
+and the vendor's spelling to `subjects.rs`. A vendor-named test there is only
+right when the *outcome* is about a named pair (`codex_opencode_agree_on_the_shared_skill_root`).
+
 ## Support crate
 
 `crates/uze-testkit` owns the shared infrastructure:
@@ -69,12 +98,18 @@ live inside their domain with behavior-descriptive test names.
   invocation log), including the vendor plugin-marketplace state machine
   (`Action::VendorMarketplace`) and Antigravity's stub-install lifecycle.
 - `fixtures` — canonical `/foreign/`/`scenarios/`/`golden` resolution.
+  (Package-shaped fixtures for the integration suites live beside them in
+  `tests/integrations/fixtures.rs`, one copy: they were byte-identical in
+  two conformance files, and the copy a change forgets is the one whose
+  suite quietly stops proving what it says.)
 - `scenario::Scenario` — declarative system-state builder.
 - `assertions` — context-carrying fs/process assertions + `snapshot_dir`.
 
 ## Commands
 
 ```bash
+make journey                            # one product journey, on this machine
+make journey-docker                     # the same journey in the pinned container
 cargo test --workspace --no-fail-fast   # the full suite (includes acceptance)
 cargo test -p uze --test acceptance      # L3 only (the release signal)
 cargo test -p uze --test integrations    # conformance + per-harness semantics
@@ -94,12 +129,16 @@ suite.
 Does it need a real harness CLI?
 ├── yes ──> conformance/, as an L2 or L4 scenario (see conformance/README.md)
 └── no
-    └── Does it exercise a public UZE flow end to end?
-        ├── yes ──> tests/acceptance/
+    └── Does proving it need a gesture in the TUI, or a reading of the
+        machine that UZE's own report cannot stand in for?
+        ├── yes ──> journeys/suites/, as a scene (see journeys/README.md)
         └── no
-            └── Does it use the uze library or the uze binary, deterministically?
-                ├── yes ──> tests/<domain>/
-                └── no  ──> a #[cfg(test)] module beside the code
+            └── Does it exercise a public UZE flow end to end?
+                ├── yes ──> tests/acceptance/
+                └── no
+                    └── Does it use the uze library or binary, deterministically?
+                        ├── yes ──> tests/<domain>/
+                        └── no  ──> a #[cfg(test)] module beside the code
 ```
 
 If a test would need a credential, a network call, or an environment variable

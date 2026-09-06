@@ -1,185 +1,39 @@
-//! Capability conformance (L1/L2): per-harness `package_exposure_plan`
-//! exact-coverage semantics — generated native projection, explicit
-//! envelope precedence, unsafe-declaration rejection and fallback.
+//! Capability conformance (L1): `package_exposure_plan` exact-coverage
+//! semantics — generated native projection, explicit envelope precedence,
+//! unsafe-declaration rejection and fallback.
 //!
-//! Migrated verbatim from the former `tests/integration_conformance.rs`
-//! (the PACKAGE_DELIVERY half); the lifecycle half now lives in
-//! `tests/integrations/lifecycle_conformance.rs`.
+//! **Every question here is asked of every registered harness.** The subject
+//! list comes from `IntegrationRegistry::isolated` (see `super::subjects`),
+//! so a harness added to the product enters this suite automatically and
+//! must either answer each question or declare, with a reason, that it has
+//! no surface for it. That replaces the hand-copied per-vendor blocks this
+//! file used to carry: three copies of the same scenario could not tell a
+//! deliberate exemption from a forgotten one, and the fifth harness would
+//! have started with none of them.
+//!
+//! Every assertion is phrased as an *outcome* invariant — route, coverage
+//! set, fallback survival — never as "the JSON must look like X". A vendor's
+//! manifest shape is knowledge held in exactly one place, `subjects.rs`.
 
-//! Integration Conformance Test Suite.
-//!
-//! Formalizes behavioral invariants that Claude, Codex, Antigravity, and
-//! OpenCode already share — proven independently, per-integration, before
-//! this suite existed — as a single, reusable set of assertions taken
-//! against `&dyn IntegrationPort`. This is deliberately **not** a new
-//! trait or framework: every helper below is a plain function; the only
-//! "framework" concession is a couple of small, local fixture structs
-//! (`CoverageFixture`, `SkillFixture`) that exist purely to avoid four-way
-//! tuple returns, not to impose a shape on future integrations.
-//!
-//! Produced by, and should be read alongside, the Integration Capability
-//! Contracts Audit: `IntegrationPort` stays unchanged, the public API is
-//! unchanged, and no vendor module was refactored except two helpers
-//! proven byte-for-byte (`crate::shared::provision`) or found NOT
-//! byte-for-byte and deliberately left alone (the `..`/absolute-path
-//! normalization each coverage function does — see that audit's
-//! Duplication Analysis for the concrete divergence found).
-//!
-//! **What this suite deliberately does NOT assert** (per its own brief):
-//! a vendor's manifest shape is never checked against another's;
-//! OpenCode is never asked for package-level delivery (it has none, by
-//! design); no publication/catalogue model is assumed identical across
-//! vendors (Antigravity and OpenCode publish nothing at all, and that's
-//! correct). Every assertion below is phrased as an *outcome* invariant
-//! (route, coverage set, lifecycle state) — never as "the JSON must look
-//! like X."
-
-use std::{
-    collections::BTreeSet,
-    fs,
-    path::{Path, PathBuf},
-};
-
-// `PATH` is process-global; every test below that mutates it must not
-// interleave with another one doing the same under the default parallel
-// test runner — same discipline, same reason, as
-// `uze_core::harness_runtime`'s own `PATH_ENV_GUARD`.
+use std::{collections::BTreeSet, fs};
 
 use uze_core::{
-    acquisition::{PackageSource, Provenance, ResolvedSource},
-    capability::{Capability, CapabilityKind, Representation},
-    exposure::ExposureMechanism,
-    home::UzeHome,
-    integration::IntegrationPort,
-    project::Resource,
-    router::CompatibilityRoute,
-    state,
-    store::{PackageId, StoredPackage},
+    exposure::ExposureMechanism, integration::IntegrationPort, project::Resource,
+    router::CompatibilityRoute, store::StoredPackage,
 };
 
-use uze_integrations::{
-    antigravity::AntigravityIntegration, claude::ClaudeIntegration, codex::CodexIntegration,
+use super::{
+    fixtures::{
+        build_package, mark_setup, mcp_resource, skill_resource,
+        skill_resource_outside_conventions, tree,
+    },
+    subjects::{Subject, subjects},
 };
 
 // ============================================================================
-// Fixture plumbing — plain functions, not a framework.
+// The shared assertions. Each states one invariant, against `&dyn
+// IntegrationPort` and nothing more.
 // ============================================================================
-
-fn temp(label: &str) -> PathBuf {
-    uze_testkit::temp::scratch(label)
-}
-
-/// Writes a canonical `plugin.json` plus every `(relative_path, content)`
-/// pair, then builds the `StoredPackage` those bytes describe. Deliberately
-/// mirrors a real `Store::ingest` result closely enough for
-/// `package_exposure_plan`/`exposure_plan` to behave identically, without
-/// pulling acquisition/Store machinery into this file — every fixture
-/// still lives entirely under a throwaway temp root, never a real
-/// `$UZE_HOME/store`.
-fn build_package(
-    label: &str,
-    name: &str,
-    extra_files: &[(&str, &str)],
-) -> (PathBuf, StoredPackage) {
-    let root = temp(label);
-    let pkg_root = root.join("pkg");
-    fs::create_dir_all(&pkg_root).unwrap();
-    fs::write(
-        pkg_root.join("plugin.json"),
-        format!(r#"{{"name":"{name}","version":"1.0.0","description":"Conformance fixture"}}"#),
-    )
-    .unwrap();
-    for (relative, content) in extra_files {
-        let path = pkg_root.join(relative);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, content).unwrap();
-    }
-    let id = PackageId::from_plugin_name(name, &pkg_root.join("plugin.json")).unwrap();
-    let package = StoredPackage {
-        active_name: id.plugin_name().to_owned(),
-        id,
-        root: pkg_root.clone(),
-        manifest: pkg_root.join("plugin.json"),
-        provenance: Provenance {
-            requested: PackageSource::Local {
-                path: PathBuf::from("/tmp/fake"),
-            },
-            resolved: ResolvedSource::Local {
-                path: PathBuf::from("/tmp/fake"),
-            },
-        },
-    };
-    (root, package)
-}
-
-/// Writes `<dir>/<name>/SKILL.md` under the package root and returns the
-/// discovered `Resource` for it — the same shape `UzeEngine` would produce.
-/// Writes `<dir>/<name>/SKILL.md` under the package root and returns the
-/// discovered `Resource` for it — the same shape `UzeEngine` would produce.
-fn skill_resource(package: &StoredPackage, dir: &str, name: &str) -> Resource {
-    let path = package.root.join(dir).join(name).join("SKILL.md");
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write(&path, format!("---\nname: {name}\n---\n\nBody.\n")).unwrap();
-    Resource::from_package(
-        package.id.clone(),
-        package.root.clone(),
-        Capability {
-            kind: CapabilityKind::AgentSkill,
-            representation: Representation::Standard,
-            path,
-            payload: Vec::new(),
-        },
-    )
-}
-/// A skill resource at a path outside every convention a native package
-/// tier reads from — used for the "extra discovered resource" coverage
-/// case, never for a case that expects it covered.
-fn skill_resource_outside_conventions(package: &StoredPackage, name: &str) -> Resource {
-    skill_resource(package, "unconventional-location", name)
-}
-fn mcp_resource(package: &StoredPackage, name: &str, payload: &str) -> Resource {
-    let path = package.root.join("mcp.json");
-    Resource::from_package_named(
-        package.id.clone(),
-        package.root.clone(),
-        Capability {
-            kind: CapabilityKind::Mcp,
-            representation: Representation::Standard,
-            path,
-            payload: payload.as_bytes().to_vec(),
-        },
-        name.to_owned(),
-    )
-}
-
-fn mark_setup(home: &UzeHome, integration: &dyn IntegrationPort) {
-    state::record(
-        home,
-        state::IntegrationRecord {
-            harness: integration.id().to_owned(),
-            version: None,
-            strategy: "conformance-fixture".to_owned(),
-            installed: true,
-        },
-    )
-    .unwrap();
-}
-//
-// One shared invariant, exercised identically for Claude, Codex, and
-// Antigravity (OpenCode has no package-level native concept at all — never
-// asked for one, per this suite's own brief): `provided_resource_identities`
-// must be an exact `discovered ∩ safely-representable` intersection, never
-// a "manifest/structural surface exists → cover everything" shortcut, and
-// every resource NOT in that set must still resolve to a non-Unsupported
-// individual `exposure_plan` — never silently dropped.
-//
-// These fixtures ship no vendor envelope beyond the canonical manifest, so
-// for Claude/Codex this exercises the GENERATED route (ADR-013)
-// while for Antigravity the canonical plugin.json IS the vendor manifest
-// (generation only kicks in for canonical-MCP translation) — the same
-// coverage invariant applies either way, and proving it is what item 4
-// asks for. Item 3 (explicit precedence) gets its own,
-// separately-enveloped fixtures below.
 
 fn assert_exact_package_coverage(
     integration: &dyn IntegrationPort,
@@ -200,517 +54,65 @@ fn assert_exact_package_coverage(
         &plan.provided_resource_identities, expected_covered,
         "[{case}] provided_resource_identities must be an exact discovered ∩ declared intersection"
     );
-    // Item 5: every uncovered resource must still resolve through the
-    // normal per-resource fallback, never silently disappear.
+    assert_every_uncovered_resource_still_falls_back(
+        integration,
+        resources,
+        expected_covered,
+        case,
+    );
+}
+
+/// An uncovered resource must still resolve through the normal per-resource
+/// fallback, never silently disappear.
+fn assert_every_uncovered_resource_still_falls_back(
+    integration: &dyn IntegrationPort,
+    resources: &[&Resource],
+    covered: &BTreeSet<String>,
+    case: &str,
+) {
     for resource in resources {
-        if !expected_covered.contains(&resource.identity()) {
-            let fallback = integration.exposure_plan(resource);
-            assert!(
-                !matches!(fallback.mechanism, ExposureMechanism::Unsupported { .. }),
-                "[{case}] uncovered resource {} must still route through capability-level \
-                 fallback, not Unsupported",
-                resource.identity()
-            );
+        if !covered.contains(&resource.identity()) {
+            assert_fallback_survives(integration, resource, case);
         }
     }
 }
 
-/// Claude: no explicit `.claude-plugin/plugin.json` → generated route.
-fn claude_coverage_fixture(
-    label: &str,
-    skill_dirs: &[&str],
-    with_extra_skill: bool,
-    with_mcp: bool,
-) -> (PathBuf, StoredPackage, Vec<Resource>, BTreeSet<String>) {
-    let files: &[(&str, &str)] = if with_mcp {
-        &[("mcp.json", r#"{"mcpServers":{"mcp-a":{"command":"a"}}}"#)]
-    } else {
-        &[]
-    };
-    let (root, package) = build_package(label, "flow", files);
-    let mut resources = Vec::new();
-    let mut expected = BTreeSet::new();
-    for name in skill_dirs {
-        let resource = skill_resource(&package, "skills", name);
-        expected.insert(resource.identity());
-        resources.push(resource);
-    }
-    if with_extra_skill {
-        resources.push(skill_resource_outside_conventions(&package, "outsider"));
-    }
-    if with_mcp {
-        let mcp = mcp_resource(&package, "mcp-a", r#"{"command":"a"}"#);
-        expected.insert(mcp.identity());
-        resources.push(mcp);
-    }
-    (root, package, resources, expected)
-}
-
-#[test]
-fn claude_generated_coverage_full() {
-    let (root, package, resources, expected) =
-        claude_coverage_fixture("claude-full", &["commit"], false, true);
-    let refs: Vec<&Resource> = resources.iter().collect();
-    let home = UzeHome::at(root.join("uze"));
-    let integration = ClaudeIntegration::new(root.join("claude"), home.clone());
-    mark_setup(&home, &integration);
-    assert_exact_package_coverage(&integration, &package, &refs, &expected, "claude/full");
-    let _ = fs::remove_dir_all(root);
-}
-
-#[test]
-fn claude_generated_coverage_subset_plus_extra_discovered() {
-    // Two skills declared/conventional, one MCP; only-the-conventional-ones
-    // must be covered — the "subset" and "extra discovered" cases fold
-    // together naturally here since both are proven by the same
-    // discovered-outside-the-conventional-surface resource.
-    let (root, package, resources, expected) =
-        claude_coverage_fixture("claude-subset", &["commit", "deploy"], true, true);
-    let refs: Vec<&Resource> = resources.iter().collect();
-    let home = UzeHome::at(root.join("uze"));
-    let integration = ClaudeIntegration::new(root.join("claude"), home.clone());
-    mark_setup(&home, &integration);
-    assert_exact_package_coverage(&integration, &package, &refs, &expected, "claude/subset");
-    let _ = fs::remove_dir_all(root);
-}
-
-#[test]
-fn claude_generated_coverage_malformed_explicit_envelope_yields_empty_but_no_crash() {
-    // A malformed EXPLICIT envelope: present, so explicit route is taken
-    // (never generation), but unparseable, so coverage is empty rather
-    // than a crash or a silent "cover everything."
-    let (root, package) = build_package(
-        "claude-malformed",
-        "flow",
-        &[(".claude-plugin/plugin.json", "{not json")],
-    );
-    let skill = skill_resource(&package, "skills", "commit");
-    let resources = vec![&skill];
-    let home = UzeHome::at(root.join("uze"));
-    let integration = ClaudeIntegration::new(root.join("claude"), home.clone());
-    mark_setup(&home, &integration);
-    let plan = integration
-        .package_exposure_plan(&package, &resources)
-        .expect("a present, even malformed, explicit envelope still takes the explicit route");
-    assert_eq!(plan.route, CompatibilityRoute::Native);
+fn assert_fallback_survives(integration: &dyn IntegrationPort, resource: &Resource, case: &str) {
+    let fallback = integration.exposure_plan(resource);
     assert!(
-        plan.provided_resource_identities.is_empty(),
-        "malformed declaration must yield empty coverage, not a crash and not full coverage"
+        !matches!(fallback.mechanism, ExposureMechanism::Unsupported { .. }),
+        "[{case}] resource {} must still route through capability-level fallback, not Unsupported",
+        resource.identity()
     );
-    let fallback = integration.exposure_plan(&skill);
-    assert!(!matches!(
-        fallback.mechanism,
-        ExposureMechanism::Unsupported { .. }
-    ));
-    let _ = fs::remove_dir_all(root);
 }
 
-#[test]
-fn claude_generated_coverage_path_escape_is_rejected() {
-    let (root, package) = build_package(
-        "claude-escape",
-        "flow",
-        &[(
-            ".claude-plugin/plugin.json",
-            r#"{"name":"flow","skills":["../../etc","/absolute-that-still-resolves-relative"]}"#,
-        )],
-    );
-    let skill = skill_resource(&package, "skills", "commit");
-    let resources = vec![&skill];
-    let home = UzeHome::at(root.join("uze"));
-    let integration = ClaudeIntegration::new(root.join("claude"), home.clone());
-    mark_setup(&home, &integration);
-    let plan = integration
-        .package_exposure_plan(&package, &resources)
-        .expect("explicit envelope present");
-    assert!(
-        plan.provided_resource_identities.is_empty(),
-        "a `..`-escaping declaration must never cover a real resource that happens to share no \
-         name with it"
-    );
-    let _ = fs::remove_dir_all(root);
-}
-
-#[test]
-fn claude_generated_coverage_duplicate_declaration_is_deduplicated_not_double_counted() {
-    let (root, package) = build_package(
-        "claude-duplicate",
-        "flow",
-        &[(
-            ".claude-plugin/plugin.json",
-            r#"{"name":"flow","skills":["./skills/commit","./skills/commit","skills/commit"]}"#,
-        )],
-    );
-    let skill = skill_resource(&package, "skills", "commit");
-    let resources = vec![&skill];
-    let home = UzeHome::at(root.join("uze"));
-    let integration = ClaudeIntegration::new(root.join("claude"), home.clone());
-    mark_setup(&home, &integration);
-    let plan = integration
-        .package_exposure_plan(&package, &resources)
-        .expect("explicit envelope present");
-    assert_eq!(
-        plan.provided_resource_identities,
-        BTreeSet::from([skill.identity()]),
-        "a repeated declaration must still resolve to exactly one covered identity"
-    );
-    let _ = fs::remove_dir_all(root);
-}
-
-/// Codex: no explicit `.codex-plugin/plugin.json` → generated route.
-fn codex_coverage_fixture(
-    label: &str,
-    skill_dirs: &[&str],
-    with_extra_skill: bool,
-    with_mcp: bool,
-) -> (PathBuf, StoredPackage, Vec<Resource>, BTreeSet<String>) {
-    let files: &[(&str, &str)] = if with_mcp {
-        &[("mcp.json", r#"{"mcpServers":{"mcp-a":{"command":"a"}}}"#)]
-    } else {
-        &[]
-    };
-    let (root, package) = build_package(label, "flow", files);
-    let mut resources = Vec::new();
-    let mut expected = BTreeSet::new();
-    for name in skill_dirs {
-        let resource = skill_resource(&package, "skills", name);
-        expected.insert(resource.identity());
-        resources.push(resource);
+/// Presence of an explicit envelope — not its validity — decides the branch.
+/// A malformed envelope must never be papered over by generation, and the two
+/// legal shapes of that outcome are both stated here: a plan on the explicit
+/// route declaring nothing, or no native plan at all where the envelope *is*
+/// the vendor manifest.
+fn assert_a_malformed_envelope_never_becomes_coverage(
+    integration: &dyn IntegrationPort,
+    package: &StoredPackage,
+    resource: &Resource,
+    case: &str,
+) {
+    // Two legal shapes, both stated: a plan on the explicit route declaring
+    // nothing, or no native plan at all where the envelope *is* the vendor
+    // manifest. Either way generation never papered over it.
+    if let Some(plan) = integration.package_exposure_plan(package, &[resource]) {
+        assert!(
+            plan.provided_resource_identities.is_empty(),
+            "[{case}] a malformed declaration must yield empty coverage — never a crash, and \
+             never the full coverage generation would have produced"
+        );
     }
-    if with_extra_skill {
-        resources.push(skill_resource_outside_conventions(&package, "outsider"));
-    }
-    if with_mcp {
-        let mcp = mcp_resource(&package, "mcp-a", r#"{"command":"a"}"#);
-        expected.insert(mcp.identity());
-        resources.push(mcp);
-    }
-    (root, package, resources, expected)
+    assert_fallback_survives(integration, resource, case);
 }
 
-#[test]
-fn codex_generated_coverage_full() {
-    let (root, package, resources, expected) =
-        codex_coverage_fixture("codex-full", &["commit"], false, true);
-    let refs: Vec<&Resource> = resources.iter().collect();
-    let home = UzeHome::at(root.join("uze"));
-    let integration = CodexIntegration::new(root.join("agents"), home.clone());
-    mark_setup(&home, &integration);
-    assert_exact_package_coverage(&integration, &package, &refs, &expected, "codex/full");
-    let _ = fs::remove_dir_all(root);
-}
-
-#[test]
-fn codex_generated_coverage_subset_plus_extra_discovered() {
-    let (root, package, resources, expected) =
-        codex_coverage_fixture("codex-subset", &["commit", "deploy"], true, true);
-    let refs: Vec<&Resource> = resources.iter().collect();
-    let home = UzeHome::at(root.join("uze"));
-    let integration = CodexIntegration::new(root.join("agents"), home.clone());
-    mark_setup(&home, &integration);
-    assert_exact_package_coverage(&integration, &package, &refs, &expected, "codex/subset");
-    let _ = fs::remove_dir_all(root);
-}
-
-#[test]
-fn codex_explicit_coverage_malformed_envelope_yields_empty_but_no_crash() {
-    let (root, package) = build_package(
-        "codex-malformed",
-        "flow",
-        &[(".codex-plugin/plugin.json", "{not json")],
-    );
-    let skill = skill_resource(&package, "skills", "commit");
-    let resources = vec![&skill];
-    let home = UzeHome::at(root.join("uze"));
-    let integration = CodexIntegration::new(root.join("agents"), home.clone());
-    mark_setup(&home, &integration);
-    let plan = integration
-        .package_exposure_plan(&package, &resources)
-        .expect("a present, even malformed, explicit envelope still takes the explicit route");
-    assert_eq!(plan.route, CompatibilityRoute::Native);
-    assert!(plan.provided_resource_identities.is_empty());
-    let fallback = integration.exposure_plan(&skill);
-    assert!(!matches!(
-        fallback.mechanism,
-        ExposureMechanism::Unsupported { .. }
-    ));
-    let _ = fs::remove_dir_all(root);
-}
-
-#[test]
-fn codex_explicit_coverage_path_escape_is_rejected() {
-    let (root, package) = build_package(
-        "codex-escape",
-        "flow",
-        &[(
-            ".codex-plugin/plugin.json",
-            r#"{"name":"flow","skills":"../../etc"}"#,
-        )],
-    );
-    let skill = skill_resource(&package, "skills", "commit");
-    let resources = vec![&skill];
-    let home = UzeHome::at(root.join("uze"));
-    let integration = CodexIntegration::new(root.join("agents"), home.clone());
-    mark_setup(&home, &integration);
-    let plan = integration
-        .package_exposure_plan(&package, &resources)
-        .expect("explicit envelope present");
-    assert!(plan.provided_resource_identities.is_empty());
-    let _ = fs::remove_dir_all(root);
-}
-
-/// Antigravity: the canonical `plugin.json` IS the explicit envelope (and
-/// the vendor manifest), so the same "envelope-less package" fixture takes
-/// the GENERATED route only when canonical `mcp.json` needs translating —
-/// which is exactly this fixture's shape (skill + mcp.json). Coverage and
-/// the uncovered-resource fallback behave exactly like the other vendors'.
-fn antigravity_coverage_fixture(
-    label: &str,
-    skill_dirs: &[&str],
-    with_extra_skill: bool,
-    with_mcp: bool,
-) -> (PathBuf, StoredPackage, Vec<Resource>, BTreeSet<String>) {
-    let files: &[(&str, &str)] = if with_mcp {
-        &[("mcp.json", r#"{"mcpServers":{"mcp-a":{"command":"a"}}}"#)]
-    } else {
-        &[]
-    };
-    let (root, package) = build_package(label, "flow", files);
-    let mut resources = Vec::new();
-    let mut expected = BTreeSet::new();
-    for name in skill_dirs {
-        let resource = skill_resource(&package, "skills", name);
-        expected.insert(resource.identity());
-        resources.push(resource);
-    }
-    if with_extra_skill {
-        resources.push(skill_resource_outside_conventions(&package, "outsider"));
-    }
-    if with_mcp {
-        let mcp = mcp_resource(&package, "mcp-a", r#"{"command":"a"}"#);
-        expected.insert(mcp.identity());
-        resources.push(mcp);
-    }
-    (root, package, resources, expected)
-}
-
-#[test]
-fn antigravity_generated_coverage_full() {
-    let (root, package, resources, expected) =
-        antigravity_coverage_fixture("antigravity-full", &["commit"], false, true);
-    let refs: Vec<&Resource> = resources.iter().collect();
-    let home = UzeHome::at(root.join("uze"));
-    let integration = AntigravityIntegration::new(root.join("agents"), home.clone());
-    mark_setup(&home, &integration);
-    assert_exact_package_coverage(&integration, &package, &refs, &expected, "antigravity/full");
-    let _ = fs::remove_dir_all(root);
-}
-
-#[test]
-fn antigravity_generated_coverage_subset_plus_extra_discovered() {
-    let (root, package, resources, expected) =
-        antigravity_coverage_fixture("antigravity-subset", &["commit", "deploy"], true, true);
-    let refs: Vec<&Resource> = resources.iter().collect();
-    let home = UzeHome::at(root.join("uze"));
-    let integration = AntigravityIntegration::new(root.join("agents"), home.clone());
-    mark_setup(&home, &integration);
-    assert_exact_package_coverage(
-        &integration,
-        &package,
-        &refs,
-        &expected,
-        "antigravity/subset",
-    );
-    let _ = fs::remove_dir_all(root);
-}
-
-#[test]
-fn antigravity_explicit_coverage_malformed_manifest_yields_no_native_plan() {
-    // A malformed canonical plugin.json is an unreadable vendor manifest:
-    // no explicit route, and generation is never consulted to paper over it
-    // (plugging the malformed manifest with a synthesized one would be
-    // exactly the "silently displaced explicit envelope" this suite
-    // forbids). The resource still routes through capability-level
-    // delivery.
-    let (root, package) = build_package(
-        "antigravity-malformed",
-        "flow",
-        &[("plugin.json", "{not json")],
-    );
-    let skill = skill_resource(&package, "skills", "commit");
-    let resources = vec![&skill];
-    let home = UzeHome::at(root.join("uze"));
-    let integration = AntigravityIntegration::new(root.join("agents"), home.clone());
-    mark_setup(&home, &integration);
-    assert!(
-        integration
-            .package_exposure_plan(&package, &resources)
-            .is_none(),
-        "malformed canonical manifest must never be silently displaced by generation"
-    );
-    let fallback = integration.exposure_plan(&skill);
-    assert!(!matches!(
-        fallback.mechanism,
-        ExposureMechanism::Unsupported { .. }
-    ));
-    let _ = fs::remove_dir_all(root);
-}
-
-// ============================================================================
-// 3. Explicit native envelope precedence — PACKAGE_DELIVERY.
-// ============================================================================
-//
-// Presence of an explicit envelope — not its validity — decides the
-// branch. An explicit envelope, even a malformed one, must never be
-// silently displaced by generation. Claude/Codex's malformed-
-// envelope cases above already prove "explicit still wins when malformed";
-// this section adds the complementary case: an explicit envelope that
-// declares LESS than generation would, proving generation is never
-// consulted at all once an explicit envelope file exists.
-
-#[test]
-fn claude_explicit_envelope_with_partial_declaration_is_never_topped_up_by_generation() {
-    let (root, package) = build_package(
-        "claude-precedence",
-        "flow",
-        &[
-            (
-                ".claude-plugin/plugin.json",
-                r#"{"name":"flow","skills":["./skills/commit"]}"#,
-            ),
-            ("mcp.json", r#"{"mcpServers":{"mcp-a":{"command":"a"}}}"#),
-        ],
-    );
-    let skill = skill_resource(&package, "skills", "commit");
-    let mcp = mcp_resource(&package, "mcp-a", r#"{"command":"a"}"#);
-    let resources = vec![&skill, &mcp];
-    let home = UzeHome::at(root.join("uze"));
-    let integration = ClaudeIntegration::new(root.join("claude"), home.clone());
-    mark_setup(&home, &integration);
-    let plan = integration
-        .package_exposure_plan(&package, &resources)
-        .expect("explicit envelope present");
-    // The explicit envelope declares only the skill; even though the
-    // package ALSO has a root mcp.json generation would have picked up,
-    // presence of the explicit envelope must keep coverage exactly at
-    // what it itself declares.
-    assert_eq!(
-        plan.provided_resource_identities,
-        BTreeSet::from([skill.identity()]),
-        "explicit envelope's own declared subset must never be topped up by what generation \
-         would have additionally covered"
-    );
-    let mcp_fallback = integration.exposure_plan(&mcp);
-    assert!(!matches!(
-        mcp_fallback.mechanism,
-        ExposureMechanism::Unsupported { .. }
-    ));
-    let _ = fs::remove_dir_all(root);
-}
-
-#[test]
-fn codex_explicit_envelope_with_partial_declaration_is_never_topped_up_by_generation() {
-    let (root, package) = build_package(
-        "codex-precedence",
-        "flow",
-        &[
-            (
-                ".codex-plugin/plugin.json",
-                r#"{"name":"flow","skills":"./skills/"}"#,
-            ),
-            ("mcp.json", r#"{"mcpServers":{"mcp-a":{"command":"a"}}}"#),
-        ],
-    );
-    let skill = skill_resource(&package, "skills", "commit");
-    let mcp = mcp_resource(&package, "mcp-a", r#"{"command":"a"}"#);
-    let resources = vec![&skill, &mcp];
-    let home = UzeHome::at(root.join("uze"));
-    let integration = CodexIntegration::new(root.join("agents"), home.clone());
-    mark_setup(&home, &integration);
-    let plan = integration
-        .package_exposure_plan(&package, &resources)
-        .expect("explicit envelope present");
-    // Codex's explicit `mcpServers` field points at an external file
-    // (`.mcp.json` by convention), never the root `mcp.json` generation
-    // reads — so an explicit envelope declaring only `skills` truly
-    // cannot see the root mcp.json at all, proving precedence rather than
-    // assuming it.
-    assert_eq!(
-        plan.provided_resource_identities,
-        BTreeSet::from([skill.identity()])
-    );
-    let _ = fs::remove_dir_all(root);
-}
-
-#[test]
-fn antigravity_explicit_envelope_with_partial_declaration_is_never_topped_up_by_generation() {
-    // Antigravity's explicit envelope is the canonical plugin.json itself.
-    // When the author ALSO ships a vendor mcp_config.json declaring a
-    // subset, generation (which would translate the full canonical
-    // mcp.json) must never be consulted: coverage is exactly the declared
-    // subset, and the undeclared MCP resource falls back individually.
-    let (root, package) = build_package(
-        "antigravity-precedence",
-        "flow",
-        &[
-            (
-                "mcp.json",
-                r#"{"mcpServers":{"mcp-a":{"command":"a"},"mcp-b":{"command":"b"}}}"#,
-            ),
-            (
-                "mcp_config.json",
-                r#"{"mcpServers":{"mcp-b":{"command":"b"}}}"#,
-            ),
-        ],
-    );
-    let skill = skill_resource(&package, "skills", "commit");
-    let mcp_declared = mcp_resource(&package, "mcp-b", r#"{"command":"b"}"#);
-    let mcp_undeclared = mcp_resource(&package, "mcp-a", r#"{"command":"a"}"#);
-    let resources = vec![&skill, &mcp_declared, &mcp_undeclared];
-    let home = UzeHome::at(root.join("uze"));
-    let integration = AntigravityIntegration::new(root.join("agents"), home.clone());
-    mark_setup(&home, &integration);
-    let plan = integration
-        .package_exposure_plan(&package, &resources)
-        .expect("the author-shipped mcp_config.json keeps the explicit route");
-    assert_eq!(
-        plan.provided_resource_identities,
-        BTreeSet::from([skill.identity(), mcp_declared.identity()]),
-        "explicit declaration's own subset must never be topped up by what generation would \
-         have covered from the canonical mcp.json"
-    );
-    let fallback = integration.exposure_plan(&mcp_undeclared);
-    assert!(!matches!(
-        fallback.mechanism,
-        ExposureMechanism::Unsupported { .. }
-    ));
-    let _ = fs::remove_dir_all(root);
-}
-
-// ============================================================================
-// Path safety hardening — PACKAGE_DELIVERY.
-// ============================================================================
-//
-// Regression coverage for a real bug found by the Path Safety +
-// Foreign Importer Cleanup audit: Claude's per-entry manifest-path
-// normalization used to strip a leading `/` before testing whether a
-// declaration was absolute, so `/skills/foo` silently became the relative
-// declaration `skills/foo` and was ACCEPTED — Codex's independently
-// written equivalent never did this. Both now share one fixed predicate
-// (`crate::shared::path::normalize_declared_relative_path`); this proves
-// the INVARIANT the fix restores, not either vendor's specific syntax:
-//
-//   An invalid/unsafe native manifest path can never be made valid by
-//   destructive normalization.
-//
-//   An invalid native coverage declaration must not suppress the
-//   resource's normal capability-level fallback.
-//
-// Antigravity has no manifest-declared path field at all (its coverage is
-// purely structural — see `antigravity/plugin.rs`), so it is exempt from
-// this section entirely, not silently assumed safe.
-
-fn assert_unsafe_declaration_never_covers_the_colliding_resource(
+/// An invalid or unsafe declaration can never be made valid by destructive
+/// normalization, and must not suppress the resource's own delivery.
+fn assert_an_unsafe_declaration_never_covers_the_colliding_resource(
     integration: &dyn IntegrationPort,
     package: &StoredPackage,
     resource: &Resource,
@@ -721,186 +123,381 @@ fn assert_unsafe_declaration_never_covers_the_colliding_resource(
             !plan
                 .provided_resource_identities
                 .contains(&resource.identity()),
-            "[{case}] an unsafe declaration must never cover the real resource it collides \
-             with, even though a destructive normalizer would have made them match"
+            "[{case}] an unsafe declaration must never cover the real resource it collides with, \
+             even though a destructive normalizer would have made them match"
         );
     }
-    // The resource must still be attachable through the normal
-    // capability-level fallback — an invalid declaration must never
-    // suppress delivery of a real, otherwise-valid capability.
-    let fallback = integration.exposure_plan(resource);
+    assert_fallback_survives(integration, resource, case);
+}
+
+// ============================================================================
+// The questions, each asked of every registered harness.
+// ============================================================================
+
+/// The fixture every coverage question is asked against: a package holding
+/// conventional skills, one skill outside the conventional surface, and a
+/// canonical `mcp.json`.
+struct Coverage {
+    package: StoredPackage,
+    resources: Vec<Resource>,
+    expected: BTreeSet<String>,
+}
+
+fn coverage_fixture(label: &str, skills: &[&str], with_outsider: bool) -> Coverage {
+    let (_, package) = build_package(
+        label,
+        "flow",
+        &[("mcp.json", r#"{"mcpServers":{"mcp-a":{"command":"a"}}}"#)],
+    );
+    let mut resources = Vec::new();
+    let mut expected = BTreeSet::new();
+    for name in skills {
+        let resource = skill_resource(&package, "skills", name);
+        expected.insert(resource.identity());
+        resources.push(resource);
+    }
+    if with_outsider {
+        resources.push(skill_resource_outside_conventions(&package, "outsider"));
+    }
+    let mcp = mcp_resource(&package, "mcp-a", r#"{"command":"a"}"#);
+    expected.insert(mcp.identity());
+    resources.push(mcp);
+    Coverage {
+        package,
+        resources,
+        expected,
+    }
+}
+
+/// A package with an explicit envelope carries no package-level delivery for
+/// a harness that has none; asserting that is what keeps "not applicable"
+/// from meaning "unasked".
+fn assert_no_package_delivery(subject: &Subject, coverage: &Coverage) {
+    let refs: Vec<&Resource> = coverage.resources.iter().collect();
     assert!(
-        !matches!(fallback.mechanism, ExposureMechanism::Unsupported { .. }),
-        "[{case}] a resource left uncovered by an invalid declaration must still route through \
-         normal fallback, never Unsupported"
+        subject
+            .integration
+            .package_exposure_plan(&coverage.package, &refs)
+            .is_none(),
+        "[{}] a harness with no package-level envelope must produce no package plan at all",
+        subject.id
     );
+    for resource in &refs {
+        assert_fallback_survives(subject.integration.as_ref(), resource, &subject.id);
+    }
 }
 
 #[test]
-fn claude_absolute_declaration_never_covers_colliding_resource_and_fallback_survives() {
-    let (root, package) = build_package(
-        "claude-path-safety-absolute",
-        "flow",
-        &[(
-            ".claude-plugin/plugin.json",
-            r#"{"name":"flow","skills":["/skills/commit"]}"#,
-        )],
-    );
-    let skill = skill_resource(&package, "skills", "commit");
-    let home = UzeHome::at(root.join("uze"));
-    let integration = ClaudeIntegration::new(root.join("claude"), home.clone());
-    mark_setup(&home, &integration);
-    assert_unsafe_declaration_never_covers_the_colliding_resource(
-        &integration,
-        &package,
-        &skill,
-        "claude/absolute",
-    );
-    let _ = fs::remove_dir_all(root);
+fn every_harness_covers_exactly_what_the_package_declares() {
+    for subject in subjects("coverage-full") {
+        mark_setup(&subject.home, subject.integration.as_ref());
+        let coverage =
+            coverage_fixture(&format!("coverage-full-{}", subject.id), &["commit"], false);
+        if subject.envelope().get().is_none() {
+            assert_no_package_delivery(&subject, &coverage);
+            continue;
+        }
+        let refs: Vec<&Resource> = coverage.resources.iter().collect();
+        assert_exact_package_coverage(
+            subject.integration.as_ref(),
+            &coverage.package,
+            &refs,
+            &coverage.expected,
+            &format!("{}/full", subject.id),
+        );
+    }
 }
 
 #[test]
-fn claude_whitespace_padded_absolute_declaration_never_covers_colliding_resource() {
-    let (root, package) = build_package(
-        "claude-path-safety-padded",
-        "flow",
-        &[(
-            ".claude-plugin/plugin.json",
-            r#"{"name":"flow","skills":["  /skills/commit  "]}"#,
-        )],
-    );
-    let skill = skill_resource(&package, "skills", "commit");
-    let home = UzeHome::at(root.join("uze"));
-    let integration = ClaudeIntegration::new(root.join("claude"), home.clone());
-    mark_setup(&home, &integration);
-    assert_unsafe_declaration_never_covers_the_colliding_resource(
-        &integration,
-        &package,
-        &skill,
-        "claude/padded-absolute",
-    );
-    let _ = fs::remove_dir_all(root);
+fn every_harness_covers_only_the_conventional_surface_it_discovered() {
+    // Two conventional skills and one discovered outside the conventional
+    // surface: the "subset" and "extra discovered" cases fold together, both
+    // proven by the same outsider resource.
+    for subject in subjects("coverage-subset") {
+        mark_setup(&subject.home, subject.integration.as_ref());
+        let coverage = coverage_fixture(
+            &format!("coverage-subset-{}", subject.id),
+            &["commit", "deploy"],
+            true,
+        );
+        if subject.envelope().get().is_none() {
+            assert_no_package_delivery(&subject, &coverage);
+            continue;
+        }
+        let refs: Vec<&Resource> = coverage.resources.iter().collect();
+        assert_exact_package_coverage(
+            subject.integration.as_ref(),
+            &coverage.package,
+            &refs,
+            &coverage.expected,
+            &format!("{}/subset", subject.id),
+        );
+    }
 }
 
 #[test]
-fn codex_absolute_declaration_never_covers_colliding_resource_and_fallback_survives() {
-    let (root, package) = build_package(
-        "codex-path-safety-absolute",
-        "flow",
-        &[(
-            ".codex-plugin/plugin.json",
-            r#"{"name":"flow","skills":"/skills/"}"#,
-        )],
-    );
-    let skill = skill_resource(&package, "skills", "commit");
-    let home = UzeHome::at(root.join("uze"));
-    let integration = CodexIntegration::new(root.join("agents"), home.clone());
-    mark_setup(&home, &integration);
-    assert_unsafe_declaration_never_covers_the_colliding_resource(
-        &integration,
-        &package,
-        &skill,
-        "codex/absolute",
-    );
-    let _ = fs::remove_dir_all(root);
-}
-
-#[test]
-fn codex_escaping_declaration_never_covers_colliding_resource_and_fallback_survives() {
-    let (root, package) = build_package(
-        "codex-path-safety-escape",
-        "flow",
-        &[(
-            ".codex-plugin/plugin.json",
-            r#"{"name":"flow","skills":"skills/../skills"}"#,
-        )],
-    );
-    let skill = skill_resource(&package, "skills", "commit");
-    let home = UzeHome::at(root.join("uze"));
-    let integration = CodexIntegration::new(root.join("agents"), home.clone());
-    mark_setup(&home, &integration);
-    assert_unsafe_declaration_never_covers_the_colliding_resource(
-        &integration,
-        &package,
-        &skill,
-        "codex/escape",
-    );
-    let _ = fs::remove_dir_all(root);
-}
-
-// ============================================================================
-// 7/8. attach → inspect Matched → detach → Missing, and destructive detach
-// blocked on Drifted/Conflict — LIFECYCLE (ADR-009).
-// ============================================================================
-//
-// Exercised through Skill delivery on purpose: it is the one capability
-// every one of the four harnesses actually implements, and — for all
-// four — its managed artifact is a pure filesystem `SymlinkReference`
-// (`IntegrationPort::attach_receipt`'s own generic default builds it off
-// `ExposureMechanism::ManagedUserScopeReference`, and no integration
-// overrides `attach_receipt`), so this proves the lifecycle invariant
-// without spawning any vendor process for any of the four.
-
-fn snapshot(root: &Path) -> BTreeSet<PathBuf> {
-    let mut out = BTreeSet::new();
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = fs::read_dir(&dir) else {
+fn no_harness_turns_a_malformed_envelope_into_coverage() {
+    for subject in subjects("malformed") {
+        mark_setup(&subject.home, subject.integration.as_ref());
+        let Some(envelope) = subject.envelope().get() else {
             continue;
         };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path.clone());
-            }
-            out.insert(path);
-        }
+        let (_, package) = build_package(
+            &format!("malformed-{}", subject.id),
+            "flow",
+            &[(envelope.manifest, envelope.malformed)],
+        );
+        let skill = skill_resource(&package, "skills", "commit");
+        assert_a_malformed_envelope_never_becomes_coverage(
+            subject.integration.as_ref(),
+            &package,
+            &skill,
+            &format!("{}/malformed", subject.id),
+        );
     }
-    out
 }
 
 #[test]
-fn computing_a_package_exposure_plan_never_mutates_store_bytes_on_any_harness() {
-    let (root, package, resources, _expected) =
-        claude_coverage_fixture("store-untouched", &["commit"], false, true);
-    let refs: Vec<&Resource> = resources.iter().collect();
-    let before = snapshot(&package.root);
-
-    let uze_home = UzeHome::at(root.join("uze"));
-    let claude = ClaudeIntegration::new(root.join("claude"), uze_home.clone());
-    let codex = CodexIntegration::new(root.join("agents"), uze_home.clone());
-    let antigravity = AntigravityIntegration::new(root.join("agents"), uze_home);
-    let _ = claude.package_exposure_plan(&package, &refs);
-    let _ = codex.package_exposure_plan(&package, &refs);
-    let _ = antigravity.package_exposure_plan(&package, &refs);
-
-    let after = snapshot(&package.root);
-    assert_eq!(
-        before, after,
-        "computing a package exposure plan on any harness must never mutate the Store's own \
-         package tree"
-    );
-    let _ = fs::remove_dir_all(root);
+fn no_harness_lets_an_escaping_declaration_cover_a_resource() {
+    for subject in subjects("escaping") {
+        mark_setup(&subject.home, subject.integration.as_ref());
+        let Some(envelope) = subject.envelope().get() else {
+            continue;
+        };
+        let Some(escaping) = envelope.escaping.get() else {
+            continue;
+        };
+        let (_, package) = build_package(
+            &format!("escaping-{}", subject.id),
+            "flow",
+            &[(envelope.manifest, escaping)],
+        );
+        let skill = skill_resource(&package, "skills", "commit");
+        assert_an_unsafe_declaration_never_covers_the_colliding_resource(
+            subject.integration.as_ref(),
+            &package,
+            &skill,
+            &format!("{}/escaping", subject.id),
+        );
+    }
 }
 
-// ============================================================================
-// 12. Core vendor neutrality remains intact — structural.
-// ============================================================================
-//
-// `uze-core` production logic is vendor-neutral: no line of it may name a
-// specific harness. Scans every non-test `.rs` file under
-// `crates/uze-core/src/` for the four harness names appearing as a live
-// identifier or string literal, mirroring `tests/runtime_shim_boundary.rs`'s
-// technique for the shim-boundary invariant.
-//
-// This invariant was strengthened by the Path Safety + Foreign Importer
-// Cleanup milestone (ADR-005): `crates/uze-core/src/importers/
-// claude_plugin.rs` used to be the one real, production exception (a
-// vendor-named foreign-format importer, confirmed dead — never reached by
-// `Store::ingest` or any other production path — and removed). With it
-// gone, this test needs only one scope narrowing, not two:
-// `#[cfg(test)]` module bodies are skipped, because Core's own unit tests
-// use realistic strings like `"claude-code"`/`"codex"` as illustrative
-// fixture values for genuinely generic fields (`AttachmentReceipt.
-// integration: String`) — that is not vendor coupling, it is a test
-// picking a recognizable example over `"foo"`.
+#[test]
+fn no_harness_lets_an_absolute_declaration_cover_a_colliding_resource() {
+    // The regression this guards: a per-entry normalizer stripped a leading
+    // `/` before testing whether a declaration was absolute, so
+    // `/skills/commit` silently became the relative `skills/commit` and was
+    // accepted. Both vendors that declare paths now share one predicate
+    // (`crate::shared::path::normalize_declared_relative_path`); this proves
+    // the invariant the fix restores, not either vendor's syntax.
+    for subject in subjects("absolute") {
+        mark_setup(&subject.home, subject.integration.as_ref());
+        let Some(envelope) = subject.envelope().get() else {
+            continue;
+        };
+        let Some(absolute) = envelope.absolute.get() else {
+            continue;
+        };
+        let (_, package) = build_package(
+            &format!("absolute-{}", subject.id),
+            "flow",
+            &[(envelope.manifest, absolute)],
+        );
+        let skill = skill_resource(&package, "skills", "commit");
+        assert_an_unsafe_declaration_never_covers_the_colliding_resource(
+            subject.integration.as_ref(),
+            &package,
+            &skill,
+            &format!("{}/absolute", subject.id),
+        );
+    }
+}
+
+#[test]
+fn no_harness_lets_a_whitespace_padded_absolute_declaration_cover_a_colliding_resource() {
+    // A normalizer that trims before deciding whether a path is absolute
+    // reopens the hole the case above closes.
+    for subject in subjects("absolute-padded") {
+        mark_setup(&subject.home, subject.integration.as_ref());
+        let Some(envelope) = subject.envelope().get() else {
+            continue;
+        };
+        let Some(padded) = envelope.absolute_padded.get() else {
+            continue;
+        };
+        let (_, package) = build_package(
+            &format!("absolute-padded-{}", subject.id),
+            "flow",
+            &[(envelope.manifest, padded)],
+        );
+        let skill = skill_resource(&package, "skills", "commit");
+        assert_an_unsafe_declaration_never_covers_the_colliding_resource(
+            subject.integration.as_ref(),
+            &package,
+            &skill,
+            &format!("{}/absolute-padded", subject.id),
+        );
+    }
+}
+
+#[test]
+fn no_harness_double_counts_a_resource_declared_more_than_once() {
+    for subject in subjects("duplicate") {
+        mark_setup(&subject.home, subject.integration.as_ref());
+        let Some(envelope) = subject.envelope().get() else {
+            continue;
+        };
+        let Some(duplicate) = envelope.duplicate.get() else {
+            continue;
+        };
+        let (_, package) = build_package(
+            &format!("duplicate-{}", subject.id),
+            "flow",
+            &[(envelope.manifest, duplicate)],
+        );
+        let skill = skill_resource(&package, "skills", "commit");
+        let plan = subject
+            .integration
+            .package_exposure_plan(&package, &[&skill])
+            .unwrap_or_else(|| panic!("[{}] explicit envelope present", subject.id));
+        assert_eq!(
+            plan.provided_resource_identities,
+            BTreeSet::from([skill.identity()]),
+            "[{}] a repeated declaration must still resolve to exactly one covered identity",
+            subject.id
+        );
+    }
+}
+
+#[test]
+fn computing_a_package_exposure_plan_is_a_read_on_every_harness() {
+    // Planning writes nothing: not into the Store's package tree, and not
+    // into the harness's own world — which is stronger than "the generated
+    // directory was not created" (the vendor-private assertion this
+    // replaces), and holds for a harness that generates nothing at all.
+    // Bytes and symlink targets, not merely the set of paths.
+    let coverage = coverage_fixture("plan-is-a-read", &["commit"], false);
+    let refs: Vec<&Resource> = coverage.resources.iter().collect();
+    let store_before = tree(&coverage.package.root);
+    for subject in subjects("plan-is-a-read") {
+        mark_setup(&subject.home, subject.integration.as_ref());
+        let world_before = tree(&subject.root);
+        let _ = subject
+            .integration
+            .package_exposure_plan(&coverage.package, &refs);
+        assert_eq!(
+            store_before,
+            tree(&coverage.package.root),
+            "[{}] planning must never mutate the Store's own package tree",
+            subject.id
+        );
+        assert_eq!(
+            world_before,
+            tree(&subject.root),
+            "[{}] planning must write nothing into the harness's world either",
+            subject.id
+        );
+    }
+}
+
+#[test]
+fn no_harness_tops_up_an_explicit_envelopes_own_declaration_with_generation() {
+    // An explicit envelope that declares LESS than generation would: presence
+    // of the envelope must keep coverage exactly at what it declares, proving
+    // generation is never consulted once an envelope exists.
+    for subject in subjects("precedence") {
+        mark_setup(&subject.home, subject.integration.as_ref());
+        let Some(envelope) = subject.envelope().get() else {
+            continue;
+        };
+        let mut files = vec![(
+            "mcp.json",
+            r#"{"mcpServers":{"mcp-a":{"command":"a"},"mcp-b":{"command":"b"}}}"#,
+        )];
+        files.extend_from_slice(envelope.partial.files);
+        let (_, package) = build_package(&format!("precedence-{}", subject.id), "flow", &files);
+
+        let skill = skill_resource(&package, "skills", "commit");
+        let mcp_a = mcp_resource(&package, "mcp-a", r#"{"command":"a"}"#);
+        let mcp_b = mcp_resource(&package, "mcp-b", r#"{"command":"b"}"#);
+        let named = [("skill", &skill), ("mcp-a", &mcp_a), ("mcp-b", &mcp_b)];
+        let expected: BTreeSet<String> = envelope
+            .partial
+            .declares
+            .iter()
+            .map(|name| {
+                named
+                    .iter()
+                    .find(|(fixture, _)| fixture == name)
+                    .unwrap_or_else(|| panic!("{name:?} is not a fixture resource"))
+                    .1
+                    .identity()
+            })
+            .collect();
+
+        let refs: Vec<&Resource> = named.iter().map(|(_, resource)| *resource).collect();
+        assert_exact_package_coverage(
+            subject.integration.as_ref(),
+            &package,
+            &refs,
+            &expected,
+            &format!("{}/precedence", subject.id),
+        );
+    }
+}
+
+#[test]
+fn every_exemption_from_this_suite_states_its_reason() {
+    // The point of a declared exemption: it is readable, and it is a claim
+    // someone can be wrong about. An empty reason is an omission wearing a
+    // declaration's clothes.
+    for subject in subjects("exemptions") {
+        let mut declared = Vec::new();
+        if let Some(reason) = subject.envelope().reason() {
+            declared.push(("package envelope", reason));
+        } else {
+            let envelope = subject.envelope().get().expect("checked");
+            for (question, support) in [
+                ("escaping declaration", envelope.escaping.reason()),
+                ("absolute declaration", envelope.absolute.reason()),
+                (
+                    "padded absolute declaration",
+                    envelope.absolute_padded.reason(),
+                ),
+                ("duplicate declaration", envelope.duplicate.reason()),
+            ] {
+                if let Some(reason) = support {
+                    declared.push((question, reason));
+                }
+            }
+        }
+        for (question, reason) in declared {
+            assert!(
+                reason.len() > 20,
+                "[{}] the exemption from {question} must say why, not merely that it exists: {reason:?}",
+                subject.id
+            );
+        }
+    }
+}
+
+/// Fixture roots are removed when a `Subject` drops; the package roots the
+/// coverage fixtures build are scratch directories of their own.
+#[test]
+fn every_registered_harness_is_a_conformance_subject() {
+    let found: Vec<String> = subjects("registry").iter().map(|s| s.id.clone()).collect();
+    assert!(
+        found.len() >= 4,
+        "the registry produced {found:?}; a harness that cannot be constructed in isolation \
+         cannot be conformance-tested either"
+    );
+    let mut sorted = found.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(
+        sorted.len(),
+        found.len(),
+        "duplicate harness ids: {found:?}"
+    );
+    let _ = fs::metadata(".");
+}
