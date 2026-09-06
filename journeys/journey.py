@@ -172,7 +172,9 @@ def build_world(spec: dict, slug: str, binary: Path, keep: bool) -> World:
     if root.exists() and not keep:
         shutil.rmtree(root)
     world_spec = spec.get("world", {})
-    for part in ("home/.uze", "run", "bin", "projects"):
+    # Deliberately not `home/.uze`: UZE creates its own home on demand, and a
+    # world that pre-creates it makes that unprovable.
+    for part in ("home", "run", "bin", "projects"):
         (root / part).mkdir(parents=True, exist_ok=True)
 
     install_standins(root, world_spec)
@@ -612,7 +614,18 @@ def resolve_json(document, path: str) -> list:
     return nodes
 
 
-VERBS = ("dir", "file", "tree", "json", "git", "tasks", "process", "capture", "cmd")
+VERBS = (
+    "dir",
+    "file",
+    "link",
+    "tree",
+    "json",
+    "git",
+    "tasks",
+    "process",
+    "capture",
+    "cmd",
+)
 
 
 class Checker:
@@ -779,6 +792,34 @@ class Checker:
                 )
         return True, f"{shape}"
 
+    def _link(self, spec: dict) -> tuple[bool, str]:
+        pattern = spec["link"]
+        found = sorted(
+            path for path in globlib.glob(pattern) if Path(path).is_symlink()
+        )
+        if spec.get("exists") is False:
+            return (not found), (
+                f"{pattern}: still a link" if found else f"{pattern}: absent"
+            )
+        if not found:
+            return False, f"{pattern}: no symlink there"
+        if "count" in spec and len(found) != spec["count"]:
+            return (
+                False,
+                f"{pattern}: expected {spec['count']} links, found {len(found)}",
+            )
+        targets = {path: os.readlink(path) for path in found}
+        if wanted := spec.get("resolves_to"):
+            wrong = {
+                path: target for path, target in targets.items() if wanted not in target
+            }
+            if wrong:
+                return (
+                    False,
+                    f"{pattern}: {wanted!r} is not what these point at: {wrong}",
+                )
+        return True, f"{[f'{Path(k).name} -> {v}' for k, v in targets.items()]}"
+
     def _tree(self, spec: dict) -> tuple[bool, str]:
         roots = spec["tree"] if isinstance(spec["tree"], list) else [spec["tree"]]
         now = snapshot_tree(roots)
@@ -828,8 +869,11 @@ class Checker:
             return False, f"{where}: nothing resolved"
         if spec.get("exists") is False and values:
             return False, f"{where}: resolved to {readable}"
-        if "equals" in spec and readable != [spec["equals"]]:
-            return False, f"{where}: expected [{spec['equals']!r}], found {readable}"
+        # Every resolved value, not the list as a whole: `at` usually walks a
+        # `*`, and "each of these is true" is the question being asked. Pair
+        # it with `count` when how many also matters.
+        if "equals" in spec and any(value != spec["equals"] for value in readable):
+            return False, f"{where}: not every value is {spec['equals']!r}: {readable}"
         for wanted in spec.get("includes") or []:
             if wanted not in readable:
                 return False, f"{where}: {wanted!r} is missing from {readable}"

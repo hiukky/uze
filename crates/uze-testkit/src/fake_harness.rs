@@ -623,8 +623,13 @@ impl Standard<'_> {
             )
             .build(),
             self.interactive(
+                // A bare token, because that is what `agy --version` prints
+                // (`1.1.19` in dogfood — see antigravity/provision.rs). A
+                // stand-in that answered `agy 9.9.9` made UZE record the
+                // version as `agy`, which is what its first-token parse is
+                // right to do and what the real vendor never produces.
                 FakeHarness::new(self.bin_dir, "agy")
-                    .version_line("agy 9.9.9")
+                    .version_line("9.9.9")
                     .on_prefix(
                         ["plugin"],
                         Action::VendorAgy {

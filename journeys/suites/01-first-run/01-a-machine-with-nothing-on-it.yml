@@ -1,0 +1,119 @@
+journey: a machine with nothing on it, made ready without being taken over
+tags: [gate, cli, first-run]
+proves: web/content/docs/getting-started.mdx
+about: |
+  The first five minutes. UZE keeps its own state in one place it creates on
+  demand, provisions each harness through that harness's own route, and puts
+  itself on PATH by a shim it owns — and none of that happens to a project
+  until a project asks for it.
+
+  What this journey is really guarding is restraint: a tool that manages four
+  other tools has every opportunity to write somewhere it was not invited,
+  and the only way to know it did not is to look at the directories it could
+  have touched.
+
+world:
+  project: demo-app
+
+scenes:
+  - scene: before anything is run, the machine is untouched
+    then:
+      - dir: "{home}/.uze"
+        exists: false
+        about: UZE has no state until something asks it for some
+      - dir: "{home}/.claude"
+        exists: false
+      - dir: "{home}/.agents"
+        exists: false
+      - dir: "{home}/.gemini"
+        exists: false
+        about: and no harness home exists either
+
+  - scene: a version check stays a version check
+    when:
+      - shell: "{uze} --version"
+        say: run the most harmless command there is
+    then:
+      - dir: "{uze_home}"
+        exists: false
+        about: asking the binary its version creates no state at all
+
+  - scene: the first command that needs state creates UZE's home, and nobody else's
+    when:
+      - shell: "{uze} plugin list"
+        say: ask the machine what it has installed
+    then:
+      - dir: "{uze_home}/store"
+        exists: true
+      - dir: "{uze_home}/state"
+        exists: true
+      - dir: "{uze_home}/cache"
+        exists: true
+        about: state, store and cache are created on demand
+      - file: "{uze_home}/store/plugins/uze-official/uze/plugin.json"
+        exists: true
+        about: and the official plugin is seeded, so the machine is never empty of UZE itself
+      - file: "{home}/.agents/skills/uze:init/SKILL.md"
+        exists: true
+      - file: "{home}/.gemini/config/plugins/uze/plugin.json"
+        exists: true
+        about: |
+          and it is delivered, not merely stored — the seeded plugin reaches
+          each harness through that harness's own mechanism, which is why a
+          machine that has only ever run `plugin list` already has UZE's own
+          skill available in every one of them
+      - dir: "{home}/.claude/skills"
+        exists: true
+        about: |
+          Claude's own skills directory is created here and left empty — a
+          characterization. Its delivery is the generated package under
+          UZE's state, so nothing needs to be in this directory; it is the
+          same shape as the empty staging directories and the emptied bridge
+          file, which is UZE creating a container eagerly and never taking
+          it back.
+
+  - scene: provisioning records what it found, per harness
+    when:
+      - shell: "{uze} setup"
+        say: provision every registered harness
+        check: false
+    then:
+      - json: "{uze_home}/state/integrations.json"
+        at: integrations.*.harness
+        includes: [claude-code, codex, opencode, antigravity]
+        about: every registered harness is recorded
+      - json: "{uze_home}/state/integrations.json"
+        at: integrations.*.installed
+        equals: "true"
+        count: 4
+        about: each one marked installed, none guessed at
+      - json: "{uze_home}/state/integrations.json"
+        at: integrations.antigravity.version
+        equals: "9.9.9"
+        about: with the version the harness itself reported
+
+  - scene: UZE puts itself on PATH through a shim it owns
+    then:
+      - link: "{uze_home}/shims/*"
+        resolves_to: uze
+        about: each shim is a symlink to UZE's own binary, not a copy of a vendor's
+      - file: "{home}/.bashrc"
+        contains: "{uze_home}/shims"
+        about: and the shim directory is what was added to the shell's PATH
+
+  - scene: a project nobody has set up is reported on, not written to
+    when:
+      - shell: "{uze} status"
+        say: ask a project with no lock how it stands
+    then:
+      - file: "{project}/agents.lock"
+        exists: false
+      - file: "{project}/AGENTS.md"
+        exists: false
+      - file: "{project}/CLAUDE.md"
+        exists: false
+        about: asking a project about itself writes nothing into it
+      - cmd:
+          run: "{uze} doctor"
+          stdout_contains: UZE Home
+        about: and doctor answers for the machine, which is where the state actually is
