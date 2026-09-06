@@ -1,21 +1,11 @@
 {
-  "_comment": "Adaptive-result registry (ADR-035): every check that may legitimately record ADAPTED. An ADAPTED verdict without an entry fails the run; a registered entry that starts passing fails (escalate) until promoted. `versions` pins observed harness versions; `*` covers any (bootstrap state — pin after the first probed runs). Update `observed_at` on any touch.",
+  "_comment": "Adaptive-result registry (ADR-035): every check that may legitimately record ADAPTED. An ADAPTED verdict without an entry fails the run; a registered entry that starts passing fails (escalate) until promoted. `versions` pins observed harness versions; `*` covers any (bootstrap state \u2014 pin after the first probed runs). Update `observed_at` on any touch.",
   "adaptive": [
-    {
-      "harness": "antigravity",
-      "check": "user-only-skill-adapted",
-      "suite": "tui",
-      "reason": "Antigravity CLI offers no documented explicit-only invocation mechanism, so the user-only skill stays visible to the model; recorded as a vendor limitation, never fabricated.",
-      "versions": [
-        "*"
-      ],
-      "observed_at": "2026-08-26"
-    },
     {
       "harness": "opencode",
       "check": "mcp-tool-executed-in-tui",
       "suite": "mcp",
-      "reason": "OpenCode V2 beta: the real runtime answers a scripted call to the delivered tool name with `Unknown tool` — the tool message exists but the MCP server never ran.",
+      "reason": "OpenCode V2 beta: the real runtime answers a scripted call to the delivered tool name with `Unknown tool` \u2014 the tool message exists but the MCP server never ran.",
       "versions": [
         "*"
       ],
@@ -45,7 +35,7 @@
       "harness": "opencode",
       "check": "hooks-deny-tool-executed",
       "suite": "hooks > deny",
-      "reason": "The delivered MCP tool is not exposed on this channel, so handler execution through the bridge is not observable — the turn and marker semantics are the real harness evidence.",
+      "reason": "The delivered MCP tool is not exposed on this channel, so handler execution through the bridge is not observable \u2014 the turn and marker semantics are the real harness evidence.",
       "versions": [
         "*"
       ],
@@ -55,7 +45,7 @@
       "harness": "opencode",
       "check": "hooks-order-tool-executed",
       "suite": "hooks > order",
-      "reason": "The delivered MCP tool is not exposed on this channel, so handler execution through the bridge is not observable — the turn and marker semantics are the real harness evidence.",
+      "reason": "The delivered MCP tool is not exposed on this channel, so handler execution through the bridge is not observable \u2014 the turn and marker semantics are the real harness evidence.",
       "versions": [
         "*"
       ],
@@ -65,7 +55,7 @@
       "harness": "opencode",
       "check": "hooks-allow-tool-executed",
       "suite": "hooks > allow",
-      "reason": "The scripted call is answered `Unknown tool` by the runtime (the delivered MCP tool is not exposed at execution time on this channel), so handler execution through the bridge is not observable — the turn and marker semantics are the real harness evidence. Observed after the model-exposed escalation (the tool reached the request, execution did not).",
+      "reason": "The scripted call is answered `Unknown tool` by the runtime (the delivered MCP tool is not exposed at execution time on this channel), so handler execution through the bridge is not observable \u2014 the turn and marker semantics are the real harness evidence. Observed after the model-exposed escalation (the tool reached the request, execution did not).",
       "versions": [
         "*"
       ],

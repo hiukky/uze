@@ -244,32 +244,28 @@ def phase_tui(cfg, prov_ip):
     if struct:
         summaries = [entry.get("summary", {}) for entry in struct]
         markers = [summary.get("skill_markers", {}) for summary in summaries]
+        # The qualified label only. A marker is a substring test over the
+        # whole request body, so a bare `review`/`commit`/`analyze` also
+        # matches the word in any prose the harness sends — `init` shows up
+        # for exactly that reason and is no skill of UZE's. `flow:<name>`
+        # is the delivered identity and the only marker that discriminates.
+        model_visible = any(marker.get("flow:commit") for marker in markers)
         check(
             "model-visible-skill-present",
-            any(
-                marker.get(name)
-                for marker in markers
-                for name in ("flow:commit", "commit")
-            ),
+            model_visible,
             "flow:commit in the request the harness sent to its provider",
         )
-        check(
-            "user-only-skill-adapted",
-            any(
-                marker.get(name)
-                for marker in markers
-                for name in ("flow:review", "review")
-            ),
-            "flow:review present (no vendor explicit-only mechanism)",
-            kind="adapted",
+        # Gated on the presence above: "the policy worked" and "nothing was
+        # delivered" are the same observation otherwise (DECISIONS.md).
+        common.check_absence(
+            "user-only-skill-hidden",
+            not any(marker.get("flow:review") for marker in markers),
+            model_visible,
+            "flow:review absent from the request (disable-model-invocation preserved)",
         )
         check(
             "model-only-skill-present",
-            any(
-                marker.get(name)
-                for marker in markers
-                for name in ("flow:analyze", "analyze")
-            ),
+            any(marker.get("flow:analyze") for marker in markers),
             "flow:analyze present in the request while absent from /skills",
         )
         check(

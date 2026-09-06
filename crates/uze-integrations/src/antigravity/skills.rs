@@ -8,18 +8,23 @@
 //! `~/.gemini/antigravity-cli/builtin/skills/`), so a UZE-managed reference
 //! there is consumed natively.
 //!
-//! Invocation-policy reality (agy 1.1.21): `disable-slash-command: true`
-//! hides a Skill from `/` and `/name` while retaining model discovery. The
-//! inverse control does not exist: every user-invocable Skill remains
-//! model-discoverable. Per ADR-030 this yields:
+//! Invocation-policy reality (agy 1.1.27): both halves are controls the
+//! CLI reads from a Skill's own front matter — `disable-slash-command:
+//! true` hides it from `/` and `/name`, `disable-model-invocation: true`
+//! withholds it from the model. Per ADR-030 this yields:
 //!
 //! - model+user (default) → Native;
-//! - user-only (`model=false`) → Adapted: user invocation is native, but
-//!   the model can still discover/auto-select the Skill — the exact
-//!   semantic degradation that used to characterize delivery of a
-//!   canonical `Command`;
+//! - user-only (`model=false`) → Native via `disable-model-invocation: true`;
 //! - model-only (`user=false`) → Native via `disable-slash-command: true`;
 //! - invalid (`model=false,user=false`) → never projected.
+//!
+//! The user-only half was ADAPTED until 1.1.27: through 1.1.21 the CLI had
+//! no inverse of `disable-slash-command`, so a user-invocable Skill stayed
+//! model-discoverable and UZE said so rather than inventing the control.
+//! The vendor has since shipped it (`DisableModelInvocation
+//! yaml:"disable-model-invocation"`), and the Lab measures the promotion
+//! rather than trusting this comment: `user-only-skill-hidden` asserts the
+//! Skill is absent from the request the harness actually sends.
 //!
 //! The generated wrapper carries the stable namespaced label as its front
 //! matter `name` (agy derives the invoked name from the SKILL.md front
@@ -116,8 +121,12 @@ pub(super) fn materialize_generated_skill(
         let escaped = crate::shared::skill::escape_yaml_double_quoted(&description);
         skill.push_str(&format!("description: \"{escaped}\"\n"));
     }
-    if !resource.skill_invocation().user {
+    let policy = resource.skill_invocation();
+    if !policy.user {
         skill.push_str("disable-slash-command: true\n");
+    }
+    if !policy.model {
+        skill.push_str("disable-model-invocation: true\n");
     }
     skill.push_str("---\n");
     skill.push_str(&body);
@@ -184,7 +193,7 @@ impl AntigravityIntegration {
                 .resolved_artifact_target
                 .clone()
                 .unwrap_or_else(|| generated_skill_dir(&self.uze_home, resource));
-            let (route, mut evidence) = if policy.is_default() {
+            let (route, evidence) = if policy.is_default() {
                 (
                     CompatibilityRoute::Native,
                     "Antigravity CLI imports every markdown skill under ~/.gemini/antigravity-cli/skills as a global slash command, so a UZE-managed reference there is consumed natively. The generated wrapper carries the stable namespaced label and the canonical name/description/body."
@@ -192,8 +201,8 @@ impl AntigravityIntegration {
                 )
             } else if !policy.model {
                 (
-                    CompatibilityRoute::Adaptable,
-                    "Antigravity has no explicit-invocation-only mechanism: a user-invocable Skill remains model-discoverable. The user-invocation half is native; invoke.model=false degrades — ADAPTED per ADR-030, reported honestly rather than invented."
+                    CompatibilityRoute::Native,
+                    "Antigravity natively preserves invoke.model=false with disable-model-invocation: true: the Skill stays `/`-invocable while the model is not offered it."
                         .to_owned(),
                 )
             } else {
@@ -203,11 +212,6 @@ impl AntigravityIntegration {
                         .to_owned(),
                 )
             };
-            if !policy.model {
-                evidence.push_str(
-                    " The canonical invoke.model=false cannot be enforced: the model may still discover and auto-select this Skill.",
-                );
-            }
             return ExposurePlan {
                 representation: resource.capability.representation,
                 route,

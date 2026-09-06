@@ -293,13 +293,12 @@ fn antigravity_reports_stable_identity_and_capabilities() {
     let plan = integration.exposure_plan(&user_only);
     assert_eq!(
         plan.route,
-        uze_core::router::CompatibilityRoute::Adaptable,
-        "antigravity: a user-only Skill degrades honestly (no explicit-only mechanism)"
+        uze_core::router::CompatibilityRoute::Native,
+        "antigravity: agy 1.1.27 carries invoke.model=false in its own front matter"
     );
     assert!(
-        plan.evidence
-            .contains("invoke.model=false cannot be enforced"),
-        "the degradation must be stated in the evidence, never hidden"
+        plan.evidence.contains("disable-model-invocation"),
+        "a Native claim must name the vendor control that carries it"
     );
     let _ = fs::remove_dir_all(_root2);
     let _ = fs::remove_dir_all(root);
