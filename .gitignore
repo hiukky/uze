@@ -23,3 +23,6 @@ uze-sbom.json
 /.demo/*.gif
 /.demo/*.png
 /.demo/*.cast
+
+# journey runner: disposable worlds live in /tmp; evidence is per-run
+journeys/.evidence/

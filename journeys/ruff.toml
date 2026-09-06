@@ -1,0 +1,13 @@
+# Ruff configuration for the journey runner (journeys/).
+#
+# Same scope, and the same reasoning, as `conformance/ruff.toml`: real errors
+# (F), obvious statement/runtime mistakes (E4/E7/E9), and import ordering (I).
+# The opinionated preview rules are deliberately not selected — this is
+# synthetic-world harness code, and `subprocess.run` without `check` is the
+# point in a runner whose whole job is to observe what a command did rather
+# than to be stopped by it.
+
+target-version = "py311"
+
+[lint]
+select = ["E4", "E7", "E9", "F", "I"]

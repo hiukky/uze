@@ -112,6 +112,26 @@ ci: check msrv web audit attributions-check secrets installer coverage ## Every 
 # (`conformance-harness:latest`): real harness binary + synthetic provider,
 # zero Internet, zero tokens. HARNESS selects one harness id
 # (antigravity | claude | codex | opencode).
+JOURNEY ?= journeys/suites/agent-slots.yml
+JOURNEY_IMAGE ?= uze-journeys:latest
+
+journey: build ## Run a product journey on this machine (JOURNEY=<spec>).
+	python3 journeys/journey.py run $(JOURNEY)
+
+journey-probe: build ## Open a journey's world and leave it up to inspect by hand.
+	python3 journeys/journey.py probe $(JOURNEY)
+
+journey-image: ## Build the pinned journey runtime image (tmux, git, python).
+	docker build -f journeys/Dockerfile -t $(JOURNEY_IMAGE) journeys/
+
+journey-docker: build journey-image ## Run a journey inside the pinned container, against this build.
+	mkdir -p journeys/.evidence
+	docker run --rm --init \
+		-v "$(CURDIR)/journeys:/journeys:ro" \
+		-v "$(CURDIR)/target/debug/uze:/usr/local/bin/uze:ro" \
+		-v "$(CURDIR)/journeys/.evidence:/evidence" \
+		$(JOURNEY_IMAGE) run /journeys/$(patsubst journeys/%,%,$(JOURNEY))
+
 HARNESS ?= antigravity
 LAB_IMAGE ?= conformance-harness:latest
 
