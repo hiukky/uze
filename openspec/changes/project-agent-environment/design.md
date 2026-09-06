@@ -9,11 +9,11 @@ See proposal.md for motivation and North Star experience.
 ## Goals / Non-Goals
 
 **Goals:**
-- `agents.lock` as project-scoped desired agent environment (vendor-neutral, reproducible, Git-versionable)
+- `agents.yaml` as the project-scoped authored declaration, and `agents.lock` as what resolving it produced (vendor-neutral, reproducible, Git-versionable)
 - `uze <plugin>@<marketplace>` project shorthand (requires `@`, writes lock)
 - `uze install` consumer of lock (fresh-machine repro, no silent re-resolution)
 - `uze remove <plugin>` disambiguated (project lock vs global)
-- Project root resolution (deterministic walk: `agents.lock` > `AGENTS.md` > `.git`)
+- Project root resolution (deterministic walk: `agents.yaml` > `AGENTS.md` > `.git`)
 - Application API: `project_environment()`, `plan_project_environment()`, `add_project_plugin()`, `remove_project_plugin()`, `install_project_environment()`
 - Preserve vendor neutrality: Store/Engine/Integration remain lock-neutral
 
@@ -21,12 +21,11 @@ See proposal.md for motivation and North Star experience.
 - `uze sync` (use `install` for now)
 - Transitive dependency graph (plugins are independent)
 - Semantic version solver (commit is identity)
-- `agents.toml` manifest vs `agents.lock` lock split (deferred)
 - Automatic lock update (explicit `update` future)
+- Migrating `plugin.json`, `marketplace.json`, `hooks.json` or `mcp.json` to YAML (ADR-017 §10)
 - Remote marketplace search / federation
 - Cryptographic signature of marketplace
 - Automatic garbage collection of Store
-- `integrity: sha256:...` implementation (reserved, commit is identity today)
 
 ## Decisions
 
@@ -193,6 +192,35 @@ impl UzeApplication {
 
 **Rationale:** Parser/serializer in Core (vendor-neutral). Use cases in Application. Store/Engine/Integration remain lock-neutral (vendor neutrality preserved).
 
+## Candidate ADRs
+
+- **Editing the authored manifest without a document-model dependency** — the
+  manifest must survive a write with its comments intact, which a serde
+  round-trip cannot do (it emits from the struct; trivia has nowhere to
+  live). The ready-made answer, `yamlpath`/`yamlpatch`, pulls a
+  tree-sitter C grammar into a five-dependency domain crate and onto a
+  release matrix that already needed a workaround for one C dependency.
+  Chosen instead: a surgical editor over the three paths UZE writes,
+  where every edit is verified by re-parsing and discarded unless it
+  produced exactly the intended structure. Hard to reverse once fixtures
+  and refusal messages are written against it, and it is the load-bearing
+  reason the manifest can promise comment preservation at all.
+
+- **Keeping `noyalib`, isolated** — it was adopted in passing (it entered
+  with the implementation commit; ADR-017 records only "replacing
+  deprecated `serde_yaml`"), and its outward signals are bad: `0.0.x`
+  across 33 releases, one author, renamed once from `serde_yml`, scope
+  sprawl. Reading 0.0.28 contradicts the signals on quality — 43.6k lines
+  of source to 65.5k of tests, 351 vendored `yaml-test-suite` cases,
+  `#![forbid(unsafe_code)]` with zero `unsafe` — and it carries a `cst`
+  module whose `Document` already does lossless round-trip, path-targeted
+  `set`, comment read/write, and the re-parse-and-reject guard the
+  manifest needs. Good code does not remove the risk that a `0.0.x`
+  single-author crate breaks or goes away, so the decision is to keep it
+  behind a single module (`manifest::edit`), the way `uze-git` isolates
+  Git. Hard to reverse only if the crate leaks into call sites, which is
+  exactly what the isolation prevents.
+
 ## Risks / Trade-offs
 
 - **[Deprecated `serde_yaml`]** → Mitigation: use `noyalib::compat::serde_yaml` (maintained fork, zero unsafe, MSRV 1.86 ≤ our 1.97)
@@ -210,4 +238,4 @@ This change adds a new component (`agents.lock` as project-scoped artifact) and 
 
 This change produces two ADRs:
 - `docs/adr/016-project-agent-environment.md` — Project Agent Environment (global vs project separation)
-- `docs/adr/016-project-agent-environment.md` — the `agents.lock` schema, reproducibility, and trust
+- `docs/adr/017-reproducible-agent-dependency-lock.md` — the `agents.yaml` / `agents.lock` split, their schemas, reproducibility, integrity, and trust

@@ -21,11 +21,14 @@ Result: **Same project. Same agent environment. Any supported harness.**
 
 ## What Changes
 
-- **`agents.lock`** — new project-scoped file declaring desired agent environment (marketplaces + plugins with resolved sources)
+- **`agents.yaml`** — new project-scoped file where a person declares the desired agent environment (marketplaces, plugins, isolation policy), edited in place so comments survive
+- **`agents.lock`** — generated from `agents.yaml`: resolved sources, pinned revisions, verified `integrity`, and the request each entry satisfies. Carries no intent, and is safe to delete
 - **`uze <plugin>@<marketplace>`** — new project shorthand that writes `agents.lock` (requires `@`)
+- **No new command** — `uze install` creates `agents.yaml` with a commented default policy when a project has none; opening the client never creates anything
+- **Isolation policy in the workspace client** — the agent context popup names the completion behavior, target and gate in force and their provenance, and changes them on click
 - **`uze install`** — new command that consumes `agents.lock` to reconstruct environment on fresh machine
 - **`uze remove <plugin>`** — disambiguated: removes from project lock if present, else delegates to global `remove_plugin`
-- **Project root resolution** — deterministic walk upward for `agents.lock` > `AGENTS.md` > `.git`
+- **Project root resolution** — deterministic walk upward for `agents.yaml` > `AGENTS.md` > `.git`; `agents.yaml` replaces `agents.lock` as the consumer workspace anchor
 - **Application API** — `project_environment()`, `plan_project_environment()`, `add_project_plugin()`, `remove_project_plugin()`, `install_project_environment()`
 - **Error variants** — `UnsupportedLockVersion`, `MalformedLock`, `MarketplaceSourceConflict`, `MarketplaceMismatch`
 - **Dependency** — `noyalib` (maintained YAML, replacing deprecated `serde_yaml`)
@@ -34,7 +37,8 @@ Result: **Same project. Same agent environment. Any supported harness.**
 
 ### New Capabilities
 - `project-agent-environment`: project-scoped desired state (`agents.lock`), global vs project separation, reproducible install
-- `agents-lock`: YAML schema v1, deterministic serialization, reproducible source identity, trust boundary preservation
+- `agents-lock`: YAML schema v1, deterministic serialization, reproducible source identity, verified integrity, offline staleness detection, trust boundary preservation
+- `agents-manifest`: YAML schema for authored intent — marketplaces, plugin requests, isolation policy — and the guarantee that deleting the lock loses nothing
 
 ### Modified Capabilities
 (none — existing `add/remove/update` global commands unchanged; new commands are additive)
@@ -42,7 +46,8 @@ Result: **Same project. Same agent environment. Any supported harness.**
 ## Impact
 
 - **CLI** — new shorthand `uze <plugin>@<marketplace>`, `uze install`, `uze remove` disambiguation
-- **Core** — new `project_lock` module (parser/serializer), `project_root` module (resolution), error variants
+- **Core** — `project_lock` splits into a manifest module (authored, comment-preserving) and a lock module (derived); `project_root` and `workspace` anchor on `agents.yaml`; error variants
+- **Formats out of scope** — `plugin.json`, `marketplace.json`, `hooks.json` and `mcp.json` stay JSON (rationale in ADR-017 §10)
 - **Application** — new `project_environment` use cases (plan/add/remove/install)
 - **TUI** — future `Installed/Used` toggle reads `project_environment()` API (same use case as CLI)
 - **Store/Engine/Integration** — unchanged (vendor neutrality preserved)

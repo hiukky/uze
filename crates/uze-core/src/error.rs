@@ -93,6 +93,23 @@ pub enum UzeError {
     },
     #[error("malformed agents.lock at {path}: {reason}")]
     MalformedLock { path: PathBuf, reason: String },
+    /// The bytes acquired are not the bytes the lock pinned. Named
+    /// separately from every other install failure because the remedy is
+    /// different and the situation is not routine: either the source moved
+    /// under a reference that promised not to, or somebody replaced it.
+    #[error(
+        "`{plugin}` does not match what agents.lock pinned\n  expected {expected}\n  found    {found}\nNothing was installed. If the source legitimately changed, re-add the plugin so the lock records the new bytes."
+    )]
+    IntegrityMismatch {
+        plugin: String,
+        expected: String,
+        found: String,
+    },
+    /// The authored manifest — distinct from `MalformedLock` because the
+    /// remedy differs: a lock is regenerated, a manifest is a file only its
+    /// author can fix.
+    #[error("malformed agents.yaml at {path}: {reason}")]
+    MalformedManifest { path: PathBuf, reason: String },
     #[error(
         "marketplace source conflict for `{marketplace}`: lock has {lock_source}, global has {global_source}"
     )]

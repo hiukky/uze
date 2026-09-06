@@ -1848,7 +1848,6 @@ fn overview_install_intent_reaches_install_project_environment() {
     std::fs::write(market.join("flow/skills/uze-test/SKILL.md"), "# s\n").unwrap();
     let lock = uze_core::project_lock::ProjectLock {
         version: 1,
-        worktrees: None,
         marketplaces: std::iter::once((
             "test".to_owned(),
             uze_core::project_lock::LockedMarketplace {
@@ -1869,6 +1868,7 @@ fn overview_install_intent_reaches_install_project_environment() {
                     version: None,
                     integrity: None,
                 },
+                requested: None,
             },
         ))
         .collect(),

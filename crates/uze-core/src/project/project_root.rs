@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::{Result, UzeError, project_lock::LOCK_FILE_NAME};
+use crate::{Result, UzeError, manifest::MANIFEST_FILE_NAME};
 
 pub fn resolve_project_root(cwd: &Path) -> Result<PathBuf> {
     if !cwd.exists() {
@@ -40,7 +40,7 @@ pub fn resolve_project_root(cwd: &Path) -> Result<PathBuf> {
     let mut best_agents: Option<PathBuf> = None;
     let mut best_git: Option<PathBuf> = None;
     while let Some(dir) = current {
-        if dir.join(LOCK_FILE_NAME).is_file() {
+        if dir.join(MANIFEST_FILE_NAME).is_file() {
             return Ok(dir.to_path_buf());
         }
         if best_agents.is_none() && dir.join("AGENTS.md").is_file() {
@@ -70,13 +70,14 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn cwd_with_lock_is_root() {
-        let root = uze_testkit::temp::scratch("lock-root");
+    fn cwd_with_a_manifest_is_root() {
+        let root = uze_testkit::temp::scratch("manifest-root");
         fs::create_dir_all(&root).unwrap();
-        fs::write(root.join("agents.lock"), "version: 1\n").unwrap();
+        fs::write(root.join(MANIFEST_FILE_NAME), "worktrees: {}\n").unwrap();
         let sub = root.join("sub");
         fs::create_dir_all(&sub).unwrap();
-        // cwd is sub but sub has no lock; walk finds parent lock → parent is root
+        // cwd is sub, which declares nothing; the walk finds the parent's
+        // manifest, and the parent is the project root
         let resolved = resolve_project_root(&sub).unwrap();
         assert_eq!(resolved, root.canonicalize().unwrap());
         fs::remove_dir_all(root).unwrap();

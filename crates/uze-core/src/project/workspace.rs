@@ -1,9 +1,14 @@
-//! Deterministic workspace detection for `agents.lock` / `marketplace.json`.
+//! Deterministic workspace detection for `agents.yaml` / `marketplace.json`.
 //!
 //! One predictable rule, no git assumption, no harness assumption: a
-//! directory is a workspace when it contains `agents.lock` (consumer), or
+//! directory is a workspace when it contains `agents.yaml` (consumer), or
 //! `marketplace.json` (marketplace), or both (hybrid). The nearest such
 //! directory wins over any ancestor.
+//!
+//! The consumer anchor is the *manifest*, not the lock: a project that has
+//! declared an environment but never resolved one has no lock yet and is
+//! still a workspace. The lock is derived, and a derived file cannot be
+//! what identifies a project.
 //!
 //! `AGENTS.md` and `.agents/` are explicitly NOT anchors: they are
 //! resources *inside* an already-detected workspace, never evidence of
@@ -14,7 +19,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::{Result, UzeError, project_lock::LOCK_FILE_NAME};
+use crate::{Result, UzeError, manifest::MANIFEST_FILE_NAME};
 
 /// The marketplace manifest name (`marketplace.json`) — the same name
 /// `acquisition::marketplace` reads, named here because this module is the
@@ -24,9 +29,9 @@ pub const MARKETPLACE_MANIFEST_NAME: &str = "marketplace.json";
 /// The two UZE workspace anchors, seen from a plain directory.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub enum WorkspaceKind {
-    /// Neither `agents.lock` nor `marketplace.json` on the resolved path.
+    /// Neither `agents.yaml` nor `marketplace.json` on the resolved path.
     NoWorkspace,
-    /// `agents.lock` present.
+    /// `agents.yaml` present.
     Consumer,
     /// `marketplace.json` present.
     Marketplace,
@@ -44,7 +49,7 @@ pub struct ResolvedWorkspace {
 }
 
 /// Walks upward from `cwd` (inclusive) looking for the first directory
-/// containing `agents.lock` and/or `marketplace.json`. Nearest ancestor wins —
+/// containing `agents.yaml` and/or `marketplace.json`. Nearest ancestor wins —
 /// a nested consumer inside a marketplace (or vice versa) is detected as
 /// its own workspace, never as the outer one.
 /// The workspace root `cwd` belongs to, falling back to `cwd` itself when
@@ -75,10 +80,10 @@ pub fn resolve_workspace(cwd: &Path) -> Result<ResolvedWorkspace> {
 
     let mut current = Some(canonical.as_path());
     while let Some(dir) = current {
-        let lock = dir.join(LOCK_FILE_NAME).is_file();
-        let manifest = dir.join(MARKETPLACE_MANIFEST_NAME).is_file();
-        if lock || manifest {
-            let kind = match (lock, manifest) {
+        let consumer = dir.join(MANIFEST_FILE_NAME).is_file();
+        let marketplace = dir.join(MARKETPLACE_MANIFEST_NAME).is_file();
+        if consumer || marketplace {
+            let kind = match (consumer, marketplace) {
                 (true, true) => WorkspaceKind::Hybrid,
                 (true, false) => WorkspaceKind::Consumer,
                 (false, true) => WorkspaceKind::Marketplace,
@@ -111,7 +116,7 @@ mod workspace_root_tests {
         let root = uze_testkit::temp::scratch("workspace-root");
         let nested = root.join("crates").join("inner");
         std::fs::create_dir_all(&nested).unwrap();
-        std::fs::write(root.join(LOCK_FILE_NAME), "version: 1\n").unwrap();
+        std::fs::write(root.join(MANIFEST_FILE_NAME), "worktrees: {}\n").unwrap();
 
         // The property the terminal server is keyed on: launching from the
         // root and from a subdirectory must not produce two identities.
@@ -154,7 +159,7 @@ mod tests {
     fn consumer_at_cwd() {
         let root = uze_testkit::temp::scratch("consumer-root");
         mkdir(&root);
-        fs::write(root.join("agents.lock"), "version: 1\n").unwrap();
+        fs::write(root.join(MANIFEST_FILE_NAME), "worktrees: {}\n").unwrap();
         let resolved = resolve_workspace(&root).unwrap();
         assert_eq!(resolved.kind, WorkspaceKind::Consumer);
         assert_eq!(resolved.root, root.canonicalize().unwrap());
@@ -165,7 +170,7 @@ mod tests {
     fn consumer_from_subdir_finds_nearest_ancestor() {
         let root = uze_testkit::temp::scratch("consumer-subdir");
         mkdir(&root);
-        fs::write(root.join("agents.lock"), "version: 1\n").unwrap();
+        fs::write(root.join(MANIFEST_FILE_NAME), "worktrees: {}\n").unwrap();
         let sub = root.join("src/foo");
         mkdir(&sub);
         let resolved = resolve_workspace(&sub).unwrap();
@@ -203,7 +208,7 @@ mod tests {
     fn both_anchors_are_hybrid() {
         let root = uze_testkit::temp::scratch("hybrid");
         mkdir(&root);
-        fs::write(root.join("agents.lock"), "version: 1\n").unwrap();
+        fs::write(root.join(MANIFEST_FILE_NAME), "worktrees: {}\n").unwrap();
         fs::write(
             root.join("marketplace.json"),
             r#"{"name":"m","plugins":[]}"#,
@@ -219,8 +224,8 @@ mod tests {
         let outer = uze_testkit::temp::scratch("nested-outer");
         let inner = outer.join("packages/foo");
         mkdir(&inner);
-        fs::write(outer.join("agents.lock"), "version: 1\n").unwrap();
-        fs::write(inner.join("agents.lock"), "version: 1\n").unwrap();
+        fs::write(outer.join(MANIFEST_FILE_NAME), "worktrees: {}\n").unwrap();
+        fs::write(inner.join(MANIFEST_FILE_NAME), "worktrees: {}\n").unwrap();
         let deep = inner.join("src");
         mkdir(&deep);
         let resolved = resolve_workspace(&deep).unwrap();
@@ -241,7 +246,7 @@ mod tests {
             r#"{"name":"m","plugins":[]}"#,
         )
         .unwrap();
-        fs::write(inner.join("agents.lock"), "version: 1\n").unwrap();
+        fs::write(inner.join(MANIFEST_FILE_NAME), "worktrees: {}\n").unwrap();
         let resolved = resolve_workspace(&inner).unwrap();
         assert_eq!(
             resolved.kind,

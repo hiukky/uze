@@ -12,6 +12,7 @@ use serde::Serialize;
 
 use uze_core::{
     PackageSource, Result, UzeError,
+    manifest::{self, DeclaredMarketplace},
     project_lock::{
         self, LockedMarketplace, LockedPlugin, MarketplaceSource, PluginSource, ProjectLock,
         ResolvedMarketplace, ResolvedPlugin,
@@ -22,6 +23,38 @@ use uze_core::{
 
 use super::services::Project;
 use super::*;
+
+/// The manifest's spelling of a marketplace UZE just resolved. The lock's
+/// `MarketplaceSource` is the resolved identity; this is the declaration
+/// that produced it, so a person reading `agents.yaml` sees what they asked
+/// for rather than what resolution made of it.
+fn declared_marketplace_for(lock: &ProjectLock, marketplace: &str) -> DeclaredMarketplace {
+    let mut declared = DeclaredMarketplace {
+        git: None,
+        path: None,
+        embedded: false,
+        r#ref: None,
+        subdirectory: None,
+    };
+    match lock
+        .marketplaces
+        .get(marketplace)
+        .map(|entry| &entry.source)
+    {
+        Some(MarketplaceSource::Git {
+            url,
+            reference,
+            subdirectory,
+        }) => {
+            declared.git = Some(url.clone());
+            declared.r#ref = reference.clone();
+            declared.subdirectory = subdirectory.clone();
+        }
+        Some(MarketplaceSource::Path { path }) => declared.path = Some(path.clone()),
+        Some(MarketplaceSource::Embedded { .. }) | None => declared.embedded = true,
+    }
+    declared
+}
 
 impl Project<'_> {
     /// Read-only: observes the project's current state (lock + diagnostics).
@@ -296,45 +329,70 @@ impl Project<'_> {
 
         // What was actually acquired is the source of truth for `resolved`
         // — read back from the Store rather than trusting the request,
-        // the same discipline `Provenance` itself exists to enforce.
-        let resolved = ResolvedPlugin::from_resolved_source(
-            &self
-                .0
-                .package_by_name(&report.plugin.id)?
-                .provenance
-                .resolved,
-        );
+        // the same discipline `Provenance` itself exists to enforce. The
+        // integrity is taken from the Store's own bytes for the same
+        // reason: it must pin what landed, not what was asked for.
+        let stored = self.0.package_by_name(&report.plugin.id)?;
+        let resolved = ResolvedPlugin::from_resolved_source(&stored.provenance.resolved)
+            .with_integrity_of(
+                &stored.root,
+                stored.provenance.resolved.lock_revision().is_some(),
+            );
 
         lock.plugins.insert(
             plugin.to_owned(),
             LockedPlugin {
                 source: plugin_source,
                 resolved,
+                requested: Some(uze_core::project_lock::RequestedPlugin {
+                    marketplace: Some(marketplace.to_owned()),
+                    git: None,
+                    r#ref: None,
+                }),
             },
         );
 
+        // The declaration comes first and the lock second: `agents.yaml` is
+        // what the project meant, and the lock is what that meant resolved
+        // to. Writing the lock alone would leave the manifest — the file a
+        // person reads and edits — silently out of date.
+        manifest::declare_plugin(
+            &canonical,
+            plugin,
+            marketplace,
+            &declared_marketplace_for(&lock, marketplace),
+        )?;
         project_lock::save_lock(&canonical, &lock)?;
 
         Ok(report)
     }
 
-    /// Removes a plugin from the project lock (does NOT remove from Store).
+    /// Removes a plugin's declaration and the entry it resolved to. The
+    /// Store keeps the bytes: another project may want them, and this
+    /// command is about what *this* project declares.
     pub fn remove(&self, plugin: &str, root: &Path) -> Result<RemoveProjectPluginReport> {
         let canonical = project_root::resolve_project_root(root)?;
+        let undeclared = manifest::undeclare_plugin(&canonical, plugin)?;
         let mut lock = match project_lock::load_lock(&canonical)? {
             Some(lock) => lock,
-            None => {
-                return Ok(RemoveProjectPluginReport::NoLock);
-            }
+            None if undeclared => ProjectLock::default(),
+            None => return Ok(RemoveProjectPluginReport::NoLock),
         };
 
-        if lock.plugins.remove(plugin).is_none() {
+        if lock.plugins.remove(plugin).is_none() && !undeclared {
             return Ok(RemoveProjectPluginReport::NotInLock {
                 plugin: plugin.to_owned(),
             });
         }
 
-        project_lock::save_lock(&canonical, &lock)?;
+        // A lock with nothing left to reproduce is not an empty lock, it is
+        // no lock: leaving `agents.lock` behind declaring nothing invites
+        // the belief that resolution happened.
+        if lock.plugins.is_empty() && lock.marketplaces.is_empty() {
+            project_lock::remove_lock(&canonical)?;
+        } else {
+            project_lock::save_lock(&canonical, &lock)?;
+        }
 
         Ok(RemoveProjectPluginReport::Removed {
             plugin: plugin.to_owned(),
@@ -362,6 +420,11 @@ impl Project<'_> {
     /// primitive to build one on).
     pub fn install(&self, root: &Path, authority: &dyn TrustAuthority) -> Result<InstallReport> {
         let canonical = project_root::resolve_project_root(root)?;
+        // `install` is an explicit act of setting this project up, so it is
+        // the right moment to create the file a person edits — unlike
+        // opening the client, which must write nothing into a repository
+        // somebody is only looking at.
+        manifest::ensure_exists(&canonical)?;
         let lock = match project_lock::load_lock(&canonical)? {
             Some(lock) => lock,
             None => return Ok(InstallReport::NoChanges),
@@ -401,6 +464,11 @@ impl Project<'_> {
             }
             let package_source = Self::resolve_locked_plugin_source(&lock, &name, &locked.source)?;
             let materialized = self.0.plugins().acquire(&package_source)?;
+            // The pin is checked before the bytes are ingested, let alone
+            // delivered to a harness: a moved tag, a rewritten history or a
+            // substituted remote must stop here, not be discovered later by
+            // reading what an agent was told to do.
+            Self::verify_integrity_of(&name, &locked, materialized.root())?;
             let marketplace = match &locked.source {
                 PluginSource::Marketplace { marketplace, .. } => marketplace.as_str(),
                 PluginSource::Git { .. } => "local",
@@ -418,6 +486,27 @@ impl Project<'_> {
 
         Ok(InstallReport::Installed {
             plugins: installed_plugins,
+        })
+    }
+
+    /// Refuses bytes that are not the bytes the lock pinned. An entry with
+    /// no `integrity` is not checked — a local path has none to record, and
+    /// so has nothing to contradict.
+    fn verify_integrity_of(plugin: &str, locked: &LockedPlugin, acquired: &Path) -> Result<()> {
+        let Some(expected) = &locked.resolved.integrity else {
+            return Ok(());
+        };
+        let found = uze_core::digest::tree_sha256(acquired).map_err(|source| UzeError::Read {
+            path: acquired.to_path_buf(),
+            source,
+        })?;
+        if &found == expected {
+            return Ok(());
+        }
+        Err(UzeError::IntegrityMismatch {
+            plugin: plugin.to_owned(),
+            expected: expected.clone(),
+            found,
         })
     }
 

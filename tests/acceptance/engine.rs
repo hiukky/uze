@@ -60,11 +60,7 @@ impl Engine {
         git(&["config", "user.email", "operator@uze.invalid"]);
         fs::write(project.join("README.md"), "# engine\n").unwrap();
         fs::write(project.join(".gitignore"), "target/\n").unwrap();
-        fs::write(
-            project.join("agents.lock"),
-            format!("version: 1\nworktrees:\n{lock}"),
-        )
-        .unwrap();
+        fs::write(project.join("agents.yaml"), format!("worktrees:\n{lock}")).unwrap();
         git(&["add", "."]);
         git(&["commit", "--quiet", "-m", "init"]);
 

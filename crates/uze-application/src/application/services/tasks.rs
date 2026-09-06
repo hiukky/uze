@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use uze_core::{
     Result, UzeError, checkout,
     landing::{self, Delivered, DeliveryFailure, Readiness},
-    project_lock, prompt_history, sidebar_layout,
+    manifest, prompt_history, sidebar_layout,
     task::{self, Base, Task, TaskId, TaskState, TaskStore},
     workspace,
     worktree::{self, CompletionBehavior, WorktreePolicy},
@@ -217,12 +217,13 @@ impl Workspace<'_> {
         })
     }
 
-    /// The project's declared policy, or the defaults when the lock declares
-    /// none. A malformed lock is an error rather than a silent default.
+    /// The project's declared policy, or the defaults when its manifest
+    /// declares none. Read from the primary checkout on purpose: a worktree
+    /// never declares a policy of its own, and nothing machine-scoped
+    /// participates, so the same repository resolves identically everywhere.
+    /// A malformed manifest is an error rather than a silent default.
     fn policy(&self, primary: &Path) -> Result<WorktreePolicy> {
-        Ok(project_lock::load_lock(primary)?
-            .and_then(|lock| lock.worktrees)
-            .unwrap_or_default())
+        manifest::worktree_policy(primary)
     }
 
     /// The repository `cwd` belongs to, with its policy and recorded tasks.
@@ -279,7 +280,17 @@ impl Workspace<'_> {
     /// will do.
     pub fn delivery_policy(&self, cwd: &Path) -> Option<DeliveryPolicyView> {
         let repository = self.repository(cwd)?;
+        let declared = manifest::load(&repository.primary)
+            .ok()
+            .flatten()
+            .and_then(|manifest| manifest.worktrees)
+            .is_some();
         Some(DeliveryPolicyView {
+            source: if declared {
+                PolicySource::Declared
+            } else {
+                PolicySource::BuiltInDefault
+            },
             completion: repository.policy.completion.abi_name(),
             target: repository
                 .policy
@@ -847,6 +858,31 @@ pub struct DeliveryPolicyView {
     pub completion: &'static str,
     pub target: Option<String>,
     pub gate: Option<String>,
+    /// Whether this is what the project declared or what UZE falls back to.
+    /// A reader who cannot tell the two apart learns nothing from being
+    /// shown `handoff`: they cannot know whether anyone chose it.
+    pub source: PolicySource,
+}
+
+/// Where the policy in force came from.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PolicySource {
+    /// `agents.yaml` declares it.
+    Declared,
+    /// Nothing declares it; this is the built-in default, identical on
+    /// every machine.
+    BuiltInDefault,
+}
+
+impl PolicySource {
+    /// How the client attributes it, in the words a reader needs rather
+    /// than the words the code uses.
+    pub fn attribution(self) -> &'static str {
+        match self {
+            Self::Declared => "agents.yaml",
+            Self::BuiltInDefault => "default",
+        }
+    }
 }
 
 /// Where an agent starts, and whether that is a slot of its own.
@@ -1228,10 +1264,10 @@ mod task_service_tests {
         UzeApplication::new(UzeHome::at(uze_testkit::temp::scratch(label)), Vec::new())
     }
 
-    fn lock(repository: &uze_testkit::git::Repository, policy: &str) {
+    fn declare(repository: &uze_testkit::git::Repository, policy: &str) {
         std::fs::write(
-            repository.root().join("agents.lock"),
-            format!("version: 1\nworktrees:\n{policy}"),
+            repository.root().join("agents.yaml"),
+            format!("worktrees:\n{policy}"),
         )
         .unwrap();
     }
@@ -1267,7 +1303,7 @@ mod task_service_tests {
     #[test]
     fn evaluation_reads_the_checkout_and_merge_delivers() {
         let repository = repository("svc-merge");
-        lock(&repository, "  completion: merge\n");
+        declare(&repository, "  completion: merge\n");
         let root = repository.root().to_path_buf();
         let app = application("svc-merge-home");
         let (id, slot) = launched(&app, &root);
@@ -1296,7 +1332,7 @@ mod task_service_tests {
     #[test]
     fn a_delivered_task_still_in_its_slot_is_read_again() {
         let repository = repository("svc-redeliver");
-        lock(&repository, "  completion: merge\n");
+        declare(&repository, "  completion: merge\n");
         let root = repository.root().to_path_buf();
         let app = application("svc-redeliver-home");
         let (id, slot) = launched(&app, &root);
@@ -1333,7 +1369,7 @@ mod task_service_tests {
     #[test]
     fn a_delivered_task_whose_slot_moved_on_is_left_alone() {
         let repository = repository("svc-handover");
-        lock(&repository, "  completion: merge\n");
+        declare(&repository, "  completion: merge\n");
         let root = repository.root().to_path_buf();
         let app = application("svc-handover-home");
 
@@ -1363,7 +1399,7 @@ mod task_service_tests {
     #[test]
     fn a_conflict_returns_a_notice_addressed_to_the_slot() {
         let repository = repository("svc-conflict");
-        lock(&repository, "  completion: merge\n");
+        declare(&repository, "  completion: merge\n");
         let root = repository.root().to_path_buf();
         let app = application("svc-conflict-home");
         let (id, slot) = launched(&app, &root);
@@ -1395,7 +1431,7 @@ mod task_service_tests {
     #[test]
     fn evaluation_lets_a_clean_task_follow_the_target() {
         let repository = repository("svc-follow");
-        lock(&repository, "  completion: merge\n");
+        declare(&repository, "  completion: merge\n");
         let root = repository.root().to_path_buf();
         let app = application("svc-follow-home");
         let (_, slot) = launched(&app, &root);
@@ -1417,7 +1453,7 @@ mod task_service_tests {
     #[test]
     fn the_locks_gate_refuses_and_a_passing_gate_lets_it_through() {
         let repository = repository("svc-gate");
-        lock(
+        declare(
             &repository,
             "  completion: merge\n  gate: test -f must-exist\n",
         );
@@ -1444,7 +1480,7 @@ mod task_service_tests {
     #[test]
     fn deliver_ready_takes_them_in_order_and_the_second_sees_the_first() {
         let repository = repository("svc-ready");
-        lock(&repository, "  completion: merge\n");
+        declare(&repository, "  completion: merge\n");
         let root = repository.root().to_path_buf();
         let app = application("svc-ready-home");
         let (_, first) = launched(&app, &root);
@@ -1519,7 +1555,7 @@ mod task_service_tests {
             Some(UpstreamSync { pull: 0, push: 1 })
         );
 
-        lock(&repository, "  target: upstream\n");
+        declare(&repository, "  target: upstream\n");
         assert_eq!(
             app.workspace().target_upstream_sync(&root),
             None,
@@ -1532,7 +1568,7 @@ mod task_service_tests {
         let repository = repository("svc-lock-launch");
         repository.git(&["branch", "develop"]);
         std::fs::write(repository.root().join(".env"), "KEY=1\n").unwrap();
-        lock(
+        declare(
             &repository,
             "  target: develop\n  slots: 1\n  link: [.env]\n  setup: touch prepared\n",
         );

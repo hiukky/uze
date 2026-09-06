@@ -2,3 +2,4 @@
 //! application layer, independent of any specific harness.
 
 mod install;
+mod manifest_and_lock;
