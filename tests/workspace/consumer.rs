@@ -43,6 +43,9 @@ fn write_marketplace(root: &PathBuf, marketplace_name: &str, plugin_name: &str) 
         "# Conformance skill\n",
     )
     .unwrap();
+    // A marketplace is a Git repository: its commits are what a lock pins
+    // and what an update is measured against.
+    uze_testkit::git::commit_everything_in(root);
 }
 
 struct Fixture {
@@ -117,20 +120,23 @@ fn add_project_plugin_creates_a_deterministic_lock() {
     );
 }
 
+/// A marketplace on this machine is a clone of a repository, not a loose
+/// directory, so it pins exactly as well as a remote one.
 #[test]
-fn add_project_plugin_populates_resolved_revision_for_a_local_marketplace_plugin() {
-    // A local source carries no revision by design (see
-    // ResolvedSource::Local's doc) -- this asserts the field is at least
-    // wired through (present as `None`, not left unset by an old code
-    // path), not that a value was fabricated for a source that has none.
-    let fx = Fixture::new("resolved-revision");
+fn a_marketplace_on_this_machine_pins_like_any_other() {
+    let fx = Fixture::new("local-no-pin");
     fx.add_marketplace_to_global_registry();
     let app = fx.app();
     app.project()
         .add("flow", "test-market", &fx.project_root, &AlwaysTrust)
         .unwrap();
     let lock = project_lock::load_lock(&fx.project_root).unwrap().unwrap();
-    assert_eq!(lock.plugins["flow"].resolved.revision, None);
+    assert!(
+        !lock.marketplaces["test-market"].revision.is_empty(),
+        "a marketplace on this machine is a clone at a commit, and pins like any other"
+    );
+    assert!(lock.plugins["flow"].integrity.is_some());
+    assert_eq!(lock.plugins["flow"].marketplace, "test-market");
 }
 
 #[test]
@@ -240,6 +246,300 @@ fn install_project_environment_with_no_lock_is_a_no_op() {
         .install(&fx.project_root, &AlwaysTrust)
         .unwrap();
     assert!(matches!(report, InstallReport::NoChanges));
+}
+
+/// The path a person actually takes: write `agents.yaml` by hand (or clone
+/// a repository carrying one), then `uze install`. There is no lock yet —
+/// the lock is what installing *produces*, so a declaration nothing has
+/// resolved must be resolved here rather than reported as up to date.
+#[test]
+fn install_resolves_a_declaration_the_lock_has_never_seen() {
+    let fx = Fixture::new("install-from-manifest");
+    fs::write(
+        fx.project_root.join("agents.yaml"),
+        format!(
+            "marketplaces:\n  test-market:\n    path: {}\n    plugins:\n      - flow\n",
+            fx.marketplace_root.display()
+        ),
+    )
+    .unwrap();
+    let app = fx.app();
+
+    let report = app
+        .project()
+        .install(&fx.project_root, &AlwaysTrust)
+        .unwrap();
+
+    match report {
+        InstallReport::Installed { plugins } => assert_eq!(plugins, vec!["flow".to_owned()]),
+        other => panic!("expected Installed, got {other:?}"),
+    }
+    assert!(
+        app.plugins()
+            .list()
+            .unwrap()
+            .iter()
+            .any(|p| p.id == "flow@test-market"),
+        "the declared plugin must reach the Store, not only the lock"
+    );
+    let lock = project_lock::load_lock(&fx.project_root)
+        .unwrap()
+        .expect("install must write the lock its resolution produced");
+    assert!(lock.plugins.contains_key("flow"));
+    assert!(lock.marketplaces.contains_key("test-market"));
+    assert!(
+        app.marketplace()
+            .list()
+            .unwrap()
+            .iter()
+            .any(|m| m.name == "test-market"),
+        "a marketplace the manifest declares must be registered globally too"
+    );
+
+    // Second run: the lock now answers the declaration, so there is
+    // nothing left to resolve and nothing left to install.
+    let report = app
+        .project()
+        .install(&fx.project_root, &AlwaysTrust)
+        .unwrap();
+    assert!(
+        matches!(report, InstallReport::NoChanges),
+        "expected NoChanges, got {report:?}"
+    );
+}
+
+/// Moving a plugin to another marketplace in `agents.yaml` is heard —
+/// `install` re-resolves it rather than treating the lock's older answer
+/// as current — and stops on the machine-level name collision two
+/// same-named plugins are, naming both. Silence is what this pins
+/// against: the old entry must not be left standing as if the edit never
+/// happened. Which of the two wins is a decision no command makes today
+/// (`uze remove flow` first is the way through).
+#[test]
+fn install_re_resolves_a_plugin_the_manifest_moved_and_names_the_collision() {
+    let fx = Fixture::new("install-moved-marketplace");
+    let mirror_root = fx.uze_home.parent().unwrap().join("mirror");
+    write_marketplace(&mirror_root, "mirror-market", "flow");
+    fx.add_marketplace_to_global_registry();
+    let app = fx.app();
+    app.project()
+        .add("flow", "test-market", &fx.project_root, &AlwaysTrust)
+        .unwrap();
+
+    fs::write(
+        fx.project_root.join("agents.yaml"),
+        format!(
+            "marketplaces:\n  mirror-market:\n    path: {}\n    plugins:\n      - flow\n",
+            mirror_root.display()
+        ),
+    )
+    .unwrap();
+
+    let error = app
+        .project()
+        .install(&fx.project_root, &AlwaysTrust)
+        .expect_err("a declaration the Store cannot satisfy must be reported, not passed over");
+    let reported = error.to_string();
+    assert!(
+        reported.contains("test-market") && reported.contains("mirror-market"),
+        "the collision must name both marketplaces: {reported}"
+    );
+}
+
+/// A marketplace in a Git repository, with one plugin whose skill carries
+/// `body` — the text a test changes to prove which revision was read.
+fn write_git_marketplace(repository: &uze_testkit::git::Repository, body: &str) -> String {
+    let root = repository.root();
+    fs::write(
+        root.join("marketplace.json"),
+        r#"{"name": "git-market", "plugins": [{"name": "flow", "source": "flow"}]}"#,
+    )
+    .unwrap();
+    fs::create_dir_all(root.join("flow/skills/uze-e2e")).unwrap();
+    fs::write(root.join("flow/plugin.json"), r#"{"name": "flow"}"#).unwrap();
+    fs::write(root.join("flow/skills/uze-e2e/SKILL.md"), body).unwrap();
+    repository.git(&["add", "-A"]);
+    repository.git(&["commit", "-q", "-m", "marketplace"]);
+    repository.git(&["rev-parse", "HEAD"]).trim().to_owned()
+}
+
+fn git_marketplace_source(repository: &uze_testkit::git::Repository) -> uze_core::PackageSource {
+    uze_core::PackageSource::Git {
+        // `file://` because a bare path is a local clone, and this must
+        // exercise the same code path a real remote takes.
+        url: format!("file://{}", repository.root().display()),
+        reference: None,
+        subdirectory: None,
+    }
+}
+
+/// Every skill body under a Store, so a test can say which revision's
+/// bytes actually landed.
+fn installed_skill_bodies(home: &std::path::Path) -> Vec<String> {
+    fn walk(directory: &std::path::Path, found: &mut Vec<String>) {
+        let Ok(entries) = fs::read_dir(directory) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, found);
+            } else if path.file_name().is_some_and(|name| name == "SKILL.md") {
+                found.push(fs::read_to_string(&path).unwrap());
+            }
+        }
+    }
+    let mut found = Vec::new();
+    walk(&UzeHome::at(home).plugins_dir(), &mut found);
+    found
+}
+
+/// What a lock is *for*. A local path pins nothing by design — a directory
+/// is mutable — but a Git marketplace resolves to an immutable commit, and
+/// the entry must carry it along with a digest of the bytes that landed.
+#[test]
+fn a_plugin_from_a_git_marketplace_is_pinned_to_a_commit_and_a_digest() {
+    let market = uze_testkit::git::Repository::new("git-market-pin");
+    let commit = write_git_marketplace(&market, "# first\n");
+
+    let base = uze_testkit::temp::scratch("git-market-pin-base");
+    let (home, project) = (base.join("home"), base.join("project"));
+    fs::create_dir_all(&project).unwrap();
+    uze_core::state::marketplace_add(
+        &UzeHome::at(&home),
+        "git-market",
+        git_marketplace_source(&market),
+    )
+    .unwrap();
+
+    UzeApplication::new(UzeHome::at(&home), Vec::new())
+        .project()
+        .add("flow", "git-market", &project, &AlwaysTrust)
+        .unwrap();
+
+    let lock = project_lock::load_lock(&project).unwrap().unwrap();
+    assert_eq!(
+        lock.marketplaces["git-market"].revision, commit,
+        "the marketplace entry must record the commit it was read at"
+    );
+    let integrity = lock.plugins["flow"]
+        .integrity
+        .as_deref()
+        .expect("immutable bytes must record a digest");
+    assert!(integrity.starts_with("sha256:"), "{integrity}");
+}
+
+/// The property the file exists to hold: a second machine installs what
+/// the lock recorded, not what the branch points at by then.
+#[test]
+fn reproduction_reads_the_locked_commit_after_the_marketplace_moved() {
+    let market = uze_testkit::git::Repository::new("git-market-moved");
+    let locked_commit = write_git_marketplace(&market, "# first\n");
+
+    let base = uze_testkit::temp::scratch("git-market-moved-base");
+    let (home, project) = (base.join("home"), base.join("project"));
+    fs::create_dir_all(&project).unwrap();
+    uze_core::state::marketplace_add(
+        &UzeHome::at(&home),
+        "git-market",
+        git_marketplace_source(&market),
+    )
+    .unwrap();
+    UzeApplication::new(UzeHome::at(&home), Vec::new())
+        .project()
+        .add("flow", "git-market", &project, &AlwaysTrust)
+        .unwrap();
+
+    // The marketplace moves on, exactly as a shared repository does.
+    let moved_commit = write_git_marketplace(&market, "# second\n");
+    assert_ne!(locked_commit, moved_commit);
+
+    let fresh_home = base.join("home-fresh");
+    UzeApplication::new(UzeHome::at(&fresh_home), Vec::new())
+        .project()
+        .install(&project, &AlwaysTrust)
+        .unwrap();
+
+    assert_eq!(
+        installed_skill_bodies(&fresh_home),
+        vec!["# first\n".to_owned()],
+        "reproduction must read the commit the lock pinned, not the branch tip"
+    );
+}
+
+/// The integrity field is checked, not decorative: bytes that do not match
+/// what the lock pinned stop before anything is ingested.
+#[test]
+fn reproduction_refuses_bytes_that_are_not_the_bytes_the_lock_pinned() {
+    let market = uze_testkit::git::Repository::new("git-market-tampered");
+    write_git_marketplace(&market, "# first\n");
+
+    let base = uze_testkit::temp::scratch("git-market-tampered-base");
+    let (home, project) = (base.join("home"), base.join("project"));
+    fs::create_dir_all(&project).unwrap();
+    uze_core::state::marketplace_add(
+        &UzeHome::at(&home),
+        "git-market",
+        git_marketplace_source(&market),
+    )
+    .unwrap();
+    UzeApplication::new(UzeHome::at(&home), Vec::new())
+        .project()
+        .add("flow", "git-market", &project, &AlwaysTrust)
+        .unwrap();
+
+    // A lock claiming a digest the marketplace's bytes do not have is the
+    // same shape as a substituted remote or a rewritten history.
+    let mut lock = project_lock::load_lock(&project).unwrap().unwrap();
+    lock.plugins.get_mut("flow").unwrap().integrity =
+        Some("sha256:0000000000000000000000000000000000000000000000000000000000000000".to_owned());
+    project_lock::save_lock(&project, &lock).unwrap();
+
+    let fresh_home = base.join("home-fresh");
+    let error = UzeApplication::new(UzeHome::at(&fresh_home), Vec::new())
+        .project()
+        .install(&project, &AlwaysTrust)
+        .expect_err("a digest that does not match must stop the install");
+    assert!(
+        matches!(error, uze_core::UzeError::IntegrityMismatch { .. }),
+        "{error:?}"
+    );
+    assert!(
+        installed_skill_bodies(&fresh_home).is_empty(),
+        "nothing may be ingested once the pin failed"
+    );
+}
+
+/// The marketplace built into UZE is not a project's to declare: its
+/// plugins are installed for every project by the machine's own bootstrap.
+/// `declare_plugin` already refuses to write one into `agents.yaml`, and
+/// the lock refuses it for the same reason — an entry recording something
+/// nobody declared is a line nobody can act on.
+#[test]
+fn adding_a_built_in_plugin_installs_it_without_writing_the_project_files() {
+    let fx = Fixture::new("built-in-not-declared");
+    let app = fx.app();
+
+    app.project()
+        .add("uze", "uze-official", &fx.project_root, &AlwaysTrust)
+        .unwrap();
+
+    assert!(
+        app.plugins()
+            .list()
+            .unwrap()
+            .iter()
+            .any(|plugin| plugin.id == "uze@uze-official"),
+        "the plugin is installed on the machine"
+    );
+    assert!(
+        !project_lock::lock_path_for(&fx.project_root).exists(),
+        "nothing the project declares changed, so it has nothing to lock"
+    );
+    assert!(
+        !fx.project_root.join("agents.yaml").exists(),
+        "and nothing to declare"
+    );
 }
 
 #[test]

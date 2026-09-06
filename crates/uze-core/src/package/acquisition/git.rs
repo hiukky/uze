@@ -47,16 +47,29 @@ const MAX_MATERIALIZED_BYTES: u64 = 512 * 1024 * 1024;
 /// wrote to its own error output. Refusing the input keeps the secret from
 /// entering UZE at all. Authenticated Git is a separate mechanism to design
 /// deliberately, not a side effect of URL parsing.
+///
+/// Which userinfo is a secret depends on the transport, so this asks per
+/// transport rather than refusing the `@` character:
+///
+/// - **`http`/`https`** — userinfo is only ever a credential there
+///   (`user:token@host`, and a bare `token@host` for a forge that accepts
+///   one), so any of it is refused.
+/// - **SSH**, in either spelling (`ssh://git@host/repo`,
+///   `git@host:org/repo`) — the userinfo is a *user name*, and the secret
+///   is a key on disk that never appears in the URL. Refusing it made every
+///   private repository unusable to protect against a secret that is not
+///   there.
 pub fn reject_inline_credentials(url: &str) -> Result<()> {
-    // Only the authority component can carry userinfo, and only before the
-    // first `/` of the path. `scp`-style `user@host:path` is matched too.
-    let authority = url
-        .split_once("://")
-        .map(|(_, rest)| rest)
-        .unwrap_or(url)
-        .split('/')
-        .next()
-        .unwrap_or_default();
+    let (scheme, rest) = match url.split_once("://") {
+        Some((scheme, rest)) => (scheme, rest),
+        // No scheme is `scp`-style, which is SSH.
+        None => return Ok(()),
+    };
+    if !matches!(scheme, "http" | "https") {
+        return Ok(());
+    }
+    // Only the authority carries userinfo, and only before the path.
+    let authority = rest.split('/').next().unwrap_or_default();
     if authority.contains('@') {
         return Err(UzeError::CredentialBearingUrl);
     }
@@ -382,7 +395,7 @@ mod tests {
         for url in [
             "https://user:secret@example.com/repo.git",
             "https://token@example.com/repo.git",
-            "git@example.com:org/repo.git",
+            "http://token@example.com/repo.git",
         ] {
             assert!(
                 matches!(
@@ -391,6 +404,20 @@ mod tests {
                 ),
                 "accepted {url}"
             );
+        }
+    }
+
+    /// Over SSH the userinfo is a user name and the secret is a key on
+    /// disk. Refusing `git@` there protected nothing and made every
+    /// private repository unreachable.
+    #[test]
+    fn an_ssh_user_name_is_not_a_credential() {
+        for url in [
+            "git@example.com:org/repo.git",
+            "ssh://git@example.com/org/repo.git",
+            "ssh://example.com/org/repo.git",
+        ] {
+            assert!(reject_inline_credentials(url).is_ok(), "refused {url}");
         }
     }
 

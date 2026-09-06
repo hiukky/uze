@@ -102,6 +102,8 @@ impl Scenario {
                 let dest = dir.join("plugins").join(name);
                 copy_tree(source, &dest);
             }
+            // A marketplace is a Git repository, so a scenario's is too.
+            crate::git::commit_everything_in(&dir);
             dir
         });
 
@@ -120,17 +122,20 @@ impl Scenario {
                 .as_ref()
                 .unwrap_or_else(|| panic!("scenario: lock_plugin_from_market needs a marketplace"));
             let name = marketplace_name.as_deref().unwrap_or("local");
+            // A local marketplace is a clone, and a clone's path is a valid
+            // Git URL: the lock names the repository and the commit, the
+            // same as it would for a remote one.
+            let revision = crate::git::commit_everything_in(market);
             let mut yaml = String::from("version: 1\nmarketplaces:\n");
-            yaml.push_str(&format!("  {name}:\n    source:\n"));
             yaml.push_str(&format!(
-                "      type: path\n      path: {}\n",
+                "  {name}:\n    git: {}\n    revision: {revision}\n",
                 market.display()
             ));
             yaml.push_str("plugins:\n");
             for plugin in &self.lock_plugins {
                 yaml.push_str(&format!(
-                    "  {}:\n    source:\n      type: marketplace\n      marketplace: {}\n      plugin: {}\n    resolved: {{}}\n",
-                    plugin.plugin, plugin.marketplace, plugin.plugin
+                    "  {}:\n    marketplace: {}\n",
+                    plugin.plugin, plugin.marketplace
                 ));
             }
             std::fs::write(&lock, yaml).expect("scenario: agents.lock must be writable");

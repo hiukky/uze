@@ -86,6 +86,9 @@ impl PackageSource {
     /// of them — that is the posture UZE has always had and M2 does not
     /// change it. A remote source removes exactly that: nobody read the
     /// contents, so a capability that will execute has to be authorized.
+    /// "Local" is about where the bytes are, not how the source is
+    /// spelled: a Git URL that names a directory on this machine is a
+    /// local path with a different syntax.
     ///
     /// This is a deliberate, narrow scope. It also leaves an honest gap: an
     /// operator can clone a repository by hand and install the result as a
@@ -103,7 +106,14 @@ impl PackageSource {
     pub fn crosses_trust_boundary(&self) -> bool {
         match self {
             Self::Local { .. } => false,
-            Self::Git { .. } | Self::Embedded { .. } => true,
+            // A marketplace is a repository even when it is a clone on
+            // this disk, so a local source can arrive spelled as a Git
+            // one. The question is where the bytes are, not how the
+            // source is written down: a repository the operator has in
+            // front of them is the same posture as a directory they
+            // typed.
+            Self::Git { url, .. } => !names_a_local_path(url),
+            Self::Embedded { .. } => true,
         }
     }
 
@@ -182,6 +192,27 @@ impl ResolvedSource {
             Self::Embedded { .. } => Some("embedded".to_owned()),
         }
     }
+}
+
+/// Whether a Git URL is a directory on this machine rather than something
+/// fetched.
+///
+/// A bare absolute path is local: it is what an operator types with the
+/// directory in front of them, and Git clones it by hardlinking rather
+/// than over a transport. Everything with a scheme is not — `file://`
+/// included, which Git itself routes through the transport layer and which
+/// is the spelling that means "treat this as a remote". `scp`-style
+/// `host:path` is remote too.
+fn names_a_local_path(url: &str) -> bool {
+    if url.contains("://") {
+        return false;
+    }
+    // A colon before the first slash is a host (`git@example.com:org/repo`);
+    // one after it is just a directory with a colon in its name.
+    if url.split('/').next().unwrap_or_default().contains(':') {
+        return false;
+    }
+    Path::new(url).is_absolute()
 }
 
 /// Everything the Store persists about a package's origin, and nothing it
@@ -449,6 +480,39 @@ pub fn inspect_capabilities(package: &MaterializedPackage) -> Result<InspectedPa
         package_id,
         resources: crate::engine::package_resources_at(&id, package.root())?,
     })
+}
+
+#[cfg(test)]
+mod local_path_urls {
+    use super::*;
+
+    #[test]
+    fn a_repository_on_this_machine_is_not_a_trust_boundary() {
+        for url in ["/home/someone/ai", "/tmp/a:b/market"] {
+            assert!(
+                !PackageSource::git(url).crosses_trust_boundary(),
+                "{url} was treated as remote"
+            );
+        }
+    }
+
+    #[test]
+    fn a_remote_repository_is_one_however_it_is_spelled() {
+        for url in [
+            "https://github.com/acme/plugins",
+            "ssh://git@github.com/acme/plugins",
+            "git@github.com:acme/plugins.git",
+            // Git routes this through its transport layer rather than
+            // hardlinking, and it is what "pretend this is a remote"
+            // is spelled as.
+            "file:///tmp/origin.git",
+        ] {
+            assert!(
+                PackageSource::git(url).crosses_trust_boundary(),
+                "{url} was treated as local"
+            );
+        }
+    }
 }
 
 #[cfg(test)]

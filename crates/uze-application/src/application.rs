@@ -397,46 +397,137 @@ impl UzeApplication {
         })
     }
 
+    /// The marketplace's catalog, and the checkout it was read from.
+    ///
+    /// The checkout is returned rather than its path: a Git marketplace is
+    /// materialized into scratch that `MaterializedPackage`'s own `Drop`
+    /// removes, so handing back a bare `PathBuf` gave every caller a path
+    /// to a directory that no longer existed by the time they used it.
+    /// Holding the value is what keeps the bytes alive.
     pub(crate) fn load_marketplace_manifest(
         source: &PackageSource,
     ) -> Result<(
-        PathBuf,
+        uze_core::acquisition::MaterializedPackage,
         uze_core::acquisition::marketplace::MarketplaceManifest,
     )> {
-        match source {
-            PackageSource::Local { path } => {
-                let manifest_path = path.join(uze_core::workspace::MARKETPLACE_MANIFEST_NAME);
-                let bytes = std::fs::read(&manifest_path).map_err(|e| UzeError::Read {
-                    path: manifest_path.clone(),
-                    source: e,
-                })?;
-                let manifest = uze_core::acquisition::marketplace::parse_manifest(&bytes)?;
-                Ok((path.clone(), manifest))
+        let checkout = match source {
+            PackageSource::Local { path } => uze_core::acquisition::MaterializedPackage::borrowed(
+                path.clone(),
+                uze_core::acquisition::Provenance {
+                    requested: source.clone(),
+                    resolved: uze_core::acquisition::ResolvedSource::Local { path: path.clone() },
+                },
+            ),
+            PackageSource::Git { .. } => uze_core::acquisition::acquire(source)?,
+            PackageSource::Embedded { .. } => {
+                return Err(UzeError::ExposureUnavailable(
+                    "embedded marketplace cannot be used as marketplace source".to_owned(),
+                ));
             }
+        };
+        let manifest_path = checkout
+            .root()
+            .join(uze_core::workspace::MARKETPLACE_MANIFEST_NAME);
+        let bytes = std::fs::read(&manifest_path).map_err(|e| UzeError::Read {
+            path: manifest_path.clone(),
+            source: e,
+        })?;
+        let manifest = uze_core::acquisition::marketplace::parse_manifest(&bytes)?;
+        Ok((checkout, manifest))
+    }
+
+    /// One plugin's bytes, taken from a *clone* of the marketplace at a
+    /// commit — for a local marketplace exactly as for a remote one.
+    ///
+    /// Reading a local checkout in place was the alternative, and it is
+    /// what made a local marketplace unpinnable: the bytes on disk are
+    /// whatever their author last saved, so nothing could say they are the
+    /// bytes that were installed, and nothing could say whether something
+    /// newer exists. A clone at a commit answers both, and a local clone
+    /// is cheap (Git hardlinks it).
+    ///
+    /// `identity` is what the lock will record — the URL another machine
+    /// resolves this repository by — which is not always where these bytes
+    /// were fetched from. The returned package is the checkout narrowed to
+    /// the plugin's directory, so cleanup still owns the whole checkout
+    /// (`MaterializedPackage::retarget`) and the bytes live until the Store
+    /// has ingested them.
+    pub(crate) fn materialize_marketplace_plugin_at(
+        repository: &uze_core::acquisition::marketplace::MarketplaceRepository,
+        reference: Option<&str>,
+        subdirectory: Option<&Path>,
+        plugin: &str,
+    ) -> Result<uze_core::acquisition::MaterializedPackage> {
+        use uze_core::acquisition::{Provenance, ResolvedSource};
+
+        let fetch = PackageSource::Git {
+            url: repository.fetch.clone(),
+            reference: reference.map(str::to_owned),
+            subdirectory: subdirectory.map(Path::to_path_buf),
+        };
+        let mut checkout = uze_core::acquisition::acquire(&fetch)?;
+        let ResolvedSource::Git { commit, .. } = checkout.provenance().resolved.clone() else {
+            return Err(UzeError::AcquisitionFailed(
+                "a marketplace clone must resolve to a commit".to_owned(),
+            ));
+        };
+        let manifest_path = checkout
+            .root()
+            .join(uze_core::workspace::MARKETPLACE_MANIFEST_NAME);
+        let bytes = std::fs::read(&manifest_path).map_err(|e| UzeError::Read {
+            path: manifest_path.clone(),
+            source: e,
+        })?;
+        let manifest = uze_core::acquisition::marketplace::parse_manifest(&bytes)?;
+        let plugin_root = uze_core::acquisition::marketplace::resolve_plugin_source(
+            &manifest,
+            plugin,
+            checkout.root(),
+        )?;
+        let within_marketplace = plugin_root
+            .strip_prefix(checkout.root())
+            .map(Path::to_path_buf)
+            .ok();
+        checkout.retarget(
+            plugin_root,
+            Provenance {
+                requested: PackageSource::Git {
+                    url: repository.identity.clone(),
+                    reference: reference.map(str::to_owned),
+                    subdirectory: within_marketplace.clone(),
+                },
+                resolved: ResolvedSource::Git {
+                    url: repository.identity.clone(),
+                    commit,
+                    subdirectory: within_marketplace,
+                },
+            },
+        );
+        Ok(checkout)
+    }
+
+    /// The same, for a caller holding only a marketplace source: resolves
+    /// the repository behind it first, which is also where a source that
+    /// is not a repository is refused.
+    pub(crate) fn materialize_marketplace_plugin(
+        source: &PackageSource,
+        plugin: &str,
+    ) -> Result<uze_core::acquisition::MaterializedPackage> {
+        let repository = uze_core::acquisition::marketplace::repository_of(source)?;
+        let (reference, subdirectory) = match source {
             PackageSource::Git {
-                url,
                 reference,
                 subdirectory,
-            } => {
-                let git_source = PackageSource::Git {
-                    url: url.clone(),
-                    reference: reference.clone(),
-                    subdirectory: subdirectory.clone(),
-                };
-                let materialized = uze_core::acquisition::acquire(&git_source)?;
-                let root = materialized.root().to_path_buf();
-                let manifest_path = root.join(uze_core::workspace::MARKETPLACE_MANIFEST_NAME);
-                let bytes = std::fs::read(&manifest_path).map_err(|e| UzeError::Read {
-                    path: manifest_path.clone(),
-                    source: e,
-                })?;
-                let manifest = uze_core::acquisition::marketplace::parse_manifest(&bytes)?;
-                Ok((root, manifest))
-            }
-            PackageSource::Embedded { .. } => Err(UzeError::ExposureUnavailable(
-                "embedded marketplace cannot be used as marketplace source".to_owned(),
-            )),
-        }
+                ..
+            } => (reference.clone(), subdirectory.clone()),
+            _ => (None, None),
+        };
+        Self::materialize_marketplace_plugin_at(
+            &repository,
+            reference.as_deref(),
+            subdirectory.as_deref(),
+            plugin,
+        )
     }
 
     /// Every plugin the official marketplace lists, cross-referenced against

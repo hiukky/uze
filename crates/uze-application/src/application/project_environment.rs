@@ -11,12 +11,9 @@ use std::{
 use serde::Serialize;
 
 use uze_core::{
-    PackageSource, Result, UzeError,
+    Result, UzeError,
     manifest::{self, DeclaredMarketplace},
-    project_lock::{
-        self, LockedMarketplace, LockedPlugin, MarketplaceSource, PluginSource, ProjectLock,
-        ResolvedMarketplace, ResolvedPlugin,
-    },
+    project_lock::{self, LockedMarketplace, LockedPlugin, ProjectLock},
     project_root,
     trust::{self, TrustAuthority},
 };
@@ -24,42 +21,48 @@ use uze_core::{
 use super::services::Project;
 use super::*;
 
-/// The manifest's spelling of a marketplace UZE just resolved. The lock's
-/// `MarketplaceSource` is the resolved identity; this is the declaration
-/// that produced it, so a person reading `agents.yaml` sees what they asked
-/// for rather than what resolution made of it.
-///
-/// `None` for the marketplace built into UZE: it is always available, so
-/// there is nothing for the project to declare, and a plugin naming it
-/// stands on its own.
+/// The manifest's spelling of a marketplace the lock recorded. Both files
+/// name a source the same way, so this carries the keys across and adds
+/// the one thing only the manifest has: the list of plugins taken from it,
+/// left empty because `declare_plugin` pushes into whatever is already
+/// declared rather than replacing it.
 fn declared_marketplace_for(lock: &ProjectLock, marketplace: &str) -> Option<DeclaredMarketplace> {
-    let mut declared = DeclaredMarketplace {
-        git: None,
+    let locked = lock.marketplaces.get(marketplace)?;
+    Some(DeclaredMarketplace {
+        git: Some(locked.git.clone()),
         path: None,
-        r#ref: None,
-        subdirectory: None,
-        // The plugin list is the manifest's own: `declare_plugin` pushes
-        // into whatever is already declared rather than replacing it.
+        r#ref: locked.r#ref.clone(),
+        subdirectory: locked.subdirectory.clone(),
         plugins: Vec::new(),
-    };
-    match lock
-        .marketplaces
-        .get(marketplace)
-        .map(|entry| &entry.source)
-    {
-        Some(MarketplaceSource::Git {
-            url,
+    })
+}
+
+/// A marketplace resolved far enough to read from: the repository behind
+/// it, and the narrowing the declaration asked for.
+struct MarketplaceRequest {
+    repository: uze_core::acquisition::marketplace::MarketplaceRepository,
+    reference: Option<String>,
+    subdirectory: Option<PathBuf>,
+}
+
+impl MarketplaceRequest {
+    /// What a machine-registered or declared source resolves to.
+    fn of(source: &PackageSource) -> Result<Self> {
+        let repository = uze_core::acquisition::marketplace::repository_of(source)?;
+        let (reference, subdirectory) = match source {
+            PackageSource::Git {
+                reference,
+                subdirectory,
+                ..
+            } => (reference.clone(), subdirectory.clone()),
+            _ => (None, None),
+        };
+        Ok(Self {
+            repository,
             reference,
             subdirectory,
-        }) => {
-            declared.git = Some(url.clone());
-            declared.r#ref = reference.clone();
-            declared.subdirectory = subdirectory.clone();
-        }
-        Some(MarketplaceSource::Path { path }) => declared.path = Some(path.clone()),
-        Some(MarketplaceSource::Embedded { .. }) | None => return None,
+        })
     }
-    Some(declared)
 }
 
 impl Project<'_> {
@@ -71,31 +74,19 @@ impl Project<'_> {
         let mut diagnostics = Vec::new();
 
         if let Some(lock) = &lock {
-            // Validate marketplace sources exist in global registry or are embedded.
-            for (name, locked_mp) in &lock.marketplaces {
-                match &locked_mp.source {
-                    MarketplaceSource::Embedded { .. } => {
-                        // Embedded is always valid (no global registry needed).
-                    }
-                    MarketplaceSource::Git { .. } | MarketplaceSource::Path { .. } => {
-                        // Check if global registry has this marketplace.
-                        let global = uze_core::state::marketplace_get(&self.0.home, name)?;
-                        if global.is_none() {
-                            diagnostics.push(format!(
-                                "marketplace `{name}` in lock but not in global registry (will be resolved from lock source on install)"
-                            ));
-                        }
-                    }
+            for name in lock.marketplaces.keys() {
+                if uze_core::state::marketplace_get(&self.0.home, name)?.is_none() {
+                    diagnostics.push(format!(
+                        "marketplace `{name}` in lock but not in global registry (will be \
+                         resolved from lock source on install)"
+                    ));
                 }
             }
-
-            // Validate plugins reference valid marketplaces.
-            for (plugin_name, locked_plugin) in &lock.plugins {
-                if let PluginSource::Marketplace { marketplace, .. } = &locked_plugin.source
-                    && !lock.marketplaces.contains_key(marketplace)
-                {
+            for (plugin, locked) in &lock.plugins {
+                if !lock.marketplaces.contains_key(&locked.marketplace) {
                     diagnostics.push(format!(
-                        "plugin `{plugin_name}` references marketplace `{marketplace}` not declared in lock"
+                        "plugin `{plugin}` references marketplace `{}` not declared in lock",
+                        locked.marketplace
                     ));
                 }
             }
@@ -203,47 +194,37 @@ impl Project<'_> {
             .collect()
     }
 
-    /// Resolves a locked plugin's source into an acquirable `PackageSource`.
-    /// Shared by `add_project_plugin` (adding a new entry) and
-    /// `install_project_environment` (reproducing existing entries), so
-    /// the two can never resolve the same kind of source differently.
-    fn resolve_locked_plugin_source(
-        lock: &ProjectLock,
+    /// Reproduces one locked plugin: the recorded commit, never the
+    /// declared `ref:` — a lock that re-resolved `main` would install
+    /// whatever was pushed since, which is what it exists to prevent.
+    ///
+    /// The commit is fetched from the local checkout when this machine has
+    /// one registered for the same repository, and from the recorded URL
+    /// otherwise. Same bytes either way — a commit is a commit — but a
+    /// person who set up a local marketplace should not need the network
+    /// to reinstall from it.
+    fn reproduce_locked_plugin(
+        &self,
+        locked: &LockedMarketplace,
+        marketplace: &str,
         plugin: &str,
-        source: &PluginSource,
-    ) -> Result<PackageSource> {
-        match source {
-            PluginSource::Marketplace {
-                marketplace,
-                plugin: marketplace_plugin,
-            } => {
-                let locked_mp = lock.marketplaces.get(marketplace).ok_or_else(|| {
-                    UzeError::MarketplaceMismatch {
-                        plugin: plugin.to_owned(),
-                        expected: marketplace.clone(),
-                        found: "not declared in lock".to_owned(),
-                    }
-                })?;
-                let marketplace_source = PackageSource::from(locked_mp.source.clone());
-                let (marketplace_root, manifest) =
-                    UzeApplication::load_marketplace_manifest(&marketplace_source)?;
-                let plugin_path = uze_core::acquisition::marketplace::resolve_plugin_source(
-                    &manifest,
-                    marketplace_plugin,
-                    &marketplace_root,
-                )?;
-                Ok(PackageSource::Local { path: plugin_path })
-            }
-            PluginSource::Git {
-                url,
-                reference,
-                subdirectory,
-            } => Ok(PackageSource::Git {
-                url: url.clone(),
-                reference: reference.clone(),
-                subdirectory: subdirectory.clone(),
-            }),
+    ) -> Result<uze_core::MaterializedPackage> {
+        let mut repository = uze_core::acquisition::marketplace::MarketplaceRepository {
+            fetch: locked.git.clone(),
+            identity: locked.git.clone(),
+        };
+        if let Ok(Some(registered)) = uze_core::state::marketplace_get(&self.0.home, marketplace)
+            && let Ok(local) = uze_core::acquisition::marketplace::repository_of(&registered.source)
+            && local.identity == locked.git
+        {
+            repository.fetch = local.fetch;
         }
+        UzeApplication::materialize_marketplace_plugin_at(
+            &repository,
+            Some(&locked.revision),
+            locked.subdirectory.as_deref(),
+            plugin,
+        )
     }
 
     /// Adds a plugin to the project lock and ensures it's in the Store.
@@ -255,108 +236,55 @@ impl Project<'_> {
         authority: &dyn TrustAuthority,
     ) -> Result<AddPluginReport> {
         let canonical = project_root::resolve_project_root(root)?;
+        // The marketplace built into UZE is not a project's to declare:
+        // its plugins are installed for every project by the machine's own
+        // bootstrap. `declare_plugin` already refuses to write it into
+        // `agents.yaml`, and the lock refuses it for the same reason — an
+        // entry recording something nobody declared is a line that cannot
+        // be acted on.
+        if marketplace == uze_core::manifest::BUILT_IN_MARKETPLACE {
+            // No mutation lock taken here: the call below takes it, and it
+            // is not re-entrant.
+            return self.0.marketplace().install_plugin_resolving(
+                &format!("{plugin}@{marketplace}"),
+                authority,
+                &uze_core::naming::NoNameCollisionAuthority,
+            );
+        }
+
         let mut lock = project_lock::load_lock(&canonical)?.unwrap_or_default();
+        let global =
+            uze_core::state::marketplace_get(&self.0.home, marketplace)?.ok_or_else(|| {
+                UzeError::UnknownPackage(format!("marketplace `{marketplace}` not found"))
+            })?;
+        let request = MarketplaceRequest::of(&global.source)?;
 
-        // Resolve marketplace source.
-        let (mp_source, mp_resolved) = if marketplace == "uze-official" {
-            // Embedded official marketplace.
-            (
-                MarketplaceSource::Embedded {
-                    id: "uze-official".to_owned(),
-                },
-                ResolvedMarketplace {
-                    revision: Some("embedded".to_owned()),
-                },
-            )
-        } else {
-            // Check global registry.
-            let global =
-                uze_core::state::marketplace_get(&self.0.home, marketplace)?.ok_or_else(|| {
-                    UzeError::UnknownPackage(format!("marketplace `{marketplace}` not found"))
-                })?;
-            let source = MarketplaceSource::from(global.source);
-            // TODO: Resolve marketplace to get commit SHA for resolved.revision.
-            // For now, use empty resolved (will be populated on install).
-            (source, ResolvedMarketplace { revision: None })
-        };
-
-        // Check for marketplace source conflict.
-        if let Some(existing_mp) = lock.marketplaces.get(marketplace)
-            && existing_mp.source != mp_source
+        // A marketplace name means one repository. The lock naming one and
+        // the machine registry another is a question only a person can
+        // settle.
+        if let Some(recorded) = lock.marketplaces.get(marketplace)
+            && recorded.git != request.repository.identity
         {
             return Err(UzeError::MarketplaceSourceConflict {
                 marketplace: marketplace.to_owned(),
-                lock_source: existing_mp.source.display(),
-                global_source: mp_source.display(),
+                lock_source: recorded.display(),
+                global_source: request.repository.identity.clone(),
             });
         }
 
-        // Check for plugin marketplace mismatch.
-        if let Some(existing_plugin) = lock.plugins.get(plugin)
-            && let PluginSource::Marketplace {
-                marketplace: existing_mp,
-                ..
-            } = &existing_plugin.source
-            && existing_mp != marketplace
+        if let Some(existing) = lock.plugins.get(plugin)
+            && existing.marketplace != marketplace
         {
             return Err(UzeError::MarketplaceMismatch {
                 plugin: plugin.to_owned(),
-                expected: existing_mp.clone(),
+                expected: existing.marketplace.clone(),
                 found: marketplace.to_owned(),
             });
         }
 
-        // Add marketplace to lock if not present.
-        lock.marketplaces.insert(
-            marketplace.to_owned(),
-            LockedMarketplace {
-                source: mp_source,
-                resolved: mp_resolved,
-            },
-        );
-
-        let plugin_source = PluginSource::Marketplace {
-            marketplace: marketplace.to_owned(),
-            plugin: plugin.to_owned(),
-        };
-        let package_source = Self::resolve_locked_plugin_source(&lock, plugin, &plugin_source)?;
-
         // Acquire and ingest (reuses existing lifecycle).
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
-        let materialized = self.0.plugins().acquire(&package_source)?;
-        let report = self.0.plugins().install_materialized_from_marketplace(
-            materialized,
-            marketplace,
-            authority,
-            &[],
-            false,
-            &uze_core::naming::NoNameCollisionAuthority,
-        )?;
-
-        // What was actually acquired is the source of truth for `resolved`
-        // — read back from the Store rather than trusting the request,
-        // the same discipline `Provenance` itself exists to enforce. The
-        // integrity is taken from the Store's own bytes for the same
-        // reason: it must pin what landed, not what was asked for.
-        let stored = self.0.package_by_name(&report.plugin.id)?;
-        let resolved = ResolvedPlugin::from_resolved_source(&stored.provenance.resolved)
-            .with_integrity_of(
-                &stored.root,
-                stored.provenance.resolved.lock_revision().is_some(),
-            );
-
-        lock.plugins.insert(
-            plugin.to_owned(),
-            LockedPlugin {
-                source: plugin_source,
-                resolved,
-                requested: Some(uze_core::project_lock::RequestedPlugin {
-                    marketplace: Some(marketplace.to_owned()),
-                    git: None,
-                    r#ref: None,
-                }),
-            },
-        );
+        let report = self.resolve_into_lock(&mut lock, plugin, marketplace, &request, authority)?;
 
         // The declaration comes first and the lock second: `agents.yaml` is
         // what the project meant, and the lock is what that meant resolved
@@ -405,16 +333,25 @@ impl Project<'_> {
         })
     }
 
-    /// Reproduces the project's desired environment: acquires and installs
-    /// every locked plugin not yet in the Store, through the same
-    /// `authorize → prepare → ingest → republish → attach` lifecycle
-    /// `add_project_plugin`/`add_plugin` use — a fresh machine running
-    /// `uze install` against a cloned `agents.lock` is not a different
-    /// code path from an ordinary add, just a batch of them driven by the
-    /// lock instead of a marketplace argument. `authority` is honored
-    /// exactly as it is there: `install_materialized`'s own `authorize()`
-    /// call is what actually enforces the trust boundary, per plugin, so
-    /// this function does no trust reasoning of its own.
+    /// Brings the project's declared environment about, in two passes over
+    /// the same lifecycle an ordinary add uses
+    /// (`authorize → prepare → ingest → republish → attach`):
+    ///
+    /// 1. **Resolution** — every plugin `agents.yaml` declares that the
+    ///    lock does not answer for is acquired from the marketplace the
+    ///    manifest declares it under, and what that produced is written to
+    ///    `agents.lock`. The manifest is the authority; the lock is only
+    ///    what asking it produced, so a project that has declared but
+    ///    never resolved is exactly the case this exists for.
+    /// 2. **Reproduction** — every locked plugin not yet in the Store is
+    ///    installed from the source the lock itself carries, so a machine
+    ///    that cloned the repository and never ran `market add` reaches
+    ///    the same environment.
+    ///
+    /// `authority` is honored exactly as it is in `add`:
+    /// `install_materialized`'s own `authorize()` call is what enforces
+    /// the trust boundary, per plugin, so this function does no trust
+    /// reasoning of its own.
     ///
     /// Stops at the first plugin that fails to acquire or install and
     /// returns that error — an install is either fully applied or (for
@@ -431,23 +368,48 @@ impl Project<'_> {
         // opening the client, which must write nothing into a repository
         // somebody is only looking at.
         manifest::ensure_exists(&canonical)?;
-        let lock = match project_lock::load_lock(&canonical)? {
-            Some(lock) => lock,
-            None => return Ok(InstallReport::NoChanges),
-        };
+        let manifest = manifest::load(&canonical)?.unwrap_or_default();
+        let mut lock = project_lock::load_lock(&canonical)?.unwrap_or_default();
 
+        let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
+        let mut installed_plugins = Vec::new();
+
+        // Resolution comes first: `agents.yaml` is what the project asked
+        // for and the lock is only what asking produced, so a declaration
+        // the lock does not answer for is resolved now rather than
+        // reported as nothing to do. A clone carrying only the manifest
+        // must reach the same environment as one carrying both.
+        for stale in project_lock::stale_against(&manifest, &lock) {
+            let marketplace = stale.marketplace.as_str();
+            let declared = manifest.marketplaces.get(marketplace).ok_or_else(|| {
+                UzeError::MarketplaceMismatch {
+                    plugin: stale.plugin.clone(),
+                    expected: marketplace.to_owned(),
+                    found: "not declared in agents.yaml".to_owned(),
+                }
+            })?;
+            // The declaration is the authority over its own source: a lock
+            // recording where the plugin used to come from is the stale
+            // half, so it is overwritten rather than defended.
+            let fetch_source = Self::declared_fetch_source(&canonical, marketplace, declared)?;
+            let request = MarketplaceRequest::of(&fetch_source)?;
+            self.register_marketplace(marketplace, fetch_source, &request.repository.identity)?;
+            self.resolve_into_lock(&mut lock, &stale.plugin, marketplace, &request, authority)?;
+            // Saved per entry, not once at the end: bytes are already in
+            // the Store, and a later failure must not leave the lock
+            // denying what this machine now holds.
+            project_lock::save_lock(&canonical, &lock)?;
+            installed_plugins.push(stale.plugin);
+        }
+
+        // Reproduction second: what the lock records and the Store does
+        // not hold yet — the fresh machine cloning a project.
         let installed_ids = self.installed_plugin_ids();
         let missing: Vec<(String, LockedPlugin)> =
             Self::missing_locked_plugins(&lock, &installed_ids)
                 .into_iter()
                 .map(|(name, locked)| (name.to_owned(), locked.clone()))
                 .collect();
-        if missing.is_empty() {
-            return Ok(InstallReport::NoChanges);
-        }
-
-        let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
-        let mut installed_plugins = Vec::new();
         for (name, locked) in missing {
             // A fresh machine reproducing a cloned `agents.lock` has never
             // run `market add` — `project_environment()`'s own diagnostics
@@ -458,27 +420,29 @@ impl Project<'_> {
             // same-source re-run; a genuinely different source already
             // registered under this name surfaces as `MarketplaceConflict`
             // rather than silently mis-attributing the package.
-            if let PluginSource::Marketplace { marketplace, .. } = &locked.source
-                && marketplace != "uze-official"
-                && let Some(locked_mp) = lock.marketplaces.get(marketplace)
-            {
-                uze_core::state::marketplace_add(
-                    &self.0.home,
-                    marketplace,
-                    PackageSource::from(locked_mp.source.clone()),
-                )?;
-            }
-            let package_source = Self::resolve_locked_plugin_source(&lock, &name, &locked.source)?;
-            let materialized = self.0.plugins().acquire(&package_source)?;
+            let marketplace = locked.marketplace.as_str();
+            let recorded = lock.marketplaces.get(marketplace).ok_or_else(|| {
+                UzeError::MarketplaceMismatch {
+                    plugin: name.clone(),
+                    expected: marketplace.to_owned(),
+                    found: "not declared in lock".to_owned(),
+                }
+            })?;
+            self.register_marketplace(
+                marketplace,
+                PackageSource::Git {
+                    url: recorded.git.clone(),
+                    reference: recorded.r#ref.clone(),
+                    subdirectory: recorded.subdirectory.clone(),
+                },
+                &recorded.git,
+            )?;
+            let materialized = self.reproduce_locked_plugin(recorded, marketplace, &name)?;
             // The pin is checked before the bytes are ingested, let alone
             // delivered to a harness: a moved tag, a rewritten history or a
             // substituted remote must stop here, not be discovered later by
             // reading what an agent was told to do.
             Self::verify_integrity_of(&name, &locked, materialized.root())?;
-            let marketplace = match &locked.source {
-                PluginSource::Marketplace { marketplace, .. } => marketplace.as_str(),
-                PluginSource::Git { .. } => "local",
-            };
             self.0.plugins().install_materialized_from_marketplace(
                 materialized,
                 marketplace,
@@ -490,16 +454,132 @@ impl Project<'_> {
             installed_plugins.push(name);
         }
 
+        if installed_plugins.is_empty() {
+            return Ok(InstallReport::NoChanges);
+        }
         Ok(InstallReport::Installed {
             plugins: installed_plugins,
         })
+    }
+
+    /// Makes sure this machine knows the marketplace, without overruling
+    /// what it already knows.
+    ///
+    /// Identities are compared, not sources: a local clone and the remote
+    /// it came from are the same marketplace, and which of the two this
+    /// machine reads is its own business. A name already pointing at a
+    /// different repository is a conflict only a person can settle.
+    fn register_marketplace(
+        &self,
+        marketplace: &str,
+        source: PackageSource,
+        identity: &str,
+    ) -> Result<()> {
+        if let Some(registered) = uze_core::state::marketplace_get(&self.0.home, marketplace)? {
+            let known = uze_core::acquisition::marketplace::repository_of(&registered.source)?;
+            if known.identity == identity {
+                return Ok(());
+            }
+            return Err(UzeError::MarketplaceConflict {
+                name: marketplace.to_owned(),
+                existing: known.identity,
+                requested: identity.to_owned(),
+            });
+        }
+        uze_core::state::marketplace_add(&self.0.home, marketplace, source)?;
+        Ok(())
+    }
+
+    /// Where a declaration says to read the marketplace from. A relative
+    /// `path:` is resolved against the project root and canonicalized, so
+    /// the source `market add` would have registered and the one a
+    /// manifest produces are the same source — two spellings of one
+    /// directory would otherwise collide as a conflict under one name.
+    fn declared_fetch_source(
+        root: &Path,
+        marketplace: &str,
+        declared: &DeclaredMarketplace,
+    ) -> Result<PackageSource> {
+        if let Some(url) = &declared.git {
+            return Ok(PackageSource::Git {
+                url: url.clone(),
+                reference: declared.r#ref.clone(),
+                subdirectory: declared.subdirectory.clone(),
+            });
+        }
+        let declared_path = declared.path.as_ref().ok_or_else(|| {
+            UzeError::UnknownPackage(format!("marketplace `{marketplace}` declares no source"))
+        })?;
+        let joined = root.join(declared_path);
+        let path = joined
+            .canonicalize()
+            .map_err(|_| UzeError::MissingPath(joined.clone()))?;
+        Ok(PackageSource::Local { path })
+    }
+
+    /// Acquires one plugin from a marketplace already recorded in `lock`,
+    /// installs it, and records what resolution produced. `add` and
+    /// `install` differ in where the declaration came from — a command
+    /// argument or `agents.yaml` — and must not differ in how it resolves.
+    fn resolve_into_lock(
+        &self,
+        lock: &mut ProjectLock,
+        plugin: &str,
+        marketplace: &str,
+        request: &MarketplaceRequest,
+        authority: &dyn TrustAuthority,
+    ) -> Result<AddPluginReport> {
+        let materialized = UzeApplication::materialize_marketplace_plugin_at(
+            &request.repository,
+            request.reference.as_deref(),
+            request.subdirectory.as_deref(),
+            plugin,
+        )?;
+        let report = self.0.plugins().install_materialized_from_marketplace(
+            materialized,
+            marketplace,
+            authority,
+            &[],
+            false,
+            &uze_core::naming::NoNameCollisionAuthority,
+        )?;
+
+        // What actually landed is the source of truth, so both facts are
+        // read back from the Store rather than from the request — the
+        // discipline `Provenance` exists to enforce.
+        let stored = self.0.package_by_name(&report.plugin.id)?;
+        let reproducible = stored.provenance.resolved.lock_revision().is_some();
+        lock.plugins.insert(
+            plugin.to_owned(),
+            LockedPlugin::resolved(marketplace, &stored.root, reproducible),
+        );
+        // The revision belongs to the marketplace, which is the thing that
+        // has one: a plugin is a directory inside it. The entry is written
+        // from what the clone reported, so it cannot exist without the
+        // commit it was read at.
+        let uze_core::acquisition::ResolvedSource::Git { commit, .. } = &stored.provenance.resolved
+        else {
+            return Err(UzeError::AcquisitionFailed(format!(
+                "`{marketplace}` did not resolve to a commit"
+            )));
+        };
+        lock.marketplaces.insert(
+            marketplace.to_owned(),
+            LockedMarketplace {
+                git: request.repository.identity.clone(),
+                r#ref: request.reference.clone(),
+                subdirectory: request.subdirectory.clone(),
+                revision: commit.clone(),
+            },
+        );
+        Ok(report)
     }
 
     /// Refuses bytes that are not the bytes the lock pinned. An entry with
     /// no `integrity` is not checked — a local path has none to record, and
     /// so has nothing to contradict.
     fn verify_integrity_of(plugin: &str, locked: &LockedPlugin, acquired: &Path) -> Result<()> {
-        let Some(expected) = &locked.resolved.integrity else {
+        let Some(expected) = &locked.integrity else {
             return Ok(());
         };
         let found = uze_core::digest::tree_sha256(acquired).map_err(|source| UzeError::Read {
@@ -608,9 +688,6 @@ pub enum InstallReport {
 /// belongs to the type that owns the state rather than to either view.
 impl UzeApplication {
     pub(crate) fn locked_plugin_id(name: &str, locked: &LockedPlugin) -> String {
-        match &locked.source {
-            PluginSource::Marketplace { marketplace, .. } => format!("{name}@{marketplace}"),
-            PluginSource::Git { .. } => format!("{name}@local"),
-        }
+        format!("{name}@{}", locked.marketplace)
     }
 }

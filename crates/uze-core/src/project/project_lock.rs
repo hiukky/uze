@@ -1,8 +1,30 @@
-//! Project desired agent environment lock — `agents.lock`.
+//! Project agent environment lock — `agents.lock`.
+//!
+//! The derived half of the pair [`manifest`] authors. Two rules decide
+//! whether a key belongs in this file:
+//!
+//! 1. **It says something no other line says.** The plugin's name is the
+//!    map key, so it is not also a field; a revision belongs to the
+//!    marketplace that has one, not repeated onto every plugin inside it;
+//!    a field that is permanently empty is not a field.
+//! 2. **It is spelled the way `agents.yaml` spells it.** A marketplace is
+//!    a `git:` or a `path:` in both files. A tagged union rendered into
+//!    YAML (`source: {type: git, url: …}`) is JSON wearing a costume, and
+//!    it makes a reader moving between the two files learn the same thing
+//!    twice.
+//!
+//! What resolution adds to a declaration is exactly two things:
+//! `revision:` — the immutable commit a Git marketplace was read at — and
+//! `integrity:` — a digest of the bytes that landed, recorded only when
+//! those bytes cannot change under it. Everything else in the file was
+//! already in the manifest, and is repeated here only so the lock stands
+//! alone on a machine that has not read one.
 //!
 //! Vendor-neutral, reproducible, Git-versionable. Store/Engine/Integration
 //! never parse this file; only Core's serializer and Application's
 //! project-environment use cases do.
+//!
+//! [`manifest`]: crate::manifest
 
 use std::{
     collections::BTreeMap,
@@ -13,16 +35,22 @@ use std::{
 use noyalib::compat::serde_yaml;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    Result, UzeError,
-    acquisition::{PackageSource, ResolvedSource},
-};
+use crate::{Result, UzeError, acquisition::PackageSource};
 
 pub const SUPPORTED_LOCK_VERSION: u32 = 1;
 pub const LOCK_FILE_NAME: &str = "agents.lock";
 
 /// Top-level lock file.
+///
+/// `version` is the one key here that records nothing about the project.
+/// It earns its place by being what lets a file written by another UZE
+/// fail with a sentence a person can act on instead of a serde message
+/// about an unknown field. It stays at 1 while UZE is pre-release: the
+/// number exists to describe a shape somebody else's UZE might have
+/// written, and until there are released versions to differ, a shape
+/// change is a shape change with nobody downstream to tell.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ProjectLock {
     pub version: u32,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -41,179 +69,149 @@ impl Default for ProjectLock {
     }
 }
 
+/// A marketplace: the repository it is, and the commit this project was
+/// resolved at.
+///
+/// Both are required, so "a marketplace with no pin" cannot be written
+/// down. `git` is an identity another machine can resolve — never the
+/// local checkout somebody happened to read it from, which is a fact about
+/// one machine and belongs in that machine's own registry.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct LockedMarketplace {
-    pub source: MarketplaceSource,
-    #[serde(default, skip_serializing_if = "ResolvedMarketplace::is_empty")]
-    pub resolved: ResolvedMarketplace,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum MarketplaceSource {
-    Git {
-        url: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        reference: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        subdirectory: Option<PathBuf>,
-    },
-    Path {
-        path: PathBuf,
-    },
-    Embedded {
-        id: String,
-    },
-}
-
-impl MarketplaceSource {
-    pub fn display(&self) -> String {
-        match self {
-            Self::Git {
-                url,
-                reference,
-                subdirectory,
-            } => {
-                let mut s = url.clone();
-                if let Some(r) = reference {
-                    s.push('@');
-                    s.push_str(r);
-                }
-                if let Some(sub) = subdirectory {
-                    s.push('#');
-                    s.push_str(&sub.display().to_string());
-                }
-                s
-            }
-            Self::Path { path } => path.display().to_string(),
-            Self::Embedded { id } => format!("embedded:{id}"),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-pub struct ResolvedMarketplace {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub revision: Option<String>,
-}
-
-impl ResolvedMarketplace {
-    pub fn is_empty(&self) -> bool {
-        self.revision.is_none()
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct LockedPlugin {
-    pub source: PluginSource,
-    /// What resolution found. Flattened rather than nested under
-    /// `resolved:` — in a file that holds nothing but resolution, that key
-    /// names the obvious.
-    #[serde(flatten)]
-    pub resolved: ResolvedPlugin,
-    /// What the manifest asked for, echoed so staleness is decidable by
-    /// comparing the two files: no network, no re-resolution. `uv.lock`'s
-    /// `[package.metadata] requires-dist` serves the same purpose.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub requested: Option<RequestedPlugin>,
-}
-
-/// The declaration an entry was resolved from. Only what can change the
-/// resolution lives here — a comment or a key's position in the manifest
-/// cannot, so neither belongs.
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-pub struct RequestedPlugin {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub marketplace: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub git: Option<String>,
+    pub git: String,
+    /// The declared branch or tag, kept because it is what a later resolve
+    /// follows. `revision` is where it pointed when this was written.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub r#ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subdirectory: Option<PathBuf>,
+    pub revision: String,
 }
 
-impl RequestedPlugin {
-    /// The manifest's declaration, reduced to what resolution depends on.
-    /// A declared plugin is a name under a marketplace; `git` and `ref`
-    /// stay for what the lock itself can carry, which is more.
-    pub fn from_marketplace(marketplace: &str) -> Self {
-        Self {
-            marketplace: Some(marketplace.to_owned()),
-            git: None,
-            r#ref: None,
+impl LockedMarketplace {
+    /// Where to read it from to reproduce this entry: the recorded commit,
+    /// never the declared `ref:` — a lock that re-resolved `main` would
+    /// install whatever was pushed since.
+    pub fn pinned_source(&self) -> PackageSource {
+        PackageSource::Git {
+            url: self.git.clone(),
+            reference: Some(self.revision.clone()),
+            subdirectory: self.subdirectory.clone(),
         }
+    }
+
+    /// Whether this entry still answers the declaration it was resolved
+    /// from. `revision` is not part of the question — that is the answer.
+    ///
+    /// A `path:` declaration is compared on everything except the URL: the
+    /// identity of a local checkout is a question for that checkout's Git
+    /// remote, and this comparison is deliberately a pure read of two
+    /// files. Repointing a `path:` at a different repository is therefore
+    /// not staleness anything sees here; `uze add` re-resolves it.
+    pub fn answers(&self, declared: &crate::manifest::DeclaredMarketplace) -> bool {
+        if let Some(url) = &declared.git
+            && &self.git != url
+        {
+            return false;
+        }
+        self.r#ref == declared.r#ref && self.subdirectory == declared.subdirectory
+    }
+
+    pub fn display(&self) -> String {
+        let mut spelled = self.git.clone();
+        if let Some(reference) = &self.r#ref {
+            spelled.push('@');
+            spelled.push_str(reference);
+        }
+        if let Some(subdirectory) = &self.subdirectory {
+            spelled.push('#');
+            spelled.push_str(&subdirectory.display().to_string());
+        }
+        spelled
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum PluginSource {
-    Marketplace {
-        marketplace: String,
-        plugin: String,
-    },
-    Git {
-        url: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        reference: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        subdirectory: Option<PathBuf>,
-    },
-}
-
+/// A plugin: the marketplace that carries it, and a digest of the bytes
+/// that landed. Its own name is the map key, so it is not repeated as a
+/// field, and the revision that reproduces it belongs to the marketplace
+/// above — a directory inside a repository has no revision of its own.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-pub struct ResolvedPlugin {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub revision: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub version: Option<String>,
+#[serde(deny_unknown_fields)]
+pub struct LockedPlugin {
+    pub marketplace: String,
+    /// Recorded only when the bytes cannot change underneath it. A plugin
+    /// from a `path:` marketplace has none — a digest of a directory
+    /// somebody is editing would be wrong by the next command, and a pin
+    /// that is routinely wrong teaches people to ignore pins.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub integrity: Option<String>,
 }
 
-/// One entry's disagreement between what the manifest asks for and what the
-/// lock recorded — the whole of staleness, decided by reading two files.
+impl LockedPlugin {
+    /// The entry for a plugin just resolved. `reproducible` says whether
+    /// the bytes came from an immutable source and may therefore be
+    /// pinned; `root` is where they landed.
+    pub fn resolved(marketplace: &str, root: &Path, reproducible: bool) -> Self {
+        Self {
+            marketplace: marketplace.to_owned(),
+            integrity: reproducible
+                .then(|| crate::digest::tree_sha256(root).ok())
+                .flatten(),
+        }
+    }
+}
+
+/// One declaration the lock no longer answers for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StaleEntry {
     pub plugin: String,
-    pub requested: RequestedPlugin,
-    pub locked: Option<RequestedPlugin>,
+    /// The marketplace `agents.yaml` declares it under.
+    pub marketplace: String,
+    /// The marketplace the lock resolved it from, when it resolved it at
+    /// all — so a message can name both sides of a move.
+    pub locked: Option<String>,
 }
 
 /// Which of the manifest's declarations the lock no longer answers for.
 ///
-/// Deliberately offline and deliberately cheap: it compares `requested`
-/// against the manifest and nothing else. Re-resolving to find out whether a
-/// lock is current would need the network for a question the two files
-/// already answer, and would make `status` fail in a tunnel.
+/// Deliberately offline and deliberately cheap: it compares the two files
+/// and nothing else. Re-resolving to find out whether a lock is current
+/// would need the network for a question the files already answer, and
+/// would make `status` fail in a tunnel.
 ///
-/// A plugin the lock has never seen is stale. A plugin the lock carries with
-/// no `requested` at all is *not* reported: it predates the echo, and calling
-/// it stale would tell every project it is out of date for a reason nobody
-/// can act on.
+/// A declaration is stale when the lock has never resolved it, when it was
+/// resolved from a different marketplace, or when the marketplace it comes
+/// from is declared differently now — a new source, or a `ref:` pointing
+/// somewhere else. A lock entry the manifest no longer declares is not
+/// staleness: it is a removal, which `remove` resolves.
 pub fn stale_against(
     manifest: &crate::manifest::ProjectManifest,
     lock: &ProjectLock,
 ) -> Vec<StaleEntry> {
     let mut stale = Vec::new();
     for (plugin, marketplace) in manifest.declared_plugins() {
-        let requested = RequestedPlugin::from_marketplace(marketplace);
-        match lock.plugins.get(plugin) {
-            None => stale.push(StaleEntry {
-                plugin: plugin.to_owned(),
-                requested,
-                locked: None,
-            }),
-            Some(locked) => {
-                if let Some(recorded) = &locked.requested
-                    && recorded != &requested
-                {
-                    stale.push(StaleEntry {
-                        plugin: plugin.to_owned(),
-                        requested,
-                        locked: Some(recorded.clone()),
-                    });
-                }
-            }
+        let entry = |locked: Option<&str>| StaleEntry {
+            plugin: plugin.to_owned(),
+            marketplace: marketplace.to_owned(),
+            locked: locked.map(str::to_owned),
+        };
+        let Some(locked) = lock.plugins.get(plugin) else {
+            stale.push(entry(None));
+            continue;
+        };
+        if locked.marketplace != marketplace {
+            stale.push(entry(Some(&locked.marketplace)));
+            continue;
+        }
+        let declared = manifest.marketplaces.get(marketplace);
+        let recorded = lock.marketplaces.get(marketplace);
+        let agrees = match (declared, recorded) {
+            (Some(declared), Some(recorded)) => recorded.answers(declared),
+            _ => false,
+        };
+        if !agrees {
+            stale.push(entry(Some(&locked.marketplace)));
         }
     }
     stale
@@ -258,11 +256,42 @@ const REPLACED_KEYS: [(&str, &str); 2] = [
 ];
 
 fn parse_lock_str(text: &str, path: &Path) -> Result<ProjectLock> {
+    // A key written twice is a mistake, not a precedence question — the
+    // same rule the manifest holds. YAML's default is to keep the last,
+    // which would let a second `integrity:` quietly replace the pin.
+    let config = noyalib::ParserConfig::serde_yaml_compat()
+        .duplicate_key_policy(noyalib::DuplicateKeyPolicy::Error);
     let raw: serde_yaml::Value =
-        serde_yaml::from_str(text).map_err(|e| UzeError::MalformedLock {
+        noyalib::from_str_with_config(text, &config).map_err(|e| UzeError::MalformedLock {
             path: path.to_path_buf(),
             reason: e.to_string(),
         })?;
+    // Asked before the schema sees the document, and before the keys that
+    // moved out are looked for: a lock written by another UZE must be
+    // reported as exactly that, not as whichever of its fields this
+    // version happens to notice first.
+    let version = raw
+        .as_mapping()
+        .and_then(|mapping| mapping.get("version"))
+        .and_then(serde_yaml::Value::as_u64);
+    match version {
+        Some(version) if version == u64::from(SUPPORTED_LOCK_VERSION) => {}
+        Some(found) => {
+            return Err(UzeError::UnsupportedLockVersion {
+                found: u32::try_from(found).unwrap_or(u32::MAX),
+                expected: SUPPORTED_LOCK_VERSION,
+            });
+        }
+        None => {
+            return Err(UzeError::MalformedLock {
+                path: path.to_path_buf(),
+                reason: format!(
+                    "no `version:` — every lock carries one, and this one is expected to be \
+                     {SUPPORTED_LOCK_VERSION}"
+                ),
+            });
+        }
+    }
     for (key, why) in REPLACED_KEYS {
         if raw
             .as_mapping()
@@ -278,17 +307,10 @@ fn parse_lock_str(text: &str, path: &Path) -> Result<ProjectLock> {
         }
     }
 
-    let lock: ProjectLock = serde_yaml::from_value(raw).map_err(|e| UzeError::MalformedLock {
+    serde_yaml::from_value(raw).map_err(|e| UzeError::MalformedLock {
         path: path.to_path_buf(),
         reason: e.to_string(),
-    })?;
-    if lock.version != SUPPORTED_LOCK_VERSION {
-        return Err(UzeError::UnsupportedLockVersion {
-            found: lock.version,
-            expected: SUPPORTED_LOCK_VERSION,
-        });
-    }
-    Ok(lock)
+    })
 }
 
 /// Deletes the lock. A lock with nothing left to reproduce is not an empty
@@ -312,10 +334,16 @@ pub fn save_lock(root: &Path, lock: &ProjectLock) -> Result<()> {
     }
     let path = lock_path_for(root);
     // Deterministic YAML: BTreeMap ensures sorted keys, serde_yaml preserves order.
-    let yaml = serde_yaml::to_string(lock).map_err(|e| UzeError::MalformedLock {
+    let mut yaml = serde_yaml::to_string(lock).map_err(|e| UzeError::MalformedLock {
         path: path.clone(),
         reason: e.to_string(),
     })?;
+    // This file is generated and committed: it ends with a newline, like
+    // every other text file in a repository, so appending to it or reading
+    // it in a terminal does not start mid-line.
+    if !yaml.ends_with('\n') {
+        yaml.push('\n');
+    }
     crate::persistence::write_atomic(&path, yaml.as_bytes())
 }
 
@@ -348,83 +376,31 @@ pub fn parse_plugin_marketplace_spec(spec: &str) -> Result<(String, String)> {
     Ok((plugin.to_owned(), marketplace.to_owned()))
 }
 
-impl From<PackageSource> for MarketplaceSource {
-    fn from(value: PackageSource) -> Self {
-        match value {
-            PackageSource::Git {
-                url,
-                reference,
-                subdirectory,
-            } => Self::Git {
-                url,
-                reference,
-                subdirectory,
-            },
-            PackageSource::Local { path } => Self::Path { path },
-            PackageSource::Embedded { id } => Self::Embedded { id },
-        }
-    }
-}
-
-impl From<MarketplaceSource> for PackageSource {
-    fn from(value: MarketplaceSource) -> Self {
-        match value {
-            MarketplaceSource::Git {
-                url,
-                reference,
-                subdirectory,
-            } => Self::Git {
-                url,
-                reference,
-                subdirectory,
-            },
-            MarketplaceSource::Path { path } => Self::Local { path },
-            MarketplaceSource::Embedded { id } => Self::Embedded { id },
-        }
-    }
-}
-
-impl From<ResolvedSource> for ResolvedMarketplace {
-    fn from(value: ResolvedSource) -> Self {
-        Self {
-            revision: value.lock_revision(),
-        }
-    }
-}
-
-impl ResolvedPlugin {
-    /// Builds a lock entry's resolved facts from what acquisition actually
-    /// observed. `version` stays `None` here: nothing in this crate parses
-    /// a plugin manifest's `version` field yet (unlike `revision`, which
-    /// `ResolvedSource` already carries) — a real gap, not silently
-    /// papered over with a fabricated value.
-    pub fn from_resolved_source(resolved: &ResolvedSource) -> Self {
-        Self {
-            revision: resolved.lock_revision(),
-            version: None,
-            integrity: None,
-        }
-    }
-
-    /// Records the digest of the bytes actually ingested. A source with no
-    /// stable bytes — a local path someone is editing — records none rather
-    /// than a value that would be wrong by the next command.
-    pub fn with_integrity_of(mut self, root: &Path, reproducible: bool) -> Self {
-        if reproducible {
-            self.integrity = crate::digest::tree_sha256(root).ok();
-        }
-        self
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::PathBuf;
 
+    fn locked(marketplace: &str) -> LockedPlugin {
+        LockedPlugin {
+            marketplace: marketplace.to_owned(),
+            integrity: None,
+        }
+    }
+
     mod staleness {
         use super::*;
         use crate::manifest::{DeclaredMarketplace, ProjectManifest};
+
+        fn declared(marketplace: &str) -> DeclaredMarketplace {
+            DeclaredMarketplace {
+                git: Some(format!("https://example.invalid/{marketplace}")),
+                path: None,
+                r#ref: None,
+                subdirectory: None,
+                plugins: Vec::new(),
+            }
+        }
 
         /// The declarations, grouped the way the manifest groups them: the
         /// marketplace carries the plugins, so what a declaration can differ
@@ -435,56 +411,45 @@ mod tests {
                 manifest
                     .marketplaces
                     .entry((*marketplace).to_owned())
-                    .or_insert_with(|| DeclaredMarketplace {
-                        git: Some(format!("https://example.invalid/{marketplace}")),
-                        path: None,
-                        r#ref: None,
-                        subdirectory: None,
-                        plugins: Vec::new(),
-                    })
+                    .or_insert_with(|| declared(marketplace))
                     .plugins
                     .push((*name).to_owned());
             }
             manifest
         }
 
-        fn lock(entries: &[(&str, &str, bool)]) -> ProjectLock {
+        /// The lock the manifest above resolves to, so a test changes one
+        /// thing at a time rather than starting from disagreement.
+        fn lock(entries: &[(&str, &str)]) -> ProjectLock {
             let mut lock = ProjectLock::default();
-            for (name, marketplace, echoed) in entries {
-                lock.plugins.insert(
-                    (*name).to_owned(),
-                    LockedPlugin {
-                        source: PluginSource::Marketplace {
-                            marketplace: (*marketplace).to_owned(),
-                            plugin: (*name).to_owned(),
-                        },
-                        resolved: ResolvedPlugin::default(),
-                        requested: echoed.then(|| RequestedPlugin::from_marketplace(marketplace)),
+            for (name, marketplace) in entries {
+                lock.marketplaces.insert(
+                    (*marketplace).to_owned(),
+                    LockedMarketplace {
+                        git: format!("https://example.invalid/{marketplace}"),
+                        r#ref: None,
+                        subdirectory: None,
+                        revision: "abc123".to_owned(),
                     },
                 );
+                lock.plugins.insert((*name).to_owned(), locked(marketplace));
             }
             lock
         }
 
         #[test]
         fn a_lock_answering_the_manifest_is_current() {
-            let stale = stale_against(&manifest(&[("flow", "ai")]), &lock(&[("flow", "ai", true)]));
+            let stale = stale_against(&manifest(&[("flow", "ai")]), &lock(&[("flow", "ai")]));
             assert!(stale.is_empty(), "{stale:?}");
         }
 
         #[test]
         fn a_plugin_taken_from_a_different_marketplace_is_stale_and_names_both() {
-            let stale = stale_against(
-                &manifest(&[("flow", "mirror")]),
-                &lock(&[("flow", "ai", true)]),
-            );
+            let stale = stale_against(&manifest(&[("flow", "mirror")]), &lock(&[("flow", "ai")]));
             assert_eq!(stale.len(), 1);
             assert_eq!(stale[0].plugin, "flow");
-            assert_eq!(stale[0].requested.marketplace.as_deref(), Some("mirror"));
-            assert_eq!(
-                stale[0].locked.as_ref().unwrap().marketplace.as_deref(),
-                Some("ai")
-            );
+            assert_eq!(stale[0].marketplace, "mirror");
+            assert_eq!(stale[0].locked.as_deref(), Some("ai"));
         }
 
         #[test]
@@ -494,24 +459,37 @@ mod tests {
             assert!(stale[0].locked.is_none());
         }
 
-        /// An entry written before the echo existed must not report every
-        /// project as out of date for a reason nobody can act on.
+        /// The declaration moving is the whole question: a `ref:` pointing
+        /// somewhere else resolves to different bytes, so the entry that
+        /// answered the old one no longer answers this.
         #[test]
-        fn an_entry_with_no_echo_is_not_called_stale() {
-            let stale = stale_against(
-                &manifest(&[("flow", "mirror")]),
-                &lock(&[("flow", "ai", false)]),
-            );
-            assert!(stale.is_empty(), "{stale:?}");
+        fn a_marketplace_declared_differently_makes_its_plugins_stale() {
+            let mut manifest = manifest(&[("flow", "ai")]);
+            manifest.marketplaces.get_mut("ai").unwrap().r#ref = Some("v2".to_owned());
+            let stale = stale_against(&manifest, &lock(&[("flow", "ai")]));
+            assert_eq!(stale.len(), 1, "{stale:?}");
+            assert_eq!(stale[0].plugin, "flow");
         }
 
         /// A plugin in the lock the manifest no longer declares is not
-        /// staleness: it is a removal the next write resolves.
+        /// staleness: it is a removal `remove` resolves.
         #[test]
         fn a_lock_entry_the_manifest_dropped_is_not_reported_here() {
-            let stale = stale_against(&manifest(&[]), &lock(&[("flow", "ai", true)]));
+            let stale = stale_against(&manifest(&[]), &lock(&[("flow", "ai")]));
             assert!(stale.is_empty(), "{stale:?}");
         }
+    }
+
+    #[test]
+    fn a_saved_lock_ends_with_a_newline() {
+        let root = std::env::temp_dir().join(format!("uze-lock-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let mut lock = ProjectLock::default();
+        lock.plugins.insert("flow".to_owned(), locked("ai"));
+        save_lock(&root, &lock).unwrap();
+        let written = fs::read_to_string(lock_path_for(&root)).unwrap();
+        fs::remove_dir_all(&root).ok();
+        assert!(written.ends_with('\n'), "{written:?}");
     }
 
     #[test]
@@ -524,37 +502,58 @@ mod tests {
         assert_eq!(m, "ai");
     }
 
+    /// The whole file, spelled out. This is the contract, so it is asserted
+    /// as text rather than as a round trip: a reader must be able to see
+    /// that nothing here is said twice, and a change to the shape must
+    /// change this test. (The final newline is `save_lock`'s, not the
+    /// serializer's — `a_saved_lock_ends_with_a_newline` covers it.)
+    #[test]
+    fn the_lock_says_each_thing_once() {
+        let mut lock = ProjectLock::default();
+        lock.marketplaces.insert(
+            "ai".to_owned(),
+            LockedMarketplace {
+                git: "https://github.com/hiukky/ai".to_owned(),
+                r#ref: Some("main".to_owned()),
+                subdirectory: None,
+                revision: "abc123".to_owned(),
+            },
+        );
+        lock.plugins.insert(
+            "flow".to_owned(),
+            LockedPlugin {
+                marketplace: "ai".to_owned(),
+                integrity: Some("sha256:def456".to_owned()),
+            },
+        );
+        assert_eq!(
+            serde_yaml::to_string(&lock).unwrap(),
+            "version: 1\n\
+             marketplaces:\n\
+             \x20 ai:\n\
+             \x20   git: https://github.com/hiukky/ai\n\
+             \x20   ref: main\n\
+             \x20   revision: abc123\n\
+             plugins:\n\
+             \x20 flow:\n\
+             \x20   marketplace: ai\n\
+             \x20   integrity: sha256:def456"
+        );
+    }
+
     #[test]
     fn lock_round_trips_deterministically() {
         let mut lock = ProjectLock::default();
         lock.marketplaces.insert(
             "ai".to_owned(),
             LockedMarketplace {
-                source: MarketplaceSource::Git {
-                    url: "https://github.com/hiukky/ai.git".to_owned(),
-                    reference: None,
-                    subdirectory: None,
-                },
-                resolved: ResolvedMarketplace {
-                    revision: Some("abc123".to_owned()),
-                },
+                git: "https://github.com/hiukky/ai.git".to_owned(),
+                r#ref: None,
+                subdirectory: None,
+                revision: "abc123".to_owned(),
             },
         );
-        lock.plugins.insert(
-            "flow".to_owned(),
-            LockedPlugin {
-                source: PluginSource::Marketplace {
-                    marketplace: "ai".to_owned(),
-                    plugin: "flow".to_owned(),
-                },
-                resolved: ResolvedPlugin {
-                    revision: Some("abc123".to_owned()),
-                    version: Some("0.3.1".to_owned()),
-                    integrity: None,
-                },
-                requested: None,
-            },
-        );
+        lock.plugins.insert("flow".to_owned(), locked("ai"));
         let yaml = serde_yaml::to_string(&lock).unwrap();
         let parsed: ProjectLock = serde_yaml::from_str(&yaml).unwrap();
         assert_eq!(parsed, lock);
@@ -571,6 +570,24 @@ mod tests {
             err,
             UzeError::UnsupportedLockVersion { found: 99, .. }
         ));
+    }
+
+    /// Pre-release, a shape change does not move the version — there is
+    /// no released UZE downstream to tell apart — so a lock in the earlier
+    /// shape is refused by its fields rather than by its number.
+    #[test]
+    fn a_lock_in_an_earlier_shape_is_refused() {
+        let older = "version: 1
+plugins:
+  flow:
+    source:
+      type: marketplace
+      marketplace: ai
+      plugin: flow
+    resolved: {}
+";
+        let error = parse_lock_str(older, &PathBuf::from("agents.lock")).unwrap_err();
+        assert!(matches!(error, UzeError::MalformedLock { .. }), "{error:?}");
     }
 
     #[test]
@@ -609,16 +626,19 @@ worktrees:
         }
     }
 
-    /// The complement, and the reason the check above is scoped to the
-    /// policy: a lock written by a newer UZE must still load on an older
-    /// one, so the top level tolerates keys it does not know.
+    /// A key nothing here understands is refused, at every level. The
+    /// alternative — tolerating it for forward compatibility — cannot be
+    /// right for this file: the version already says whether UZE can read
+    /// it, and a lock is regenerated rather than preserved, so quietly
+    /// ignoring a key that might have mattered buys nothing.
     #[test]
-    fn an_unknown_key_at_the_top_level_is_tolerated() {
-        let lock = parse_lock_str(
+    fn a_key_this_uze_does_not_understand_is_refused() {
+        for spelled in [
             "version: 1\nsomething_from_a_newer_uze: true\n",
-            &PathBuf::from("agents.lock"),
-        )
-        .expect("the lock stays forward-compatible");
-        assert_eq!(lock.version, SUPPORTED_LOCK_VERSION);
+            "version: 1\nplugins:\n  flow:\n    marketplace: ai\n    signature: nope\n",
+        ] {
+            let err = parse_lock_str(spelled, &PathBuf::from("agents.lock")).unwrap_err();
+            assert!(matches!(err, UzeError::MalformedLock { .. }), "{spelled}");
+        }
     }
 }

@@ -16,14 +16,12 @@ impl Marketplace<'_> {
     /// source under the same name is a `MarketplaceConflict` error.
     pub fn add(&self, source_str: &str) -> Result<bool> {
         let source = UzeApplication::parse_marketplace_source(source_str)?;
-        let (marketplace_root, manifest) = UzeApplication::load_marketplace_manifest(&source)?;
+        let (_checkout, manifest) = UzeApplication::load_marketplace_manifest(&source)?;
         let name = manifest.name.clone();
         if name == "uze-official" {
             return Err(UzeError::ReservedMarketplace(name));
         }
-        let added = uze_core::state::marketplace_add(&self.0.home, &name, source)?;
-        let _ = (marketplace_root, manifest);
-        Ok(added)
+        uze_core::state::marketplace_add(&self.0.home, &name, source)
     }
 
     pub fn remove(&self, name: &str) -> Result<()> {
@@ -103,18 +101,9 @@ impl Marketplace<'_> {
             .ok_or_else(|| {
                 UzeError::UnknownPackage(format!("marketplace `{marketplace_name}` not found"))
             })?;
-        let (marketplace_root, manifest) =
-            UzeApplication::load_marketplace_manifest(&record.source)?;
-        let plugin_source = uze_core::acquisition::marketplace::resolve_plugin_source(
-            &manifest,
-            &plugin_name,
-            &marketplace_root,
-        )?;
-        let source = PackageSource::Local {
-            path: plugin_source,
-        };
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
-        let materialized = self.0.plugins().acquire(&source)?;
+        let materialized =
+            UzeApplication::materialize_marketplace_plugin(&record.source, &plugin_name)?;
         let report = self.0.plugins().install_materialized_from_marketplace(
             materialized,
             &marketplace_name,
@@ -204,16 +193,7 @@ impl Marketplace<'_> {
                 uze_core::state::marketplace_get(&self.0.home, marketplace)?.ok_or_else(|| {
                     UzeError::UnknownPackage(format!("marketplace `{marketplace}` not found"))
                 })?;
-            let (marketplace_root, manifest) =
-                UzeApplication::load_marketplace_manifest(&record.source)?;
-            let plugin_source = uze_core::acquisition::marketplace::resolve_plugin_source(
-                &manifest,
-                name,
-                &marketplace_root,
-            )?;
-            uze_core::acquisition::acquire(&PackageSource::Local {
-                path: plugin_source,
-            })?
+            UzeApplication::materialize_marketplace_plugin(&record.source, name)?
         };
         let inspected = uze_core::acquisition::inspect_capabilities(&materialized)?;
         Ok(MarketplacePluginDetail {

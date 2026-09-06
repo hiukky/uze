@@ -75,9 +75,18 @@ pub enum UzeError {
          prompt. Re-run with an explicit trust flag after reviewing: {detail}"
     )]
     TrustRequired { package: String, detail: String },
+    #[error(
+        "`{path}` is not a Git repository with a commit. A marketplace is a Git repository, \
+         local or remote: its commits are what tell UZE whether the bytes it installed are \
+         still the bytes there, and whether anything newer exists."
+    )]
+    MarketplaceNotARepository { path: PathBuf },
     #[error("unknown UZE package `{0}`")]
     UnknownPackage(String),
-    #[error("unsupported agents.lock version {found}; expected {expected}")]
+    #[error(
+        "agents.lock is version {found}, and this UZE writes {expected}. The lock is generated \
+         and carries nothing you wrote: delete it and run `uze install`."
+    )]
     UnsupportedLockVersion { found: u32, expected: u32 },
     #[error("no task `{0}` is recorded for this repository")]
     UnknownTask(String),

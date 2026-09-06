@@ -1822,6 +1822,18 @@ fn no_workspace_render_creates_nothing() {
     std::fs::remove_dir_all(&base).ok();
 }
 
+/// The real `git` on the ambient PATH, for a test that isolates PATH but
+/// still needs to clone a marketplace.
+fn which_git() -> std::path::PathBuf {
+    std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|directory| directory.join("git"))
+        .find(|candidate| candidate.is_file())
+        .expect("git must be on PATH for this test")
+}
+
 #[test]
 fn overview_install_intent_reaches_install_project_environment() {
     use std::sync::mpsc;
@@ -1846,32 +1858,27 @@ fn overview_install_intent_reaches_install_project_environment() {
     .unwrap();
     std::fs::write(market.join("flow/plugin.json"), r#"{"name":"flow"}"#).unwrap();
     std::fs::write(market.join("flow/skills/uze-test/SKILL.md"), "# s\n").unwrap();
+    let revision = uze_testkit::git::commit_everything_in(&market);
     let lock = uze_core::project_lock::ProjectLock {
-        version: 1,
         marketplaces: std::iter::once((
             "test".to_owned(),
             uze_core::project_lock::LockedMarketplace {
-                source: uze_core::project_lock::MarketplaceSource::Path { path: market },
-                resolved: uze_core::project_lock::ResolvedMarketplace::default(),
+                git: market.display().to_string(),
+                r#ref: None,
+                subdirectory: None,
+                revision,
             },
         ))
         .collect(),
         plugins: std::iter::once((
             "flow".to_owned(),
             uze_core::project_lock::LockedPlugin {
-                source: uze_core::project_lock::PluginSource::Marketplace {
-                    marketplace: "test".to_owned(),
-                    plugin: "flow".to_owned(),
-                },
-                resolved: uze_core::project_lock::ResolvedPlugin {
-                    revision: None,
-                    version: None,
-                    integrity: None,
-                },
-                requested: None,
+                marketplace: "test".to_owned(),
+                integrity: None,
             },
         ))
         .collect(),
+        ..Default::default()
     };
     uze_core::project_lock::save_lock(&project, &lock).unwrap();
 
@@ -1888,8 +1895,12 @@ fn overview_install_intent_reaches_install_project_environment() {
     // itself expecting Claude Code's CLI and gets `uze`'s own `--help`
     // usage back. Every harness must read as absent here, matching a
     // clean machine.
+    // Git alone, since a marketplace is a Git repository and installing
+    // from one clones it. Everything else must read as absent.
     let empty_path_dir = base.join("empty-path");
     std::fs::create_dir_all(&empty_path_dir).unwrap();
+    let git = which_git();
+    std::os::unix::fs::symlink(&git, empty_path_dir.join("git")).unwrap();
     environment.set("PATH", &empty_path_dir);
 
     let uze_home = UzeHome::at(&home);

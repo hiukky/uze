@@ -1,20 +1,100 @@
 //! `marketplace.json` — the contract a marketplace root answers "which
 //! plugins exist here, and where" with.
 //!
-//! This module is a pure, deterministic, offline primitive: it reads a
-//! manifest and resolves a plugin name against a directory already present
-//! on disk. It has no opinion on *how* that directory got there — embedded
-//! snapshot, Git checkout, or a local path someone typed are all the same
-//! marketplace root to this code, exactly as `PackageSource` keeps the
-//! acquisition *mechanism* orthogonal to what gets acquired. Nothing here
-//! names a specific plugin; adding one to `marketplace.json` and its
-//! directory under the root is the entire integration surface.
+//! Reading a manifest and resolving a plugin name against a directory is a
+//! pure, deterministic, offline primitive, and has no opinion on how that
+//! directory got there. Nothing here names a specific plugin; adding one to
+//! `marketplace.json` and its directory under the root is the entire
+//! integration surface.
+//!
+//! # A marketplace is a Git repository
+//!
+//! [`repository_of`] is the one thing in this module that is not pure, and
+//! it is here because it states what a marketplace *is*: a Git repository,
+//! whether it is a URL or a directory on this machine. Not because Git is
+//! how the bytes travel — a plain directory would do that — but because a
+//! commit is the only thing that answers the two questions a distribution
+//! layer exists to answer: *are these the same bytes I installed?* and *is
+//! there something newer?* A directory answers neither; the best it can do
+//! is a timestamp, which says when UZE last looked rather than whether
+//! anything changed.
+//!
+//! A local checkout is therefore not a lesser kind of marketplace. It is
+//! the same kind, read from a clone that happens to be on this disk, and
+//! it pins exactly as well.
 
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::error::{Result, UzeError};
+use crate::{
+    acquisition::PackageSource,
+    error::{Result, UzeError},
+};
+
+/// Where a marketplace is read from, and what it is called elsewhere.
+///
+/// The two differ for a local clone: `fetch` is the directory on this
+/// machine, and `identity` is the URL another machine resolves the same
+/// repository by. A lock records the identity — a path only this machine
+/// has is not something a project can be reproduced from — while the
+/// machine that has the clone keeps reading it locally.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MarketplaceRepository {
+    pub fetch: String,
+    pub identity: String,
+}
+
+/// The repository behind a marketplace source, refusing anything that is
+/// not one.
+///
+/// A local directory must be a Git work tree with at least one commit. Its
+/// identity is `origin` when it has one — the URL a teammate would clone —
+/// and otherwise the checkout's own absolute path, which is still a valid
+/// Git URL and is honest about resolving nowhere else.
+pub fn repository_of(source: &PackageSource) -> Result<MarketplaceRepository> {
+    match source {
+        PackageSource::Git { url, .. } => Ok(MarketplaceRepository {
+            fetch: url.clone(),
+            identity: url.clone(),
+        }),
+        PackageSource::Local { path } => {
+            let toplevel =
+                git_answer(path, &["rev-parse", "--show-toplevel"]).ok_or_else(|| {
+                    UzeError::MarketplaceNotARepository {
+                        path: path.to_path_buf(),
+                    }
+                })?;
+            // A repository with no commit has no revision to pin and
+            // nothing to compare a later one against.
+            if git_answer(path, &["rev-parse", "HEAD"]).is_none() {
+                return Err(UzeError::MarketplaceNotARepository {
+                    path: path.to_path_buf(),
+                });
+            }
+            let identity = git_answer(path, &["remote", "get-url", "origin"])
+                .unwrap_or_else(|| toplevel.clone());
+            Ok(MarketplaceRepository {
+                fetch: toplevel,
+                identity,
+            })
+        }
+        PackageSource::Embedded { id } => Err(UzeError::AcquisitionFailed(format!(
+            "`{id}` is built into UZE and is not a repository"
+        ))),
+    }
+}
+
+/// One Git question with a single-line answer, or `None` when Git said no.
+/// Every caller here is asking something whose absence is an answer — not
+/// a repository, no commit yet, no remote — so a non-zero exit is not an
+/// error to propagate.
+fn git_answer(root: &Path, args: &[&str]) -> Option<String> {
+    let output = uze_git::read(root, args).ok()?;
+    let stdout = output.successful().ok()?;
+    let answer = stdout.trim();
+    (!answer.is_empty()).then(|| answer.to_owned())
+}
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct MarketplaceManifest {
