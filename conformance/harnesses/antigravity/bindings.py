@@ -70,6 +70,15 @@ class AntigravityBindings(Bindings):
         """Antigravity names a Skill by its namespaced invocation label."""
         return f"flow:{skill}" in catalog.replace(" ", "")
 
+    def invoke(self, tui, skill):
+        """Antigravity invokes a Skill as a slash command on its label."""
+        tui.type(f"/flow:{skill}")
+        time.sleep(1.2)
+        tui.submit()
+        time.sleep(1.0)
+        tui.submit()
+        return tui.collect(reads=10)
+
     def mcp_inventory(self, tui):
         """`/mcp` lists every configured server and enumerates its tools."""
         tui.child.send("/")

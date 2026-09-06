@@ -147,6 +147,30 @@ memory or a doc older than it.
 - [ ] 9c.4 **opencode hooks (`hooks-deny-v2-limitation`, `hooks-order-v2-limitation`) — the premise is contradicted and unresolved.** UZE's own evidence string says "the V2 tool hooks carry the tool input but no block signal", and the registry follows it. The current spec says `tool.execute.before` receives `event.input` and "can prevent execution by throwing an error", and the binary registers exactly that API (`ctx.tool.hook("execute.before", …)`; `permission.evaluate` does not appear in it at all, though the registry cites it). Deciding this needs an experiment — a plugin that throws in `execute.before` against a scripted call — and, if it denies, a change to the bridge's deny semantics, which is a product change rather than a Lab adjustment. Four registry entries hang off it: the two above plus the `hooks-*-tool-executed` pair.
 - [ ] 9c.5 **opencode `mcp-tool-executed-in-tui` — untouched.** The scripted call is answered `Unknown tool: uze-mcp-conformance-uze-conformance_uze_conformance`. Whether that name is what the runtime exposes was not established; the struct summary records no declared-tool list for this harness, so it needs a `--discovery` capture read against the request's own tool declarations. The scenario already self-promotes the moment a real proof marker comes back, so no Lab change is pending on it — only the finding.
 
+## 9d. Conformance measures invocation, not listing (2026-09-06)
+
+Asked how the suite covered Skill invocation on OpenCode, the answer was:
+it did not, anywhere. Across all four harnesses the only user-side checks
+were `skill-default-is-user-invocable` and `skill-user-only-is-user-invocable`,
+both `bindings.lists(catalog, name)` — a substring on a screen. They would
+have read the same if a harness changed its invocation syntax underneath,
+and one had: OpenCode V2 moved from `/name` to `@name` and nothing noticed.
+`contract/skill.py` even declared an `INVOKED_MARKER` that nothing used,
+and it was `UZE_CONFORMANCE_PASS` — the provider's canned final text, which
+any settled turn produces. A check built on it would have passed on an
+empty turn.
+
+- [x] 9d.1 Each fixture Skill body ends with its own marker (`UZE_SKILL_BODY_<NAME>`). A catalog carries a Skill's name and description; its body reaches the model only once the harness expanded it, which is what invoking does. Neither a listing nor the provider can produce one by accident.
+- [x] 9d.2 `contract/skill.py::_assert_invocation` types what that harness's own user types and then reads the request: `skill-default-is-invocable`, `skill-user-only-is-invocable`, and `skill-model-only-is-not-invocable` gated on the first, so "the policy worked" cannot be confused with "no invocation works at all".
+- [x] 9d.3 Each binding carries its harness's real syntax — `/flow:commit` (Claude, Antigravity), `$flow:commit` (Codex), `@flow:commit` (OpenCode). The last was measured, not remembered.
+- [x] 9d.4 The invocation phase runs on its own provider and leaves a clean one behind. Invoking a Skill puts that Skill in a request by design, which turned a passing `user-only-skill-hidden-from-model` red without the harness having changed at all.
+- [x] 9d.5 Evidence is awaited rather than sampled (`_await_marker`): a request lands when the harness sends it, not when the driver stops reading the screen.
+- [x] 9d.6 **A false Native, found and corrected.** `@flow:analyze` — a Skill declaring `user: false`, delivered with `slash: false` — put its body in the model's request. OpenCode V2 invokes by mention as well as by `/id`, and `slash` gates only the second, so a Skill withheld from the `/` catalog is still invocable. UZE claimed `Native` for that policy; it is now `Adaptable` with the degradation stated, and `tests/integrations/harness/opencode.rs` requires the evidence to name it.
+- [x] 9d.7 Codex declines `model-only-is-not-invocable` on its own documented limitation — with `policy.allow_implicit_invocation: false`, explicit `$skill` invocation still works — which the check measured independently. The product already routed it as Degraded.
+- [x] 9d.8 Two of the failures were mine, and the machine caught both: a mangled marker list made Claude's provider look for `initUZE_SKILL_BODY_COMMIT` (the `--discovery` capture showed the body 303 bytes after `<command-name>/flow:commit</command-name>` in the same request — Claude had always expanded it), and registering a binding declaration in `expected.json` escalated correctly, since the registry is for scenario `adapted` results and a binding's `adapt` needs no entry.
+- [x] 9d.9 Primary-source research settled the design: all four harnesses expand a Skill body **client-side**, so a static provider suffices and no `toolcall` mode was needed. Claude injects `<command-name>` plus the body; Codex a `<skill><name/><path/>body</skill>` user item; OpenCode expands the mention in `SessionPrompt.prepare`; Antigravity formats `<SKILL>The user has explicitly invoked…</SKILL>`.
+- [x] 9d.10 Results: claude 35/35 asserted (0 ADAPTED), codex 47/47 (0 ADAPTED), antigravity's skill group clean, opencode skill 8/8.
+
 ## 10. Creation and discoverability (added 2026-09-05)
 
 Reframed from the original amendment: nothing is created on arrival.

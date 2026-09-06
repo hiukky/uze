@@ -39,6 +39,23 @@ class OpenCodeBindings(Bindings):
         """OpenCode names a Skill by its qualified invocation label."""
         return f"flow:{skill}" in catalog.replace(" ", "")
 
+    def invoke(self, tui, skill):
+        """OpenCode V2 invokes a Skill as a **mention**, not a slash command.
+
+        Measured on beta-19192: the picker renders skills as `"@" + id` and
+        selects them as `{type: "skill", value: {id, mention}}`, and the
+        prompt payload carries `skills` as mentions beside `files` and
+        `agents`. Typing `/flow:commit` here would prove nothing about this
+        harness, which is exactly the confusion a listing-only check let
+        stand.
+        """
+        tui.type(f"@flow:{skill}")
+        time.sleep(1.2)
+        tui.submit()
+        time.sleep(1.0)
+        tui.submit()
+        return tui.collect(reads=10)
+
     def mcp_inventory(self, tui):
         """`/mcps` — plural here — opens the MCP toggle surface.
 
@@ -77,6 +94,19 @@ class OpenCodeBindings(Bindings):
                 "OpenCode honours `slash: false` in its `/` palette builders but "
                 "its `/skills` browser lists every delivered Skill regardless; "
                 "the property is not observable on the surface read here"
+            )
+        if prop == "model-only-is-not-invocable":
+            # Measured, not assumed: the invocation check typed
+            # `@flow:analyze` and its body reached the model. V2 has two
+            # explicit paths and `slash` gates only one — the picker offers
+            # every discovered Skill as `@id`, and `SessionPrompt.prepare`
+            # expands a mentioned Skill whatever its `slash` value. UZE's
+            # own route for `invoke.user: false` was moved to Adaptable on
+            # the same evidence.
+            return (
+                "OpenCode V2 invokes a Skill by mention (`@id`) as well as by "
+                "`/id`, and `slash: false` gates only the second: a Skill "
+                "withheld from the `/` catalog is still invocable by mention"
             )
         return None
 

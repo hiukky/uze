@@ -63,6 +63,12 @@ SKILL_MARKERS = [
     "init",
     "North Star",
     "Review code",
+    # A Skill's *body* reaches the model only when the Skill was
+    # invoked — a listing carries name and description alone. These are
+    # what tell an invocation from an offer.
+    "UZE_SKILL_BODY_COMMIT",
+    "UZE_SKILL_BODY_REVIEW",
+    "UZE_SKILL_BODY_ANALYZE",
 ]
 # Conformance evidence markers carried by portable-hook denial reasons
 # (ADR-033): presence/absence in the structural summary proves what the real

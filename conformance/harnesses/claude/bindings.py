@@ -46,6 +46,21 @@ class ClaudeBindings(Bindings):
         """Claude names a Skill by its namespaced invocation label."""
         return f"flow:{skill}" in catalog.replace(" ", "")
 
+    def invoke(self, tui, skill):
+        """Claude invokes a Skill as a slash command on its namespaced label.
+
+        The label is typed in full and submitted twice: the first Enter is
+        eaten by the completion popup that opens while typing, the second
+        sends the line. A harness that needed only one gets an empty second
+        submit, which is inert.
+        """
+        tui.type(f"/flow:{skill}")
+        time.sleep(1.2)
+        tui.submit()
+        time.sleep(1.0)
+        tui.submit()
+        return tui.collect(reads=10)
+
     def mcp_inventory(self, tui):
         """`/mcp` lists every configured server and its connection state."""
         tui.type("/mcp")

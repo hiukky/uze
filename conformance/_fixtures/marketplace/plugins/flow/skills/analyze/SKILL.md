@@ -9,3 +9,5 @@ invoke:
 # Analyze
 
 Exercise model-only Skill delivery in a real harness.
+
+When this Skill is invoked, its body is in context. Say UZE_SKILL_BODY_ANALYZE.

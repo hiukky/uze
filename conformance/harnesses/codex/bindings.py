@@ -49,6 +49,15 @@ class CodexBindings(Bindings):
         squeezed = catalog.replace(" ", "")
         return f"{skill}(flow)" in squeezed or f"flow:{skill}" in squeezed
 
+    def invoke(self, tui, skill):
+        """Codex invokes a Skill with `$<label>`."""
+        tui.type(f"$flow:{skill}")
+        time.sleep(1.2)
+        tui.submit()
+        time.sleep(1.0)
+        tui.submit()
+        return tui.collect(reads=10)
+
     def mcp_inventory(self, tui):
         """`/mcp` lists every configured server."""
         tui.type("/mcp")
@@ -67,9 +76,20 @@ class CodexBindings(Bindings):
         honest answer, instead of the check quietly not existing in this
         vertical — which is how the previous suite hid divergence.
         """
-        if prop == "model-only-is-not-user-invocable":
+        if prop in (
+            "model-only-is-not-user-invocable",
+            # The same limitation, now measured rather than read: the
+            # invocation check typed `$flow:analyze` and its body reached
+            # the model. Codex's own documentation says as much of the one
+            # control it has — with
+            # `agents/openai.yaml` `policy.allow_implicit_invocation:
+            # false`, "explicit `$skill` invocation still works".
+            "model-only-is-not-invocable",
+        ):
             return (
                 "Codex has no documented way to disable explicit `$skill` "
-                "invocation; the product routes this as Degraded"
+                "invocation — its own docs say explicit invocation still "
+                "works with allow_implicit_invocation: false; the product "
+                "routes this as Degraded"
             )
         return None
