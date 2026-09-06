@@ -1811,6 +1811,33 @@ mod workspace_tests {
         }
     }
 
+    /// Two agents in one space, the first of them selected: `Agent` in
+    /// `first`, `Second` in `second`. The second resolves by its pane's
+    /// process rather than its label, so the two never answer to the same
+    /// row search.
+    fn two_agent_session(first: &str, second: &str) -> WorkspaceModel {
+        let mut model = agent_session_in(first);
+        let space = &mut model.session.as_mut().unwrap().workspace.spaces[0];
+        let mut tab = space.tabs[0].clone();
+        tab.id = TabId(2);
+        tab.label = "Second".into();
+        tab.layout = Layout::Pane(Pane {
+            id: PaneId(2),
+            cwd: second.into(),
+            columns: 80,
+            rows: 24,
+            process: "agent".to_owned(),
+        });
+        tab.focus = Focus { pane: PaneId(2) };
+        space.tabs.push(tab);
+        model
+    }
+
+    /// Moves the keystrokes to the second agent [`two_agent_session`] built.
+    fn select_second_agent(model: &mut WorkspaceModel) {
+        model.session.as_mut().unwrap().workspace.spaces[0].selected_tab = TabId(2);
+    }
+
     /// A session whose one space is rooted at `root` — a real directory,
     /// so the picker and the client compare the same canonical path.
     fn session_rooted_at(root: &Path) -> WorkspaceModel {
@@ -2594,19 +2621,19 @@ mod workspace_tests {
         terminal.backend().buffer().clone()
     }
 
-    /// The foreground the agent's caption — the row under its name — is
-    /// drawn in, checked to be captioning `text`.
-    fn caption_color_of(model: &WorkspaceModel, text: &str) -> Color {
+    /// The foreground the caption under the agent labelled `agent` — the
+    /// row beneath its name — is drawn in, checked to be captioning `text`.
+    fn caption_color_of(model: &WorkspaceModel, agent: &str, text: &str) -> Color {
         let buffer = sidebar_buffer(model, &mut Vec::new());
         let rows = sidebar_rows(model, &mut Vec::new());
         let row = rows
             .iter()
-            .position(|row| row.contains("Agent"))
-            .expect("the agent is named in the tree")
+            .position(|row| row.contains(agent))
+            .unwrap_or_else(|| panic!("{agent} is named in the tree: {rows:?}"))
             + 1;
         let offset = rows[row]
             .find(text)
-            .unwrap_or_else(|| panic!("{text} captions the agent: {rows:?}"));
+            .unwrap_or_else(|| panic!("{text} captions {agent}: {rows:?}"));
         // A byte offset is not a column once the caption holds small caps
         // or subscript digits: one cell, several bytes.
         let column = rows[row][..offset].chars().count();
@@ -2620,16 +2647,6 @@ mod workspace_tests {
         // just stops spelling out the tail and the name row stays clean.
         let model = agent_session_in("/repo/.worktrees/ai");
         let rows = sidebar_rows(&model, &mut Vec::new());
-        let name_row = rows
-            .iter()
-            .find(|row| row.contains("Agent"))
-            .expect("the agent is named in the tree");
-        assert_eq!(
-            caption_color_of(&model, "/repo"),
-            theme::color(Token::TextDim),
-            "a slot is the rule and draws dim: {name_row}"
-        );
-
         let caption = rows
             .iter()
             .find(|row| row.contains("/repo"))
@@ -2642,11 +2659,12 @@ mod workspace_tests {
     }
 
     /// The column in front of an agent's name answers one question — how
-    /// that agent is doing — and "outside any slot" is never said there,
-    /// nor by a mark of its own: the caption's hue says it.
+    /// that agent is doing — so which agent the keystrokes reach is left
+    /// to the caption's hue, on whatever branch that agent is on: a slot's
+    /// or the operator's own tree's, both read the same way.
     #[test]
-    fn an_agent_outside_any_slot_is_captioned_in_the_warning_hue() {
-        let mut model = agent_session_in("/repo/src");
+    fn the_agent_receiving_keystrokes_is_the_one_captioned_in_the_warning_hue() {
+        let mut model = two_agent_session("/repo/.worktrees/ai", "/repo/src");
         let rows = sidebar_rows(&model, &mut Vec::new());
         let name_row = rows
             .iter()
@@ -2657,7 +2675,23 @@ mod workspace_tests {
             "the status glyph still leads: {name_row}"
         );
         assert_eq!(
-            caption_color_of(&model, "/repo/src"),
+            caption_color_of(&model, "Agent", "/repo"),
+            theme::color(Token::StateWarning),
+            "a slot is no exception — the selected agent wears the hue"
+        );
+        assert_eq!(
+            caption_color_of(&model, "Second", "/repo/src"),
+            theme::color(Token::TextDim),
+            "and every other agent stays dim, slot or not"
+        );
+
+        select_second_agent(&mut model);
+        assert_eq!(
+            caption_color_of(&model, "Agent", "/repo"),
+            theme::color(Token::TextDim)
+        );
+        assert_eq!(
+            caption_color_of(&model, "Second", "/repo/src"),
             theme::color(Token::StateWarning)
         );
 
@@ -2665,7 +2699,7 @@ mod workspace_tests {
             .branches
             .insert(PathBuf::from("/repo/src"), "main".into());
         assert_eq!(
-            caption_color_of(&model, "main"),
+            caption_color_of(&model, "Second", "main"),
             theme::color(Token::StateWarning)
         );
     }
@@ -2731,15 +2765,15 @@ mod workspace_tests {
             "⇣₁ ⇡₁₂ sit at the right edge, one pad off the divider: {caption:?}"
         );
         assert_eq!(
-            caption_color_of(&model, "main"),
+            caption_color_of(&model, "Agent", "main"),
             theme::color(Token::StateWarning)
         );
         assert_eq!(
-            caption_color_of(&model, "\u{21e3}"),
+            caption_color_of(&model, "Agent", "\u{21e3}"),
             theme::color(Token::StateDanger)
         );
         assert_eq!(
-            caption_color_of(&model, "\u{21e1}"),
+            caption_color_of(&model, "Agent", "\u{21e1}"),
             theme::color(Token::StateSuccess)
         );
 

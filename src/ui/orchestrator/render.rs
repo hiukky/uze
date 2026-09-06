@@ -404,19 +404,20 @@ fn small_caps(s: &str) -> String {
 
 /// Whether `cwd` is outside any slot — the fallback every agent tab
 /// otherwise never needs: no repository, no commit to branch from, Git
-/// absent or refusing. An agent in the operator's own tree is the one
-/// thing the operator has to know about, so its caption — the branch it
-/// is on — is the one drawn in the warning hue rather than dim (see
-/// [`caption_color`]). Not a mark on the row, and not a status in the
-/// catalog: the branch is already there, and its colour says it.
+/// absent or refusing. An agent there has no task to take a branch from,
+/// so its caption reads the branch its own directory sits on, and the
+/// pull/push it owes its upstream.
 fn is_unisolated(cwd: &Path) -> bool {
     !uze_application::is_isolated_checkout(cwd)
 }
 
 /// The hue an agent's caption line is drawn in: dim, like every other
-/// detail, except for an agent working in the operator's own tree.
-fn caption_color(cwd: &Path) -> Color {
-    if is_unisolated(cwd) {
+/// detail, except under the agent actually receiving keystrokes. Its
+/// branch — whichever branch that is — is the one every command in the
+/// footer would act on, so the caption says so in the warning hue rather
+/// than leaving the operator to trace the bold label back down a row.
+fn caption_color(is_current: bool) -> Color {
+    if is_current {
         theme::color(Token::StateWarning)
     } else {
         theme::color(Token::TextDim)
@@ -447,8 +448,9 @@ fn push_trailing_mark(
 /// inside it — `●`/`○` for the space's context agent (see
 /// `space_context_agent`) vs. the rest, plus its label and, right-
 /// aligned on that same row, the harness alias in place of the raw process
-/// name (see [`agent_identity_for_tab`]). A dim caption line
-/// underneath names the task's own working branch, falling back to its
+/// name (see [`agent_identity_for_tab`]). A caption line underneath —
+/// dim, or in the warning hue under the agent receiving keystrokes (see
+/// [`caption_color`]) — names the task's own working branch, falling back to its
 /// pane's live cwd (as [`caption_path`] renders it, so an agent in a slot
 /// reads as its primary checkout rather than as a `.worktrees/<id>` path
 /// too long for the column) for the moment before that task association
@@ -677,17 +679,19 @@ pub(super) fn render_sidebar(
                 dragging.is_pending_drop_row(TabDragGroup::Agents(space.id), tab.id, is_last)
             });
 
+            // The agent the space is about, not its `selected_tab`: a
+            // shell opened beside an agent is part of that agent's own
+            // context, and switching into it must not unselect the agent
+            // in this tree (see `space_context_agent`).
+            let selected = Some(tab.id) == space_context_agent(space, identities);
+            // Every space names a context agent, including the ones the
+            // user is not in — so `selected` alone put a `●` on one agent
+            // per open space, each claiming to be the one receiving
+            // keystrokes. Only the active space's selection is that agent.
+            let is_current = is_active_space && selected;
+
             if let Some(label_rect) = label_slot.visible() {
-                // The agent the space is about, not its `selected_tab`: a
-                // shell opened beside an agent is part of that agent's own
-                // context, and switching into it must not unselect the agent
-                // in this tree (see `space_context_agent`).
-                let selected = Some(tab.id) == space_context_agent(space, identities);
-                // Every space names a context agent, including the ones the
-                // user is not in — so `selected` alone put a `●` on one agent
-                // per open space, each claiming to be the one receiving
-                // keystrokes. Only the active space's selection is that agent.
-                let status = model.agent_tab_status(tab.focus.pane, is_active_space && selected);
+                let status = model.agent_tab_status(tab.focus.pane, is_current);
                 let renaming_this = model
                     .renaming
                     .as_ref()
@@ -707,7 +711,7 @@ pub(super) fn render_sidebar(
                 } else {
                     theme::color(Token::TextInactive)
                 });
-                if is_active_space && selected {
+                if is_current {
                     label_style = label_style.add_modifier(Modifier::BOLD);
                 }
                 let connector_span = Span::styled(connector, theme::fg(Token::TextFaint));
@@ -806,7 +810,7 @@ pub(super) fn render_sidebar(
                 let detail_color = if lost {
                     theme::color(Token::StateWarning)
                 } else {
-                    caption_color(&cwd)
+                    caption_color(is_current)
                 };
                 let mut spans = vec![continuation_span];
                 // Right-aligned under the alias, with the same trailing
