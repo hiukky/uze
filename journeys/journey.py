@@ -980,10 +980,16 @@ def validate(spec: dict, path: Path | None = None) -> list[str]:
     # catches structural drift — a page that lost its proof, a proof that
     # points nowhere — and tells whoever changes the flow which page to
     # re-read. It cannot tell you the prose went wrong; nothing can.
+    #
+    # Only checkable from inside the repository: the container mounts
+    # `journeys/` alone, so the pages are not there to look at. Reported as
+    # skipped rather than passed, and CI runs `validate` on the runner —
+    # where the repository is — before running anything in the container.
     proves = spec.get("proves") or []
-    for page in [proves] if isinstance(proves, str) else proves:
-        if not (REPO / page).exists():
-            problems.append(f"`proves` names {page!r}, which does not exist")
+    if in_repository():
+        for page in [proves] if isinstance(proves, str) else proves:
+            if not (REPO / page).exists():
+                problems.append(f"`proves` names {page!r}, which does not exist")
     for index, scene in enumerate(spec.get("scenes", []), 1):
         where = scene.get("scene", f"scene {index}")
         for step in scene.get("when", []):
@@ -1056,6 +1062,11 @@ def command_validate(args) -> int:
             failed += 1
         else:
             say(f"{spec['journey']}: {len(spec['scenes'])} scenes, valid")
+    if not in_repository():
+        print(
+            f"{YELLOW}!{OFF} `proves` links were not checked: the repository is not "
+            "reachable from here (the container mounts journeys/ alone)"
+        )
     return 1 if failed else 0
 
 
@@ -1075,6 +1086,16 @@ def command_probe(args) -> int:
     say(f"attach with:  tmux attach -t {runner.screen.session}")
     say(f"read it with: tmux capture-pane -t {runner.screen.session} -p")
     return 0
+
+
+def in_repository() -> bool:
+    """Whether the checkout this runner belongs to is reachable.
+
+    False inside the journey container, which mounts `journeys/` and the
+    binary under test and nothing else — so anything that reads the
+    repository has to say it is skipping rather than quietly pass.
+    """
+    return (REPO / "Cargo.toml").is_file() and (REPO / "web").is_dir()
 
 
 def specs_of(args) -> list[Path]:

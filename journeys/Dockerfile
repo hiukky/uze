@@ -30,7 +30,8 @@ ENV LANG=C.UTF-8 \
     TERM=xterm-256color \
     JOURNEY_WORLDS=/tmp/uze-journeys \
     JOURNEY_EVIDENCE=/evidence \
-    JOURNEY_UZE=/usr/local/bin/uze
+    JOURNEY_UZE=/usr/local/bin/uze \
+    JOURNEY_FAKE_HARNESS=/usr/local/bin/uze-fake-harness
 
 ENTRYPOINT ["python3", "/journeys/journey.py"]
 CMD ["--help"]

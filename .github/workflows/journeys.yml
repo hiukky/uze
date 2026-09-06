@@ -60,8 +60,12 @@ jobs:
       - name: Build the journey runtime image
         run: docker build -f journeys/Dockerfile -t uze-journeys:ci journeys/
 
-      - name: Build the binary under test
-        run: cargo build --locked --bin uze
+      # Both binaries: the one under test, and the one that writes the
+      # harness stand-ins. They come from the same workspace on purpose —
+      # a second stand-in implementation is how two tiers come to disagree
+      # about what a harness does while both stay green.
+      - name: Build the binary under test, and the stand-in writer
+        run: cargo build --locked --bin uze && cargo build --locked -p uze-testkit --bin uze-fake-harness
 
       # Cheap, and it fails on the two things a run would not reach: a
       # gesture with no `expect`, and a `proves:` pointing at a page that
@@ -75,6 +79,7 @@ jobs:
           docker run --rm --init \
             -v "$PWD/journeys:/journeys:ro" \
             -v "$PWD/target/debug/uze:/usr/local/bin/uze:ro" \
+            -v "$PWD/target/debug/uze-fake-harness:/usr/local/bin/uze-fake-harness:ro" \
             -v "$PWD/journeys/.evidence:/evidence" \
             uze-journeys:ci run /journeys/suites \
             ${{ github.event_name == 'schedule' && '--record' || '--tag gate' }}
