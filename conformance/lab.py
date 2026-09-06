@@ -218,7 +218,7 @@ def print_summary(outcome):
     for r in outcome["failures"]:
         adj = r.get("gate", {}).get("adjudication", "asserted")
         reason = r["gate"].get("reason") or r["detail"]
-        print(f"  ❌ {r['suite']}: {r['check']} [{adj}] — {reason}", flush=True)
+        print(f"  ✕ {r['suite']}: {r['check']} [{adj}] — {reason}", flush=True)
     groups = {}
     for r in common.results:
         top = r.get("suite", r["check"]).split(" > ")[0]
@@ -227,7 +227,7 @@ def print_summary(outcome):
         entry["total"] += 1
     print("=== by group ===")
     for name, entry in sorted(groups.items()):
-        mark = "✅" if entry["pass"] == entry["total"] else "❌"
+        mark = "✓" if entry["pass"] == entry["total"] else "✕"
         print(f"  {mark} {name}: {entry['pass']}/{entry['total']}", flush=True)
     manifest = outcome["manifest"]
     print(

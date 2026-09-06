@@ -159,7 +159,10 @@ def settle_and_quiet(screen, quiet=None, budget=None):
     return False
 
 
-VERDICT_SYMBOL = {"PASS": "✅", "ADAPTED": "🟡", "FAIL": "❌"}
+# The same marks the journey suite prints. Emoji are double-width in some
+# terminals and single in others, so a column that lines up locally does
+# not in CI — and they carry no meaning a colour and a glyph do not.
+VERDICT_SYMBOL = {"PASS": "✓", "ADAPTED": "!", "FAIL": "✕"}
 VERDICT_COLOR = {"PASS": "\033[32m", "ADAPTED": "\033[33m", "FAIL": "\033[31m"}
 VERDICT_LABEL_WIDTH = max(len(tag) for tag in VERDICT_SYMBOL) + len("[]")
 
