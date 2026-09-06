@@ -1,0 +1,152 @@
+# git-cliff configuration for the notes on the GitHub Release page.
+#
+# `cliff.toml` writes CHANGELOG.md — history, committed, and regenerated
+# offline. This one writes a page a stranger lands on from a search result or
+# an install command, so it answers a different set of questions: what changed
+# and who changed it, whether anything breaks, how to install exactly this
+# version, and how to prove the tarball is the one this repository built.
+#
+# The install and verification sections live at the end of the body rather
+# than in `footer`, because pinning an install needs `{{ version }}` and the
+# footer template is rendered without it. This config renders one release
+# (`--latest`), so they appear once.
+#
+# Rendered by the Release workflow, never committed:
+#
+#   git-cliff --config cliff.release.toml --latest -o notes.md
+#
+# `[remote.github]` is what turns a commit into the person who wrote it: with
+# `GITHUB_TOKEN` in the environment git-cliff resolves each commit to its pull
+# request and its author's handle, and knows which of them is contributing for
+# the first time. Without a token those fields are simply absent and every
+# section that needs them disappears — the notes still render, one degree less
+# generous. Nothing else here depends on the network.
+
+[remote.github]
+owner = "hiukky"
+repo = "uze"
+
+[changelog]
+header = ""
+body = """
+{% set repo = "https://github.com/hiukky/uze" %}\
+{% set breaking = commits | filter(attribute="breaking", value=true) %}\
+{% if breaking | length > 0 %}
+> [!IMPORTANT]
+> This release changes behaviour you may depend on. Read the breaking changes
+> before upgrading — UZE is pre-1.0 and `docs/versioning.md` says what that
+> promises and what it does not.
+
+### Breaking changes
+
+{% for commit in breaking %}\
+- {% if commit.scope %}**{{ commit.scope }}:** {% endif %}{{ commit.message | upper_first }}
+{% endfor %}\
+{% endif %}\
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | striptags | trim | upper_first }}
+
+{% for commit in commits %}\
+- {% if commit.scope %}**{{ commit.scope }}:** {% endif %}{{ commit.message | upper_first }}\
+    {%- if commit.remote.username %} by @{{ commit.remote.username }}{% endif %}\
+    {%- if commit.breaking %} [**breaking**]{% endif %} \
+    ([{{ commit.id | truncate(length=7, end="") }}]({{ repo }}/commit/{{ commit.id }}))
+{% endfor %}\
+{% endfor %}\
+{# A first release-time contributor is worth naming; a bot is not. Tera has no
+   regex filter for lists, so the humans are collected one at a time. #}\
+{% set_global newcomers = [] %}\
+{% for contributor in github.contributors | filter(attribute="is_first_time", value=true) %}\
+{% if contributor.username and not contributor.username is matching("\\[bot\\]$") %}\
+{% set_global newcomers = newcomers | concat(with=contributor) %}\
+{% endif %}\
+{% endfor %}\
+{% if newcomers | length > 0 %}
+### New contributors
+
+{% for contributor in newcomers %}\
+- @{{ contributor.username }} made their first contribution{% if contributor.pr_number %} in [#{{ contributor.pr_number }}]({{ repo }}/pull/{{ contributor.pr_number }}){% endif %}
+{% endfor %}\
+{% endif %}
+{% if version and previous.version %}
+**Full changelog**: [{{ previous.version }}...{{ version }}]({{ repo }}/compare/{{ previous.version }}...{{ version }}) · [CHANGELOG.md]({{ repo }}/blob/{{ version }}/CHANGELOG.md)
+{% elif version %}
+**Full changelog**: [CHANGELOG.md]({{ repo }}/blob/{{ version }}/CHANGELOG.md)
+{% endif %}
+
+## Install
+
+```sh
+curl -fsSL https://uze.hiukky.com/i | sh
+```
+
+{% if version %}
+Pin this release instead of the latest one:
+
+```sh
+curl -fsSL https://uze.hiukky.com/i | UZE_VERSION={{ version | trim_start_matches(pat="v") }} sh
+```
+{% endif %}
+
+Linux only, on four targets: `x86_64`/`aarch64` × `gnu`/`musl`. The installer
+picks the one that matches the host, verifies its SHA-256 against
+`SHASUMS256.txt` and refuses to install on a mismatch.
+
+## Verify
+
+Every asset is checksummed and carries signed build provenance — which
+workflow built it, from which commit, on which runner:
+
+```sh
+sha256sum --ignore-missing -c SHASUMS256.txt
+gh attestation verify uze-x86_64-linux-gnu.tar.gz --repo hiukky/uze
+```
+
+`uze-sbom.cdx.json` is the CycloneDX bill of materials for the shipped binary,
+generated from this tag's own lockfile. Each tarball carries `LICENSE`,
+`NOTICE` and `CREDITS.md` beside the executable.
+"""
+footer = ""
+trim = true
+postprocessors = [
+  { pattern = '\(#(\d+)\)', replace = "([#${1}](https://github.com/hiukky/uze/pull/${1}))" },
+  # The conditional blocks above leave their own blank lines behind; one blank
+  # line between blocks is what Markdown means by a paragraph break.
+  { pattern = '\n{3,}', replace = "\n\n" },
+]
+
+[git]
+conventional_commits = true
+filter_unconventional = false
+split_commits = false
+protect_breaking_commits = false
+filter_commits = false
+tag_pattern = "v[0-9]*"
+topo_order = false
+sort_commits = "oldest"
+
+# Kept in step with `cliff.toml`: the same commit belongs under the same
+# heading whether a reader meets it in the file or on the release page.
+commit_parsers = [
+  # Merge commits repeat a change already listed by the commit it merged, and
+  # their multi-line subject drags the pull request title into the list a
+  # second time.
+  { message = "^Merge (pull request|branch|remote-tracking)", skip = true },
+  { message = "^feat", group = "<!-- 00 -->Features" },
+  { message = "^fix", group = "<!-- 01 -->Fixes" },
+  { message = "^perf", group = "<!-- 02 -->Performance" },
+  { message = "^refactor", group = "<!-- 03 -->Refactor" },
+  { message = "^docs", group = "<!-- 04 -->Documentation" },
+  { message = "^test", group = "<!-- 05 -->Tests" },
+  { message = "^ci", group = "<!-- 06 -->CI" },
+  # Dependency bumps are mostly Dependabot's, and a reader scanning for what
+  # the maintainers changed should not have to step over them.
+  { message = "^chore\\(deps", group = "<!-- 07 -->Dependencies" },
+  { message = "^build\\(deps", group = "<!-- 07 -->Dependencies" },
+  # `chore(release): ...` commits are the release-bump commits themselves;
+  # skipped so a release entry never lists its own bump.
+  { message = "^chore\\(release\\)", skip = true },
+  { message = "^chore", group = "<!-- 08 -->Chore" },
+  { message = "^style", group = "<!-- 09 -->Style" },
+  { message = ".*", group = "<!-- 10 -->Other" },
+]

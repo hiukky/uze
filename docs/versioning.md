@@ -49,6 +49,9 @@ for deliberate milestones. The workflow, on a branch of its own:
      section before the tag physically exists (with the tag already in
      place git-cliff would see an empty range and omit it) — and the
      changelog is folded into the release commit;
+   - `git-cliff --config cliff.release.toml` renders the release page
+     these commits will publish, and it goes into the pull request body:
+     the notes are reviewed with the bump, not discovered afterwards;
    - the branch is pushed and opened as a `chore(release): v<v>` pull
      request. Nothing is tagged and nothing has reached `main`.
 
@@ -64,23 +67,61 @@ it stops there. When it does not:
      commit carrying version bump + changelog + lockfile — or reused, when
      an earlier attempt got that far before failing;
    - the four Linux artifacts (`x86_64`/`aarch64` × `gnu`/`musl`) are built
-     from that tag on native runners;
+     from that tag on native runners and published as
+     `uze-<arch>-linux-<libc>.tar.gz` — the Rust target triple without its
+     vendor field, because `unknown` is a triple saying there is no vendor
+     and a person choosing a download should not have to know that. The
+     workflow's matrix and `install.sh` derive that name separately, so the
+     two must be changed together;
    - a CycloneDX SBOM is generated from the tag's own lockfile, provenance
      is signed for every asset (`gh attestation verify <file> --repo
      hiukky/uze`), and the GitHub Release — named `v<v>`, the same
      identifier the tag, the changelog and `install.sh` all use — is
-     created with the tarballs, the SBOM and `SHASUMS256.txt`. Re-runs
-     upload assets with `--clobber`, so a failed publish can be repaired
-     in place.
+     created with the tarballs, the SBOM, `SHASUMS256.txt` and the notes
+     described below. Re-runs upload assets with `--clobber` and rewrite
+     the notes, so a failed publish can be repaired in place.
 
 Asking about the release rather than the tag is what makes the repair
 possible: the first attempt at `v0.0.0-alpha.1` tagged the commit and then
 failed to build two of its four targets, and a tag-only check would have
 left that version unpublishable for good.
 
+## What the release page says
+
+Two documents come out of the same commits, and they are not the same
+document. `CHANGELOG.md` (`cliff.toml`, `make changelog`) is history: every
+release, committed, regenerated offline, so the bytes are the same on a
+laptop and in CI — which is why nothing in it depends on the GitHub API and
+its pull request links are derived from the `(#N)` a squash merge leaves in
+the subject.
+
+The release page (`cliff.release.toml`, `make release-notes`) is written for
+whoever lands on it from a search result or an install link. It carries only
+the current release, and it adds what a page needs and a file does not:
+breaking changes called out above everything else, each entry credited to the
+handle that wrote it, first-time contributors named, the compare link against
+the previous tag, and the install and verification commands for that exact
+version. The handles come from `[remote.github]` — with `GITHUB_TOKEN` in the
+environment git-cliff resolves each commit to its pull request and author;
+without one the notes still render, one degree less generous, which is what
+`make release-notes` gives you locally.
+
+Both configurations group commits identically, so a change sits under the
+same heading wherever a reader meets it. Merge commits and the release bump
+itself are skipped; dependency bumps have a group of their own.
+
+A release is deliberately *not* published with `--prerelease`, even though
+every version until v1 is an alpha: GitHub keeps pre-releases out of
+`releases/latest`, which is the URL `install.sh` downloads from when
+`UZE_VERSION` is unset.
+
 Each tarball carries `LICENSE`, `NOTICE` and `CREDITS.md` beside the binary:
 Apache-2.0 §4(a) obliges whoever receives the binary to receive the licence
 with it.
+
+The version is deliberately absent from the asset name: the default install
+resolves `releases/latest/download/<asset>`, a URL that only works when the
+filename is the same in every release.
 
 `install.sh` picks the artifact for the host (`uname -s`/`uname -m`, musl
 detection via `ldd --version`), verifies the SHA-256 against `SHASUMS256.txt`

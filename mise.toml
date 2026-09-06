@@ -1,3 +1,5 @@
+# Rust is deliberately absent: `rust-toolchain.toml` declares it, and mise's
+# `rust` tool would export `RUSTUP_TOOLCHAIN`, which silently overrides that
+# file for every command run inside this directory.
 [tools]
-rust = "stable"
 bun = "latest"

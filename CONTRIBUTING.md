@@ -46,6 +46,17 @@ than inherited, and it is where anything you would object to will be.
 - Rust stable, edition 2024, MSRV **1.97** (`rust-version` in
   `Cargo.toml`). Code that needs a newer compiler is not accepted until
   the MSRV is raised in its own pull request.
+- `rust-toolchain.toml` is what picks the compiler: rustup reads it and
+  installs `stable` with `rustfmt` and `clippy` on first use, so a clone
+  needs no `rustup default`. Do not let a version manager name Rust as
+  well — an exported `RUSTUP_TOOLCHAIN` overrides the file for every
+  command in the directory, which is why `mise.toml` here lists only bun.
+  The MSRV is checked past the file with an explicit `cargo +1.97`
+  (`make msrv`); a `+toolchain` is the one thing that outranks it.
+- Building a musl artifact locally is rarely needed — CI builds all four —
+  but when it is: `sudo apt install musl-tools` and `rustup target add
+  x86_64-unknown-linux-musl`. Which C compiler cc-rs asks for is already
+  declared in `.cargo/config.toml`, so nothing else has to be exported.
 - Python 3 with `ruff` for `conformance/`.
 - [`lefthook`](https://lefthook.dev) for the git hooks. Run
   `lefthook install` once after cloning; the hooks mirror the fast half
@@ -139,8 +150,11 @@ Every commit follows [Conventional Commits](https://www.conventionalcommits.org/
   `BREAKING CHANGE:` footer. Pre-1.0 this still matters: it is what
   drives the version bump.
 - The body says *why*. `CHANGELOG.md` is generated from these messages
-  by `git-cliff` (`make changelog`); a message you would not want in the
-  changelog is a message that needs rewriting.
+  by `git-cliff` (`make changelog`), and so is the GitHub Release page a
+  stranger reads after following an install link; a message you would not
+  want in the changelog is a message that needs rewriting. The scope leads
+  the entry, so `feat(tui): …` is what makes a reader scanning for the
+  terminal UI find it.
 - **No AI attribution trailers.** `Co-Authored-By` lines for a coding
   agent, session links and similar are stripped before a commit is
   pushed. The author is the human who takes responsibility for the
@@ -167,6 +181,10 @@ Every commit follows [Conventional Commits](https://www.conventionalcommits.org/
   and trim the fixups out in the merge box, which stays editable. The
   pull request description is not the commit message: it is written for a
   reviewer, and a rich one full of tables reads badly in `git log`.
+  The `(#N)` GitHub appends to the squashed subject is what links every
+  changelog line back to the discussion behind it, and what credits you by
+  name on the release page — so a title that reads well on its own is the
+  whole of your entry.
 - Rebase on `main` before asking for review, and again if `main` moved
   under you. Merge commits into a feature branch are not accepted.
 - A pull request is merged by a maintainer, only after CI is green and

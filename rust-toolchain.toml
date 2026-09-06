@@ -1,0 +1,22 @@
+# The toolchain this repository builds with, declared where rustup, cargo,
+# rust-analyzer and every CI action already look for it.
+#
+# Without this file the answer to "which rustc" came from whatever was
+# default on the machine — and, for anyone with a version manager exporting
+# `RUSTUP_TOOLCHAIN` (mise's `rust` tool does), from an environment variable
+# overriding that default implicitly. Two owners, one of them invisible, and
+# rustup says so out loud. The repository is the owner now; `mise.toml`
+# deliberately does not name Rust any more.
+#
+# `channel = "stable"` is the same channel every CI job runs, so a local
+# build and a release build are the same compiler. It is *not* the MSRV:
+# `rust-version` in `Cargo.toml` is the promise to downstream, and it is
+# checked with an explicit `cargo +1.97` (`make msrv`), because a `+toolchain`
+# is the one thing that overrides this file.
+
+[toolchain]
+channel = "stable"
+profile = "minimal"
+# What `make check` shells out to. Declared here so a fresh clone gets them
+# with the toolchain rather than on the first confusing failure.
+components = ["rustfmt", "clippy"]

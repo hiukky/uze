@@ -192,7 +192,11 @@ jobs:
           key: msrv
       # `check`, not `test`: the question is whether the declared version can
       # build the tree, and running the suite twice answers nothing new.
-      - run: cargo check --workspace --all-targets --locked
+      # `+1.97` explicitly: the action sets this toolchain as rustup's
+      # default, and `rust-toolchain.toml` outranks a default — without the
+      # `+` this job would quietly check the tree on stable and pass a
+      # promise it never tested. Matches `make msrv`.
+      - run: cargo +1.97 check --workspace --all-targets --locked
 
   web:
     name: Web

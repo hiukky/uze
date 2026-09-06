@@ -2,6 +2,13 @@
 # Conventional Commits convention (`type(scope): summary`, see AGENTS.md /
 # git commit history). Paired with cargo-release's `tag-name = "v{{version}}"`
 # (see release.toml). Regenerate with `make changelog`.
+#
+# This file writes the *file*; `cliff.release.toml` writes the notes on the
+# GitHub Release page. They are deliberately different documents: the
+# changelog is history, regenerated in full on every release and committed,
+# so it must render identically on a laptop and in CI — nothing here reaches
+# the GitHub API, and PR links come from the `(#N)` that squash merges leave
+# in the subject rather than from a lookup that needs a token.
 
 [changelog]
 header = """
@@ -10,11 +17,12 @@ header = """
 All notable changes to UZE are documented here, generated from Conventional
 Commits by `git-cliff` (`make changelog`). Until v1, UZE ships only SemVer
 pre-releases — see `docs/versioning.md`.
-
 """
 # A changelog nobody can navigate is a list of sentences. Every short SHA is a
-# link to its commit, and every version heading is the diff against the one
-# before it — which is the question a reader actually arrives with.
+# link to its commit, every `(#N)` is a link to the pull request that carried
+# the change, the scope leads the line so a reader can scan for the area they
+# care about, and every version heading is the diff against the one before it
+# — which is the question a reader actually arrives with.
 body = """
 {% set repo = "https://github.com/hiukky/uze" %}\
 {% if version %}\
@@ -31,7 +39,7 @@ body = """
 ### {{ group | striptags | trim | upper_first }}
 
 {% for commit in commits %}\
-- {{ commit.message | upper_first }}\
+- {% if commit.scope %}**{{ commit.scope }}:** {% endif %}{{ commit.message | upper_first }}\
     {%- if commit.breaking %} [**breaking**]{% endif %} \
     ([{{ commit.id | truncate(length=7, end="") }}]({{ repo }}/commit/{{ commit.id }}))
 {% endfor %}\
@@ -39,6 +47,22 @@ body = """
 """
 trim = true
 footer = ""
+# Squash merges leave `(#N)` in the subject, which is a pull request number
+# every reader recognises and nobody can click. Rewriting it after rendering
+# keeps the link offline-derivable: no API call, no token, and `make
+# changelog` on a laptop produces the same bytes CI commits.
+postprocessors = [
+  { pattern = '\(#(\d+)\)', replace = "([#${1}](https://github.com/hiukky/uze/pull/${1}))" },
+  # The conditional blocks above leave their own blank lines behind; one blank
+  # line between blocks is what Markdown means by a paragraph break.
+  # Releases are rendered one at a time and joined without a blank line
+  # between them, which glued the last entry of one release to the heading of
+  # the next. Postprocessors run on each release body after it is trimmed, so
+  # the separator has to be added at the front of the body — which is why the
+  # header above no longer ends with a blank line of its own.
+  { pattern = '^(## \[)', replace = "\n${1}" },
+  { pattern = '\n{3,}', replace = "\n\n" },
+]
 
 [git]
 conventional_commits = true
@@ -51,21 +75,30 @@ topo_order = false
 sort_commits = "oldest"
 
 # Matches the types actually used in this repo's history (feat, fix, chore,
-# docs, refactor, test, style, ci). The `<!-- n -->` prefixes are sort keys:
+# docs, refactor, test, style, ci). The `<!-- nn -->` prefixes are sort keys:
 # `group_by` orders alphabetically, which put CI above Features, and the
-# template's `striptags` removes them again before printing.
-# `chore(release): ...` commits are the release-bump commits themselves;
-# skipped so a release entry never lists its own bump.
+# template's `striptags` removes them again before printing. Two digits,
+# zero-padded, because `<!-- 10 -->` sorts before `<!-- 2 -->`.
 commit_parsers = [
-  { message = "^feat", group = "<!-- 0 -->Features" },
-  { message = "^fix", group = "<!-- 1 -->Fixes" },
-  { message = "^refactor", group = "<!-- 3 -->Refactor" },
-  { message = "^perf", group = "<!-- 2 -->Performance" },
-  { message = "^docs", group = "<!-- 4 -->Documentation" },
-  { message = "^test", group = "<!-- 5 -->Tests" },
-  { message = "^style", group = "<!-- 8 -->Style" },
-  { message = "^ci", group = "<!-- 6 -->CI" },
+  # Merge commits repeat a change already listed by the commit it merged, and
+  # their multi-line subject drags the pull request title into the list a
+  # second time.
+  { message = "^Merge (pull request|branch|remote-tracking)", skip = true },
+  { message = "^feat", group = "<!-- 00 -->Features" },
+  { message = "^fix", group = "<!-- 01 -->Fixes" },
+  { message = "^perf", group = "<!-- 02 -->Performance" },
+  { message = "^refactor", group = "<!-- 03 -->Refactor" },
+  { message = "^docs", group = "<!-- 04 -->Documentation" },
+  { message = "^test", group = "<!-- 05 -->Tests" },
+  { message = "^ci", group = "<!-- 06 -->CI" },
+  # Dependency bumps are mostly Dependabot's, and a reader scanning for what
+  # the maintainers changed should not have to step over them.
+  { message = "^chore\\(deps", group = "<!-- 07 -->Dependencies" },
+  { message = "^build\\(deps", group = "<!-- 07 -->Dependencies" },
+  # `chore(release): ...` commits are the release-bump commits themselves;
+  # skipped so a release entry never lists its own bump.
   { message = "^chore\\(release\\)", skip = true },
-  { message = "^chore", group = "<!-- 7 -->Chore" },
-  { message = ".*", group = "<!-- 9 -->Other" },
+  { message = "^chore", group = "<!-- 08 -->Chore" },
+  { message = "^style", group = "<!-- 09 -->Style" },
+  { message = ".*", group = "<!-- 10 -->Other" },
 ]
