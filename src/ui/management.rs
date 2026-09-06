@@ -20,7 +20,7 @@ use uze_application::{Result, UzeHome};
 
 use super::hit::Hit;
 use super::model::{self, Focus, Overlay, ROUTES, Route, Status, TuiModel};
-use super::worker::{Intent, dispatch, drain_worker_results, spawn_startup};
+use super::worker::{Intent, dispatch, drain_worker_results, recent_prompts, spawn_startup};
 use super::{TerminalSession, overlay, small_digits, view};
 use crate::ui::theme::{self, Symbol, Token};
 
@@ -39,6 +39,11 @@ pub(crate) fn run_management(
         sidebar_width: *sidebar_width,
         ..TuiModel::default()
     };
+    // Before the first frame rather than from the startup worker, which
+    // reaches this only after seeding plugins and auto-updating (see
+    // `worker::recent_prompts`). The refresh replaces it with the same
+    // answer when it lands.
+    model.prompt_history = recent_prompts(home.clone(), &model.context_root);
     spawn_startup(home.clone(), sender.clone(), model.context_root.clone());
     loop {
         model.tick = model.tick.wrapping_add(1);

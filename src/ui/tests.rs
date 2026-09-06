@@ -1948,6 +1948,45 @@ fn overview_install_intent_reaches_install_project_environment() {
 
 // --- Prompt history -----------------------------------------------------
 
+/// The Overview's history is seeded before the first frame, and must find
+/// what the workspace client wrote — keyed the same way, from anywhere
+/// inside the workspace. Reading it out of the startup worker instead is
+/// what made an opened management screen say "no history yet" while
+/// plugins were being seeded and the official snapshot auto-updated.
+#[test]
+fn the_seeded_history_reads_what_the_workspace_client_recorded() {
+    let base = uze_testkit::temp::scratch("ui-prompt-history-seed");
+    let home = UzeHome::at(base.join("home"));
+    let project = base.join("project");
+    let nested = project.join("crates").join("inner");
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::write(project.join("agents.lock"), "version: 1\n").unwrap();
+
+    let app = super::tui_application(home.clone()).unwrap();
+    let root = app.workspace().root(&project);
+    app.workspace()
+        .record_prompt(
+            &root,
+            &uze_application::PromptOrigin {
+                space_label: "project".to_owned(),
+                tab_id: 7,
+                tab_label: "agent 1".to_owned(),
+                agent_binary: "claude".to_owned(),
+            },
+            "ship the thing",
+        )
+        .unwrap();
+
+    // From a subdirectory, the way a `uze` launched deep inside one asks.
+    let seeded = super::worker::recent_prompts(home, &nested);
+
+    let previews: Vec<&str> = seeded.iter().map(|entry| entry.preview.as_str()).collect();
+    assert_eq!(previews, ["ship the thing"]);
+    assert_eq!(seeded[0].tab_id, 7);
+
+    std::fs::remove_dir_all(&base).ok();
+}
+
 fn prompt(tab_id: u64, preview: &str) -> uze_core::prompt_history::PromptEntry {
     uze_core::prompt_history::PromptEntry {
         space_label: "space 1".to_owned(),
