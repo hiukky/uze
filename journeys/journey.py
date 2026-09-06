@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """journey — perform a product flow, then check the machine it left behind.
 
+    journey list     [DIR]    what each journey proves, in reading order
     journey validate SPEC     parse it, resolve it, say what is wrong
     journey seed     SPEC     build the disposable world
     journey probe    SPEC     seed, open the app, leave it up to poke at
@@ -797,6 +798,28 @@ def binary_path() -> Path:
     die("no uze binary: run `cargo build --bin uze` first")
 
 
+def command_list(args) -> int:
+    """The index, read from the journeys themselves. A hand-maintained table
+    of what a suite proves is the same trap as a hand-copied test matrix: it
+    is right on the day it is written."""
+    chapter = None
+    for path in specs_of(args):
+        spec = load(path)
+        where = path.parent.name
+        if where != chapter:
+            chapter = where
+            print(f"\n{BOLD}{chapter}{OFF}")
+        tags = " ".join(f"{DIM}#{tag}{OFF}" for tag in spec.get("tags") or [])
+        scenes = len(spec.get("scenes") or [])
+        print(f"  {GREEN}{path.name}{OFF}  {tags}")
+        print(f"      {spec.get('journey', '(unnamed)')}")
+        print(
+            f"      {DIM}{scenes} scenes, {sum(len(s.get('then', [])) for s in spec.get('scenes') or [])} checks{OFF}"
+        )
+    print()
+    return 0
+
+
 def command_validate(args) -> int:
     failed = 0
     for path in specs_of(args):
@@ -836,7 +859,11 @@ def specs_of(args) -> list[Path]:
     target = Path(args.spec)
     if target.is_file():
         return [target]
-    found = sorted(target.glob("*.yml")) + sorted(target.glob("*.yaml"))
+    # Recursive and sorted: chapters are directories, and the numeric prefix
+    # is what puts a reader at the start of the story rather than in the
+    # middle of it. Nothing at run time depends on the order — every journey
+    # builds its own world — so the numbers are for people.
+    found = sorted(target.rglob("*.yml")) + sorted(target.rglob("*.yaml"))
     if tag := getattr(args, "tag", None):
         found = [spec for spec in found if tag in (load(spec).get("tags") or [])]
     if not found:
@@ -1072,7 +1099,7 @@ def stop_world_servers(world: World) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(prog="journey")
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("validate", "seed", "probe", "run"):
+    for name in ("list", "validate", "seed", "probe", "run"):
         child = sub.add_parser(name)
         child.add_argument("spec")
         child.add_argument(
@@ -1088,6 +1115,8 @@ def main() -> int:
             "--tag", help="when SPEC is a directory, only journeys with this tag"
         )
     args = parser.parse_args()
+    if args.command == "list":
+        return command_list(args)
     if args.command == "validate":
         return command_validate(args)
     if args.command == "seed":

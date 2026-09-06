@@ -15,10 +15,12 @@ proves what **UZE** does, including the 28k lines of `src/ui/` no Rust test
 can click.
 
 ```bash
-python3 journeys/journey.py validate journeys/suites/agent-slots.yml
-python3 journeys/journey.py run      journeys/suites/agent-slots.yml
-python3 journeys/journey.py probe    journeys/suites/agent-slots.yml  # leave it up to poke at
-python3 journeys/journey.py run      journeys/suites --tag gate       # a whole directory
+python3 journeys/journey.py list     journeys/suites                  # what is proven, in order
+python3 journeys/journey.py run      journeys/suites --tag gate       # everything the gate runs
+python3 journeys/journey.py run      journeys/suites/04-workspace     # one chapter
+python3 journeys/journey.py run      journeys/suites/04-workspace/01-agents-and-slots.yml
+python3 journeys/journey.py probe    <spec>                           # leave it up to poke at
+python3 journeys/journey.py validate <spec|dir>
 ```
 
 A spec carries `tags:`. `--tag gate` is what a pull request runs; a nightly
@@ -50,6 +52,78 @@ if you want a GIF; the journey does not carry a renderer.
 Two runs of the same journey are diffable: `verdict.json` holds the same
 shape with different generated identifiers, so a regression shows up as a
 `read` that changed.
+
+## How the suite is organized
+
+```
+journeys/suites/
+  01-first-run/     a machine with nothing on it: it opens, it reports itself
+  02-packages/      a plugin arrives, is delivered, is taken back
+  03-context/       AGENTS.md, and the bridges each harness reads
+  04-workspace/     spaces, agents, checkouts, slots
+  05-delivery/      handing the work back
+  06-recovery/      drift, a lost checkout, a rebase that stopped
+      NN-<the claim, in kebab>.yml
+```
+
+**The numbers are the reading order, not a dependency.** Every journey builds
+its own world from nothing, so `04` does not need `01` to have run. The
+prefix exists so that someone opening the folder meets the product the way a
+user does — install it, configure it, work in it, deliver, recover — instead
+of alphabetically. Chapters appear when their first journey does; an empty
+one is a promise, not a plan.
+
+The index is `journey list`, read from the files themselves. Do not keep a
+table of what the suite proves — that is the same trap as a hand-copied test
+matrix: correct the day it is written.
+
+Naming: the file is the claim in kebab-case, the `journey:` field is the same
+claim as a sentence, and `about:` is the paragraph a reader needs before the
+first scene makes sense.
+
+## Scene, file, or chapter?
+
+**A scene continues the story; a file starts one over.** If you would join
+the two with *"and then"*, it is a scene. If you would join them with
+*"also"*, it is a file.
+
+Write a new **file** when any of these is true:
+
+- **the world differs** — a different fixture, harness set, or manifest;
+- **the claim does not depend on the story so far** — it would pass just as
+  well first;
+- **the two would run at different cadences** — one on the gate, one nightly;
+- **one failing would hide the other.** A run stops at the first failure, so
+  claims sharing a file share a fate. Two claims you would want proven
+  independently do not belong in one.
+
+Write a new **scene** when the claim needs what the last one left behind —
+"the next agent takes the freed slot" means nothing without "an agent was
+closed".
+
+Write a new **chapter** when a group of files shares a stage of use, not when
+it shares a subsystem.
+
+### A scene must be load-bearing
+
+Delete it: a later scene must break, or its checks must be the only proof of
+its own claim. A scene that survives its own deletion was a step, not a
+claim — fold it into its neighbour. This is what keeps a journey from
+drifting into a script that clicks a lot and proves little.
+
+### Tags say when it runs, numbers say where it sits
+
+`gate` is the pull-request set: fast, deterministic, no real harness.
+Everything runs nightly. `cli` / `tui` name the surface, and a domain tag
+(`workspace`, `packages`, `context`) is how you run a slice while working on
+one. Cadence never goes in the folder name — a journey that becomes slow
+should change its tag, not move.
+
+### Worlds repeat before they deserve a name
+
+The `world:` block stays in the journey, where a reader can see it without
+opening another file. When a third journey needs the same fixture, and not
+before, lift it into `journeys/worlds/<name>.yml`.
 
 ## A journey
 

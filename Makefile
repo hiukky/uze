@@ -112,7 +112,7 @@ ci: check msrv web audit attributions-check secrets installer coverage ## Every 
 # (`conformance-harness:latest`): real harness binary + synthetic provider,
 # zero Internet, zero tokens. HARNESS selects one harness id
 # (antigravity | claude | codex | opencode).
-JOURNEY ?= journeys/suites/agent-slots.yml
+JOURNEY ?= journeys/suites
 JOURNEY_IMAGE ?= uze-journeys:latest
 
 journey: build ## Run a product journey on this machine (JOURNEY=<spec>).
