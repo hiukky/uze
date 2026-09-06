@@ -173,6 +173,112 @@ fn effective_base(primary: &Path, task: &Task) -> String {
     task.base_commit.clone()
 }
 
+/// What bringing the local target in line with the remote's did.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TargetSync {
+    /// Nothing to sync against: no remote, or the target is not on it yet.
+    Unpublished,
+    /// The local target already carries everything the remote's does.
+    Current,
+    /// The local target was moved forward onto the remote's tip.
+    FastForwarded { commits: usize },
+    /// The remote is ahead and the local target stayed where it was.
+    Stalled { behind: usize, reason: String },
+}
+
+impl TargetSync {
+    /// What the operator has to be told, if anything: an agent about to be
+    /// placed on a target that could not be brought up to date starts
+    /// behind the work everyone else is already on, and will hear about it
+    /// as a conflict much later.
+    pub fn concern(&self, target: &str) -> Option<String> {
+        match self {
+            Self::Stalled { behind, reason } if *behind > 0 => {
+                let plural = if *behind == 1 { "" } else { "s" };
+                Some(format!(
+                    "`{target}` is {behind} commit{plural} behind `{REMOTE}` and could not be \
+                     moved: {reason}. This agent starts from the local tip."
+                ))
+            }
+            Self::Stalled { reason, .. } => Some(format!(
+                "`{REMOTE}` could not be read: {reason}. This agent starts from the local tip, \
+                 which may be behind."
+            )),
+            _ => None,
+        }
+    }
+}
+
+/// Brings the local target in line with the remote's before anything is
+/// branched from it, by fast-forward and never by anything else.
+///
+/// An agent is placed on the target's tip, and every judgement made about
+/// its work afterwards — what it is ahead of, whether its slot holds
+/// anything, what it rebases onto — is made against that same local branch.
+/// Left unfetched, the branch drifts a whole day's merges behind the target
+/// everyone else is on: the agent starts from history nobody has, and the
+/// divergence surfaces as conflicts in a request already opened, which is
+/// the most expensive place to learn it.
+///
+/// Fast-forward only, so this can never lose or reorder an operator's own
+/// commits: a target that has commits the remote lacks is left exactly
+/// where it is and reported, as is one Git refuses to move because the
+/// primary checkout has local modifications in the way.
+pub fn sync_target(primary: &Path, target: &str) -> TargetSync {
+    if !has_remote(primary) {
+        return TargetSync::Unpublished;
+    }
+    uze_git::locked(primary, uze_git::DEFAULT_WRITE_TIMEOUT, || {
+        sync_target_locked(primary, target)
+    })
+    .unwrap_or_else(|error| TargetSync::Stalled {
+        behind: 0,
+        reason: error.to_string(),
+    })
+}
+
+fn sync_target_locked(primary: &Path, target: &str) -> TargetSync {
+    let tracking = format!("refs/remotes/{REMOTE}/{target}");
+    // An explicit refspec, so the tracking ref moves whatever the remote's
+    // configured fetch refspecs say.
+    let refspec = format!("+refs/heads/{target}:{tracking}");
+    if let Err(reason) = git(primary, &["fetch", "--quiet", REMOTE, &refspec]) {
+        return TargetSync::Stalled { behind: 0, reason };
+    }
+    if checkout::tip_of(primary, &tracking).is_empty() {
+        return TargetSync::Unpublished;
+    }
+    let behind = commits_ahead(primary, target, &tracking);
+    if behind == 0 {
+        return TargetSync::Current;
+    }
+    let local_tip = checkout::tip_of(primary, target);
+    if !is_ancestor(primary, &local_tip, &tracking) {
+        return TargetSync::Stalled {
+            behind,
+            reason: format!("it carries commits `{REMOTE}` does not"),
+        };
+    }
+    match fast_forward(primary, target, &tracking) {
+        Ok(()) => TargetSync::FastForwarded { commits: behind },
+        Err(reason) => TargetSync::Stalled { behind, reason },
+    }
+}
+
+/// Moves the local target onto `tracking`. Through the working tree when
+/// the operator is standing on the target — Git's own fast-forward, which
+/// refuses rather than overwrite anything uncommitted in the way — and by
+/// moving the ref when they are not, which Git refuses in turn while
+/// another checkout has the branch.
+fn fast_forward(primary: &Path, target: &str, tracking: &str) -> Result<(), String> {
+    let args = if checkout::current_branch(primary).as_deref() == Some(target) {
+        vec!["merge", "--quiet", "--ff-only", tracking]
+    } else {
+        vec!["branch", "--quiet", "--force", target, tracking]
+    };
+    git(primary, &args).map(|_| ())
+}
+
 /// Delivers a ready task according to `policy`, under the repository write
 /// lock. Updates `task` to say what happened, whatever that was.
 pub fn deliver(
@@ -240,11 +346,13 @@ fn deliver_locked(
 /// Rebases a live task onto the target when the target has moved, under
 /// the same rules as delivery. Only for a clean, ready checkout: never
 /// under an agent mid-edit. Returns whether anything moved.
-pub fn refresh(
-    primary: &Path,
-    task: &mut Task,
-    completion: CompletionBehavior,
-) -> Result<bool, DeliveryFailure> {
+///
+/// Always the local target, whatever the completion behaviour: this runs
+/// whenever a pane goes quiet, and a fetch on that cadence would be paid
+/// for on every tick of every task. `pr` reaches the remote's tip twice
+/// anyway — where the target is brought in line before an agent is placed
+/// on it, and at delivery, which is the one that decides.
+pub fn refresh(primary: &Path, task: &mut Task) -> Result<bool, DeliveryFailure> {
     uze_git::locked(primary, uze_git::DEFAULT_WRITE_TIMEOUT, || {
         let slot = slot_path(primary, task).ok_or(DeliveryFailure::NotReady(Readiness::Running))?;
         match readiness(primary, task) {
@@ -254,7 +362,7 @@ pub fn refresh(
             Readiness::Running => {}
             other => return Err(DeliveryFailure::NotReady(other)),
         }
-        let tip = target_tip(primary, task, completion)?;
+        let tip = target_tip(primary, task, CompletionBehavior::Handoff)?;
         if tip == task.base_commit || is_ancestor(primary, &tip, &task.branch) {
             task.base_commit = tip;
             return Ok(false);
@@ -927,28 +1035,116 @@ mod tests {
         repository.commit_file("theirs.rs", "");
         let target = tip_of(primary, TARGET);
 
-        assert_eq!(
-            refresh(primary, &mut task, CompletionBehavior::Merge),
-            Ok(true)
-        );
+        assert_eq!(refresh(primary, &mut task), Ok(true));
         assert_eq!(task.base_commit, target);
         let slot = slot_path(primary, &task).unwrap();
         assert!(slot.join("theirs.rs").is_file() && slot.join("mine.rs").is_file());
-        assert_eq!(
-            refresh(primary, &mut task, CompletionBehavior::Merge),
-            Ok(false)
-        );
+        assert_eq!(refresh(primary, &mut task), Ok(false));
 
         fs::write(slot.join("editing"), "").unwrap();
         repository.commit_file("more.rs", "");
         assert_eq!(
-            refresh(primary, &mut task, CompletionBehavior::Merge),
+            refresh(primary, &mut task),
             Err(DeliveryFailure::NotReady(Readiness::Uncommitted))
         );
         assert!(
             !slot.join("more.rs").exists(),
             "never rebased under an agent mid-edit"
         );
+    }
+
+    /// A repository with a bare `origin` behind it and a second checkout
+    /// of that remote, standing in for whoever else pushes to it.
+    fn published(label: &str) -> (Repository, PathBuf) {
+        let repository = repository(label);
+        let base = uze_testkit::temp::scratch(&format!("{label}-remote"));
+        let origin = base.join("origin.git");
+        repository.git(&[
+            "init",
+            "--quiet",
+            "--bare",
+            "-b",
+            TARGET,
+            origin.to_str().unwrap(),
+        ]);
+        repository.git(&["remote", "add", REMOTE, origin.to_str().unwrap()]);
+        repository.git(&["push", "--quiet", "-u", REMOTE, TARGET]);
+        let other = base.join("other");
+        repository.git(&[
+            "clone",
+            "--quiet",
+            origin.to_str().unwrap(),
+            other.to_str().unwrap(),
+        ]);
+        repository.git_in(&other, &["config", "user.name", "Other"]);
+        repository.git_in(&other, &["config", "user.email", "other@uze.invalid"]);
+        (repository, other)
+    }
+
+    /// What someone else merged, pushed from their own checkout.
+    fn push_from(repository: &Repository, other: &Path, file: &str) -> String {
+        fs::write(other.join(file), "").unwrap();
+        repository.git_in(other, &["add", "."]);
+        repository.git_in(other, &["commit", "-qm", file]);
+        repository.git_in(other, &["push", "--quiet"]);
+        repository.git_in(other, &["rev-parse", "HEAD"])
+    }
+
+    /// The reason this exists: every agent is placed on the local target,
+    /// and a local target nobody fetched is a day of merges behind the one
+    /// the rest of the team is on.
+    #[test]
+    fn the_local_target_is_fast_forwarded_onto_the_remotes() {
+        let (repository, other) = published("landing-sync");
+        let primary = repository.root();
+        let pushed = push_from(&repository, &other, "merged-by-someone-else.rs");
+
+        assert_eq!(
+            sync_target(primary, TARGET),
+            TargetSync::FastForwarded { commits: 1 }
+        );
+        assert_eq!(tip_of(primary, TARGET), pushed);
+        assert!(
+            primary.join("merged-by-someone-else.rs").is_file(),
+            "the operator's own checkout is at the target it now names"
+        );
+        assert_eq!(
+            sync_target(primary, TARGET),
+            TargetSync::Current,
+            "nothing moved the second time"
+        );
+    }
+
+    /// Fast-forward only: an operator's unpushed commit is never rewound,
+    /// reordered or merged into, and the placement says so instead.
+    #[test]
+    fn a_target_carrying_its_own_commits_is_left_alone_and_reported() {
+        let (repository, other) = published("landing-sync-diverged");
+        let primary = repository.root();
+        push_from(&repository, &other, "theirs.rs");
+        let mine = repository.commit_file("mine.rs", "");
+
+        let sync = sync_target(primary, TARGET);
+        assert!(
+            matches!(sync, TargetSync::Stalled { behind: 1, .. }),
+            "the remote is ahead and the local target cannot be moved: {sync:?}"
+        );
+        assert_eq!(tip_of(primary, TARGET), mine, "nothing was rewritten");
+        assert!(
+            sync.concern(TARGET)
+                .is_some_and(|concern| concern.contains(TARGET)),
+            "and an agent placed on it is told"
+        );
+    }
+
+    #[test]
+    fn a_repository_with_no_remote_has_nothing_to_sync_against() {
+        let repository = repository("landing-sync-local");
+        assert_eq!(
+            sync_target(repository.root(), TARGET),
+            TargetSync::Unpublished
+        );
+        assert_eq!(sync_target(repository.root(), TARGET).concern(TARGET), None);
     }
 
     /// `pr` against a bare remote, with no forge CLI anywhere: the push

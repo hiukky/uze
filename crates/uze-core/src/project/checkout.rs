@@ -370,8 +370,7 @@ pub fn reconcile(primary: &Path, store: &mut TaskStore, target: &str) -> Reconci
             // agent while this one is still writing in it. Only the
             // current owner revives; a slot already handed over answers
             // for whoever holds it now.
-            if task.state == TaskState::Integrated
-                && commits_ahead(primary, target, &task.branch) > 0
+            if task.state == TaskState::Integrated && !is_integrated(primary, target, &task.branch)
             {
                 task.state = TaskState::Running;
                 report.revived.push(task.id.clone());
@@ -381,7 +380,7 @@ pub fn reconcile(primary: &Path, store: &mut TaskStore, target: &str) -> Reconci
         let holds_work = is_dirty(path)
             || branch
                 .as_deref()
-                .is_some_and(|branch| commits_ahead(primary, target, branch) > 0);
+                .is_some_and(|branch| !is_integrated(primary, target, branch));
         let label = branch
             .as_deref()
             .and_then(|branch| branch.strip_prefix(BRANCH_PREFIX))
@@ -421,8 +420,7 @@ pub fn reconcile(primary: &Path, store: &mut TaskStore, target: &str) -> Reconci
         task.checkout = None;
         // A delivery already recorded stays recorded: its branch has
         // nothing of its own left precisely because the target has it all.
-        if branch_exists(primary, &task.branch) && commits_ahead(primary, target, &task.branch) > 0
-        {
+        if branch_exists(primary, &task.branch) && !is_integrated(primary, target, &task.branch) {
             task.state = TaskState::Parked;
         } else if task.state != TaskState::Integrated {
             task.state = TaskState::Closed;
@@ -481,7 +479,7 @@ pub fn prune_integrated_branches(primary: &Path, store: &TaskStore, target: &str
         if checked_out.contains(&branch) || live.contains(&branch.as_str()) {
             continue;
         }
-        if commits_ahead(primary, target, &branch) == 0
+        if is_integrated(primary, target, &branch)
             && git(primary, &["branch", "-D", &branch]).is_ok()
         {
             removed.push(branch);
@@ -533,8 +531,7 @@ pub fn release(primary: &Path, task: &mut Task, target: &str) -> SlotState {
         .map(|checkout| primary.join(WORKTREES_DIRECTORY).join(checkout.as_str()))
         .filter(|path| path.is_dir());
     let holds_work = directory.is_some_and(|path| is_dirty(&path))
-        || (branch_exists(primary, &task.branch)
-            && commits_ahead(primary, target, &task.branch) > 0);
+        || (branch_exists(primary, &task.branch) && !is_integrated(primary, target, &task.branch));
     if is_live(&task.state) {
         task.state = if holds_work {
             TaskState::Parked
@@ -651,6 +648,81 @@ pub fn commits_ahead(root: &Path, target: &str, branch: &str) -> usize {
     .unwrap_or(0)
 }
 
+/// Whether everything `branch` carries is already in `target`: reachable
+/// from it, or there under other commits carrying the same patch.
+///
+/// Reachability alone is the wrong question wherever the target is written
+/// by a forge that rewrites what it integrates. A squash merge replaces a
+/// branch's commits with one of its own and a rebase merge gives each of
+/// them a new identity, so a branch merged weeks ago still counts commits
+/// the target "lacks" — and that answer is what parks its slot, revives its
+/// task and keeps its branch, until every new agent is paying for a working
+/// tree of its own. Patch identity is what survives both rewrites, and
+/// `git cherry` is Git's own answer to it: asked of the branch's commits
+/// first, which is free, and then of the single patch a squash would have
+/// made of them, which costs one object.
+pub fn is_integrated(root: &Path, target: &str, branch: &str) -> bool {
+    commits_ahead(root, target, branch) == 0
+        || patch_is_in(root, target, branch)
+        || squashed_patch_is_in(root, target, branch)
+}
+
+/// Whether every commit of `branch` outside `target` has an equivalent
+/// there — what a rebase merge, and a fast-forward of a single commit,
+/// leave behind.
+fn patch_is_in(root: &Path, target: &str, branch: &str) -> bool {
+    read(root, &["cherry", target, branch]).is_some_and(|listing| every_commit_is_there(&listing))
+}
+
+/// `git cherry` marks a commit `-` when the target already has its patch.
+/// Nothing listed is not an answer: the question was asked of commits, and
+/// there were none to read.
+fn every_commit_is_there(listing: &str) -> bool {
+    let mut commits = listing.lines().peekable();
+    commits.peek().is_some() && commits.all(|commit| commit.starts_with('-'))
+}
+
+/// Whether the one patch a squash would have made of `branch` is already in
+/// `target`. The probe commit is written rather than described because
+/// patch identity is Git's to compute: its tree is the branch's, its parent
+/// the merge base, so it carries exactly what the branch adds and nothing
+/// of how it was written.
+fn squashed_patch_is_in(root: &Path, target: &str, branch: &str) -> bool {
+    let Some(base) = read(root, &["merge-base", target, branch]) else {
+        return false;
+    };
+    let Some(tree) = read(root, &["rev-parse", &format!("{branch}^{{tree}}")]) else {
+        return false;
+    };
+    let Ok(probe) = git(
+        root,
+        &[
+            "-c",
+            "user.name=UZE",
+            "-c",
+            "user.email=uze@invalid",
+            "commit-tree",
+            &tree,
+            "-p",
+            &base,
+            "-m",
+            "squash probe",
+        ],
+    ) else {
+        return false;
+    };
+    read(root, &["cherry", target, &probe]).is_some_and(|listing| every_commit_is_there(&listing))
+}
+
+/// A read whose failure is simply no answer.
+fn read(root: &Path, args: &[&str]) -> Option<String> {
+    uze_git::read(root, args)
+        .ok()?
+        .successful()
+        .ok()
+        .map(|stdout| stdout.trim().to_owned())
+}
+
 fn branch_exists(root: &Path, branch: &str) -> bool {
     uze_git::read(
         root,
@@ -751,8 +823,8 @@ fn slot_state(
     let declared_done = task.is_some_and(|task| task.state == TaskState::Integrated);
     let target = task.map(|task| task.target.as_str());
     let holds_commits = match (branch, target) {
-        (Some(branch), Some(target)) => commits_ahead(primary, target, branch) > 0,
-        (Some(branch), None) => commits_ahead(primary, "HEAD", branch) > 0,
+        (Some(branch), Some(target)) => !is_integrated(primary, target, branch),
+        (Some(branch), None) => !is_integrated(primary, "HEAD", branch),
         (None, _) => false,
     };
     if holds_commits && !declared_done {
@@ -918,6 +990,77 @@ mod tests {
         assert!(
             other.path.join("draft.rs").is_file(),
             "every file of a parked checkout is preserved"
+        );
+    }
+
+    /// The forge most of these projects deliver to squashes what it
+    /// merges, so the branch's own commits never appear in the target.
+    /// Read by reachability, such a slot is parked for as long as the
+    /// repository lives and the pool never has a free slot in it again.
+    #[test]
+    fn a_squash_merged_branch_frees_its_slot_and_is_pruned() {
+        let repository = repository("slots-squash");
+        let primary = repository.root();
+        let mut store = TaskStore::default();
+
+        let (delivered, slot) = launch(&repository, &mut store, "squashed");
+        fs::write(slot.path.join("feature.rs"), b"fn f() {}").unwrap();
+        fs::write(slot.path.join("feature_test.rs"), b"fn t() {}").unwrap();
+        repository.git_in(&slot.path, &["add", "."]);
+        repository.git_in(&slot.path, &["commit", "-qm", "the feature"]);
+        fs::write(slot.path.join("feature.rs"), b"fn f() -> u8 { 1 }").unwrap();
+        repository.git_in(&slot.path, &["commit", "-qam", "and its fix"]);
+        // What a forge's squash button leaves behind: one commit of the
+        // target's own, carrying the branch's whole diff.
+        repository.git(&["merge", "--squash", &delivered.branch]);
+        repository.git(&["commit", "-qm", "the feature (#7)"]);
+        assert!(
+            commits_ahead(primary, TARGET, &delivered.branch) > 0,
+            "none of the branch's commits is reachable from the target"
+        );
+
+        assert_eq!(
+            release(
+                repository.root(),
+                store.get_mut(&delivered.id).unwrap(),
+                TARGET
+            ),
+            SlotState::Free,
+            "its work is in the target, under the forge's own commit"
+        );
+        let (_, reused) = launch(&repository, &mut store, "next");
+        assert!(!reused.created, "the freed slot is taken, not a new one");
+        assert_eq!(reused.path, slot.path);
+        assert_eq!(
+            prune_integrated_branches(primary, &store, TARGET),
+            vec![delivered.branch],
+            "and the branch it left behind is safe to remove"
+        );
+    }
+
+    /// The other button: every commit kept, each under a new identity.
+    #[test]
+    fn a_rebase_merged_branch_frees_its_slot() {
+        let repository = repository("slots-rebase-merge");
+        let mut store = TaskStore::default();
+
+        let (delivered, slot) = launch(&repository, &mut store, "rebased");
+        fs::write(slot.path.join("feature.rs"), b"fn f() {}").unwrap();
+        repository.git_in(&slot.path, &["add", "."]);
+        repository.git_in(&slot.path, &["commit", "-qm", "the feature"]);
+        // The target moves first, so replaying the commit gives it a new
+        // identity — exactly what a rebase merge does.
+        repository.commit_file("unrelated.rs", "");
+        repository.git(&["cherry-pick", &delivered.branch]);
+
+        assert_eq!(
+            release(
+                repository.root(),
+                store.get_mut(&delivered.id).unwrap(),
+                TARGET
+            ),
+            SlotState::Free,
+            "the same patch is in the target under another commit"
         );
     }
 

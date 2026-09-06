@@ -58,6 +58,10 @@ concurrency, and a project MAY declare a cap.
 - **WHEN** a task's agent is gone and its checkout has uncommitted changes or commits absent from its base
 - **THEN** the checkout is parked, listed to the operator, and not offered to a new agent
 
+#### Scenario: A slot whose work was squash-merged is free again
+- **WHEN** a task's work reached the target as a squash or a rebase merge, so none of the branch's own commits is reachable from it, and the agent is gone
+- **THEN** the checkout is free and the next agent is placed in it rather than in a new one
+
 #### Scenario: A new checkout is created only when none is free
 - **WHEN** every existing checkout is occupied or parked
 - **THEN** a new checkout is created
@@ -68,10 +72,12 @@ concurrency, and a project MAY declare a cap.
 
 ### Requirement: Nothing that can hold work is removed automatically
 The system SHALL NOT remove a working tree holding uncommitted changes, nor
-a branch holding commits absent from its target, on any automatic path. It
-MAY remove a branch whose work is in the target — every commit reachable
-from the target, or, for a task delivered as a pull request, the request
-reported merged by the forge — and MAY remove the directory of a clean
+a branch holding commits absent from its target, on any automatic path.
+Whether a branch's work is in the target SHALL be answered by what the
+target carries and not by commit identity alone: every commit reachable
+from it, or the same patch present under commits of its own, as a squash
+merge and a rebase merge each leave it. A branch whose work is in the
+target MAY be removed, as MAY the directory of a clean
 checkout idle beyond a declared age while keeping its branch. Discarding work SHALL happen only on an explicit operator
 action naming the task.
 
@@ -87,9 +93,10 @@ action naming the task.
 - **WHEN** every commit of a task's branch is reachable from the target
 - **THEN** the branch may be removed without an operator action
 
-#### Scenario: A squash-merged pull request still counts as integrated
-- **WHEN** a task delivered as a pull request is merged by squashing, so none of its commits is reachable from the target
-- **THEN** the task is reported integrated on the forge's evidence and its branch may be pruned
+#### Scenario: A squash-merged branch still counts as integrated
+- **WHEN** a branch's work is merged by squashing, so none of its commits is reachable from the target
+- **THEN** the branch is read as integrated from the patch the target carries, without asking any forge, and may be pruned
+- **AND** the same holds for a rebase merge, which keeps every commit under a new identity
 
 #### Scenario: Only the operator discards
 - **WHEN** a parked task is discarded
@@ -142,6 +149,27 @@ delivered, MAY trigger an evaluation but SHALL NOT be required.
 - **WHEN** a task was reported ready and its agent produces further changes
 - **THEN** the next evaluation reflects the checkout's current state
 
+### Requirement: An agent is placed on the target as the remote has it
+The system SHALL bring the local target in line with the remote's before
+cutting a new agent's branch from it, by fast-forward and by nothing else.
+A target carrying commits the remote lacks, and one Git refuses to move
+because the primary checkout has work in the way, SHALL be left exactly as
+they stand, and the placement SHALL report how far behind the agent starts.
+A repository with no remote, or whose target the remote does not have, SHALL
+be placed from its local target with nothing to report.
+
+#### Scenario: A new agent starts from what the remote has
+- **WHEN** the remote's target has moved since this machine last fetched and an agent is created
+- **THEN** the local target is fast-forwarded onto the remote's tip and the agent's branch is cut from there
+
+#### Scenario: The operator's own commits are never rewritten to sync
+- **WHEN** the local target carries commits the remote does not and the remote has moved
+- **THEN** the local target is left where it stands, the agent is placed from it, and the placement says how far behind the target is
+
+#### Scenario: A repository with no remote is placed from its own target
+- **WHEN** an agent is created in a repository with no remote
+- **THEN** the agent is placed from the local target and nothing is reported
+
 ### Requirement: Delivery follows the declared completion and only the system writes the target
 The system SHALL deliver a ready task only on an explicit operator action,
 one task at a time, according to the project's declared completion
@@ -153,8 +181,10 @@ readable name and open a pull request against the target. No agent SHALL
 write the target branch; the system SHALL write it only in the fast-forward
 step. The target's tip SHALL be taken from where the target lives: the
 remote-tracking branch after a fetch when delivery publishes a pull
-request, the local branch otherwise. The system SHALL NOT update the
-operator's checked-out target except in the fast-forward step of `merge`.
+request, the local branch otherwise. Delivery SHALL NOT update the
+operator's checked-out target except in the fast-forward step of `merge`;
+the only other write to it is the fast-forward that brings it in line with
+the remote before an agent is placed.
 
 #### Scenario: Handoff never touches the target
 - **WHEN** the operator delivers a ready task in a project declaring handoff
@@ -185,7 +215,7 @@ operator's checked-out target except in the fast-forward step of `merge`.
 #### Scenario: In pr mode the target is the remote's
 - **WHEN** a task is rebased or delivered in a project declaring pr and the remote target has moved
 - **THEN** the branch is rebased onto the remote target's tip as fetched
-- **AND** the operator's local target branch and primary checkout are not modified
+- **AND** delivery does not modify the operator's local target branch or primary checkout
 
 #### Scenario: Sibling tasks share work only through the target
 - **WHEN** one task has been delivered and another live task asks for the target
@@ -196,6 +226,7 @@ operator's checked-out target except in the fast-forward step of `merge`.
 - **WHEN** the target has moved and a live task's pane goes quiet with a clean working tree
 - **THEN** the task's branch is rebased onto the target's tip inside its checkout, under the same rules as delivery
 - **AND** a conflict is returned to the agent and the target is unchanged
+- **AND** this holds under every completion behavior, from the local target and without a fetch of its own
 
 #### Scenario: A task mid-edit is not rebased under its agent
 - **WHEN** the target has moved while a live task's working tree is dirty
