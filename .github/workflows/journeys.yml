@@ -85,6 +85,14 @@ jobs:
             uze-journeys:ci run /journeys/suites \
             ${{ github.event_name == 'schedule' && '--record' || '--tag gate' }}
 
+      # Named, because "No files were found" on the upload below is how a
+      # failing run lost its own evidence once: the artifact is silent about
+      # an empty directory, and the reason it was empty is not visible
+      # anywhere else.
+      - name: Show what evidence was written
+        if: always()
+        run: ls -la journeys/.evidence/ || echo "no evidence directory at all"
+
       # Uploaded on failure and on the nightly: a journey's evidence is what
       # it read off the machine, and it is the whole point of having run it.
       - name: Keep the evidence
@@ -94,3 +102,4 @@ jobs:
           name: journey-evidence-${{ github.run_id }}
           path: journeys/.evidence/
           retention-days: 14
+          if-no-files-found: error

@@ -1268,6 +1268,13 @@ def run_one(args, path: Path) -> int:
                 # The frame is captured before leaving: a gesture that did
                 # not land is exactly when the screen is worth keeping.
                 entry["screen"] = capture_frame(runner, evidence, index)
+                # And printed, because the log is the evidence of last
+                # resort. An artifact can fail to upload, a container's
+                # mount can go nowhere, and the world is a temp directory
+                # the next run deletes — but whoever is reading a red job
+                # always has the log.
+                for line in failure_context(runner):
+                    log(f"  {DIM}│{OFF} {line}")
                 break
             for check in scene.get("then", []):
                 ok, detail = checker.check(check)
@@ -1321,6 +1328,34 @@ def run_one(args, path: Path) -> int:
         f"{record['seconds']}s · evidence in {evidence}{OFF}"
     )
     return 0
+
+
+def failure_context(runner: Runner) -> list[str]:
+    """The smallest thing worth printing into a failing job's log: the frame
+    the gesture failed on, and what the machine looked like underneath it."""
+    lines = ["── the screen ──"]
+    if runner.screen is not None:
+        frame = [row.rstrip() for row in runner.screen.pane().splitlines()]
+        while frame and not frame[-1]:
+            frame.pop()
+        lines += frame or ["(nothing — the session is gone; the app exited)"]
+    else:
+        lines.append("(no session)")
+    tasks = sorted(
+        (runner.world.uze_home / "state" / "tasks").glob("*.json"),
+    )
+    recorded = []
+    for store in tasks:
+        try:
+            recorded += json.loads(store.read_text()).get("tasks", [])
+        except (OSError, json.JSONDecodeError):
+            continue
+    lines.append("── what the machine recorded ──")
+    lines += [
+        f"{task['id']} {task['state']['state']} checkout={task.get('checkout')}"
+        for task in recorded
+    ] or ["(no tasks recorded)"]
+    return lines
 
 
 def capture_frame(runner: Runner, evidence: Path, index: int) -> str | None:
