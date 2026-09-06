@@ -592,6 +592,30 @@ ignored artifacts survive. A slot holding work is never reused.
 > `crates/uze-core/src/project/checkout.rs::a_new_directory_appears_only_when_none_is_free_and_the_cap_holds`
 > `crates/uze-application/src/application/services.rs::placement_tests::a_delivered_tasks_slot_is_reused_by_the_next_agent`
 
+### Work in the target is recognized by its patch, not by its commits
+
+A forge that squashes or rebases what it merges gives the target commits of
+its own, so a delivered branch stays "ahead" of it forever. Integration is
+therefore read from the patch the target carries — the branch's own commits,
+then the single patch a squash would have made of them — and that is what
+frees a slot, prunes a branch and keeps a delivered task delivered. Read by
+reachability alone, one squash merge parked a slot for the life of the
+repository and every new agent paid for a checkout of its own.
+
+> `crates/uze-core/src/project/checkout.rs::a_squash_merged_branch_frees_its_slot_and_is_pruned`
+> `crates/uze-core/src/project/checkout.rs::a_rebase_merged_branch_frees_its_slot`
+
+### An agent is placed on the target as the remote has it
+
+The local target is fast-forwarded onto the remote's before a new agent's
+branch is cut from it, and by nothing but a fast-forward: a target carrying
+commits the remote lacks is left where it stands and the placement reports
+how far behind the agent starts.
+
+> `crates/uze-core/src/project/landing.rs::the_local_target_is_fast_forwarded_onto_the_remotes`
+> `crates/uze-core/src/project/landing.rs::a_target_carrying_its_own_commits_is_left_alone_and_reported`
+> `crates/uze-application/src/application/services/tasks.rs::placement_tests::a_new_agent_starts_from_the_target_as_the_remote_has_it`
+
 ### Nothing that can hold work is removed automatically
 
 A dirty orphan is parked with every file preserved. A branch with commits the

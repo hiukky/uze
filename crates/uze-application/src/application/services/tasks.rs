@@ -116,6 +116,10 @@ impl Workspace<'_> {
         else {
             return AgentPlacement::unisolated(&primary, "the primary checkout is not on a branch");
         };
+        // Before anything is branched from it: an agent placed on a target
+        // nobody fetched starts behind every merge of the day, and hears
+        // about it as conflicts in a request already opened.
+        let sync = landing::sync_target(&primary, &target);
         let base_tip = checkout::tip_of(&primary, &target);
         if base_tip.is_empty() {
             return AgentPlacement::unisolated(&primary, "no commit to branch from");
@@ -136,8 +140,13 @@ impl Workspace<'_> {
                 task.checkout = Some(acquired.id.clone());
                 store.upsert(task.clone());
                 let _ = task::save(&self.0.home, &primary, &store);
-                let warnings =
-                    checkout::materialize(&primary, &acquired.path, &policy.link, &policy.setup);
+                let mut warnings = sync.concern(&task.target).into_iter().collect::<Vec<_>>();
+                warnings.extend(checkout::materialize(
+                    &primary,
+                    &acquired.path,
+                    &policy.link,
+                    &policy.setup,
+                ));
                 AgentPlacement {
                     cwd: acquired.path,
                     isolation: Isolation::Slot {
@@ -337,7 +346,6 @@ impl Workspace<'_> {
         checkout::reconcile(&repository.primary, &mut repository.store, &target);
         let mut notices = Vec::new();
         let primary = repository.primary.clone();
-        let completion = repository.policy.completion;
         let owners = slot_owners(&repository.store);
         for task in &mut repository.store.tasks {
             // A task that ended is still looked at while it owns its
@@ -381,15 +389,16 @@ impl Workspace<'_> {
                 }
             }
             // Following a moved target costs a clean task nothing and a
-            // dirty one its work in progress, which `refresh` refuses. A
-            // published target is followed at delivery, where the fetch
-            // is already paid for.
-            if completion != CompletionBehavior::Pr
-                && matches!(task.state, TaskState::Running | TaskState::Ready)
+            // dirty one its work in progress, which `refresh` refuses.
+            // Whatever the completion behaviour: a task that follows the
+            // target as it moves meets a conflict while its agent is
+            // still holding the change, rather than in a request already
+            // opened.
+            if matches!(task.state, TaskState::Running | TaskState::Ready)
                 && let Err(DeliveryFailure::Conflict {
                     files,
                     target_moved,
-                }) = landing::refresh(&primary, task, completion)
+                }) = landing::refresh(&primary, task)
                 && let Some(slot) = landing::slot_path(&primary, task)
             {
                 notices.push(AgentNotice {
@@ -971,6 +980,56 @@ mod placement_tests {
             Isolation::Slot { task, .. } => task,
             Isolation::Unisolated { reason } => panic!("expected a slot, got: {reason}"),
         }
+    }
+
+    /// An agent is placed on the target's tip, so the target has to be the
+    /// one the team is on rather than the one this machine last saw: a
+    /// branch cut from a stale tip conflicts in a request already opened.
+    #[test]
+    fn a_new_agent_starts_from_the_target_as_the_remote_has_it() {
+        let repository = repository("place-synced");
+        let root = repository.root().to_path_buf();
+        let base = uze_testkit::temp::scratch("place-synced-remote");
+        let origin = base.join("origin.git");
+        repository.git(&[
+            "init",
+            "--quiet",
+            "--bare",
+            "-b",
+            "main",
+            origin.to_str().unwrap(),
+        ]);
+        repository.git(&["remote", "add", "origin", origin.to_str().unwrap()]);
+        repository.git(&["push", "--quiet", "-u", "origin", "main"]);
+        let other = base.join("other");
+        repository.git(&[
+            "clone",
+            "--quiet",
+            origin.to_str().unwrap(),
+            other.to_str().unwrap(),
+        ]);
+        repository.git_in(&other, &["config", "user.name", "Other"]);
+        repository.git_in(&other, &["config", "user.email", "other@uze.invalid"]);
+        std::fs::write(other.join("merged-while-you-were-away.rs"), "").unwrap();
+        repository.git_in(&other, &["add", "."]);
+        repository.git_in(&other, &["commit", "-qm", "merged while you were away"]);
+        repository.git_in(&other, &["push", "--quiet"]);
+
+        let app = application("place-synced-home");
+        let placement = app.workspace().place_new_agent(&root, &[]);
+
+        assert!(
+            placement
+                .cwd
+                .join("merged-while-you-were-away.rs")
+                .is_file(),
+            "the agent starts from what the remote has, not from the local tip"
+        );
+        assert!(
+            placement.warnings.is_empty(),
+            "nothing to report when the target could be moved: {:?}",
+            placement.warnings
+        );
     }
 
     #[test]

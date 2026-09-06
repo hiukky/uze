@@ -74,9 +74,13 @@ green. Tests run against real repositories through `uze_testkit::git`.
 - [x] 10.4 Application surface: task list read model with state, one delivery service, the preserved-work list at space start; TUI: sidebar label and state, `i`/`I`, the preserved-work list with resume, deliver and discard.
 - [x] 10.5 Cover delivery: handoff never touches the target, merge advances it linearly after the gate, gate runs after the rebase, a gate failure and a conflict both leave the target untouched and return to the owner, the second task sees the first, overlap with the operator's dirty primary refuses, pr pushes and opens the request against a fake forge CLI, only the operator discards.
 
-- [x] 10.6 Rebase a live task onto the target automatically when the target has moved and the task's pane is quiet with a clean tree, through the same path as delivery's rebase; never under a dirty tree. No manual mode.
+- [x] 10.6 Rebase a live task onto the target automatically when the target has moved and the task's pane is quiet with a clean tree, through the same path as delivery's rebase; never under a dirty tree. No manual mode. Under every completion behavior, from the local target: a fetch on the cadence of a quiet pane would be paid on every tick, and `pr` reaches the remote where it matters — before an agent is placed, and at delivery.
 
-- [x] 10.7 In pr mode, resolve the target's tip from the remote-tracking branch after a fetch under the lock, and take "integrated" from the forge (request merged) rather than from reachability, so a squash merge still closes the task and prunes its branch; the operator's local target is never pulled.
+- [x] 10.7 In pr mode, resolve the target's tip from the remote-tracking branch after a fetch under the lock, and take "integrated" from the patch the target carries rather than from reachability, so a squash merge still closes the task and prunes its branch.
+
+- [x] 10.8 Read integration by patch identity everywhere reachability was asked: `checkout::is_integrated` answers from `git cherry`, on the branch's own commits and then on the single patch a squash would have made of them, and is what parks a slot, revives a delivered task, adopts an orphan and prunes a branch. Reachability alone reported a squash-merged branch as work nobody delivered, which parked its slot for the life of the repository and left every new agent creating a checkout of its own.
+
+- [x] 10.9 Fast-forward the local target onto the remote's before an agent is branched from it (`landing::sync_target`), and never by anything but a fast-forward: a diverged target, or one Git refuses to move under the operator's uncommitted work, is left alone and reported in the placement's warnings. Without it an agent starts a day of merges behind the target the rest of the team is on, and learns it as conflicts in a request already opened.
 
 ## 11. Materialisation
 
