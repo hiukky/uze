@@ -1,5 +1,6 @@
 journey: agents, their checkouts, and the slot the next one takes
 tags: [gate, tui, workspace]
+proves: web/content/docs/workspace.mdx
 about: |
   Placing an agent gives it a checkout of its own. A change inside that
   checkout becomes the task's recorded status. Closing an agent frees its

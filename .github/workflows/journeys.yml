@@ -63,6 +63,12 @@ jobs:
       - name: Build the binary under test
         run: cargo build --locked --bin uze
 
+      # Cheap, and it fails on the two things a run would not reach: a
+      # gesture with no `expect`, and a `proves:` pointing at a page that
+      # moved.
+      - name: Validate the journeys
+        run: python3 journeys/journey.py validate journeys/suites
+
       - name: Run the journeys
         run: |
           mkdir -p journeys/.evidence

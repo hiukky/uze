@@ -757,10 +757,18 @@ def load(path: Path) -> dict:
         die(f"{path}: {error}")
 
 
-def validate(spec: dict) -> list[str]:
+def validate(spec: dict, path: Path | None = None) -> list[str]:
     problems = []
     if not spec.get("journey"):
         problems.append("the journey has no name")
+    # A journey may name the user-facing page whose claim it backs. This
+    # catches structural drift — a page that lost its proof, a proof that
+    # points nowhere — and tells whoever changes the flow which page to
+    # re-read. It cannot tell you the prose went wrong; nothing can.
+    proves = spec.get("proves") or []
+    for page in [proves] if isinstance(proves, str) else proves:
+        if not (REPO / page).exists():
+            problems.append(f"`proves` names {page!r}, which does not exist")
     for index, scene in enumerate(spec.get("scenes", []), 1):
         where = scene.get("scene", f"scene {index}")
         for step in scene.get("when", []):
@@ -813,9 +821,11 @@ def command_list(args) -> int:
         scenes = len(spec.get("scenes") or [])
         print(f"  {GREEN}{path.name}{OFF}  {tags}")
         print(f"      {spec.get('journey', '(unnamed)')}")
-        print(
-            f"      {DIM}{scenes} scenes, {sum(len(s.get('then', [])) for s in spec.get('scenes') or [])} checks{OFF}"
-        )
+        checks = sum(len(scene.get("then", [])) for scene in spec.get("scenes") or [])
+        print(f"      {DIM}{scenes} scenes, {checks} checks{OFF}")
+        proves = spec.get("proves") or []
+        for page in [proves] if isinstance(proves, str) else proves:
+            print(f"      {DIM}proves {page}{OFF}")
     print()
     return 0
 
@@ -824,7 +834,7 @@ def command_validate(args) -> int:
     failed = 0
     for path in specs_of(args):
         spec = load(path)
-        problems = validate(spec)
+        problems = validate(spec, path)
         for problem in problems:
             print(f"{RED}✕{OFF} {path.name}: {problem}")
         if problems:
@@ -894,7 +904,7 @@ def command_run_all(args) -> int:
 
 def run_one(args, path: Path) -> int:
     spec = load(path)
-    if problems := validate(spec):
+    if problems := validate(spec, path):
         for problem in problems:
             print(f"{RED}✕{OFF} {problem}")
         return 1

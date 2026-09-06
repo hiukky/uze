@@ -119,6 +119,23 @@ Everything runs nightly. `cli` / `tui` name the surface, and a domain tag
 one. Cadence never goes in the folder name — a journey that becomes slow
 should change its tag, not move.
 
+### A journey can name the page it backs
+
+```yaml
+proves: web/content/docs/workspace.mdx
+```
+
+`journey validate` fails a `proves:` that no longer resolves, and
+`journey list` prints it. That is the whole mechanism, and its limits are
+worth stating: it catches a page that moved or was deleted, and it tells
+whoever changes a flow which page to re-read. It cannot tell you the prose
+stopped being true — no check can, and pretending otherwise is worse than
+not having one.
+
+The direction is journey → page, not page → journey: the suite changes far
+more often than the site, the link belongs where the change happens, and the
+site's frontmatter schema stays untouched.
+
 ### Worlds repeat before they deserve a name
 
 The `world:` block stays in the journey, where a reader can see it without
