@@ -132,6 +132,21 @@ newer?* A directory answers neither.
 - [ ] 9b.10 **Update detection is now possible and still unbuilt.** `plugin_summary`'s `update_available` is computed only for `Embedded` sources; every marketplace-installed plugin reports `None`. With a marketplace commit recorded, the answer is a comparison — the locked revision against what the declared `ref:` points at now — but it needs a fetch policy (when to touch the network, what `status` says offline) that nothing here decides yet.
 - [ ] 9b.11 The version stays `1` while UZE is pre-release: the number exists to tell apart shapes a *released* UZE wrote, and there is none. A lock in an earlier shape is refused by its fields.
 
+## 9c. Re-asking the ADAPTED declarations (2026-09-06)
+
+Every vendor moved at once in this round (claude 2.1.260→2.1.263,
+antigravity 1.1.22→1.1.27, opencode beta-18684→beta-19192, codex
+0.152.1→0.153.4). ADR-035 records a drift as an explicit event because a
+declaration that has quietly become false is a false green waiting to
+happen — so each was re-asked against the binary under test, never against
+memory or a doc older than it.
+
+- [x] 9c.1 **antigravity `user-only-skill-adapted` → promoted.** 1.1.27 carries `DisableModelInvocation yaml:"disable-model-invocation"` (plus the matching proto field); through 1.1.21 there was no inverse of `disable-slash-command`. The wrapper emits it, the route is Native, and the Lab asserts absence (`user-only-skill-hidden`) gated on the presence check beside it. Registry entry removed. Vertical: 41/41 asserted, 0 ADAPTED (was 41/41 with 1).
+- [x] 9c.2 The first run of that check failed, which is the point of measuring: markers are substring tests over the whole request body, so a bare `review` also matches the word in prose (`init` matches the same way and is no skill of UZE's). The three antigravity skill checks now read the qualified `flow:<name>` alone — the delivered identity, and the only marker that discriminates.
+- [ ] 9c.3 **opencode `model-only-is-not-user-invocable` — declaration corrected, not retired.** Its old reason ("no documented control hides a Skill from explicit invocation") is false at beta-19192: the parser reads `metadata."opencode/slash"` falling back to a top-level `slash`, two catalog builders filter with `skills.filter((s) => s.slash !== false)`, and UZE already writes it. Removing the decline made the check fail — the `/skills` browser this vertical reads renders `flow:analyze` regardless. The declaration now says that, and names what retires it: read the `/` palette those filters build, and prove on one capture that a default Skill is listed there while the model-only one is not.
+- [ ] 9c.4 **opencode hooks (`hooks-deny-v2-limitation`, `hooks-order-v2-limitation`) — the premise is contradicted and unresolved.** UZE's own evidence string says "the V2 tool hooks carry the tool input but no block signal", and the registry follows it. The current spec says `tool.execute.before` receives `event.input` and "can prevent execution by throwing an error", and the binary registers exactly that API (`ctx.tool.hook("execute.before", …)`; `permission.evaluate` does not appear in it at all, though the registry cites it). Deciding this needs an experiment — a plugin that throws in `execute.before` against a scripted call — and, if it denies, a change to the bridge's deny semantics, which is a product change rather than a Lab adjustment. Four registry entries hang off it: the two above plus the `hooks-*-tool-executed` pair.
+- [ ] 9c.5 **opencode `mcp-tool-executed-in-tui` — untouched.** The scripted call is answered `Unknown tool: uze-mcp-conformance-uze-conformance_uze_conformance`. Whether that name is what the runtime exposes was not established; the struct summary records no declared-tool list for this harness, so it needs a `--discovery` capture read against the request's own tool declarations. The scenario already self-promotes the moment a real proof marker comes back, so no Lab change is pending on it — only the finding.
+
 ## 10. Creation and discoverability (added 2026-09-05)
 
 Reframed from the original amendment: nothing is created on arrival.

@@ -53,16 +53,30 @@ class OpenCodeBindings(Bindings):
         return tui.collect(reads=6)
 
     def unsupported(self, prop):
-        """OpenCode's skill surface offers every delivered Skill to the user;
-        no documented control hides one from explicit invocation.
+        """`/skills` lists every delivered Skill, whatever `slash` says.
 
-        Consistent with what the product already reports: `uze plugin
-        inspect` routes every OpenCode Skill as `Adaptable`, never `Native`.
+        Re-asked at beta-19192 (2026-09-06). The old reason — "no
+        documented control hides a Skill from explicit invocation" — is
+        false: the skill parser reads `metadata."opencode/slash"` falling
+        back to a top-level `slash`, and two catalog builders filter with
+        `skills.filter((s) => s.slash !== false)`. UZE writes that control,
+        and its own routing calls this Native.
+
+        What is still true is narrower and was measured, not assumed:
+        the surface this vertical reads renders `flow:analyze` alongside
+        the others, so the property cannot be observed *here*. Removing
+        the declaration made the check fail on exactly that.
+
+        What would retire this: reading the surface those two filters
+        build — the `/` invocation palette — rather than the `/skills`
+        browser, and proving on the same capture that a default Skill is
+        listed there while the model-only one is not.
         """
         if prop == "model-only-is-not-user-invocable":
             return (
-                "OpenCode has no documented control that hides a Skill from "
-                "explicit invocation; the product routes its Skills as Adaptable"
+                "OpenCode honours `slash: false` in its `/` palette builders but "
+                "its `/skills` browser lists every delivered Skill regardless; "
+                "the property is not observable on the surface read here"
             )
         return None
 
