@@ -269,6 +269,39 @@ impl Workspace<'_> {
 
     /// The project's say in delivery, for a header to name what `deliver`
     /// will do.
+    /// What declaring a completion behavior would do, so a caller can say
+    /// it before doing it rather than after. Writing the policy touches a
+    /// *tracked* file — the one the whole team reads — and the projected
+    /// `AGENTS.md` still needs `uze context reconcile` to follow it, so a
+    /// click that silently did both would be a click nobody could predict.
+    pub fn completion_change_consequence(&self, cwd: &Path) -> Option<PolicyWriteConsequence> {
+        let repository = self.repository(cwd)?;
+        let manifest = manifest::manifest_path_for(&repository.primary);
+        Some(PolicyWriteConsequence {
+            creates_manifest: !manifest.exists(),
+            manifest,
+        })
+    }
+
+    /// Declares the completion behavior for the repository `cwd` belongs
+    /// to, creating `agents.yaml` when the project has none. Reports
+    /// whether it created it, so the caller can say which of the two
+    /// things just happened.
+    ///
+    /// The policy is the primary checkout's, always: an isolated checkout
+    /// declaring one of its own would be a per-worktree policy, which
+    /// there is deliberately none of.
+    pub fn set_completion(&self, cwd: &Path, behavior: CompletionBehavior) -> Result<bool> {
+        // `MissingPath` is what resolving a project root already answers
+        // with when there is nothing to resolve; a policy is a repository's,
+        // and outside one there is no primary checkout to declare it in.
+        let primary = self
+            .repository(cwd)
+            .map(|repository| repository.primary)
+            .ok_or_else(|| UzeError::MissingPath(cwd.to_path_buf()))?;
+        manifest::set_completion(&primary, behavior)
+    }
+
     pub fn delivery_policy(&self, cwd: &Path) -> Option<DeliveryPolicyView> {
         let repository = self.repository(cwd)?;
         let declared = manifest::load(&repository.primary)
@@ -842,6 +875,15 @@ pub enum DeliveryOutcome {
 pub struct DeliveryReport {
     pub task: TaskView,
     pub outcome: DeliveryOutcome,
+}
+
+/// What writing the policy is about to do to the project.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PolicyWriteConsequence {
+    /// The file does not exist yet, so declaring adds a tracked file to
+    /// the repository rather than editing one.
+    pub creates_manifest: bool,
+    pub manifest: PathBuf,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

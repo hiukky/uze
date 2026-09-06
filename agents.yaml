@@ -10,7 +10,5 @@ worktrees:
 marketplaces:
   ai:
     path: /home/hiukky/ai
-
-plugins:
-  git:
-    marketplace: ai
+    plugins:
+      - git

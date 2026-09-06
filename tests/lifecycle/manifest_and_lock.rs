@@ -9,7 +9,7 @@
 use std::fs;
 
 use uze_application::UzeApplication;
-use uze_core::{UzeHome, manifest, trust::AlwaysTrust};
+use uze_core::{UzeHome, manifest, trust::AlwaysTrust, worktree::CompletionBehavior};
 
 /// A real repository, because a manifest declaring links is validated
 /// against what the repository ignores — a bare directory would pass tests
@@ -93,6 +93,49 @@ fn install_run_twice_leaves_the_manifest_byte_identical() {
     let second = fs::read_to_string(manifest::manifest_path_for(&root)).unwrap();
 
     assert_eq!(first, second);
+}
+
+/// The other act that declares something: the workspace client changing the
+/// policy. A project that skipped `uze install` and opened the client
+/// straight away has no manifest, and the first declaration is what creates
+/// one — the file arrives by intent, still, just not `install`'s.
+#[test]
+fn declaring_the_policy_from_the_client_creates_the_manifest_and_states_it_first() {
+    let (application, repository) = project("manifest-policy-click");
+    let root = repository.root().to_path_buf();
+    assert!(
+        !manifest::manifest_path_for(&root).exists(),
+        "the fixture must start with nothing declared"
+    );
+
+    let consequence = application
+        .workspace()
+        .completion_change_consequence(&root)
+        .expect("a git repository has a policy to declare");
+    assert!(
+        consequence.creates_manifest,
+        "the caller must be able to say a tracked file is about to appear"
+    );
+    assert_eq!(consequence.manifest, manifest::manifest_path_for(&root));
+
+    assert!(
+        application
+            .workspace()
+            .set_completion(&root, CompletionBehavior::Pr)
+            .unwrap()
+    );
+    assert_eq!(
+        manifest::worktree_policy(&root).unwrap().completion,
+        CompletionBehavior::Pr
+    );
+    assert!(
+        !application
+            .workspace()
+            .completion_change_consequence(&root)
+            .unwrap()
+            .creates_manifest,
+        "the file exists now; a second change edits it"
+    );
 }
 
 #[test]

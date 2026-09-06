@@ -24,7 +24,10 @@ use std::{
 use noyalib::{DuplicateKeyPolicy, ParserConfig, compat::serde_yaml, from_str_with_config};
 use serde::{Deserialize, Serialize};
 
-use crate::{Result, UzeError, worktree::WorktreePolicy};
+use crate::{
+    Result, UzeError,
+    worktree::{CompletionBehavior, WorktreePolicy},
+};
 
 pub const MANIFEST_FILE_NAME: &str = "agents.yaml";
 
@@ -254,6 +257,28 @@ pub fn ensure_exists(root: &Path) -> Result<bool> {
     document.append_block(SCAFFOLD)?;
     document.save()?;
     Ok(true)
+}
+
+/// Declares the completion behavior, creating the manifest when the project
+/// has none. This is the other act that declares something — the client's
+/// own — so it creates the file for the same reason `install` does, and
+/// reports whether it had to, since a caller showing a person the
+/// consequence of their click needs to say "this creates a tracked file"
+/// before it happens rather than after.
+pub fn set_completion(root: &Path, behavior: CompletionBehavior) -> Result<bool> {
+    let path = manifest_path_for(root);
+    let created = ensure_exists(root)?;
+    let mut document = edit::ManifestDocument::open(&path)?;
+    document.upsert(
+        "worktrees",
+        "completion",
+        &serde_yaml::Value::String(behavior.abi_name().to_owned()),
+    )?;
+    document.save()?;
+    // Re-read through the typed path, the same guard `declare_plugin` has:
+    // a write the schema would reject is a bug here, not on a later command.
+    load(root)?;
+    Ok(created)
 }
 
 /// Declares a plugin under the marketplace it comes from, creating the
@@ -699,6 +724,60 @@ mod tests {
         assert_eq!(one.worktrees.unwrap().gate, vec!["cargo test".to_owned()]);
         let many = parsed("worktrees:\n  gate:\n    - cargo test\n    - cargo clippy\n").unwrap();
         assert_eq!(many.worktrees.unwrap().gate.len(), 2);
+    }
+
+    #[test]
+    fn declaring_the_policy_creates_the_manifest_and_says_that_it_did() {
+        let root = uze_testkit::temp::scratch("manifest-set-completion");
+        assert!(
+            set_completion(&root, CompletionBehavior::Pr).unwrap(),
+            "the first call creates the file, and the caller is told so"
+        );
+        assert_eq!(
+            worktree_policy(&root).unwrap().completion,
+            CompletionBehavior::Pr
+        );
+
+        assert!(
+            !set_completion(&root, CompletionBehavior::Merge).unwrap(),
+            "the second call changes a file that already exists"
+        );
+        assert_eq!(
+            worktree_policy(&root).unwrap().completion,
+            CompletionBehavior::Merge
+        );
+    }
+
+    /// The scaffold's own commentary is what teaches the choices, so a
+    /// click that changes one must not take the explanation with it.
+    #[test]
+    fn declaring_the_policy_keeps_the_comment_that_explains_it() {
+        let root = uze_testkit::temp::scratch("manifest-set-completion-comments");
+        set_completion(&root, CompletionBehavior::Pr).unwrap();
+        let written = fs::read_to_string(manifest_path_for(&root)).unwrap();
+        assert!(written.contains("completion: pr"), "{written}");
+        assert!(written.contains("handoff | merge | pr"), "{written}");
+        assert!(written.contains("# slots: 3"), "{written}");
+    }
+
+    #[test]
+    fn declaring_the_policy_into_a_manifest_that_has_no_policy_block_adds_one() {
+        let root = uze_testkit::temp::scratch("manifest-set-completion-marketless");
+        let authored = "# ours\nmarketplaces:\n  ai:\n    path: ../ai\n    plugins: [flow]\n";
+        fs::write(manifest_path_for(&root), authored).unwrap();
+
+        assert!(
+            !set_completion(&root, CompletionBehavior::Merge).unwrap(),
+            "a manifest that exists is not created"
+        );
+        let manifest = load(&root).unwrap().unwrap();
+        assert_eq!(
+            manifest.worktrees.unwrap().completion,
+            CompletionBehavior::Merge
+        );
+        let written = fs::read_to_string(manifest_path_for(&root)).unwrap();
+        assert!(written.contains("# ours"), "{written}");
+        assert_eq!(manifest.marketplaces["ai"].plugins, vec!["flow".to_owned()]);
     }
 
     #[test]

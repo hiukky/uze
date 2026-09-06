@@ -91,16 +91,23 @@ impl ManifestDocument {
         if self.document.get(mapping_path).is_none() {
             return self.append_mapping(mapping_path, key, value);
         }
-        // An entry already there is removed rather than overwritten:
-        // growing a scalar (`flow: ours`) into a block (`flow:` + fields)
-        // is not an in-place edit, and the library refuses it as one. When
-        // it was the mapping's only entry the parent goes with it, and the
-        // re-insert takes the create path above.
-        if self
-            .document
-            .get(&format!("{mapping_path}.{key}"))
-            .is_some()
-        {
+        let full = format!("{mapping_path}.{key}");
+        if self.document.get(&full).is_some() {
+            // A scalar replacing a scalar is an in-place edit: the library
+            // matches the value's existing style, and the comment its
+            // author wrote beside it stays where they put it.
+            if !matches!(
+                value,
+                serde_yaml::Value::Mapping(_) | serde_yaml::Value::Sequence(_)
+            ) {
+                return self
+                    .document
+                    .set_value(&full, value)
+                    .map_err(|error| self.refusal(&full, error.to_string()));
+            }
+            // Growing a scalar into a block is not one, and the library
+            // refuses it as such. When it was the mapping's only entry the
+            // parent goes with it, and the re-insert takes the create path.
             self.remove(mapping_path, key)?;
             return self.upsert(mapping_path, key, value);
         }
