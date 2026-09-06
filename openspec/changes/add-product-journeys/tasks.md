@@ -122,12 +122,31 @@ already covers are ticked.
       monotonic deadlines the suite is 10/10, and the tool's author has
       never seen it in real use. Left here because "we called our own
       environment a product bug" is worth remembering.
-- [ ] 6b.6 Findings characterized in scenes rather than fixed, each with its
-      reason: an empty `generated/<plugin>` created during install
-      (Claude/Codex), the bridge file surviving a reconcile empty
-      (deliberate; the file's existence is the one managed artifact with no
-      receipt), `~/.claude/skills` created empty, and a blocked
-      `plugin remove` exiting 0.
+- [ ] 6b.6 Three findings characterized in scenes rather than fixed, each
+      with its reason:
+      - a blocked `plugin remove` exits 0, so a script running
+        `uze plugin remove x && …` is told the removal happened. Nothing in
+        the code states this either way, and an exit status is a contract.
+      - the bridge file survives a reconcile empty. Deliberate and
+        documented in `text_region::detach`; the cost is that
+        `uze context inspect` then reports the bridge as `Missing` while an
+        empty file sits in the repository. The file's *existence* is the one
+        managed artifact with no receipt behind it, and that is the fix.
+      - an empty directory named after the plugin appears beside the one that
+        delivers (`generated/<plugin>` next to `generated/<plugin>@<market>`),
+        on Claude and Codex. **Creator not located.** Measured, not guessed:
+        it is created empty and never receives a child (46k samples during
+        the command); nothing reads it (blocking the path with a file leaves
+        the whole delivery working and raises no error); it appears only when
+        a harness is present; and it does not come from the per-skill wrapper
+        — `generated_skill_dir` is never called, traced with a backtrace.
+        Four suspects eliminated by measurement, the fifth unfound. Finding
+        it needs a trace on every `create_dir_all` in the attach path, or a
+        machine with `strace`.
+
+      Dropped from this list after checking: `~/.claude/skills` being created
+      empty is not a defect. The integration's `install()` creates the
+      discovery directory it will later attach into, deliberately.
 
 ## 7. Documentation and model
 
