@@ -1848,7 +1848,6 @@ fn overview_install_intent_reaches_install_project_environment() {
     std::fs::write(market.join("flow/skills/uze-test/SKILL.md"), "# s\n").unwrap();
     let lock = uze_core::project_lock::ProjectLock {
         version: 1,
-        worktrees: None,
         marketplaces: std::iter::once((
             "test".to_owned(),
             uze_core::project_lock::LockedMarketplace {
@@ -1869,6 +1868,7 @@ fn overview_install_intent_reaches_install_project_environment() {
                     version: None,
                     integrity: None,
                 },
+                requested: None,
             },
         ))
         .collect(),
@@ -1960,7 +1960,10 @@ fn the_seeded_history_reads_what_the_workspace_client_recorded() {
     let project = base.join("project");
     let nested = project.join("crates").join("inner");
     std::fs::create_dir_all(&nested).unwrap();
-    std::fs::write(project.join("agents.lock"), "version: 1\n").unwrap();
+    // The manifest is what anchors a project: the lock is derived, and a
+    // derived file cannot be what identifies one. A fixture that only
+    // resolved would not be found from a subdirectory at all.
+    std::fs::write(project.join("agents.yaml"), "worktrees: {}\n").unwrap();
 
     let app = super::tui_application(home.clone()).unwrap();
     let root = app.workspace().root(&project);

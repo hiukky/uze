@@ -3,7 +3,8 @@
 //! # What lives under `project/`
 //!
 //! Everything scoped to a *project directory* rather than to the machine:
-//! what a project declares ([`project_lock`], [`worktree`]), where that
+//! what a project declares ([`manifest`]) and what resolving it produced
+//! ([`project_lock`], [`worktree`]), where that
 //! project begins ([`project_root`], [`workspace`]), the instruction
 //! context it carries ([`context`], [`project_context`]), the mechanism
 //! for owning a slice of a file UZE did not write ([`text_region`]), and
@@ -18,6 +19,7 @@
 pub mod checkout;
 pub mod context;
 pub mod landing;
+pub mod manifest;
 pub mod project_context;
 pub mod project_lock;
 pub mod project_root;

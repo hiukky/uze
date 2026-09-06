@@ -1347,6 +1347,132 @@ fn unified_lines(rows: &[DiffRow]) -> Vec<&DiffCell> {
 mod tests {
     use super::*;
 
+    /// Highlighting is the one thing in this crate whose correctness depends
+    /// on syntect's regex backend, and the failure mode of changing that
+    /// backend is quiet: a syntax whose patterns the engine cannot match
+    /// still renders, with every span collapsed into the default colour.
+    /// Pinning exact RGB values would break on any syntect or theme update
+    /// and prove little, so these assert the two properties that actually
+    /// distinguish working highlighting from silently broken highlighting —
+    /// the text survives intact, and the line is genuinely coloured in more
+    /// than one way.
+    mod highlighting {
+        use super::*;
+
+        fn spans_for(file: &str, source: &str) -> Vec<(Rgb, String)> {
+            let rows = highlight_diff_rows(
+                vec![PairedRow {
+                    left: None,
+                    right: Some((1, DiffLineKind::Added, source.to_owned())),
+                }],
+                Path::new(file),
+                FALLBACK_SYNTAX_THEME,
+            );
+            rows.into_iter()
+                .next()
+                .and_then(|row| row.right)
+                .expect("the added side is what was asked for")
+                .spans
+        }
+
+        /// One line per language, each mixing constructs a regex engine has
+        /// to get right: a string, a comment, an interpolation, a raw or
+        /// template literal.
+        const SAMPLES: [(&str, &str); 8] = [
+            ("a.rs", "fn main() { let s: &str = \"hi\"; /* c */ }"),
+            ("a.py", "def f(a=1): return f\"{a!r}\"  # note"),
+            ("a.js", "const re = /ab+c/gi; let o = `t${x}`; // c"),
+            ("a.go", "func main() { s := `raw`; _ = s } // c"),
+            ("a.md", "# Title with `code` and **bold**"),
+            ("a.yaml", "key: \"quoted\"  # trailing comment"),
+            ("a.json", "{\"a\": [1, 2.5e3, null, true]}"),
+            ("a.sh", "for f in *.rs; do echo \"${f%.rs}\"; done"),
+        ];
+
+        #[test]
+        fn every_sample_is_coloured_in_more_than_one_way() {
+            for (file, source) in SAMPLES {
+                let spans = spans_for(file, source);
+                let distinct: std::collections::BTreeSet<(u8, u8, u8)> =
+                    spans.iter().map(|(Rgb(r, g, b), _)| (*r, *g, *b)).collect();
+                assert!(
+                    distinct.len() > 1,
+                    "`{file}` came back in a single colour, which is what a regex backend that \
+                     cannot match this syntax looks like: {spans:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn highlighting_never_alters_the_text_it_colours() {
+            for (file, source) in SAMPLES {
+                let rebuilt: String = spans_for(file, source)
+                    .into_iter()
+                    .map(|(_, piece)| piece)
+                    .collect();
+                assert_eq!(rebuilt, source, "`{file}` lost or changed bytes");
+            }
+        }
+
+        /// The property that made `load_defaults_newlines` necessary: the
+        /// highlighter carries state between lines, so a block comment
+        /// opened on one line still colours the next.
+        #[test]
+        fn a_block_comment_stays_open_across_lines() {
+            let rows = highlight_diff_rows(
+                vec![
+                    PairedRow {
+                        left: None,
+                        right: Some((1, DiffLineKind::Added, "/* open".to_owned())),
+                    },
+                    PairedRow {
+                        left: None,
+                        right: Some((2, DiffLineKind::Added, "still inside */".to_owned())),
+                    },
+                ],
+                Path::new("a.rs"),
+                FALLBACK_SYNTAX_THEME,
+            );
+            let colour_of = |row: &DiffRow| row.right.as_ref().unwrap().spans[0].0;
+            assert_eq!(
+                colour_of(&rows[0]),
+                colour_of(&rows[1]),
+                "the second line left the comment the first one opened"
+            );
+        }
+
+        /// An extension syntect does not bundle must fall back to plain
+        /// text rather than panic — the same guarantee the theme lookup
+        /// above it makes.
+        #[test]
+        fn an_unknown_extension_falls_back_to_plain_text() {
+            let spans = spans_for("a.unknown-to-syntect", "anything at all");
+            let rebuilt: String = spans.into_iter().map(|(_, piece)| piece).collect();
+            assert_eq!(rebuilt, "anything at all");
+        }
+
+        /// The control that gives the assertion above its teeth. Plain text
+        /// is what a collapsed highlighter produces — every span in one
+        /// colour — so this pins the *other* side of the comparison: if
+        /// plain text also came back multi-coloured, `every_sample_…` would
+        /// be passing on a property that does not discriminate.
+        #[test]
+        fn plain_text_is_a_single_colour_so_the_comparison_means_something() {
+            let spans = spans_for(
+                "a.unknown-to-syntect",
+                "fn main() { let s: &str = \"hi\"; /* c */ }",
+            );
+            let distinct: std::collections::BTreeSet<(u8, u8, u8)> =
+                spans.iter().map(|(Rgb(r, g, b), _)| (*r, *g, *b)).collect();
+            assert_eq!(
+                distinct.len(),
+                1,
+                "unhighlighted text must be one colour, or the multi-colour \
+                 assertion proves nothing: {spans:?}"
+            );
+        }
+    }
+
     /// The same grant the workspace client makes, so these exercise the
     /// real path rather than a stub. A fake would be the right tool for
     /// testing *the view*; this file tests what the view reads.

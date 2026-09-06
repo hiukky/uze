@@ -1,6 +1,4 @@
 version: 1
-worktrees:
-  completion: pr
 marketplaces:
   ai:
     source:

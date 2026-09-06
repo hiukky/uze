@@ -16,7 +16,6 @@ use serde::{Deserialize, Serialize};
 use crate::{
     Result, UzeError,
     acquisition::{PackageSource, ResolvedSource},
-    worktree::WorktreePolicy,
 };
 
 pub const SUPPORTED_LOCK_VERSION: u32 = 1;
@@ -26,11 +25,6 @@ pub const LOCK_FILE_NAME: &str = "agents.lock";
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ProjectLock {
     pub version: u32,
-    /// What this project does with an isolated agent's finished work. The
-    /// layout of isolated checkouts is fixed infrastructure, not declared
-    /// here — see `crate::worktree`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub worktrees: Option<WorktreePolicy>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub marketplaces: BTreeMap<String, LockedMarketplace>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -41,7 +35,6 @@ impl Default for ProjectLock {
     fn default() -> Self {
         Self {
             version: SUPPORTED_LOCK_VERSION,
-            worktrees: None,
             marketplaces: BTreeMap::new(),
             plugins: BTreeMap::new(),
         }
@@ -113,7 +106,42 @@ impl ResolvedMarketplace {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct LockedPlugin {
     pub source: PluginSource,
+    /// What resolution found. Flattened rather than nested under
+    /// `resolved:` — in a file that holds nothing but resolution, that key
+    /// names the obvious.
+    #[serde(flatten)]
     pub resolved: ResolvedPlugin,
+    /// What the manifest asked for, echoed so staleness is decidable by
+    /// comparing the two files: no network, no re-resolution. `uv.lock`'s
+    /// `[package.metadata] requires-dist` serves the same purpose.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested: Option<RequestedPlugin>,
+}
+
+/// The declaration an entry was resolved from. Only what can change the
+/// resolution lives here — a comment or a key's position in the manifest
+/// cannot, so neither belongs.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct RequestedPlugin {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub marketplace: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub r#ref: Option<String>,
+}
+
+impl RequestedPlugin {
+    /// The manifest's declaration, reduced to what resolution depends on.
+    /// A declared plugin is a name under a marketplace; `git` and `ref`
+    /// stay for what the lock itself can carry, which is more.
+    pub fn from_marketplace(marketplace: &str) -> Self {
+        Self {
+            marketplace: Some(marketplace.to_owned()),
+            git: None,
+            r#ref: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -132,7 +160,7 @@ pub enum PluginSource {
     },
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ResolvedPlugin {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revision: Option<String>,
@@ -140,6 +168,55 @@ pub struct ResolvedPlugin {
     pub version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub integrity: Option<String>,
+}
+
+/// One entry's disagreement between what the manifest asks for and what the
+/// lock recorded — the whole of staleness, decided by reading two files.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StaleEntry {
+    pub plugin: String,
+    pub requested: RequestedPlugin,
+    pub locked: Option<RequestedPlugin>,
+}
+
+/// Which of the manifest's declarations the lock no longer answers for.
+///
+/// Deliberately offline and deliberately cheap: it compares `requested`
+/// against the manifest and nothing else. Re-resolving to find out whether a
+/// lock is current would need the network for a question the two files
+/// already answer, and would make `status` fail in a tunnel.
+///
+/// A plugin the lock has never seen is stale. A plugin the lock carries with
+/// no `requested` at all is *not* reported: it predates the echo, and calling
+/// it stale would tell every project it is out of date for a reason nobody
+/// can act on.
+pub fn stale_against(
+    manifest: &crate::manifest::ProjectManifest,
+    lock: &ProjectLock,
+) -> Vec<StaleEntry> {
+    let mut stale = Vec::new();
+    for (plugin, marketplace) in manifest.declared_plugins() {
+        let requested = RequestedPlugin::from_marketplace(marketplace);
+        match lock.plugins.get(plugin) {
+            None => stale.push(StaleEntry {
+                plugin: plugin.to_owned(),
+                requested,
+                locked: None,
+            }),
+            Some(locked) => {
+                if let Some(recorded) = &locked.requested
+                    && recorded != &requested
+                {
+                    stale.push(StaleEntry {
+                        plugin: plugin.to_owned(),
+                        requested,
+                        locked: Some(recorded.clone()),
+                    });
+                }
+            }
+        }
+    }
+    stale
 }
 
 pub fn lock_path_for(root: &Path) -> PathBuf {
@@ -159,63 +236,26 @@ pub fn load_lock(root: &Path) -> Result<Option<ProjectLock>> {
         path: path.clone(),
         reason: "agents.lock is not valid UTF-8".to_owned(),
     })?;
-    let lock = parse_lock_str(&text, &path)?;
-    if let Some(policy) = &lock.worktrees {
-        reject_unignored_links(root, &path, policy)?;
-    }
-    Ok(Some(lock))
+    parse_lock_str(&text, &path).map(Some)
 }
 
-/// A linked file must be ignored by the repository: a tracked file linked
-/// into a checkout would land in the agent's commits as a symlink. Asked
-/// of Git only when a lock declares links, so a lock that declares none
-/// costs no subprocess to read.
-fn reject_unignored_links(
-    root: &Path,
-    path: &Path,
-    policy: &crate::worktree::WorktreePolicy,
-) -> Result<()> {
-    for link in &policy.link {
-        let spelled = link.to_string_lossy();
-        let answer =
-            uze_git::read(root, &["check-ignore", "--quiet", "--", &spelled]).map_err(|error| {
-                UzeError::MalformedLock {
-                    path: path.to_path_buf(),
-                    reason: format!("`worktrees.link` names `{spelled}`, but {error}"),
-                }
-            })?;
-        match answer.code {
-            Some(0) => {}
-            Some(1) => {
-                return Err(UzeError::MalformedLock {
-                    path: path.to_path_buf(),
-                    reason: format!(
-                        "`worktrees.link` names `{spelled}`, which the repository does not \
-                         ignore; a linked file must be ignored, or it would be committed as a \
-                         symlink from an agent's checkout"
-                    ),
-                });
-            }
-            _ => {
-                return Err(UzeError::MalformedLock {
-                    path: path.to_path_buf(),
-                    reason: format!(
-                        "`worktrees.link` names `{spelled}`, but this directory is not a Git \
-                         repository that could ignore it"
-                    ),
-                });
-            }
-        }
-    }
-    Ok(())
-}
-
-/// The superseded spelling of the isolation policy: a bare directory, with
-/// no trigger, naming, base-ref, or integration semantics, and no projection
-/// to any harness. Rejected loudly rather than ignored — `ProjectLock` does
-/// not deny unknown fields, so silently dropping it would turn a declared
-/// policy into no policy at all with nothing said.
-const REPLACED_DIRECTORY_KEY: &str = "worktrees_dir";
+/// Keys a lock once carried and no longer may. `worktrees_dir` was the
+/// bare-directory spelling of the isolation policy; `worktrees` was the
+/// policy itself, which now lives in `agents.yaml` because every field of
+/// it is a decision rather than a resolution. Both are rejected loudly:
+/// `ProjectLock` does not deny unknown fields, so dropping them silently
+/// would turn a declared policy into no policy at all with nothing said.
+const REPLACED_KEYS: [(&str, &str); 2] = [
+    (
+        "worktrees_dir",
+        "the checkout layout is fixed infrastructure rather than something a project declares",
+    ),
+    (
+        "worktrees",
+        "the isolation policy is a declaration, so it belongs in agents.yaml; agents.lock records \
+         only what resolution produced",
+    ),
+];
 
 fn parse_lock_str(text: &str, path: &Path) -> Result<ProjectLock> {
     let raw: serde_yaml::Value =
@@ -223,36 +263,25 @@ fn parse_lock_str(text: &str, path: &Path) -> Result<ProjectLock> {
             path: path.to_path_buf(),
             reason: e.to_string(),
         })?;
-    if raw
-        .as_mapping()
-        .is_some_and(|mapping| mapping.contains_key(REPLACED_DIRECTORY_KEY))
-    {
-        return Err(UzeError::MalformedLock {
-            path: path.to_path_buf(),
-            reason: format!(
-                "`{REPLACED_DIRECTORY_KEY}` was replaced by the `worktrees` policy block; write a \
-                 `worktrees:` block with a `completion:` entry instead, as the checkout layout is \
-                 now fixed infrastructure rather than something a project declares"
-            ),
-        });
+    for (key, why) in REPLACED_KEYS {
+        if raw
+            .as_mapping()
+            .is_some_and(|mapping| mapping.contains_key(key))
+        {
+            return Err(UzeError::MalformedLock {
+                path: path.to_path_buf(),
+                reason: format!(
+                    "`{key}` no longer belongs in agents.lock: {why}. Move it to agents.yaml and \
+                     let UZE regenerate the lock."
+                ),
+            });
+        }
     }
 
     let lock: ProjectLock = serde_yaml::from_value(raw).map_err(|e| UzeError::MalformedLock {
         path: path.to_path_buf(),
         reason: e.to_string(),
     })?;
-    if let Some(policy) = &lock.worktrees
-        && let Some((link, why)) = policy.misplaced_links().into_iter().next()
-    {
-        return Err(UzeError::MalformedLock {
-            path: path.to_path_buf(),
-            reason: format!(
-                "`worktrees.link` names `{}`, which is {why}; a link is a relative path inside \
-                 the repository",
-                link.display()
-            ),
-        });
-    }
     if lock.version != SUPPORTED_LOCK_VERSION {
         return Err(UzeError::UnsupportedLockVersion {
             found: lock.version,
@@ -262,19 +291,19 @@ fn parse_lock_str(text: &str, path: &Path) -> Result<ProjectLock> {
     Ok(lock)
 }
 
-pub fn save_lock(root: &Path, lock: &ProjectLock) -> Result<()> {
-    if let Some(policy) = &lock.worktrees
-        && let Some((link, why)) = policy.misplaced_links().into_iter().next()
-    {
-        return Err(UzeError::MalformedLock {
-            path: lock_path_for(root),
-            reason: format!(
-                "`worktrees.link` names `{}`, which is {why}; a link is a relative path inside \
-                 the repository",
-                link.display()
-            ),
-        });
+/// Deletes the lock. A lock with nothing left to reproduce is not an empty
+/// lock, it is no lock — leaving the file behind declaring nothing invites
+/// the belief that resolution happened.
+pub fn remove_lock(root: &Path) -> Result<()> {
+    let path = lock_path_for(root);
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(UzeError::Write { path, source }),
     }
+}
+
+pub fn save_lock(root: &Path, lock: &ProjectLock) -> Result<()> {
     if lock.version != SUPPORTED_LOCK_VERSION {
         return Err(UzeError::UnsupportedLockVersion {
             found: lock.version,
@@ -376,12 +405,114 @@ impl ResolvedPlugin {
             integrity: None,
         }
     }
+
+    /// Records the digest of the bytes actually ingested. A source with no
+    /// stable bytes — a local path someone is editing — records none rather
+    /// than a value that would be wrong by the next command.
+    pub fn with_integrity_of(mut self, root: &Path, reproducible: bool) -> Self {
+        if reproducible {
+            self.integrity = crate::digest::tree_sha256(root).ok();
+        }
+        self
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    mod staleness {
+        use super::*;
+        use crate::manifest::{DeclaredMarketplace, ProjectManifest};
+
+        /// The declarations, grouped the way the manifest groups them: the
+        /// marketplace carries the plugins, so what a declaration can differ
+        /// in is which marketplace it is under.
+        fn manifest(entries: &[(&str, &str)]) -> ProjectManifest {
+            let mut manifest = ProjectManifest::default();
+            for (name, marketplace) in entries {
+                manifest
+                    .marketplaces
+                    .entry((*marketplace).to_owned())
+                    .or_insert_with(|| DeclaredMarketplace {
+                        git: Some(format!("https://example.invalid/{marketplace}")),
+                        path: None,
+                        r#ref: None,
+                        subdirectory: None,
+                        plugins: Vec::new(),
+                    })
+                    .plugins
+                    .push((*name).to_owned());
+            }
+            manifest
+        }
+
+        fn lock(entries: &[(&str, &str, bool)]) -> ProjectLock {
+            let mut lock = ProjectLock::default();
+            for (name, marketplace, echoed) in entries {
+                lock.plugins.insert(
+                    (*name).to_owned(),
+                    LockedPlugin {
+                        source: PluginSource::Marketplace {
+                            marketplace: (*marketplace).to_owned(),
+                            plugin: (*name).to_owned(),
+                        },
+                        resolved: ResolvedPlugin::default(),
+                        requested: echoed.then(|| RequestedPlugin::from_marketplace(marketplace)),
+                    },
+                );
+            }
+            lock
+        }
+
+        #[test]
+        fn a_lock_answering_the_manifest_is_current() {
+            let stale = stale_against(&manifest(&[("flow", "ai")]), &lock(&[("flow", "ai", true)]));
+            assert!(stale.is_empty(), "{stale:?}");
+        }
+
+        #[test]
+        fn a_plugin_taken_from_a_different_marketplace_is_stale_and_names_both() {
+            let stale = stale_against(
+                &manifest(&[("flow", "mirror")]),
+                &lock(&[("flow", "ai", true)]),
+            );
+            assert_eq!(stale.len(), 1);
+            assert_eq!(stale[0].plugin, "flow");
+            assert_eq!(stale[0].requested.marketplace.as_deref(), Some("mirror"));
+            assert_eq!(
+                stale[0].locked.as_ref().unwrap().marketplace.as_deref(),
+                Some("ai")
+            );
+        }
+
+        #[test]
+        fn a_plugin_the_lock_has_never_seen_is_stale() {
+            let stale = stale_against(&manifest(&[("flow", "ai")]), &lock(&[]));
+            assert_eq!(stale.len(), 1);
+            assert!(stale[0].locked.is_none());
+        }
+
+        /// An entry written before the echo existed must not report every
+        /// project as out of date for a reason nobody can act on.
+        #[test]
+        fn an_entry_with_no_echo_is_not_called_stale() {
+            let stale = stale_against(
+                &manifest(&[("flow", "mirror")]),
+                &lock(&[("flow", "ai", false)]),
+            );
+            assert!(stale.is_empty(), "{stale:?}");
+        }
+
+        /// A plugin in the lock the manifest no longer declares is not
+        /// staleness: it is a removal the next write resolves.
+        #[test]
+        fn a_lock_entry_the_manifest_dropped_is_not_reported_here() {
+            let stale = stale_against(&manifest(&[]), &lock(&[("flow", "ai", true)]));
+            assert!(stale.is_empty(), "{stale:?}");
+        }
+    }
 
     #[test]
     fn parse_plugin_marketplace_requires_at() {
@@ -421,6 +552,7 @@ mod tests {
                     version: Some("0.3.1".to_owned()),
                     integrity: None,
                 },
+                requested: None,
             },
         );
         let yaml = serde_yaml::to_string(&lock).unwrap();
@@ -449,57 +581,32 @@ mod tests {
     }
 
     #[test]
-    fn a_policy_block_defaults_every_axis_it_does_not_state() {
-        let lock =
-            parse_lock_str("version: 1\nworktrees: {}\n", &PathBuf::from("agents.lock")).unwrap();
-        let policy = lock.worktrees.expect("an empty block is still a policy");
-        assert_eq!(policy, crate::worktree::WorktreePolicy::default());
-    }
-
-    #[test]
-    fn the_declared_completion_behavior_round_trips() {
-        let lock = parse_lock_str(
-            "version: 1\nworktrees:\n  completion: merge\n",
-            &PathBuf::from("agents.lock"),
-        )
-        .unwrap();
-        assert_eq!(
-            lock.worktrees.unwrap().completion,
-            crate::worktree::CompletionBehavior::Merge
-        );
-    }
-
-    #[test]
-    fn the_replaced_directory_key_is_rejected_rather_than_silently_dropped() {
-        let err = parse_lock_str(
-            "version: 1\nworktrees_dir: ./.worktrees\n",
-            &PathBuf::from("agents.lock"),
-        )
-        .unwrap_err();
-        let UzeError::MalformedLock { reason, .. } = err else {
-            panic!("a replaced key must be reported as a malformed lock");
-        };
-        assert!(reason.contains(REPLACED_DIRECTORY_KEY), "{reason}");
-        assert!(
-            reason.contains("completion:"),
-            "the operator must be told what to write instead: {reason}"
-        );
-    }
-
-    /// The policy block is a closed vocabulary, unlike the lock around it: a
-    /// key nobody recognizes there is a mistake, and reading past it would
-    /// report a policy as honored that was never applied.
-    #[test]
-    fn an_unknown_key_inside_the_policy_block_is_refused_by_name() {
-        let err = parse_lock_str(
-            "version: 1\nworktrees:\n  completion: merge\n  directory: ./.worktrees\n",
-            &PathBuf::from("agents.lock"),
-        )
-        .unwrap_err();
-        let UzeError::MalformedLock { reason, .. } = err else {
-            panic!("an unknown policy key must be reported as a malformed lock");
-        };
-        assert!(reason.contains("directory"), "{reason}");
+    fn a_key_the_lock_no_longer_carries_is_rejected_rather_than_silently_dropped() {
+        for (key, spelled) in [
+            (
+                "worktrees_dir",
+                "version: 1
+worktrees_dir: ./.worktrees
+",
+            ),
+            (
+                "worktrees",
+                "version: 1
+worktrees:
+  completion: pr
+",
+            ),
+        ] {
+            let err = parse_lock_str(spelled, &PathBuf::from("agents.lock")).unwrap_err();
+            let UzeError::MalformedLock { reason, .. } = err else {
+                panic!("a retired key must be reported as a malformed lock");
+            };
+            assert!(reason.contains(key), "{reason}");
+            assert!(
+                reason.contains("agents.yaml"),
+                "the operator must be told where the declaration lives now: {reason}"
+            );
+        }
     }
 
     /// The complement, and the reason the check above is scoped to the
@@ -513,87 +620,5 @@ mod tests {
         )
         .expect("the lock stays forward-compatible");
         assert_eq!(lock.version, SUPPORTED_LOCK_VERSION);
-    }
-
-    #[test]
-    fn the_policy_round_trips_with_every_field() {
-        let lock = parse_lock_str(
-            "version: 1\nworktrees:\n  target: develop\n  completion: pr\n  link: [.env, .env.local]\n  setup: pnpm install\n  gate: cargo test\n  slots: 3\n",
-            &PathBuf::from("agents.lock"),
-        )
-        .unwrap();
-        let policy = lock.worktrees.clone().unwrap();
-        assert_eq!(policy.target.as_deref(), Some("develop"));
-        assert_eq!(policy.completion, crate::worktree::CompletionBehavior::Pr);
-        assert_eq!(
-            policy.link,
-            vec![PathBuf::from(".env"), PathBuf::from(".env.local")]
-        );
-        assert_eq!(policy.setup.as_deref(), Some("pnpm install"));
-        assert_eq!(policy.gate.as_deref(), Some("cargo test"));
-        assert_eq!(policy.slots, Some(3));
-        let text = serde_yaml::to_string(&lock).unwrap();
-        let again = parse_lock_str(&text, &PathBuf::from("agents.lock")).unwrap();
-        assert_eq!(again, lock);
-    }
-
-    #[test]
-    fn a_policy_block_declaring_nothing_has_safe_defaults() {
-        let lock =
-            parse_lock_str("version: 1\nworktrees: {}\n", &PathBuf::from("agents.lock")).unwrap();
-        let policy = lock.worktrees.unwrap();
-        assert_eq!(policy.target, None);
-        assert_eq!(
-            policy.completion,
-            crate::worktree::CompletionBehavior::Handoff
-        );
-        assert!(policy.link.is_empty() && policy.setup.is_none() && policy.gate.is_none());
-        assert_eq!(policy.slots, None);
-    }
-
-    #[test]
-    fn a_link_escaping_the_repository_is_rejected_at_read_time() {
-        for link in ["/etc/passwd", "../sibling/.env", "config/../../.env"] {
-            let err = parse_lock_str(
-                &format!("version: 1\nworktrees:\n  link: ['{link}']\n"),
-                &PathBuf::from("agents.lock"),
-            )
-            .unwrap_err();
-            let UzeError::MalformedLock { reason, .. } = err else {
-                panic!("{link}: a misplaced link must be a malformed lock");
-            };
-            assert!(reason.contains(link), "{reason}");
-        }
-    }
-
-    /// Against a real repository: an ignored link loads, a tracked one is
-    /// refused by name and reason.
-    #[test]
-    fn a_link_to_a_tracked_file_is_rejected_and_an_ignored_one_loads() {
-        let repository = uze_testkit::git::Repository::new("lock-links");
-        repository.commit_file(".gitignore", ".env\n");
-        let root = repository.root();
-
-        fs::write(
-            root.join(LOCK_FILE_NAME),
-            "version: 1\nworktrees:\n  link: [.env]\n",
-        )
-        .unwrap();
-        let lock = load_lock(root).unwrap().unwrap();
-        assert_eq!(lock.worktrees.unwrap().link, vec![PathBuf::from(".env")]);
-
-        fs::write(
-            root.join(LOCK_FILE_NAME),
-            "version: 1\nworktrees:\n  link: [README.md]\n",
-        )
-        .unwrap();
-        let err = load_lock(root).unwrap_err();
-        let UzeError::MalformedLock { reason, .. } = err else {
-            panic!("a tracked link must be a malformed lock");
-        };
-        assert!(
-            reason.contains("README.md") && reason.contains("ignore"),
-            "{reason}"
-        );
     }
 }

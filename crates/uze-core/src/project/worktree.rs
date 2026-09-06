@@ -109,18 +109,60 @@ pub struct WorktreePolicy {
     /// what the agent reads belongs here.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub link: Vec<PathBuf>,
-    /// A shell command that prepares a checkout, run in it after linking.
-    /// Its failure warns and never blocks a launch.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub setup: Option<String>,
-    /// A shell command run in the task's checkout on the rebased commits;
-    /// a non-zero exit refuses delivery.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub gate: Option<String>,
+    /// What prepares a checkout, run in it after linking. Its failure
+    /// warns and never blocks a launch.
+    #[serde(
+        default,
+        deserialize_with = "one_or_many",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub setup: Vec<String>,
+    /// What runs in the task's checkout on the rebased commits; a non-zero
+    /// exit refuses delivery.
+    #[serde(
+        default,
+        deserialize_with = "one_or_many",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub gate: Vec<String>,
     /// The most checkouts that may exist at once. Undeclared, peak
     /// concurrency is the only bound.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slots: Option<usize>,
+}
+
+/// One command, or an ordered list of them. A single command is the
+/// common case and reads better on one line; a list is what makes a
+/// failure say *which* step failed instead of handing back the output of a
+/// chain the shell assembled.
+fn one_or_many<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Vec<String>, D::Error> {
+    struct OneOrMany;
+
+    impl<'de> serde::de::Visitor<'de> for OneOrMany {
+        type Value = Vec<String>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a command, or a list of commands run in order")
+        }
+
+        fn visit_str<E: serde::de::Error>(
+            self,
+            command: &str,
+        ) -> std::result::Result<Self::Value, E> {
+            Ok(vec![command.to_owned()])
+        }
+
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(
+            self,
+            seq: A,
+        ) -> std::result::Result<Self::Value, A::Error> {
+            Deserialize::deserialize(serde::de::value::SeqAccessDeserializer::new(seq))
+        }
+    }
+
+    deserializer.deserialize_any(OneOrMany)
 }
 
 impl WorktreePolicy {

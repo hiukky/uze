@@ -1,8 +1,13 @@
 ## Purpose
 
 Defines `agents.lock`'s schema and durability guarantees: a versioned,
-deterministic, atomically-written YAML file that is the single source of
-truth `install_project_environment` reproduces an environment from.
+deterministic, atomically-written YAML file recording what resolving
+`agents.yaml` actually produced, so `install_project_environment`
+reproduces that exact environment on another machine without resolving
+anything again.
+
+The lock is derived. Intent lives in `agents-manifest`; nothing a person
+decides is stored only here.
 
 ## ADDED Requirements
 
@@ -75,24 +80,56 @@ reference).
   ai, plugin: flow`
 - **THEN** the plugin resolves through marketplace `ai`'s manifest
 
-### Requirement: Integrity field is reserved, not enforced
-The lock format SHALL accept an optional `integrity` field on a plugin
-entry without validating it — reserved for a future content hash, not
-implemented today.
+### Requirement: A locked plugin pins the bytes it resolved to
+Every plugin entry SHALL carry an `integrity` value: a content hash over
+the bytes acquisition ingested into the Store, written when the entry is
+resolved. A revision names where bytes came from; the hash is what makes
+the lock verifiable rather than merely descriptive.
 
-#### Scenario: Integrity field round-trips without validation
-- **WHEN** a lock entry carries an `integrity` value
-- **THEN** it is preserved through parse/serialize but does not affect
-  whether install succeeds
+#### Scenario: Resolution records the hash of what was ingested
+- **WHEN** a plugin is resolved and ingested
+- **THEN** its lock entry carries an `integrity` value derived from the
+  ingested bytes
 
-### Requirement: Malformed lock handling
-A lock that fails to parse SHALL be reported as an error, never silently
-ignored and never overwritten by a subsequent write.
+#### Scenario: Installing bytes that do not match the pin fails
+- **WHEN** `install_project_environment` acquires a plugin whose bytes
+  hash to a value other than the entry's `integrity`
+- **THEN** the install fails naming both hashes, and nothing is delivered
+  to any harness
 
-#### Scenario: Malformed YAML is rejected without data loss
+#### Scenario: A source with no stable bytes records no pin
+- **WHEN** a plugin resolves from a local path
+- **THEN** `integrity` is absent rather than fabricated, and the entry is
+  reported as non-reproducible
+
+### Requirement: A malformed lock is repaired by regeneration, not by hand
+A lock that fails to parse SHALL be reported, naming the path and the
+reason, and SHALL be treated as regenerable rather than as data to
+protect: it holds no intent, so resolving `agents.yaml` again replaces
+it. No command SHALL ask a person to repair a lock by editing it, and no
+command SHALL refuse to proceed solely because the existing lock is
+unreadable.
+
+This replaces the original "never overwritten by a subsequent write"
+rule, which was right while the lock was the only declaration a project
+had and wrong once it became derived.
+
+#### Scenario: Malformed YAML is reported and regenerable
 - **WHEN** `agents.lock` contains invalid YAML
-- **THEN** every read of it fails with a malformed-lock error naming the
-  path and reason, and no code path overwrites the file in response
+- **THEN** reading it fails with a malformed-lock error naming the path
+  and reason
+- **AND** resolving the manifest again replaces the file without asking
+
+#### Scenario: A malformed lock never reproduces an environment
+- **WHEN** `install_project_environment` finds an unparseable lock
+- **THEN** it installs nothing from it, rather than applying the part
+  that happened to parse
+
+#### Scenario: A hand-edited lock is replaced without ceremony
+- **WHEN** a person edits `agents.lock` and the environment is resolved
+  again
+- **THEN** the edit is replaced by what resolution produced, reported as
+  a regenerated file rather than as drift to reconcile
 
 ### Requirement: Non-UTF-8 lock is rejected
 The lock file SHALL be valid UTF-8; a lock that isn't SHALL fail to parse
@@ -113,8 +150,8 @@ every other piece of durable UZE state.
   content or the new complete content, never a partial file
 
 ### Requirement: Marketplace source conflict is rejected
-Adding a plugin under a marketplace name already locked to a different
-source SHALL fail rather than silently repoint the lock.
+Adding a plugin under a marketplace name already declared with a
+different source SHALL fail rather than silently repoint the manifest.
 
 #### Scenario: Same name, different source, is rejected
 - **WHEN** `add_project_plugin` is called for a marketplace name already
@@ -132,14 +169,21 @@ rather than silently move it.
 - **THEN** the call fails, naming the expected and found marketplace, and
   the lock is not modified
 
-### Requirement: Empty lock is valid
-A lock declaring no marketplaces and no plugins SHALL be valid — the
-state before anything has been added.
+### Requirement: No lock until something resolves
+A lock SHALL exist only once the project has a marketplace or a plugin to
+resolve. Declaring only an isolation policy SHALL produce no lock, and a
+lock left holding no entries SHALL be removed rather than written empty —
+there is nothing to reproduce, and an empty lock invites the belief that
+resolution happened.
 
-#### Scenario: A lock with only a version parses successfully
-- **WHEN** a lock file contains only `version: 1`
-- **THEN** it parses successfully into an entry with no marketplaces or
+#### Scenario: A policy-only project has no lock
+- **WHEN** a manifest declares an isolation policy and no marketplaces or
   plugins
+- **THEN** no `agents.lock` is written
+
+#### Scenario: Removing the last plugin removes the lock
+- **WHEN** the last plugin is removed from a project's manifest
+- **THEN** `agents.lock` is deleted rather than left declaring nothing
 
 ### Requirement: Deterministic key ordering
 Marketplace and plugin entries SHALL serialize in a deterministic
@@ -150,3 +194,58 @@ Marketplace and plugin entries SHALL serialize in a deterministic
   flow}` (inserted in that order)
 - **THEN** the serialized file lists `ai` before `local` and `flow`
   before `uze`
+
+### Requirement: The lock is derived and rebuildable
+The lock SHALL be a derived artifact: deleting it and resolving
+`agents.yaml` again SHALL produce an equivalent lock, and no command
+SHALL ask a person to edit it. Its header SHALL say so.
+
+#### Scenario: A deleted lock is regenerated equivalently
+- **WHEN** `agents.lock` is deleted and the environment is resolved again
+  from an unchanged `agents.yaml` against unchanged sources
+- **THEN** the regenerated lock is byte-identical to the deleted one
+
+#### Scenario: The lock states that it is generated
+- **WHEN** `agents.lock` is written
+- **THEN** its first line is a comment naming `agents.yaml` as the file to
+  edit instead
+
+### Requirement: The lock carries no intent
+The lock SHALL record only resolution. It SHALL NOT carry the worktree
+isolation policy, which is a declaration and belongs to `agents.yaml`.
+A key the lock once carried and no longer may SHALL be rejected by name,
+saying where the declaration lives now — never dropped silently, which
+would turn a declared policy into no policy with nothing said.
+
+#### Scenario: A policy block in the lock is rejected
+- **WHEN** `agents.lock` carries a `worktrees` block
+- **THEN** the lock is reported as malformed, naming `agents.yaml` as the
+  file that declares the policy
+- **AND** no environment is loaded from it
+
+#### Scenario: The superseded directory key is still rejected by name
+- **WHEN** `agents.lock` carries the retired `worktrees_dir` key
+- **THEN** the lock is reported as malformed, naming the key and
+  `agents.yaml`
+
+#### Scenario: An unknown key at the top level still loads
+- **WHEN** `agents.lock` carries a key from a newer UZE that this version
+  does not know
+- **THEN** the lock still loads, so a newer lock is readable by an older
+  binary
+
+### Requirement: The lock records what the manifest asked for
+Each entry SHALL carry the request it satisfies — the manifest
+declaration it was resolved from — so staleness is decidable by comparing
+the two files, with no network access and no re-resolution.
+
+#### Scenario: A changed manifest is detected as stale offline
+- **WHEN** `agents.yaml` changes a plugin's requested reference and the
+  environment is inspected with no network available
+- **THEN** the lock is reported as stale for that entry, naming the
+  requested and locked values
+
+#### Scenario: An unchanged manifest is not stale
+- **WHEN** `agents.yaml` is unchanged since the lock was written
+- **THEN** inspection reports the lock as current without resolving
+  anything

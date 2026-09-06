@@ -1,0 +1,14 @@
+# This project's agent environment. UZE reads this file; it writes
+# agents.lock, which you never edit.
+
+worktrees:
+  # UZE rebases an agent's branch onto the target, runs the checks, pushes
+  # it, and asks the agent to open the request. Projected into AGENTS.md's
+  # "Concurrent work isolation" section by `uze context reconcile`.
+  completion: pr
+
+marketplaces:
+  ai:
+    path: /home/hiukky/ai
+    plugins:
+      - git

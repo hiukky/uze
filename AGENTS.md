@@ -73,6 +73,57 @@ explains a non-obvious *why* — the rationale behind a decision, an invariant,
 a workaround, or a subtle constraint the code alone cannot convey. Never
 restate what the code already says; write intent, not implementation.
 
+## Dependencies
+
+The dependency surface is small on purpose: ~22 direct external crates
+across the workspace. Every addition is a permanent maintenance liability
+and part of the binary's supply chain, so choose by **provenance**, not by
+whichever crate name matched the search.
+
+Prefer, in this order, and stop at the first tier that can do the job:
+
+1. **The standard library, or a crate already in the workspace.** Ask this
+   first. Most additions lose here.
+2. **Foundation** — `rust-lang`, `serde-rs`, `tokio-rs`, dtolnay:
+   `serde`, `serde_json`, `thiserror`, `libc`, `tokio`.
+3. **A de-facto standard with an organization behind it** — `clap`
+   (clap-rs), `ratatui`, `crossterm` (crossterm-rs), `toml_edit`
+   (toml-rs), `indicatif`/`dialoguer` (console-rs), `anstyle` (rust-cli),
+   `unicode-width` (unicode-rs), `alacritty_terminal` (alacritty),
+   `portable-pty` (wezterm), `rmcp` (the official MCP Rust SDK).
+4. **A single maintainer, but mature and widely adopted** — `syntect`,
+   `comfy-table`, `schemars`. Acceptable, with the trade-off stated in the
+   PR.
+
+Refuse, unless there is no alternative and the reason is written down:
+
+- **A `0.0.x` crate.** In semver that range promises nothing; every
+  release may break.
+- **A crate that has renamed itself.** The identity of a dependency
+  moving under the project is a supply-chain event, not branding.
+- **A recently published crate with no adoption**, however well its README
+  reads. A README is written by the person asking for your trust.
+- **A crate whose author publishes many similarly-branded crates** with
+  claims disproportionate to their version number.
+
+Always check, and write the answer in the PR that adds it:
+
+- **Who publishes it.** `cargo info <crate>` shows `repository`, but that
+  field is set by the publisher — confirm the crate is genuinely published
+  from the repository it names.
+- **Whether it compiles C.** A build script compiling C costs real money
+  here: `release.yml` cross-compiles four targets, two of them musl, and
+  already carries a workaround for one such dependency (`onig_sys`, see
+  the comment at `release.yml:206`). If a feature flag avoids the C path,
+  take it.
+- **`cargo deny check` passes.** A new advisory ignore needs a reason *and*
+  a way out — `deny.toml`'s existing ignores name the condition that
+  removes them, and a new one must do the same. An ignore with no exit is
+  a decision to carry the problem forever.
+- **Transitive weight.** `cargo tree -p <crate>` before, not after.
+
+None of this applies to a crate the workspace already depends on: use it.
+
 ## Documentation hygiene
 
 Do not create permanent Markdown files for implementation notes,

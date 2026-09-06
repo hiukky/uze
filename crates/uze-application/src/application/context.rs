@@ -311,12 +311,13 @@ impl Context<'_> {
         })
     }
 
-    /// This project's declared isolation policy, or `None` when `agents.lock`
-    /// declares none. A malformed lock is an error here rather than a silent
-    /// "no policy": dropping a declared policy without saying so is exactly
-    /// the failure that left `worktrees_dir` unprojected for so long.
+    /// This project's declared isolation policy, or `None` when
+    /// `agents.yaml` declares none. A malformed manifest is an error here
+    /// rather than a silent "no policy": dropping a declared policy without
+    /// saying so is exactly the failure that left `worktrees_dir`
+    /// unprojected for so long.
     fn worktree_policy(&self, canonical: &std::path::Path) -> Result<Option<WorktreePolicy>> {
-        Ok(uze_core::project_lock::load_lock(canonical)?.and_then(|lock| lock.worktrees))
+        Ok(uze_core::manifest::load(canonical)?.and_then(|manifest| manifest.worktrees))
     }
 
     /// Composes the policy's current standing: its managed region in the

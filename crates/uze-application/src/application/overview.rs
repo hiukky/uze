@@ -300,10 +300,48 @@ mod tests {
                         version: None,
                         integrity: None,
                     },
+                    requested: None,
                 },
             );
         }
         project_lock::save_lock(root, &lock).unwrap();
+        // The manifest is what anchors a consumer workspace, so a fixture
+        // that wants one must declare, not only resolve.
+        declare(root, &lock);
+    }
+
+    /// Writes the `agents.yaml` the lock's entries were resolved from — the
+    /// declaration side of the same fixture.
+    fn declare(root: &Path, lock: &uze_core::project_lock::ProjectLock) {
+        let mut text = String::from("worktrees: {}\n");
+        let declarable: Vec<&String> = lock
+            .marketplaces
+            .keys()
+            .filter(|name| name.as_str() != uze_core::manifest::BUILT_IN_MARKETPLACE)
+            .collect();
+        if !declarable.is_empty() {
+            text.push_str("marketplaces:\n");
+            for name in declarable {
+                text.push_str(&format!("  {name}:\n    path: ../{name}\n"));
+                let taken: Vec<&String> = lock
+                    .plugins
+                    .iter()
+                    .filter_map(|(plugin, locked)| match &locked.source {
+                        uze_core::project_lock::PluginSource::Marketplace {
+                            marketplace, ..
+                        } if marketplace == name => Some(plugin),
+                        _ => None,
+                    })
+                    .collect();
+                if !taken.is_empty() {
+                    text.push_str("    plugins:\n");
+                    for plugin in taken {
+                        text.push_str(&format!("      - {plugin}\n"));
+                    }
+                }
+            }
+        }
+        std::fs::write(root.join(uze_core::manifest::MANIFEST_FILE_NAME), text).unwrap();
     }
 
     struct Fixture {
@@ -456,6 +494,11 @@ mod tests {
         let fx = Fixture::new("malformed");
         let root = fx._drop_root.join("project");
         fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join(uze_core::manifest::MANIFEST_FILE_NAME),
+            "worktrees: {}\n",
+        )
+        .unwrap();
         fs::write(root.join("agents.lock"), "version: 1\nplugins: [broken").unwrap();
 
         let project = fx.project(&root);
@@ -468,6 +511,11 @@ mod tests {
         let fx = Fixture::new("unsupported");
         let root = fx._drop_root.join("project");
         fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join(uze_core::manifest::MANIFEST_FILE_NAME),
+            "worktrees: {}\n",
+        )
+        .unwrap();
         fs::write(root.join("agents.lock"), "version: 99\n").unwrap();
 
         let project = fx.project(&root);

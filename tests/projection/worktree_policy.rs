@@ -1,4 +1,4 @@
-//! Worktree-policy projection: one declaration in `agents.lock`, rendered
+//! Worktree-policy projection: one declaration in `agents.yaml`, rendered
 //! into the shared instruction baseline every harness already reads.
 //!
 //! Isolation itself is not tested here — UZE performs it by choosing an
@@ -29,14 +29,16 @@ fn app(root: &Path) -> UzeApplication {
     UzeApplication::new(home, registry.into_parts().0)
 }
 
-fn project_with_policy(root: &Path, lock_body: &str) -> PathBuf {
+fn project_with_policy(root: &Path, manifest: &str) -> PathBuf {
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();
-    fs::write(project.join("agents.lock"), lock_body).unwrap();
+    fs::write(project.join("agents.yaml"), manifest).unwrap();
     project
 }
 
-const POLICY_LOCK: &str = "version: 1\nworktrees: {}\n";
+/// The policy declared with every field left to its default — the shape
+/// that proves projection does not depend on any of them being set.
+const POLICY_MANIFEST: &str = "worktrees: {}\n";
 
 // --- projection into the shared baseline ----------------------------------
 
@@ -44,7 +46,7 @@ const POLICY_LOCK: &str = "version: 1\nworktrees: {}\n";
 fn reconcile_projects_the_declaration_into_the_shared_baseline() {
     let root = temp("worktree-projection");
     let application = app(&root);
-    let project = project_with_policy(&root, POLICY_LOCK);
+    let project = project_with_policy(&root, POLICY_MANIFEST);
 
     let report = application.context().reconcile(&project).unwrap();
     let region = report
@@ -78,7 +80,7 @@ fn reconcile_projects_the_declaration_into_the_shared_baseline() {
 fn the_projection_never_triggers_a_harnesss_own_isolation() {
     let root = temp("worktree-no-double-isolation");
     let application = app(&root);
-    let project = project_with_policy(&root, POLICY_LOCK);
+    let project = project_with_policy(&root, POLICY_MANIFEST);
     application.context().reconcile(&project).unwrap();
 
     let agents_md = fs::read_to_string(project.join("AGENTS.md"))
@@ -97,7 +99,7 @@ fn the_projection_never_triggers_a_harnesss_own_isolation() {
 fn a_project_declaring_nothing_gets_no_region() {
     let root = temp("worktree-absent");
     let application = app(&root);
-    let project = project_with_policy(&root, "version: 1\n");
+    let project = project_with_policy(&root, "");
 
     let report = application.context().reconcile(&project).unwrap();
     assert!(report.worktree_region.is_none());
@@ -114,7 +116,7 @@ fn a_project_declaring_nothing_gets_no_region() {
 fn the_declared_completion_behavior_is_what_reaches_the_baseline() {
     let root = temp("worktree-completion");
     let application = app(&root);
-    let project = project_with_policy(&root, "version: 1\nworktrees:\n  completion: merge\n");
+    let project = project_with_policy(&root, "worktrees:\n  completion: merge\n");
 
     application.context().reconcile(&project).unwrap();
     let agents_md = fs::read_to_string(project.join("AGENTS.md")).unwrap();
@@ -138,7 +140,7 @@ fn the_declared_completion_behavior_is_what_reaches_the_baseline() {
 fn an_edited_region_is_blocked_not_overwritten() {
     let root = temp("worktree-drift");
     let application = app(&root);
-    let project = project_with_policy(&root, POLICY_LOCK);
+    let project = project_with_policy(&root, POLICY_MANIFEST);
     application.context().reconcile(&project).unwrap();
 
     let agents_md = project.join("AGENTS.md");
@@ -168,12 +170,12 @@ fn an_edited_region_is_blocked_not_overwritten() {
 fn editing_the_declaration_replaces_its_region_rather_than_drifting() {
     let root = temp("worktree-edit");
     let application = app(&root);
-    let project = project_with_policy(&root, POLICY_LOCK);
+    let project = project_with_policy(&root, POLICY_MANIFEST);
     application.context().reconcile(&project).unwrap();
 
     fs::write(
-        project.join("agents.lock"),
-        "version: 1\nworktrees:\n  completion: merge\n",
+        project.join("agents.yaml"),
+        "worktrees:\n  completion: merge\n",
     )
     .unwrap();
 
