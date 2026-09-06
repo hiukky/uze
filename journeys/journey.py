@@ -402,9 +402,14 @@ class Runner:
     def await_screen(
         self, pattern: str, where: str, timeout: float, step: dict
     ) -> None:
-        deadline = time.time() + timeout
+        # Monotonic, like every other deadline here: a wall clock that steps
+        # backwards stretches this into a wait that never ends, and one that
+        # steps forward fires it early — a gesture reported as "never showed"
+        # because the host adjusted its time is the worst kind of false
+        # failure, and the hardest to stop believing.
+        deadline = time.monotonic() + timeout
         while not self.screen.shows(pattern, where):
-            if time.time() > deadline:
+            if time.monotonic() > deadline:
                 raise Failed(f"{self.label(step)}: never showed {pattern!r}")
             time.sleep(0.3)
 
@@ -536,7 +541,7 @@ class Runner:
     def _wait(self, step: dict) -> None:
         until = self.resolve(step.get("until", ""))
         kind = step["wait"]
-        deadline = time.time() + float(step.get("timeout", 60))
+        deadline = time.monotonic() + float(step.get("timeout", 60))
         while True:
             if kind == "shell":
                 ok = (
@@ -557,7 +562,7 @@ class Runner:
                 raise Failed(f"unknown wait kind {kind!r}")
             if ok:
                 break
-            if time.time() > deadline:
+            if time.monotonic() > deadline:
                 raise Failed(
                     f"{self.label(step)}: waited, it never happened ({until!r})"
                 )
@@ -1148,7 +1153,19 @@ def run_one(args, path: Path) -> int:
     world = build_world(spec, path.stem, binary_path(), keep=args.keep)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     evidence = EVIDENCE / f"{path.stem}-{stamp}"
-    evidence.mkdir(parents=True, exist_ok=True)
+    try:
+        evidence.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        # A traceback is poor evidence from a tool whose whole argument is
+        # that a failure should tell you what to do. In a container this
+        # means the mounted directory belongs to another user: run as the
+        # one who owns it (`--user "$(id -u):$(id -g)"`).
+        die(
+            f"cannot write evidence to {evidence}: {error}\n"
+            f"  the evidence directory is {EVIDENCE}; if this is a container, its mount is "
+            f'owned by whoever created it — pass --user "$(id -u):$(id -g)" so the run '
+            f"writes as that user."
+        )
     cast = None
     if args.record:
         if shutil.which("asciinema"):
@@ -1175,7 +1192,11 @@ def run_one(args, path: Path) -> int:
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "scenes": [],
     }
-    began = time.time()
+    # Monotonic, not wall clock: a duration must not be able to come out
+    # negative because the host adjusted its time mid-run, which is exactly
+    # what a container on a suspended laptop does. Wall clock stays for the
+    # timestamps, where it is the right answer.
+    began = time.monotonic()
 
     log(f"\n{BOLD}{spec['journey']}{OFF}")
     log(f"{DIM}world {world.root}{OFF}\n")
@@ -1188,12 +1209,12 @@ def run_one(args, path: Path) -> int:
             log(f"{BOLD}▪ {name}{OFF}")
             try:
                 for step in scene.get("when", []):
-                    at = time.time()
+                    at = time.monotonic()
                     runner.perform(step)
                     entry["gestures"].append(
                         {
                             "did": Runner.label(step),
-                            "seconds": round(time.time() - at, 2),
+                            "seconds": round(time.monotonic() - at, 2),
                             "gate": step.get("expect") or step.get("until"),
                         }
                     )
@@ -1236,7 +1257,7 @@ def run_one(args, path: Path) -> int:
             log()
     finally:
         record["ended_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-        record["seconds"] = round(time.time() - began, 1)
+        record["seconds"] = round(time.monotonic() - began, 1)
         record["verdict"] = "failed" if failures else "held"
         record["counts"] = {
             "scenes": len(record["scenes"]),
@@ -1329,8 +1350,8 @@ def stop_world_servers(world: World) -> None:
     # world's UZE_HOME, so a server still shutting down when the next run
     # starts is a live socket the next client connects to and then watches
     # die — which shows up as a tab whose pane never paints.
-    deadline = time.time() + 10
-    while stopped and time.time() < deadline:
+    deadline = time.monotonic() + 10
+    while stopped and time.monotonic() < deadline:
         stopped = [pid for pid in stopped if Path(f"/proc/{pid}").exists()]
         if stopped:
             time.sleep(0.2)

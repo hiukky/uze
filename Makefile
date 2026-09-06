@@ -128,6 +128,7 @@ journey-docker: build journey-image ## Run a journey inside the pinned container
 	$(CARGO) build --locked -p uze-testkit --bin uze-fake-harness
 	mkdir -p journeys/.evidence
 	docker run --rm --init \
+		--user "$$(id -u):$$(id -g)" -e HOME=/tmp/journey-home \
 		-v "$(CURDIR)/journeys:/journeys:ro" \
 		-v "$(CURDIR)/target/debug/uze:/usr/local/bin/uze:ro" \
 		-v "$(CURDIR)/target/debug/uze-fake-harness:/usr/local/bin/uze-fake-harness:ro" \

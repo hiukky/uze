@@ -17,10 +17,14 @@ RUN apt-get update \
         ca-certificates git tmux python3 python3-yaml procps \
     && rm -rf /var/lib/apt/lists/*
 
-# Not root: the guard that refuses a sandbox overlapping a real home is worth
-# more when the home it protects is not the image's own /root. Pinned to uid
-# 1000 — the uid a CI runner and a developer both have — so the mounted
-# evidence directory is writable without a `--user` flag at every call site.
+# Not root by default: the guard that refuses a sandbox overlapping a real
+# home is worth more when the home it protects is not the image's own /root.
+#
+# Callers pass `--user "$(id -u):$(id -g)"` anyway, because the evidence
+# directory is a mount owned by whoever invoked docker — uid 1000 on a
+# developer's machine, 1001 on a GitHub runner — and an image that guesses at
+# that number is right in exactly one of those places. `HOME` comes in with
+# it, since a uid the image has no passwd entry for has no home to resolve.
 RUN userdel --remove ubuntu 2>/dev/null || true \
     && useradd --create-home --uid 1000 --shell /bin/bash journey
 USER journey
