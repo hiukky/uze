@@ -26,18 +26,10 @@ class CodexBindings(Bindings):
         return Tui(cfg, codex_container(cfg, prov_ip, final), "codex-isolation")
 
     def relaunch_in(self, cfg, prov_ip, cwd, prelude):
-        """Two launches in one terminal, back to back. Not `exec`: the shell
-        has to outlive the first process to start the second."""
-        launcher = continuity.launcher(self.launcher_name())
-        final = f"{prelude}\ncd {cwd} && {launcher}; {launcher}"
+        """Two launches in one terminal, back to back."""
+        relaunch = continuity.relaunch_command(self.launcher_name())
+        final = f"{prelude}\ncd {cwd} && {relaunch}"
         return Tui(cfg, codex_container(cfg, prov_ip, final), "codex-continuity")
-
-    def quit(self, tui):
-        """The two interrupts every scene in this vertical ends on."""
-        tui.child.send("\x03")
-        time.sleep(0.5)
-        tui.child.send("\x03")
-        time.sleep(2.0)
 
     def prepare(self, tui):
         """Codex opens on an onboarding flow; the prompt only accepts input

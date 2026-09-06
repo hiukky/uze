@@ -17,6 +17,9 @@ class AntigravityBindings(Bindings):
     launch = "exec agy"
     ready_markers = ("Antigravity CLI",)
     warmup = 3.0
+    #: An interrupt, then this harness's own exit verb when that was not
+    #: enough — `agy` treats a lone interrupt as "clear the line".
+    exit_keys = ("\x03", "/exit\r")
 
     def session(self, cfg, prov_ip):
         setup = agy_setup(cfg, prov_ip, include_mcp=True, final_cmd=self.launch)
@@ -33,25 +36,15 @@ class AntigravityBindings(Bindings):
         return Tui(cfg, docker_base(cfg, prov_ip, setup), "antigravity-isolation")
 
     def relaunch_in(self, cfg, prov_ip, cwd, prelude):
-        """Two launches in one terminal, back to back. Not `exec`: the shell
-        has to outlive the first process to start the second."""
-        launcher = continuity.launcher(self.launcher_name())
+        """Two launches in one terminal, back to back."""
         setup = agy_setup(
             cfg,
             prov_ip,
             include_mcp=False,
-            final_cmd=f"{launcher}; {launcher}",
+            final_cmd=continuity.relaunch_command(self.launcher_name()),
             prelude=f"{prelude}\ncd {cwd}",
         )
         return Tui(cfg, docker_base(cfg, prov_ip, setup), "antigravity-continuity")
-
-    def quit(self, tui):
-        """An interrupt, then the harness's own exit verb — the sequence
-        every scene in this vertical ends on."""
-        tui.child.send("\x03")
-        time.sleep(0.5)
-        tui.child.sendline("/exit")
-        time.sleep(2.0)
 
     def prepare(self, tui):
         """agy opens on a colour-scheme picker and a terms screen; the prompt

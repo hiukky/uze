@@ -99,6 +99,29 @@ def launcher(harness):
     return f"{UZE_HOME}/shims/{harness}"
 
 
+#: Printed by the shell between the two launches. Without it, "the second
+#: process never reached its prompt" is one message for two very different
+#: facts — a harness that would not exit, and a harness that started and
+#: rendered something unexpected — and the three verticals that failed this
+#: check first disagreed about which they had hit.
+ENDED_MARKER = "UZE_CONFORMANCE_PROCESS_ENDED"
+
+
+def relaunch_command(harness, args=""):
+    """The shell one terminal runs: the launcher, a marker when it returns,
+    the launcher again. `args` is whatever this harness needs on the line
+    both times.
+
+    Not `exec`, because the shell has to outlive the first process to start
+    the second — which is the whole shape being tested. Composed here rather
+    than in each binding: the marker only means anything if every vertical
+    prints the same one, and a binding is free to wrap this in whatever its
+    own container needs.
+    """
+    run = f"{launcher(harness)} {args}".strip()
+    return f"{run}; printf '\\n{ENDED_MARKER}\\n'; {run}"
+
+
 def assert_contract(cfg, prov_ip, bindings):
     with describe("continuity"):
         _assert_a_relaunch_carries_the_turn(cfg, prov_ip, bindings)
@@ -132,8 +155,18 @@ def _assert_a_relaunch_carries_the_turn(cfg, prov_ip, bindings):
         # The process ends and another starts in its place — what the
         # terminal runtime does when it restores a workspace after a
         # restart, with no client in the room to compose a command.
-        bindings.quit(tui)
-        plain, matched = bindings.prepare(tui)
+        plain, ended = _end_the_process(tui, bindings)
+        check(
+            "continuity-first-process-ended",
+            bool(ended),
+            "the first process exited and the shell went on to the next"
+            if ended
+            else f"it is still running: {plain[-160:]}".replace("\n", " "),
+        )
+        if not ended:
+            return
+
+        plain, matched = bindings.rejoin(tui)
         check(
             "continuity-second-process-ready",
             bool(matched),
@@ -154,6 +187,34 @@ def _assert_a_relaunch_carries_the_turn(cfg, prov_ip, bindings):
             _carried(cfg),
             "a request from the relaunched process carries the earlier turn",
         )
+
+
+def _end_the_process(tui, bindings):
+    """Sends this harness's exit keys, one at a time, stopping the moment
+    the shell says the process is gone.
+
+    Paced here rather than in the binding because the pacing is the whole
+    point. Harnesses disagree about how many interrupts it takes — one
+    ends OpenCode, two are what Claude asks for — and a key sent after the
+    process is already gone does not vanish: the shell has it, and the
+    shell is at that moment starting the next process.
+    """
+    plain = ""
+    for index, key in enumerate(bindings.exit_keys):
+        last = index == len(bindings.exit_keys) - 1
+        tui.child.send(key)
+        # Between keys a glance, after the last one a real wait. A harness
+        # that answers an interrupt with "press it again to exit" means
+        # *again*, soon: wait two seconds between the two and the offer has
+        # expired, which turns the second interrupt into another first one
+        # and the process never ends — measured on Claude Code, which is
+        # why a harness lists only the keys it actually needs.
+        _, plain, ended = tui.wait_for(
+            [ENDED_MARKER], tries=8 if last else 1, gap=2.0 if last else 0.4
+        )
+        if ended:
+            return plain, True
+    return plain, False
 
 
 def _carried(cfg):
