@@ -4,14 +4,14 @@ All notable changes to UZE are documented here, generated from Conventional
 Commits by `git-cliff` (`make changelog`). Until v1, UZE ships only SemVer
 pre-releases — see `docs/versioning.md`.
 
-## [Unreleased]
+## [0.0.0-alpha.2](https://github.com/hiukky/uze/compare/v0.0.0-alpha.1...v0.0.0-alpha.2) - 2026-09-06
 
 ### Features
 
 - Hand the request to its agent, and let the sidebar scroll ([#20](https://github.com/hiukky/uze/pull/20)) [**breaking**] ([6965b48](https://github.com/hiukky/uze/commit/6965b48c425919387ce32a14a9c11a082afe7758))
 - **theme:** Tokenize the UI behind one design vocabulary ([#21](https://github.com/hiukky/uze/pull/21)) ([3474a01](https://github.com/hiukky/uze/commit/3474a01d1ffb2c4e9eb1290897c6bc5a2dfdcfc9))
 - Split what a project declares from what resolving it produced ([#23](https://github.com/hiukky/uze/pull/23)) [**breaking**] ([4756844](https://github.com/hiukky/uze/commit/4756844428ca216ea6a3cc36a65c14477b75a6a3))
-- **release:** Write the notes, name the assets, own the toolchain [**breaking**] ([510f510](https://github.com/hiukky/uze/commit/510f5102be635adf110a247e78286dfa450cb812))
+- **release:** Write the notes, name the assets, own the toolchain ([#25](https://github.com/hiukky/uze/pull/25)) [**breaking**] ([96d9528](https://github.com/hiukky/uze/commit/96d9528b4c24cb08c1e8d23e9f7f2dbe2fef069c))
 
 ### Fixes
 
