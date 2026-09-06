@@ -215,7 +215,16 @@ mod tests {
         /// exact argv (never a substring) so a concurrently running test's
         /// own spawned `sleep` — a different marker — can never be mistaken
         /// for this one.
+        /// This process's child running `/bin/sleep <marker>`, by parentage.
+        ///
+        /// Identified by PPID and not by command line alone: `sleep 3` is the
+        /// least distinctive command there is, and matching it anywhere under
+        /// `/proc` asserted the process group of whatever else on the machine
+        /// happened to be sleeping — another test, a shell loop, a CI step.
+        /// That failed intermittently and blamed the runner, when the defect
+        /// was that the child was guessed rather than identified.
         fn find_marked_sleep_child(marker: &str, deadline: Instant) -> u32 {
+            let ours = std::process::id();
             loop {
                 if let Ok(entries) = std::fs::read_dir("/proc") {
                     for entry in entries.flatten() {
@@ -230,17 +239,27 @@ mod tests {
                             .filter_map(|part| std::str::from_utf8(part).ok())
                             .filter(|part| !part.is_empty())
                             .collect();
-                        if args == ["/bin/sleep", marker] {
+                        if args == ["/bin/sleep", marker] && ppid_of(pid) == Some(ours) {
                             return pid;
                         }
                     }
                 }
                 assert!(
                     Instant::now() < deadline,
-                    "the marked `sleep {marker}` child never appeared under /proc"
+                    "this process's own `sleep {marker}` child never appeared under /proc"
                 );
                 std::thread::sleep(Duration::from_millis(10));
             }
+        }
+
+        /// The parent of `pid`, read from `/proc/<pid>/stat`. The comm field
+        /// is parenthesised and may itself contain spaces, so the fields
+        /// after it are taken from the last `)` rather than by splitting the
+        /// whole line.
+        fn ppid_of(pid: u32) -> Option<u32> {
+            let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+            let after_comm = stat.rsplit_once(')')?.1;
+            after_comm.split_whitespace().nth(1)?.parse().ok()
         }
 
         #[test]
