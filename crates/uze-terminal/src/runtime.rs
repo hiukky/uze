@@ -54,9 +54,15 @@ pub fn attach(root: &Path, _columns: u16, _rows: u16) -> Result<UnixStream, Runt
     // its doc comment); there's no guarantee an incompatible server can
     // even parse an `Attach` request enough to answer with a clean
     // `ClientEvent::Error` rather than hanging the connection.
-    if endpoint.socket.exists() && server_protocol_version(&endpoint.pid) != Some(PROTOCOL_VERSION)
-    {
-        replace_incompatible_server(&endpoint)?;
+    if endpoint.socket.exists() {
+        match recorded_compatibility(&endpoint.pid) {
+            Compatibility::Known => {}
+            Compatibility::Mismatched => replace_incompatible_server(&endpoint)?,
+            Compatibility::Unrecorded => match probe_server(&endpoint) {
+                Probe::Speaks { pid } => heal_pid_file(&endpoint, pid),
+                Probe::Foreign => replace_incompatible_server(&endpoint)?,
+            },
+        }
     }
     match UnixStream::connect(&endpoint.socket) {
         Ok(stream) => Ok(stream),
@@ -355,8 +361,8 @@ fn read_pid(pid_path: &Path) -> Option<libc::pid_t> {
 /// The `PROTOCOL_VERSION` the server holding this pid file was compiled
 /// with, from the file's second line — `None` for a pid file written
 /// before this line existed, or one that's missing/unreadable/corrupt.
-/// [`attach`] treats all of those the same as a known mismatch: it can no
-/// longer assume anything about how that server speaks the wire protocol.
+/// `None` is silence, not an answer: what [`attach`] makes of it is
+/// [`Compatibility::Unrecorded`]'s business.
 fn server_protocol_version(pid_path: &Path) -> Option<u16> {
     let text = fs::read_to_string(pid_path).ok()?;
     text.lines().nth(1)?.trim().parse().ok()
@@ -368,6 +374,97 @@ fn server_protocol_version(pid_path: &Path) -> Option<u16> {
 /// `attach`'s pre-connect check.
 fn write_pid_file(pid_path: &Path, pid: u32) -> io::Result<()> {
     fs::write(pid_path, format!("{pid}\n{PROTOCOL_VERSION}"))
+}
+
+/// What the pid file says about the server holding the endpoint.
+enum Compatibility {
+    /// It recorded the version this client speaks.
+    Known,
+    /// It recorded a different one: alive, and not worth connecting to.
+    Mismatched,
+    /// It records nothing — missing, unreadable, or written before the
+    /// version line existed. Silence is not evidence of a mismatch: a
+    /// runtime directory that fell back to `/tmp` can lose its pid file to
+    /// the distro's own cleaner while the server it named is still
+    /// serving, and reading that as a mismatch unlinks a live session's
+    /// socket and strands its panes behind a server nothing can reach.
+    Unrecorded,
+}
+
+fn recorded_compatibility(pid_path: &Path) -> Compatibility {
+    match server_protocol_version(pid_path) {
+        Some(version) if version == PROTOCOL_VERSION => Compatibility::Known,
+        Some(_) => Compatibility::Mismatched,
+        None => Compatibility::Unrecorded,
+    }
+}
+
+/// Who is behind the socket, asked of the socket itself because the pid
+/// file could not say.
+enum Probe {
+    /// The listener is running this very executable, and so was compiled
+    /// with this `PROTOCOL_VERSION` — a proof the wire cannot give more
+    /// cheaply, since a server built to another framing may never answer
+    /// the handshake that would ask it (see [`attach`]).
+    Speaks { pid: u32 },
+    /// Another build, another program, or nobody at all.
+    Foreign,
+}
+
+fn probe_server(endpoint: &Endpoint) -> Probe {
+    match listener_running_this_executable(&endpoint.socket) {
+        Some(pid) => Probe::Speaks { pid },
+        None => Probe::Foreign,
+    }
+}
+
+/// The pid listening on `socket`, given only when that process runs the
+/// same executable image as this one. The kernel stamps the peer's
+/// credentials onto the connection, so the pid is the listener's own and
+/// not something a connection could claim; `/proc/<pid>/exe` then names
+/// the image it is running, which stops resolving to this path once the
+/// binary is replaced underneath a live server (a `cargo install --force`
+/// mid-session).
+#[cfg(target_os = "linux")]
+fn listener_running_this_executable(socket: &Path) -> Option<u32> {
+    use std::os::unix::io::AsRawFd;
+
+    let stream = UnixStream::connect(socket).ok()?;
+    let mut peer = libc::ucred {
+        pid: 0,
+        uid: 0,
+        gid: 0,
+    };
+    let mut size = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    let asked = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            (&raw mut peer).cast(),
+            &raw mut size,
+        )
+    };
+    if asked != 0 || peer.pid <= 0 {
+        return None;
+    }
+    let mine = env::current_exe().ok()?;
+    (fs::read_link(format!("/proc/{}/exe", peer.pid)).ok()? == mine).then_some(peer.pid as u32)
+}
+
+/// Peer credentials are how the question above is asked, and this release
+/// ships Linux binaries only. Anywhere else the endpoint keeps the answer
+/// it had before it could be asked at all.
+#[cfg(not(target_os = "linux"))]
+fn listener_running_this_executable(_socket: &Path) -> Option<u32> {
+    None
+}
+
+/// Records what the probe established, so the next attach reads the answer
+/// instead of deriving it again. Best-effort: a write that fails leaves
+/// exactly the state just recovered from, and the probe stands without it.
+fn heal_pid_file(endpoint: &Endpoint, pid: u32) {
+    let _ = write_pid_file(&endpoint.pid, pid);
 }
 
 /// Tears down a server that's alive but speaking a `PROTOCOL_VERSION` this
@@ -1635,10 +1732,10 @@ fn identity_of(root: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        Endpoint, PaneRuntime, PersistedSpace, PersistedTab, PersistedWorkspace, ReplySink,
-        Selection, Server, identity_of, persisted_state_path, read_event,
-        relaunch_command_for_process, replace_incompatible_server, send_request,
-        server_protocol_version, snapshot, view_for,
+        Compatibility, Endpoint, PaneRuntime, PersistedSpace, PersistedTab, PersistedWorkspace,
+        Probe, ReplySink, Selection, Server, heal_pid_file, identity_of, persisted_state_path,
+        probe_server, read_event, recorded_compatibility, relaunch_command_for_process,
+        replace_incompatible_server, send_request, server_protocol_version, snapshot, view_for,
     };
     use std::sync::{Arc, Mutex};
 
@@ -1717,7 +1814,7 @@ mod tests {
     /// A pid file with no recorded version — exactly what a server built
     /// before `write_pid_file` existed leaves behind — must read as
     /// "unknown", not "compatible": see `attach`'s pre-connect check, which
-    /// treats this the same as a version that actively mismatches.
+    /// goes and asks the socket rather than trusting a file that is silent.
     #[test]
     fn server_protocol_version_is_unknown_without_a_recorded_version() {
         let scratch = uze_testkit::temp::scratch("terminal-protocol-version");
@@ -1732,6 +1829,93 @@ mod tests {
             server_protocol_version(&pid_path),
             Some(super::PROTOCOL_VERSION)
         );
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// The three readings `attach` acts on. The load-bearing one is the
+    /// last: an absent or silent pid file must never read as a mismatch,
+    /// because the only recovery for a mismatch kills the process the file
+    /// names and unlinks the socket it was serving on.
+    #[test]
+    fn a_pid_file_speaks_for_its_server_only_where_it_recorded_a_version() {
+        let scratch = uze_testkit::temp::scratch("terminal-recorded-compatibility");
+        std::fs::create_dir_all(&scratch).unwrap();
+        let pid_path = scratch.join("test.pid");
+
+        assert!(matches!(
+            recorded_compatibility(&pid_path),
+            Compatibility::Unrecorded
+        ));
+
+        std::fs::write(&pid_path, "4242").unwrap();
+        assert!(matches!(
+            recorded_compatibility(&pid_path),
+            Compatibility::Unrecorded
+        ));
+
+        std::fs::write(&pid_path, format!("4242\n{}", super::PROTOCOL_VERSION + 1)).unwrap();
+        assert!(matches!(
+            recorded_compatibility(&pid_path),
+            Compatibility::Mismatched
+        ));
+
+        std::fs::write(&pid_path, format!("4242\n{}", super::PROTOCOL_VERSION)).unwrap();
+        assert!(matches!(
+            recorded_compatibility(&pid_path),
+            Compatibility::Known
+        ));
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// The rescue itself: a server of this build whose pid file vanished —
+    /// the shape a `/tmp` cleaner leaves behind — is recognized through the
+    /// socket and given its file back, so the next attach reads the answer
+    /// instead of asking again. Without this the endpoint's live owner is
+    /// killed and whatever was running in its panes goes with it.
+    #[test]
+    fn a_server_of_this_build_is_adopted_when_its_pid_file_vanishes() {
+        let scratch = uze_testkit::temp::scratch("terminal-adopt-live-server");
+        std::fs::create_dir_all(&scratch).unwrap();
+        let endpoint = Endpoint {
+            socket: scratch.join("test.sock"),
+            pid: scratch.join("test.pid"),
+        };
+        // This process holds the socket, and is by construction running the
+        // executable the probe compares against — the same relationship a
+        // real server has to a client built from the same binary.
+        let listener = std::os::unix::net::UnixListener::bind(&endpoint.socket).unwrap();
+
+        let Probe::Speaks { pid } = probe_server(&endpoint) else {
+            panic!("a listener running this very executable must answer the probe");
+        };
+        assert_eq!(pid, std::process::id());
+
+        heal_pid_file(&endpoint, pid);
+        assert!(
+            matches!(recorded_compatibility(&endpoint.pid), Compatibility::Known),
+            "the healed pid file must answer the next attach on its own"
+        );
+
+        drop(listener);
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// An endpoint file nobody answers on is not a server to adopt: the
+    /// probe has to say so, or a leftover socket would be healed into a pid
+    /// file naming a process that never existed.
+    #[test]
+    fn a_socket_no_one_listens_on_is_foreign() {
+        let scratch = uze_testkit::temp::scratch("terminal-probe-foreign");
+        std::fs::create_dir_all(&scratch).unwrap();
+        let endpoint = Endpoint {
+            socket: scratch.join("test.sock"),
+            pid: scratch.join("test.pid"),
+        };
+        std::fs::write(&endpoint.socket, b"placeholder").unwrap();
+
+        assert!(matches!(probe_server(&endpoint), Probe::Foreign));
 
         let _ = std::fs::remove_dir_all(&scratch);
     }
