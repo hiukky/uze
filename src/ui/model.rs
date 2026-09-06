@@ -55,6 +55,18 @@ impl Route {
         }
     }
 
+    /// The badge a route carries beside its name in the sidebar, or
+    /// `None` for one that is finished. The sidebar is where someone
+    /// decides which screen to open, so it is where "not settled yet" has
+    /// to be said — a warning found only after arriving is a warning that
+    /// came too late.
+    pub(crate) fn badge(self) -> Option<&'static str> {
+        match self {
+            Route::Profiles => Some("Beta"),
+            _ => None,
+        }
+    }
+
     pub(crate) fn index(self) -> usize {
         ROUTES.iter().position(|route| *route == self).unwrap()
     }
