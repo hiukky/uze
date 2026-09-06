@@ -108,6 +108,11 @@ def standin_binary() -> Path:
     """The tool that writes the harness stand-ins — `uze-fake-harness` from
     `uze-testkit`."""
     if named := os.environ.get("JOURNEY_FAKE_HARNESS"):
+        # Checked, not trusted: a path from the environment that is not there
+        # otherwise surfaces as a traceback from the first subprocess call,
+        # naming neither the variable nor what to do about it.
+        if not Path(named).exists():
+            die(f"JOURNEY_FAKE_HARNESS names {named}, which does not exist")
         return Path(named)
     for candidate in (
         REPO / "target" / "debug" / "uze-fake-harness",
@@ -194,6 +199,14 @@ def build_world(spec: dict, slug: str, binary: Path, keep: bool) -> World:
         "GIT_COMMITTER_EMAIL": "ada@journey.test",
         "GIT_CONFIG_GLOBAL": str(root / "home" / ".gitconfig"),
     }
+    # Built, never inherited — with one named exception. `LLVM_PROFILE_FILE`
+    # is how a coverage-instrumented binary writes its counters, and the
+    # question "what do the journeys actually reach" cannot be answered
+    # without it reaching the processes under test. Passed through only when
+    # the caller set it, so an ordinary run is unaffected.
+    if profile := os.environ.get("LLVM_PROFILE_FILE"):
+        env["LLVM_PROFILE_FILE"] = profile
+
     (root / "home" / ".gitconfig").write_text(
         "[user]\n\tname = Ada Lovelace\n\temail = ada@journey.test\n"
         "[init]\n\tdefaultBranch = main\n[advice]\n\tdetachedHead = false\n"
@@ -346,6 +359,14 @@ class Screen:
             ["tmux", "kill-session", "-t", self.session], capture_output=True
         )
 
+    def wait_until_gone(self, seconds: float) -> bool:
+        deadline = time.monotonic() + seconds
+        while self.alive():
+            if time.monotonic() > deadline:
+                return False
+            time.sleep(0.2)
+        return True
+
 
 # ── performing ───────────────────────────────────────────────────────────
 
@@ -476,6 +497,23 @@ class Runner:
         )
         self.screen = Screen(session)
         time.sleep(1.5)
+
+    def close_app(self) -> None:
+        """Quits the app the way a person does, then kills what is left.
+
+        Not tidiness: a process killed by a signal never runs its exit
+        handlers, so anything it was going to write on the way out — a
+        coverage profile, a flushed state file — is simply lost, and a
+        measurement of what the journeys reach comes back reading zero for
+        every long-lived process. Asking it to quit first is also the only
+        thing that exercises the shutdown path at all.
+        """
+        if self.screen is None:
+            return
+        if self.screen.alive():
+            self.screen.key("C-q")
+            self.screen.wait_until_gone(10)
+        self.screen.kill()
 
     def _target(self, step: dict) -> tuple[int, int]:
         where = step.get("in", "screen")
@@ -1022,6 +1060,8 @@ def binary_path() -> Path:
     """The binary under test. `JOURNEY_UZE` names it directly, which is how
     a container runs against a binary the host's cargo cache already built."""
     if named := os.environ.get("JOURNEY_UZE"):
+        if not Path(named).exists():
+            die(f"JOURNEY_UZE names {named}, which does not exist")
         return Path(named)
     for candidate in (
         REPO / "target" / "debug" / "uze",
@@ -1267,7 +1307,7 @@ def run_one(args, path: Path) -> int:
         }
         write_evidence(runner, evidence, record, transcript)
         if runner.screen and not args.keep_session:
-            runner.screen.kill()
+            runner.close_app()
         if not args.keep_session:
             stop_world_servers(world)
 
@@ -1310,6 +1350,22 @@ def write_evidence(
             text=True,
         ).stdout
     )
+    # The small state documents themselves, not only their paths. These are
+    # what a check reads, so a failure is undiagnosable without them — and
+    # the world is a temp directory that the next run deletes, so "look at
+    # the machine" is not available to whoever reads this afterwards.
+    state = evidence / "state"
+    for source in [
+        *sorted((world.uze_home / "state" / "tasks").glob("*.json")),
+        world.uze_home / "state" / "integrations.json",
+        world.uze_home / "state" / "attachments.json",
+        world.uze_home / "state" / "marketplaces.json",
+        world.project / "agents.yaml",
+        world.project / "AGENTS.md",
+    ]:
+        if source.is_file() and source.stat().st_size < 256 * 1024:
+            state.mkdir(exist_ok=True)
+            (state / source.name).write_text(source.read_text(errors="replace"))
     processes = []
     for line in subprocess.run(
         ["pgrep", "-a", "."], capture_output=True, text=True
@@ -1331,6 +1387,15 @@ def stop_world_servers(world: World) -> None:
     """Stops every process this world started. The terminal server is a
     daemon by design — it outlives the client so a pane survives a client
     leaving — so nothing else would ever stop it."""
+    # Ask before telling: the server exits cleanly on its own command, and a
+    # process that exits cleanly runs the handlers a signalled one never
+    # does. SIGTERM below stays as the fallback for a server that will not.
+    subprocess.run(
+        [str(binary_path()), "terminal", "stop"],
+        cwd=world.project,
+        env=world.shell_env(),
+        capture_output=True,
+    )
     stopped = []
     for pid in subprocess.run(
         ["pgrep", "-f", "uze"], capture_output=True, text=True
