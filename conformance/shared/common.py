@@ -167,19 +167,35 @@ VERDICT_COLOR = {"PASS": "\033[32m", "ADAPTED": "\033[33m", "FAIL": "\033[31m"}
 VERDICT_LABEL_WIDTH = max(len(tag) for tag in VERDICT_SYMBOL) + len("[]")
 
 
-def print_verdict(tag, name, detail=""):
-    """One live-log line per verdict, aligned on the widest tag.
+def colour_is_wanted():
+    """Whether the console this is printing to renders escapes.
 
-    Colour is a terminal courtesy only: a redirected log (CI, `tee`, an
-    evidence capture) must stay byte-clean, so escapes are emitted solely
-    for a TTY and suppressed under NO_COLOR.
+    `isatty` alone was the whole rule, and it made the one place these
+    marks are read most — an Actions log somebody opens because something
+    went red — the one place nothing was ever red: Actions pipes stdout
+    and renders the escapes itself, so the pipe is not the evidence of a
+    dumb terminal it is elsewhere. `NO_COLOR` still wins over everything,
+    and `FORCE_COLOR` covers the runner that renders them without saying
+    so. Evidence is unaffected either way: `verdict.json` carries the
+    verdicts, and it never carried a colour.
     """
-    label = f"[{tag}]".ljust(VERDICT_LABEL_WIDTH)
-    if sys.stdout.isatty() and "NO_COLOR" not in os.environ:
-        label = f"{VERDICT_COLOR[tag]}{label}\033[0m"
+    if "NO_COLOR" in os.environ:
+        return False
+    if os.environ.get("FORCE_COLOR"):
+        return True
+    return sys.stdout.isatty() or os.environ.get("GITHUB_ACTIONS") == "true"
+
+
+def print_verdict(tag, name, detail=""):
+    """One live-log line per verdict, aligned on the widest tag."""
+    mark = f"{VERDICT_SYMBOL[tag]} {f'[{tag}]'.ljust(VERDICT_LABEL_WIDTH)}"
+    if colour_is_wanted():
+        # The glyph inside the colour, not only the tag beside it: the
+        # glyph is what the eye scans down a column of two hundred lines.
+        mark = f"{VERDICT_COLOR[tag]}{mark}\033[0m"
     indent = "  " * len(SUITE_STACK)
     suffix = f"  ({detail})" if detail else ""
-    print(f"{indent}{VERDICT_SYMBOL[tag]} {label} {name}{suffix}", flush=True)
+    print(f"{indent}{mark} {name}{suffix}", flush=True)
 
 
 def check_absence(name, ok, settled, detail=""):
