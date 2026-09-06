@@ -14,7 +14,6 @@ about: |
 
 world:
   project: demo-app
-  harnesses: [claude, codex, opencode]
   manifest: |
     worktrees:
       target: main

@@ -1,0 +1,112 @@
+journey: a plugin installed once, delivered to every harness, from one copy of its bytes
+tags: [gate, cli, packages]
+proves: web/content/docs/getting-started.mdx
+about: |
+  The claim the product is named for: you install a plugin once, UZE keeps
+  its bytes in one place, and each harness reads it through the mechanism
+  that harness actually offers — a generated native package for one, a byte
+  copy staged by the vendor CLI for another, a shared skill root for the
+  rest. Nothing is installed four times, and the source it came from is
+  never written to.
+
+world:
+  project: demo-app
+  files:
+    market/marketplace.json: |
+      {
+        "name": "demo",
+        "description": "A marketplace this journey stages.",
+        "plugins": [
+          { "name": "flow", "source": "./plugins/flow", "description": "Canonical skill plugin." }
+        ]
+      }
+    market/plugins/flow/plugin.json: |
+      {
+        "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+        "name": "flow",
+        "version": "1.0.0",
+        "description": "Canonical: one package, no vendor manifests."
+      }
+    market/plugins/flow/skills/commit/SKILL.md: |
+      ---
+      name: commit
+      description: Write a commit message from the staged diff.
+      ---
+
+      The body a harness would read.
+
+scenes:
+  - scene: harnesses are provisioned before anything is delivered
+    when:
+      - shell: "{uze} setup"
+        say: provision every registered harness
+        check: false
+    then:
+      - json: "{uze_home}/state/integrations.json"
+        at: "*.*.harness"
+        includes: [claude-code, codex, opencode, antigravity]
+        about: every harness is recorded as provisioned
+      - dir: "{uze_home}/store/plugins/demo"
+        exists: false
+        about: provisioning delivers nothing on its own
+
+  - scene: a marketplace is registered without installing anything
+    when:
+      - shell: "{uze} market add {world}/market"
+        say: register the staged marketplace
+    then:
+      - json: "{uze_home}/state/marketplaces.json"
+        at: "*.*.name"
+        includes: [demo]
+        about: the marketplace is recorded by name
+      - dir: "{uze_home}/store/plugins/demo"
+        exists: false
+        about: registering a source installs nothing
+
+  - scene: installing keeps one copy of the bytes, in the Store
+    when:
+      - shell: "{uze} plugin install flow@demo"
+        say: install the plugin once
+    then:
+      - file: "{uze_home}/store/plugins/demo/flow/plugin.json"
+        contains: '"name": "flow"'
+        about: the package's own manifest is in the Store
+      - file: "{uze_home}/store/plugins/demo/flow/skills/commit/SKILL.md"
+        contains: The body a harness would read
+        about: the Store holds the bytes verbatim, not a rewrite of them
+      - file: "{world}/market/plugins/flow/skills/commit/SKILL.md"
+        contains: The body a harness would read
+        about: the source it came from was never written to
+      - cmd:
+          run: "{uze} plugin list"
+          stdout_contains: flow
+        about: and UZE agrees it is installed
+
+  - scene: every harness reads it where that harness reads things
+    then:
+      - dir: "{uze_home}/state/attachments/claude/generated/flow@demo"
+        exists: true
+        about: Claude Code gets a generated native package
+      - dir: "{uze_home}/state/attachments/codex/generated"
+        exists: true
+        about: Codex gets its own generated catalogue entry
+      - file: "{home}/.gemini/config/plugins/flow/plugin.json"
+        contains: '"name": "flow"'
+        about: Antigravity gets a byte copy, staged by its own CLI
+      - file: "{home}/.agents/skills/flow:commit/SKILL.md"
+        contains: The body a harness would read
+        about: the shared agent skill root carries the same skill
+      - dir: "{uze_home}/store/plugins/demo/*"
+        count: 1
+        about: and all of that came from one package in the Store
+
+  - scene: every delivery left a receipt naming what it owns
+    then:
+      - json: "{uze_home}/state/attachments.json"
+        at: receipts.*.integration
+        includes: [claude-code, codex, opencode, antigravity]
+        about: one receipt per harness that delivered
+      - json: "{uze_home}/state/attachments.json"
+        at: receipts.*.package_id
+        includes: [flow@demo]
+        about: each names the package it belongs to

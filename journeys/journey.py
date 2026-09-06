@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import glob as globlib
+import hashlib
 import json
 import os
 import re
@@ -73,17 +74,6 @@ REAL_ROOTS = [
     Path.home() / ".config" / "opencode",
 ]
 
-FAKE_HARNESS = """#!/bin/sh
-# A stand-in for {display}. Its file name is what /proc/<pid>/comm reports,
-# which is how UZE recognizes the agent running in a pane.
-printf '{display} v9.9.9 (journey stand-in)\\n'
-printf 'cwd %s\\n' "$PWD"
-while IFS= read -r line; do
-  [ "$line" = "/exit" ] && exit 0
-  printf '> %s\\n' "$line"
-done
-"""
-
 
 @dataclass
 class World:
@@ -114,6 +104,60 @@ class World:
         }
 
 
+def standin_binary() -> Path:
+    """The tool that writes the harness stand-ins — `uze-fake-harness` from
+    `uze-testkit`."""
+    if named := os.environ.get("JOURNEY_FAKE_HARNESS"):
+        return Path(named)
+    for candidate in (
+        REPO / "target" / "debug" / "uze-fake-harness",
+        REPO / "target" / "release" / "uze-fake-harness",
+    ):
+        if candidate.exists():
+            return candidate
+    die(
+        "no uze-fake-harness binary: run `cargo build -p uze-testkit --bin uze-fake-harness`. "
+        "The stand-ins come from uze-testkit so this tier and the Rust suites cannot come to "
+        "disagree about what a harness does."
+    )
+
+
+def install_standins(root: Path, world_spec: dict) -> None:
+    """Writes the standard stand-in set into the world's `bin`.
+
+    Never hand-rolled here. A stand-in emulates the side effect UZE reads
+    back — `agy plugin install` staging a byte copy UZE then reads as its
+    ownership proof, the vendor marketplace state Claude and Codex answer
+    from — and a second implementation of that drifting from the first is how
+    two tiers disagree about a harness while both stay green. Real vendor
+    behaviour is the conformance Lab's verdict; nothing here speaks to a
+    model or a provider, and a journey that needs one was in the wrong tier.
+    """
+    result = subprocess.run(
+        [
+            str(standin_binary()),
+            "--bin-dir",
+            str(root / "bin"),
+            "--home",
+            str(root / "home"),
+            "--state-dir",
+            str(root / "standin-state"),
+            # A journey launches these into panes, so a bare invocation has
+            # to hold the terminal the way the real binary does.
+            "--interactive",
+            *(
+                argument
+                for name in world_spec.get("scripted_agents") or []
+                for argument in ("--scripted-agent", name)
+            ),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        die(f"uze-fake-harness failed: {result.stdout}{result.stderr}")
+
+
 def guard(root: Path) -> None:
     root = root.resolve()
     for real in REAL_ROOTS:
@@ -131,16 +175,7 @@ def build_world(spec: dict, slug: str, binary: Path, keep: bool) -> World:
     for part in ("home/.uze", "run", "bin", "projects"):
         (root / part).mkdir(parents=True, exist_ok=True)
 
-    for harness in world_spec.get("harnesses", ["claude"]):
-        display = {
-            "claude": "Claude Code",
-            "codex": "Codex",
-            "opencode": "OpenCode",
-            "agy": "Antigravity CLI",
-        }.get(harness, harness)
-        path = root / "bin" / harness
-        path.write_text(FAKE_HARNESS.format(display=display))
-        path.chmod(0o755)
+    install_standins(root, world_spec)
 
     env = {
         "HOME": str(root / "home"),
@@ -161,6 +196,13 @@ def build_world(spec: dict, slug: str, binary: Path, keep: bool) -> World:
         "[user]\n\tname = Ada Lovelace\n\temail = ada@journey.test\n"
         "[init]\n\tdefaultBranch = main\n[advice]\n\tdetachedHead = false\n"
     )
+
+    # Anything a journey needs staged in its world that is not the project
+    # itself — a marketplace to install from, a file a command reads.
+    for relative, content in (world_spec.get("files") or {}).items():
+        staged = root / relative
+        staged.parent.mkdir(parents=True, exist_ok=True)
+        staged.write_text(content)
 
     name = world_spec.get("project", "demo-app")
     project = root / "projects" / name
@@ -523,7 +565,54 @@ class Runner:
 
 # ── checking the machine ─────────────────────────────────────────────────
 
-VERBS = ("dir", "file", "git", "tasks", "process", "capture", "cmd")
+
+def snapshot_tree(roots: list[str]) -> dict:
+    """Every path under `roots`, with a digest of what it holds — file bytes,
+    or a symlink's target. What "nothing was left behind" is measured
+    against, and the reason it is a digest rather than a listing: an artifact
+    that survived a removal with different content is still an orphan."""
+    found = {}
+    for root in roots:
+        base = Path(root)
+        if not base.exists():
+            continue
+        for path in sorted(base.rglob("*")):
+            key = f"{base.name}/{path.relative_to(base)}"
+            if path.is_symlink():
+                found[key] = f"-> {os.readlink(path)}"
+            elif path.is_dir():
+                found[key] = "dir"
+            else:
+                try:
+                    found[key] = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+                except OSError as error:
+                    found[key] = f"unreadable: {error}"
+    return found
+
+
+def resolve_json(document, path: str) -> list:
+    """A dotted path into a JSON document, where `*` takes every value of an
+    object or every element of a list. Small on purpose: a check reads a fact
+    off a document UZE wrote, and a query language would invite asserting on
+    a document's shape instead of on what it says."""
+    nodes = [document]
+    for part in [segment for segment in path.split(".") if segment]:
+        next_nodes = []
+        for node in nodes:
+            if part == "*":
+                if isinstance(node, dict):
+                    next_nodes += list(node.values())
+                elif isinstance(node, list):
+                    next_nodes += node
+            elif isinstance(node, dict) and part in node:
+                next_nodes.append(node[part])
+            elif isinstance(node, list) and part.isdigit() and int(part) < len(node):
+                next_nodes.append(node[int(part)])
+        nodes = next_nodes
+    return nodes
+
+
+VERBS = ("dir", "file", "tree", "json", "git", "tasks", "process", "capture", "cmd")
 
 
 class Checker:
@@ -690,6 +779,62 @@ class Checker:
                 )
         return True, f"{shape}"
 
+    def _tree(self, spec: dict) -> tuple[bool, str]:
+        roots = spec["tree"] if isinstance(spec["tree"], list) else [spec["tree"]]
+        now = snapshot_tree(roots)
+        if remembered := spec.get("same_as"):
+            before = self.runner.captures.get(remembered)
+            if before is None:
+                return False, f"no capture named {remembered!r}"
+            gained = sorted(set(now) - set(before))
+            lost = sorted(set(before) - set(now))
+            changed = sorted(
+                path for path in set(now) & set(before) if now[path] != before[path]
+            )
+            if gained or lost or changed:
+                detail = []
+                if gained:
+                    detail.append(f"left behind: {gained}")
+                if lost:
+                    detail.append(f"removed that was there before: {lost}")
+                if changed:
+                    detail.append(f"changed: {changed}")
+                return False, "; ".join(detail)
+            return True, f"{len(now)} paths, identical to {remembered}"
+        return True, f"{len(now)} paths"
+
+    def _json(self, spec: dict) -> tuple[bool, str]:
+        pattern = spec["json"]
+        found = sorted(globlib.glob(pattern))
+        if not found:
+            return False, f"{pattern}: nothing there"
+        values = []
+        for path in found:
+            try:
+                document = json.loads(Path(path).read_text())
+            except json.JSONDecodeError as error:
+                return False, f"{path}: not JSON ({error})"
+            values += resolve_json(document, spec.get("at", ""))
+        readable = [
+            value if isinstance(value, str) else json.dumps(value) for value in values
+        ]
+        where = f"{pattern} at {spec.get('at', '.')!r}"
+        if "count" in spec and len(values) != spec["count"]:
+            return (
+                False,
+                f"{where}: expected {spec['count']} values, found {len(values)}: {readable}",
+            )
+        if spec.get("exists") is True and not values:
+            return False, f"{where}: nothing resolved"
+        if spec.get("exists") is False and values:
+            return False, f"{where}: resolved to {readable}"
+        if "equals" in spec and readable != [spec["equals"]]:
+            return False, f"{where}: expected [{spec['equals']!r}], found {readable}"
+        for wanted in spec.get("includes") or []:
+            if wanted not in readable:
+                return False, f"{where}: {wanted!r} is missing from {readable}"
+        return True, f"{where}: {readable}"
+
     def _process(self, spec: dict) -> tuple[bool, str]:
         pattern = spec["process"]["matching"]
         alive = False
@@ -733,7 +878,9 @@ class Checker:
 
     def _capture(self, spec: dict) -> tuple[bool, str]:
         name = spec["capture"]["name"]
-        if pattern := spec["capture"].get("dirs"):
+        if roots := spec["capture"].get("tree"):
+            value = snapshot_tree(roots if isinstance(roots, list) else [roots])
+        elif pattern := spec["capture"].get("dirs"):
             value = sorted(
                 Path(path).name for path in globlib.glob(pattern) if Path(path).is_dir()
             )
