@@ -31,6 +31,8 @@ pub fn marketplace_install_args(root: &Path, package: &Path) -> (Vec<String>, Ve
         serde_json::to_string_pretty(&manifest).unwrap(),
     )
     .unwrap();
+    // A marketplace is a Git repository — a staged one is no exception.
+    crate::git::commit_everything_in(&market);
     (
         vec![
             "market".to_owned(),

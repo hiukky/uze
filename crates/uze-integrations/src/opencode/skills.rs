@@ -10,13 +10,27 @@
 //!   activatable by ID (model=false preserved — documented, and this
 //!   wrapper's exact syntax is the documented `metadata: { opencode/autoinvoke: <bool> }`
 //!   shape);
-//! - `slash: false` hides the skill from interactive command catalogs
-//!   (user=false preserved).
+//! - `slash: false` hides the skill from the `/` command catalog — which
+//!   is *not* the whole of user invocation on V2, see below.
 //!
-//! Because every combination is natively representable, a canonical
-//! user-only Skill is projected as an OpenCode **Skill**, never as a
-//! vendor Command — the vendor Command primitive remains a projection
-//! detail UZE does not need for this harness (ADR-030 §9).
+//! A canonical user-only Skill is projected as an OpenCode **Skill**,
+//! never as a vendor Command — the vendor Command primitive remains a
+//! projection detail UZE does not need for this harness (ADR-030 §9).
+//!
+//! # `invoke.user: false` degrades, and says so (measured 2026-09-06)
+//!
+//! V2 has two explicit-invocation paths, and `slash` gates one of them.
+//! A Skill is `/id` when `slash === true`, and `@id` — a mention —
+//! always: the picker renders every discovered Skill as `"@" + id`, and
+//! `SessionPrompt.prepare` expands a mentioned Skill's body into the user
+//! message whatever its `slash` value. So `slash: false` removes a Skill
+//! from the `/` catalog and leaves it invocable by mention.
+//!
+//! This was `Native` here until the Lab learned to *invoke* rather than to
+//! read a catalog: `skill-model-only-is-not-invocable` types `@flow:analyze`
+//! and finds its body in the request. The claim was never wrong on purpose
+//! — nothing measured it. It is now Adaptable, with the degradation
+//! stated, and the Lab holds it there.
 //!
 //! UZE materializes every Skill as one wrapper SKILL.md under `$UZE_HOME` —
 //! loading the canonical name/description/body, never rewriting the Store
@@ -241,14 +255,25 @@ impl OpenCodeIntegration {
             let mut evidence = String::from(
                 "OpenCode natively discovers the UZE-managed symlink in ~/.agents/skills (the same shared root Codex uses). UZE generates a wrapper carrying the stable qualified label as its `name`, while preserving the canonical description and body without rewriting the Store.",
             );
+            let mut route = CompatibilityRoute::Native;
             if !policy.is_default() {
                 evidence.push_str(
-                    " A non-default policy is translated into OpenCode's own SKILL.md fields on a generated wrapper (metadata.opencode/autoinvoke: false for model=false; slash: false for user=false) without touching the canonical Store bytes — Native per ADR-030.",
+                    " A non-default policy is translated into OpenCode's own SKILL.md fields on a generated wrapper (metadata.opencode/autoinvoke: false for model=false; slash: false for user=false) without touching the canonical Store bytes.",
+                );
+            }
+            if !policy.user {
+                // Measured, not assumed: `slash: false` removes the Skill
+                // from the `/` catalog, and a mention (`@id`) still expands
+                // its body — V2's picker offers every discovered Skill that
+                // way. Half the policy is carried; half is not.
+                route = CompatibilityRoute::Adaptable;
+                evidence.push_str(
+                    " invoke.user=false degrades on OpenCode V2: `slash: false` withholds the Skill from the `/` catalog, but a mention (`@<label>`) still invokes it, so a user can reach it anyway — ADAPTED per ADR-030, reported rather than claimed.",
                 );
             }
             return ExposurePlan {
                 representation: resource.capability.representation,
-                route: CompatibilityRoute::Native,
+                route,
                 verification: VerificationStatus::Unverified,
                 mechanism: ExposureMechanism::ManagedUserScopeReference {
                     discovery_root: self.skills_dir.clone(),

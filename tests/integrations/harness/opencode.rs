@@ -1,25 +1,33 @@
-//! OpenCode invocation-policy conformance (ADR-030): native routing with
-//! `autoinvoke`/`slash: false` metadata and user-only lifecycle.
+//! OpenCode invocation-policy conformance (ADR-030): what `autoinvoke` and
+//! `slash` carry, and what `slash` does not.
 
 use crate::policy::*;
 
 #[test]
-fn opencode_routes_every_combination_natively() {
+fn opencode_routes_each_combination_by_what_the_vendor_carries() {
     let combinations = [
         (
             "default",
             default_body("commit"),
             CompatibilityRoute::Native,
         ),
+        // `metadata.opencode/autoinvoke: false` withholds the Skill from
+        // model discovery, which is the whole of invoke.model=false.
         (
             "user-only",
             user_only_body("review"),
             CompatibilityRoute::Native,
         ),
+        // `slash: false` gates the `/` catalog only: V2 also invokes a
+        // Skill by mention (`@id`), and a mentioned Skill's body is
+        // expanded whatever its `slash` value. Measured by the Lab's
+        // invocation check (`skill-model-only-is-not-invocable`, opencode2
+        // beta-19192), which types `@flow:analyze` and finds its body in
+        // the request. Half the policy is carried; half is not.
         (
             "model-only",
             model_only_body("legacy"),
-            CompatibilityRoute::Native,
+            CompatibilityRoute::Adaptable,
         ),
         (
             "invalid",
@@ -36,11 +44,18 @@ fn opencode_routes_every_combination_natively() {
             home.clone(),
         );
         mark_setup(&home, &opencode);
+        let plan = opencode.exposure_plan(&r);
         assert_eq!(
-            opencode.exposure_plan(&r).route,
-            expected,
-            "OpenCode V2 preserves every combination natively ({label})"
+            plan.route, expected,
+            "OpenCode routes by what it carries ({label})"
         );
+        if label == "model-only" {
+            assert!(
+                plan.evidence.contains("still invokes it"),
+                "the degradation must be stated, never hidden: {}",
+                plan.evidence
+            );
+        }
         fs::remove_dir_all(root).unwrap();
     }
 }

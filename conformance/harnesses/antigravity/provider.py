@@ -120,6 +120,12 @@ SKILL_MARKERS = [
     "review",
     "analyze",
     "init",
+    # A Skill's *body* reaches the model only when the Skill was
+    # invoked — a listing carries name and description alone. These are
+    # what tell an invocation from an offer.
+    "UZE_SKILL_BODY_COMMIT",
+    "UZE_SKILL_BODY_REVIEW",
+    "UZE_SKILL_BODY_ANALYZE",
 ]
 TOOL_NAMES = [
     "grep_search",

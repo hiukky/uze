@@ -2353,8 +2353,11 @@ fn render_project_lock_status(status: &uze_application::application::ProjectLock
             text
         }
         ProjectLockStatus::Malformed { reason } => {
+            // The reason already names the file and what is wrong with it;
+            // a prefix here only says it twice, and says "malformed" over
+            // errors that are not.
             format!(
-                "\n{}  {} agents.lock is malformed: {reason}\n",
+                "\n{}  {} {reason}\n",
                 progress::report_section("Project lock"),
                 progress::warning_icon()
             )

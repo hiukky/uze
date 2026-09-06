@@ -128,6 +128,46 @@ impl Repository {
     }
 }
 
+/// Turns an existing directory into a repository with one commit holding
+/// everything in it, and answers with that commit.
+///
+/// Deliberately not a [`Repository`]: that fixture isolates ambient Git
+/// configuration by mutating the process environment, which takes a
+/// crate-wide lock and so allows only one at a time. A test that needs a
+/// project repository *and* a marketplace repository needs two, so the two
+/// settings that actually break a fixture — signing, and the operator's
+/// hooks — are passed per invocation instead.
+pub fn commit_everything_in(root: &Path) -> String {
+    let isolated = |args: &[&str]| -> String {
+        let mut full = vec!["-c", "commit.gpgsign=false", "-c", "core.hooksPath="];
+        full.extend_from_slice(args);
+        uze_git::write(root, &full)
+            .unwrap_or_else(|error| panic!("git must be on PATH for this fixture: {error}"))
+            .successful()
+            .unwrap_or_else(|error| panic!("git {args:?} failed: {error}"))
+            .trim()
+            .to_owned()
+    };
+    let already = uze_git::read(root, &["rev-parse", "--git-dir"])
+        .map(|output| output.is_success())
+        .unwrap_or(false);
+    if !already {
+        isolated(&["init", "--quiet", "-b", INITIAL_BRANCH, "."]);
+        isolated(&["config", "user.name", AUTHOR_NAME]);
+        isolated(&["config", "user.email", AUTHOR_EMAIL]);
+    }
+    isolated(&["add", "-A"]);
+    // Idempotent: a fixture may commit, write more, and commit again, and
+    // a second call with nothing new to record is not a failure.
+    let unchanged = uze_git::read(root, &["diff", "--cached", "--quiet"])
+        .map(|output| output.is_success())
+        .unwrap_or(false);
+    if !unchanged {
+        isolated(&["commit", "--quiet", "-m", "fixture"]);
+    }
+    isolated(&["rev-parse", "HEAD"])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

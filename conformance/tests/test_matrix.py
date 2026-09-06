@@ -128,8 +128,8 @@ class ReportTest(unittest.TestCase):
         ]
         table = render_table(cells)
         self.assertIn("claude", table)
-        self.assertIn("18/18 ✅", table)
-        self.assertIn("22/28 🟡", table)
+        self.assertIn("18/18 ✓", table)
+        self.assertIn("22/28 !", table)
         self.assertIn("CRASH", table)
 
 

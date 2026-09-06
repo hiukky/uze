@@ -50,7 +50,19 @@ TOOL_NAME = os.environ.get("TOOL_NAME", MCP_TOOL)
 TOOL_ARGS = json.loads(os.environ.get("TOOL_ARGS", "{}"))
 
 ISOLATION_MARKERS = ["already isolated", "UZE_CONFORMANCE_REBASE"]
-SKILL_MARKERS = ["flow:commit", "flow:review", "commit", "review", "init"]
+SKILL_MARKERS = [
+    "flow:commit",
+    "flow:review",
+    "commit",
+    "review",
+    "init",
+    # A Skill's *body* reaches the model only when the Skill was
+    # invoked — a listing carries name and description alone. These are
+    # what tell an invocation from an offer.
+    "UZE_SKILL_BODY_COMMIT",
+    "UZE_SKILL_BODY_REVIEW",
+    "UZE_SKILL_BODY_ANALYZE",
+]
 # Conformance evidence markers carried by portable-hook denial reasons
 # (ADR-033): presence/absence in the structural summary proves what the real
 # harness relayed after the hook executed.

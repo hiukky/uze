@@ -291,16 +291,8 @@ mod tests {
             lock.plugins.insert(
                 name.to_string(),
                 project_lock::LockedPlugin {
-                    source: project_lock::PluginSource::Marketplace {
-                        marketplace: marketplace.to_owned(),
-                        plugin: name.to_string(),
-                    },
-                    resolved: project_lock::ResolvedPlugin {
-                        revision: None,
-                        version: None,
-                        integrity: None,
-                    },
-                    requested: None,
+                    marketplace: marketplace.to_owned(),
+                    integrity: None,
                 },
             );
         }
@@ -326,12 +318,7 @@ mod tests {
                 let taken: Vec<&String> = lock
                     .plugins
                     .iter()
-                    .filter_map(|(plugin, locked)| match &locked.source {
-                        uze_core::project_lock::PluginSource::Marketplace {
-                            marketplace, ..
-                        } if marketplace == name => Some(plugin),
-                        _ => None,
-                    })
+                    .filter_map(|(plugin, locked)| (locked.marketplace == **name).then_some(plugin))
                     .collect();
                 if !taken.is_empty() {
                     text.push_str("    plugins:\n");

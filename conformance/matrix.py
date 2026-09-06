@@ -120,13 +120,13 @@ def render_table(cells: list[dict[str, Any]]) -> str:
             elif cell["crash"]:
                 row.append("CRASH")
             elif cell["passed"] == cell["total"]:
-                row.append(f"{cell['passed']}/{cell['total']} ✅")
+                row.append(f"{cell['passed']}/{cell['total']} ✓")
             elif cell["known_adapted"] or any(
                 f["adjudication"] != "asserted" for f in cell["failures"]
             ):
-                row.append(f"{cell['passed']}/{cell['total']} 🟡")
+                row.append(f"{cell['passed']}/{cell['total']} !")
             else:
-                row.append(f"{cell['passed']}/{cell['total']} ❌")
+                row.append(f"{cell['passed']}/{cell['total']} ✕")
         rows.append(" | ".join(row) + " |")
     return "\n".join(rows)
 

@@ -228,6 +228,7 @@ mod integrity {
         .unwrap();
         fs::write(root.join("plugins/flow/plugin.json"), r#"{"name":"flow"}"#).unwrap();
         fs::write(root.join("plugins/flow/skills/demo/SKILL.md"), skill).unwrap();
+        uze_testkit::git::commit_everything_in(&root);
         root
     }
 
@@ -241,11 +242,11 @@ mod integrity {
         (application, repository.root().to_path_buf())
     }
 
-    /// A local path has no stable revision, so it has no honest pin either:
-    /// the bytes change whenever their author saves. Recording one would
-    /// turn ordinary editing into a mismatch.
+    /// A marketplace on this machine is a clone of a repository, not a
+    /// loose directory, so it pins exactly as well as a remote one: the
+    /// commit it was read at, and a digest of the bytes that commit holds.
     #[test]
-    fn a_local_path_records_no_pin_rather_than_a_value_that_would_be_wrong_tomorrow() {
+    fn a_marketplace_on_this_machine_pins_like_any_other() {
         let (application, root) = with_marketplace("integrity-local", "# demo\n");
         application
             .project()
@@ -253,12 +254,15 @@ mod integrity {
             .unwrap();
 
         let lock = fs::read_to_string(root.join("agents.lock")).unwrap();
-        assert!(!lock.contains("integrity:"), "{lock}");
+        assert!(lock.contains("integrity: sha256:"), "{lock}");
+        assert!(lock.contains("revision:"), "{lock}");
     }
 
     /// The shape of the lock, which is what a reviewer reads in a diff.
+    /// Nothing in it is said twice: no wrapper key names what the whole
+    /// file already is, and nothing repeats a map key as a field.
     #[test]
-    fn resolution_is_flat_and_the_request_is_echoed() {
+    fn the_lock_repeats_nothing_it_has_already_said() {
         let (application, root) = with_marketplace("integrity-shape", "# demo\n");
         application
             .project()
@@ -266,13 +270,23 @@ mod integrity {
             .unwrap();
 
         let lock = fs::read_to_string(root.join("agents.lock")).unwrap();
-        assert!(
-            lock.contains("requested:"),
-            "the lock must echo what was asked, for offline staleness: {lock}"
-        );
-        assert!(
-            !lock.contains("resolved:"),
-            "resolution is the whole file; the nested key names the obvious: {lock}"
+        for redundant in [
+            "source:",
+            "resolved:",
+            "requested:",
+            "type:",
+            "plugin: flow",
+        ] {
+            assert!(
+                !lock.contains(redundant),
+                "`{redundant}` says what another line already said: {lock}"
+            );
+        }
+        assert_eq!(
+            lock.matches("ai").count(),
+            2,
+            "the marketplace is named once where it is described and once where \
+             it is drawn from: {lock}"
         );
     }
 
@@ -289,11 +303,19 @@ mod integrity {
         // A second machine: the same declaration, a lock pinning bytes that
         // are not the ones this source now yields.
         let lock = fs::read_to_string(root.join("agents.lock")).unwrap();
-        let pinned = lock.replace(
-            "  flow:",
-            "  flow:\n    integrity: sha256:0000000000000000000000000000000000000000000000000000000000000000",
-        );
-        fs::write(root.join("agents.lock"), &pinned).unwrap();
+        let pinned = lock
+            .lines()
+            .map(|line| {
+                if line.trim_start().starts_with("integrity:") {
+                    "    integrity: sha256:\
+                     0000000000000000000000000000000000000000000000000000000000000000"
+                } else {
+                    line
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(root.join("agents.lock"), format!("{pinned}\n")).unwrap();
 
         let elsewhere = UzeApplication::new(
             UzeHome::at(uze_testkit::temp::scratch("integrity-mismatch-elsewhere")),

@@ -95,11 +95,18 @@ jobs:
 
       # Uploaded on failure and on the nightly: a journey's evidence is what
       # it read off the machine, and it is the whole point of having run it.
+      #
+      # `include-hidden-files` because the evidence lives under a dot
+      # directory, which the action excludes by default — the step above
+      # listed ten evidence directories and this one still reported "No
+      # files were found", so the first failing run in CI lost exactly what
+      # it was there to produce.
       - name: Keep the evidence
         if: failure() || github.event_name == 'schedule'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: journey-evidence-${{ github.run_id }}
           path: journeys/.evidence/
+          include-hidden-files: true
           retention-days: 14
           if-no-files-found: error

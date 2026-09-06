@@ -39,6 +39,23 @@ class OpenCodeBindings(Bindings):
         """OpenCode names a Skill by its qualified invocation label."""
         return f"flow:{skill}" in catalog.replace(" ", "")
 
+    def invoke(self, tui, skill):
+        """OpenCode V2 invokes a Skill as a **mention**, not a slash command.
+
+        Measured on beta-19192: the picker renders skills as `"@" + id` and
+        selects them as `{type: "skill", value: {id, mention}}`, and the
+        prompt payload carries `skills` as mentions beside `files` and
+        `agents`. Typing `/flow:commit` here would prove nothing about this
+        harness, which is exactly the confusion a listing-only check let
+        stand.
+        """
+        tui.type(f"@flow:{skill}")
+        time.sleep(1.2)
+        tui.submit()
+        time.sleep(1.0)
+        tui.submit()
+        return tui.collect(reads=10)
+
     def mcp_inventory(self, tui):
         """`/mcps` — plural here — opens the MCP toggle surface.
 
@@ -53,16 +70,43 @@ class OpenCodeBindings(Bindings):
         return tui.collect(reads=6)
 
     def unsupported(self, prop):
-        """OpenCode's skill surface offers every delivered Skill to the user;
-        no documented control hides one from explicit invocation.
+        """`/skills` lists every delivered Skill, whatever `slash` says.
 
-        Consistent with what the product already reports: `uze plugin
-        inspect` routes every OpenCode Skill as `Adaptable`, never `Native`.
+        Re-asked at beta-19192 (2026-09-06). The old reason — "no
+        documented control hides a Skill from explicit invocation" — is
+        false: the skill parser reads `metadata."opencode/slash"` falling
+        back to a top-level `slash`, and two catalog builders filter with
+        `skills.filter((s) => s.slash !== false)`. UZE writes that control,
+        and its own routing calls this Native.
+
+        What is still true is narrower and was measured, not assumed:
+        the surface this vertical reads renders `flow:analyze` alongside
+        the others, so the property cannot be observed *here*. Removing
+        the declaration made the check fail on exactly that.
+
+        What would retire this: reading the surface those two filters
+        build — the `/` invocation palette — rather than the `/skills`
+        browser, and proving on the same capture that a default Skill is
+        listed there while the model-only one is not.
         """
         if prop == "model-only-is-not-user-invocable":
             return (
-                "OpenCode has no documented control that hides a Skill from "
-                "explicit invocation; the product routes its Skills as Adaptable"
+                "OpenCode honours `slash: false` in its `/` palette builders but "
+                "its `/skills` browser lists every delivered Skill regardless; "
+                "the property is not observable on the surface read here"
+            )
+        if prop == "model-only-is-not-invocable":
+            # Measured, not assumed: the invocation check typed
+            # `@flow:analyze` and its body reached the model. V2 has two
+            # explicit paths and `slash` gates only one — the picker offers
+            # every discovered Skill as `@id`, and `SessionPrompt.prepare`
+            # expands a mentioned Skill whatever its `slash` value. UZE's
+            # own route for `invoke.user: false` was moved to Adaptable on
+            # the same evidence.
+            return (
+                "OpenCode V2 invokes a Skill by mention (`@id`) as well as by "
+                "`/id`, and `slash: false` gates only the second: a Skill "
+                "withheld from the `/` catalog is still invocable by mention"
             )
         return None
 
