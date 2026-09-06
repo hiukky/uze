@@ -21,7 +21,7 @@ use uze_application::{Result, UzeHome};
 use super::hit::Hit;
 use super::model::{self, Focus, Overlay, ROUTES, Route, Status, TuiModel};
 use super::worker::{Intent, dispatch, drain_worker_results, recent_prompts, spawn_startup};
-use super::{TerminalSession, overlay, small_digits, view};
+use super::{TerminalSession, overlay, small_caps, small_digits, view};
 use crate::ui::theme::{self, Symbol, Token};
 
 pub(crate) fn run_management(
@@ -262,6 +262,24 @@ fn route_count(route: Route, model: &TuiModel) -> Option<usize> {
     }
 }
 
+/// A nav row's label, plus the badge for a route that carries one. The
+/// badge takes the row's own style and overrides only the hue, so it
+/// inherits the selected row's background instead of punching a hole in
+/// it. Small capitals let a mark sit beside a name without shouting over
+/// it; the amber says the screen is not settled without claiming anything
+/// is broken.
+fn route_label_line(route: Route, style: Style) -> Line<'static> {
+    let mut spans = vec![Span::styled(route.label(), style)];
+    if let Some(badge) = route.badge() {
+        spans.push(Span::styled("  ", style));
+        spans.push(Span::styled(
+            small_caps(badge),
+            style.fg(theme::color(Token::StateWarning)),
+        ));
+    }
+    Line::from(spans)
+}
+
 fn render_sidebar(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
@@ -384,17 +402,14 @@ fn render_sidebar(
                 } else {
                     theme::fg(Token::Accent)
                 };
-                frame.render_widget(Paragraph::new(Span::styled(route.label(), style)), cols[0]);
+                frame.render_widget(Paragraph::new(route_label_line(route, style)), cols[0]);
                 frame.render_widget(
                     Paragraph::new(Span::styled(count_str, count_style))
                         .alignment(ratatui::layout::Alignment::Right),
                     cols[1],
                 );
             } else {
-                frame.render_widget(
-                    Paragraph::new(Span::styled(route.label(), style)),
-                    text_rect,
-                );
+                frame.render_widget(Paragraph::new(route_label_line(route, style)), text_rect);
             }
             hits.push((rect, Hit::Route(route)));
             continue;
@@ -451,7 +466,7 @@ fn render_sidebar(
                     .fg(theme::color(Token::Accent))
                     .bg(theme::color(Token::SurfaceRaised));
                 frame.render_widget(
-                    Paragraph::new(Span::styled(route.label(), label_style)),
+                    Paragraph::new(route_label_line(route, label_style)),
                     cols[0],
                 );
                 frame.render_widget(
@@ -461,7 +476,7 @@ fn render_sidebar(
                 );
             } else {
                 frame.render_widget(
-                    Paragraph::new(Span::styled(route.label(), label_style)),
+                    Paragraph::new(route_label_line(route, label_style)),
                     inner_label,
                 );
             }
@@ -490,7 +505,7 @@ fn render_sidebar(
                     .split(inner_label);
                 let count_style = theme::fg(Token::Accent);
                 frame.render_widget(
-                    Paragraph::new(Span::styled(route.label(), label_style)),
+                    Paragraph::new(route_label_line(route, label_style)),
                     cols[0],
                 );
                 frame.render_widget(
@@ -500,7 +515,7 @@ fn render_sidebar(
                 );
             } else {
                 frame.render_widget(
-                    Paragraph::new(Span::styled(route.label(), label_style)),
+                    Paragraph::new(route_label_line(route, label_style)),
                     inner_label,
                 );
             }

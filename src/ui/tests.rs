@@ -2307,3 +2307,90 @@ fn eliding_reserves_the_active_themes_own_marker_width() {
         );
     }
 }
+
+// The sidebar draws the badge into the label column, beside a
+// right-aligned count, and the workspace tab measures the alias against
+// the width it has left — so a label that changed length or cell count on
+// its way to the screen would take a column with it. Cell count holds
+// because every small capital is East Asian width *neutral*: a terminal
+// gives each one cell whether or not its font has the glyph.
+#[test]
+fn small_caps_preserves_a_labels_length_and_its_cells() {
+    use ratatui::text::Span;
+    for label in ["Beta", "claude", "codex", "antigravity", "PATH shadowed"] {
+        let drawn = crate::ui::small_caps(label);
+        assert_eq!(
+            drawn.chars().count(),
+            label.chars().count(),
+            "{label:?} changed length as {drawn:?}"
+        );
+        assert_eq!(
+            Span::raw(drawn.clone()).width(),
+            Span::raw(label).width(),
+            "{label:?} changed cell count as {drawn:?}"
+        );
+        assert_eq!(
+            drawn.split(' ').count(),
+            label.split(' ').count(),
+            "{label:?} lost a word boundary as {drawn:?}"
+        );
+    }
+}
+
+// Mixed case has to arrive as one even run — a full-height initial next to
+// small capitals is the thing this exists to avoid. `q` and `x`, which
+// Unicode has no small capital for, come out lowercase rather than
+// vanishing or standing up as the one full-height letter in the run.
+#[test]
+fn small_caps_levels_mixed_case_and_keeps_what_it_cannot_fold() {
+    assert_eq!(crate::ui::small_caps("Beta"), "ʙᴇᴛᴀ");
+    assert_eq!(crate::ui::small_caps("PATH shadowed"), "ᴘᴀᴛʜ ꜱʜᴀᴅᴏᴡᴇᴅ");
+    assert_eq!(crate::ui::small_caps("Query X2"), "qᴜᴇʀʏ x2");
+}
+
+// The sidebar is where someone decides which screen to open, so a route
+// that is not settled has to say so there — selected or not, and in the
+// narrow layout too, which drops the subtitle and is exactly where a badge
+// is easiest to lose. The count has to survive beside it: the badge is
+// drawn into the label column, and pushing the count off its own would
+// trade one signal for another.
+#[test]
+fn the_unsettled_route_is_the_only_badged_one_in_either_layout() {
+    use ratatui::{Terminal, backend::TestBackend};
+    let badge = crate::ui::small_caps("Beta");
+    for (width, height) in [(150u16, 26u16), (80, 20)] {
+        for route in [Route::Profiles, Route::Plugins] {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            let model = TuiModel {
+                route,
+                focus: Focus::Content,
+                overlay: Overlay::None,
+                ..model_with_data()
+            };
+            let mut hits = Vec::new();
+            terminal
+                .draw(|frame| render(frame, &model, &mut hits))
+                .unwrap();
+            let badged: Vec<_> = buffer_rows(&terminal)
+                .into_iter()
+                .filter(|row| row.contains(&badge))
+                .collect();
+            assert_eq!(
+                badged.len(),
+                1,
+                "at {width}x{height} on {route:?}, {} rows carry the badge: {badged:?}",
+                badged.len()
+            );
+            assert!(
+                badged[0].contains(Route::Profiles.label()),
+                "the badge landed on the wrong row: {:?}",
+                badged[0]
+            );
+            assert!(
+                badged[0].contains(&crate::ui::small_digits(2)),
+                "the badge pushed the route count off its row: {:?}",
+                badged[0]
+            );
+        }
+    }
+}

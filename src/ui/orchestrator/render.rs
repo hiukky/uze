@@ -365,43 +365,6 @@ fn caption_path(cwd: &Path) -> String {
     }
 }
 
-/// Renders lowercase ASCII letters as their Unicode small-capital form
-/// (`claude` -> `ᴄʟᴀᴜᴅᴇ`) — a quieter way to give a badge-like label some
-/// visual weight without full-height capitals. Unicode has no small-cap
-/// `q` or `x`, so those (and anything already non-lowercase-ASCII) pass
-/// through unchanged rather than being dropped or capitalized.
-fn small_caps(s: &str) -> String {
-    s.chars()
-        .map(|c| match c {
-            'a' => 'ᴀ',
-            'b' => 'ʙ',
-            'c' => 'ᴄ',
-            'd' => 'ᴅ',
-            'e' => 'ᴇ',
-            'f' => 'ꜰ',
-            'g' => 'ɢ',
-            'h' => 'ʜ',
-            'i' => 'ɪ',
-            'j' => 'ᴊ',
-            'k' => 'ᴋ',
-            'l' => 'ʟ',
-            'm' => 'ᴍ',
-            'n' => 'ɴ',
-            'o' => 'ᴏ',
-            'p' => 'ᴘ',
-            'r' => 'ʀ',
-            's' => 'ꜱ',
-            't' => 'ᴛ',
-            'u' => 'ᴜ',
-            'v' => 'ᴠ',
-            'w' => 'ᴡ',
-            'y' => 'ʏ',
-            'z' => 'ᴢ',
-            other => other,
-        })
-        .collect()
-}
-
 /// Whether `cwd` is outside any slot — the fallback every agent tab
 /// otherwise never needs: no repository, no commit to branch from, Git
 /// absent or refusing. An agent there has no task to take a branch from,
@@ -753,7 +716,8 @@ pub(super) fn render_sidebar(
                 // `Padding::new(1, 0, 0, 0)`) — that padding drop suits a
                 // button glued to the edge, not a plain text label.
                 let alias = agent_identity_for_tab(identities, tab).unwrap_or_default();
-                let alias_span = Span::styled(small_caps(alias), theme::fg(Token::TextDim));
+                let alias_span =
+                    Span::styled(crate::ui::small_caps(alias), theme::fg(Token::TextDim));
                 let used: u16 = spans.iter().map(|span| span.width() as u16).sum::<u16>()
                     + alias_span.width() as u16
                     + TRAILING_PAD;

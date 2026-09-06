@@ -272,6 +272,67 @@ pub(crate) fn small_digits(n: usize) -> String {
         .collect()
 }
 
+/// Renders a label as Unicode small capitals (`Beta` -> `ʙᴇᴛᴀ`) — the
+/// weight of capitals without their full height, for a mark that has to be
+/// noticed beside a name without shouting over it. The input is lowercased
+/// first so a mixed-case label reads as one even run rather than as a
+/// full-height initial followed by small ones. Unicode has no small
+/// capital for `q` or `x`, so those stay lowercase — closer in weight to
+/// their neighbours than the one full-height letter in the run would be —
+/// and anything outside the ASCII alphabet passes through rather than
+/// being dropped.
+///
+/// Every letter maps to exactly one character, and all 24 are East Asian
+/// width *neutral*, so a label keeps both its length and its cell count:
+/// the padded columns it sits in are unaffected.
+///
+/// What this depends on is the reader's font, which is why it is spent
+/// sparingly — the workspace tab's agent alias and the sidebar's badge for
+/// an unsettled route, both short and both read once. The glyphs are
+/// scattered across three blocks (IPA Extensions, Phonetic Extensions,
+/// and `ꜰ`/`ꜱ` alone in Latin Extended-D) and monospace coverage is thin:
+/// measured against the patched Nerd Fonts, Fira Code, JetBrains Mono and
+/// Hack carry none of the 24, DejaVu Sans Mono and Meslo 8, Consolas and
+/// Liberation Mono 22 — missing exactly `ꜰ` and `ꜱ` — and only Iosevka and
+/// Noto Sans Mono all 24. A terminal missing a glyph substitutes a
+/// proportional fallback face, which still occupies its one cell but is
+/// drawn at another size and optical width, so the run looks unevenly
+/// spaced rather than misaligned. That is a font to install rather than a
+/// bug to fix here, but it is the reason a status a reader must be able to
+/// scan across a list is left in ordinary case.
+pub(crate) fn small_caps(s: &str) -> String {
+    s.chars()
+        .flat_map(char::to_lowercase)
+        .map(|c| match c {
+            'a' => 'ᴀ',
+            'b' => 'ʙ',
+            'c' => 'ᴄ',
+            'd' => 'ᴅ',
+            'e' => 'ᴇ',
+            'f' => 'ꜰ',
+            'g' => 'ɢ',
+            'h' => 'ʜ',
+            'i' => 'ɪ',
+            'j' => 'ᴊ',
+            'k' => 'ᴋ',
+            'l' => 'ʟ',
+            'm' => 'ᴍ',
+            'n' => 'ɴ',
+            'o' => 'ᴏ',
+            'p' => 'ᴘ',
+            'r' => 'ʀ',
+            's' => 'ꜱ',
+            't' => 'ᴛ',
+            'u' => 'ᴜ',
+            'v' => 'ᴠ',
+            'w' => 'ᴡ',
+            'y' => 'ʏ',
+            'z' => 'ᴢ',
+            other => other,
+        })
+        .collect()
+}
+
 /// `~/relative/path` when `root` is under the user's home directory, else
 /// the path as-is — mirrors what a shell prompt usually shows.
 pub(crate) fn display_project_path(root: &std::path::Path) -> String {
