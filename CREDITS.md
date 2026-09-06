@@ -66,7 +66,7 @@ accepts, which is why the table sums to more than the number of crates.
 
 | Licence | Crates |
 | --- | --- |
-| Apache License 2.0 (`Apache-2.0`) | 179 |
+| Apache License 2.0 (`Apache-2.0`) | 187 |
 | MIT License (`MIT`) | 60 |
 | Unicode License v3 (`Unicode-3.0`) | 1 |
 | zlib License (`Zlib`) | 1 |
@@ -93,8 +93,11 @@ accepts, which is why the table sums to more than the number of crates.
 | `base64` | 0.22.1 | MIT OR Apache-2.0 |
 | `base64` | 0.23.1 | MIT OR Apache-2.0 |
 | `bincode` | 1.3.3 | MIT |
+| `bit-set` | 0.8.0 | Apache-2.0 OR MIT |
+| `bit-vec` | 0.8.0 | Apache-2.0 OR MIT |
 | `bitflags` | 1.3.2 | MIT OR Apache-2.0 |
 | `bitflags` | 2.13.1 | MIT OR Apache-2.0 |
+| `block-buffer` | 0.10.4 | MIT OR Apache-2.0 |
 | `bumpalo` | 3.20.3 | MIT OR Apache-2.0 |
 | `bytes` | 1.12.1 | MIT |
 | `castaway` | 0.2.4 | MIT |
@@ -113,11 +116,13 @@ accepts, which is why the table sums to more than the number of crates.
 | `console` | 0.16.4 | MIT |
 | `convert_case` | 0.10.0 | MIT |
 | `core-foundation-sys` | 0.8.7 | MIT OR Apache-2.0 |
+| `cpufeatures` | 0.2.17 | MIT OR Apache-2.0 |
 | `crc32fast` | 1.5.1 | MIT OR Apache-2.0 |
 | `critical-section` | 1.2.0 | MIT OR Apache-2.0 |
 | `crossbeam-utils` | 0.8.23 | MIT OR Apache-2.0 |
 | `crossterm` | 0.29.0 | MIT |
 | `crossterm_winapi` | 0.9.1 | MIT |
+| `crypto-common` | 0.1.7 | MIT OR Apache-2.0 |
 | `cursor-icon` | 1.2.0 | MIT OR Apache-2.0 OR Zlib |
 | `darling` | 0.24.1 | MIT |
 | `darling_core` | 0.24.1 | MIT |
@@ -126,6 +131,7 @@ accepts, which is why the table sums to more than the number of crates.
 | `derive_more` | 2.1.1 | MIT |
 | `derive_more-impl` | 2.1.1 | MIT |
 | `dialoguer` | 0.12.0 | MIT |
+| `digest` | 0.10.7 | MIT OR Apache-2.0 |
 | `document-features` | 0.2.12 | MIT OR Apache-2.0 |
 | `downcast-rs` | 1.2.1 | MIT OR Apache-2.0 |
 | `dyn-clone` | 1.0.20 | MIT OR Apache-2.0 |
@@ -133,6 +139,7 @@ accepts, which is why the table sums to more than the number of crates.
 | `encode_unicode` | 1.0.0 | Apache-2.0 OR MIT |
 | `equivalent` | 1.0.2 | Apache-2.0 OR MIT |
 | `errno` | 0.3.14 | MIT OR Apache-2.0 |
+| `fancy-regex` | 0.16.2 | MIT |
 | `fastrand` | 2.5.0 | Apache-2.0 OR MIT |
 | `filedescriptor` | 0.8.3 | MIT |
 | `find-msvc-tools` | 0.1.12 | MIT OR Apache-2.0 |
@@ -148,6 +155,7 @@ accepts, which is why the table sums to more than the number of crates.
 | `futures-sink` | 0.3.34 | MIT OR Apache-2.0 |
 | `futures-task` | 0.3.34 | MIT OR Apache-2.0 |
 | `futures-util` | 0.3.34 | MIT OR Apache-2.0 |
+| `generic-array` | 0.14.7 | MIT |
 | `getrandom` | 0.4.3 | MIT OR Apache-2.0 |
 | `hashbrown` | 0.16.1 | MIT OR Apache-2.0 |
 | `hashbrown` | 0.17.1 | MIT OR Apache-2.0 |
@@ -187,14 +195,11 @@ accepts, which is why the table sums to more than the number of crates.
 | `num_threads` | 0.1.7 | MIT OR Apache-2.0 |
 | `once_cell` | 1.21.4 | MIT OR Apache-2.0 |
 | `once_cell_polyfill` | 1.70.2 | MIT OR Apache-2.0 |
-| `onig` | 6.5.3 | MIT |
-| `onig_sys` | 69.9.3 | MIT |
 | `parking_lot` | 0.12.5 | MIT OR Apache-2.0 |
 | `parking_lot_core` | 0.9.12 | MIT OR Apache-2.0 |
 | `pastey` | 0.2.3 | MIT OR Apache-2.0 |
 | `pin-project-lite` | 0.2.17 | Apache-2.0 OR MIT |
 | `piper` | 0.2.5 | MIT OR Apache-2.0 |
-| `pkg-config` | 0.3.34 | MIT OR Apache-2.0 |
 | `plist` | 1.10.0 | MIT |
 | `polling` | 3.11.0 | Apache-2.0 OR MIT |
 | `portable-atomic` | 1.15.0 | Apache-2.0 OR MIT |
@@ -234,6 +239,7 @@ accepts, which is why the table sums to more than the number of crates.
 | `serde_ignored` | 0.1.14 | MIT OR Apache-2.0 |
 | `serde_json` | 1.0.151 | MIT OR Apache-2.0 |
 | `serial2` | 0.2.38 | BSD-2-Clause OR Apache-2.0 |
+| `sha2` | 0.10.9 | MIT OR Apache-2.0 |
 | `shared_library` | 0.1.9 | Apache-2.0 OR MIT |
 | `shell-words` | 1.1.1 | MIT OR Apache-2.0 |
 | `shlex` | 2.0.1 | MIT OR Apache-2.0 |
@@ -268,6 +274,7 @@ accepts, which is why the table sums to more than the number of crates.
 | `tracing` | 0.1.44 | MIT |
 | `tracing-attributes` | 0.1.31 | MIT |
 | `tracing-core` | 0.1.36 | MIT |
+| `typenum` | 1.20.1 | MIT OR Apache-2.0 |
 | `unicode-ident` | 1.0.24 | (MIT OR Apache-2.0) AND Unicode-3.0 |
 | `unicode-segmentation` | 1.13.3 | MIT OR Apache-2.0 |
 | `unicode-truncate` | 2.0.1 | MIT OR Apache-2.0 |
@@ -275,6 +282,7 @@ accepts, which is why the table sums to more than the number of crates.
 | `unit-prefix` | 0.5.2 | MIT |
 | `utf8parse` | 0.2.2 | Apache-2.0 OR MIT |
 | `uuid` | 1.26.0 | Apache-2.0 OR MIT |
+| `version_check` | 0.9.5 | MIT OR Apache-2.0 |
 | `vte` | 0.15.0 | Apache-2.0 OR MIT |
 | `walkdir` | 2.5.0 | Unlicense OR MIT |
 | `wasi` | 0.11.1+wasi-snapshot-preview1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
