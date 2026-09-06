@@ -65,6 +65,17 @@ fn install_sets_the_project_up_and_writes_no_lock_when_there_is_nothing_to_resol
         written.contains("handoff | merge | pr"),
         "the choices must be discoverable by opening the file: {written}"
     );
+    for offered in ["# target:", "# link:", "# setup:", "# gate:", "# slots:"] {
+        assert!(
+            written.contains(offered),
+            "setting a project up must show `{offered}` too, commented: {written}"
+        );
+    }
+    assert_eq!(
+        manifest::worktree_policy(&root).unwrap(),
+        uze_core::worktree::WorktreePolicy::default(),
+        "showing the options must not declare any of them"
+    );
     assert!(
         !root.join("agents.lock").exists(),
         "a project with nothing to resolve has no lock"

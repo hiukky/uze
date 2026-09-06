@@ -28,13 +28,19 @@ use super::*;
 /// `MarketplaceSource` is the resolved identity; this is the declaration
 /// that produced it, so a person reading `agents.yaml` sees what they asked
 /// for rather than what resolution made of it.
-fn declared_marketplace_for(lock: &ProjectLock, marketplace: &str) -> DeclaredMarketplace {
+///
+/// `None` for the marketplace built into UZE: it is always available, so
+/// there is nothing for the project to declare, and a plugin naming it
+/// stands on its own.
+fn declared_marketplace_for(lock: &ProjectLock, marketplace: &str) -> Option<DeclaredMarketplace> {
     let mut declared = DeclaredMarketplace {
         git: None,
         path: None,
-        embedded: false,
         r#ref: None,
         subdirectory: None,
+        // The plugin list is the manifest's own: `declare_plugin` pushes
+        // into whatever is already declared rather than replacing it.
+        plugins: Vec::new(),
     };
     match lock
         .marketplaces
@@ -51,9 +57,9 @@ fn declared_marketplace_for(lock: &ProjectLock, marketplace: &str) -> DeclaredMa
             declared.subdirectory = subdirectory.clone();
         }
         Some(MarketplaceSource::Path { path }) => declared.path = Some(path.clone()),
-        Some(MarketplaceSource::Embedded { .. }) | None => declared.embedded = true,
+        Some(MarketplaceSource::Embedded { .. }) | None => return None,
     }
-    declared
+    Some(declared)
 }
 
 impl Project<'_> {
@@ -360,7 +366,7 @@ impl Project<'_> {
             &canonical,
             plugin,
             marketplace,
-            &declared_marketplace_for(&lock, marketplace),
+            declared_marketplace_for(&lock, marketplace).as_ref(),
         )?;
         project_lock::save_lock(&canonical, &lock)?;
 

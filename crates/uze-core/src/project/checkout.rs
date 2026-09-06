@@ -277,7 +277,7 @@ pub fn materialize(
     primary: &Path,
     slot: &Path,
     links: &[PathBuf],
-    setup: Option<&str>,
+    setup: &[String],
 ) -> Vec<String> {
     let mut warnings = Vec::new();
     for link in links {
@@ -303,11 +303,15 @@ pub fn materialize(
             warnings.push(format!("could not link `{}`: {error}", link.display()));
         }
     }
-    if let Some(setup) = setup {
-        let (passed, output) = crate::subprocess::run_shell_bounded(slot, setup, SETUP_TIMEOUT);
+    // In order, and stopping at the first failure: a later step almost
+    // always assumes the earlier one ran, so continuing would produce a
+    // second, more confusing warning about the same cause.
+    for step in setup {
+        let (passed, output) = crate::subprocess::run_shell_bounded(slot, step, SETUP_TIMEOUT);
         if !passed {
             let tail = output.lines().last().unwrap_or("").to_owned();
-            warnings.push(format!("setup `{setup}` failed: {tail}"));
+            warnings.push(format!("setup `{step}` failed: {tail}"));
+            break;
         }
     }
     warnings
@@ -1352,7 +1356,7 @@ mod tests {
             primary,
             &slot.path,
             &[PathBuf::from(".env"), PathBuf::from(".env.local")],
-            None,
+            &[],
         );
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(warnings[0].contains(".env.local"));
@@ -1365,7 +1369,7 @@ mod tests {
         );
         assert_eq!(fs::read_to_string(&linked).unwrap(), "SECRET=1\n");
         assert!(
-            materialize(primary, &slot.path, &[PathBuf::from(".env")], None).is_empty(),
+            materialize(primary, &slot.path, &[PathBuf::from(".env")], &[]).is_empty(),
             "idempotent"
         );
     }
@@ -1380,11 +1384,11 @@ mod tests {
             primary,
             &slot.path,
             &[],
-            Some("echo preparing; echo 'no such tool: pnpm' >&2; exit 3"),
+            &["echo preparing; echo 'no such tool: pnpm' >&2; exit 3".to_owned()],
         );
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(warnings[0].contains("no such tool: pnpm"), "{warnings:?}");
-        assert!(materialize(primary, &slot.path, &[], Some("touch prepared")).is_empty());
+        assert!(materialize(primary, &slot.path, &[], &["touch prepared".to_owned()]).is_empty());
         assert!(
             slot.path.join("prepared").exists(),
             "setup runs in the checkout"

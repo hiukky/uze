@@ -314,22 +314,31 @@ mod tests {
     /// declaration side of the same fixture.
     fn declare(root: &Path, lock: &uze_core::project_lock::ProjectLock) {
         let mut text = String::from("worktrees: {}\n");
-        if !lock.marketplaces.is_empty() {
+        let declarable: Vec<&String> = lock
+            .marketplaces
+            .keys()
+            .filter(|name| name.as_str() != uze_core::manifest::BUILT_IN_MARKETPLACE)
+            .collect();
+        if !declarable.is_empty() {
             text.push_str("marketplaces:\n");
-            for name in lock.marketplaces.keys() {
-                text.push_str(&format!("  {name}: {{ embedded: true }}\n"));
-            }
-        }
-        if !lock.plugins.is_empty() {
-            text.push_str("plugins:\n");
-            for (name, locked) in &lock.plugins {
-                let marketplace = match &locked.source {
-                    uze_core::project_lock::PluginSource::Marketplace { marketplace, .. } => {
-                        marketplace.clone()
+            for name in declarable {
+                text.push_str(&format!("  {name}:\n    path: ../{name}\n"));
+                let taken: Vec<&String> = lock
+                    .plugins
+                    .iter()
+                    .filter_map(|(plugin, locked)| match &locked.source {
+                        uze_core::project_lock::PluginSource::Marketplace {
+                            marketplace, ..
+                        } if marketplace == name => Some(plugin),
+                        _ => None,
+                    })
+                    .collect();
+                if !taken.is_empty() {
+                    text.push_str("    plugins:\n");
+                    for plugin in taken {
+                        text.push_str(&format!("      - {plugin}\n"));
                     }
-                    uze_core::project_lock::PluginSource::Git { .. } => continue,
-                };
-                text.push_str(&format!("  {name}: {{ marketplace: {marketplace} }}\n"));
+                }
             }
         }
         std::fs::write(root.join(uze_core::manifest::MANIFEST_FILE_NAME), text).unwrap();

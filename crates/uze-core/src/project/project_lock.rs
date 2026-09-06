@@ -133,11 +133,13 @@ pub struct RequestedPlugin {
 
 impl RequestedPlugin {
     /// The manifest's declaration, reduced to what resolution depends on.
-    pub fn of(declared: &crate::manifest::DeclaredPlugin) -> Self {
+    /// A declared plugin is a name under a marketplace; `git` and `ref`
+    /// stay for what the lock itself can carry, which is more.
+    pub fn from_marketplace(marketplace: &str) -> Self {
         Self {
-            marketplace: declared.marketplace.clone(),
-            git: declared.git.clone(),
-            r#ref: declared.r#ref.clone(),
+            marketplace: Some(marketplace.to_owned()),
+            git: None,
+            r#ref: None,
         }
     }
 }
@@ -193,11 +195,11 @@ pub fn stale_against(
     lock: &ProjectLock,
 ) -> Vec<StaleEntry> {
     let mut stale = Vec::new();
-    for (plugin, declared) in &manifest.plugins {
-        let requested = RequestedPlugin::of(declared);
+    for (plugin, marketplace) in manifest.declared_plugins() {
+        let requested = RequestedPlugin::from_marketplace(marketplace);
         match lock.plugins.get(plugin) {
             None => stale.push(StaleEntry {
-                plugin: plugin.clone(),
+                plugin: plugin.to_owned(),
                 requested,
                 locked: None,
             }),
@@ -206,7 +208,7 @@ pub fn stale_against(
                     && recorded != &requested
                 {
                     stale.push(StaleEntry {
-                        plugin: plugin.clone(),
+                        plugin: plugin.to_owned(),
                         requested,
                         locked: Some(recorded.clone()),
                     });
@@ -422,39 +424,42 @@ mod tests {
 
     mod staleness {
         use super::*;
-        use crate::manifest::{DeclaredPlugin, ProjectManifest};
+        use crate::manifest::{DeclaredMarketplace, ProjectManifest};
 
-        fn manifest(entries: &[(&str, Option<&str>)]) -> ProjectManifest {
+        /// The declarations, grouped the way the manifest groups them: the
+        /// marketplace carries the plugins, so what a declaration can differ
+        /// in is which marketplace it is under.
+        fn manifest(entries: &[(&str, &str)]) -> ProjectManifest {
             let mut manifest = ProjectManifest::default();
-            for (name, reference) in entries {
-                manifest.plugins.insert(
-                    (*name).to_owned(),
-                    DeclaredPlugin {
-                        marketplace: Some("ai".to_owned()),
-                        r#ref: reference.map(str::to_owned),
-                        ..DeclaredPlugin::default()
-                    },
-                );
+            for (name, marketplace) in entries {
+                manifest
+                    .marketplaces
+                    .entry((*marketplace).to_owned())
+                    .or_insert_with(|| DeclaredMarketplace {
+                        git: Some(format!("https://example.invalid/{marketplace}")),
+                        path: None,
+                        r#ref: None,
+                        subdirectory: None,
+                        plugins: Vec::new(),
+                    })
+                    .plugins
+                    .push((*name).to_owned());
             }
             manifest
         }
 
-        fn lock(entries: &[(&str, Option<&str>, bool)]) -> ProjectLock {
+        fn lock(entries: &[(&str, &str, bool)]) -> ProjectLock {
             let mut lock = ProjectLock::default();
-            for (name, reference, echoed) in entries {
+            for (name, marketplace, echoed) in entries {
                 lock.plugins.insert(
                     (*name).to_owned(),
                     LockedPlugin {
                         source: PluginSource::Marketplace {
-                            marketplace: "ai".to_owned(),
+                            marketplace: (*marketplace).to_owned(),
                             plugin: (*name).to_owned(),
                         },
                         resolved: ResolvedPlugin::default(),
-                        requested: echoed.then(|| RequestedPlugin {
-                            marketplace: Some("ai".to_owned()),
-                            git: None,
-                            r#ref: reference.map(str::to_owned),
-                        }),
+                        requested: echoed.then(|| RequestedPlugin::from_marketplace(marketplace)),
                     },
                 );
             }
@@ -463,31 +468,28 @@ mod tests {
 
         #[test]
         fn a_lock_answering_the_manifest_is_current() {
-            let stale = stale_against(
-                &manifest(&[("flow", Some("v1"))]),
-                &lock(&[("flow", Some("v1"), true)]),
-            );
+            let stale = stale_against(&manifest(&[("flow", "ai")]), &lock(&[("flow", "ai", true)]));
             assert!(stale.is_empty(), "{stale:?}");
         }
 
         #[test]
-        fn a_changed_reference_is_stale_and_names_both_values() {
+        fn a_plugin_taken_from_a_different_marketplace_is_stale_and_names_both() {
             let stale = stale_against(
-                &manifest(&[("flow", Some("v2"))]),
-                &lock(&[("flow", Some("v1"), true)]),
+                &manifest(&[("flow", "mirror")]),
+                &lock(&[("flow", "ai", true)]),
             );
             assert_eq!(stale.len(), 1);
             assert_eq!(stale[0].plugin, "flow");
-            assert_eq!(stale[0].requested.r#ref.as_deref(), Some("v2"));
+            assert_eq!(stale[0].requested.marketplace.as_deref(), Some("mirror"));
             assert_eq!(
-                stale[0].locked.as_ref().unwrap().r#ref.as_deref(),
-                Some("v1")
+                stale[0].locked.as_ref().unwrap().marketplace.as_deref(),
+                Some("ai")
             );
         }
 
         #[test]
         fn a_plugin_the_lock_has_never_seen_is_stale() {
-            let stale = stale_against(&manifest(&[("flow", None)]), &lock(&[]));
+            let stale = stale_against(&manifest(&[("flow", "ai")]), &lock(&[]));
             assert_eq!(stale.len(), 1);
             assert!(stale[0].locked.is_none());
         }
@@ -497,8 +499,8 @@ mod tests {
         #[test]
         fn an_entry_with_no_echo_is_not_called_stale() {
             let stale = stale_against(
-                &manifest(&[("flow", Some("v2"))]),
-                &lock(&[("flow", Some("v1"), false)]),
+                &manifest(&[("flow", "mirror")]),
+                &lock(&[("flow", "ai", false)]),
             );
             assert!(stale.is_empty(), "{stale:?}");
         }
@@ -507,7 +509,7 @@ mod tests {
         /// staleness: it is a removal the next write resolves.
         #[test]
         fn a_lock_entry_the_manifest_dropped_is_not_reported_here() {
-            let stale = stale_against(&manifest(&[]), &lock(&[("flow", None, true)]));
+            let stale = stale_against(&manifest(&[]), &lock(&[("flow", "ai", true)]));
             assert!(stale.is_empty(), "{stale:?}");
         }
     }

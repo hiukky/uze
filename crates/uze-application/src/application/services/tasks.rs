@@ -136,12 +136,8 @@ impl Workspace<'_> {
                 task.checkout = Some(acquired.id.clone());
                 store.upsert(task.clone());
                 let _ = task::save(&self.0.home, &primary, &store);
-                let warnings = checkout::materialize(
-                    &primary,
-                    &acquired.path,
-                    &policy.link,
-                    policy.setup.as_deref(),
-                );
+                let warnings =
+                    checkout::materialize(&primary, &acquired.path, &policy.link, &policy.setup);
                 AgentPlacement {
                     cwd: acquired.path,
                     isolation: Isolation::Slot {
@@ -204,12 +200,7 @@ impl Workspace<'_> {
             reused: !acquired.created,
         };
         task::save(&self.0.home, &primary, &repository.store)?;
-        let warnings = checkout::materialize(
-            &primary,
-            &acquired.path,
-            &policy.link,
-            policy.setup.as_deref(),
-        );
+        let warnings = checkout::materialize(&primary, &acquired.path, &policy.link, &policy.setup);
         Ok(AgentPlacement {
             cwd: acquired.path,
             isolation,
@@ -584,7 +575,7 @@ impl Repository {
         let gate = self.policy.gate.clone();
         let policy = landing::Policy {
             completion,
-            gate: gate.as_deref(),
+            gate: &gate,
         };
         let primary = self.primary.clone();
         let task = self.task_mut(task_id)?;
@@ -610,11 +601,11 @@ impl Repository {
                 checkout: landing::slot_path(&primary, task).unwrap_or_default(),
                 message: landing::conflict_message(task, &files, target_moved),
             }),
-            Err(DeliveryFailure::GateFailed { output }) => {
+            Err(DeliveryFailure::GateFailed { command, output }) => {
                 DeliveryOutcome::ReturnedToAgent(AgentNotice {
                     task: task.id.as_str().to_owned(),
                     checkout: landing::slot_path(&primary, task).unwrap_or_default(),
-                    message: landing::gate_failure_message(task, &output),
+                    message: landing::gate_failure_message(task, &command, &output),
                 })
             }
             Err(other) => DeliveryOutcome::Refused(other.to_string()),
@@ -857,7 +848,7 @@ pub struct DeliveryReport {
 pub struct DeliveryPolicyView {
     pub completion: &'static str,
     pub target: Option<String>,
-    pub gate: Option<String>,
+    pub gate: Vec<String>,
     /// Whether this is what the project declared or what UZE falls back to.
     /// A reader who cannot tell the two apart learns nothing from being
     /// shown `handoff`: they cannot know whether anyone chose it.

@@ -48,9 +48,9 @@ pub enum Readiness {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Policy<'a> {
     pub completion: CompletionBehavior,
-    /// A shell command run in the task's checkout on the rebased commits;
-    /// a non-zero exit refuses delivery.
-    pub gate: Option<&'a str>,
+    /// What runs in the task's checkout on the rebased commits, in order;
+    /// the first non-zero exit refuses delivery.
+    pub gate: &'a [String],
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -80,6 +80,10 @@ pub enum DeliveryFailure {
         target_moved: usize,
     },
     GateFailed {
+        /// The step that failed — named, because a gate of several steps
+        /// that reports only output leaves the reader diffing the output
+        /// against the manifest to find out which one.
+        command: String,
         output: String,
     },
     /// The operator has uncommitted changes to files the task changed.
@@ -104,7 +108,7 @@ impl fmt::Display for DeliveryFailure {
             Self::Conflict { files, .. } => {
                 write!(formatter, "conflicts in {}", join_paths(files))
             }
-            Self::GateFailed { .. } => formatter.write_str("the gate failed"),
+            Self::GateFailed { command, .. } => write!(formatter, "the gate failed at `{command}`"),
             Self::Overlap { files } => write!(
                 formatter,
                 "the primary checkout has uncommitted changes to {}",
@@ -195,11 +199,14 @@ fn deliver_locked(
     task.state = TaskState::Integrating;
     let tip = target_tip(primary, task, policy.completion)?;
     rebase_in_slot(primary, &slot, task, &tip)?;
-    if let Some(gate) = policy.gate {
-        let (passed, output) = run_shell_bounded(&slot, gate, GATE_TIMEOUT);
+    for step in policy.gate {
+        let (passed, output) = run_shell_bounded(&slot, step, GATE_TIMEOUT);
         if !passed {
             task.state = TaskState::GateFailed;
-            return Err(DeliveryFailure::GateFailed { output });
+            return Err(DeliveryFailure::GateFailed {
+                command: step.clone(),
+                output,
+            });
         }
     }
     match policy.completion {
@@ -376,7 +383,7 @@ pub fn conflict_message(task: &Task, files: &[PathBuf], target_moved: usize) -> 
 
 /// The message written into the owning agent's pane when the gate refused
 /// its rebased commits.
-pub fn gate_failure_message(task: &Task, output: &str) -> String {
+pub fn gate_failure_message(task: &Task, command: &str, output: &str) -> String {
     let tail: String = output
         .lines()
         .rev()
@@ -387,8 +394,8 @@ pub fn gate_failure_message(task: &Task, output: &str) -> String {
         .collect::<Vec<_>>()
         .join(" | ");
     format!(
-        "The project's checks failed on your branch after it was rebased onto {target}. Fix \
-         them on this branch, commit, and end your turn. Last lines: {tail}",
+        "The project's checks failed on your branch after it was rebased onto {target}: \
+         `{command}`. Fix them on this branch, commit, and end your turn. Last lines: {tail}",
         target = task.target,
     )
 }
@@ -612,15 +619,19 @@ mod tests {
     fn handoff() -> Policy<'static> {
         Policy {
             completion: CompletionBehavior::Handoff,
-            gate: None,
+            gate: &[],
         }
     }
 
-    fn merge(gate: Option<&str>) -> Policy<'_> {
+    fn merge(gate: &[String]) -> Policy<'_> {
         Policy {
             completion: CompletionBehavior::Merge,
             gate,
         }
+    }
+
+    fn steps(commands: &[&str]) -> Vec<String> {
+        commands.iter().map(|step| (*step).to_owned()).collect()
     }
 
     #[test]
@@ -674,7 +685,7 @@ mod tests {
         let delivered = deliver(
             primary,
             &mut task,
-            &merge(Some("test -f a.rs && test -f b.rs")),
+            &merge(&steps(&["test -f a.rs && test -f b.rs"])),
         )
         .unwrap();
         assert!(matches!(delivered, Delivered::Merged { .. }));
@@ -700,7 +711,11 @@ mod tests {
         agent_commits(&repository, &task, "feature.rs", "");
         repository.commit_file("from-target.txt", "only on the target after launch");
 
-        let outcome = deliver(primary, &mut task, &merge(Some("test -f from-target.txt")));
+        let outcome = deliver(
+            primary,
+            &mut task,
+            &merge(&steps(&["test -f from-target.txt"])),
+        );
         assert!(
             outcome.is_ok(),
             "{outcome:?}: the gate saw the rebased tree"
@@ -719,16 +734,54 @@ mod tests {
         let failure = deliver(
             primary,
             &mut task,
-            &merge(Some("echo 'assertion failed: x'; exit 1")),
+            &merge(&steps(&["echo 'assertion failed: x'; exit 1"])),
         )
         .unwrap_err();
         assert!(
-            matches!(&failure, DeliveryFailure::GateFailed { output } if output.contains("assertion failed")),
+            matches!(&failure, DeliveryFailure::GateFailed { output, .. } if output.contains("assertion failed")),
             "{failure:?}"
         );
         assert_eq!(tip_of(primary, TARGET), before);
         assert_eq!(task.state, TaskState::GateFailed);
-        assert!(gate_failure_message(&task, "assertion failed: x").contains("assertion failed"));
+        assert!(
+            gate_failure_message(&task, "cargo test", "assertion failed: x")
+                .contains("assertion failed")
+        );
+    }
+
+    /// A gate of several steps must say which one refused the delivery:
+    /// the agent that has to fix it reads this message, not the manifest.
+    #[test]
+    fn a_multi_step_gate_stops_at_the_first_failure_and_names_it() {
+        let repository = repository("landing-gate-steps");
+        let primary = repository.root();
+        let mut store = TaskStore::default();
+        let mut task = launch(&repository, &mut store, "gate steps");
+        agent_commits(&repository, &task, "a.rs", "");
+        let slot = slot_path(primary, &task).unwrap();
+
+        let failure = deliver(
+            primary,
+            &mut task,
+            &merge(&steps(&[
+                "touch ran-first",
+                "echo 'lint: 3 problems' >&2; exit 1",
+                "touch never-ran",
+            ])),
+        )
+        .unwrap_err();
+
+        let DeliveryFailure::GateFailed { command, output } = &failure else {
+            panic!("expected a failed gate, got {failure:?}");
+        };
+        assert!(command.contains("lint"), "{command}");
+        assert!(output.contains("3 problems"), "{output}");
+        assert!(failure.to_string().contains("`echo 'lint"), "{failure}");
+        assert!(slot.join("ran-first").exists(), "the first step ran");
+        assert!(
+            !slot.join("never-ran").exists(),
+            "a step after the failure must not run"
+        );
     }
 
     #[test]
@@ -741,7 +794,7 @@ mod tests {
         repository.commit_file("shared.rs", "operator's version\n");
         let before = tip_of(primary, TARGET);
 
-        let failure = deliver(primary, &mut task, &merge(None)).unwrap_err();
+        let failure = deliver(primary, &mut task, &merge(&[])).unwrap_err();
         let DeliveryFailure::Conflict {
             files,
             target_moved,
@@ -782,7 +835,7 @@ mod tests {
         let mut task = launch(&repository, &mut store, "resolved");
         agent_commits(&repository, &task, "shared.rs", "agent's version\n");
         repository.commit_file("shared.rs", "operator's version\n");
-        deliver(primary, &mut task, &merge(None)).unwrap_err();
+        deliver(primary, &mut task, &merge(&[])).unwrap_err();
 
         let slot = slot_path(primary, &task).unwrap();
         fs::write(slot.join("shared.rs"), "both versions\n").unwrap();
@@ -798,7 +851,7 @@ mod tests {
         assert_eq!(ahead, 1, "the agent's commit, not the target's");
         assert_eq!(base, tip_of(primary, TARGET));
         assert!(matches!(
-            deliver(primary, &mut task, &merge(None)),
+            deliver(primary, &mut task, &merge(&[])),
             Ok(Delivered::Merged { .. })
         ));
         assert_eq!(
@@ -817,8 +870,8 @@ mod tests {
         agent_commits(&repository, &first, "first.rs", "");
         agent_commits(&repository, &second, "second.rs", "");
 
-        deliver(primary, &mut first, &merge(None)).unwrap();
-        deliver(primary, &mut second, &merge(Some("test -f first.rs"))).unwrap();
+        deliver(primary, &mut first, &merge(&[])).unwrap();
+        deliver(primary, &mut second, &merge(&steps(&["test -f first.rs"]))).unwrap();
         assert!(primary.join("first.rs").is_file() && primary.join("second.rs").is_file());
         assert_eq!(second.base_commit, tip_of(primary, &first.branch));
     }
@@ -833,7 +886,7 @@ mod tests {
         fs::write(primary.join("README.md"), "the operator is editing it\n").unwrap();
         let before = tip_of(primary, TARGET);
 
-        let failure = deliver(primary, &mut task, &merge(None)).unwrap_err();
+        let failure = deliver(primary, &mut task, &merge(&[])).unwrap_err();
         assert!(
             matches!(&failure, DeliveryFailure::Overlap { files } if files == &[PathBuf::from("README.md")]),
             "{failure:?}"
@@ -853,13 +906,13 @@ mod tests {
         let mut store = TaskStore::default();
         let mut task = launch(&repository, &mut store, "empty");
         assert_eq!(
-            deliver(primary, &mut task, &merge(None)),
+            deliver(primary, &mut task, &merge(&[])),
             Err(DeliveryFailure::NotReady(Readiness::Running))
         );
         let slot = slot_path(primary, &task).unwrap();
         fs::write(slot.join("wip"), "").unwrap();
         assert_eq!(
-            deliver(primary, &mut task, &merge(None)),
+            deliver(primary, &mut task, &merge(&[])),
             Err(DeliveryFailure::NotReady(Readiness::Uncommitted))
         );
     }
@@ -939,7 +992,7 @@ mod tests {
 
         let policy = Policy {
             completion: CompletionBehavior::Pr,
-            gate: Some("test -f remote-only.txt"),
+            gate: &steps(&["test -f remote-only.txt"]),
         };
         let Delivered::AwaitingRequest {
             branch,
@@ -1025,7 +1078,7 @@ mod tests {
         agent_commits(&repository, &task, "auth.rs", "");
         let policy = Policy {
             completion: CompletionBehavior::Pr,
-            gate: None,
+            gate: &[],
         };
         deliver(primary, &mut task, &policy).unwrap();
         let tip = tip_of(primary, &task.branch);
@@ -1053,7 +1106,7 @@ mod tests {
         agent_commits(&repository, &task, "a.rs", "");
         let policy = Policy {
             completion: CompletionBehavior::Pr,
-            gate: None,
+            gate: &[],
         };
         assert_eq!(
             deliver(primary, &mut task, &policy),

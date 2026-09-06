@@ -36,18 +36,21 @@ worktrees:
   completion: pr
   link: [.env.local]
 
+# a marketplace declares one source, and what the project takes from it;
+# its `ref:` is the pin that moves them. UZE's own marketplace is built
+# into the binary and is never declared here.
 marketplaces:
   ai:
     git: https://github.com/hiukky/ai.git
     ref: main            # optional
     subdirectory: market # optional
+    plugins:
+      - flow
+      - review
   local-dev:
     path: ../local-marketplace
-
-plugins:
-  # pinned until the upstream fix lands
-  flow: { marketplace: ai, ref: v0.3.1 }
-  uze: { marketplace: uze-official }
+    plugins:
+      - bench
 ```
 
 **Lock (`agents.lock`) — generated, never edited:**

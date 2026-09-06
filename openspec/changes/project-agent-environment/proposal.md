@@ -24,7 +24,7 @@ Result: **Same project. Same agent environment. Any supported harness.**
 - **`agents.yaml`** — new project-scoped file where a person declares the desired agent environment (marketplaces, plugins, isolation policy), edited in place so comments survive
 - **`agents.lock`** — generated from `agents.yaml`: resolved sources, pinned revisions, verified `integrity`, and the request each entry satisfies. Carries no intent, and is safe to delete
 - **`uze <plugin>@<marketplace>`** — new project shorthand that writes `agents.lock` (requires `@`)
-- **No new command** — `uze install` creates `agents.yaml` with a commented default policy when a project has none; opening the client never creates anything
+- **No new command** — `uze install` creates `agents.yaml` when a project has none, carrying every key the schema accepts with only the default policy live and the rest commented; opening the client never creates anything
 - **Isolation policy in the workspace client** — the agent context popup names the completion behavior, target and gate in force and their provenance, and changes them on click
 - **`uze install`** — new command that consumes `agents.lock` to reconstruct environment on fresh machine
 - **`uze remove <plugin>`** — disambiguated: removes from project lock if present, else delegates to global `remove_plugin`
