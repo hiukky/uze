@@ -34,7 +34,7 @@ pub(super) const RUNTIME_PROJECTION_ENV_VAR: &str = "CLAUDE_CODE_ADDITIONAL_DIRE
 /// `LEGACY/PERSISTENT CONTEXT DELIVERY STRATEGY` until an empirical
 /// interactive comparison decides otherwise).
 ///
-/// Builds (or refreshes) `$UZE_HOME/runtime/claude-code/projects/<id>/
+/// Builds (or refreshes) `$UZE_HOME/runtime/projects/<id>/claude-code/
 /// CLAUDE.md` importing the current project's `AGENTS.md`, entirely outside
 /// the project's own working tree. Returns `Ok(None)` when `ctx.cwd` is not
 /// inside a project carrying any portable context at all — that is not an
@@ -49,9 +49,8 @@ pub(super) fn claude_runtime_projection(
     if !context.has_any() {
         return Ok(None);
     }
-    let project_id = harness_runtime::project_id_for(&context.root);
-    let runtime_dir = ctx.home.runtime_projection_dir("claude-code", &project_id);
-    fs::create_dir_all(&runtime_dir).map_err(|error| error.to_string())?;
+    let runtime_dir = harness_runtime::prepare_projection(ctx.home, "claude-code", &context.root)
+        .map_err(|error| error.to_string())?;
 
     project_instruction_projection(&context, &runtime_dir)?;
     for resource in project_context::AGENTS_DIRECTORY_RESOURCES {
@@ -304,10 +303,11 @@ mod runtime_projection_tests {
         let second = integration.runtime_contribution(&ctx);
         assert_eq!(first, second, "same project must yield the same plan");
 
-        let runtime_dir = PathBuf::from(&first.extra_args[1]);
-        // Same project id both times: no second directory was created.
-        let projects_dir = runtime_dir.parent().unwrap();
-        let entries: Vec<_> = std::fs::read_dir(projects_dir).unwrap().collect();
+        // Same project id both times: no second project directory was
+        // created under the runtime tree's `projects` tenant.
+        let entries: Vec<_> = std::fs::read_dir(home.runtime_projects_dir())
+            .unwrap()
+            .collect();
         assert_eq!(entries.len(), 1);
 
         let _ = std::fs::remove_dir_all(&root);

@@ -161,7 +161,7 @@ canonical skill directory still referenced. The invalid policy
 ## Runtime
 
 `claude/runtime.rs` is Claude's unique mechanism: `claude_runtime_projection`
-builds `$UZE_HOME/runtime/claude-code/projects/<id>/CLAUDE.md` (a single
+builds `$UZE_HOME/runtime/projects/<id>/claude-code/CLAUDE.md` (a single
 `@<AGENTS.md path>` import line, content-compared before writing —
 idempotent), and `runtime_contribution` turns that into `--add-dir <dir>` +
 `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1`. Reached through

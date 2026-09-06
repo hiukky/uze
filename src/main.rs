@@ -1824,7 +1824,7 @@ impl uze_application::NameCollisionAuthority for PromptingCollisionAuthority {
         println!();
         let choice = dialoguer::Select::new()
             .with_prompt("How should this be resolved?")
-            .items(&[
+            .items([
                 "Keep existing (default)",
                 "Replace it",
                 "Alias this install to a new name",

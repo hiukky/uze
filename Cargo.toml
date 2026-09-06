@@ -61,8 +61,8 @@ indicatif = "0.18"
 # dialoguer replaces raw `stdin().read_line()` prompts with proper
 # confirm/select/input widgets; comfy-table replaces hand-padded columns.
 anstyle = "1"
-dialoguer = "0.11"
-comfy-table = "7"
+dialoguer = "0.12"
+comfy-table = "8"
 
 # MCP fixtures and the local playground server are test/development support;
 # neither is linked into UZE's application/core crates.

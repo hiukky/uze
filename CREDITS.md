@@ -67,7 +67,7 @@ accepts, which is why the table sums to more than the number of crates.
 | Licence | Crates |
 | --- | --- |
 | Apache License 2.0 (`Apache-2.0`) | 179 |
-| MIT License (`MIT`) | 61 |
+| MIT License (`MIT`) | 60 |
 | Unicode License v3 (`Unicode-3.0`) | 1 |
 | zlib License (`Zlib`) | 1 |
 
@@ -98,7 +98,7 @@ accepts, which is why the table sums to more than the number of crates.
 | `bumpalo` | 3.20.3 | MIT OR Apache-2.0 |
 | `bytes` | 1.12.1 | MIT |
 | `castaway` | 0.2.4 | MIT |
-| `cc` | 1.4.4 | MIT OR Apache-2.0 |
+| `cc` | 1.4.5 | MIT OR Apache-2.0 |
 | `cfg-if` | 1.0.4 | MIT OR Apache-2.0 |
 | `cfg_aliases` | 0.1.1 | MIT |
 | `chrono` | 0.4.45 | MIT OR Apache-2.0 |
@@ -107,16 +107,15 @@ accepts, which is why the table sums to more than the number of crates.
 | `clap_derive` | 4.6.4 | MIT OR Apache-2.0 |
 | `clap_lex` | 1.1.0 | MIT OR Apache-2.0 |
 | `colorchoice` | 1.0.5 | MIT OR Apache-2.0 |
-| `comfy-table` | 7.2.2 | MIT |
+| `comfy-table` | 8.0.0 | MIT |
 | `compact_str` | 0.9.1 | MIT |
 | `concurrent-queue` | 2.5.0 | Apache-2.0 OR MIT |
-| `console` | 0.15.11 | MIT |
 | `console` | 0.16.4 | MIT |
 | `convert_case` | 0.10.0 | MIT |
 | `core-foundation-sys` | 0.8.7 | MIT OR Apache-2.0 |
 | `crc32fast` | 1.5.1 | MIT OR Apache-2.0 |
 | `critical-section` | 1.2.0 | MIT OR Apache-2.0 |
-| `crossbeam-utils` | 0.8.22 | MIT OR Apache-2.0 |
+| `crossbeam-utils` | 0.8.23 | MIT OR Apache-2.0 |
 | `crossterm` | 0.29.0 | MIT |
 | `crossterm_winapi` | 0.9.1 | MIT |
 | `cursor-icon` | 1.2.0 | MIT OR Apache-2.0 OR Zlib |
@@ -126,7 +125,7 @@ accepts, which is why the table sums to more than the number of crates.
 | `deranged` | 0.5.8 | MIT OR Apache-2.0 |
 | `derive_more` | 2.1.1 | MIT |
 | `derive_more-impl` | 2.1.1 | MIT |
-| `dialoguer` | 0.11.0 | MIT |
+| `dialoguer` | 0.12.0 | MIT |
 | `document-features` | 0.2.12 | MIT OR Apache-2.0 |
 | `downcast-rs` | 1.2.1 | MIT OR Apache-2.0 |
 | `dyn-clone` | 1.0.20 | MIT OR Apache-2.0 |
@@ -136,7 +135,7 @@ accepts, which is why the table sums to more than the number of crates.
 | `errno` | 0.3.14 | MIT OR Apache-2.0 |
 | `fastrand` | 2.5.0 | Apache-2.0 OR MIT |
 | `filedescriptor` | 0.8.3 | MIT |
-| `find-msvc-tools` | 0.1.11 | MIT OR Apache-2.0 |
+| `find-msvc-tools` | 0.1.12 | MIT OR Apache-2.0 |
 | `flate2` | 1.1.10 | MIT OR Apache-2.0 |
 | `fnv` | 1.0.7 | Apache-2.0  OR  MIT |
 | `foldhash` | 0.2.0 | Zlib |
@@ -153,19 +152,19 @@ accepts, which is why the table sums to more than the number of crates.
 | `hashbrown` | 0.16.1 | MIT OR Apache-2.0 |
 | `hashbrown` | 0.17.1 | MIT OR Apache-2.0 |
 | `heck` | 0.5.0 | MIT OR Apache-2.0 |
-| `hermit-abi` | 0.5.2 | MIT OR Apache-2.0 |
+| `hermit-abi` | 0.5.3 | MIT OR Apache-2.0 |
 | `home` | 0.5.12 | MIT OR Apache-2.0 |
 | `iana-time-zone` | 0.1.65 | MIT OR Apache-2.0 |
 | `iana-time-zone-haiku` | 0.1.2 | MIT OR Apache-2.0 |
 | `ident_case` | 1.0.1 | MIT OR Apache-2.0 |
-| `indexmap` | 2.14.0 | Apache-2.0 OR MIT |
+| `indexmap` | 2.14.2 | Apache-2.0 OR MIT |
 | `indicatif` | 0.18.6 | MIT |
 | `indoc` | 2.0.7 | MIT OR Apache-2.0 |
 | `instability` | 0.3.13 | MIT |
 | `is_terminal_polyfill` | 1.70.2 | MIT OR Apache-2.0 |
 | `itertools` | 0.14.0 | MIT OR Apache-2.0 |
 | `itoa` | 1.0.18 | MIT OR Apache-2.0 |
-| `js-sys` | 0.3.104 | MIT OR Apache-2.0 |
+| `js-sys` | 0.3.105 | MIT OR Apache-2.0 |
 | `kasuari` | 0.4.12 | MIT OR Apache-2.0 |
 | `lazy_static` | 1.5.0 | MIT OR Apache-2.0 |
 | `libc` | 0.2.189 | MIT OR Apache-2.0 |
@@ -176,13 +175,13 @@ accepts, which is why the table sums to more than the number of crates.
 | `litrs` | 1.0.0 | MIT OR Apache-2.0 |
 | `lock_api` | 0.4.14 | MIT OR Apache-2.0 |
 | `log` | 0.4.34 | MIT OR Apache-2.0 |
-| `lru` | 0.18.2 | MIT |
+| `lru` | 0.18.4 | MIT |
 | `memchr` | 2.8.3 | Unlicense OR MIT |
 | `miniz_oxide` | 0.9.1 | MIT OR Zlib OR Apache-2.0 |
-| `mio` | 1.2.2 | MIT |
+| `mio` | 1.2.3 | MIT |
 | `miow` | 0.6.1 | MIT OR Apache-2.0 |
 | `nix` | 0.28.0 | MIT |
-| `noyalib` | 0.0.28 | MIT OR Apache-2.0 |
+| `noyalib` | 0.0.33 | MIT OR Apache-2.0 |
 | `num-conv` | 0.2.2 | MIT OR Apache-2.0 |
 | `num-traits` | 0.2.19 | MIT OR Apache-2.0 |
 | `num_threads` | 0.1.7 | MIT OR Apache-2.0 |
@@ -215,8 +214,8 @@ accepts, which is why the table sums to more than the number of crates.
 | `ref-cast-impl` | 1.0.27 | MIT OR Apache-2.0 |
 | `regex-automata` | 0.4.18 | MIT OR Apache-2.0 |
 | `regex-syntax` | 0.8.11 | MIT OR Apache-2.0 |
-| `rmcp` | 3.1.4 | Apache-2.0 |
-| `rmcp-macros` | 3.1.4 | Apache-2.0 |
+| `rmcp` | 3.2.0 | Apache-2.0 |
+| `rmcp-macros` | 3.2.0 | Apache-2.0 |
 | `rustc-hash` | 2.1.3 | Apache-2.0 OR MIT |
 | `rustc_version` | 0.4.1 | MIT OR Apache-2.0 |
 | `rustix` | 1.1.4 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
@@ -244,13 +243,13 @@ accepts, which is why the table sums to more than the number of crates.
 | `signal-hook-registry` | 1.4.8 | MIT OR Apache-2.0 |
 | `simd-adler32` | 0.3.10 | MIT |
 | `slab` | 0.4.12 | MIT |
-| `smallvec` | 1.15.2 | MIT OR Apache-2.0 |
+| `smallvec` | 1.16.0 | MIT OR Apache-2.0 |
 | `static_assertions` | 1.1.0 | MIT OR Apache-2.0 |
 | `strsim` | 0.11.1 | MIT |
 | `strum` | 0.28.0 | MIT |
 | `strum_macros` | 0.28.0 | MIT |
 | `syn` | 2.0.119 | MIT OR Apache-2.0 |
-| `syn` | 3.0.3 | MIT OR Apache-2.0 |
+| `syn` | 3.0.5 | MIT OR Apache-2.0 |
 | `syntect` | 5.3.0 | MIT |
 | `tempfile` | 3.27.0 | MIT OR Apache-2.0 |
 | `thiserror` | 1.0.69 | MIT OR Apache-2.0 |
@@ -275,14 +274,14 @@ accepts, which is why the table sums to more than the number of crates.
 | `unicode-width` | 0.2.2 | MIT OR Apache-2.0 |
 | `unit-prefix` | 0.5.2 | MIT |
 | `utf8parse` | 0.2.2 | Apache-2.0 OR MIT |
-| `uuid` | 1.25.0 | Apache-2.0 OR MIT |
+| `uuid` | 1.26.0 | Apache-2.0 OR MIT |
 | `vte` | 0.15.0 | Apache-2.0 OR MIT |
 | `walkdir` | 2.5.0 | Unlicense OR MIT |
 | `wasi` | 0.11.1+wasi-snapshot-preview1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
-| `wasm-bindgen` | 0.2.127 | MIT OR Apache-2.0 |
-| `wasm-bindgen-macro` | 0.2.127 | MIT OR Apache-2.0 |
-| `wasm-bindgen-macro-support` | 0.2.127 | MIT OR Apache-2.0 |
-| `wasm-bindgen-shared` | 0.2.127 | MIT OR Apache-2.0 |
+| `wasm-bindgen` | 0.2.128 | MIT OR Apache-2.0 |
+| `wasm-bindgen-macro` | 0.2.128 | MIT OR Apache-2.0 |
+| `wasm-bindgen-macro-support` | 0.2.128 | MIT OR Apache-2.0 |
+| `wasm-bindgen-shared` | 0.2.128 | MIT OR Apache-2.0 |
 | `web-time` | 1.1.0 | MIT OR Apache-2.0 |
 | `winapi` | 0.3.9 | MIT OR Apache-2.0 |
 | `winapi-i686-pc-windows-gnu` | 0.4.0 | MIT OR Apache-2.0 |

@@ -1,7 +1,7 @@
 //! Integration seam tests: vendor-neutral contracts, per-harness capability
-//! and lifecycle conformance, the runtime-shim boundary, the invocation
-//! policy carrier used by the per-harness modules, and the structural
-//! vendor-neutrality scans.
+//! and lifecycle conformance, the runtime-shim boundary and the projection
+//! tree behind it, the invocation policy carrier used by the per-harness
+//! modules, and the structural vendor-neutrality scans.
 
 mod agents;
 mod capability_conformance;
@@ -11,6 +11,7 @@ mod identity;
 mod lifecycle_conformance;
 mod policy;
 mod runtime_boundary;
+mod runtime_projection;
 mod vendor_neutral;
 
 pub(crate) mod harness {
