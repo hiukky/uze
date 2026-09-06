@@ -30,7 +30,7 @@ docs didn't cover it).
 |---|---|---|---|
 | Claude Code | `~/.claude/skills/<entry>/SKILL.md` | Directory-name-driven: `/<entry-name>` (personal/project skills). After rename, `uze` package delivers `init` → `/uze:init` (qualified) — also autonomous, description-matched. | OFFICIAL (code.claude.com/docs/en/skills) + **EMPIRICAL** (pre-refactor listing was `uze-uze-uze`, post-refactor `uze`→`uze:init` via `exposure_name_candidates = [logical, qualified]` `claude.rs:152` + `TESTED` `exposure_naming:158`) |
 | Codex | `$HOME/.agents/skills/<entry>/SKILL.md` | `$uze:init` (frontmatter `name: init`, qualified `uze:init`) or autonomous. `/skills` lists, does not force. | OFFICIAL (learn.chatgpt.com/docs/build-skills) + **EMPIRICAL**: `codex debug prompt-input` (real binary, no credential) listed the installed skill as `- init:` — the clean frontmatter name, confirmed identical to what the doc predicted |
-| OpenCode | `~/.agents/skills/<entry>/SKILL.md` (one of several aliases) | V1: model-invoked `skill({ name: "init" })` autonomous only. **V2: `/uze:init` slash (skills listed as commands with `(Skill)` label) + autonomous.** | OFFICIAL (opencode.ai/docs/skills + opencode.ai/v2/docs/skills) + **EMPIRICAL**: `opencode debug skill` pre-refactor listed `"name": "init"` against `".../skills/uze-init"`; V2 `slash` frontmatter `v2/docs/skills` + PR #11390 feat skills as slash commands |
+| OpenCode | `~/.agents/skills/<entry>/SKILL.md` (one of several aliases) | V1: model-invoked `skill({ name: "init" })` autonomous only. **V2: `@uze:init` — a mention, not a slash command** + autonomous. | OFFICIAL (opencode.ai/docs/skills + opencode.ai/v2/docs/skills) + **EMPIRICAL (2026-09-06, opencode2 beta-19192)**: the picker renders skills as `display: "@" + id` and selects them as `{type: "skill", value: {id, mention}}`, and the prompt payload carries `skills` as mentions beside `files` and `agents`. The `slash` frontmatter field still exists and two list builders filter on it (`skills.filter((s) => s.slash !== false)`), but it does not make a skill a `/` command. A hand test on the real TUI agrees: opening `/skills` and picking one inserts `@uze:init`. The earlier claim here (`/uze:init` slash, citing PR #11390) predated this build and was never measured — the conformance suite asserts a *listing*, never an invocation, so nothing caught it. |
 
 **Update pós-refactor + rename para `init` (2026-08-24):** O naming original
 (`uze-<package>-<skill>` → `uze-uze-uze`) foi substituído por `short-or-qualified`
@@ -38,8 +38,8 @@ docs didn't cover it).
 
 **Observação:** Codex/OpenCode continuam usando frontmatter `name: init`
 para invocação tool (`$uze:init` / `skill({name:"init"})`), independentemente do
-diretório (`uze:init` após rename), e OpenCode V2 expõe Skills como
-`/uze:init` slash também (ver Fase 1 atualizada).
+diretório (`uze:init` após rename), e OpenCode V2 expõe Skills como menções
+`@uze:init` — não como slash commands (ver Fase 1 atualizada).
 
 CWD/project root, shell execution, and interactive confirmation were also
 confirmed for all four: every harness runs its shell/bash tool with cwd set
@@ -132,8 +132,8 @@ Health
 | Step | Claude Code | Codex | OpenCode |
 |---|---|---|---|---|
 | Discovers (pós-rename `init`) | `~/.claude/skills/uze:init/` (legado `uze`/`uze:uze` ainda reutilizado se já existe) | `$HOME/.agents/skills/uze:init/` | `~/.agents/skills/uze:init/` (V2 `slash:true`) |
-| Identifies itself as | `uze:init` (qualified, legado `uze` se receipt legado) | `init` (frontmatter, exposição `uze:init`) | `init` (frontmatter, também `/uze:init` slash em V2) |
-| User can explicitly invoke via | `/uze:init` (legado `/uze` ainda funciona se instalado antes) | `$uze:init` | **V1:** *(autonomous only, skill tool)* / **V2:** `/uze:init` (skill listed as command `(Skill)`) |
+| Identifies itself as | `uze:init` (qualified, legado `uze` se receipt legado) | `init` (frontmatter, exposição `uze:init`) | `init` (frontmatter; em V2 a menção é `@uze:init`) |
+| User can explicitly invoke via | `/uze:init` (legado `/uze` ainda funciona se instalado antes) | `$uze:init` | **V1:** *(autonomous only, skill tool)* / **V2:** `@uze:init` (mention, não slash — medido em beta-19192) |
 | User can invoke via natural language | Yes | Yes | Yes (primary mechanism) | Yes (primary mechanism) |
 | Can call `uze` CLI | Yes (bash tool) | Yes (shell tool) | Yes (bash tool) | Yes (shell tool) |
 | Project root available | Yes, session cwd | Yes, session cwd | Yes, session cwd | Yes, session cwd |
@@ -149,7 +149,7 @@ it demonstrably isn't.
 
 ## Limitations (atualizado pós-refactor/builtin)
 
-- Pós-rename `init`, `/uze:init` **é literal em Claude Code** (`uze:init` qualified via `[logical, qualified]` `claude.rs:152`, `TESTED` `exposure_naming:158`). Legado `uze:uze` persiste só como receipt reutilizado verbatim. Em Codex `$uze:init`, OpenCode V1 autônomo `skill({name:"init"})` / **V2 `/uze:init` slash** (`slash: true` default, PR #11390). Natural-language trigger via `description` permanece o mais uniforme. Nenhum Core change escondeu a assimetria anterior — o naming foi corrigido para short-or-qualified.
+- Pós-rename `init`, `/uze:init` **é literal em Claude Code** (`uze:init` qualified via `[logical, qualified]` `claude.rs:152`, `TESTED` `exposure_naming:158`). Legado `uze:uze` persiste só como receipt reutilizado verbatim. Em Codex `$uze:init`, OpenCode V1 autônomo `skill({name:"init"})` / **V2 `@uze:init` menção** (medido em beta-19192; `slash` continua sendo um campo do frontmatter, mas não faz da Skill um comando `/`). Natural-language trigger via `description` permanece o mais uniforme. Nenhum Core change escondeu a assimetria anterior — o naming foi corrigido para short-or-qualified.
 - The agentic reasoning quality (does the Skill draft a *good* `AGENTS.md`,
   classify content well) has no automated eval yet — see
   `tests/_fixtures/scenarios/eval/` (L4 fixture set) for the fixture set and
