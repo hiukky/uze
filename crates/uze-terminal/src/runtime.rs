@@ -1636,8 +1636,9 @@ fn identity_of(root: &Path) -> String {
 mod tests {
     use super::{
         Endpoint, PaneRuntime, PersistedSpace, PersistedTab, PersistedWorkspace, ReplySink,
-        Selection, Server, identity_of, persisted_state_path, relaunch_command_for_process,
-        replace_incompatible_server, server_protocol_version, snapshot, view_for,
+        Selection, Server, identity_of, persisted_state_path, read_event,
+        relaunch_command_for_process, replace_incompatible_server, send_request,
+        server_protocol_version, snapshot, view_for,
     };
     use std::sync::{Arc, Mutex};
 
@@ -2112,6 +2113,91 @@ mod tests {
 
         let (_, process) = status.expect("foreground process must be observable on Linux");
         assert_eq!(process, "claude");
+    }
+
+    /// A client that attaches without naming a root takes the session as
+    /// it stands. Nothing is created for it, and nothing the operator
+    /// closed comes back.
+    ///
+    /// This is the server half of what makes closing a space stick: the
+    /// workspace client detaches and attaches again on every Ctrl+O round
+    /// trip to management, and an attach that named the launch directory
+    /// every time reopened the space closed just before it.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn attaching_without_a_root_neither_creates_nor_reopens_a_space() {
+        let scratch = uze_testkit::temp::scratch("terminal-rootless-attach");
+        let uze_home = scratch.join("home");
+        let project = scratch.join("project");
+        let other = scratch.join("other");
+        let runtime_dir = scratch.join("runtime");
+        for directory in [&uze_home, &project, &other, &runtime_dir] {
+            std::fs::create_dir_all(directory).unwrap();
+        }
+        let mut env = uze_testkit::env::scope();
+        env.set("UZE_HOME", &uze_home)
+            .set("XDG_RUNTIME_DIR", &runtime_dir);
+
+        let endpoint = Endpoint::global().unwrap();
+        let (server, _damage) = Server::new(project.clone(), endpoint).unwrap();
+        let server = Arc::new(server);
+        // A second space, because the last one standing cannot be closed.
+        let pane = server.session.lock().expect("session poisoned").add_space(
+            "other".into(),
+            other.clone(),
+            80,
+            24,
+        );
+        server.spawn_pane(pane, None).unwrap();
+        let launch = {
+            let mut session = server.session.lock().expect("session poisoned");
+            let launch = session
+                .space_for_root(&project)
+                .expect("the bootstrap space is rooted at the launch directory");
+            assert!(session.remove_space(launch).is_some(), "space closed");
+            launch
+        };
+
+        let (client, driver) = std::os::unix::net::UnixStream::pair().unwrap();
+        let serving = {
+            let server = Arc::clone(&server);
+            std::thread::spawn(move || server.handle_client(client))
+        };
+        let mut writer = driver.try_clone().unwrap();
+        let mut reader = std::io::BufReader::new(driver);
+        send_request(
+            &mut writer,
+            &crate::ClientRequest::Attach {
+                version: crate::PROTOCOL_VERSION,
+                workspace: WorkspaceId("rootless".into()),
+                columns: 80,
+                rows: 24,
+                root: None,
+            },
+        )
+        .unwrap();
+        let attached = loop {
+            match read_event(&mut reader).unwrap() {
+                Some(crate::ClientEvent::Attached { session }) => break session,
+                Some(_) => {}
+                None => panic!("the server hung up before attaching"),
+            }
+        };
+        assert_eq!(
+            attached.space_for_root(&project),
+            None,
+            "a rootless attach left the closed space closed"
+        );
+        assert_eq!(attached.workspace.spaces.len(), 1);
+        assert_ne!(attached.workspace.selected_space, launch);
+
+        let _ = send_request(&mut writer, &crate::ClientRequest::Detach);
+        drop(writer);
+        drop(reader);
+        let _ = serving.join();
+        server.stop_panes();
+
+        let _ = std::fs::remove_dir_all(&scratch);
     }
 
     /// The whole point of persistence: a server that starts with nothing

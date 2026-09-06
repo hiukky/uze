@@ -121,6 +121,10 @@ pub fn run(home: UzeHome) -> Result<()> {
     // Set when management asks to return to a specific tab (activating a
     // prompt-history row); consumed by the next attach.
     let mut pending_tab: Option<uze_terminal::TabId> = None;
+    // Only the first attach lands the client in a space for the directory
+    // `uze` was started in; every Ctrl+O round trip after it takes the
+    // session as it stands (see `orchestrator::Landing`).
+    let mut landing = orchestrator::Landing::AtLaunchDirectory;
     loop {
         let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         match orchestrator::attach_workspace(
@@ -130,9 +134,11 @@ pub fn run(home: UzeHome) -> Result<()> {
             &mut workspace_memory,
             &home,
             pending_tab.take(),
+            landing,
         )? {
             orchestrator::WorkspaceExit::Quit => return Ok(()),
             orchestrator::WorkspaceExit::Management => {
+                landing = orchestrator::Landing::WhereItLeftOff;
                 let exit =
                     management::run_management(&mut terminal, home.clone(), &mut sidebar_width)?;
                 // The workspace client writes its own changes as they

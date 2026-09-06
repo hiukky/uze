@@ -543,6 +543,24 @@ fn spawn_git_view_reload(
     });
 }
 
+/// Whether this attach asks the server for a space rooted at the launch
+/// directory.
+///
+/// Only the process's first attach does. A Ctrl+O round trip to management
+/// is a detach and a fresh attach of the *same* run, and asking again there
+/// would reopen a space the operator closed in between — the launch
+/// directory would resurrect it every trip, and closing it would look
+/// broken rather than deliberate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Landing {
+    /// The run's first attach: the directory `uze` was started in gets a
+    /// space, created when none is open for it.
+    AtLaunchDirectory,
+    /// A return from management: the session already knows where the
+    /// operator was, and a space they closed stays closed.
+    WhereItLeftOff,
+}
+
 /// The active theme, in the shape the terminal runtime speaks: plain
 /// triples, since that crate holds no opinion about appearance.
 fn active_palette() -> uze_terminal::Palette {
@@ -565,6 +583,7 @@ pub(crate) fn attach_workspace(
     memory: &mut WorkspaceMemory,
     home: &UzeHome,
     pending_tab: Option<TabId>,
+    landing: Landing,
 ) -> Result<WorkspaceExit> {
     // The handshake below must ship the real terminal size: it sizes the PTY
     // used for the session's *already-selected* pane (e.g. a tab restored
@@ -581,9 +600,10 @@ pub(crate) fn attach_workspace(
     let (columns, rows) = (layout.pane.width, layout.pane.height);
 
     // One server per user; what the launch directory decides is which
-    // space this client lands in. Resolving the workspace root *before*
-    // attaching is what makes a repository and a subdirectory of it the
-    // same space rather than two.
+    // space this client lands in, and only on the run's first attach (see
+    // `Landing`). Resolving the workspace root *before* attaching is what
+    // makes a repository and a subdirectory of it the same space rather
+    // than two.
     let workspace_root = uze_application::space_root(root);
     let mut stream = attach(&workspace_root, columns, rows).map_err(runtime_error)?;
     let read_stream = stream.try_clone().map_err(io_error)?;
@@ -594,7 +614,10 @@ pub(crate) fn attach_workspace(
             workspace: uze_terminal::WorkspaceId("client".into()),
             columns,
             rows,
-            root: Some(workspace_root.clone()),
+            root: match landing {
+                Landing::AtLaunchDirectory => Some(workspace_root.clone()),
+                Landing::WhereItLeftOff => None,
+            },
         },
     )
     .map_err(runtime_error)?;
