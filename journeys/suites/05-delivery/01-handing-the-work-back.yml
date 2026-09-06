@@ -1,0 +1,106 @@
+journey: an agent's work reaches the target branch, and says what it will do before doing it
+tags: [gate, tui, delivery]
+proves: web/content/docs/workspace.mdx
+about: |
+  The end of the loop. An agent commits in its own checkout; the project's
+  branch does not move because of it. When the work is deliverable the
+  workspace offers a button that *names the ending it will reach* — `merge →
+  main`, not "deliver" — and only pressing it moves anything.
+
+  The naming is the point. A button that says "deliver" leaves the person
+  guessing whether their commit is about to land on a shared branch, be
+  pushed, or sit on a branch for review. This one says which, before it is
+  pressed, and the journey reads the branch afterwards to check it told the
+  truth.
+
+world:
+  project: demo-app
+  manifest: |
+    worktrees:
+      target: main
+      completion: merge
+      slots: 3
+
+scenes:
+  - scene: an agent, working in a checkout of its own
+    when:
+      - open: "{uze}"
+        expect: demo-app
+        expect_timeout: 20
+        pause: 1.0
+      - click: "│"
+        say: open the new-agent picker
+        in: strip
+        occurrence: 2
+        offset: 2
+        expect: new agent
+      - click: " new agent "
+        say: pick Claude Code
+        in: pane
+        row_offset: 1
+        offset: 3
+        expect: Claude Code v
+        expect_timeout: 45
+        pause: 1.5
+    then:
+      - tasks: { count: 1, states: [running] }
+      - git: { in: "{project}", dirty: false }
+        about: nothing has happened to the project yet
+      - capture: { name: slots, dirs: "{project}/.worktrees/*" }
+
+  - scene: it commits, and the project's branch does not move
+    when:
+      - shell: |
+          set -e
+          slot=$(ls -d {project}/.worktrees/*/ | head -1)
+          printf 'pub fn ping() -> &str { "pong" }\n' > "$slot/src/ping.rs"
+          git -C "$slot" add -A
+          git -C "$slot" commit -qm 'feat(api): answer ping with pong'
+        say: the agent commits its work
+      - wait: screen
+        until: "merge → main"
+        in: strip
+        timeout: 40
+        settle: 1.0
+        say: the workspace notices and offers the ending it would reach
+    then:
+      - tasks: { any_state: ready }
+        about: the task reads as deliverable — commits ahead, clean tree
+      - cmd:
+          run: "git -C {project} log --oneline -1"
+          stdout_contains: "chore: declare the worktree policy"
+        about: and the target branch has not moved an inch
+      - git: { in: "{project}", dirty: false }
+        about: nor was the primary checkout used as a workbench
+
+  - scene: pressing the button does exactly what the button said
+    when:
+      - click: "merge → main"
+        say: deliver
+        in: strip
+        expect: "merged → main"
+        expect_timeout: 60
+        pause: 2.0
+    then:
+      - cmd:
+          run: "git -C {project} log --oneline -1"
+          stdout_contains: "feat(api): answer ping with pong"
+        about: the target branch now carries the agent's commit
+      - cmd:
+          run: "git -C {project} log --oneline -2"
+          stdout_contains: "chore: declare the worktree policy"
+        about: on top of what was already there, not instead of it
+      - tasks: { count: 1, newest_state: integrated }
+        about: and the task is recorded as integrated, not merely closed
+      - git: { in: "{project}", dirty: false }
+        about: with the project's own checkout still clean
+
+  - scene: the agent keeps the slot it was working in
+    then:
+      - dir: "{project}/.worktrees/*"
+        same_as: slots
+        about: |
+          delivering is not leaving — the agent that just delivered usually
+          keeps working in the same checkout, so the slot stays its own
+      - git: { branches: "agent/*", count: 1 }
+        about: and its branch is still there to keep committing on
