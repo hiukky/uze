@@ -1,0 +1,172 @@
+journey: one project context, composed once, and never rewriting what the team wrote
+tags: [gate, cli, context]
+proves: web/content/docs/concepts/context.mdx
+about: |
+  A project states its conventions once, in AGENTS.md. An installed plugin
+  contributes to it in a region UZE owns and can take back; everything else
+  on the page belongs to the team and is never UZE's to touch. Harnesses that
+  read AGENTS.md natively get it for free, and the one that does not gets a
+  bridge — generated, marked, and removable.
+
+  The read-only commands are held to it: `inspect` and `plan` say what would
+  change and write nothing at all, which is the only reason a person can
+  trust running them on a repository they care about.
+
+  The last scene characterizes what the round trip does *not* undo, on
+  purpose: a journey that quietly narrowed its scope until everything passed
+  would be worth less than no journey.
+
+world:
+  project: demo-app
+  commits:
+    - message: "chore: initial commit"
+      files:
+        README.md: "# demo-app\n"
+    - message: "docs: the team's own conventions"
+      files:
+        AGENTS.md: |
+          # demo-app
+
+          Hand-written by the team, and never UZE's to rewrite.
+
+          ## Conventions
+
+          - Conventional Commits for commit subjects.
+  files:
+    market/marketplace.json: |
+      {
+        "name": "demo",
+        "plugins": [
+          { "name": "house-rules", "source": "./plugins/house-rules", "description": "Instructions plugin." }
+        ]
+      }
+    market/plugins/house-rules/plugin.json: |
+      {
+        "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+        "name": "house-rules",
+        "version": "1.0.0",
+        "description": "Shared house rules."
+      }
+    market/plugins/house-rules/AGENTS.md: |
+      # House rules
+
+      - Always run `make check` before committing.
+
+scenes:
+  - scene: a project with its own AGENTS.md, and a plugin with something to say
+    when:
+      - shell: "{uze} setup"
+        check: false
+      - shell: "{uze} market add {world}/market"
+      - shell: "{uze} plugin install house-rules@demo"
+        say: install a plugin that contributes instructions
+    then:
+      - file: "{project}/AGENTS.md"
+        contains: Conventional Commits for commit subjects.
+        about: the team's own page is on disk, untouched
+      - file: "{project}/CLAUDE.md"
+        exists: false
+        about: no bridge exists until something asks for one
+      - capture:
+          name: project
+          tree: "{project}"
+        about: remember the project as the team left it
+
+  - scene: the read-only commands write nothing at all
+    when:
+      - shell: "{uze} context inspect"
+        say: inspect the current context
+      - shell: "{uze} context plan"
+        say: preview what reconciling would change
+    then:
+      - tree: "{project}"
+        same_as: project
+        about: the project is byte-identical after inspect and plan
+      - cmd:
+          run: "{uze} context plan"
+          stdout_contains: ATTACH
+        about: and the plan says the contribution is not attached yet
+
+  - scene: reconciling composes the contribution into a region UZE owns
+    when:
+      - shell: "{uze} context reconcile"
+        say: apply the plan
+    then:
+      - file: "{project}/AGENTS.md"
+        contains: "<!-- uze:begin package:house-rules:demo:instructions -->"
+        about: the contribution arrives inside a marked region
+      - file: "{project}/AGENTS.md"
+        contains: Always run `make check` before committing.
+        about: carrying what the plugin actually said
+      - file: "{project}/AGENTS.md"
+        contains: Conventional Commits for commit subjects.
+        about: and the team's own words are still there
+
+  - scene: the one harness that cannot read AGENTS.md gets a bridge, not a copy
+    then:
+      - file: "{project}/CLAUDE.md"
+        contains: "@AGENTS.md"
+        about: the bridge points at the baseline instead of duplicating it
+      - file: "{project}/CLAUDE.md"
+        contains: "<!-- uze:begin instruction-bridge -->"
+        about: and is marked as UZE's to take back
+      - file: "{project}/GEMINI.md"
+        exists: false
+        about: harnesses that read AGENTS.md natively get no second file
+
+  - scene: reconciling again changes nothing
+    then:
+      - capture:
+          name: reconciled
+          tree: "{project}"
+      - cmd:
+          run: "{uze} context reconcile"
+        about: a second reconcile succeeds
+      - tree: "{project}"
+        same_as: reconciled
+        about: and leaves the project byte-identical
+
+  - scene: removing the plugin from the machine leaves the project alone
+    when:
+      - shell: "{uze} plugin remove house-rules"
+        say: remove the plugin from this machine
+    then:
+      - file: "{project}/AGENTS.md"
+        contains: Always run `make check` before committing.
+        about: a machine-scoped command never edits a project's page
+      - cmd:
+          run: "{uze} context plan"
+          stdout_contains: REMOVE
+        about: the project's own command is what reports the region as orphaned
+
+  - scene: and reconciling takes the region back, leaving the team's page as it was
+    when:
+      - shell: "{uze} context reconcile"
+        say: reconcile the project again
+    then:
+      - file: "{project}/AGENTS.md"
+        contains: Conventional Commits for commit subjects.
+        about: the team's words survived the whole round trip
+      - file: "{project}/AGENTS.md"
+        contains: Hand-written by the team, and never UZE's to rewrite.
+        about: the baseline is exactly the page the team wrote
+      - json: "{uze_home}/state/attachments.json"
+        at: receipts.*.package_id
+        exists: true
+        about: and the machine still knows what it has
+
+  - scene: what the round trip does leave behind, stated rather than glossed over
+    then:
+      - file: "{project}/CLAUDE.md"
+        exists: true
+        about: |
+          the bridge file survives, empty — a characterization, not a claim
+          that it is right. `text_region::detach` will not delete a file it
+          cannot prove UZE created (its own test pins that: a user's
+          pre-existing empty file must survive attach/detach), so the region
+          goes and the file stays. `uze context inspect` then reports the
+          bridge as `Missing` while an empty file sits in the repository
+          disagreeing with it. Making the file's existence a tracked
+          artifact — a receipt, the way every other managed artifact is —
+          is what would let this flip to `exists: false`, and that is a
+          design decision rather than a patch.

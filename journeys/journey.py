@@ -891,7 +891,10 @@ class Checker:
         else:
             return False, f"capture {name!r} names nothing to remember"
         self.runner.captures[name] = value
-        return True, f"{name} = {value}"
+        summary = value if isinstance(value, list) else sorted(value)
+        if len(summary) > 6:
+            summary = [*summary[:6], f"… {len(summary) - 6} more"]
+        return True, f"{name} = {summary}"
 
 
 # ── the spec ─────────────────────────────────────────────────────────────
