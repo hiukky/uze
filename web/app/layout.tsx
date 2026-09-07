@@ -35,7 +35,7 @@ export default function Layout({ children }: LayoutProps<'/'>) {
     >
       <body className="flex flex-col min-h-screen font-sans">
         <Banner
-          id="alpha-2026-08"
+          id="alpha-2026-09"
           height="var(--uze-banner-height)"
           className="gap-x-2 px-12 text-center font-mono text-xs tracking-tight"
         >
@@ -44,10 +44,10 @@ export default function Layout({ children }: LayoutProps<'/'>) {
           {/* One line at every width: the banner's height feeds the docs
               grid's sticky offsets, so text that wraps is text that gets
               clipped. */}
-          <span className="sm:hidden">first release coming soon</span>
+          <span className="sm:hidden">every release is a pre-release</span>
           <span className="max-sm:hidden">APIs and harness behavior are still changing</span>
           <span className="text-fd-muted-foreground max-sm:hidden">·</span>
-          <span className="max-sm:hidden">first release coming soon</span>
+          <span className="max-sm:hidden">every release until v1 is a pre-release</span>
         </Banner>
         <RootProvider>{children}</RootProvider>
       </body>
