@@ -138,7 +138,7 @@ export default function HomePage() {
           </Link>
         </div>
         <p className="mt-3 text-xs text-muted">
-          Linux, x86_64 or aarch64, checksum verified.{' '}
+          Linux and macOS, x86_64 or aarch64, checksum verified.{' '}
           <Link href="/docs/getting-started" className="text-ink underline underline-offset-4 hover:text-accent transition-colors">
             Build from source
           </Link>{' '}

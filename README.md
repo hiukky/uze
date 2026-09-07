@@ -4,10 +4,10 @@
 
 **Install once. Native everywhere.**
 
-[![CI](https://img.shields.io/badge/CI-passing-8fd19e?style=flat-square&labelColor=1e1f20)](https://github.com/hiukky/uze/actions/workflows/ci.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/hiukky/uze/ci.yml?branch=main&style=flat-square&labelColor=1e1f20&label=CI)](https://github.com/hiukky/uze/actions/workflows/ci.yml)
 [![Rust](https://img.shields.io/badge/rust-1.97%2B-7d97c9?style=flat-square&labelColor=1e1f20)](Cargo.toml)
 [![License](https://img.shields.io/badge/license-Apache_2.0-A22136?style=flat-square&labelColor=1e1f20)](LICENSE)
-[![Status](https://img.shields.io/badge/status-alpha-e0b567?style=flat-square&labelColor=1e1f20)](https://uze-hiukky.vercel.app)
+[![Status](https://img.shields.io/badge/status-alpha-e0b567?style=flat-square&labelColor=1e1f20)](https://uze.hiukky.com/docs/roadmap)
 
 A compatibility layer for agent tooling: install a plugin once, share one
 project context, and every harness — Claude, Codex, OpenCode,
@@ -22,7 +22,7 @@ side by side, each agent in an isolated checkout of its own.
 curl -fsSL https://uze.hiukky.com/i | sh
 ```
 
-**[Full documentation →](https://uze-hiukky.vercel.app)**
+**[Full documentation →](https://uze.hiukky.com/docs)**
 
 </div>
 
@@ -31,9 +31,9 @@ curl -fsSL https://uze.hiukky.com/i | sh
 - [x] Harness management · Skills & MCP portability · Project context · Marketplace · TUI
 - [x] Agent & hook portability · Native package delivery
 - [x] Profiles · Environment maintenance · Terminal workspace with isolated agents
-- [x] Reproducible project environments · Theming · Linux releases
+- [x] Reproducible project environments · Theming · Linux & macOS releases
 - [ ] Requirements & dependencies · Update detection · Security & trust
-- [ ] macOS & Windows releases · Runtime context projection · Migration tooling · Ecosystem expansion
+- [ ] Windows releases · Runtime context projection · Migration tooling · Ecosystem expansion
 
 ---
 

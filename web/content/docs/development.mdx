@@ -101,8 +101,8 @@ or `~/.local/bin` (ADR-034). `make test-installer` exercises it, and gates CI.
 
 A release enters `main` through a pull request like anything else: the **Release**
 workflow bumps the version, regenerates `CHANGELOG.md`, renders the release notes
-into the PR body, and publishes the four Linux artifacts, an SBOM and signed
-provenance on the merge. Versions come from one place —
+into the PR body, and publishes the six tarballs (Linux gnu/musl, macOS), an
+SBOM and signed provenance on the merge. Versions come from one place —
 `[workspace.package].version` in the root `Cargo.toml`, inherited by every crate.
 `docs/versioning.md` is the full procedure.
 
