@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use uze_core::{
     engine::package_resources_at,
+    exposure::ExposureMechanism,
     home::UzeHome,
     hook::HookEvent,
     integration::{AttachmentReceipt, AttachmentState, IntegrationPort, ManagedArtifact},
@@ -1041,4 +1042,58 @@ fn a_hook_receipt_without_an_event_blocks_inspection_and_detach() {
         "nothing was written or removed on a blocked detach"
     );
     let _ = fs::remove_dir_all(root);
+}
+
+/// The hook UZE itself ships, asserted as the artifact it is rather than as
+/// a fixture that resembles it.
+///
+/// Three claims, and the third is the one that matters: a `deny` a harness
+/// cannot preserve is routed `Unsupported`, so the group is never attached
+/// there. A denial that quietly became an observation would be worse than
+/// no denial at all — the operator would believe the guard was on.
+#[test]
+fn the_shipped_naming_hook_blocks_where_it_can_and_declines_where_it_cannot() {
+    let shipped = Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins/uze-naming/hooks.json");
+    let manifest = fs::read_to_string(&shipped)
+        .unwrap_or_else(|error| panic!("the shipped hook manifest must be readable: {error}"));
+
+    let (_root, resources) = hook_package("shipped-naming-hook", &manifest);
+    let group = hook_resource(&resources, "name-the-work");
+
+    let base = temp("shipped-naming-home");
+    let home = UzeHome::at(base.join("uze"));
+    let claude = ClaudeIntegration::new(base.join("claude"), home.clone());
+    let codex = CodexIntegration::new(base.join("agents"), home.clone());
+    let opencode = OpenCodeIntegration::new(
+        base.join("agents"),
+        base.join("config/opencode.json"),
+        home.clone(),
+    );
+    let antigravity = AntigravityIntegration::new(base.join("agents"), home);
+
+    for (harness, integration) in [
+        ("claude", &claude.exposure_plan(group).route),
+        ("codex", &codex.exposure_plan(group).route),
+        ("antigravity", &antigravity.exposure_plan(group).route),
+    ] {
+        assert_eq!(
+            *integration,
+            CompatibilityRoute::Native,
+            "{harness} claims deny on PreToolUse, so the guard is delivered natively"
+        );
+    }
+
+    let refused = opencode.exposure_plan(group);
+    assert_eq!(
+        refused.route,
+        CompatibilityRoute::Unsupported,
+        "OpenCode carries no input-level block, and a deny is never fabricated"
+    );
+    let ExposureMechanism::Unsupported { rationale } = &refused.mechanism else {
+        panic!("a refused deny carries its reason: {:?}", refused.mechanism);
+    };
+    assert!(
+        rationale.contains("deny"),
+        "and the reason names the effect that could not be preserved: {rationale}"
+    );
 }

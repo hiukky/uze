@@ -7,6 +7,7 @@
 //! disk look like after a command — not the shape of a struct.
 
 use std::fs;
+use uze_application::application::ApproveSurplusRemoval;
 
 use uze_application::UzeApplication;
 use uze_core::{UzeHome, manifest, trust::AlwaysTrust, worktree::CompletionBehavior};
@@ -54,7 +55,10 @@ fn install_sets_the_project_up_and_writes_no_lock_when_there_is_nothing_to_resol
     let (application, repository) = project("manifest-install-creates");
     let root = repository.root().to_path_buf();
 
-    application.project().install(&root, &AlwaysTrust).unwrap();
+    application
+        .project()
+        .install(&root, &AlwaysTrust, &ApproveSurplusRemoval)
+        .unwrap();
 
     let written = fs::read_to_string(manifest::manifest_path_for(&root)).unwrap();
     assert!(
@@ -86,10 +90,16 @@ fn install_sets_the_project_up_and_writes_no_lock_when_there_is_nothing_to_resol
 fn install_run_twice_leaves_the_manifest_byte_identical() {
     let (application, repository) = project("manifest-install-idempotent");
     let root = repository.root().to_path_buf();
-    application.project().install(&root, &AlwaysTrust).unwrap();
+    application
+        .project()
+        .install(&root, &AlwaysTrust, &ApproveSurplusRemoval)
+        .unwrap();
     let first = fs::read_to_string(manifest::manifest_path_for(&root)).unwrap();
 
-    application.project().install(&root, &AlwaysTrust).unwrap();
+    application
+        .project()
+        .install(&root, &AlwaysTrust, &ApproveSurplusRemoval)
+        .unwrap();
     let second = fs::read_to_string(manifest::manifest_path_for(&root)).unwrap();
 
     assert_eq!(first, second);
@@ -145,7 +155,10 @@ fn install_never_rewrites_a_manifest_somebody_authored() {
     let authored = "# ours\nworktrees:\n  completion: pr   # decided in the RFC\n";
     fs::write(manifest::manifest_path_for(&root), authored).unwrap();
 
-    application.project().install(&root, &AlwaysTrust).unwrap();
+    application
+        .project()
+        .install(&root, &AlwaysTrust, &ApproveSurplusRemoval)
+        .unwrap();
 
     assert_eq!(
         fs::read_to_string(manifest::manifest_path_for(&root)).unwrap(),
@@ -332,7 +345,7 @@ mod integrity {
 
         let error = elsewhere
             .project()
-            .install(&root, &AlwaysTrust)
+            .install(&root, &AlwaysTrust, &ApproveSurplusRemoval)
             .expect_err("a pin that does not match must refuse");
         let message = error.to_string();
         assert!(message.contains("flow"), "{message}");

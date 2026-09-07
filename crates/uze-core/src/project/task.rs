@@ -157,6 +157,31 @@ pub struct Task {
 }
 
 impl Task {
+    /// Whether this work carries a name somebody chose, rather than one
+    /// UZE is still holding for it.
+    ///
+    /// The test is the namespace, not the identifier: `agent/` is UZE's
+    /// own, and a branch inside it — the generated identifier, or one a
+    /// checkout was adopted on — is still UZE's to name. Putting a name
+    /// outside the namespace is exactly what naming does, so "outside the
+    /// prefix" and "somebody chose this" are the same fact.
+    ///
+    /// One predicate for the whole codebase: a name anybody chose — the
+    /// agent, the operator, an earlier automatic step — is final, and every
+    /// later mechanism asks this same question rather than inventing its
+    /// own notion of "unnamed".
+    pub fn is_named(&self) -> bool {
+        !self.branch.starts_with(BRANCH_PREFIX)
+    }
+
+    /// Takes `branch` as this task's name, deriving the visible label from
+    /// it. The caller owns the Git rename and the validation; this is the
+    /// record of it.
+    pub fn take_name(&mut self, branch: String) {
+        self.label = crate::worktree::label_of(&branch);
+        self.branch = branch;
+    }
+
     pub fn new(prompt: Option<&str>, base: Base, base_commit: String, target: String) -> Self {
         let id = TaskId::generate();
         let label = prompt
@@ -476,5 +501,50 @@ mod tests {
             .parse()
             .expect("a label the writer produced");
         assert!(round > 0, "the writer got past its first save");
+    }
+}
+
+#[cfg(test)]
+mod naming_tests {
+    use super::*;
+
+    fn task() -> Task {
+        Task::new(
+            None,
+            Base::Ref("main".into()),
+            "0123abcd".into(),
+            "main".into(),
+        )
+    }
+
+    /// The one predicate the whole codebase asks, and it is about the
+    /// namespace rather than the identifier: everything under `agent/` is
+    /// still UZE's to name, including the branch an adopted checkout was
+    /// found on.
+    #[test]
+    fn only_a_branch_outside_uzes_namespace_reads_as_named() {
+        let mut task = task();
+        assert!(!task.is_named(), "the generated identifier is not a name");
+        task.branch = format!("{BRANCH_PREFIX}adopted-from-somewhere");
+        assert!(
+            !task.is_named(),
+            "a branch inside UZE's namespace is still UZE's to name"
+        );
+        task.take_name("fix/branch-naming".to_owned());
+        assert!(task.is_named());
+    }
+
+    #[test]
+    fn taking_a_name_sets_both_halves_and_disturbs_nothing_else() {
+        let mut task = task();
+        let (id, checkout, created) =
+            (task.id.clone(), task.checkout.clone(), task.created_at_unix);
+        task.take_name("fix/branch-naming".to_owned());
+        assert_eq!(task.branch, "fix/branch-naming");
+        assert_eq!(task.label, "branch naming");
+        assert!(task.is_named());
+        assert_eq!(task.id, id);
+        assert_eq!(task.checkout, checkout);
+        assert_eq!(task.created_at_unix, created);
     }
 }

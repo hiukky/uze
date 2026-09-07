@@ -1,0 +1,12 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "id": "name-the-work",
+        "matcher": "shell",
+        "effect": "deny",
+        "hooks": [{ "type": "command", "command": "${PLUGIN_ROOT}/scripts/name-the-work", "timeout": 10 }]
+      }
+    ]
+  }
+}

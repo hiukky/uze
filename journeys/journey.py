@@ -399,6 +399,19 @@ def seed_project(project: Path, world_spec: dict, env: dict) -> None:
         (project / "agents.yaml").write_text(manifest)
         run("git", "add", "-A")
         run("git", "commit", "-q", "-m", "chore: declare the worktree policy")
+    # A bare repository beside the project, as its `origin`. What a journey
+    # about publishing needs and nothing else does: a claim about a branch
+    # reaching a remote has to be read off a remote that exists.
+    if world_spec.get("remote") == "bare":
+        origin = project.parent / f"{project.name}.git"
+        subprocess.run(
+            ("git", "init", "-q", "--bare", "-b", "main", str(origin)),
+            env=env,
+            check=True,
+            capture_output=True,
+        )
+        run("git", "remote", "add", "origin", str(origin))
+        run("git", "push", "-q", "-u", "origin", "main")
 
 
 # ── the screen ───────────────────────────────────────────────────────────
@@ -960,6 +973,25 @@ class Checker:
                     False,
                     f"expected {wanted['checkouts']} distinct checkouts, found {sorted(checkouts)}",
                 )
+        # The recorded name, read out of the task store UZE writes — a
+        # machine fact, like every other check here. What the *screen* says
+        # about a name belongs to `src/ui`'s own tests.
+        if "newest_branch" in wanted and (
+            not tasks or tasks[-1].get("branch") != wanted["newest_branch"]
+        ):
+            found = tasks[-1].get("branch") if tasks else None
+            return (
+                False,
+                f"newest task is on {found!r}, expected {wanted['newest_branch']!r}",
+            )
+        if "newest_label" in wanted and (
+            not tasks or tasks[-1].get("label") != wanted["newest_label"]
+        ):
+            found = tasks[-1].get("label") if tasks else None
+            return (
+                False,
+                f"newest task is labelled {found!r}, expected {wanted['newest_label']!r}",
+            )
         if "newest_state" in wanted and (
             not tasks or tasks[-1]["state"]["state"] != wanted["newest_state"]
         ):
@@ -1120,6 +1152,15 @@ class Checker:
                 return (
                     False,
                     f"stdout has no {text!r}:\n        {result.stdout.strip()}",
+                )
+        # The absence of something is a claim too — that a generated
+        # identifier never reached a remote, say — and it needs its own
+        # spelling rather than a contorted positive one.
+        if text := spec["cmd"].get("stdout_excludes"):
+            if text in result.stdout:
+                return (
+                    False,
+                    f"stdout carries {text!r} and should not:\n        {result.stdout.strip()}",
                 )
         return True, spec["cmd"]["run"]
 

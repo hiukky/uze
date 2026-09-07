@@ -395,10 +395,21 @@ properties):
   hooks/plugins/order.
 - **Machine and project scope are independent**: `uze setup`, `uze doctor`,
   `uze theme`, `uze market …` and `uze plugin …` are machine-scoped
-  (`~/.uze`); `uze <plugin>@<market>`, `uze install`, `uze remove`,
-  `uze status` and `uze context inspect|plan|reconcile` are project-scoped
-  (`agents.yaml`, `agents.lock`, `AGENTS.md`). Neither touches the other's
-  state — see `docs/adr/019-explicit-project-machine-boundary-in-cli-command-grammar.md`.
+  (`~/.uze`); `uze <plugin>@<market>`, `uze install` (aliased `uze i`),
+  `uze remove`, `uze status`, `uze context inspect|plan|reconcile` and
+  `uze agent …` are project-scoped (`agents.yaml`, `agents.lock`,
+  `AGENTS.md`). Neither touches the other's state — see
+  `docs/adr/019-explicit-project-machine-boundary-in-cli-command-grammar.md`.
+  `uze install` converges the manifest in both directions (a plugin dropped
+  from `agents.yaml` is removed, once confirmed) and leaves the project
+  context reconciled, so declaring an environment and projecting it are one
+  command rather than two.
+- **`uze agent …` is an audience, not a category**: its reader is an agent
+  UZE launched, not a person, so it is hidden from `uze --help` and
+  documented in the region UZE projects into `AGENTS.md` — each audience
+  reads one surface. `uze agent task name <type>/<subject>` is how work
+  acquires the branch a reviewer sees and the label an operator reads; the
+  vocabulary it is judged against is `worktrees.branch` in `agents.yaml`.
 - **`agents.yaml` is authored, `agents.lock` is derived**: the manifest holds
   what the project declared (marketplaces, plugins, the `worktrees:` policy);
   the lock holds only what resolving it produced — a commit per marketplace and

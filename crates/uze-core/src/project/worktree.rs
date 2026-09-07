@@ -41,6 +41,204 @@ pub const WORKTREES_DIRECTORY: &str = ".worktrees";
 /// reviewers, and says what it is, not what made it.
 pub const BRANCH_PREFIX: &str = "agent/";
 
+/// The longest a name's subject may be. Long enough for two or three
+/// words, short enough that a sidebar shows it whole beside its siblings —
+/// which is the reason the limit exists at all.
+pub const SUBJECT_MAX_CHARS: usize = 32;
+
+/// The branch types a project's names may use.
+///
+/// Closed, in both spellings, because a name proposed by a model has to be
+/// *judged* — and only a closed set can judge one. A preset is a named
+/// list and nothing more; validation never learns which spelling it came
+/// from.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case", untagged)]
+pub enum BranchVocabulary {
+    /// One of the named vocabularies below.
+    Preset(BranchPreset),
+    /// This project's own list. A preset that almost fits invites misuse —
+    /// `style` in Conventional Commits means formatting, not visual design
+    /// — so a team that wants `ui` declares `ui` rather than mislabelling
+    /// its work.
+    Types(Vec<String>),
+    /// Undeclared: the generated identifier, which is what UZE did before
+    /// any of this existed.
+    #[default]
+    Unset,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BranchPreset {
+    /// Conventional Commits — the most widely adopted vocabulary in the
+    /// market, and the one this repository's own history already uses.
+    Conventional,
+    /// The git-flow branch prefixes.
+    Gitflow,
+    /// GitHub Flow: a subject and no type at all.
+    Flat,
+    /// The generated identifier under the `agent/` prefix.
+    Agent,
+}
+
+const CONVENTIONAL: &[&str] = &[
+    "feat", "fix", "docs", "refactor", "perf", "test", "build", "ci", "chore", "style", "revert",
+];
+const GITFLOW: &[&str] = &["feature", "bugfix", "hotfix", "release", "support"];
+
+/// Why a proposed name was refused. Carried rather than rendered, so the
+/// caller decides the words — but always saying *which half* was wrong,
+/// because a refusal an agent cannot act on is one it will retry wrong.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum NameRefusal {
+    /// The project declares no vocabulary, so nothing may be named.
+    NotDeclared,
+    /// A type outside the declared vocabulary; carries what is declared.
+    UnknownType {
+        found: String,
+        declared: Vec<String>,
+    },
+    /// A type was given where the vocabulary takes none.
+    UnexpectedType { found: String },
+    /// A type was omitted where the vocabulary requires one.
+    MissingType { declared: Vec<String> },
+    /// The subject is not one well-formed segment; carries the reason.
+    MalformedSubject { reason: &'static str },
+}
+
+impl BranchVocabulary {
+    pub fn is_unset(&self) -> bool {
+        matches!(self, Self::Unset)
+    }
+
+    /// The declared types, empty for a vocabulary that takes none.
+    pub fn types(&self) -> Vec<String> {
+        match self {
+            Self::Preset(BranchPreset::Conventional) => {
+                CONVENTIONAL.iter().map(|t| (*t).to_owned()).collect()
+            }
+            Self::Preset(BranchPreset::Gitflow) => {
+                GITFLOW.iter().map(|t| (*t).to_owned()).collect()
+            }
+            Self::Preset(BranchPreset::Flat | BranchPreset::Agent) | Self::Unset => Vec::new(),
+            Self::Types(types) => types.clone(),
+        }
+    }
+
+    /// Whether this project names its work at all. `agent` and an
+    /// undeclared vocabulary keep the generated identifier, which is the
+    /// behaviour every project had before this existed.
+    pub fn names_work(&self) -> bool {
+        match self {
+            Self::Preset(BranchPreset::Agent) | Self::Unset => false,
+            Self::Types(types) => !types.is_empty(),
+            Self::Preset(_) => true,
+        }
+    }
+
+    /// Whether a name must carry a type. `flat` is the one vocabulary that
+    /// takes a subject alone.
+    fn takes_a_type(&self) -> bool {
+        !matches!(self, Self::Preset(BranchPreset::Flat))
+    }
+
+    /// How this vocabulary is spelled for a reader — the projected
+    /// instruction and every refusal say the same words.
+    pub fn spelled(&self) -> String {
+        match self {
+            Self::Preset(BranchPreset::Flat) => "a subject alone, with no type".to_owned(),
+            Self::Preset(BranchPreset::Agent) | Self::Unset => {
+                "the generated identifier".to_owned()
+            }
+            _ => self.types().join("|"),
+        }
+    }
+
+    /// Splits and judges a proposed name, answering the branch it becomes.
+    ///
+    /// Pure: it knows nothing about the repository, so a caller still has
+    /// to refuse a branch that already exists. What it does know is the
+    /// shape, and it says which half failed.
+    pub fn accept(&self, proposed: &str) -> std::result::Result<String, NameRefusal> {
+        if !self.names_work() {
+            return Err(NameRefusal::NotDeclared);
+        }
+        // Whitespace only: a trailing `/` is an empty subject, not a
+        // separator to tidy away, and tidying it would turn a malformed
+        // name into a missing type — the wrong half to report.
+        let proposed = proposed.trim();
+        let (kind, subject) = match proposed.split_once('/') {
+            Some((kind, subject)) => (Some(kind), subject),
+            None => (None, proposed),
+        };
+        match (self.takes_a_type(), kind) {
+            (true, None) => {
+                return Err(NameRefusal::MissingType {
+                    declared: self.types(),
+                });
+            }
+            (false, Some(found)) => {
+                return Err(NameRefusal::UnexpectedType {
+                    found: found.to_owned(),
+                });
+            }
+            (true, Some(kind)) if !self.types().iter().any(|known| known == kind) => {
+                return Err(NameRefusal::UnknownType {
+                    found: kind.to_owned(),
+                    declared: self.types(),
+                });
+            }
+            _ => {}
+        }
+        validate_subject(subject)?;
+        Ok(match kind {
+            Some(kind) => format!("{kind}/{subject}"),
+            None => subject.to_owned(),
+        })
+    }
+}
+
+/// One well-formed segment: lowercase, `[a-z0-9-]`, bounded, and nothing
+/// that would read as a second path level or as a Git refname trick.
+fn validate_subject(subject: &str) -> std::result::Result<(), NameRefusal> {
+    let refuse = |reason| Err(NameRefusal::MalformedSubject { reason });
+    if subject.is_empty() {
+        return refuse("it is empty");
+    }
+    if subject.chars().count() > SUBJECT_MAX_CHARS {
+        return refuse("it is longer than a sidebar can show");
+    }
+    if subject.contains('/') {
+        return refuse("it carries a path separator, which is the type's own");
+    }
+    if subject.starts_with('-') || subject.ends_with('-') {
+        return refuse("it starts or ends with a hyphen");
+    }
+    if subject.contains("--") {
+        return refuse("it carries a doubled hyphen");
+    }
+    if !subject
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    {
+        return refuse("it is not lowercase letters, digits and single hyphens");
+    }
+    Ok(())
+}
+
+/// The visible label a branch name carries: its subject, read as words.
+///
+/// One derivation, here, so the sidebar and the branch can never disagree
+/// about what a name means.
+pub fn label_of(branch: &str) -> String {
+    branch
+        .rsplit('/')
+        .next()
+        .unwrap_or(branch)
+        .replace('-', " ")
+}
+
 /// What happens to an isolated agent's work once it is done. The only axis
 /// a project declares, because it is the only one that is a team decision
 /// rather than infrastructure.
@@ -103,6 +301,11 @@ pub struct WorktreePolicy {
     pub target: Option<String>,
     #[serde(default)]
     pub completion: CompletionBehavior,
+    /// The branch vocabulary an agent's own name is judged against.
+    /// Undeclared, work is not named and the branch stays the generated
+    /// identifier — every project's behaviour before this existed.
+    #[serde(default, skip_serializing_if = "BranchVocabulary::is_unset")]
+    pub branch: BranchVocabulary,
     /// Ignored files a fresh checkout links from the primary checkout —
     /// `.env` and friends. Relative, inside the repository, and ignored by
     /// it: a symlink the agent writes through reaches the primary, so only
@@ -218,6 +421,28 @@ impl WorktreePolicy {
             .is_some_and(|rest| rest.starts_with('/'))
     }
 
+    /// What the projected text tells an agent about naming its work.
+    ///
+    /// Empty for a project that names nothing, so a project that declared
+    /// no vocabulary projects exactly the bytes it projected before. The
+    /// vocabulary is spelled out rather than referred to: the instruction
+    /// an agent reads has to be the one its project will accept, and an
+    /// agent cannot open `agents.yaml` it was never told about.
+    fn naming_clause(&self) -> String {
+        if !self.branch.names_work() {
+            return String::new();
+        }
+        format!(
+            "- Before your first commit, name the work: `uze agent task name \
+             <type>/<subject>`. Types this project accepts: `{types}`. The subject is one or \
+             two words naming the intention, not a description of the task — `fix/branch-naming`, \
+             not `fix/correct-the-problem-with-agent-branch-names`. Your branch is renamed when \
+             you do, so ask Git for its name rather than remembering it; a name you or the \
+             operator already chose is never replaced.\n",
+            types = self.branch.spelled()
+        )
+    }
+
     /// The rendered statement projected into the project's shared
     /// instruction file — the exact bytes the managed region carries.
     ///
@@ -240,6 +465,7 @@ impl WorktreePolicy {
              - If UZE tells you a rebase is paused in your checkout, resolve the conflicts \
              preserving the intent of your change, run `git rebase --continue`, run the \
              project's checks, and end your turn.\n\
+             {naming}\
              - Before spawning parallel subagents that write files, give each its own checkout \
              so they cannot collide:\n\
              \n\
@@ -252,6 +478,7 @@ impl WorktreePolicy {
              relative to your own would nest one worktree inside another.\n",
             directory = WORKTREES_DIRECTORY,
             prefix = BRANCH_PREFIX,
+            naming = self.naming_clause(),
             target = self
                 .target
                 .as_deref()
@@ -457,5 +684,157 @@ mod tests {
     fn a_directory_outside_any_repository_has_no_primary_checkout() {
         let root = uze_testkit::temp::scratch("worktree-norepo");
         assert_eq!(primary_checkout(&root), None);
+    }
+}
+
+#[cfg(test)]
+mod naming_tests {
+    use super::*;
+
+    fn conventional() -> BranchVocabulary {
+        BranchVocabulary::Preset(BranchPreset::Conventional)
+    }
+
+    #[test]
+    fn a_preset_accepts_its_own_types_and_refuses_the_others() {
+        assert_eq!(
+            conventional().accept("fix/branch-naming").unwrap(),
+            "fix/branch-naming"
+        );
+        assert!(matches!(
+            conventional().accept("feature/branch-naming"),
+            Err(NameRefusal::UnknownType { .. })
+        ));
+        assert_eq!(
+            BranchVocabulary::Preset(BranchPreset::Gitflow)
+                .accept("feature/branch-naming")
+                .unwrap(),
+            "feature/branch-naming"
+        );
+    }
+
+    /// A preset is a named list and nothing more: the same members spelled
+    /// out have to behave identically, or the "closed set" the validation
+    /// rests on would depend on which spelling produced it.
+    #[test]
+    fn a_projects_own_list_behaves_exactly_like_a_preset_of_the_same_members() {
+        let listed = BranchVocabulary::Types(conventional().types());
+        for proposed in ["fix/a-thing", "feat/a-thing", "nope/a-thing", "a-thing"] {
+            assert_eq!(
+                listed.accept(proposed).is_ok(),
+                conventional().accept(proposed).is_ok(),
+                "{proposed}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_project_may_declare_a_type_no_preset_carries() {
+        let vocabulary = BranchVocabulary::Types(vec!["ui".to_owned(), "fix".to_owned()]);
+        assert_eq!(vocabulary.accept("ui/dark-mode").unwrap(), "ui/dark-mode");
+        assert!(vocabulary.accept("feat/dark-mode").is_err());
+    }
+
+    /// Every refusal says *which half* was wrong: a refusal an agent cannot
+    /// act on is one it will retry wrong.
+    #[test]
+    fn a_malformed_subject_is_refused_per_reason() {
+        for proposed in [
+            "fix/",
+            "fix/a-subject-far-longer-than-any-sidebar-column-could-ever-show",
+            "fix/-leading",
+            "fix/trailing-",
+            "fix/double--hyphen",
+            "fix/UPPER",
+            "fix/with space",
+        ] {
+            assert!(
+                matches!(
+                    conventional().accept(proposed),
+                    Err(NameRefusal::MalformedSubject { .. })
+                ),
+                "{proposed} should be refused as a malformed subject"
+            );
+        }
+    }
+
+    #[test]
+    fn a_missing_or_unexpected_type_is_its_own_refusal() {
+        assert!(matches!(
+            conventional().accept("branch-naming"),
+            Err(NameRefusal::MissingType { .. })
+        ));
+        assert!(matches!(
+            BranchVocabulary::Preset(BranchPreset::Flat).accept("fix/branch-naming"),
+            Err(NameRefusal::UnexpectedType { .. })
+        ));
+        assert_eq!(
+            BranchVocabulary::Preset(BranchPreset::Flat)
+                .accept("branch-naming")
+                .unwrap(),
+            "branch-naming"
+        );
+    }
+
+    /// `agent` and an undeclared vocabulary are the same answer: this
+    /// project does not name work, and every project had that behaviour
+    /// before any of this existed.
+    #[test]
+    fn a_project_that_names_nothing_refuses_every_name() {
+        for vocabulary in [
+            BranchVocabulary::Unset,
+            BranchVocabulary::Preset(BranchPreset::Agent),
+            BranchVocabulary::Types(Vec::new()),
+        ] {
+            assert!(!vocabulary.names_work());
+            assert!(matches!(
+                vocabulary.accept("fix/branch-naming"),
+                Err(NameRefusal::NotDeclared)
+            ));
+        }
+    }
+
+    #[test]
+    fn the_label_is_the_subject_read_as_words() {
+        assert_eq!(label_of("fix/branch-naming"), "branch naming");
+        assert_eq!(label_of("branch-naming"), "branch naming");
+        assert_eq!(label_of("agent/zulqgq"), "zulqgq");
+    }
+
+    /// A project that declares no vocabulary must project exactly the bytes
+    /// it projected before this existed — otherwise every existing project
+    /// reports a stale region for a policy nobody changed.
+    #[test]
+    fn a_project_that_names_nothing_projects_no_naming_clause() {
+        let text = WorktreePolicy::default().instructions();
+        assert!(!text.contains("uze agent task name"), "{text}");
+    }
+
+    /// The instruction an agent reads has to be the one its project will
+    /// accept, and an agent cannot open an `agents.yaml` nobody told it
+    /// about.
+    #[test]
+    fn the_projected_clause_spells_out_the_vocabulary_in_force() {
+        let policy = WorktreePolicy {
+            branch: BranchVocabulary::Types(vec!["ui".to_owned(), "fix".to_owned()]),
+            ..WorktreePolicy::default()
+        };
+        let text = policy.instructions();
+        assert!(text.contains("uze agent task name"), "{text}");
+        assert!(text.contains("ui|fix"), "{text}");
+    }
+
+    /// The region's identity is a digest of its bytes, so a vocabulary
+    /// change is a projection that has fallen behind — which is what makes
+    /// the drift report possible at all.
+    #[test]
+    fn changing_the_vocabulary_changes_the_regions_identity() {
+        let before = WorktreePolicy::default().region_identity();
+        let after = WorktreePolicy {
+            branch: BranchVocabulary::Preset(BranchPreset::Conventional),
+            ..WorktreePolicy::default()
+        }
+        .region_identity();
+        assert_ne!(before, after);
     }
 }

@@ -460,9 +460,10 @@ pub fn collect(
     .unwrap_or_default()
 }
 
-/// Deletes every `agent/` branch whose commits are all reachable from
-/// `target` and which no live task and no checkout is using. Returns the
-/// branches removed.
+/// Deletes every branch UZE can account for — one under the `agent/`
+/// prefix, or one a recorded task names — whose commits are all reachable
+/// from `target` and which no live task and no checkout is using. Returns
+/// the branches removed.
 pub fn prune_integrated_branches(primary: &Path, store: &TaskStore, target: &str) -> Vec<String> {
     let checked_out: Vec<String> = registered_checkouts(primary)
         .into_iter()
@@ -475,7 +476,17 @@ pub fn prune_integrated_branches(primary: &Path, store: &TaskStore, target: &str
         .map(|task| task.branch.as_str())
         .collect();
     let mut removed = Vec::new();
-    for branch in agent_branches(primary) {
+    // The prefix is no longer the whole answer: a named task's branch left
+    // it behind (`worktree::BranchVocabulary`), and a branch nobody can
+    // find is a branch nobody collects. The store names what it knows; the
+    // prefix still catches what the store has forgotten.
+    let mut candidates = agent_branches(primary);
+    for task in &store.tasks {
+        if !candidates.contains(&task.branch) {
+            candidates.push(task.branch.clone());
+        }
+    }
+    for branch in candidates {
         if checked_out.contains(&branch) || live.contains(&branch.as_str()) {
             continue;
         }
@@ -583,6 +594,21 @@ pub fn is_live(state: &TaskState) -> bool {
 /// `symbolic-ref` rather than `rev-parse --abbrev-ref`: it still names the
 /// branch when it has no commit yet, which is the case that must be told
 /// apart from "no branch at all".
+/// Renames a branch, under the repository's write lock.
+///
+/// Taken in the primary the way every other write is, so a rename cannot
+/// interleave with a slot acquisition creating the very branch it renames.
+/// Git moves the ref and every checkout on it follows, so the agent's own
+/// working directory needs nothing done to it.
+pub fn rename_branch(primary: &Path, from: &str, to: &str) -> crate::Result<()> {
+    uze_git::locked(primary, uze_git::DEFAULT_WRITE_TIMEOUT, || {
+        git(primary, &["branch", "--move", from, to])
+            .map(|_| ())
+            .map_err(|reason| crate::UzeError::TaskNaming(reason.to_string()))
+    })
+    .map_err(|reason| crate::UzeError::TaskNaming(reason.to_string()))?
+}
+
 pub fn current_branch(root: &Path) -> Option<String> {
     let branch = uze_git::read(root, &["symbolic-ref", "--short", "--quiet", "HEAD"])
         .ok()?
@@ -723,7 +749,7 @@ fn read(root: &Path, args: &[&str]) -> Option<String> {
         .map(|stdout| stdout.trim().to_owned())
 }
 
-fn branch_exists(root: &Path, branch: &str) -> bool {
+pub fn branch_exists(root: &Path, branch: &str) -> bool {
     uze_git::read(
         root,
         &[
@@ -1567,5 +1593,57 @@ mod tests {
             None,
             "detached: nothing tracks"
         );
+    }
+}
+
+#[cfg(test)]
+mod naming_collection_tests {
+    use super::*;
+    use crate::task::{Base, Task, TaskState, TaskStore};
+
+    /// The prefix is no longer the whole answer. A named task's branch left
+    /// `agent/` behind, and a branch nobody can find is a branch nobody
+    /// collects — so the store's own names are searched beside the prefix.
+    #[test]
+    fn a_named_branch_is_collected_once_its_work_is_in_the_target() {
+        let repository = uze_testkit::git::Repository::new("collect-named");
+        let primary = repository.root();
+        let base = repository.commit_file("seed.rs", "");
+
+        let mut task = Task::new(None, Base::Ref("main".into()), base.clone(), "main".into());
+        repository.git(&["branch", &task.branch]);
+        repository.git(&["branch", "--move", &task.branch, "fix/named-work"]);
+        task.take_name("fix/named-work".to_owned());
+        task.state = TaskState::Integrated;
+        let mut store = TaskStore::default();
+        store.upsert(task);
+
+        let removed = prune_integrated_branches(primary, &store, "main");
+
+        assert_eq!(
+            removed,
+            vec!["fix/named-work".to_owned()],
+            "a branch the store names is collectable even outside the prefix"
+        );
+        assert!(!branch_exists(primary, "fix/named-work"));
+    }
+
+    /// And a live task's branch is never collected, named or not — the
+    /// rule that protects work has not moved.
+    #[test]
+    fn a_live_named_branch_is_left_alone() {
+        let repository = uze_testkit::git::Repository::new("collect-live");
+        let primary = repository.root();
+        let base = repository.commit_file("seed.rs", "");
+
+        let mut task = Task::new(None, Base::Ref("main".into()), base, "main".into());
+        repository.git(&["branch", "fix/still-working"]);
+        task.take_name("fix/still-working".to_owned());
+        task.state = TaskState::Running;
+        let mut store = TaskStore::default();
+        store.upsert(task);
+
+        assert!(prune_integrated_branches(primary, &store, "main").is_empty());
+        assert!(branch_exists(primary, "fix/still-working"));
     }
 }

@@ -196,3 +196,82 @@ write-path task, not a new read model.
 - [ ] 11.4 Bind a change to tasks created after it; a live task keeps the policy it launched under, and the popup shows both.
 - [ ] 11.5 The write runs off the render thread like every other unbounded workspace operation (`spawn_*`/`absorb_*` pair; `orchestrator/` may not name `WorkspaceHost`).
 - [ ] 11.6 Tests: attribution of an undeclared policy; click creates the manifest; a live task keeps its launch policy; a stale projection is reported.
+
+## 12. The manifest is the top of the chain (added 2026-09-07)
+
+Reported as "altero o agents.yaml e o uze não processa isso". It is
+accurate, and it is three separate holes rather than one — see design
+§11. Nothing here is a new concept: the chain, the receipts and the
+inspect-before-detach rule all exist. What is missing is that the
+manifest is only ever read forwards, by one command, and that no surface
+says so.
+
+- [x] 12.1 `project_lock::surplus_against(manifest, lock)` — the inverse
+  of `stale_against`, which iterates `manifest.declared_plugins()` and
+  therefore cannot express "the lock carries what nobody declares". Pure
+  set difference over the two documents; no Store read, no Git.
+- [x] 12.2 `Project::plan` re-founded on `agents.yaml`. Today it starts
+  from the lock and `has_changes = !missing.is_empty()`, so a manifest
+  edit is invisible to it — and nothing calls it, which is why the
+  blindness was never felt. It gains `unresolved` (declared, not locked),
+  `surplus` (locked, not declared) and `stale_projection`, keeping the
+  four fields §6 already records as honest stubs. Read-only stays a
+  pinned property, not a comment.
+- [x] 12.3 Projection staleness without re-rendering the world: the
+  managed region carries `WorktreePolicy::region_identity()`, a digest of
+  the exact bytes it should hold, so "is the projection behind the
+  policy" is one string comparison against the region already in
+  `AGENTS.md`. No harness is asked anything to answer it.
+- [x] 12.4 `StatusReport` carries the drift and `render_status` says it,
+  naming the command that resolves each kind. `status` is `Budgeted`
+  (`command_performance.rs:46`) and must stay so: the whole computation
+  is two file reads plus a set difference against the Store index that
+  `lock_status` already loads.
+- [x] 12.5 `install` converges removals. The lifecycle already exists —
+  `remove_project_plugin` undeclares and regenerates, ADR-009's
+  `Matched/Missing/Drifted/Blocked` decides whether the detach may
+  happen — so this is a call site and a confirmation, not new removal
+  semantics. Drift on a surplus plugin's artifact refuses the detach and
+  is reported; it never authorizes one.
+- [x] 12.6 The confirmation is explicit and refusable, and refusing it
+  leaves the additive half of the run intact. A destructive step must
+  never ride along on a command whose other half is additive.
+- [x] 12.7 `install` reconciles the project context at the end, and the
+  report says what it reconciled. This is what closes the policy hole:
+  `worktrees:` is read live per placement, but agents read the projected
+  text, so a policy change was in force for UZE and not for them until
+  somebody happened to run `uze context reconcile`.
+- [x] 12.8 `uze i` alias. Clap alias on the existing variant, not a
+  second variant — and check `tests::every_cli_command_is_classified`
+  before assuming an alias needs no entry of its own.
+- [x] 12.9 The client shows the drift where the project is described and
+  offers the action, which already exists (`Intent::InstallProjectEnvironment`,
+  `src/ui/worker.rs:352`). Detect and offer; opening the client still
+  writes nothing. The read runs off the render thread like every other
+  unbounded workspace operation (`spawn_*`/`absorb_*`; `orchestrator/`
+  may not name `WorkspaceHost`).
+- [x] 12.10 Tests, one per hole rather than one per function: a manifest
+  edit is visible to the plan before anything is installed; a plugin
+  dropped from the manifest is surplus and, once confirmed, is gone from
+  the lock and detached; an unconfirmed run changes nothing; a changed
+  `completion` reports a stale projection and `install` clears it; `uze
+  i` and `uze install` produce the same report; and — the one that is
+  easy to skip — the plan writes nothing in a drifted project, which §6.6
+  records as a gap left open the first time.
+- [x] 12.11 **L3.5 — journey**, `journeys/suites/02-packages/`, a new
+  file: the manifest is edited and the machine follows. Scenes: a plugin is
+  removed from `agents.yaml` and, before anything runs, the lock and the
+  delivered links are still there — the drift is real, not assumed; `uze
+  install` is refused the confirmation and nothing changes; confirmed, the
+  lock entry is gone and the harness link with it. Every `then` reads the
+  lock file, the filesystem and the links — never UZE's own report, which
+  is the subject of the `cmd` steps rather than the source of truth.
+- [x] 12.12 **L3.5 — journey**, `journeys/suites/03-context/`: the
+  projected region follows the policy. `worktrees.completion` is changed in
+  the manifest, `AGENTS.md` still carries the old clause on disk, and one
+  `uze install` later the file carries the new one. A separate file from
+  12.11: different claim, and a shared file would mean a shared fate.
+- [x] 12.13 Docs: the drift states in `docs/architecture/invariants.md`,
+  each tied to the test that proves it, and the root `AGENTS.md`
+  paragraph on project/machine scope updated to say that `install`
+  reconciles context.

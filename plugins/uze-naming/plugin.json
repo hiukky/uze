@@ -1,0 +1,5 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "uze-naming",
+  "description": "Refuses an agent's first commit while the work it is doing has no name, so a branch that reaches a reviewer says what the change is."
+}

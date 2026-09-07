@@ -40,6 +40,7 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Resolve agents.yaml into agents.lock, then install what it records
+    #[command(visible_alias = "i")]
     Install {
         path: Option<PathBuf>,
         /// Authorize executable capabilities
@@ -97,6 +98,15 @@ enum Command {
         #[command(subcommand)]
         action: TerminalAction,
     },
+    /// The agent's own surface: what an agent UZE launched calls to take
+    /// part in the workflow it is inside. Hidden from this help on
+    /// purpose — its audience reads the instruction text UZE projects into
+    /// the project, not `uze --help`.
+    #[command(hide = true)]
+    Agent {
+        #[command(subcommand)]
+        action: AgentAction,
+    },
     /// Internal runtime dispatch: runs a package's hook commands for one
     /// hook event (ADR-033). Harness integrations emit invocations of this
     /// exact form into managed hook configuration; it is not for
@@ -130,6 +140,29 @@ enum Command {
     /// hand-maintained priority list.
     #[command(external_subcommand)]
     External(Vec<String>),
+}
+
+#[derive(Debug, Subcommand)]
+enum AgentAction {
+    /// The task this agent is working in
+    Task {
+        #[command(subcommand)]
+        action: AgentTaskAction,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum AgentTaskAction {
+    /// Name the work being done, as `<type>/<subject>`
+    Name {
+        /// The proposed name, judged against the project's vocabulary
+        name: String,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+        format: OutputFormat,
+    },
+    /// Hook handler: refuses a commit from work nobody has named yet.
+    /// Exits `3` with the reason on stderr, per the portable Hook ABI.
+    Guard,
 }
 
 #[derive(Debug, Subcommand)]
@@ -677,7 +710,7 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
             let spinner = progress::spinner("Installing project environment...");
             match app
                 .project()
-                .install(&context_path(path), authority.as_ref())
+                .install(&context_path(path), authority.as_ref(), &AskBeforeRemoving)
             {
                 Ok(report) => {
                     let message = match &report {
@@ -750,6 +783,7 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
                 OutputFormat::Json => print_json(&report),
             }
         }
+        Command::Agent { action } => run_agent(&app, action)?,
         Command::Context { action } => run_context(&app, action)?,
         Command::Theme { action } => run_theme(&app, &home, action)?,
         Command::Market { action } => run_market(&app, action)?,
@@ -2146,17 +2180,114 @@ fn render_install(report: &uze_application::application::InstallReport) -> Strin
             "{} Project environment is already up to date.\n",
             progress::success_icon()
         ),
-        InstallReport::Installed { plugins } => {
+        InstallReport::Installed {
+            plugins,
+            removed,
+            reconciled,
+        } => {
             let mut text = progress::report_title("Installed environment", None);
             text.push_str(&format!(
                 "{} plugin(s) are ready\n\n",
                 progress::success_text(plugins.len().to_string())
             ));
-            text.push_str(&progress::report_section("Packages"));
-            for plugin in plugins {
-                text.push_str(&format!("  {plugin}\n"));
+            if !plugins.is_empty() {
+                text.push_str(&progress::report_section("Packages"));
+                for plugin in plugins {
+                    text.push_str(&format!("  {plugin}\n"));
+                }
+            }
+            if !removed.is_empty() {
+                text.push_str(&progress::report_section("Removed"));
+                for plugin in removed {
+                    text.push_str(&format!("  {plugin}\n"));
+                }
+            }
+            if *reconciled {
+                text.push_str(&progress::report_section("Context"));
+                text.push_str("  AGENTS.md and the harness bridges are reconciled\n");
             }
             text
+        }
+    }
+}
+
+/// Answers the one destructive half of an install by asking.
+///
+/// Refuses without a terminal to ask in: a removal that happens because
+/// nobody was there to say no is exactly the outcome the confirmation
+/// exists to prevent, and CI is where that would happen.
+struct AskBeforeRemoving;
+
+impl uze_application::application::SurplusAuthority for AskBeforeRemoving {
+    fn approve_removal(&self, plugins: &[String]) -> bool {
+        if !prompt::interactive() {
+            progress::warn(&format!(
+                "agents.yaml no longer declares {}; run `uze install` in a terminal to remove \
+                 {}",
+                plugins.join(", "),
+                if plugins.len() == 1 { "it" } else { "them" }
+            ));
+            return false;
+        }
+        prompt::confirm(
+            &format!(
+                "agents.yaml no longer declares {}. Remove {} from this project?",
+                plugins.join(", "),
+                if plugins.len() == 1 { "it" } else { "them" }
+            ),
+            false,
+        )
+        .unwrap_or(false)
+    }
+}
+
+/// The agent's own surface. Every answer here is written for a model: a
+/// refusal names what this project would have accepted, because that
+/// sentence is the only feedback channel a denied agent has.
+fn run_agent(app: &UzeApplication, action: AgentAction) -> Result<()> {
+    let AgentAction::Task { action } = action;
+    match action {
+        AgentTaskAction::Name { name, format } => {
+            let cwd =
+                std::env::current_dir().map_err(|source| uze_application::UzeError::Read {
+                    path: PathBuf::from("."),
+                    source,
+                })?;
+            let named = app.workspace().name_task(&cwd, &name)?;
+            match format {
+                OutputFormat::Text => println!(
+                    "{} named `{}` on branch `{}`",
+                    progress::success_icon(),
+                    named.label,
+                    named.branch
+                ),
+                OutputFormat::Json => print_json(&NamedTaskReport::from(&named)),
+            }
+        }
+        AgentTaskAction::Guard => {
+            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            if let Some(reason) = app.workspace().naming_owed(&cwd) {
+                eprintln!("{reason}");
+                std::process::exit(uze_application::DENY_EXIT_CODE);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[derive(serde::Serialize)]
+struct NamedTaskReport<'a> {
+    task: &'a str,
+    branch: &'a str,
+    label: &'a str,
+}
+
+impl<'a> From<&'a uze_application::NamedTask> for NamedTaskReport<'a> {
+    fn from(named: &'a uze_application::NamedTask) -> Self {
+        Self {
+            task: &named.task,
+            branch: &named.branch,
+            label: &named.label,
         }
     }
 }
@@ -2384,6 +2515,7 @@ fn render_status(report: &StatusReport) -> String {
         )
     ));
     text.push_str(&render_project_lock_status(&report.project_lock));
+    text.push_str(&render_drift(&report.drift));
 
     let next_step = status_next_step(report);
     if !report.issues.is_empty() || next_step.is_some() {
@@ -2434,6 +2566,49 @@ fn status_icon(report: &StatusReport) -> String {
     } else {
         progress::warning_icon()
     }
+}
+
+/// What `agents.yaml` asks for that the rest of the chain has not caught
+/// up to. Silent when there is nothing owed — a clean project says nothing
+/// rather than saying "no drift", which is a sentence nobody needs.
+fn render_drift(drift: &uze_application::application::EnvironmentDrift) -> String {
+    if drift.is_clear() {
+        return String::new();
+    }
+    let mut text = String::from("\n");
+    text.push_str(&progress::report_section("Declared, not yet applied"));
+    if !drift.unresolved.is_empty() {
+        text.push_str(&format!(
+            "  {} declared in agents.yaml, not resolved: {}\n",
+            progress::warning_icon(),
+            drift.unresolved.join(", ")
+        ));
+    }
+    if !drift.surplus.is_empty() {
+        text.push_str(&format!(
+            "  {} in agents.lock, no longer declared: {}\n",
+            progress::warning_icon(),
+            drift.surplus.join(", ")
+        ));
+    }
+    if !drift.missing.is_empty() {
+        text.push_str(&format!(
+            "  {} locked, absent from this machine: {}\n",
+            progress::warning_icon(),
+            drift.missing.join(", ")
+        ));
+    }
+    if drift.stale_projection {
+        text.push_str(&format!(
+            "  {} AGENTS.md is behind the declared worktree policy\n",
+            progress::warning_icon()
+        ));
+    }
+    text.push_str(&format!(
+        "  {}\n",
+        progress::label("Run `uze install` to apply")
+    ));
+    text
 }
 
 fn render_status_harness(harness: &uze_application::application::HarnessContextStatus) -> String {

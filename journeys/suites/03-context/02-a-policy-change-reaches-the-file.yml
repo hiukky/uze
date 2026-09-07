@@ -1,0 +1,61 @@
+journey: changing the worktree policy changes what agents read, in the same command
+tags: [gate, cli, context]
+proves: web/content/docs/project-files.mdx
+about: |
+  UZE reads `worktrees:` live wherever it acts on the policy itself. The
+  agents that must honour it read something else: the region UZE projects
+  into `AGENTS.md`. So a policy could be in force for UZE and not for them
+  — for as long as nobody happened to run a second command.
+
+  A separate file from the plugin journey next door: a different claim,
+  and a run stops at the first failure, so claims that share a file share a
+  fate.
+
+world:
+  project: demo-app
+  manifest: |
+    worktrees:
+      target: main
+      completion: handoff
+
+scenes:
+  - scene: the declared policy is what the file says
+    when:
+      - shell: "{uze} install"
+        say: set the project up
+    then:
+      - file: "{project}/AGENTS.md"
+        contains: "left for a person to integrate"
+        about: the projected region carries the words of the policy in force
+
+  - scene: a changed policy is owed to the file, and status says so
+    when:
+      - shell: |
+          set -e
+          printf 'worktrees:\n  target: main\n  completion: merge\n' > {project}/agents.yaml
+        say: the person changes the completion behaviour
+    then:
+      - cmd:
+          run: "{uze} status"
+          stdout_contains: "AGENTS.md is behind"
+        about: |
+          the policy is in force for UZE and not yet for the agents reading
+          the file, and that gap is reported rather than left to be noticed
+      - file: "{project}/AGENTS.md"
+        contains: "left for a person to integrate"
+        about: the file on disk still carries the previous instruction
+
+  - scene: one command, one intention
+    when:
+      - shell: "{uze} install"
+        say: apply what the manifest now declares
+    then:
+      - file: "{project}/AGENTS.md"
+        contains: "fast-forwards the target"
+        about: |
+          the projected region carries the new policy's own words —
+          declaring an environment and projecting it are one act
+      - cmd:
+          run: "{uze} status"
+          stdout_excludes: "AGENTS.md is behind"
+        about: and nothing is owed any more

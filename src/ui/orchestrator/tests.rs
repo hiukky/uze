@@ -1018,6 +1018,30 @@ mod workspace_tests {
         assert!(behind_by_two.contains("⇧2 #20"), "{behind_by_two}");
     }
 
+    /// A named task reads as its name on both lines: the label the agent
+    /// chose above, the branch it renamed below. This is where a claim
+    /// about what the *screen says* belongs — a journey may only gate on
+    /// screen text, never assert it.
+    #[test]
+    fn a_named_task_reads_as_its_name_in_the_sidebar() {
+        let mut model = agent_with_task(TaskStateView::Ready, 3);
+        for tasks in model.tasks.values_mut() {
+            tasks[0].branch = "fix/branch-naming".to_owned();
+            tasks[0].label = "branch naming".to_owned();
+        }
+
+        let rows = sidebar_rows(&model, &mut Vec::new());
+
+        assert!(
+            rows.iter().any(|row| row.contains("fix/branch-naming")),
+            "the branch a reviewer will see is the caption: {rows:?}"
+        );
+        assert!(
+            !rows.iter().any(|row| row.contains("agent/")),
+            "and the generated identifier is nowhere on the screen: {rows:?}"
+        );
+    }
+
     /// A branch too long for the column is elided, not cut. It used to run
     /// under the row's own right-aligned caption and off the sidebar,
     /// taking that caption's meaning with it and ending mid-word with

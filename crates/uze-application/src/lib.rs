@@ -6,8 +6,11 @@ pub mod bootstrap;
 pub use application::UzeApplication;
 pub use application::services::{
     AgentIdentity, AgentNotice, AgentPlacement, DeliveryOutcome, DeliveryPolicyView,
-    DeliveryReport, Evaluation, Isolation, Reconciliation, ReleasedTask, TaskStateView, TaskView,
-    UpstreamSync,
+    DeliveryReport, Evaluation, Isolation, NamedTask, Reconciliation, ReleasedTask, TaskStateView,
+    TaskView, UpstreamSync,
+};
+pub use application::{
+    ApproveSurplusRemoval, RefuseSurplusRemoval, StaleProjection, SurplusAuthority,
 };
 
 /// Types the read models above are made of. Presentation consumes these
@@ -21,8 +24,8 @@ pub use uze_core::{
     client_layout::{ClientLayout, ManagementLayout, SidebarLayout, WorkspaceLayout},
     context::PlannedAction,
     hook::{
-        CommandHandlerType, CommandHook, DEFAULT_TIMEOUT_SECONDS, HookEffect, HookEvent,
-        HookNativeOutput,
+        CommandHandlerType, CommandHook, DEFAULT_TIMEOUT_SECONDS, DENY_EXIT_CODE, HookEffect,
+        HookEvent, HookNativeOutput,
     },
     integration::{AttachmentState, PublicationStatus},
     naming::{
@@ -37,7 +40,9 @@ pub use uze_core::{
     router::HarnessCapabilities,
     trust::{AlwaysTrust, NoTrustAuthority, TrustAuthority, TrustOutcome, TrustRequest},
     workspace::workspace_root_or_self,
-    worktree::{CompletionBehavior, IsolatedCheckout, isolated_checkout},
+    worktree::{
+        BranchPreset, BranchVocabulary, CompletionBehavior, IsolatedCheckout, isolated_checkout,
+    },
 };
 
 /// The repository a directory's tasks hang off, resolved lexically.

@@ -566,11 +566,43 @@ pub struct StatusReport {
     pub packages_installed: usize,
     pub packages_contributing_here: usize,
     pub project_lock: ProjectLockStatus,
+    /// What `agents.yaml` asks for that the rest of the chain has not
+    /// caught up to. Empty when the declaration, the lock, the Store and
+    /// the projection all agree.
+    pub drift: EnvironmentDrift,
     /// Human-readable, one-line-each context problems: a non-matched
     /// contribution, a bridge gap, a malformed or blocked orphan region.
     /// Empty means healthy. Never a substitute for `context inspect`'s
     /// full detail — this is the "does anything need my attention" view.
     pub issues: Vec<String>,
+}
+
+/// Drift along the chain a project's environment passes through:
+/// declared -> locked -> installed -> delivered.
+///
+/// Every field is a normal state, never an error: a project mid-edit is a
+/// project someone is working on. What makes drift worth reporting is that
+/// nothing else names it, so a person editing `agents.yaml` gets no signal
+/// that anything is owed.
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct EnvironmentDrift {
+    /// Declared in the manifest, and the lock does not answer for it.
+    pub unresolved: Vec<String>,
+    /// In the lock, and the manifest no longer declares it.
+    pub surplus: Vec<String>,
+    /// Recorded in the lock and absent from this machine's Store.
+    pub missing: Vec<String>,
+    /// The projected instruction region is behind the declared policy.
+    pub stale_projection: bool,
+}
+
+impl EnvironmentDrift {
+    pub fn is_clear(&self) -> bool {
+        self.unresolved.is_empty()
+            && self.surplus.is_empty()
+            && self.missing.is_empty()
+            && !self.stale_projection
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]

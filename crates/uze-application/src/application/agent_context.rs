@@ -67,14 +67,6 @@ pub enum UndeliveredReason {
     Unsupported,
 }
 
-impl ResourceDelivery {
-    /// Whether this is a real gap a reader should act on — the project has
-    /// something the harness is not getting.
-    pub fn is_gap(&self) -> bool {
-        matches!(self, Self::Undelivered(_))
-    }
-}
-
 /// One harness's context delivery, resolved against one directory.
 #[derive(Clone, Debug, Serialize)]
 pub struct AgentContextStatus {

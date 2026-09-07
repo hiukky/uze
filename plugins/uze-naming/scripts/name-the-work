@@ -1,0 +1,21 @@
+#!/bin/sh
+# Refuses an agent's first commit while its work is still unnamed.
+#
+# The whole question — does this project name its work, is this an agent's
+# checkout, is this task still carrying its generated name — is one command,
+# on purpose. A shell script answering it would have to re-derive three
+# facts from files it has no business reading, and would be wrong in a
+# different way on each harness.
+#
+# Silent and allowing for anything that is not a commit: this group's effect
+# is `deny`, so every exit that is not 0 or 3 is a failure that blocks, and
+# a guard that blocks for its own reasons is worse than no guard.
+set -u
+
+case "${HOOK_COMMAND:-}" in
+  *'git commit'* | *'git'*' commit'*) ;;
+  *) exit 0 ;;
+esac
+
+command -v uze >/dev/null 2>&1 || exit 0
+exec uze agent task guard

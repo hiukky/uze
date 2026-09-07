@@ -192,6 +192,60 @@ impl UzeApplication {
 
 **Rationale:** Parser/serializer in Core (vendor-neutral). Use cases in Application. Store/Engine/Integration remain lock-neutral (vendor neutrality preserved).
 
+### 11. The manifest is the top of the chain (added 2026-09-07)
+
+Decisions 1-2 gave the project four states — declared (`agents.yaml`),
+locked (`agents.lock`), installed (the Store), delivered (the projected
+region and the harness bridges) — but only one command ever reads the
+first of them, and it only ever reads it forwards. Three consequences,
+all reported by a person who edited the manifest and watched nothing
+happen:
+
+- `project_lock::stale_against` iterates `manifest.declared_plugins()`,
+  so it finds an addition and a re-pointing and can, by construction,
+  never find a removal. A plugin deleted from the manifest stays locked,
+  stays in the Store and stays attached.
+- `Project::plan` starts from the lock (`has_changes = !missing`), which
+  makes it blind to exactly the edit a person just made — and nothing
+  calls it, so the blindness was never felt.
+- `Health::status` compares lock to Store, never manifest to lock.
+
+**Decision: drift is computed over the whole chain, and the manifest is
+its head.** `plan` is re-founded on `agents.yaml`; `status` reports what
+it finds; `install` converges both directions.
+
+**Removal is confirmed, and inspected first.** Converging a removal is
+the only destructive half of `install`, and the project already has the
+rule for it (ADR-009: inspect-before-detach; drift blocks a destructive
+mutation rather than authorizing one). A removal is therefore an
+explicit answer, never a consequence of a command whose other half is
+additive.
+
+**Detect and offer; never apply.** The client shows the drift and the
+action beside it. `install`'s own comment already states the rule this
+follows — creating the manifest belongs to "an explicit act of setting
+this project up… unlike opening the client, which must write nothing
+into a repository somebody is only looking at". A drift signal that
+applied itself would be that write, arriving through a different door.
+The signal is affordable on the render path for the same reason it is
+safe: two file reads and a set difference against the Store index, no
+acquisition and no remote read, inside the `Budgeted` cost `status`
+already holds.
+
+**Install reconciles the context it just changed.** Installing a package
+changes what the project's packages contribute to `AGENTS.md`; leaving
+that to a second command is why a policy change could sit unprojected
+while agents read the previous instruction. `uze i` is the alias, on the
+same argument ADR-019 used for `market`: this is CLI vocabulary, not a
+second entry point.
+
+**Alternatives considered.** *Watch the manifest and re-install on
+change* — rejected: it is the write-on-open rule with a file watcher
+attached, and it would acquire packages behind a person who was editing
+a line. *Report drift only in `status`* — rejected: the person who
+edits `agents.yaml` is usually inside the client, and a report they have
+to leave to read is a report they do not read.
+
 ## Candidate ADRs
 
 - **Editing the authored manifest without a document-model dependency** — the

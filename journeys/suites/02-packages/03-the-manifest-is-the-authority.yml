@@ -1,0 +1,91 @@
+journey: taking a plugin out of agents.yaml takes it out of the project, once somebody confirms
+tags: [gate, cli, packages]
+proves: web/content/docs/project-files.mdx
+about: |
+  `agents.yaml` is what the project declared. Until now it was declarative
+  in one direction only — adding a plugin was heard, removing one was not,
+  so a manifest could say one thing while the lock and every harness said
+  another.
+
+  This journey edits the file the way a person does and then reads the
+  machine: the lock on disk, and the tree the harness reads. The
+  confirmation is the point of the middle scene — the additive halves of an
+  install must never carry a destructive one along with them.
+
+world:
+  project: demo-app
+  standins: [claude]
+  files:
+    market/marketplace.json: |
+      {
+        "name": "demo",
+        "plugins": [{ "name": "flow", "source": "plugins/flow" }]
+      }
+    market/plugins/flow/plugin.json: |
+      {
+        "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+        "name": "flow",
+        "description": "Canonical: one package, no vendor manifests."
+      }
+    market/plugins/flow/skills/commit/SKILL.md: |
+      ---
+      name: commit
+      description: Write a commit message from the staged diff.
+      ---
+
+      The body a harness would read.
+
+scenes:
+  - scene: what the manifest declares reaches the lock and the harness
+    when:
+      - shell: "{uze} setup"
+        say: provision every registered harness
+        check: false
+      - shell: |
+          set -e
+          printf 'marketplaces:\n  demo:\n    path: %s/market\n    plugins:\n      - flow\n' "{world}" > {project}/agents.yaml
+        say: declare the marketplace and its plugin by hand
+      - shell: "{uze} install"
+        say: install what agents.yaml declares
+    then:
+      - file: "{project}/agents.lock"
+        contains: flow
+        about: the lock records what resolving the declaration produced
+      - file: "{home}/.agents/skills/flow:commit/SKILL.md"
+        exists: true
+        about: and the plugin's skill is where a harness reads it
+
+  - scene: dropping it from the manifest is reported, and nothing is taken away yet
+    when:
+      - shell: |
+          set -e
+          printf 'marketplaces:\n  demo:\n    path: %s/market\n' "{world}" > {project}/agents.yaml
+        say: the person edits agents.yaml, taking the plugin out
+    then:
+      - cmd:
+          run: "{uze} status"
+          stdout_contains: "no longer declared"
+        about: status names what the manifest asks for that nothing has applied
+      - file: "{project}/agents.lock"
+        contains: flow
+        about: |
+          reporting drift changes nothing — the lock still carries it, and a
+          removal nobody confirmed is a removal that did not happen
+      - file: "{home}/.agents/skills/flow:commit/SKILL.md"
+        exists: true
+        about: and the harness still reads it
+
+  - scene: confirmed, the machine follows the manifest
+    when:
+      - shell: "yes | {uze} install"
+        say: install again, confirming the removal this time
+        check: false
+    then:
+      - file: "{project}/agents.lock"
+        exists: false
+        about: |
+          a lock with nothing left to reproduce is not an empty lock, it is
+          no lock
+      - file: "{home}/.agents/skills/flow:commit/SKILL.md"
+        exists: false
+        about: and the harness no longer reads a plugin nobody declares

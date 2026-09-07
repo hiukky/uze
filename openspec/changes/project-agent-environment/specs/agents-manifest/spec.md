@@ -272,3 +272,21 @@ everywhere.
   machines
 - **THEN** both resolve to the built-in default and project the same
   `AGENTS.md` text
+
+### Requirement: A policy change reaches the projected instructions
+A change to the worktree policy in `agents.yaml` SHALL be reported as
+outstanding until the projected `AGENTS.md` region carries it. The policy
+is read live wherever UZE itself acts on it, but the agents that must
+honor it read the projected text — so a policy the projection has not
+caught up to is a policy only half in force.
+
+#### Scenario: A changed policy makes the projection stale
+- **WHEN** `worktrees.completion` is changed and nothing has reconciled
+  the project context since
+- **THEN** the projected region is reported stale, naming the declared
+  value and the projected one
+
+#### Scenario: Reconciliation clears it
+- **WHEN** the project context is reconciled after that change
+- **THEN** the region carries the new policy's text and the report is
+  clear

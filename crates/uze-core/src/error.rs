@@ -106,6 +106,11 @@ pub enum UzeError {
     ResumeFailed(String),
     #[error("could not discard the task: {0}")]
     Discard(String),
+    /// A proposed name was refused. Its text is written for the agent that
+    /// proposed it: it says which half was wrong and what this project
+    /// accepts, because a refusal is that agent's only feedback channel.
+    #[error("{0}")]
+    TaskNaming(String),
     #[error("unsupported state schema {found} in {path}; this uze writes {expected}")]
     UnsupportedStateSchema {
         path: PathBuf,
