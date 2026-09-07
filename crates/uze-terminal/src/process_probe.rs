@@ -402,8 +402,8 @@ mod tests {
         std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .unwrap();
 
-        let mut child = std::process::Command::new(&script).spawn().unwrap();
-        let named = wait_for_name(child.id() as libc::pid_t);
+        let mut child = spawn_when_not_busy(&script);
+        let named = wait_for_name(child.id() as libc::pid_t, "uzeprobe");
         let _ = child.kill();
         let _ = child.wait();
         let _ = std::fs::remove_dir_all(&dir);
@@ -432,7 +432,7 @@ mod tests {
             .args(["-c", "sleep 30; :"])
             .spawn()
             .unwrap();
-        let named = wait_for_name(child.id() as libc::pid_t);
+        let named = wait_for_name(child.id() as libc::pid_t, "sh");
         let _ = child.kill();
         let _ = child.wait();
 
@@ -443,19 +443,49 @@ mod tests {
         );
     }
 
-    /// The name settles once the child has `exec`ed; before that the kernel
-    /// still reports what it forked from.
+    /// Spawns `program`, retrying while the kernel reports the file busy.
+    ///
+    /// A file this process wrote moments ago cannot be `exec`ed while any
+    /// descriptor to it is still open for writing — and in a test binary
+    /// that is spawning from several threads at once, another thread's
+    /// `fork` inherits that descriptor for the instant before its own
+    /// `exec` closes it. `ETXTBSY` is that instant, and it is a property of
+    /// the harness rather than of anything under test.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    fn wait_for_name(pid: libc::pid_t) -> Option<String> {
-        let own = command_name_of(std::process::id() as libc::pid_t);
+    fn spawn_when_not_busy(program: &std::path::Path) -> std::process::Child {
+        for _ in 0..100 {
+            match std::process::Command::new(program).spawn() {
+                Ok(child) => return child,
+                Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Err(error) => panic!("spawning {}: {error}", program.display()),
+            }
+        }
+        panic!("{} stayed busy", program.display());
+    }
+
+    /// Polls until `pid` is reported by `expected`, and says what it saw if
+    /// it never is.
+    ///
+    /// Waited on by the name itself, never by "something other than mine".
+    /// A child that has forked but not yet `exec`ed carries the name of the
+    /// *thread* that forked it — Linux keeps `comm` per thread, and a test
+    /// harness names its threads after its tests — so the process's own
+    /// name is not what a pre-`exec` child looks like, and comparing
+    /// against it accepted exactly the moment this is trying to skip.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn wait_for_name(pid: libc::pid_t, expected: &str) -> Option<String> {
+        let mut last_seen = None;
         for _ in 0..200 {
             let seen = command_name_of(pid);
-            if seen.is_some() && seen != own {
+            if seen.as_deref() == Some(expected) {
                 return seen;
             }
+            last_seen = seen.or(last_seen);
             std::thread::sleep(std::time::Duration::from_millis(25));
         }
-        command_name_of(pid)
+        last_seen
     }
 
     /// The three process questions, asked about this very process, on any
