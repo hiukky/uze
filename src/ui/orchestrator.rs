@@ -294,14 +294,28 @@ fn spawn_task_evaluation(
         // key, and the directory is then never evaluated again.
         let answered = tui_application(home).ok().and_then(|app| {
             let workspace = app.workspace();
+            // Every question here is about the *repository*, and `cwd` is
+            // only how the caller happened to name it — usually a pane's
+            // directory. Once that directory is removed it names nothing:
+            // `primary_of` asks Git and `evaluate_tasks` opens the
+            // repository, so both answered empty, and the client kept the
+            // task view it already had — one that still believed it had a
+            // checkout, which is the single thing the way back in is gated
+            // on. The slot key is the same repository, derived lexically
+            // before this thread started and already what every other
+            // lookup below asks with; the three that took `cwd` now take
+            // the repository too.
+            let primary = workspace
+                .primary_of(&cwd)
+                .or_else(|| uze_application::is_isolated_checkout(&cwd).then(|| key.clone()))?;
             Some(EvaluationAnswer {
-                primary: workspace.primary_of(&cwd)?,
                 branch: workspace.current_branch(&key),
                 target: workspace
                     .delivery_policy(&key)
                     .and_then(|policy| policy.target),
                 sync: workspace.target_upstream_sync(&key),
-                evaluation: workspace.evaluate_tasks(&cwd, &occupied),
+                evaluation: workspace.evaluate_tasks(&primary, &occupied),
+                primary,
             })
         });
         let _ = sender.send(TaskResolution { key, answered });
