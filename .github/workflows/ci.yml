@@ -52,7 +52,7 @@ env:
 # Journeys and Conformance are called from here rather than triggered beside
 # it, because `needs:` does not cross a workflow boundary and a tier that
 # cannot be gated is a tier that runs on a tree nobody has compiled. Being
-# called also nests them: GitHub renders `CI / conformance / E2E - Claude`,
+# called also nests them: GitHub renders `CI / Conformance / E2E - Claude`,
 # which is as close to a stage as the platform gets.
 
 jobs:
@@ -453,7 +453,7 @@ jobs:
   # scheduled run here would perform each of them twice.
 
   journeys:
-    name: journeys
+    name: Journeys
     needs: [changes, lint]
     if: github.event_name != 'schedule' && needs.changes.outputs.journeys == 'true'
     uses: ./.github/workflows/journeys.yml
@@ -467,7 +467,7 @@ jobs:
   # verticals it feeds, and putting a second one in front of it would only
   # delay the longest job in the pipeline by the length of the shortest.
   conformance:
-    name: conformance
+    name: Conformance
     needs: changes
     if: github.event_name != 'schedule' && needs.changes.outputs.lab == 'true'
     uses: ./.github/workflows/conformance.yml
@@ -489,7 +489,7 @@ jobs:
   # off an expensive tier without a documentation change sitting forever on a
   # check that will never report.
   gate:
-    name: gate
+    name: Gate
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     if: always()
