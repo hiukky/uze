@@ -87,6 +87,15 @@ class Bindings:
     #: at the one that worked, so a harness may list more than it needs.
     exit_keys = ("\x03", "\x03")
 
+    #: Seconds between one exit key and the next. Per harness because the
+    #: harnesses want opposite things and both were measured: Claude's
+    #: "press it again to exit" *expires*, so a slow second interrupt is
+    #: read as another first one and it never leaves; Codex has to render
+    #: that offer before a second interrupt means anything, and a fast one
+    #: is swallowed. There is no value that suits both, which is why this
+    #: is not a constant in the contract.
+    exit_key_gap = 0.5
+
     def rejoin(self, tui):
         """What proves the *next* process reached its prompt.
 

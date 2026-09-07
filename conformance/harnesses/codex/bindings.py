@@ -16,6 +16,10 @@ class CodexBindings(Bindings):
     #: onboarding passes every check against a screen that accepts no
     #: input — which it did, once, here.
     ready_markers = ("Ask Codex to do anything",)
+    #: Codex answers the first interrupt by offering to take a second, and
+    #: a second sent before that offer is drawn is swallowed: measured, six
+    #: seconds apart it exits and half a second apart it never does.
+    exit_key_gap = 6.0
     warmup = 6.0
 
     def session(self, cfg, prov_ip):

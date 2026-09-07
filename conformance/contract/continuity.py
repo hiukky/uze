@@ -203,14 +203,14 @@ def _end_the_process(tui, bindings):
     for index, key in enumerate(bindings.exit_keys):
         last = index == len(bindings.exit_keys) - 1
         tui.child.send(key)
-        # Between keys a glance, after the last one a real wait. A harness
-        # that answers an interrupt with "press it again to exit" means
-        # *again*, soon: wait two seconds between the two and the offer has
-        # expired, which turns the second interrupt into another first one
-        # and the process never ends — measured on Claude Code, which is
-        # why a harness lists only the keys it actually needs.
+        # Between keys the harness's own gap, after the last one a real
+        # wait. The gap belongs to the harness because they want opposite
+        # things: Claude's "press it again to exit" expires, and Codex has
+        # to draw that offer before a second interrupt means anything.
         _, plain, ended = tui.wait_for(
-            [ENDED_MARKER], tries=8 if last else 1, gap=2.0 if last else 0.4
+            [ENDED_MARKER],
+            tries=8 if last else 1,
+            gap=2.0 if last else bindings.exit_key_gap,
         )
         if ended:
             return plain, True
