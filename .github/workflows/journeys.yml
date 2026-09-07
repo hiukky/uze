@@ -45,8 +45,20 @@ permissions:
 jobs:
   journeys:
     name: Journeys
-    runs-on: ubuntu-latest
+    # Pinned, not `ubuntu-latest`. The journey drives a rendered screen, so
+    # the terminal is part of the contract — the tmux build, the locale and
+    # the unicode width tables decide where a glyph lands, and a moving
+    # runner label is free to change all three under a selector with no
+    # commit behind it. This label is the pin, and it is the same one
+    # `journeys/Dockerfile` states as its `FROM`: both pin the Ubuntu
+    # release, which is as far as either can pin.
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
+    env:
+      # What the image used to set. The frames are read as text, so the
+      # locale is part of what a selector matches.
+      LANG: C.UTF-8
+      TERM: xterm-256color
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
@@ -54,11 +66,23 @@ jobs:
           toolchain: stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
-      # The journey drives a rendered screen, so the terminal is part of the
-      # contract: the pinned image is what keeps a runner-image bump from
-      # moving a glyph out from under a selector.
-      - name: Build the journey runtime image
-        run: docker build -f journeys/Dockerfile -t uze-journeys:ci journeys/
+      # Run natively, on the runner itself. A hosted runner is already a
+      # disposable machine, and `journey.py` builds its own world under
+      # `JOURNEY_WORLDS` with a guard that refuses one overlapping a real
+      # home — so the container was never what isolated the run. What it
+      # pinned, `runs-on` above now pins directly, for free.
+      #
+      # It also makes this job and the macOS one the same shape: macOS
+      # runners have no Docker, so a containerised Linux run and a native
+      # macOS run would be proving the same journeys two different ways.
+      #
+      # `journeys/Dockerfile` and `make journey-docker` stay for local use —
+      # running a journey on your own machine without letting it near your
+      # own tmux, HOME or terminal.
+      - name: Install the journey runtime
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq tmux python3-yaml procps
 
       # Both binaries: the one under test, and the one that writes the
       # harness stand-ins. They come from the same workspace on purpose —
@@ -75,14 +99,7 @@ jobs:
 
       - name: Run the journeys
         run: |
-          mkdir -p journeys/.evidence
-          docker run --rm --init \
-            --user "$(id -u):$(id -g)" -e HOME=/tmp/journey-home \
-            -v "$PWD/journeys:/journeys:ro" \
-            -v "$PWD/target/debug/uze:/usr/local/bin/uze:ro" \
-            -v "$PWD/target/debug/uze-fake-harness:/usr/local/bin/uze-fake-harness:ro" \
-            -v "$PWD/journeys/.evidence:/evidence" \
-            uze-journeys:ci run /journeys/suites \
+          python3 journeys/journey.py run journeys/suites \
             ${{ github.event_name == 'schedule' && '--record' || '--tag gate' }}
 
       # Named, because "No files were found" on the upload below is how a

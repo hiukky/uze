@@ -1,0 +1,134 @@
+name: macOS
+
+# uze has never been built or run on macOS. `ci.yml` is Ubuntu end to end and
+# `release.yml` ships four Linux targets, so the honest answer to "does it
+# work there" has always been "nobody has asked the machine". This workflow
+# asks it: the same three questions the gate asks — does it lint, does it
+# link, does it pass its own suite — on Apple Silicon.
+#
+# Deliberately not a job inside `ci.yml`. Until a run here settles green the
+# answer is unknown, and an unknown answer must not block a pull request that
+# has nothing to do with macOS. When it does settle, fold it into the gate as
+# a runner matrix and delete this file — a second workflow that duplicates
+# the gate is a cost, not a feature.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 4 * * *"
+  pull_request:
+    branches: [main]
+    # Path-filtered, unlike the gate: a macOS runner is the most expensive
+    # minute this repository can spend, and a change to the web site or a
+    # doc cannot break a syscall. The list is the platform-sensitive
+    # surface — anything reaching for `/proc`, a signal, a pty or a peer
+    # credential — plus whatever decides what gets linked in.
+    paths:
+      - "crates/uze-core/src/machine/**"
+      - "crates/uze-terminal/**"
+      - "crates/uze-git/**"
+      - "src/shim.rs"
+      # The job runs the journeys too, natively — see the steps below.
+      - "journeys/**"
+      - "**/Cargo.toml"
+      - "Cargo.lock"
+      - ".cargo/config.toml"
+      - ".github/workflows/macos.yml"
+
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  macos:
+    name: Build and test
+    # Apple Silicon: the machine essentially every macOS developer actually
+    # has. An `x86_64-apple-darwin` entry belongs here as a second matrix
+    # leg once this one is green — not before, because two unknowns fail
+    # together and tell you nothing about either.
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          key: macos
+      # `.cargo/config.toml` pins `jobs = 2` as a courtesy to a 4-vCPU WSL
+      # box. A hosted macOS runner is not that box, and this job is already
+      # the slowest one here.
+      - name: Use the whole runner
+        run: echo "CARGO_BUILD_JOBS=0" >> "$GITHUB_ENV"
+
+      # Every step runs even after an earlier one fails. This workflow exists
+      # to produce evidence, and "clippy was unhappy" must not hide whether
+      # the binary links or the suite passes — the job still ends red either
+      # way. Ordered cheapest-signal-first all the same: a link error is the
+      # answer you want in the first two minutes, not after the suite.
+      - name: Build the binary
+        if: ${{ !cancelled() }}
+        run: cargo build --locked --bin uze
+      # Linking is not running. This is the smallest proof that the produced
+      # executable starts on this platform at all.
+      - name: Run it
+        if: ${{ !cancelled() }}
+        run: ./target/debug/uze --version
+      - name: Clippy
+        if: ${{ !cancelled() }}
+        run: cargo clippy --all-targets -- -D warnings
+      # `--no-fail-fast`, deliberately: the first macOS run's value is the
+      # complete list of what does not hold there, not the name of the first
+      # test that stopped.
+      - name: Test
+        if: ${{ !cancelled() }}
+        run: cargo test --workspace --no-fail-fast --locked
+
+      # --- product journeys ------------------------------------------------
+      #
+      # Natively, not in `journeys/Dockerfile`. A hosted macOS runner has no
+      # Docker, so the pinned image the Linux job runs in is simply not
+      # available here — and that is the honest arrangement anyway. The image
+      # exists to pin the terminal, because a journey aims a click at a glyph
+      # and a runner-image bump must not move it. A macOS run wants the
+      # opposite: Apple's own tmux, locale and width tables are the thing
+      # under test. The two runs prove different halves and neither replaces
+      # the other.
+      - name: Install the journey runtime
+        if: ${{ !cancelled() }}
+        run: |
+          brew install tmux
+          python3 -m pip install --break-system-packages pyyaml
+      # The binary under test is already built above; this is the one that
+      # writes the harness stand-ins.
+      - name: Build the stand-in writer
+        if: ${{ !cancelled() }}
+        run: cargo build --locked -p uze-testkit --bin uze-fake-harness
+      - name: Validate the journeys
+        if: ${{ !cancelled() }}
+        run: python3 journeys/journey.py validate journeys/suites
+      - name: Run the journeys
+        if: ${{ !cancelled() }}
+        run: python3 journeys/journey.py run journeys/suites --tag gate
+      # What the run read off the machine. On macOS this is the first thing
+      # anybody will want when a check fails, because nobody debugging it has
+      # the machine in front of them.
+      - name: Keep the evidence
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: macos-journey-evidence-${{ github.run_id }}
+          path: journeys/.evidence/
+          include-hidden-files: true
+          retention-days: 14
+          if-no-files-found: warn
