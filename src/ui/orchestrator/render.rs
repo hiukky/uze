@@ -118,6 +118,9 @@ pub(super) struct FrameMetrics {
     /// Rows of the space tree the sidebar could not show — how far the
     /// tree may be scrolled, and zero when it fits.
     pub(super) tree_overflow: u16,
+    /// Where the Git changes list settled, when the overlay was drawn —
+    /// see `extension_view::NavigatorScroll`.
+    pub(super) git_tree_scroll: Option<crate::ui::extension_view::NavigatorScroll>,
 }
 
 pub(super) fn render(
@@ -152,7 +155,14 @@ pub(super) fn render(
             git,
             crate::ui::extension_view::content_space(area, model.git_tree_width),
         );
-        crate::ui::extension_view::render(frame, &view, area, model.git_tree_width, &mut view_hits);
+        metrics.git_tree_scroll = Some(crate::ui::extension_view::render(
+            frame,
+            &view,
+            area,
+            model.git_tree_width,
+            model.git_tree_scroll,
+            &mut view_hits,
+        ));
         hits.extend(
             view_hits
                 .into_iter()

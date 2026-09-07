@@ -1088,23 +1088,29 @@ impl Attach<'_> {
         } = *viewport;
         match mouse {
             _ if self.model.git_view.is_some() => {
-                if let Some(view) = self.model.git_view.as_mut()
-                    && let Some(target) = crate::ui::extension_view::scroll_target(
-                        Rect::new(0, 0, size.width, size.height),
-                        self.model.git_tree_width,
-                        mouse.column,
-                        mouse.row,
-                    )
-                {
-                    git::handle_scroll(
-                        view,
-                        target,
-                        if mouse.kind == MouseEventKind::ScrollUp {
-                            ScrollDirection::Up
-                        } else {
-                            ScrollDirection::Down
-                        },
-                    );
+                let direction = if mouse.kind == MouseEventKind::ScrollUp {
+                    ScrollDirection::Up
+                } else {
+                    ScrollDirection::Down
+                };
+                match crate::ui::extension_view::scroll_target(
+                    Rect::new(0, 0, size.width, size.height),
+                    self.model.git_tree_width,
+                    mouse.column,
+                    mouse.row,
+                ) {
+                    // The list is the host's to scroll (see
+                    // `WorkspaceModel::git_tree_scroll`); the diff is the
+                    // extension's own content.
+                    Some(uze_extensions::view::ScrollTarget::Navigator) => {
+                        self.model.git_tree_scroll = self.model.git_tree_scroll.scrolled(direction);
+                    }
+                    Some(uze_extensions::view::ScrollTarget::Content) => {
+                        if let Some(view) = self.model.git_view.as_mut() {
+                            git::handle_scroll(view, direction);
+                        }
+                    }
+                    None => {}
                 }
                 self.model.dirty = true;
             }
@@ -1434,7 +1440,7 @@ impl Attach<'_> {
                     hit_rect,
                     &self.answers.commit_details,
                 ),
-                ViewHit::ResizeNavigator | ViewHit::Close => {}
+                ViewHit::ResizeNavigator | ViewHit::ToggleGroup(_) | ViewHit::Close => {}
             },
             WorkspaceHit::SwitchToManagement => {
                 let _ = send_request(&mut self.stream, &ClientRequest::Detach);

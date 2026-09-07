@@ -113,16 +113,30 @@ pub struct Navigator {
     /// strongly than mere selection.
     pub focused: bool,
     pub rows: Vec<NavigatorRow>,
-    /// The row that must stay on screen when the list is taller than the
-    /// space. The host scrolls to keep it visible; the extension does not
-    /// know how many rows fit.
-    pub anchor: usize,
+    /// The row that must come on screen when it changes — the selection,
+    /// usually — or `None` when nothing needs to. The host scrolls to
+    /// reveal it, and only then: the extension does not know how many
+    /// rows fit, and the host does not know why a row matters. Between
+    /// changes the list scrolls freely, so a wheel can look at the rows a
+    /// long way from the selection without the selection dragging the
+    /// list back.
+    pub anchor: Option<usize>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum NavigatorRow {
-    /// A heading that groups the rows under it. Not selectable.
-    Group { name: String, depth: usize },
+    /// A heading that groups the rows under it. Not selectable, but it
+    /// folds: the host draws the mark and hands the gesture back as
+    /// [`ViewHit::ToggleGroup`]; which rows a fold hides is the
+    /// extension's to decide.
+    Group {
+        /// The extension's own identifier, handed back verbatim in
+        /// [`ViewHit::ToggleGroup`]. Opaque to the host.
+        id: usize,
+        name: String,
+        depth: usize,
+        collapsed: bool,
+    },
     Item {
         /// The extension's own identifier, handed back verbatim in
         /// [`ViewHit::SelectItem`]. Opaque to the host.
@@ -215,6 +229,8 @@ pub enum ViewHit {
     /// The `id` of a [`NavigatorRow::Item`], or the index of a
     /// [`SectionRow`].
     SelectItem(usize),
+    /// The `id` of a [`NavigatorRow::Group`], clicked to fold or unfold it.
+    ToggleGroup(usize),
     /// The divider between navigator and content, dragged.
     ResizeNavigator,
     /// A [`Section`]'s header, which folds it.

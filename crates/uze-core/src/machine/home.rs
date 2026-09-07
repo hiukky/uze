@@ -106,10 +106,10 @@ impl UzeHome {
         self.state_dir().join("profiles.json")
     }
 
-    /// What the workspace client's sidebar was left looking like (see
-    /// `sidebar_layout`).
-    pub fn sidebar_layout_path(&self) -> PathBuf {
-        self.state_dir().join("sidebar.json")
+    /// What the TUI was left looking like, in both of its modes (see
+    /// `client_layout`).
+    pub fn client_layout_path(&self) -> PathBuf {
+        self.state_dir().join("layout.json")
     }
 
     /// Where a user's own themes live, one file per theme, named by the

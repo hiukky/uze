@@ -18,7 +18,7 @@ use ratatui::{
     widgets::{Block, Borders, Padding, Paragraph, Wrap},
 };
 
-use uze_application::{Result, UzeHome};
+use uze_application::{ClientLayout, Result, UzeHome};
 
 use super::hit::Hit;
 use super::model::{self, Focus, Overlay, ROUTES, Remembered, Route, Status, TuiModel};
@@ -42,7 +42,8 @@ pub(crate) const RESOLUTION_STANDS_FOR: Duration = Duration::from_secs(30);
 /// `super::run` for the whole session the way the workspace's own
 /// [`super::orchestrator::WorkspaceMemory`] is. Ctrl+O leaves this mode
 /// and comes back to it constantly; without this, each return started
-/// from nothing.
+/// from nothing. The screen and the drawers are not here: they outlive
+/// the process, in the `ClientLayout` `super::run` owns.
 pub(crate) struct ManagementMemory {
     /// The channel every management worker answers on. Session-lived
     /// rather than per-visit, which is what lets the resolution start
@@ -98,7 +99,7 @@ fn context_root() -> PathBuf {
 pub(crate) fn run_management(
     terminal: &mut TerminalSession,
     home: UzeHome,
-    sidebar_width: &mut Option<u16>,
+    layout: &mut ClientLayout,
     memory: &mut ManagementMemory,
 ) -> Result<ManagementExit> {
     let sender = memory.sender.clone();
@@ -106,8 +107,8 @@ pub(crate) fn run_management(
         // Carries over whatever the user last dragged the sidebar to — in
         // this mode or the workspace's — so switching modes with Ctrl+O
         // never resets it back to the responsive default.
-        sidebar_width: *sidebar_width,
-        ..TuiModel::recall(memory.remembered.take())
+        sidebar_width: layout.sidebar.width,
+        ..TuiModel::recall(memory.remembered.take(), &layout.management)
     };
     if opening_re_resolves(model.resolved_at) && !memory.in_flight {
         // Behind the frame: every list is already on screen, so nothing
@@ -173,11 +174,6 @@ pub(crate) fn run_management(
                     // decides from `self`.
                     let total_width = terminal.size()?.width;
                     let intent = model.apply_mouse(mouse, total_width);
-                    // Written straight through to the shared value (not
-                    // just kept on `model`) so a Ctrl+O switch to the
-                    // workspace picks up this width immediately, instead of
-                    // only on the next drag.
-                    *sidebar_width = model.sidebar_width;
                     if let Some(exit) = leaving_management(&intent) {
                         break exit;
                     }
@@ -188,6 +184,11 @@ pub(crate) fn run_management(
             }
         }
     };
+    // Handed back to the shared layout rather than kept on `model`, so a
+    // Ctrl+O switch to the workspace picks up a drag made here at once,
+    // and the next run opens on the screen this visit left.
+    layout.sidebar.width = model.sidebar_width;
+    layout.management = model.management_layout();
     memory.in_flight = model.maintenance_in_flight;
     memory.remembered = Some(model.remember());
     Ok(exit)

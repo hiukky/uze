@@ -36,8 +36,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use syntect::{easy::HighlightLines, highlighting::ThemeSet, parsing::SyntaxSet};
 
 use crate::view::{
-    Content, ContentLine, LineTone, Navigator, NavigatorRow, Rgb, Role, ScrollDirection,
-    ScrollTarget, Section, SectionRow, Size, Span, View, ViewHit,
+    Content, ContentLine, LineTone, Navigator, NavigatorRow, Rgb, Role, ScrollDirection, Section,
+    SectionRow, Size, Span, View, ViewHit,
 };
 
 use crate::Host;
@@ -477,14 +477,28 @@ struct FileTreeNode {
 
 enum FileTreeItem {
     Directory {
+        /// The directory as [`GitView::folded`] names it: its compacted
+        /// path from the root, so `src/ui` folded stays folded when a
+        /// sibling appears under `src` and the row stops being compact.
+        path: String,
         name: String,
         depth: usize,
+        folded: bool,
     },
     File {
         index: usize,
         name: String,
         depth: usize,
     },
+}
+
+impl FileTreeItem {
+    fn file_index(&self) -> Option<usize> {
+        match self {
+            FileTreeItem::File { index, .. } => Some(*index),
+            FileTreeItem::Directory { .. } => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -534,6 +548,11 @@ pub struct GitView {
     branch: String,
     files: Vec<ChangedFile>,
     selected: usize,
+    /// The directories folded shut in the navigator, by the path
+    /// [`FileTreeItem::Directory`] gives them. A fold never moves the
+    /// selection: the diff being read stays the diff being read, its row
+    /// just stops being drawn until the directory opens again.
+    folded: BTreeSet<String>,
     diff: Vec<DiffRow>,
     /// Set instead of populating `files`/`diff` when the active tab's
     /// `cwd` isn't inside a git repository, `git` isn't on `PATH`, or a
@@ -567,6 +586,7 @@ pub struct ViewPlacement {
     path: Option<PathBuf>,
     focus: GitViewFocus,
     scroll: u16,
+    folded: BTreeSet<String>,
 }
 
 impl GitView {
@@ -598,6 +618,7 @@ impl GitView {
             files: parse_porcelain_status(&status, &root),
             root,
             selected: 0,
+            folded: BTreeSet::new(),
             diff: Vec::new(),
             error: None,
             scroll: 0,
@@ -627,6 +648,7 @@ impl GitView {
             branch: String::new(),
             files: Vec::new(),
             selected: 0,
+            folded: BTreeSet::new(),
             diff: Vec::new(),
             error: None,
             scroll: 0,
@@ -643,12 +665,21 @@ impl GitView {
             branch: String::new(),
             files: Vec::new(),
             selected: 0,
+            folded: BTreeSet::new(),
             diff: Vec::new(),
             error: Some(message),
             scroll: 0,
             focus: GitViewFocus::Files,
             diff_pending: false,
             refreshed_at: Instant::now(),
+        }
+    }
+
+    /// Moves the selection one file in tree order, past nothing a fold
+    /// hides.
+    fn step(&mut self, direction: ScrollDirection) {
+        if let Some(index) = self.neighbour(direction) {
+            self.select(index);
         }
     }
 
@@ -667,6 +698,91 @@ impl GitView {
         self.scroll = 0;
         self.diff = Vec::new();
         self.diff_pending = true;
+    }
+
+    /// The next file in tree order from the selection, in `direction`,
+    /// skipping every file a fold hides. Measured on the unfolded tree,
+    /// so a selection that is itself hidden still knows which way is
+    /// which and steps out to the nearest file that shows.
+    fn neighbour(&self, direction: ScrollDirection) -> Option<usize> {
+        let order: Vec<usize> = tree_items(self, &BTreeSet::new())
+            .iter()
+            .filter_map(FileTreeItem::file_index)
+            .collect();
+        let shown: BTreeSet<usize> = tree_items(self, &self.folded)
+            .iter()
+            .filter_map(FileTreeItem::file_index)
+            .collect();
+        let position = order.iter().position(|index| *index == self.selected)?;
+        let (before, after) = order.split_at(position);
+        match direction {
+            ScrollDirection::Down => after.iter().skip(1).find(|index| shown.contains(index)),
+            ScrollDirection::Up => before.iter().rev().find(|index| shown.contains(index)),
+        }
+        .copied()
+    }
+
+    /// The directories above the selected file, outermost first, by the
+    /// path the navigator folds them under.
+    fn ancestors_of_selection(&self) -> Vec<String> {
+        let items = tree_items(self, &BTreeSet::new());
+        let Some(row) = items
+            .iter()
+            .position(|item| item.file_index() == Some(self.selected))
+        else {
+            return Vec::new();
+        };
+        let FileTreeItem::File { depth, .. } = items[row] else {
+            return Vec::new();
+        };
+        let mut wanted = depth;
+        let mut ancestors = Vec::new();
+        for item in items[..row].iter().rev() {
+            if wanted == 0 {
+                break;
+            }
+            if let FileTreeItem::Directory { path, depth, .. } = item
+                && *depth == wanted - 1
+            {
+                ancestors.push(path.clone());
+                wanted = *depth;
+            }
+        }
+        ancestors.reverse();
+        ancestors
+    }
+
+    /// Folds the innermost open directory above the selection — pressed
+    /// again, the one above that — so the tree closes outward from where
+    /// the viewer is.
+    fn fold_selection(&mut self) {
+        if let Some(path) = self
+            .ancestors_of_selection()
+            .into_iter()
+            .rev()
+            .find(|path| !self.folded.contains(path))
+        {
+            self.folded.insert(path);
+        }
+    }
+
+    /// Opens the outermost folded directory above the selection — the
+    /// reverse of [`fold_selection`](Self::fold_selection), so a hidden
+    /// selection comes back into view one level at a time.
+    fn unfold_selection(&mut self) {
+        if let Some(path) = self
+            .ancestors_of_selection()
+            .into_iter()
+            .find(|path| self.folded.contains(path))
+        {
+            self.folded.remove(&path);
+        }
+    }
+
+    fn toggle_directory(&mut self, path: String) {
+        if !self.folded.remove(&path) {
+            self.folded.insert(path);
+        }
     }
 
     /// Whether the diff being shown is the selected file's yet.
@@ -691,6 +807,7 @@ impl GitView {
             path: self.files.get(self.selected).map(|file| file.path.clone()),
             focus: self.focus,
             scroll: self.scroll,
+            folded: self.folded.clone(),
         }
     }
 
@@ -707,6 +824,7 @@ impl GitView {
         let mut reloaded = Self::open(host, root);
         reloaded.focus = placement.focus;
         reloaded.scroll = placement.scroll;
+        reloaded.folded = placement.folded;
         if let Some(path) = placement.path
             && let Some(file) = reloaded.files.iter().position(|file| file.path == path)
         {
@@ -1067,13 +1185,15 @@ pub fn handle_key(view: &mut GitView, key: KeyEvent) -> GitViewOutcome {
             };
         }
         KeyCode::Up => match view.focus {
-            GitViewFocus::Files => view.select(view.selected.saturating_sub(1)),
+            GitViewFocus::Files => view.step(ScrollDirection::Up),
             GitViewFocus::Diff => view.scroll = view.scroll.saturating_sub(1),
         },
         KeyCode::Down => match view.focus {
-            GitViewFocus::Files => view.select(view.selected + 1),
+            GitViewFocus::Files => view.step(ScrollDirection::Down),
             GitViewFocus::Diff => view.scroll = view.scroll.saturating_add(1),
         },
+        KeyCode::Left if view.focus == GitViewFocus::Files => view.fold_selection(),
+        KeyCode::Right if view.focus == GitViewFocus::Files => view.unfold_selection(),
         KeyCode::Enter if view.focus == GitViewFocus::Files => {
             if !view.files.is_empty() {
                 view.focus = GitViewFocus::Diff;
@@ -1089,37 +1209,38 @@ pub fn handle_key(view: &mut GitView, key: KeyEvent) -> GitViewOutcome {
 pub fn handle_mouse(view: &mut GitView, hit: Option<ViewHit>) -> GitViewOutcome {
     match hit {
         Some(ViewHit::SelectItem(index)) => view.select(index),
+        Some(ViewHit::ToggleGroup(row)) => {
+            // The id handed back is the row's place in the tree this view
+            // last described — rebuilt here from the same state, so it
+            // names the same directory.
+            if let Some(FileTreeItem::Directory { path, .. }) =
+                file_tree_items(view).into_iter().nth(row)
+            {
+                view.toggle_directory(path);
+            }
+        }
         Some(ViewHit::Close) => return GitViewOutcome::Close,
         _ => {}
     }
     GitViewOutcome::Stay
 }
 
-/// Mouse-wheel scroll over an open [`GitView`] — routed by *where the
-/// cursor is*, not by `GitViewFocus` (which only reflects `Tab`/keyboard
-/// navigation): hovering the file list moves the selection, hovering the
-/// diff scrolls it, matching how a mouse wheel behaves everywhere else
-/// (VS Code included) regardless of which panel last had keyboard focus.
+/// Mouse-wheel scroll over the diff of an open [`GitView`].
 ///
-/// *Where* is resolved by the host, which owns the layout — this used to
-/// re-derive the columns from the frame rectangle, which meant two sides
-/// computing the same geometry and only one of them being authoritative.
-pub fn handle_scroll(view: &mut GitView, target: ScrollTarget, direction: ScrollDirection) {
+/// Only the diff: the wheel over the file list scrolls that list, and
+/// how far a list of rows can scroll is a question about how many fit,
+/// which the host answers because the host laid them out (see
+/// [`Navigator::anchor`]). A wheel that moved the selection instead read
+/// every file it passed over, and could not reach a row without landing
+/// on it.
+pub fn handle_scroll(view: &mut GitView, direction: ScrollDirection) {
     if view.error.is_some() || view.files.is_empty() {
         return;
     }
-    match (target, direction) {
-        (ScrollTarget::Navigator, ScrollDirection::Up) => {
-            view.select(view.selected.saturating_sub(1));
-        }
-        (ScrollTarget::Navigator, ScrollDirection::Down) => view.select(view.selected + 1),
-        (ScrollTarget::Content, ScrollDirection::Up) => {
-            view.scroll = view.scroll.saturating_sub(3);
-        }
-        (ScrollTarget::Content, ScrollDirection::Down) => {
-            view.scroll = view.scroll.saturating_add(3);
-        }
-    }
+    view.scroll = match direction {
+        ScrollDirection::Up => view.scroll.saturating_sub(3),
+        ScrollDirection::Down => view.scroll.saturating_add(3),
+    };
 }
 
 /// What this extension shows, as data — see [`crate::view`] for why it
@@ -1142,7 +1263,7 @@ pub fn view(git: &GitView, space: Size) -> View {
             format!(" · {}", git.branch)
         }
     );
-    let footer_hint = "↑↓ navigate · ↵ diff · tab focus · esc close".to_owned();
+    let footer_hint = "↑↓ navigate · ←→ fold · ↵ diff · tab focus · esc close".to_owned();
 
     if let Some(message) = &git.error {
         return View {
@@ -1212,13 +1333,21 @@ fn navigator(git: &GitView) -> Navigator {
         heading: "CHANGES".to_owned(),
         badge: git.files.len().to_string(),
         focused: git.focus == GitViewFocus::Files,
-        anchor: selected_tree_row(&items, git).unwrap_or(0),
+        anchor: selected_tree_row(&items, git),
         rows: items
             .iter()
-            .map(|item| match item {
-                FileTreeItem::Directory { name, depth } => NavigatorRow::Group {
+            .enumerate()
+            .map(|(row, item)| match item {
+                FileTreeItem::Directory {
+                    name,
+                    depth,
+                    folded,
+                    ..
+                } => NavigatorRow::Group {
+                    id: row,
                     name: format!("{name}/"),
                     depth: *depth,
+                    collapsed: *folded,
                 },
                 FileTreeItem::File { index, name, depth } => NavigatorRow::Item {
                     id: *index,
@@ -1262,6 +1391,13 @@ fn content_line(cell: &DiffCell) -> ContentLine {
 /// The model retains a flat `files` vec because diff loading and selection
 /// are file-oriented; this projection is strictly presentation state.
 fn file_tree_items(view: &GitView) -> Vec<FileTreeItem> {
+    tree_items(view, &view.folded)
+}
+
+/// The navigator's rows with `folded` directories shut — the view's own
+/// folds normally, or none, for a question about where a file sits
+/// regardless of what is showing.
+fn tree_items(view: &GitView, folded: &BTreeSet<String>) -> Vec<FileTreeItem> {
     let mut tree = FileTreeNode::default();
     for (index, file) in view.files.iter().enumerate() {
         let relative = file.path.strip_prefix(&view.root).unwrap_or(&file.path);
@@ -1276,16 +1412,35 @@ fn file_tree_items(view: &GitView) -> Vec<FileTreeItem> {
         node.file_index = Some(index);
     }
     let mut items = Vec::new();
-    collect_tree_items(&tree, 0, &mut items);
+    collect_tree_items(&tree, "", 0, folded, &mut items);
     items
 }
 
-fn collect_tree_items(node: &FileTreeNode, depth: usize, items: &mut Vec<FileTreeItem>) {
+fn collect_tree_items(
+    node: &FileTreeNode,
+    parent: &str,
+    depth: usize,
+    folded: &BTreeSet<String>,
+    items: &mut Vec<FileTreeItem>,
+) {
     for (name, child) in &node.children {
         if child.file_index.is_none() {
             let (name, child) = compact_directory(name, child);
-            items.push(FileTreeItem::Directory { name, depth });
-            collect_tree_items(child, depth + 1, items);
+            let path = if parent.is_empty() {
+                name.clone()
+            } else {
+                format!("{parent}/{name}")
+            };
+            let is_folded = folded.contains(&path);
+            items.push(FileTreeItem::Directory {
+                name,
+                depth,
+                folded: is_folded,
+                path: path.clone(),
+            });
+            if !is_folded {
+                collect_tree_items(child, &path, depth + 1, folded, items);
+            }
         }
     }
     for (name, child) in &node.children {
@@ -1543,6 +1698,7 @@ mod tests {
                 },
             ],
             selected: 0,
+            folded: BTreeSet::new(),
             diff: Vec::new(),
             error: None,
             scroll: 0,
@@ -1552,9 +1708,11 @@ mod tests {
         };
         let items = file_tree_items(&view);
         assert!(
-            matches!(items[0], FileTreeItem::Directory { ref name, depth: 0 } if name == "src")
+            matches!(items[0], FileTreeItem::Directory { ref name, depth: 0, .. } if name == "src")
         );
-        assert!(matches!(items[1], FileTreeItem::Directory { ref name, depth: 1 } if name == "ui"));
+        assert!(
+            matches!(items[1], FileTreeItem::Directory { ref name, depth: 1, .. } if name == "ui")
+        );
         assert!(
             matches!(items[2], FileTreeItem::File { ref name, depth: 2, .. } if name == "git_diff.rs")
         );
@@ -2021,6 +2179,7 @@ mod view_tests {
                 },
             ],
             selected: 1,
+            folded: BTreeSet::new(),
             diff: highlight_diff_rows(
                 pair_side_by_side(parse_unified_diff(
                     "@@ -1,3 +1,4 @@\n context\n-removed line\n+added line\n",
@@ -2136,6 +2295,172 @@ mod view_tests {
             "{:?}",
             rendered.content
         );
+    }
+
+    /// Three files under two directories, selected on the deepest one.
+    fn tree_fixture() -> GitView {
+        let root = PathBuf::from("/repo");
+        GitView {
+            display_root: root.display().to_string(),
+            root: root.clone(),
+            branch: "main".to_owned(),
+            files: vec![
+                ChangedFile {
+                    status: FileStatus::Modified,
+                    path: root.join("src/ui/git_diff.rs"),
+                },
+                ChangedFile {
+                    status: FileStatus::Added,
+                    path: root.join("src/ui.rs"),
+                },
+                ChangedFile {
+                    status: FileStatus::Untracked,
+                    path: root.join("README.md"),
+                },
+            ],
+            selected: 0,
+            folded: BTreeSet::new(),
+            diff: Vec::new(),
+            error: None,
+            scroll: 0,
+            focus: GitViewFocus::Files,
+            diff_pending: false,
+            refreshed_at: Instant::now(),
+        }
+    }
+
+    fn group_names(view: &GitView) -> Vec<(String, bool)> {
+        navigator(view)
+            .rows
+            .into_iter()
+            .filter_map(|row| match row {
+                NavigatorRow::Group {
+                    name, collapsed, ..
+                } => Some((name, collapsed)),
+                NavigatorRow::Item { .. } => None,
+            })
+            .collect()
+    }
+
+    fn item_names(view: &GitView) -> Vec<String> {
+        navigator(view)
+            .rows
+            .into_iter()
+            .filter_map(|row| match row {
+                NavigatorRow::Item { name, .. } => Some(name),
+                NavigatorRow::Group { .. } => None,
+            })
+            .collect()
+    }
+
+    /// A folded directory keeps its files off the list and the selection
+    /// where it was: the diff being read is not changed by tidying the
+    /// tree around it.
+    #[test]
+    fn folding_a_directory_hides_its_files_and_moves_nothing_else() {
+        let mut view = tree_fixture();
+        let ui_group = navigator(&view)
+            .rows
+            .iter()
+            .position(|row| matches!(row, NavigatorRow::Group { name, .. } if name == "ui/"))
+            .expect("the ui directory is a group");
+
+        handle_mouse(&mut view, Some(ViewHit::ToggleGroup(ui_group)));
+
+        assert_eq!(item_names(&view), vec!["ui.rs", "README.md"]);
+        assert_eq!(
+            group_names(&view),
+            vec![("src/".to_owned(), false), ("ui/".to_owned(), true)]
+        );
+        assert_eq!(view.selected, 0, "the selection is hidden, not moved");
+        assert!(!view.diff_pending(), "and its diff was not re-read");
+        assert_eq!(
+            navigator(&view).anchor,
+            None,
+            "nothing to keep on screen while the selection is folded away"
+        );
+
+        handle_mouse(&mut view, Some(ViewHit::ToggleGroup(ui_group)));
+        assert_eq!(item_names(&view), vec!["git_diff.rs", "ui.rs", "README.md"]);
+        assert_eq!(navigator(&view).anchor, Some(2));
+    }
+
+    /// The arrows walk the tree as drawn — directories first, folded
+    /// ones skipped — rather than the flat order `git status` answered
+    /// in.
+    #[test]
+    fn the_arrows_walk_the_tree_as_drawn_and_step_over_a_fold() {
+        let mut view = tree_fixture();
+        let down = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+        let up = KeyEvent::new(KeyCode::Up, KeyModifiers::NONE);
+
+        handle_key(&mut view, down);
+        assert_eq!(view.selected, 1, "src/ui.rs follows src/ui/git_diff.rs");
+        handle_key(&mut view, down);
+        assert_eq!(view.selected, 2, "README.md is last, under every directory");
+        handle_key(&mut view, down);
+        assert_eq!(view.selected, 2, "the last row holds");
+
+        view.folded.insert("src".to_owned());
+        handle_key(&mut view, up);
+        assert_eq!(view.selected, 2, "nothing above README.md is showing");
+
+        view.folded.clear();
+        view.folded.insert("src/ui".to_owned());
+        handle_key(&mut view, up);
+        assert_eq!(view.selected, 1, "the folded file is stepped over");
+        handle_key(&mut view, up);
+        assert_eq!(view.selected, 1, "and the fold is the top of what shows");
+    }
+
+    /// Left closes the tree outward from the selection, Right opens it
+    /// back inward, one directory at a time.
+    #[test]
+    fn left_folds_outward_and_right_unfolds_inward() {
+        let mut view = tree_fixture();
+        let left = KeyEvent::new(KeyCode::Left, KeyModifiers::NONE);
+        let right = KeyEvent::new(KeyCode::Right, KeyModifiers::NONE);
+
+        handle_key(&mut view, left);
+        assert_eq!(view.folded, BTreeSet::from(["src/ui".to_owned()]));
+        handle_key(&mut view, left);
+        assert_eq!(
+            view.folded,
+            BTreeSet::from(["src".to_owned(), "src/ui".to_owned()])
+        );
+        assert_eq!(item_names(&view), vec!["README.md"]);
+        handle_key(&mut view, left);
+        assert_eq!(view.folded.len(), 2, "nothing above the root to fold");
+
+        handle_key(&mut view, right);
+        assert_eq!(view.folded, BTreeSet::from(["src/ui".to_owned()]));
+        handle_key(&mut view, right);
+        assert!(view.folded.is_empty());
+        assert_eq!(view.selected, 0, "folding never moved the selection");
+    }
+
+    /// The wheel over the diff scrolls the diff and nothing else: the
+    /// selection is not a scroll position.
+    #[test]
+    fn the_wheel_scrolls_the_diff_and_leaves_the_selection_alone() {
+        let mut view = fixture();
+
+        handle_scroll(&mut view, ScrollDirection::Down);
+
+        assert_eq!(view.scroll, 3);
+        assert_eq!(view.selected, 1);
+        assert!(!view.diff_pending());
+    }
+
+    /// A re-read comes back folded the way the viewer left it.
+    #[test]
+    fn a_reload_keeps_the_folds() {
+        let mut view = tree_fixture();
+        view.folded.insert("src/ui".to_owned());
+
+        let placement = view.placement();
+
+        assert_eq!(placement.folded, view.folded);
     }
 
     /// The section names meaning, never colour — the same contract the

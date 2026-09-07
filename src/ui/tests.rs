@@ -450,7 +450,8 @@ fn a_return_visit_draws_what_the_last_one_resolved() {
     model.inspection_in_flight = Some(Intent::InspectPlugin("one".to_owned()));
     model.hits = vec![(Rect::new(0, 0, 1, 1), Hit::Route(Route::Plugins))];
 
-    let model = TuiModel::recall(Some(model.remember()));
+    let layout = model.management_layout();
+    let model = TuiModel::recall(Some(model.remember()), &layout);
 
     assert_eq!(
         model.plugins.len(),
@@ -498,12 +499,47 @@ fn a_resolution_the_session_just_made_is_not_asked_for_again() {
 
 #[test]
 fn a_first_visit_starts_from_the_default_model() {
-    let model = TuiModel::recall(None);
+    let model = TuiModel::recall(None, &uze_application::ManagementLayout::default());
     assert!(model.plugins.is_empty());
     assert_eq!(model.route, Route::Overview);
     assert!(
         model.marketplace_drawer_open && model.extension_drawer_open && model.harnesses_drawer_open,
         "the drawers a screen opens with are stated once, by Default"
+    );
+}
+
+/// Which screen was open, and how its drawers were left, outlive the
+/// process: the next run opens where the last one was, not on Overview.
+#[test]
+fn the_next_run_opens_on_the_screen_the_last_one_left() {
+    let mut model = TuiModel::default();
+    model.set_route(Route::Profiles);
+    model.harnesses_drawer_open = false;
+    model.profile_columns_width = Some(28);
+    model
+        .collapsed_marketplaces
+        .insert("uze-official".to_owned());
+
+    let layout = model.management_layout();
+    assert_eq!(layout.route.as_deref(), Some("profiles"));
+
+    let model = TuiModel::recall(None, &layout);
+    assert_eq!(model.route, Route::Profiles);
+    assert!(
+        !model.harnesses_drawer_open,
+        "a drawer stays as it was left"
+    );
+    assert_eq!(model.profile_columns_width, Some(28));
+    assert!(model.collapsed_marketplaces.contains("uze-official"));
+
+    let unknown = uze_application::ManagementLayout {
+        route: Some("a screen this build does not have".to_owned()),
+        ..uze_application::ManagementLayout::default()
+    };
+    assert_eq!(
+        TuiModel::recall(None, &unknown).route,
+        Route::Overview,
+        "a screen the client no longer recognizes opens the default, not nothing"
     );
 }
 

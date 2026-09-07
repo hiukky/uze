@@ -7,6 +7,7 @@
 
 use super::tui_application;
 use crate::ui::extension_host::WorkspaceHost;
+use crate::ui::extension_view;
 use crate::ui::root_picker::RootPicker;
 use crate::ui::theme::{self, Symbol, Token};
 use crossterm::event::{
@@ -619,7 +620,7 @@ fn active_palette() -> uze_terminal::Palette {
 pub(crate) fn attach_workspace(
     terminal: &mut super::TerminalSession,
     root: &Path,
-    sidebar_width: &mut Option<u16>,
+    layout: &mut uze_application::ClientLayout,
     memory: &mut WorkspaceMemory,
     home: &UzeHome,
     pending_tab: Option<TabId>,
@@ -631,13 +632,16 @@ pub(crate) fn attach_workspace(
     // corrects the size actually visible in that loop's compute_layout call.
     // A placeholder here previously left a stale-selected pane pinned to a
     // wrong fixed size until something happened to trigger a fresh resize.
-    // `*sidebar_width` carries over whatever the user last dragged it to —
-    // in this mode or the management one, they share the one value (see
-    // `super::run`) — so the pane starts at its real width immediately
-    // instead of assuming the sidebar's responsive default.
+    // `layout.sidebar.width` carries over whatever the user last dragged
+    // it to — in this mode or the management one, they share the one value
+    // (see `super::run`) — so the pane starts at its real width
+    // immediately instead of assuming the sidebar's responsive default.
     let size = terminal.size()?;
-    let layout = compute_layout(Rect::new(0, 0, size.width, size.height), *sidebar_width);
-    let (columns, rows) = (layout.pane.width, layout.pane.height);
+    let geometry = compute_layout(
+        Rect::new(0, 0, size.width, size.height),
+        layout.sidebar.width,
+    );
+    let (columns, rows) = (geometry.pane.width, geometry.pane.height);
 
     // One server per user; what the launch directory decides is which
     // space this client lands in, and only on the run's first attach (see
@@ -692,23 +696,29 @@ pub(crate) fn attach_workspace(
             }
         }
     });
-    // The sidebar's own shape, written the same way and for the same
+    // This client's own shape, written the same way and for the same
     // reason: folding a section is a click, and a click never waits on the
-    // filesystem.
-    let (layout_recorder, remembered_layouts) = mpsc::channel::<uze_application::SidebarLayout>();
+    // filesystem. The thread writes the whole layout, management's section
+    // included, from the copy it was handed: that section cannot change
+    // while this mode has the screen, so the copy is exact.
+    let (layout_recorder, remembered_layouts) = mpsc::channel::<WorkspaceShape>();
     thread::spawn({
         let home = home.clone();
+        let mut layout = layout.clone();
         move || {
-            while let Ok(layout) = remembered_layouts.recv() {
+            while let Ok(shape) = remembered_layouts.recv() {
+                shape.apply_to(&mut layout);
                 let _ = tui_application(home.clone())
-                    .and_then(|app| app.workspace().save_sidebar_layout(&layout));
+                    .and_then(|app| app.workspace().save_client_layout(&layout));
             }
         }
     });
     let mut model = WorkspaceModel {
         dirty: true,
         last_size: (columns, rows),
-        sidebar_width: *sidebar_width,
+        sidebar_width: layout.sidebar.width,
+        timeline_collapsed: layout.workspace.timeline_collapsed,
+        timeline_rows: layout.workspace.timeline_rows,
         prompt_recorder: Some(prompt_recorder),
         layout_recorder: Some(layout_recorder),
         ..WorkspaceModel::recall(std::mem::take(&mut memory.remembered))
@@ -830,15 +840,15 @@ pub(crate) fn attach_workspace(
     let outcome: Result<WorkspaceExit> = (|| loop {
         attach.pump(&inbox);
         let size = terminal.size()?;
-        let layout = compute_layout(
+        let geometry = compute_layout(
             Rect::new(0, 0, size.width, size.height),
             attach.model.sidebar_width,
         );
         let viewport = Viewport {
             size,
-            columns: layout.pane.width,
-            rows: layout.pane.height,
-            layout,
+            columns: geometry.pane.width,
+            rows: geometry.pane.height,
+            layout: geometry,
         };
         if (viewport.columns, viewport.rows) != attach.model.last_size {
             attach.model.last_size = (viewport.columns, viewport.rows);
@@ -861,20 +871,39 @@ pub(crate) fn attach_workspace(
             attach.model.hits = hits;
             attach.model.tree_overflow = metrics.tree_overflow;
             attach.model.tree_scroll = attach.model.tree_scroll.min(metrics.tree_overflow);
+            if let Some(scroll) = metrics.git_tree_scroll {
+                attach.model.git_tree_scroll = scroll;
+            }
             attach.model.dirty = false;
         }
-        // The sidebar width is shared with management (see `super::run`),
-        // so a drag in this mode shows up there on the next Ctrl+O rather
-        // than only after the next drag.
-        *sidebar_width = attach.model.sidebar_width;
         if event::poll(POLL).map_err(io_error)?
             && let Flow::Exit(exit) = attach.handle(event::read().map_err(io_error)?, &viewport)
         {
             return Ok(exit);
         }
     })();
+    // The shape is shared with management (see `super::run`), so a drag
+    // or a fold in this mode is there on the next Ctrl+O rather than only
+    // on the next run.
+    attach.model.shape().apply_to(layout);
     memory.remembered = attach.model.remember();
     outcome
+}
+
+/// What this client owns of the shared layout: the column both modes
+/// draw, and its own section. Sent to the recorder thread on every
+/// change and handed back to `super::run` when the attach ends.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WorkspaceShape {
+    pub(crate) sidebar: uze_application::SidebarLayout,
+    pub(crate) workspace: uze_application::WorkspaceLayout,
+}
+
+impl WorkspaceShape {
+    fn apply_to(self, layout: &mut uze_application::ClientLayout) {
+        layout.sidebar = self.sidebar;
+        layout.workspace = self.workspace;
+    }
 }
 
 /// `pub(super)` (not private) so `uze_extensions::git` — a crate
@@ -1416,37 +1445,10 @@ impl<T> Default for Answers<T> {
 /// in again one answer at a time, reading as the whole workspace being
 /// resolved from scratch. What comes from the server (the session, the
 /// pane grids) is deliberately *not* here: the attach re-reads it, and a
-/// stale copy would be worse than a short wait for the real one.
-impl WorkspaceMemory {
-    /// The memory a fresh process starts with: nothing resolved yet, and
-    /// the sidebar as the user last left it (see
-    /// `uze_application::SidebarLayout`). Seeded once, by `super::run` —
-    /// a Ctrl+O round trip carries the live values back in `remembered`,
-    /// and re-reading the file would undo a fold made since.
-    pub(crate) fn restored(layout: uze_application::SidebarLayout) -> Self {
-        Self {
-            remembered: Remembered {
-                timeline_collapsed: layout.timeline_collapsed,
-                timeline_rows: layout.timeline_rows,
-                ..Remembered::default()
-            },
-            ..Self::default()
-        }
-    }
-
-    /// The sidebar as it stands: what this client remembers of the
-    /// timeline, plus the `width` its two modes share (see `super::run`,
-    /// which owns that one and is the only side that knows a drag in
-    /// management moved it).
-    pub(crate) fn sidebar_layout(&self, width: Option<u16>) -> uze_application::SidebarLayout {
-        uze_application::SidebarLayout {
-            width,
-            timeline_collapsed: self.remembered.timeline_collapsed,
-            timeline_rows: self.remembered.timeline_rows,
-        }
-    }
-}
-
+/// stale copy would be worse than a short wait for the real one. Nor is
+/// the client's own shape — the sidebar's width, the timeline's fold —
+/// which is a preference rather than a resolution, and lives in the
+/// `uze_application::ClientLayout` both modes share.
 #[derive(Default)]
 pub(crate) struct WorkspaceMemory {
     /// The model's own remembered half, taken by the attach and handed
@@ -1499,8 +1501,6 @@ struct Remembered {
     slots_swept: bool,
     roots_shown: BTreeSet<SpaceId>,
     strip_selection: BTreeMap<TabId, TabId>,
-    timeline_collapsed: bool,
-    timeline_rows: Option<u16>,
     tree_scroll: u16,
 }
 
@@ -1531,8 +1531,6 @@ impl WorkspaceModel {
             slots_swept,
             roots_shown,
             strip_selection,
-            timeline_collapsed,
-            timeline_rows,
             tree_scroll,
         } = remembered;
         Self {
@@ -1559,8 +1557,6 @@ impl WorkspaceModel {
             slots_swept,
             roots_shown,
             strip_selection,
-            timeline_collapsed,
-            timeline_rows,
             tree_scroll,
             ..Self::default()
         }
@@ -1592,8 +1588,6 @@ impl WorkspaceModel {
             slots_swept: self.slots_swept,
             roots_shown: self.roots_shown,
             strip_selection: self.strip_selection,
-            timeline_collapsed: self.timeline_collapsed,
-            timeline_rows: self.timeline_rows,
             tree_scroll: self.tree_scroll,
         }
     }
@@ -1688,6 +1682,12 @@ struct WorkspaceModel {
     /// survives closing and reopening the overlay within the same
     /// session, the same way the sidebar's width survives switching tabs.
     git_tree_width: Option<u16>,
+    /// Where the Git changes list is scrolled to. The host's, not the
+    /// extension's, for the reason the width is: how far a list of rows
+    /// can scroll is a question about how many fit, and only the render
+    /// knows — which is also why a frame hands it back settled (see
+    /// `render::FrameMetrics`).
+    git_tree_scroll: extension_view::NavigatorScroll,
     dragging_git_tree: bool,
     /// An in-progress tab-reorder drag; `None` when no tab is being
     /// dragged. Client-local presentation state — nothing is sent to the
@@ -1714,7 +1714,7 @@ struct WorkspaceModel {
     /// Sink for the sidebar's own remembered shape, written when the user
     /// changes it. `None` leaves the stored layout untouched — the
     /// default, so tests fold and drag without writing to a real UZE home.
-    layout_recorder: Option<mpsc::Sender<uze_application::SidebarLayout>>,
+    layout_recorder: Option<mpsc::Sender<WorkspaceShape>>,
     /// Every repository's tasks as last evaluated, keyed by its primary
     /// checkout. Display state: the truth is Git and the task store.
     tasks: BTreeMap<PathBuf, Vec<TaskView>>,
@@ -1790,9 +1790,9 @@ struct WorkspaceModel {
     /// resolution, so a Ctrl+O round trip does not flip it back.
     roots_shown: BTreeSet<SpaceId>,
     /// Whether the sidebar's timeline section shows only its header —
-    /// folded by clicking that header (see
-    /// `ViewHit::ToggleSection`). Remembered across attaches for
-    /// the same reason `roots_shown` is.
+    /// folded by clicking that header (see `ViewHit::ToggleSection`).
+    /// A preference, kept in the shared `ClientLayout` rather than in
+    /// this attach's memory (see `shape`).
     timeline_collapsed: bool,
     /// Which tab each agent was last left on: the agent's own tab, or one
     /// of the shells opened beside it in its strip.
@@ -1806,8 +1806,8 @@ struct WorkspaceModel {
     strip_selection: BTreeMap<TabId, TabId>,
     /// How many commit rows the user dragged the timeline section to;
     /// `None` leaves it to `render::timeline_height`'s own default.
-    /// Mirrors `sidebar_width`/`dragging_sidebar`, remembered across
-    /// attaches like `timeline_collapsed`.
+    /// Mirrors `sidebar_width`/`dragging_sidebar`, kept like
+    /// `timeline_collapsed`.
     timeline_rows: Option<u16>,
     dragging_timeline: bool,
     /// The first commit the timeline section shows — where the wheel has
@@ -2269,16 +2269,25 @@ impl WorkspaceModel {
         self.open_echo_window(pane, Instant::now(), AGENT_REDRAW_GRACE);
     }
 
+    /// What this client owns of the shared layout, as it stands.
+    fn shape(&self) -> WorkspaceShape {
+        WorkspaceShape {
+            sidebar: uze_application::SidebarLayout {
+                width: self.sidebar_width,
+            },
+            workspace: uze_application::WorkspaceLayout {
+                timeline_collapsed: self.timeline_collapsed,
+                timeline_rows: self.timeline_rows,
+            },
+        }
+    }
+
     /// Keeps the sidebar's shape for the next run — sent, never written
     /// here, so a fold costs a channel send on the input path (see
     /// `layout_recorder`).
     fn remember_sidebar(&self) {
         if let Some(recorder) = self.layout_recorder.as_ref() {
-            let _ = recorder.send(uze_application::SidebarLayout {
-                width: self.sidebar_width,
-                timeline_collapsed: self.timeline_collapsed,
-                timeline_rows: self.timeline_rows,
-            });
+            let _ = recorder.send(self.shape());
         }
     }
 
@@ -3545,6 +3554,7 @@ fn open_git_view(model: &mut WorkspaceModel) {
     let cwd = pane.cwd.clone();
     let display_root = crate::ui::display_project_path(&cwd);
     model.git_view = Some(git::GitView::opening(cwd, display_root));
+    model.git_tree_scroll = extension_view::NavigatorScroll::default();
     model.dirty = true;
 }
 

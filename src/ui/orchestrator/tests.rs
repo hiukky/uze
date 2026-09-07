@@ -2573,11 +2573,15 @@ mod workspace_tests {
 
         toggle_timeline(&mut model);
 
-        let layout = recorded.try_recv().expect("the fold is recorded");
-        assert!(layout.timeline_collapsed);
-        assert_eq!(layout.timeline_rows, Some(4), "the height it was left at");
+        let shape = recorded.try_recv().expect("the fold is recorded");
+        assert!(shape.workspace.timeline_collapsed);
         assert_eq!(
-            layout.width, model.sidebar_width,
+            shape.workspace.timeline_rows,
+            Some(4),
+            "the height it was left at"
+        );
+        assert_eq!(
+            shape.sidebar.width, model.sidebar_width,
             "the whole column's shape, not the one field that changed"
         );
     }
@@ -4296,8 +4300,8 @@ mod workspace_tests {
 
         driven.mouse(20, 5, MouseEventKind::Up(MouseButton::Left));
 
-        let layout = recorded.try_recv().expect("the release is recorded");
-        assert_eq!(layout.width, dragged);
+        let shape = recorded.try_recv().expect("the release is recorded");
+        assert_eq!(shape.sidebar.width, dragged);
     }
 
     /// An agent that could not be given a checkout of its own starts in

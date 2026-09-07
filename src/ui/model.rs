@@ -7,7 +7,7 @@ use std::{
 };
 
 use ratatui::layout::Rect;
-use uze_application::{Autonomy, ModelPreference, SandboxScope};
+use uze_application::{Autonomy, ManagementLayout, ModelPreference, SandboxScope};
 use uze_extensions::registry::BuiltinExtension;
 
 use uze_application::application::{
@@ -69,6 +69,24 @@ impl Route {
 
     pub(crate) fn index(self) -> usize {
         ROUTES.iter().position(|route| *route == self).unwrap()
+    }
+
+    /// The name this route is remembered by between runs (see
+    /// `ManagementLayout::route`). The user-facing one, so the file reads
+    /// the way the sidebar does; stable, so a variant renamed in code
+    /// does not forget where the operator was.
+    pub(crate) fn id(self) -> &'static str {
+        match self {
+            Route::Overview => "overview",
+            Route::Plugins => "plugins",
+            Route::Extensions => "extensions",
+            Route::Harnesses => "integrations",
+            Route::Profiles => "profiles",
+        }
+    }
+
+    pub(crate) fn from_id(id: &str) -> Option<Self> {
+        ROUTES.into_iter().find(|route| route.id() == id)
     }
 }
 
@@ -403,7 +421,10 @@ pub(crate) struct TuiModel {
 }
 
 impl Default for TuiModel {
+    /// A model with nothing resolved, shaped as `ManagementLayout`'s own
+    /// default — the drawers a screen opens with are stated once, there.
     fn default() -> Self {
+        let layout = ManagementLayout::default();
         Self {
             route: Route::Overview,
             focus: Focus::Sidebar,
@@ -417,19 +438,19 @@ impl Default for TuiModel {
             marketplace_plugins: Vec::new(),
             marketplace_selected: 0,
             marketplace_detail: None,
-            marketplace_drawer_open: true,
+            marketplace_drawer_open: layout.marketplace_drawer_open,
             inspection_in_flight: None,
             marketplace_filter: String::new(),
             filtering: false,
-            collapsed_marketplaces: BTreeSet::new(),
+            collapsed_marketplaces: layout.collapsed_marketplaces,
             extensions: uze_extensions::registry::ExtensionRegistry::builtin()
                 .all()
                 .to_vec(),
             extension_filter: String::new(),
             extensions_selected: 0,
-            extension_drawer_open: true,
+            extension_drawer_open: layout.extension_drawer_open,
             harnesses_selected: 0,
-            harnesses_drawer_open: true,
+            harnesses_drawer_open: layout.harnesses_drawer_open,
             harnesses_filter: String::new(),
             profiles: Vec::new(),
             profiles_selected: 0,
@@ -454,10 +475,10 @@ impl Default for TuiModel {
             hits: Vec::new(),
             sidebar_width: None,
             dragging_sidebar: false,
-            marketplace_drawer_width: None,
-            extension_drawer_width: None,
-            harness_drawer_width: None,
-            profile_columns_width: None,
+            marketplace_drawer_width: layout.marketplace_drawer_width,
+            extension_drawer_width: layout.extension_drawer_width,
+            harness_drawer_width: layout.harness_drawer_width,
+            profile_columns_width: layout.profile_columns_width,
             dragging_panel: None,
         }
     }
@@ -467,7 +488,10 @@ impl Default for TuiModel {
 /// client — the machine state it resolved and where in it the operator
 /// was. Everything not listed here belongs to one visit: the open
 /// overlay, the status line, work in flight, and per-frame transients
-/// such as hit rects and the spinner tick.
+/// such as hit rects and the spinner tick. The screen that was open and
+/// how its drawers were left are not here either: those outlive the
+/// *process*, and live in the `ManagementLayout` every visit is shaped
+/// from (see [`TuiModel::recall`]).
 ///
 /// Management is entered and left every time the operator presses Ctrl+O,
 /// and rebuilding a default model each time meant an empty screen — no
@@ -487,86 +511,87 @@ pub(crate) struct Remembered {
     workspace: Option<OverviewWorkspaceSummary>,
     prompt_history: Vec<uze_application::PromptEntry>,
     update_badges: Vec<UpdateBadge>,
-    route: Route,
     marketplace_selected: usize,
     extensions_selected: usize,
     harnesses_selected: usize,
     profiles_selected: usize,
     overview_prompt_selected: usize,
-    collapsed_marketplaces: BTreeSet<String>,
-    marketplace_drawer_open: bool,
-    extension_drawer_open: bool,
-    harnesses_drawer_open: bool,
-    marketplace_drawer_width: Option<u16>,
-    extension_drawer_width: Option<u16>,
-    harness_drawer_width: Option<u16>,
-    profile_columns_width: Option<u16>,
 }
 
 impl TuiModel {
-    /// A model opening the management client with what the previous visit
-    /// left behind. `None` is the first visit of the process, which starts
-    /// from the default model rather than from a second spelling of it
-    /// here — the drawers a screen opens with are stated once, in
-    /// `Default`.
-    pub(crate) fn recall(remembered: Option<Remembered>) -> Self {
-        let Some(remembered) = remembered else {
-            return Self::default();
-        };
-        let Remembered {
-            plugins,
-            doctor,
-            resolved_at,
-            marketplaces,
-            marketplace_plugins,
-            profiles,
-            context_status,
-            context_plan,
-            workspace,
-            prompt_history,
-            update_badges,
-            route,
-            marketplace_selected,
-            extensions_selected,
-            harnesses_selected,
-            profiles_selected,
-            overview_prompt_selected,
-            collapsed_marketplaces,
-            marketplace_drawer_open,
-            extension_drawer_open,
-            harnesses_drawer_open,
-            marketplace_drawer_width,
-            extension_drawer_width,
-            harness_drawer_width,
-            profile_columns_width,
-        } = remembered;
-        Self {
-            plugins,
-            doctor,
-            resolved_at,
-            marketplaces,
-            marketplace_plugins,
-            profiles,
-            context_status,
-            context_plan,
-            workspace,
-            prompt_history,
-            update_badges,
-            route,
-            marketplace_selected,
-            extensions_selected,
-            harnesses_selected,
-            profiles_selected,
-            overview_prompt_selected,
-            collapsed_marketplaces,
-            marketplace_drawer_open,
-            extension_drawer_open,
-            harnesses_drawer_open,
-            marketplace_drawer_width,
-            extension_drawer_width,
-            harness_drawer_width,
-            profile_columns_width,
-            ..Self::default()
+    /// A model opening the management client shaped as `layout` says —
+    /// the screen, the drawers, the folds — with what the previous visit
+    /// left behind. `None` is the first visit of the process, which has
+    /// nothing resolved yet and starts from the default model.
+    pub(crate) fn recall(remembered: Option<Remembered>, layout: &ManagementLayout) -> Self {
+        let mut model = remembered.map_or_else(Self::default, |remembered| {
+            let Remembered {
+                plugins,
+                doctor,
+                resolved_at,
+                marketplaces,
+                marketplace_plugins,
+                profiles,
+                context_status,
+                context_plan,
+                workspace,
+                prompt_history,
+                update_badges,
+                marketplace_selected,
+                extensions_selected,
+                harnesses_selected,
+                profiles_selected,
+                overview_prompt_selected,
+            } = remembered;
+            Self {
+                plugins,
+                doctor,
+                resolved_at,
+                marketplaces,
+                marketplace_plugins,
+                profiles,
+                context_status,
+                context_plan,
+                workspace,
+                prompt_history,
+                update_badges,
+                marketplace_selected,
+                extensions_selected,
+                harnesses_selected,
+                profiles_selected,
+                overview_prompt_selected,
+                ..Self::default()
+            }
+        });
+        model.route = layout
+            .route
+            .as_deref()
+            .and_then(Route::from_id)
+            .unwrap_or(Route::Overview);
+        model.marketplace_drawer_open = layout.marketplace_drawer_open;
+        model.extension_drawer_open = layout.extension_drawer_open;
+        model.harnesses_drawer_open = layout.harnesses_drawer_open;
+        model.marketplace_drawer_width = layout.marketplace_drawer_width;
+        model.extension_drawer_width = layout.extension_drawer_width;
+        model.harness_drawer_width = layout.harness_drawer_width;
+        model.profile_columns_width = layout.profile_columns_width;
+        model.collapsed_marketplaces = layout.collapsed_marketplaces.clone();
+        model
+    }
+
+    /// The shape this visit leaves the management client in, for the
+    /// next visit and the next run alike.
+    pub(crate) fn management_layout(&self) -> ManagementLayout {
+        ManagementLayout {
+            route: Some(self.route.id().to_owned()),
+            marketplace_drawer_open: self.marketplace_drawer_open,
+            extension_drawer_open: self.extension_drawer_open,
+            harnesses_drawer_open: self.harnesses_drawer_open,
+            marketplace_drawer_width: self.marketplace_drawer_width,
+            extension_drawer_width: self.extension_drawer_width,
+            harness_drawer_width: self.harness_drawer_width,
+            profile_columns_width: self.profile_columns_width,
+            collapsed_marketplaces: self.collapsed_marketplaces.clone(),
         }
     }
 
@@ -584,20 +609,11 @@ impl TuiModel {
             workspace: self.workspace,
             prompt_history: self.prompt_history,
             update_badges: self.update_badges,
-            route: self.route,
             marketplace_selected: self.marketplace_selected,
             extensions_selected: self.extensions_selected,
             harnesses_selected: self.harnesses_selected,
             profiles_selected: self.profiles_selected,
             overview_prompt_selected: self.overview_prompt_selected,
-            collapsed_marketplaces: self.collapsed_marketplaces,
-            marketplace_drawer_open: self.marketplace_drawer_open,
-            extension_drawer_open: self.extension_drawer_open,
-            harnesses_drawer_open: self.harnesses_drawer_open,
-            marketplace_drawer_width: self.marketplace_drawer_width,
-            extension_drawer_width: self.extension_drawer_width,
-            harness_drawer_width: self.harness_drawer_width,
-            profile_columns_width: self.profile_columns_width,
         }
     }
 
