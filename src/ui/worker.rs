@@ -408,7 +408,7 @@ pub(crate) fn dispatch(
     }
 }
 
-fn spawn_refresh(home: UzeHome, sender: Sender<WorkerResult>, context_root: PathBuf) {
+pub(crate) fn spawn_refresh(home: UzeHome, sender: Sender<WorkerResult>, context_root: PathBuf) {
     thread::spawn(move || {
         let result = load_refresh_data(home, &context_root).map_err(|error| error.to_string());
         let _ = sender.send(WorkerResult::Refreshed(result));
@@ -422,10 +422,12 @@ fn spawn_refresh(home: UzeHome, sender: Sender<WorkerResult>, context_root: Path
 /// the alternate screen was even entered, so the terminal appeared frozen
 /// for that whole stretch.
 ///
-/// Bootstrap and refresh share one worker so startup paints immediately while
-/// all machine maintenance stays off the rendering/event loop. Every
+/// Started once per session by [`super::management::ManagementMemory::warming`],
+/// at launch rather than on the first Ctrl+O into the management client:
+/// bootstrap and refresh share one worker, so the one answer it composes
+/// is normally waiting by the time that screen is asked for. Every
 /// subsequent refresh (`Intent::Refresh`) goes through `spawn_refresh` and
-/// is coalesced while this worker is in flight.
+/// is coalesced while a worker is in flight.
 pub(crate) fn spawn_startup(home: UzeHome, sender: Sender<WorkerResult>, context_root: PathBuf) {
     thread::spawn(move || {
         let mut applied = Vec::new();

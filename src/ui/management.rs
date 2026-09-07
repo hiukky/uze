@@ -6,7 +6,9 @@
 //! drag-resize with the same bounds) so switching between the two with
 //! Ctrl+O reads as one product, not two.
 
-use std::sync::mpsc;
+use std::path::PathBuf;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event};
 use ratatui::{
@@ -19,40 +21,127 @@ use ratatui::{
 use uze_application::{Result, UzeHome};
 
 use super::hit::Hit;
-use super::model::{self, Focus, Overlay, ROUTES, Route, Status, TuiModel};
-use super::worker::{Intent, dispatch, drain_worker_results, recent_prompts, spawn_startup};
+use super::model::{self, Focus, Overlay, ROUTES, Remembered, Route, Status, TuiModel};
+use super::worker::{
+    Intent, WorkerResult, dispatch, drain_worker_results, recent_prompts, spawn_refresh,
+    spawn_startup,
+};
 use super::{TerminalSession, overlay, small_caps, small_digits, view};
 use crate::ui::theme::{self, Symbol, Token};
+
+/// How long a resolution of the machine stands for before opening this
+/// screen re-resolves it. The window exists for one case: the session's
+/// own warm-up has just answered and the operator presses Ctrl+O right
+/// after it, which should show that answer rather than immediately ask
+/// the same question again. Past it, opening the screen is a claim about
+/// the machine *now* — a `uze add` run in one of the workspace's own panes
+/// happened outside anything this client would hear about.
+pub(crate) const RESOLUTION_STANDS_FOR: Duration = Duration::from_secs(30);
+
+/// What the management client keeps between visits to it, owned by
+/// `super::run` for the whole session the way the workspace's own
+/// [`super::orchestrator::WorkspaceMemory`] is. Ctrl+O leaves this mode
+/// and comes back to it constantly; without this, each return started
+/// from nothing.
+pub(crate) struct ManagementMemory {
+    /// The channel every management worker answers on. Session-lived
+    /// rather than per-visit, which is what lets the resolution start
+    /// before the screen exists and lets an answer outlive the visit that
+    /// asked for it, instead of dying with a dropped receiver.
+    sender: Sender<WorkerResult>,
+    receiver: Receiver<WorkerResult>,
+    /// The last visit's resolved machine state and place in it, or `None`
+    /// before the first visit.
+    remembered: Option<Remembered>,
+    /// Whether a worker still owes this session an answer. Carried across
+    /// visits because the channel is: a refresh the operator walked out on
+    /// still lands, and re-entering must not ask a second time.
+    in_flight: bool,
+}
+
+impl ManagementMemory {
+    /// A session's management memory, already resolving the machine on a
+    /// thread of its own.
+    ///
+    /// Seeding the default plugins and applying the official snapshot's
+    /// pending updates is what *opening uze* does — once, here, rather
+    /// than on the first Ctrl+O into this screen. Started before the
+    /// workspace client even attaches, so the answer is normally waiting
+    /// by the time anyone asks for the screen, and the work never sits in
+    /// front of the operator as an empty list under a "refreshing" line.
+    pub(crate) fn warming(home: &UzeHome) -> Self {
+        let (sender, receiver) = mpsc::channel();
+        spawn_startup(home.clone(), sender.clone(), context_root());
+        Self {
+            sender,
+            receiver,
+            remembered: None,
+            in_flight: true,
+        }
+    }
+}
+
+/// Whether opening the screen asks the machine again, given when it last
+/// answered. Nothing resolved yet is not an answer to stand on, so it
+/// asks; a resolution inside [`RESOLUTION_STANDS_FOR`] is.
+pub(crate) fn opening_re_resolves(resolved_at: Option<Instant>) -> bool {
+    resolved_at.is_none_or(|at| at.elapsed() >= RESOLUTION_STANDS_FOR)
+}
+
+/// The directory this session speaks about, resolved the same way
+/// [`TuiModel`]'s own `context_root` is — the workers started before a
+/// model exists must ask the same question it would.
+fn context_root() -> PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
 
 pub(crate) fn run_management(
     terminal: &mut TerminalSession,
     home: UzeHome,
     sidebar_width: &mut Option<u16>,
+    memory: &mut ManagementMemory,
 ) -> Result<ManagementExit> {
-    let (sender, receiver) = mpsc::channel();
+    let sender = memory.sender.clone();
     let mut model = TuiModel {
-        status: Status::Working("Refreshing environment…".to_owned()),
-        maintenance_in_flight: true,
         // Carries over whatever the user last dragged the sidebar to — in
         // this mode or the workspace's — so switching modes with Ctrl+O
         // never resets it back to the responsive default.
         sidebar_width: *sidebar_width,
-        ..TuiModel::default()
+        ..TuiModel::recall(memory.remembered.take())
     };
-    // Before the first frame rather than from the startup worker, which
-    // reaches this only after seeding plugins and auto-updating (see
-    // `worker::recent_prompts`). The refresh replaces it with the same
-    // answer when it lands.
-    model.prompt_history = recent_prompts(home.clone(), &model.context_root);
-    spawn_startup(home.clone(), sender.clone(), model.context_root.clone());
-    loop {
+    if opening_re_resolves(model.resolved_at) && !memory.in_flight {
+        // Behind the frame: every list is already on screen, so nothing
+        // about this reads as the plugins having gone away.
+        spawn_refresh(home.clone(), sender.clone(), model.context_root.clone());
+        memory.in_flight = true;
+    }
+    model.maintenance_in_flight = memory.in_flight;
+    if model.resolved_at.is_none() {
+        // The one case where the operator arrives before any answer does:
+        // Ctrl+O within the first moments of the session. Nothing to draw
+        // yet, so the wait is at least named — and the queued answer, if
+        // it landed while the workspace had the screen, replaces this in
+        // the same frame (the loop drains before it draws).
+        model.status = Status::Working("Refreshing environment…".to_owned());
+        // Read here rather than waited on from the startup worker, which
+        // reaches it only after seeding plugins and auto-updating (see
+        // `worker::recent_prompts`): one small file, and the Overview
+        // otherwise says "no history yet" — the same words it uses when
+        // there genuinely is none.
+        model.prompt_history = recent_prompts(home.clone(), &model.context_root);
+    }
+    let exit = loop {
         model.tick = model.tick.wrapping_add(1);
         model.expire_status();
         model.expire_update_badges();
+        // Before the frame, not after it: an answer that arrived while the
+        // workspace had the screen is already in the channel when this
+        // mode opens, and draining it first is what makes the very first
+        // frame show it.
+        drain_worker_results(&mut model, &memory.receiver);
         let mut hits = Vec::new();
         terminal.draw(|frame| render(frame, &model, &mut hits))?;
         model.hits = hits;
-        drain_worker_results(&mut model, &receiver);
         let missing = model.drawer_inspect_intent();
         if missing != Intent::None {
             dispatch(missing, &home, &sender, &mut model);
@@ -65,14 +154,14 @@ pub(crate) fn run_management(
                         .contains(crossterm::event::KeyModifiers::CONTROL)
                         && key.code == crossterm::event::KeyCode::Char('o')
                     {
-                        return Ok(ManagementExit::Workspace);
+                        break ManagementExit::Workspace;
                     }
                     let intent = model.apply_key(key);
                     if intent == Intent::Quit {
-                        return Ok(ManagementExit::Quit);
+                        break ManagementExit::Quit;
                     }
                     if let Some(exit) = leaving_management(&intent) {
-                        return Ok(exit);
+                        break exit;
                     }
                     dispatch(intent, &home, &sender, &mut model);
                 }
@@ -90,7 +179,7 @@ pub(crate) fn run_management(
                     // only on the next drag.
                     *sidebar_width = model.sidebar_width;
                     if let Some(exit) = leaving_management(&intent) {
-                        return Ok(exit);
+                        break exit;
                     }
                     dispatch(intent, &home, &sender, &mut model);
                 }
@@ -98,7 +187,10 @@ pub(crate) fn run_management(
                 _ => {}
             }
         }
-    }
+    };
+    memory.in_flight = model.maintenance_in_flight;
+    memory.remembered = Some(model.remember());
+    Ok(exit)
 }
 
 pub(crate) enum ManagementExit {

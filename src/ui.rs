@@ -118,6 +118,13 @@ pub fn run(home: UzeHome) -> Result<()> {
     // attach takes over from the last instead of deriving again in front
     // of the user (see `orchestrator::WorkspaceMemory`).
     let mut workspace_memory = orchestrator::WorkspaceMemory::restored(stored);
+    // The management client's own half of the same idea, started here
+    // rather than on the first Ctrl+O into it: the machine resolves on a
+    // thread while the workspace attaches, so that screen is already
+    // answered when the operator asks for it, and what it resolved is
+    // still there the next time they do (see
+    // `management::ManagementMemory`).
+    let mut management_memory = management::ManagementMemory::warming(&home);
     // Set when management asks to return to a specific tab (activating a
     // prompt-history row); consumed by the next attach.
     let mut pending_tab: Option<uze_terminal::TabId> = None;
@@ -139,8 +146,12 @@ pub fn run(home: UzeHome) -> Result<()> {
             orchestrator::WorkspaceExit::Quit => return Ok(()),
             orchestrator::WorkspaceExit::Management => {
                 landing = orchestrator::Landing::WhereItLeftOff;
-                let exit =
-                    management::run_management(&mut terminal, home.clone(), &mut sidebar_width)?;
+                let exit = management::run_management(
+                    &mut terminal,
+                    home.clone(),
+                    &mut sidebar_width,
+                    &mut management_memory,
+                )?;
                 // The workspace client writes its own changes as they
                 // happen; management has no such sink, so a drag there is
                 // kept on the way out of it — the one moment this side
