@@ -421,8 +421,15 @@ mod tests {
     #[test]
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn an_interpreter_with_no_script_keeps_its_own_name() {
+        // Two commands, not one. A `sh -c` given a single command `exec`s it
+        // — dash certainly does — so `sh -c "sleep 30"` *becomes* `sleep`
+        // and there is no interpreter left to name. The first version of
+        // this test raced that exec and passed only by catching the
+        // instant before it; under coverage instrumentation, which is
+        // slower, it lost. A second command is what keeps the shell alive
+        // to be the answer.
         let mut child = std::process::Command::new("/bin/sh")
-            .args(["-c", "sleep 30"])
+            .args(["-c", "sleep 30; :"])
             .spawn()
             .unwrap();
         let named = wait_for_name(child.id() as libc::pid_t);
