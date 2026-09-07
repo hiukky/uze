@@ -315,6 +315,7 @@ fn render_navigator(
                 });
                 frame.render_widget(
                     Paragraph::new(Line::from(vec![
+                        TextSpan::raw(" "),
                         TextSpan::raw("  ".repeat(*depth)),
                         TextSpan::styled(format!("{fold} "), theme::fg(Token::TextMuted)),
                         TextSpan::styled(name.clone(), theme::fg(Token::TextSecondary)),
@@ -337,7 +338,19 @@ fn render_navigator(
                     (true, false) => theme::fg(Token::TextBright),
                     (false, _) => theme::fg(Token::TextInactive),
                 };
+                // The selected row is marked the way every other list in
+                // the product marks its selection — the accent bar and the
+                // selected surface the plugin list uses — rather than a
+                // neutral lift that the diff beside it easily outshone.
                 let mut spans = vec![
+                    TextSpan::styled(
+                        if *selected {
+                            theme::glyph(Symbol::TreeColumnDivider)
+                        } else {
+                            " ".to_owned()
+                        },
+                        theme::fg(Token::Accent),
+                    ),
                     TextSpan::raw("  ".repeat(*depth)),
                     styled(&Span {
                         text: format!("{} ", marker.text),
@@ -346,7 +359,11 @@ fn render_navigator(
                     TextSpan::styled(name.clone(), label_style),
                 ];
                 if *selected {
-                    fill_row_bg(&mut spans, rect.width, theme::color(Token::SurfaceRaised));
+                    crate::ui::fill_row_bg(
+                        &mut spans,
+                        rect.width,
+                        theme::color(Token::SurfaceSelected),
+                    );
                 }
                 frame.render_widget(Paragraph::new(Line::from(spans)), rect);
                 hits.push((rect, ViewHit::SelectItem(*id)));
@@ -454,17 +471,6 @@ fn push_right_aligned(spans: &mut Vec<TextSpan<'static>>, value: String, width: 
         spans.push(TextSpan::raw(" ".repeat(gap)));
         spans.push(TextSpan::styled(value, Style::default().fg(color)));
     }
-}
-
-fn fill_row_bg(spans: &mut Vec<TextSpan<'static>>, width: u16, background: Color) {
-    for span in spans.iter_mut() {
-        span.style = span.style.bg(background);
-    }
-    let used: usize = spans.iter().map(TextSpan::width).sum();
-    spans.push(TextSpan::styled(
-        " ".repeat((width as usize).saturating_sub(used)),
-        Style::default().bg(background),
-    ));
 }
 
 /// Draws one extension [`Section`] into the rows it is given, and reports
@@ -724,6 +730,11 @@ mod tests {
             cell_at("CHANGES").unwrap().fg,
             theme::color(Token::TextSecondary),
             "a heading is chrome, so it resolves through the palette"
+        );
+        assert_eq!(
+            cell_at("M ui.rs").unwrap().bg,
+            theme::color(Token::SurfaceSelected),
+            "the selected row carries the surface every other list marks its selection with"
         );
         assert_eq!(
             cell_at("M ").unwrap().fg,
