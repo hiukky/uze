@@ -227,15 +227,19 @@ says so.
   (`command_performance.rs:46`) and must stay so: the whole computation
   is two file reads plus a set difference against the Store index that
   `lock_status` already loads.
-- [x] 12.5 `install` converges removals. The lifecycle already exists —
-  `remove_project_plugin` undeclares and regenerates, ADR-009's
-  `Matched/Missing/Drifted/Blocked` decides whether the detach may
-  happen — so this is a call site and a confirmation, not new removal
-  semantics. Drift on a surplus plugin's artifact refuses the detach and
-  is reported; it never authorizes one.
-- [x] 12.6 The confirmation is explicit and refusable, and refusing it
-  leaves the additive half of the run intact. A destructive step must
-  never ride along on a command whose other half is additive.
+- [x] 12.5 `install` converges removals through `remove_project_plugin`,
+  which undeclares and regenerates the lock.
+- [x] 12.6 *(planned as a confirmation; built without one)* The plan
+  called this the destructive half and gated it behind an explicit answer.
+  Writing the journey showed the premise was wrong: `remove_project_plugin`
+  touches the manifest and the lock and **nothing on the machine** — the
+  Store keeps the package and every harness keeps reading it, because
+  other projects share both, and taking it away is `uze plugin remove` in
+  machine scope. Converging a derived file to match the authored one it is
+  derived *from* is the least destructive thing this command does. The
+  confirmation, the `SurplusAuthority` trait and the `--prune` flag it
+  needed were all removed; what protects the machine is the scope boundary
+  ADR-019 already draws, not a prompt.
 - [x] 12.7 `install` reconciles the project context at the end, and the
   report says what it reconciled. This is what closes the policy hole:
   `worktrees:` is read live per placement, but agents read the projected

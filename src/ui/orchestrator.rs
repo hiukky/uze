@@ -1526,6 +1526,11 @@ struct Remembered {
     upstream_syncs: BTreeMap<PathBuf, UpstreamSync>,
     task_eval_pending: BTreeSet<PathBuf>,
     label_adoptions: BTreeMap<TabId, String>,
+    /// What [`adopt_task_names`] last put on each tab. Its own ledger
+    /// rather than a second use of `label_adoptions`: that one is retained
+    /// against a *shell* label still being generated, which would drop
+    /// these the moment they land.
+    task_name_adoptions: BTreeMap<TabId, String>,
     last_task_refresh: Option<Instant>,
     delivery_pending: BTreeSet<String>,
     notice: Option<Notice>,
@@ -1546,6 +1551,7 @@ impl WorkspaceModel {
             agent_activity,
             completed_agent_panes,
             agent_support,
+            task_name_adoptions,
             agent_support_pending,
             git_badge,
             git_pending,
@@ -1572,6 +1578,7 @@ impl WorkspaceModel {
             agent_activity,
             completed_agent_panes,
             agent_support,
+            task_name_adoptions,
             agent_support_pending,
             git_badge,
             git_pending,
@@ -1603,6 +1610,7 @@ impl WorkspaceModel {
             agent_activity: self.agent_activity,
             completed_agent_panes: self.completed_agent_panes,
             agent_support: self.agent_support,
+            task_name_adoptions: self.task_name_adoptions,
             agent_support_pending: self.agent_support_pending,
             git_badge: self.git_badge,
             git_pending: self.git_pending,
@@ -1773,6 +1781,11 @@ struct WorkspaceModel {
     /// told, until the session confirms it — so two updates arriving
     /// before the rename lands do not ask twice.
     label_adoptions: BTreeMap<TabId, String>,
+    /// What [`adopt_task_names`] last put on each tab. Its own ledger
+    /// rather than a second use of `label_adoptions`: that one is retained
+    /// against a *shell* label still being generated, which would drop
+    /// these the moment they land.
+    task_name_adoptions: BTreeMap<TabId, String>,
     last_task_refresh: Option<Instant>,
     /// Agent panes that went quiet since the last tick — the moment
     /// readiness is re-read.
@@ -3136,6 +3149,50 @@ fn adopt_agent_labels(
         }
     }
     requests
+}
+
+/// The renames owed to tabs whose task has acquired a name.
+///
+/// A task's name is stored the moment the work is named — by its agent, by
+/// the operator's own `git branch -m`, or by the first commit — but the
+/// strip and the sidebar read the *tab's* label, so without this the name
+/// exists everywhere except where a person looks. A generated `agent N`
+/// says nothing the user meant; a label they chose is theirs and stays,
+/// which is the same rule [`adopt_agent_labels`] applies to shells.
+///
+/// Asked once per tab through the same `label_adoptions` ledger, so a
+/// session that has not yet echoed the rename is not asked twice.
+fn adopt_task_names(model: &mut WorkspaceModel) -> Vec<ClientRequest> {
+    let Some(session) = model.session.as_ref() else {
+        return Vec::new();
+    };
+    let named: Vec<(TabId, String)> = session
+        .workspace
+        .spaces
+        .iter()
+        .flat_map(|space| &space.tabs)
+        .filter_map(|tab| {
+            let task = model.tab_task(tab.id)?;
+            if task.label.is_empty() || task.label == task.id || task.label == tab.label {
+                return None;
+            }
+            // Whose label is on the tab right now decides whether it may
+            // move. A generated `agent N` is nobody's. A label this
+            // mechanism last set is still its own, so a task renamed again
+            // — by its agent, by the operator's `git branch -m` — carries
+            // the tab with it. Anything else is a name a person typed, and
+            // it stays.
+            let ours = model.task_name_adoptions.get(&tab.id) == Some(&tab.label);
+            (is_generated_agent_label(&tab.label) || ours).then(|| (tab.id, task.label.clone()))
+        })
+        .collect();
+    named
+        .into_iter()
+        .map(|(tab, label)| {
+            model.task_name_adoptions.insert(tab, label.clone());
+            ClientRequest::RenameTab { tab, label }
+        })
+        .collect()
 }
 
 /// A sidebar action may target an agent in a background space, so its

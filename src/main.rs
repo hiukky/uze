@@ -707,7 +707,7 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
             let spinner = progress::spinner("Installing project environment...");
             match app
                 .project()
-                .install(&context_path(path), authority.as_ref(), &AskBeforeRemoving)
+                .install(&context_path(path), authority.as_ref())
             {
                 Ok(report) => {
                     let message = match &report {
@@ -2205,36 +2205,6 @@ fn render_install(report: &uze_application::application::InstallReport) -> Strin
             }
             text
         }
-    }
-}
-
-/// Answers the one destructive half of an install by asking.
-///
-/// Refuses without a terminal to ask in: a removal that happens because
-/// nobody was there to say no is exactly the outcome the confirmation
-/// exists to prevent, and CI is where that would happen.
-struct AskBeforeRemoving;
-
-impl uze_application::application::SurplusAuthority for AskBeforeRemoving {
-    fn approve_removal(&self, plugins: &[String]) -> bool {
-        if !prompt::interactive() {
-            progress::warn(&format!(
-                "agents.yaml no longer declares {}; run `uze install` in a terminal to remove \
-                 {}",
-                plugins.join(", "),
-                if plugins.len() == 1 { "it" } else { "them" }
-            ));
-            return false;
-        }
-        prompt::confirm(
-            &format!(
-                "agents.yaml no longer declares {}. Remove {} from this project?",
-                plugins.join(", "),
-                if plugins.len() == 1 { "it" } else { "them" }
-            ),
-            false,
-        )
-        .unwrap_or(false)
     }
 }
 

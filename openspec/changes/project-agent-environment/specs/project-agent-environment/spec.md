@@ -184,28 +184,30 @@ edits the file at all.
 
 ### Requirement: Install converges what the manifest no longer declares
 `uze install` SHALL converge removals as well as additions: a plugin the
-manifest no longer declares is removed from the lock and detached, so a
-declarative manifest is declarative in both directions. Because removal
-is destructive it SHALL be confirmed before it is performed, and it SHALL
-inspect current state before detaching — drift blocks the removal rather
-than authorizing it.
+manifest no longer declares is removed from `agents.lock`, so a
+declarative manifest is declarative in both directions. It SHALL NOT
+remove the package from this machine's Store or detach it from any
+harness — those are shared with every other project and are machine scope
+(`uze plugin remove`). Converging the lock is therefore not a destructive
+act and SHALL NOT require confirmation: the lock is derived, and what it
+loses is what the person just deleted from the file they author.
 
-#### Scenario: An undeclared plugin is removed
+#### Scenario: An undeclared plugin leaves the lock
 - **WHEN** the user removes a plugin from `agents.yaml` and runs `uze
-  install`, confirming the removal
-- **THEN** the plugin is removed from `agents.lock` and detached from
-  every harness that received it
+  install`
+- **THEN** the lock no longer carries that plugin, and the removal is
+  reported
 
-#### Scenario: A refused confirmation changes nothing
-- **WHEN** the same run is not confirmed
-- **THEN** the lock and every attachment are left exactly as they were,
-  and the drift is still reported
+#### Scenario: The machine keeps what other projects may share
+- **WHEN** the same run completes
+- **THEN** the package is still in the Store and every harness still reads
+  it
 
-#### Scenario: Drift refuses the detach
-- **WHEN** a surplus plugin's managed artifact no longer matches its
-  receipt
-- **THEN** the detach is refused and reported, and no artifact UZE did
-  not write is removed
+#### Scenario: What the manifest still declares survives
+- **WHEN** a marketplace is still declared and only one of its plugins was
+  dropped
+- **THEN** the lock keeps that marketplace, having converged rather than
+  been truncated
 
 ### Requirement: Installing is one act
 `uze install` SHALL leave the project context reconciled when it

@@ -10,10 +10,7 @@ use std::{fs, path::PathBuf};
 
 use uze_application::{
     UzeApplication,
-    application::{
-        ApproveSurplusRemoval, InstallReport, ProjectLockStatus, RefuseSurplusRemoval,
-        RemoveProjectPluginReport,
-    },
+    application::{InstallReport, ProjectLockStatus, RemoveProjectPluginReport},
 };
 use uze_core::{UzeHome, project_lock, project_root, trust::AlwaysTrust};
 
@@ -176,7 +173,7 @@ fn install_project_environment_reproduces_a_lock_on_a_fresh_machine() {
 
     let report = fresh_app
         .project()
-        .install(&fx.project_root, &AlwaysTrust, &ApproveSurplusRemoval)
+        .install(&fx.project_root, &AlwaysTrust)
         .unwrap();
     match report {
         InstallReport::Installed { plugins, .. } => {
@@ -236,11 +233,11 @@ fn install_project_environment_is_a_no_op_once_everything_is_installed() {
     // `add` declared the policy scaffold, so the first install still owes a
     // projection; what this test is about is the run after that one.
     app.project()
-        .install(&fx.project_root, &AlwaysTrust, &ApproveSurplusRemoval)
+        .install(&fx.project_root, &AlwaysTrust)
         .unwrap();
     let report = app
         .project()
-        .install(&fx.project_root, &AlwaysTrust, &ApproveSurplusRemoval)
+        .install(&fx.project_root, &AlwaysTrust)
         .unwrap();
     assert!(
         matches!(report, InstallReport::NoChanges),
@@ -256,7 +253,7 @@ fn install_project_environment_with_no_lock_installs_nothing_and_settles() {
     // edits, and a manifest that declares a policy is owed a projection.
     let report = app
         .project()
-        .install(&fx.project_root, &AlwaysTrust, &ApproveSurplusRemoval)
+        .install(&fx.project_root, &AlwaysTrust)
         .unwrap();
     match report {
         InstallReport::Installed { plugins, .. } => assert!(plugins.is_empty()),
@@ -266,7 +263,7 @@ fn install_project_environment_with_no_lock_installs_nothing_and_settles() {
     // actually matters: installing twice is installing once.
     let report = app
         .project()
-        .install(&fx.project_root, &AlwaysTrust, &ApproveSurplusRemoval)
+        .install(&fx.project_root, &AlwaysTrust)
         .unwrap();
     assert!(
         matches!(report, InstallReport::NoChanges),
@@ -293,7 +290,7 @@ fn install_resolves_a_declaration_the_lock_has_never_seen() {
 
     let report = app
         .project()
-        .install(&fx.project_root, &AlwaysTrust, &ApproveSurplusRemoval)
+        .install(&fx.project_root, &AlwaysTrust)
         .unwrap();
 
     match report {
@@ -326,7 +323,7 @@ fn install_resolves_a_declaration_the_lock_has_never_seen() {
     // nothing left to resolve and nothing left to install.
     let report = app
         .project()
-        .install(&fx.project_root, &AlwaysTrust, &ApproveSurplusRemoval)
+        .install(&fx.project_root, &AlwaysTrust)
         .unwrap();
     assert!(
         matches!(report, InstallReport::NoChanges),
@@ -363,7 +360,7 @@ fn install_re_resolves_a_plugin_the_manifest_moved_and_names_the_collision() {
 
     let error = app
         .project()
-        .install(&fx.project_root, &AlwaysTrust, &ApproveSurplusRemoval)
+        .install(&fx.project_root, &AlwaysTrust)
         .expect_err("a declaration the Store cannot satisfy must be reported, not passed over");
     let reported = error.to_string();
     assert!(
@@ -483,7 +480,7 @@ fn reproduction_reads_the_locked_commit_after_the_marketplace_moved() {
     let fresh_home = base.join("home-fresh");
     UzeApplication::new(UzeHome::at(&fresh_home), Vec::new())
         .project()
-        .install(&project, &AlwaysTrust, &ApproveSurplusRemoval)
+        .install(&project, &AlwaysTrust)
         .unwrap();
 
     assert_eq!(
@@ -524,7 +521,7 @@ fn reproduction_refuses_bytes_that_are_not_the_bytes_the_lock_pinned() {
     let fresh_home = base.join("home-fresh");
     let error = UzeApplication::new(UzeHome::at(&fresh_home), Vec::new())
         .project()
-        .install(&project, &AlwaysTrust, &ApproveSurplusRemoval)
+        .install(&project, &AlwaysTrust)
         .expect_err("a digest that does not match must stop the install");
     assert!(
         matches!(error, uze_core::UzeError::IntegrityMismatch { .. }),
@@ -725,7 +722,7 @@ fn malformed_lock_is_reported_not_panicked_on() {
     assert!(app.project().plan(&fx.project_root).is_err());
     assert!(
         app.project()
-            .install(&fx.project_root, &AlwaysTrust, &ApproveSurplusRemoval)
+            .install(&fx.project_root, &AlwaysTrust)
             .is_err()
     );
 
@@ -824,7 +821,7 @@ mod drift {
         declaring(&fx, &["flow"]);
         let app = fx.app();
         app.project()
-            .install(&fx.project_root, &AlwaysTrust, &ApproveSurplusRemoval)
+            .install(&fx.project_root, &AlwaysTrust)
             .unwrap();
 
         declaring(&fx, &[]);
@@ -839,32 +836,28 @@ mod drift {
         );
     }
 
-    /// The destructive half, and the confirmation that gates it.
+    /// Converging the lock is the least destructive thing an install does,
+    /// not the most: the lock is derived, and what it loses is what the
+    /// person just deleted from the file they author.
+    ///
+    /// What is *not* touched is the machine. The Store keeps the package
+    /// and every harness keeps reading it, because other projects share
+    /// both — taking it off this machine is `uze plugin remove`, which is
+    /// a different scope by ADR-019.
     #[test]
-    fn install_removes_what_the_manifest_dropped_only_when_it_is_approved() {
+    fn install_converges_the_lock_and_leaves_the_machine_alone() {
         let fx = Fixture::new("drift-converge");
         declaring(&fx, &["flow"]);
         let app = fx.app();
         app.project()
-            .install(&fx.project_root, &AlwaysTrust, &ApproveSurplusRemoval)
+            .install(&fx.project_root, &AlwaysTrust)
             .unwrap();
+        let installed_before = app.plugins().list().unwrap().len();
+
         declaring(&fx, &[]);
-
-        // Refused: everything stays exactly as it was.
-        app.project()
-            .install(&fx.project_root, &AlwaysTrust, &RefuseSurplusRemoval)
-            .unwrap();
-        assert!(
-            project_lock::load_lock(&fx.project_root)
-                .unwrap()
-                .is_some_and(|lock| lock.plugins.contains_key("flow")),
-            "a removal nobody confirmed is a removal that did not happen"
-        );
-
-        // Approved: the lock no longer carries it.
         let report = app
             .project()
-            .install(&fx.project_root, &AlwaysTrust, &ApproveSurplusRemoval)
+            .install(&fx.project_root, &AlwaysTrust)
             .unwrap();
 
         match report {
@@ -879,13 +872,18 @@ mod drift {
                 .is_none_or(|lock| !lock.plugins.contains_key("flow")),
             "the lock no longer answers for a plugin nobody declares"
         );
+        assert_eq!(
+            app.plugins().list().unwrap().len(),
+            installed_before,
+            "and the machine's Store is untouched — other projects share it"
+        );
         assert!(
             app.project()
                 .plan(&fx.project_root)
                 .unwrap()
                 .surplus
                 .is_empty(),
-            "and the drift is cleared"
+            "with the drift cleared"
         );
     }
 
@@ -925,7 +923,7 @@ mod drift {
         );
 
         app.project()
-            .install(&fx.project_root, &AlwaysTrust, &RefuseSurplusRemoval)
+            .install(&fx.project_root, &AlwaysTrust)
             .unwrap();
 
         assert!(

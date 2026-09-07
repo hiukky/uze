@@ -214,12 +214,16 @@ happen:
 its head.** `plan` is re-founded on `agents.yaml`; `status` reports what
 it finds; `install` converges both directions.
 
-**Removal is confirmed, and inspected first.** Converging a removal is
-the only destructive half of `install`, and the project already has the
-rule for it (ADR-009: inspect-before-detach; drift blocks a destructive
-mutation rather than authorizing one). A removal is therefore an
-explicit answer, never a consequence of a command whose other half is
-additive.
+**Removal needs no confirmation, because it removes nothing from the
+machine.** This was planned the other way round — as the destructive half,
+gated behind an explicit answer — and the journey proved the premise
+wrong: `remove_project_plugin` edits the manifest and the lock, and the
+Store keeps the package while every harness keeps reading it. Other
+projects share both, so taking it off this machine is `uze plugin remove`,
+in machine scope, by ADR-019. What is left here is a derived file being
+made to agree with the authored one it derives from, and asking permission
+for that would teach people to click through a prompt that never
+protected anything.
 
 **Detect and offer; never apply.** The client shows the drift and the
 action beside it. `install`'s own comment already states the rule this

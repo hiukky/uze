@@ -358,16 +358,8 @@ pub(crate) fn dispatch(
                 move |app| {
                     // Same use case and same default (no trust flag) as the
                     // CLI's `uze install`; the TUI adds no install logic.
-                    // Removal is refused here on purpose: this surface
-                    // has nowhere to ask, and a destructive convergence
-                    // nobody confirmed is the one thing the drift signal
-                    // exists to avoid doing on its own.
                     app.project()
-                        .install(
-                            &root,
-                            &uze_application::NoTrustAuthority,
-                            &uze_application::RefuseSurplusRemoval,
-                        )
+                        .install(&root, &uze_application::NoTrustAuthority)
                         .map(|report| match report {
                             InstallReport::NoChanges => {
                                 "Project environment already up to date".to_owned()

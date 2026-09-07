@@ -906,6 +906,15 @@ class Checker:
             ]
             if missing:
                 return False, f"{pattern}: {text!r} not in {missing}"
+        # What a file no longer says is a claim of its own — a lock that
+        # converged, a region that dropped a clause — and it needs its own
+        # spelling rather than a contorted positive one.
+        if text := spec.get("excludes"):
+            carrying = [
+                path for path in found if text in Path(path).read_text(errors="replace")
+            ]
+            if carrying:
+                return False, f"{pattern}: {text!r} still in {carrying}"
         return True, f"{pattern}: {[Path(path).name for path in found]}"
 
     def _git(self, spec: dict) -> tuple[bool, str]:
@@ -1152,6 +1161,15 @@ class Checker:
                 return (
                     False,
                     f"stdout has no {text!r}:\n        {result.stdout.strip()}",
+                )
+        # A warning is not an answer, so it goes to stderr — and a claim
+        # about what a command *told* the operator has to be able to read
+        # the stream it was told on.
+        if text := spec["cmd"].get("stderr_contains"):
+            if text not in result.stderr:
+                return (
+                    False,
+                    f"stderr has no {text!r}:\n        {result.stderr.strip()}",
                 )
         # The absence of something is a claim too — that a generated
         # identifier never reached a remote, say — and it needs its own

@@ -1,4 +1,4 @@
-journey: taking a plugin out of agents.yaml takes it out of the project, once somebody confirms
+journey: taking a plugin out of agents.yaml takes it out of the project, and out of nothing else
 tags: [gate, cli, packages]
 proves: web/content/docs/project-files.mdx
 about: |
@@ -8,9 +8,11 @@ about: |
   another.
 
   This journey edits the file the way a person does and then reads the
-  machine: the lock on disk, and the tree the harness reads. The
-  confirmation is the point of the middle scene — the additive halves of an
-  install must never carry a destructive one along with them.
+  machine: the lock on disk, and the tree the harness reads. The last scene
+  is the point, and it is a boundary rather than a feature — converging the
+  lock is not the same as taking a package off the machine. The Store and
+  every harness keep it, because other projects share both; removing it
+  from *this* machine is `uze plugin remove`, a different scope.
 
 world:
   project: demo-app
@@ -55,7 +57,7 @@ scenes:
         exists: true
         about: and the plugin's skill is where a harness reads it
 
-  - scene: dropping it from the manifest is reported, and nothing is taken away yet
+  - scene: dropping it from the manifest is reported before anything acts on it
     when:
       - shell: |
           set -e
@@ -69,23 +71,30 @@ scenes:
       - file: "{project}/agents.lock"
         contains: flow
         about: |
-          reporting drift changes nothing — the lock still carries it, and a
-          removal nobody confirmed is a removal that did not happen
+          reporting is not applying — the lock still carries it until an
+          install is run
       - file: "{home}/.agents/skills/flow:commit/SKILL.md"
         exists: true
         about: and the harness still reads it
 
-  - scene: confirmed, the machine follows the manifest
+  - scene: the lock follows the manifest, and the machine is left alone
     when:
-      - shell: "yes | {uze} install"
-        say: install again, confirming the removal this time
-        check: false
+      - shell: "{uze} install"
+        say: install again, now that the manifest asks for less
     then:
       - file: "{project}/agents.lock"
-        exists: false
+        excludes: flow
         about: |
-          a lock with nothing left to reproduce is not an empty lock, it is
-          no lock
+          the lock no longer answers for a plugin nobody declares — it is
+          derived, so what it loses is what the person just deleted
+      - file: "{project}/agents.lock"
+        contains: demo
+        about: |
+          and it keeps the marketplace the manifest still declares: this is
+          convergence, not truncation
       - file: "{home}/.agents/skills/flow:commit/SKILL.md"
-        exists: false
-        about: and the harness no longer reads a plugin nobody declares
+        exists: true
+        about: |
+          the machine keeps the package and every harness keeps reading it.
+          Other projects share the Store, so taking it away here is
+          `uze plugin remove`'s to do, in machine scope

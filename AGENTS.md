@@ -400,10 +400,12 @@ properties):
   `uze agent …` are project-scoped (`agents.yaml`, `agents.lock`,
   `AGENTS.md`). Neither touches the other's state — see
   `docs/adr/019-explicit-project-machine-boundary-in-cli-command-grammar.md`.
-  `uze install` converges the manifest in both directions (a plugin dropped
-  from `agents.yaml` is removed, once confirmed) and leaves the project
-  context reconciled, so declaring an environment and projecting it are one
-  command rather than two.
+  `uze install` converges the manifest in both directions — a plugin dropped
+  from `agents.yaml` leaves `agents.lock`, while the Store and every harness
+  keep it, because other projects share those and taking it off the machine
+  is `uze plugin remove` — and leaves the project context reconciled, so
+  declaring an environment and projecting it are one command rather than
+  two.
 - **`uze agent …` is an audience, not a category**: its reader is an agent
   UZE launched, not a person, so it is hidden from `uze --help` and
   documented in the region UZE projects into `AGENTS.md` — each audience

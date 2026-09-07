@@ -395,12 +395,7 @@ impl Project<'_> {
     /// no-transaction model (the Store has no all-or-nothing multi-package
     /// primitive to build one on).
     #[tracing::instrument(name = "project.install", skip_all, fields(root = %root.display()), err)]
-    pub fn install(
-        &self,
-        root: &Path,
-        authority: &dyn TrustAuthority,
-        surplus_authority: &dyn SurplusAuthority,
-    ) -> Result<InstallReport> {
+    pub fn install(&self, root: &Path, authority: &dyn TrustAuthority) -> Result<InstallReport> {
         let canonical = project_root::resolve_project_root(root)?;
         // `install` is an explicit act of setting this project up, so it is
         // the right moment to create the file a person edits — unlike
@@ -493,18 +488,21 @@ impl Project<'_> {
             installed_plugins.push(name);
         }
 
-        // Convergence, third: what the manifest no longer declares. Only
-        // this half is destructive, so it is the only half that asks — a
-        // removal must never ride along on a command whose other passes
-        // are additive. Refusing leaves everything above it standing.
+        // Convergence, third: what the manifest no longer declares.
+        //
+        // Nothing is asked and nothing on this machine is touched. The lock
+        // is derived — regenerable from the manifest, and losing an entry
+        // loses nothing a person did not just delete themselves — so making
+        // it agree with what the project declared is the least destructive
+        // thing this command does, not the most. What *would* be
+        // destructive is taking the package off the machine or out of a
+        // harness, and that is `uze plugin remove`'s to do: other projects
+        // share the Store, and ADR-019 keeps project scope out of it.
         let mut removed_plugins = Vec::new();
         let surplus = project_lock::surplus_against(&manifest, &lock);
-        if !surplus.is_empty() && surplus_authority.approve_removal(&surplus) {
+        if !surplus.is_empty() {
             drop(_mutation);
             for plugin in &surplus {
-                // `remove` inspects before it detaches, so drift on a
-                // managed artifact refuses the removal and says so rather
-                // than deleting something UZE did not write.
                 self.remove(plugin, &canonical)?;
                 removed_plugins.push(plugin.clone());
             }
@@ -777,36 +775,6 @@ pub enum InstallReport {
         #[serde(default)]
         reconciled: bool,
     },
-}
-
-/// Who answers for the one destructive half of an install.
-///
-/// A separate authority from `TrustAuthority` because it answers a
-/// different question — not "may this code run" but "may this be taken
-/// away" — and because the default answer differs: trust is asked once per
-/// package, and removal is refused unless somebody says otherwise.
-pub trait SurplusAuthority {
-    fn approve_removal(&self, plugins: &[String]) -> bool;
-}
-
-/// Refuses every removal. What a surface that cannot ask uses — opening
-/// the client must not remove anything, however clearly the manifest says
-/// it should.
-pub struct RefuseSurplusRemoval;
-
-impl SurplusAuthority for RefuseSurplusRemoval {
-    fn approve_removal(&self, _plugins: &[String]) -> bool {
-        false
-    }
-}
-
-/// Approves every removal. For a caller that has already asked.
-pub struct ApproveSurplusRemoval;
-
-impl SurplusAuthority for ApproveSurplusRemoval {
-    fn approve_removal(&self, _plugins: &[String]) -> bool {
-        true
-    }
 }
 
 /// Read by both the project environment and the workspace overview, so it

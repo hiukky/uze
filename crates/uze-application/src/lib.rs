@@ -3,14 +3,12 @@
 pub mod application;
 pub mod bootstrap;
 
+pub use application::StaleProjection;
 pub use application::UzeApplication;
 pub use application::services::{
     AgentIdentity, AgentNotice, AgentPlacement, DeliveryOutcome, DeliveryPolicyView,
     DeliveryReport, Evaluation, Isolation, NamedTask, Reconciliation, ReleasedTask, TaskStateView,
     TaskView, UpstreamSync,
-};
-pub use application::{
-    ApproveSurplusRemoval, RefuseSurplusRemoval, StaleProjection, SurplusAuthority,
 };
 
 /// Types the read models above are made of. Presentation consumes these

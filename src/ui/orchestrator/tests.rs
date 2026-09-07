@@ -1018,6 +1018,100 @@ mod workspace_tests {
         assert!(behind_by_two.contains("⇧2 #20"), "{behind_by_two}");
     }
 
+    fn label_every_tab(model: &mut WorkspaceModel, label: &str) {
+        if let Some(session) = model.session.as_mut() {
+            for space in &mut session.workspace.spaces {
+                for tab in &mut space.tabs {
+                    tab.label = label.to_owned();
+                }
+            }
+        }
+    }
+
+    /// A task that acquired a name renames the tab that is running it —
+    /// without this the name is stored everywhere except where a person
+    /// looks, since the strip and the sidebar read the *tab's* label.
+    #[test]
+    fn a_task_that_acquired_a_name_renames_its_tab() {
+        let mut model = agent_with_task(TaskStateView::Ready, 3);
+        for tasks in model.tasks.values_mut() {
+            tasks[0].branch = "fix/branch-naming".to_owned();
+            tasks[0].label = "branch naming".to_owned();
+        }
+        label_every_tab(&mut model, "agent 1");
+
+        let requests = super::super::adopt_task_names(&mut model);
+
+        assert!(
+            requests.iter().any(|request| matches!(
+                request,
+                uze_terminal::ClientRequest::RenameTab { label, .. } if label == "branch naming"
+            )),
+            "the tab takes the name the work acquired: {requests:?}"
+        );
+        // Once the session echoes the rename, the tab already says what the
+        // task says and nothing more is owed.
+        label_every_tab(&mut model, "branch naming");
+        assert!(
+            super::super::adopt_task_names(&mut model).is_empty(),
+            "a tab already carrying its task's name is left alone"
+        );
+    }
+
+    /// A task renamed again — by its agent, or by the operator's own
+    /// `git branch -m` — carries the tab with it, because the label on
+    /// that tab is one this mechanism put there.
+    #[test]
+    fn a_task_renamed_again_carries_the_tab_it_already_named() {
+        let mut model = agent_with_task(TaskStateView::Ready, 3);
+        for tasks in model.tasks.values_mut() {
+            tasks[0].label = "branch naming".to_owned();
+        }
+        label_every_tab(&mut model, "agent 1");
+        let first = super::super::adopt_task_names(&mut model);
+        assert_eq!(first.len(), 1);
+        label_every_tab(&mut model, "branch naming");
+
+        for tasks in model.tasks.values_mut() {
+            tasks[0].label = "renamed by hand".to_owned();
+        }
+        let second = super::super::adopt_task_names(&mut model);
+
+        assert!(
+            second.iter().any(|request| matches!(
+                request,
+                uze_terminal::ClientRequest::RenameTab { label, .. } if label == "renamed by hand"
+            )),
+            "the tab follows the new name: {second:?}"
+        );
+    }
+
+    /// A label the user chose is theirs and stays — the same rule the shell
+    /// adoption already follows.
+    #[test]
+    fn a_tab_the_user_named_is_never_renamed_by_its_task() {
+        let mut model = agent_with_task(TaskStateView::Ready, 3);
+        for tasks in model.tasks.values_mut() {
+            tasks[0].label = "branch naming".to_owned();
+        }
+        label_every_tab(&mut model, "my own name");
+
+        assert!(super::super::adopt_task_names(&mut model).is_empty());
+    }
+
+    /// A task still carrying its generated identifier has no name to give.
+    #[test]
+    fn an_unnamed_task_renames_nothing() {
+        let mut model = agent_with_task(TaskStateView::Ready, 3);
+        for tasks in model.tasks.values_mut() {
+            let id = tasks[0].id.clone();
+            tasks[0].label = id;
+        }
+        label_every_tab(&mut model, "agent 1");
+
+        assert!(super::super::adopt_task_names(&mut model).is_empty());
+    }
+
     /// A named task reads as its name on both lines: the label the agent
     /// chose above, the branch it renamed below. This is where a claim
     /// about what the *screen says* belongs — a journey may only gate on

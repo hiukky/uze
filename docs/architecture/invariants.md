@@ -1202,10 +1202,10 @@ where `commits_ahead` answers `0` and a task with work reads as having none.
 Declared (`agents.yaml`) → locked (`agents.lock`) → installed (the Store) →
 delivered (the projected region) is compared from the manifest down, and the
 comparison is two file reads and a set difference — no acquisition, no
-network. The one destructive convergence, removing what the manifest no
-longer declares, is refused unless somebody confirms it; the client, which
-has nowhere to ask, always refuses.
+network. Converging a removal edits the lock and nothing on the machine:
+the Store keeps the package and every harness keeps reading it, because
+other projects share both and machine scope is `uze plugin remove`'s.
 
-> `tests/workspace/consumer.rs::drift::install_removes_what_the_manifest_dropped_only_when_it_is_approved`
+> `tests/workspace/consumer.rs::drift::install_converges_the_lock_and_leaves_the_machine_alone`
 > `tests/workspace/consumer.rs::drift::a_policy_change_reads_as_a_stale_projection_until_install_clears_it`
 
