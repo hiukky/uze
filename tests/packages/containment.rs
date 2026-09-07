@@ -92,6 +92,9 @@ fn an_absolute_symlink_escape_is_rejected() {
 /// where the install happens to run.
 #[test]
 fn two_names_one_case_insensitive_filesystem_cannot_separate_are_rejected() {
+    // The fixture is two files whose names differ only in case. Creating it
+    // is itself a filesystem question, and the assertion below follows the
+    // answer rather than assuming one.
     let root = temporary("case-collision");
     let package = root.join("package");
     package_at(&package);
@@ -99,22 +102,42 @@ fn two_names_one_case_insensitive_filesystem_cannot_separate_are_rejected() {
     fs::write(skill.join("SKILL.md"), b"# reviewed\n").unwrap();
     fs::write(skill.join("skill.md"), b"# installed\n").unwrap();
 
+    // Whether the pair could be created at all is the platform's answer,
+    // not ours — and it decides what there is to assert. On a
+    // case-sensitive filesystem both files exist and the package must be
+    // refused. On a case-insensitive one the second write *is* the first,
+    // so there is a single file, nothing collides, and refusing would be
+    // the bug. Which is also where the protection earns its keep: a
+    // package is authored and reviewed where both can exist, and the
+    // refusal there is what stops it ever reaching a machine where one
+    // silently wins.
+    let both_exist = skill.join("SKILL.md").exists() && skill.join("skill.md").exists();
+    let separable = both_exist
+        && fs::read(skill.join("SKILL.md")).unwrap() != fs::read(skill.join("skill.md")).unwrap();
+
     let (home, result) = install(&root);
-    let message = match result {
-        Ok(_) => panic!("a package with a case-colliding pair was installed"),
-        Err(error) => error.to_string(),
-    };
-    assert!(
-        message.contains("case-insensitive"),
-        "the refusal must name why the pair is refused, got: {message}"
-    );
-    assert!(
-        !home
-            .plugins_dir()
-            .join("local/containment-fixture")
-            .exists(),
-        "a rejected package still left bytes in the store"
-    );
+    let installed = home.plugins_dir().join("local/containment-fixture");
+    if separable {
+        let message = match result {
+            Ok(_) => panic!("a package with a case-colliding pair was installed"),
+            Err(error) => error.to_string(),
+        };
+        assert!(
+            message.contains("case-insensitive"),
+            "the refusal must name why the pair is refused, got: {message}"
+        );
+        assert!(
+            !installed.exists(),
+            "a rejected package still left bytes in the store"
+        );
+    } else {
+        assert!(
+            result.is_ok(),
+            "this filesystem folded the two names into one, so there is no \
+             collision to refuse: {:?}",
+            result.err()
+        );
+    }
 
     let _ = fs::remove_dir_all(root);
 }
