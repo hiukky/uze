@@ -618,7 +618,7 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
             let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
             let root = uze_application::space_root(&cwd);
             let label = uze_terminal::open_space(&root)
-                .map_err(|error| uze_application::UzeError::AcquisitionFailed(error.to_string()))?;
+                .map_err(|error| uze_application::UzeError::TerminalRuntime(error.to_string()))?;
             println!(
                 "opened space `{label}` at {} in the running uze",
                 root.display()
@@ -653,12 +653,12 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
             // Resolved the same way `ui::orchestrator` resolves it before
             // attaching — `stop` must target the server that `attach`
             // actually started, not one keyed on the raw cwd.
-            TerminalAction::Stop => uze_terminal::stop(&uze_application::workspace_root_or_self(
-                &root,
-            ))
-            .map_err(|error| uze_application::UzeError::AcquisitionFailed(error.to_string())),
+            TerminalAction::Stop => {
+                uze_terminal::stop(&uze_application::workspace_root_or_self(&root))
+                    .map_err(|error| uze_application::UzeError::TerminalRuntime(error.to_string()))
+            }
             TerminalAction::Serve { root } => uze_terminal::serve(root)
-                .map_err(|error| uze_application::UzeError::AcquisitionFailed(error.to_string())),
+                .map_err(|error| uze_application::UzeError::TerminalRuntime(error.to_string())),
         };
     }
     let app = UzeApplication::from_env(home.clone())?;

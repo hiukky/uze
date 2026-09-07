@@ -68,6 +68,12 @@ pub enum UzeError {
     CredentialBearingUrl,
     #[error("could not acquire package: {0}")]
     AcquisitionFailed(String),
+    /// The local terminal runtime failed. Its own right to a variant: a
+    /// socket that cannot be reached has nothing to do with acquiring a
+    /// package, and borrowing that variant is how `uze terminal stop`
+    /// reported a missing socket as `could not acquire package`.
+    #[error("terminal runtime: {0}")]
+    TerminalRuntime(String),
     #[error("setup incomplete: {0}")]
     ProvisioningIncomplete(String),
     /// The operator declined. Distinct from `TrustRequired`: a decision was
