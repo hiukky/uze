@@ -641,6 +641,7 @@ pub struct Standard<'a> {
 impl Standard<'_> {
     /// Writes every stand-in and returns them in registration order.
     pub fn install(&self) -> Vec<FakeHarness> {
+        self.install_installer_fetcher();
         let session = |display: &str, version: &str| Action::InteractiveSession {
             banner: format!("{display} {version}"),
         };
@@ -700,6 +701,25 @@ impl Standard<'_> {
             )
             .build(),
         ]
+    }
+
+    /// A `curl` that fetches nothing.
+    ///
+    /// OpenCode's provisioning route for the legacy `opencode2` name is
+    /// `sh -c "curl -fsSL https://opencode.ai/v2/install | bash"`, and a
+    /// suite that pins that name to keep the path proven was reaching the
+    /// public Internet to do it — the run failed whenever the network was
+    /// down, and piped a remote script into `bash` when it was up. A
+    /// stand-in first on `$PATH` answers with nothing and exits zero, so
+    /// the pipeline succeeds offline and UZE still runs the command it
+    /// would really run; the invocation log is what proves it did.
+    ///
+    /// Not returned with the harnesses: callers print that list as the set
+    /// of harness stand-ins, and this is not one.
+    fn install_installer_fetcher(&self) {
+        FakeHarness::new(self.bin_dir, "curl")
+            .version_line("curl 9.9.9 (fake)")
+            .build();
     }
 
     /// Attaches the bare-invocation session rule, when this set is

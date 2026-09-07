@@ -3600,7 +3600,7 @@ fn io_error(source: io::Error) -> UzeError {
     }
 }
 fn runtime_error(error: uze_terminal::RuntimeError) -> UzeError {
-    UzeError::AcquisitionFailed(error.to_string())
+    UzeError::TerminalRuntime(error.to_string())
 }
 
 #[cfg(test)]

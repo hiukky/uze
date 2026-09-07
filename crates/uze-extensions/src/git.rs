@@ -90,19 +90,18 @@ pub fn change_summary(host: &dyn Host, cwd: &Path) -> Option<GitChangeSummary> {
         return None;
     }
 
+    // One diff against HEAD, not the staged and unstaged ones added
+    // together: a line staged and then edited again appears in both, and
+    // the sum counts it twice. A repository with no commit yet has no HEAD
+    // to diff against and answers from the index alone.
+    let numstat = run_git(host, &root, &["diff", "--numstat", "HEAD"])
+        .or_else(|_| run_git(host, &root, &["diff", "--numstat", "--cached"]))
+        .ok()?;
+    let (additions, deletions) = parse_numstat(&numstat);
     let mut summary = GitChangeSummary {
-        additions: 0,
-        deletions: 0,
+        additions,
+        deletions,
     };
-    for args in [
-        ["diff", "--numstat"].as_slice(),
-        ["diff", "--cached", "--numstat"].as_slice(),
-    ] {
-        let output = run_git(host, &root, args).ok()?;
-        let (additions, deletions) = parse_numstat(&output);
-        summary.additions += additions;
-        summary.deletions += deletions;
-    }
     for file in files
         .iter()
         .filter(|file| file.status == FileStatus::Untracked)
@@ -922,14 +921,7 @@ fn parse_numstat(output: &str) -> (u32, u32) {
 /// `--no-index`; count their visible lines as additions so the badge and the
 /// overlay agree that they are changes.
 fn untracked_line_count(host: &dyn Host, path: &Path) -> u32 {
-    let Some(contents) = host.read_file(path) else {
-        return 0;
-    };
-    if contents.is_empty() {
-        0
-    } else {
-        contents.lines().count().max(1) as u32
-    }
+    host.count_lines(path)
 }
 
 /// Parses `git status --porcelain=v1 --untracked-files=all` output.
@@ -1840,6 +1832,50 @@ mod tests {
     /// changes and every sibling agent's alongside its own — including
     /// checkouts whose agent is long gone. Scoping is by checkout, not by
     /// the isolation layout, so it holds for any worktree, however created.
+
+    /// The badge counts the change against HEAD, which is what the viewer
+    /// sees on screen — not the staged diff plus the unstaged one. A line
+    /// staged and then edited again appears in both of those, and adding
+    /// them reported the work twice.
+    #[test]
+    fn a_line_staged_and_then_edited_again_counts_once() {
+        let repository = uze_testkit::git::Repository::new("git-badge-double-count");
+        let root = repository.root().to_path_buf();
+        repository.commit_file("f.rs", "a\nb\nc\n");
+
+        std::fs::write(root.join("f.rs"), "a\nB\nc\n").unwrap();
+        repository.git(&["add", "f.rs"]);
+        std::fs::write(root.join("f.rs"), "a\nBB\nc\n").unwrap();
+
+        assert_eq!(
+            change_summary(&TestHost, &root),
+            Some(GitChangeSummary {
+                additions: 1,
+                deletions: 1,
+            }),
+            "one line differs from HEAD, however many times it was touched \
+             on the way there"
+        );
+    }
+
+    /// A repository whose first commit has not happened has no HEAD to
+    /// diff against; the badge still has to answer for what is staged.
+    #[test]
+    fn a_repository_with_no_commit_yet_still_reports_what_is_staged() {
+        let repository = uze_testkit::git::Repository::new("git-badge-unborn");
+        let root = repository.root().to_path_buf();
+        std::fs::write(root.join("first.rs"), "fn first() {}\n").unwrap();
+        repository.git(&["add", "first.rs"]);
+
+        assert_eq!(
+            change_summary(&TestHost, &root),
+            Some(GitChangeSummary {
+                additions: 1,
+                deletions: 0,
+            })
+        );
+    }
+
     #[test]
     fn discovers_main_and_configured_linked_worktrees() {
         let repository = uze_testkit::git::Repository::new("worktree-test");

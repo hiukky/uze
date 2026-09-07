@@ -121,10 +121,29 @@ pub fn open_space(root: &Path) -> Result<String, RuntimeError> {
     Ok(label)
 }
 
+/// Stops the user's server, and says so when there was nothing to stop.
+///
+/// "Nothing is running" is the ordinary state of this command, not a
+/// failure: after a reboot, after the server exited, and — on WSL — after
+/// a `/tmp` cleaner took the socket out from under a server that was
+/// running. A missing socket and a socket nobody is listening on are both
+/// that state, and reporting them as errors made every teardown script and
+/// journey run end on a failure it was right to ignore.
 pub fn stop(_root: &Path) -> Result<(), RuntimeError> {
     let _span = tracing::info_span!("terminal.stop", root = %_root.display()).entered();
     let endpoint = Endpoint::global()?;
-    let mut stream = UnixStream::connect(&endpoint.socket)?;
+    let mut stream = match UnixStream::connect(&endpoint.socket) {
+        Ok(stream) => stream,
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
+            ) =>
+        {
+            return Ok(());
+        }
+        Err(error) => return Err(error.into()),
+    };
     write_message(&mut stream, &ClientRequest::Stop)?;
     match read_message::<_, ClientEvent>(&mut BufReader::new(stream))? {
         Some(ClientEvent::Stopped) => Ok(()),
@@ -1923,6 +1942,42 @@ mod tests {
         drop(listener);
         let _ = std::fs::remove_file(&endpoint.socket);
         let _ = std::fs::remove_dir_all(&deep);
+    }
+
+    /// "Nothing is running" is the ordinary state of `uze terminal stop`,
+    /// and it used to exit non-zero: a machine that has not opened the TUI
+    /// since boot has no socket, and a `/tmp` cleaner taking the socket out
+    /// from under a live server leaves one nobody answers. Both reached the
+    /// operator as `could not acquire package: terminal runtime I/O error`,
+    /// from a command that stops a terminal.
+    #[test]
+    fn stopping_a_runtime_that_is_not_running_is_not_a_failure() {
+        let scratch = uze_testkit::temp::socket_scratch("stop-idempotent");
+        let mut env = uze_testkit::env::scope();
+        env.set("XDG_RUNTIME_DIR", &scratch);
+
+        let endpoint = Endpoint::global().expect("an endpoint can always be named");
+        let _ = std::fs::remove_file(&endpoint.socket);
+        assert!(
+            super::stop(&scratch).is_ok(),
+            "no socket at all is nothing to stop, not a failure"
+        );
+
+        // The shape a cleaner leaves: the file is there, the server is not.
+        let listener = std::os::unix::net::UnixListener::bind(&endpoint.socket)
+            .expect("the endpoint path binds");
+        drop(listener);
+        assert!(
+            endpoint.socket.exists(),
+            "dropping the listener leaves the socket file behind, which is the case under test"
+        );
+        assert!(
+            super::stop(&scratch).is_ok(),
+            "a socket nobody answers is nothing to stop either"
+        );
+
+        let _ = std::fs::remove_file(&endpoint.socket);
+        let _ = std::fs::remove_dir_all(&scratch);
     }
 
     #[test]

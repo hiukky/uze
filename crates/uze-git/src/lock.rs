@@ -8,7 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{SpawnError, read};
+use crate::SpawnError;
 
 const LOCK_FILE_NAME: &str = "uze-write.lock";
 const RETRY_INTERVAL: Duration = Duration::from_millis(20);
@@ -77,18 +77,13 @@ pub(crate) fn acquire(root: &Path, timeout: Duration) -> Result<Held, SpawnError
 
 /// `<common dir>/uze-write.lock`, or `None` outside a repository.
 fn lock_path(root: &Path) -> Option<PathBuf> {
-    let common = read(
-        root,
-        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    // Every write asks this before it can take the lock, so it is the
+    // single hottest caller of the memo in `repository`.
+    Some(
+        crate::repository::common_dir(root)
+            .ok()?
+            .join(LOCK_FILE_NAME),
     )
-    .ok()?
-    .successful()
-    .ok()?;
-    let common = common.trim();
-    if common.is_empty() {
-        return None;
-    }
-    Some(PathBuf::from(common).join(LOCK_FILE_NAME))
 }
 
 #[cfg(unix)]
