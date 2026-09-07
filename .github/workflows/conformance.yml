@@ -57,6 +57,11 @@ env:
 jobs:
   conformance:
     name: E2E - ${{ matrix.label }}
+    # TEMPORARY-MACOS-ONLY: while the macOS vertical is being stabilised on this branch,
+    # everything else is skipped so a run answers in minutes instead of
+    # competing for runners. Revert this commit before merging — grep
+    # `TEMPORARY-MACOS-ONLY` to find every line it added.
+    if: ${{ github.head_ref != 'agent/ls10rd' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     strategy:

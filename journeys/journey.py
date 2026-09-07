@@ -31,6 +31,19 @@ from pathlib import Path
 
 import yaml
 
+# A run reports as it goes, and it has to report as it goes *wherever* it
+# runs. Python line-buffers stdout only when it is a terminal; into a pipe —
+# which is every CI log and every `| tee` — it switches to 8 KB blocks, so a
+# five-minute journey run shows nothing at all and then everything at once.
+# Watching a run is how you tell "slow" from "hung", and that distinction is
+# the whole reason the output is written a check at a time.
+#
+# Reconfigured here rather than passing `flush=True` at each call site: there
+# are fifteen of those and a sixteenth would silently not do it. (The same
+# lesson, from the other direction, is why `tests/scripts/installer-test.sh`
+# starts its helper server with `python3 -u`.)
+sys.stdout.reconfigure(line_buffering=True)
+
 REPO = Path(__file__).resolve().parent.parent
 
 # Outside the repository on purpose. UZE reads any path containing

@@ -50,6 +50,11 @@ jobs:
     # and the rest, where the pair now reads as what each tier drives
     # end to end — this one drives UZE, those drive a vendor's harness.
     name: E2E - UZE
+    # TEMPORARY-MACOS-ONLY: while the macOS vertical is being stabilised on
+    # this branch, everything else is skipped so a run answers in minutes
+    # instead of competing for runners. Revert this commit before merging —
+    # grep `TEMPORARY-MACOS-ONLY` to find every line it added.
+    if: ${{ github.head_ref != 'agent/ls10rd' }}
     # Pinned, not `ubuntu-latest`. The journey drives a rendered screen, so
     # the terminal is part of the contract — the tmux build, the locale and
     # the unicode width tables decide where a glyph lands, and a moving

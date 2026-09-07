@@ -65,7 +65,12 @@ scenes:
       - wait: screen
         until: checkout removed
         in: sidebar
-        timeout: 40
+        # A removed checkout is one of the things `TASK_REFRESH` exists to
+        # notice (its doc comment says so), and that timer is 20 seconds.
+        # Forty was two of them, so a deletion landing just after a tick had
+        # to be caught by the very next one. Three intervals, so the wait is
+        # bounded by the cadence rather than racing it.
+        timeout: 70
         settle: 1.0
         say: the workspace says what happened instead of showing a broken row
     then:

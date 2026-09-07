@@ -40,6 +40,11 @@ jobs:
 
   fmt:
     name: Format
+    # TEMPORARY-MACOS-ONLY: while the macOS vertical is being stabilised on this branch,
+    # everything else is skipped so a run answers in minutes instead of
+    # competing for runners. Revert this commit before merging — grep
+    # `TEMPORARY-MACOS-ONLY` to find every line it added.
+    if: ${{ github.head_ref != 'agent/ls10rd' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -52,6 +57,11 @@ jobs:
 
   lint:
     name: Clippy
+    # TEMPORARY-MACOS-ONLY: while the macOS vertical is being stabilised on this branch,
+    # everything else is skipped so a run answers in minutes instead of
+    # competing for runners. Revert this commit before merging — grep
+    # `TEMPORARY-MACOS-ONLY` to find every line it added.
+    if: ${{ github.head_ref != 'agent/ls10rd' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -65,6 +75,11 @@ jobs:
 
   test:
     name: Test
+    # TEMPORARY-MACOS-ONLY: while the macOS vertical is being stabilised on this branch,
+    # everything else is skipped so a run answers in minutes instead of
+    # competing for runners. Revert this commit before merging — grep
+    # `TEMPORARY-MACOS-ONLY` to find every line it added.
+    if: ${{ github.head_ref != 'agent/ls10rd' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -77,6 +92,11 @@ jobs:
 
   msrv:
     name: MSRV
+    # TEMPORARY-MACOS-ONLY: while the macOS vertical is being stabilised on this branch,
+    # everything else is skipped so a run answers in minutes instead of
+    # competing for runners. Revert this commit before merging — grep
+    # `TEMPORARY-MACOS-ONLY` to find every line it added.
+    if: ${{ github.head_ref != 'agent/ls10rd' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -101,6 +121,11 @@ jobs:
 
   coverage:
     name: Coverage
+    # TEMPORARY-MACOS-ONLY: while the macOS vertical is being stabilised on this branch,
+    # everything else is skipped so a run answers in minutes instead of
+    # competing for runners. Revert this commit before merging — grep
+    # `TEMPORARY-MACOS-ONLY` to find every line it added.
+    if: ${{ github.head_ref != 'agent/ls10rd' }}
     runs-on: ubuntu-24.04
     # LLVM instrumentation changes test timing and memory use. Keep this
     # separate from ordinary tests so a concurrency regression cannot leave a
@@ -143,6 +168,11 @@ jobs:
 
   audit:
     name: Audit
+    # TEMPORARY-MACOS-ONLY: while the macOS vertical is being stabilised on this branch,
+    # everything else is skipped so a run answers in minutes instead of
+    # competing for runners. Revert this commit before merging — grep
+    # `TEMPORARY-MACOS-ONLY` to find every line it added.
+    if: ${{ github.head_ref != 'agent/ls10rd' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -163,6 +193,11 @@ jobs:
 
   licences:
     name: Licences
+    # TEMPORARY-MACOS-ONLY: while the macOS vertical is being stabilised on this branch,
+    # everything else is skipped so a run answers in minutes instead of
+    # competing for runners. Revert this commit before merging — grep
+    # `TEMPORARY-MACOS-ONLY` to find every line it added.
+    if: ${{ github.head_ref != 'agent/ls10rd' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -192,6 +227,11 @@ jobs:
 
   secrets:
     name: Secrets
+    # TEMPORARY-MACOS-ONLY: while the macOS vertical is being stabilised on this branch,
+    # everything else is skipped so a run answers in minutes instead of
+    # competing for runners. Revert this commit before merging — grep
+    # `TEMPORARY-MACOS-ONLY` to find every line it added.
+    if: ${{ github.head_ref != 'agent/ls10rd' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -233,6 +273,11 @@ jobs:
 
   installer:
     name: Installer
+    # TEMPORARY-MACOS-ONLY: while the macOS vertical is being stabilised on this branch,
+    # everything else is skipped so a run answers in minutes instead of
+    # competing for runners. Revert this commit before merging — grep
+    # `TEMPORARY-MACOS-ONLY` to find every line it added.
+    if: ${{ github.head_ref != 'agent/ls10rd' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -246,6 +291,11 @@ jobs:
 
   web:
     name: Web
+    # TEMPORARY-MACOS-ONLY: while the macOS vertical is being stabilised on this branch,
+    # everything else is skipped so a run answers in minutes instead of
+    # competing for runners. Revert this commit before merging — grep
+    # `TEMPORARY-MACOS-ONLY` to find every line it added.
+    if: ${{ github.head_ref != 'agent/ls10rd' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     defaults:
@@ -264,6 +314,11 @@ jobs:
 
   python:
     name: Python
+    # TEMPORARY-MACOS-ONLY: while the macOS vertical is being stabilised on this branch,
+    # everything else is skipped so a run answers in minutes instead of
+    # competing for runners. Revert this commit before merging — grep
+    # `TEMPORARY-MACOS-ONLY` to find every line it added.
+    if: ${{ github.head_ref != 'agent/ls10rd' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
