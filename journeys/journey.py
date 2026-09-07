@@ -312,13 +312,21 @@ def build_world(spec: dict, slug: str, binary: Path, keep: bool) -> World:
         "GIT_COMMITTER_EMAIL": "ada@journey.test",
         "GIT_CONFIG_GLOBAL": str(root / "home" / ".gitconfig"),
     }
-    # Built, never inherited — with one named exception. `LLVM_PROFILE_FILE`
-    # is how a coverage-instrumented binary writes its counters, and the
-    # question "what do the journeys actually reach" cannot be answered
-    # without it reaching the processes under test. Passed through only when
-    # the caller set it, so an ordinary run is unaffected.
-    if profile := os.environ.get("LLVM_PROFILE_FILE"):
-        env["LLVM_PROFILE_FILE"] = profile
+    # Built, never inherited — with named exceptions, each one a question
+    # that cannot be answered without it reaching the processes under test.
+    # `LLVM_PROFILE_FILE` is how a coverage-instrumented binary writes its
+    # counters ("what do the journeys actually reach"); the two telemetry
+    # variables are how a run says where its time went ("what does this flow
+    # actually cost"), which is otherwise unobservable from outside a world
+    # this sealed. Each is passed through only when the caller set it, so an
+    # ordinary run is unaffected.
+    for passed_through in (
+        "LLVM_PROFILE_FILE",
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "UZE_LOG",
+    ):
+        if value := os.environ.get(passed_through):
+            env[passed_through] = value
 
     (root / "home" / ".gitconfig").write_text(
         "[user]\n\tname = Ada Lovelace\n\temail = ada@journey.test\n"
