@@ -176,7 +176,7 @@ fn install_project_environment_reproduces_a_lock_on_a_fresh_machine() {
         .install(&fx.project_root, &AlwaysTrust)
         .unwrap();
     match report {
-        InstallReport::Installed { plugins } => {
+        InstallReport::Installed { plugins, .. } => {
             assert_eq!(plugins, vec!["flow".to_owned()]);
         }
         other => panic!("expected Installed, got {other:?}"),
@@ -230,22 +230,45 @@ fn install_project_environment_is_a_no_op_once_everything_is_installed() {
         .add("flow", "test-market", &fx.project_root, &AlwaysTrust)
         .unwrap();
 
+    // `add` declared the policy scaffold, so the first install still owes a
+    // projection; what this test is about is the run after that one.
+    app.project()
+        .install(&fx.project_root, &AlwaysTrust)
+        .unwrap();
     let report = app
         .project()
         .install(&fx.project_root, &AlwaysTrust)
         .unwrap();
-    assert!(matches!(report, InstallReport::NoChanges));
+    assert!(
+        matches!(report, InstallReport::NoChanges),
+        "expected NoChanges, got {report:?}"
+    );
 }
 
 #[test]
-fn install_project_environment_with_no_lock_is_a_no_op() {
+fn install_project_environment_with_no_lock_installs_nothing_and_settles() {
     let fx = Fixture::new("no-lock");
-    let report = fx
-        .app()
+    let app = fx.app();
+    // The first run is not nothing: `install` creates the manifest a person
+    // edits, and a manifest that declares a policy is owed a projection.
+    let report = app
         .project()
         .install(&fx.project_root, &AlwaysTrust)
         .unwrap();
-    assert!(matches!(report, InstallReport::NoChanges));
+    match report {
+        InstallReport::Installed { plugins, .. } => assert!(plugins.is_empty()),
+        InstallReport::NoChanges => {}
+    }
+    // The second has nothing left to do, which is the property that
+    // actually matters: installing twice is installing once.
+    let report = app
+        .project()
+        .install(&fx.project_root, &AlwaysTrust)
+        .unwrap();
+    assert!(
+        matches!(report, InstallReport::NoChanges),
+        "expected NoChanges, got {report:?}"
+    );
 }
 
 /// The path a person actually takes: write `agents.yaml` by hand (or clone
@@ -271,7 +294,7 @@ fn install_resolves_a_declaration_the_lock_has_never_seen() {
         .unwrap();
 
     match report {
-        InstallReport::Installed { plugins } => assert_eq!(plugins, vec!["flow".to_owned()]),
+        InstallReport::Installed { plugins, .. } => assert_eq!(plugins, vec!["flow".to_owned()]),
         other => panic!("expected Installed, got {other:?}"),
     }
     assert!(
@@ -752,4 +775,169 @@ fn project_root_resolution_is_deterministic_from_a_subdirectory() {
     fs::create_dir_all(&nested).unwrap();
     let resolved = project_root::resolve_project_root(&nested).unwrap();
     assert_eq!(resolved, fx.project_root.canonicalize().unwrap());
+}
+
+/// Drift along the chain a project's environment passes through, and what
+/// converging it does. Every assertion reads the two documents, the Store
+/// and the projected file — never UZE's own summary of them.
+mod drift {
+    use super::*;
+
+    fn declaring(fx: &Fixture, plugins: &[&str]) {
+        let mut text = format!(
+            "marketplaces:\n  test-market:\n    path: {}\n",
+            fx.marketplace_root.display()
+        );
+        if !plugins.is_empty() {
+            text.push_str("    plugins:\n");
+            for plugin in plugins {
+                text.push_str(&format!("      - {plugin}\n"));
+            }
+        }
+        fs::write(fx.project_root.join("agents.yaml"), text).unwrap();
+    }
+
+    /// The edit a person just made is the one thing a plan founded on the
+    /// lock could never see.
+    #[test]
+    fn a_manifest_edit_is_visible_to_the_plan_before_anything_is_installed() {
+        let fx = Fixture::new("drift-unresolved");
+        declaring(&fx, &["flow"]);
+        let app = fx.app();
+
+        let plan = app.project().plan(&fx.project_root).unwrap();
+
+        assert_eq!(plan.unresolved, vec!["flow".to_owned()]);
+        assert!(plan.has_changes);
+        assert!(
+            project_lock::load_lock(&fx.project_root).unwrap().is_none(),
+            "planning resolves nothing and writes nothing"
+        );
+    }
+
+    #[test]
+    fn a_plugin_the_manifest_no_longer_declares_reads_as_surplus() {
+        let fx = Fixture::new("drift-surplus");
+        declaring(&fx, &["flow"]);
+        let app = fx.app();
+        app.project()
+            .install(&fx.project_root, &AlwaysTrust)
+            .unwrap();
+
+        declaring(&fx, &[]);
+        let plan = app.project().plan(&fx.project_root).unwrap();
+
+        assert_eq!(plan.surplus, vec!["flow".to_owned()]);
+        assert!(
+            project_lock::load_lock(&fx.project_root)
+                .unwrap()
+                .is_some_and(|lock| lock.plugins.contains_key("flow")),
+            "the plan reports; it does not remove"
+        );
+    }
+
+    /// Converging the lock is the least destructive thing an install does,
+    /// not the most: the lock is derived, and what it loses is what the
+    /// person just deleted from the file they author.
+    ///
+    /// What is *not* touched is the machine. The Store keeps the package
+    /// and every harness keeps reading it, because other projects share
+    /// both — taking it off this machine is `uze plugin remove`, which is
+    /// a different scope by ADR-019.
+    #[test]
+    fn install_converges_the_lock_and_leaves_the_machine_alone() {
+        let fx = Fixture::new("drift-converge");
+        declaring(&fx, &["flow"]);
+        let app = fx.app();
+        app.project()
+            .install(&fx.project_root, &AlwaysTrust)
+            .unwrap();
+        let installed_before = app.plugins().list().unwrap().len();
+
+        declaring(&fx, &[]);
+        let report = app
+            .project()
+            .install(&fx.project_root, &AlwaysTrust)
+            .unwrap();
+
+        match report {
+            InstallReport::Installed { removed, .. } => {
+                assert_eq!(removed, vec!["flow".to_owned()])
+            }
+            other => panic!("expected the removal to be reported, got {other:?}"),
+        }
+        assert!(
+            project_lock::load_lock(&fx.project_root)
+                .unwrap()
+                .is_none_or(|lock| !lock.plugins.contains_key("flow")),
+            "the lock no longer answers for a plugin nobody declares"
+        );
+        assert_eq!(
+            app.plugins().list().unwrap().len(),
+            installed_before,
+            "and the machine's Store is untouched — other projects share it"
+        );
+        assert!(
+            app.project()
+                .plan(&fx.project_root)
+                .unwrap()
+                .surplus
+                .is_empty(),
+            "with the drift cleared"
+        );
+    }
+
+    /// The policy hole: `worktrees:` is read live wherever UZE acts on it,
+    /// but the agents that must honour it read the projected text.
+    #[test]
+    fn a_policy_change_reads_as_a_stale_projection_until_install_clears_it() {
+        let fx = Fixture::new("drift-projection");
+        let manifest = fx.project_root.join("agents.yaml");
+        fs::write(&manifest, "worktrees:\n  completion: handoff\n").unwrap();
+        let app = fx.app();
+        app.context().reconcile(&fx.project_root).unwrap();
+        assert!(
+            app.project()
+                .plan(&fx.project_root)
+                .unwrap()
+                .stale_projection
+                .is_none(),
+            "a freshly reconciled project is not stale"
+        );
+
+        fs::write(&manifest, "worktrees:\n  completion: merge\n").unwrap();
+
+        let stale = app
+            .project()
+            .plan(&fx.project_root)
+            .unwrap()
+            .stale_projection;
+        assert!(
+            stale.is_some_and(|stale| stale.declared == "merge"),
+            "agents are still reading the previous instruction"
+        );
+        let projected = fs::read_to_string(fx.project_root.join("AGENTS.md")).unwrap();
+        assert!(
+            !projected.contains("fast-forwards the target"),
+            "the file on disk still carries the old clause"
+        );
+
+        app.project()
+            .install(&fx.project_root, &AlwaysTrust)
+            .unwrap();
+
+        assert!(
+            app.project()
+                .plan(&fx.project_root)
+                .unwrap()
+                .stale_projection
+                .is_none(),
+            "one install later, the projection has caught up"
+        );
+        let projected = fs::read_to_string(fx.project_root.join("AGENTS.md")).unwrap();
+        assert!(
+            projected.contains("fast-forwards the target"),
+            "and the file carries the new policy's own words: {projected}"
+        );
+    }
 }

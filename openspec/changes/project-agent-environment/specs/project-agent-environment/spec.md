@@ -84,14 +84,42 @@ upward from the working directory, preferring `agents.lock`, then
 - **THEN** the project root resolves to `<root>`
 
 ### Requirement: `desired ≠ actual` is a reportable, non-error state
-A locked plugin that is not yet installed SHALL be a normal, reportable
-state — not an error and not collapsed into a generic "unhealthy" signal.
+The system SHALL report drift across the whole chain a project's
+environment passes through — declared (`agents.yaml`), locked
+(`agents.lock`), installed (the Store), delivered (the projected
+`AGENTS.md` region and the harness bridges it implies) — as a normal,
+reportable state, not an error and not collapsed into a generic
+"unhealthy" signal. A drift no surface names is a drift nobody can act
+on, which is what makes the manifest feel inert after an edit.
 
 #### Scenario: Status reports a missing locked plugin
 - **WHEN** the user runs `uze status` in a project whose lock declares a
   plugin not present in the local Store
 - **THEN** the report includes that plugin's lock entry with its
   installed state, distinguishable from an installed one
+
+#### Scenario: Status reports a declaration the lock does not answer for
+- **WHEN** the user runs `uze status` in a project whose `agents.yaml`
+  declares a plugin the lock has no entry for
+- **THEN** the report names that plugin as declared and unresolved, and
+  names the command that resolves it
+
+#### Scenario: Status reports what the manifest no longer declares
+- **WHEN** the user runs `uze status` in a project whose lock carries a
+  plugin the manifest no longer declares
+- **THEN** the report names that plugin as surplus, distinguishable from
+  a plugin that is merely missing
+
+#### Scenario: Status reports a projection the policy has outrun
+- **WHEN** the user runs `uze status` after `worktrees.completion` was
+  changed in `agents.yaml` and nothing has reconciled the context since
+- **THEN** the report names the projected `AGENTS.md` region as stale,
+  because agents are still reading the previous instruction
+
+#### Scenario: Reporting drift writes nothing
+- **WHEN** any of the above is reported
+- **THEN** no file in the project and nothing in the Store is created,
+  modified or removed
 
 ### Requirement: Remove disambiguation
 `uze remove <plugin>` SHALL remove from the project lock when a lock is
@@ -136,3 +164,91 @@ at a package that was never installed.
 - **WHEN** `add_project_plugin` is called and the underlying `install
   Materialized` call fails (e.g. a package conflict)
 - **THEN** `agents.lock` is not modified
+
+### Requirement: The plan is founded on the manifest
+The project environment plan SHALL be computed from `agents.yaml` as its
+starting point, not from `agents.lock`. The lock records only what
+resolving the manifest produced, so a plan founded on it cannot see a
+declaration nobody has resolved yet — the most common reason a person
+edits the file at all.
+
+#### Scenario: A manifest edit is visible to the plan
+- **WHEN** a plugin is added to `agents.yaml` and the plan is computed
+  before anything is installed
+- **THEN** the plan reports that declaration as pending work
+
+#### Scenario: The plan is read-only
+- **WHEN** the plan is computed in any state, drifted or not
+- **THEN** it performs no filesystem write — no lock persisted, no
+  package acquired or ingested
+
+### Requirement: Install converges what the manifest no longer declares
+`uze install` SHALL converge removals as well as additions: a plugin the
+manifest no longer declares is removed from `agents.lock`, so a
+declarative manifest is declarative in both directions. It SHALL NOT
+remove the package from this machine's Store or detach it from any
+harness — those are shared with every other project and are machine scope
+(`uze plugin remove`). Converging the lock is therefore not a destructive
+act and SHALL NOT require confirmation: the lock is derived, and what it
+loses is what the person just deleted from the file they author.
+
+#### Scenario: An undeclared plugin leaves the lock
+- **WHEN** the user removes a plugin from `agents.yaml` and runs `uze
+  install`
+- **THEN** the lock no longer carries that plugin, and the removal is
+  reported
+
+#### Scenario: The machine keeps what other projects may share
+- **WHEN** the same run completes
+- **THEN** the package is still in the Store and every harness still reads
+  it
+
+#### Scenario: What the manifest still declares survives
+- **WHEN** a marketplace is still declared and only one of its plugins was
+  dropped
+- **THEN** the lock keeps that marketplace, having converged rather than
+  been truncated
+
+### Requirement: Installing is one act
+`uze install` SHALL leave the project context reconciled when it
+finishes, so declaring an environment and projecting it are one intention
+rather than two commands. It SHALL also be reachable as `uze i`.
+
+#### Scenario: Install leaves the context reconciled
+- **WHEN** `uze install` completes having changed what the project's
+  packages contribute
+- **THEN** the project's `AGENTS.md` and the harness bridges it implies
+  are reconciled in the same run, and the report says so
+
+#### Scenario: Install reconciles a policy change
+- **WHEN** `uze install` runs after `worktrees.completion` changed and
+  nothing else did
+- **THEN** the projected region is rewritten to the new policy's text
+
+#### Scenario: The alias is the same command
+- **WHEN** the user runs `uze i`
+- **THEN** it behaves exactly as `uze install`, including its arguments
+  and its report
+
+### Requirement: The client reports drift and never applies it
+The workspace client SHALL surface project environment drift and offer
+the action that resolves it, and SHALL NOT apply it on its own. Opening
+the client must write nothing into a repository somebody is only looking
+at, and that rule does not weaken because the write would be a helpful
+one.
+
+#### Scenario: Drift is surfaced with the action beside it
+- **WHEN** the client is open on a project whose `agents.yaml` has
+  changed since the last install
+- **THEN** the drift is named where the project is described, with the
+  action that applies it
+
+#### Scenario: Opening the client applies nothing
+- **WHEN** the client is opened on a drifted project and no action is
+  taken
+- **THEN** no project file, no lock entry and no attachment is written
+
+#### Scenario: Reading drift costs no network
+- **WHEN** the client computes the drift signal
+- **THEN** it is answered from the project's own files and the Store's
+  index alone, with no acquisition and no remote read

@@ -508,27 +508,117 @@ pub fn gate_failure_message(task: &Task, command: &str, output: &str) -> String 
     )
 }
 
-/// The name a branch is published under: the label as a slug, the
-/// identifier when the label is one already.
-pub fn readable_branch_name(task: &Task) -> String {
-    let slug: String = task
-        .label
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || character == '-' || character == '.' {
-                character.to_ascii_lowercase()
-            } else {
-                '-'
-            }
-        })
-        .collect();
-    let slug = slug.trim_matches('-').to_owned();
-    let slug = if slug.is_empty() {
-        task.id.as_str().to_owned()
-    } else {
-        slug
+/// The name a branch is published under when nobody named the work.
+///
+/// Sourced from the first commit on the branch rather than from the task's
+/// label, because the label of an unnamed task is its generated
+/// identifier — and a pull request titled `agent/zulqgq` teaches a
+/// reviewer nothing. The agent that wrote that commit is the only party
+/// that held the intent, and its subject line is the one place that intent
+/// was already written down.
+///
+/// A Conventional Commits subject gives up its type as the branch's own
+/// (`feat(ui): one layout file` -> `feat/one-layout-file`); anything else
+/// keeps the project's prefix. This is the net under every other
+/// mechanism, not the mechanism: a named task never reaches it.
+pub fn readable_branch_name(primary: &Path, task: &Task) -> String {
+    let fallback = || format!("{}{}", crate::worktree::BRANCH_PREFIX, task.id.as_str());
+    let Some((kind, subject)) = commit_derived_halves(primary, task) else {
+        return fallback();
     };
-    format!("{}{slug}", crate::worktree::BRANCH_PREFIX)
+    match kind {
+        Some(kind) => format!("{kind}/{subject}"),
+        None => format!("{}{subject}", crate::worktree::BRANCH_PREFIX),
+    }
+}
+
+/// The name the work would take from its own first commit, judged against
+/// what the project accepts — `None` when nothing usable can be derived.
+///
+/// This is the automatic half of naming, and it is deliberately the
+/// *later* half: it runs once the work has a commit, because until then
+/// there is nothing to name it after. The agent naming its own work
+/// arrives earlier and therefore wins, which is the whole of the
+/// precedence rule — no ladder, no overwriting.
+///
+/// Judged rather than trusted: a derived name that the declared vocabulary
+/// would refuse from an agent is not one UZE may write behind its back, so
+/// a project whose types the commit does not match keeps the generated
+/// name and says nothing.
+pub fn derived_name(
+    primary: &Path,
+    task: &Task,
+    vocabulary: &crate::worktree::BranchVocabulary,
+) -> Option<String> {
+    let (kind, subject) = commit_derived_halves(primary, task)?;
+    let proposed = match kind {
+        Some(kind) => format!("{kind}/{subject}"),
+        None => subject,
+    };
+    vocabulary.accept(&proposed).ok()
+}
+
+/// The type and subject the branch's first commit yields, if any. A
+/// Conventional Commits subject gives up its type (`feat(ui): one layout
+/// file` -> `feat` + `one-layout-file`); anything else yields a subject
+/// alone.
+fn commit_derived_halves(primary: &Path, task: &Task) -> Option<(Option<String>, String)> {
+    let subject = first_commit_subject(primary, task)?;
+    let (kind, rest) = match subject.split_once(':') {
+        Some((head, rest)) if !head.contains(' ') => {
+            let kind = head.split('(').next().unwrap_or(head).trim_end_matches('!');
+            (Some(slug(kind)).filter(|kind| !kind.is_empty()), rest)
+        }
+        _ => (None, subject.as_str()),
+    };
+    let subject = shorten(&slug(rest));
+    (!subject.is_empty()).then_some((kind, subject))
+}
+
+/// The subject of the oldest commit the branch carries beyond its base.
+fn first_commit_subject(primary: &Path, task: &Task) -> Option<String> {
+    let range = format!("{}..{}", task.base_commit, task.branch);
+    let listing = uze_git::read(primary, &["log", "--format=%s", "--reverse", &range])
+        .ok()?
+        .successful()
+        .ok()?;
+    listing
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(str::to_owned)
+}
+
+/// Lowercase, non-alphanumerics collapsed to single hyphens, trimmed.
+fn slug(text: &str) -> String {
+    let mut slug = String::new();
+    let mut pending = false;
+    for character in text.chars() {
+        if character.is_ascii_alphanumeric() {
+            if pending && !slug.is_empty() {
+                slug.push('-');
+            }
+            pending = false;
+            slug.extend(character.to_lowercase());
+        } else {
+            pending = true;
+        }
+    }
+    slug.trim_matches('-').to_owned()
+}
+
+/// Cut at a word boundary, so a long subject reads as a name rather than
+/// as a truncation.
+fn shorten(slug: &str) -> String {
+    let limit = crate::worktree::SUBJECT_MAX_CHARS;
+    if slug.chars().count() <= limit {
+        return slug.to_owned();
+    }
+    let cut: String = slug.chars().take(limit).collect();
+    match cut.rfind('-') {
+        Some(boundary) if boundary > 0 => cut[..boundary].to_owned(),
+        _ => cut,
+    }
 }
 
 /// Publishes the branch and says whether the forge already has a request
@@ -544,7 +634,7 @@ fn publish(primary: &Path, task: &mut Task) -> Result<Delivered, DeliveryFailure
     let name = task
         .published_as
         .clone()
-        .unwrap_or_else(|| readable_branch_name(task));
+        .unwrap_or_else(|| readable_branch_name(primary, task));
     let refspec = format!("{}:refs/heads/{name}", task.branch);
     let push = if task.pushed {
         vec![
@@ -717,6 +807,16 @@ mod tests {
     }
 
     /// The agent commits a file on its branch.
+    /// Commits with a subject of its own — what the publish-time fallback
+    /// reads, since the branch is named from the work rather than from
+    /// anything said at launch.
+    fn agent_commits_saying(repository: &Repository, task: &Task, file: &str, subject: &str) {
+        let slot = slot_path(repository.root(), task).unwrap();
+        fs::write(slot.join(file), "").unwrap();
+        repository.git_in(&slot, &["add", "--", file]);
+        repository.git_in(&slot, &["commit", "-qm", subject]);
+    }
+
     fn agent_commits(repository: &Repository, task: &Task, file: &str, contents: &str) {
         let slot = slot_path(repository.root(), task).unwrap();
         fs::write(slot.join(file), contents).unwrap();
@@ -1147,6 +1247,67 @@ mod tests {
         assert_eq!(sync_target(repository.root(), TARGET).concern(TARGET), None);
     }
 
+    /// A named task publishes under the name it already has: the
+    /// publish-time derivation is a net under everything else, never a
+    /// second naming that overrules the agent's own.
+    #[test]
+    fn a_named_task_publishes_under_its_own_name() {
+        let repository = repository("landing-named-publish");
+        let primary = repository.root();
+        let mut store = TaskStore::default();
+        let mut task = launch(&repository, &mut store, "anything");
+        agent_commits_saying(
+            &repository,
+            &task,
+            "auth.rs",
+            "fix(auth): stop the redirect loop",
+        );
+        let slot = slot_path(primary, &task).unwrap();
+        repository.git_in(&slot, &["branch", "--move", "fix/chosen-by-the-agent"]);
+        task.take_name("fix/chosen-by-the-agent".to_owned());
+
+        assert_eq!(
+            readable_branch_name(primary, &task),
+            "fix/stop-the-redirect-loop",
+            "the derivation still has an answer of its own"
+        );
+        assert!(
+            task.is_named(),
+            "but the task carries a name, so publish never asks for it"
+        );
+    }
+
+    /// A subject with no conventional type keeps UZE's own prefix rather
+    /// than inventing one the project never declared.
+    #[test]
+    fn a_subject_without_a_type_keeps_the_prefix() {
+        let repository = repository("landing-plain-subject");
+        let primary = repository.root();
+        let mut store = TaskStore::default();
+        let task = launch(&repository, &mut store, "anything");
+        agent_commits_saying(&repository, &task, "auth.rs", "make the thing work");
+
+        assert_eq!(
+            readable_branch_name(primary, &task),
+            "agent/make-the-thing-work"
+        );
+    }
+
+    /// Nothing committed, nothing to read: the identifier is the honest
+    /// answer rather than an invented word.
+    #[test]
+    fn a_branch_with_no_commits_falls_back_to_the_identifier() {
+        let repository = repository("landing-no-commits");
+        let primary = repository.root();
+        let mut store = TaskStore::default();
+        let task = launch(&repository, &mut store, "anything");
+
+        assert_eq!(
+            readable_branch_name(primary, &task),
+            format!("agent/{}", task.id)
+        );
+    }
+
     /// `pr` against a bare remote, with no forge CLI anywhere: the push
     /// is UZE's, the request is the agent's, and the branch is rebased
     /// onto the *remote's* target rather than the operator's local one.
@@ -1169,7 +1330,15 @@ mod tests {
         let primary = repository.root();
         let mut store = TaskStore::default();
         let mut task = launch(&repository, &mut store, "Fix the auth redirect");
-        agent_commits(&repository, &task, "auth.rs", "");
+        // The published name comes from the *work*, not from the launch
+        // prompt: this is the first commit's subject, which is the only
+        // place the agent wrote down what it was doing.
+        agent_commits_saying(
+            &repository,
+            &task,
+            "auth.rs",
+            "fix(auth): stop the redirect loop",
+        );
         // The remote target moved: the rebase base must be the remote's tip.
         let other = uze_testkit::temp::scratch("landing-pr-other");
         repository.git(&[
@@ -1197,20 +1366,20 @@ mod tests {
         else {
             panic!("no request exists yet, so opening one is the agent's");
         };
-        assert_eq!(branch, "agent/fix-the-auth-redirect");
+        assert_eq!(branch, "fix/stop-the-redirect-loop");
         assert!(
-            instruction.contains("agent/fix-the-auth-redirect") && instruction.contains(TARGET),
+            instruction.contains("fix/stop-the-redirect-loop") && instruction.contains(TARGET),
             "the agent is told which branch and which target: {instruction}"
         );
         assert!(task.pushed);
         assert_eq!(task.published_request, None);
         assert_eq!(
             task.published_as.as_deref(),
-            Some("agent/fix-the-auth-redirect")
+            Some("fix/stop-the-redirect-loop")
         );
         let remote_branches = repository.git_in(&other, &["ls-remote", "--heads", REMOTE]);
         assert!(
-            remote_branches.contains("refs/heads/agent/fix-the-auth-redirect"),
+            remote_branches.contains("refs/heads/fix/stop-the-redirect-loop"),
             "{remote_branches}"
         );
         assert!(
@@ -1236,7 +1405,7 @@ mod tests {
         assert_eq!(
             deliver(primary, &mut task, &policy).unwrap(),
             Delivered::Published {
-                branch: "agent/fix-the-auth-redirect".into(),
+                branch: "fix/stop-the-redirect-loop".into(),
                 request: 11,
             },
             "a published branch with a request open for it is a sync"
@@ -1271,7 +1440,12 @@ mod tests {
         let primary = repository.root();
         let mut store = TaskStore::default();
         let mut task = launch(&repository, &mut store, "Fix the auth redirect");
-        agent_commits(&repository, &task, "auth.rs", "");
+        agent_commits_saying(
+            &repository,
+            &task,
+            "auth.rs",
+            "fix(auth): stop the redirect loop",
+        );
         let policy = Policy {
             completion: CompletionBehavior::Pr,
             gate: &[],
@@ -1287,7 +1461,7 @@ mod tests {
         assert_eq!(
             deliver(primary, &mut task, &policy).unwrap(),
             Delivered::Published {
-                branch: "agent/fix-the-auth-redirect".into(),
+                branch: "fix/stop-the-redirect-loop".into(),
                 request: 4,
             }
         );

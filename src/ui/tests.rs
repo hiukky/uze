@@ -1659,6 +1659,7 @@ fn consumer_workspace(
         kind: WorkspaceKind::Consumer,
         agents_directory_present: true,
         project: ProjectOverview {
+            drift: Default::default(),
             environment: state,
             memory: MemoryState::Ready,
             declared_plugins: declared,
@@ -1676,6 +1677,7 @@ fn marketplace_workspace(root: &std::path::Path) -> OverviewWorkspaceSummary {
         kind: WorkspaceKind::Marketplace,
         agents_directory_present: false,
         project: ProjectOverview {
+            drift: Default::default(),
             environment: ProjectEnvironmentState::NotConfigured,
             memory: MemoryState::None,
             declared_plugins: 0,
@@ -1898,6 +1900,7 @@ fn no_workspace_render_creates_nothing() {
             kind: WorkspaceKind::NoWorkspace,
             agents_directory_present: false,
             project: ProjectOverview {
+                drift: Default::default(),
                 environment: ProjectEnvironmentState::NotConfigured,
                 memory: MemoryState::None,
                 declared_plugins: 0,

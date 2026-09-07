@@ -1651,6 +1651,9 @@ impl Attach<'_> {
         while let Ok(event) = inbox.events.try_recv() {
             self.model.apply(event, &self.identities);
         }
+        for request in adopt_task_names(&mut self.model) {
+            let _ = send_request(&mut self.stream, &request);
+        }
         for request in adopt_agent_labels(&mut self.model, &self.identities) {
             let _ = send_request(&mut self.stream, &request);
         }

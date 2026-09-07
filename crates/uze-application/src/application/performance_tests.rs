@@ -255,6 +255,19 @@ fn status_meets_the_budget() {
     world.within_budget("status", |app| app.health().status(&world.project));
 }
 
+/// The agent's own surface: the read path a naming call takes before its
+/// one ref rename, answered from the project's own files plus one Git call.
+#[test]
+fn the_agent_surface_meets_the_budget() {
+    let world = World::build("budget-agent-surface");
+    world.within_budget("agent task name", |app| {
+        // Refused (this is the primary checkout, which owns no task), which
+        // is the same read path a successful naming takes before its one
+        // ref rename.
+        app.workspace().name_task(&world.project, "fix/budget").ok()
+    });
+}
+
 #[test]
 fn doctor_meets_the_budget() {
     let world = World::build("budget-doctor");

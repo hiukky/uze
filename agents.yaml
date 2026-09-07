@@ -7,6 +7,12 @@ worktrees:
   # "Concurrent work isolation" section by `uze context reconcile`.
   completion: pr
 
+  # An agent names its own work before its first commit
+  # (`uze agent task name <type>/<subject>`); work that reaches a commit
+  # unnamed is named from that commit's subject. Both are judged against
+  # this vocabulary — the same one this repository's own history uses.
+  branch: conventional
+
 marketplaces:
   ai:
     path: /home/hiukky/ai

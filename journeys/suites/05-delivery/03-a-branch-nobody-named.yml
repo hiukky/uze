@@ -1,0 +1,89 @@
+journey: work nobody named still reaches the remote under a readable name
+tags: [gate, tui, delivery]
+proves: web/content/docs/workspace.mdx
+about: |
+  Instructing an agent is not the same as it happening. So naming has an
+  automatic half: work that reaches its first commit still carrying the
+  name UZE generated takes its name from that commit instead — on the
+  evaluation pass that already runs, asking no harness anything.
+
+  The last claim is read off the remote with Git, not off UZE's delivery
+  report.
+  A separate file from the naming journey on purpose: a different world
+  (this one has a remote), a different claim, and a run stops at the first
+  failure — claims that share a file share a fate.
+
+world:
+  project: demo-app
+  remote: bare
+  manifest: |
+    worktrees:
+      target: main
+      completion: pr
+      branch: conventional
+      slots: 2
+
+scenes:
+  - scene: an agent commits without ever naming its work
+    when:
+      - open: "{uze}"
+        say: uze opens on the project
+        expect: demo-app
+        expect_timeout: 20
+        pause: 1.0
+      - click: "│"
+        say: open the new-agent picker
+        in: strip
+        occurrence: 2
+        offset: 2
+        expect: new agent
+      - click: " new agent "
+        say: pick Claude Code
+        in: pane
+        row_offset: 1
+        offset: 3
+        expect: Claude Code v
+        expect_timeout: 45
+        pause: 1.5
+      - shell: |
+          set -e
+          slot=$(ls -d {project}/.worktrees/*/ | head -1)
+          printf 'pub fn ping() {}\n' > "$slot/src/ping.rs"
+          git -C "$slot" add -A
+          git -C "$slot" commit -qm 'feat(api): answer ping with pong'
+        say: the agent commits, and names nothing
+      - wait: screen
+        until: "pr → main"
+        in: strip
+        timeout: 40
+        settle: 1.0
+        say: the workspace offers the ending this project declared
+    then:
+      - tasks: { newest_branch: "feat/answer-ping-with-pong" }
+        about: |
+          nobody named it, so UZE named it from the commit the agent wrote —
+          the one place the intent was already written down
+      - git: { branches: "agent/*", count: 0 }
+        about: and the generated identifier is gone from the repository
+      - tasks: { any_state: ready }
+        about: with the work still deliverable
+
+  - scene: publishing gives it a name the reviewer can read
+    when:
+      - click: "pr → main"
+        say: publish the branch
+        in: strip
+        expect: "pushed"
+        expect_timeout: 60
+        pause: 2.0
+    then:
+      - cmd:
+          run: "git -C {project} ls-remote --heads origin"
+          stdout_contains: "refs/heads/feat/answer-ping-with-pong"
+        about: |
+          the remote received a name derived from the commit the agent
+          wrote — the one place the intent was already written down
+      - cmd:
+          run: "git -C {project} ls-remote --heads origin"
+          stdout_excludes: "refs/heads/agent/"
+        about: the generated identifier never leaves the machine

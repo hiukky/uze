@@ -35,7 +35,7 @@ use std::{
 use noyalib::compat::serde_yaml;
 use serde::{Deserialize, Serialize};
 
-use crate::{Result, UzeError, acquisition::PackageSource};
+use crate::{Result, UzeError};
 
 pub const SUPPORTED_LOCK_VERSION: u32 = 1;
 pub const LOCK_FILE_NAME: &str = "agents.lock";
@@ -90,17 +90,6 @@ pub struct LockedMarketplace {
 }
 
 impl LockedMarketplace {
-    /// Where to read it from to reproduce this entry: the recorded commit,
-    /// never the declared `ref:` — a lock that re-resolved `main` would
-    /// install whatever was pushed since.
-    pub fn pinned_source(&self) -> PackageSource {
-        PackageSource::Git {
-            url: self.git.clone(),
-            reference: Some(self.revision.clone()),
-            subdirectory: self.subdirectory.clone(),
-        }
-    }
-
     /// Whether this entry still answers the declaration it was resolved
     /// from. `revision` is not part of the question — that is the answer.
     ///
@@ -184,7 +173,7 @@ pub struct StaleEntry {
 /// resolved from a different marketplace, or when the marketplace it comes
 /// from is declared differently now — a new source, or a `ref:` pointing
 /// somewhere else. A lock entry the manifest no longer declares is not
-/// staleness: it is a removal, which `remove` resolves.
+/// staleness: it is surplus, which [`surplus_against`] answers for.
 pub fn stale_against(
     manifest: &crate::manifest::ProjectManifest,
     lock: &ProjectLock,
@@ -215,6 +204,38 @@ pub fn stale_against(
         }
     }
     stale
+}
+
+/// Which of the lock's plugins the manifest no longer declares.
+///
+/// The inverse of [`stale_against`], and the half it cannot express: that
+/// function iterates the manifest's declarations, so a plugin deleted from
+/// `agents.yaml` is invisible to it by construction. Same cost and same
+/// offline promise — two documents compared, nothing else asked.
+///
+/// Scoped to the marketplaces the manifest actually declares, and this is
+/// the load-bearing part: silence is not a claim. A lock inherited from
+/// before the manifest existed, or one whose marketplace nobody has
+/// declared, is a project that has said nothing about those plugins — not
+/// a project asking for all of them to be taken away. Only a marketplace
+/// the manifest names can make one of its plugins surplus, which is
+/// exactly the edit a person makes when they mean it.
+pub fn surplus_against(
+    manifest: &crate::manifest::ProjectManifest,
+    lock: &ProjectLock,
+) -> Vec<String> {
+    let declared: Vec<&str> = manifest
+        .declared_plugins()
+        .map(|(plugin, _)| plugin)
+        .collect();
+    lock.plugins
+        .iter()
+        .filter(|(plugin, locked)| {
+            manifest.marketplaces.contains_key(&locked.marketplace)
+                && !declared.contains(&plugin.as_str())
+        })
+        .map(|(plugin, _)| plugin.clone())
+        .collect()
 }
 
 pub fn lock_path_for(root: &Path) -> PathBuf {
@@ -640,5 +661,72 @@ worktrees:
             let err = parse_lock_str(spelled, &PathBuf::from("agents.lock")).unwrap_err();
             assert!(matches!(err, UzeError::MalformedLock { .. }), "{spelled}");
         }
+    }
+}
+
+#[cfg(test)]
+mod surplus_tests {
+    use super::*;
+
+    fn manifest(declared: &[&str]) -> crate::manifest::ProjectManifest {
+        let mut text = String::from("marketplaces:\n  ai:\n    path: /tmp/ai\n");
+        if !declared.is_empty() {
+            text.push_str("    plugins:\n");
+            for plugin in declared {
+                text.push_str(&format!("      - {plugin}\n"));
+            }
+        }
+        crate::manifest::parse(&text, Path::new("agents.yaml")).unwrap()
+    }
+
+    fn lock(plugins: &[&str]) -> ProjectLock {
+        let mut lock = ProjectLock::default();
+        for plugin in plugins {
+            lock.plugins.insert(
+                (*plugin).to_owned(),
+                LockedPlugin {
+                    marketplace: "ai".to_owned(),
+                    integrity: None,
+                },
+            );
+        }
+        lock
+    }
+
+    /// The half `stale_against` cannot express: it iterates the manifest's
+    /// declarations, so a plugin deleted from `agents.yaml` is invisible to
+    /// it by construction.
+    #[test]
+    fn a_plugin_the_manifest_no_longer_declares_is_surplus() {
+        let surplus = surplus_against(&manifest(&["git"]), &lock(&["git", "flow"]));
+        assert_eq!(surplus, vec!["flow".to_owned()]);
+    }
+
+    /// Silence is not a claim: a lock whose marketplace the manifest never
+    /// mentions is a project that has said nothing about those plugins.
+    #[test]
+    fn a_marketplace_the_manifest_does_not_declare_makes_nothing_surplus() {
+        let manifest = crate::manifest::parse("", Path::new("agents.yaml")).unwrap();
+        assert!(surplus_against(&manifest, &lock(&["git", "flow"])).is_empty());
+    }
+
+    #[test]
+    fn a_declared_plugin_is_never_surplus() {
+        assert!(surplus_against(&manifest(&["git", "flow"]), &lock(&["git", "flow"])).is_empty());
+    }
+
+    /// The two answers are complements, never overlapping: a plugin is
+    /// either something to resolve or something to take away.
+    #[test]
+    fn nothing_is_both_stale_and_surplus() {
+        let (manifest, lock) = (manifest(&["git"]), lock(&["flow"]));
+        let stale: Vec<String> = stale_against(&manifest, &lock)
+            .into_iter()
+            .map(|entry| entry.plugin)
+            .collect();
+        let surplus = surplus_against(&manifest, &lock);
+        assert_eq!(stale, vec!["git".to_owned()]);
+        assert_eq!(surplus, vec!["flow".to_owned()]);
+        assert!(stale.iter().all(|plugin| !surplus.contains(plugin)));
     }
 }

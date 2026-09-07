@@ -194,6 +194,13 @@ worktrees:
   # primary checkout is on when the task is created.
   # target: main
 
+  # conventional | gitflow | flat | agent — or this project's own list of
+  # types, e.g. [feat, fix, docs, ui]. What an agent's own name for its
+  # work is judged against: it proposes `<type>/<subject>`, UZE accepts it
+  # only if the type is here. Undeclared (`agent`), work is not named and
+  # the branch stays the generated identifier.
+  # branch: conventional
+
   # Ignored files a fresh checkout links from the primary one. Relative,
   # inside the repository, and ignored by it — a symlink the agent writes
   # through reaches the primary.
@@ -898,6 +905,7 @@ mod tests {
         }
 
         let policy = WorktreePolicy {
+            branch: crate::worktree::BranchVocabulary::Unset,
             target: Some("main".to_owned()),
             completion: CompletionBehavior::Handoff,
             link: vec![PathBuf::from(".env")],

@@ -1,0 +1,129 @@
+journey: an agent names the work it is doing, and a name nobody generated is never replaced
+tags: [gate, tui, workspace]
+proves: web/content/docs/workspace.mdx
+about: |
+  A branch a reviewer meets on a pull request has to say what the change
+  is. Nothing UZE knows at launch can say that — the work has not been
+  decided yet — so the agent names it, through a command resolved from the
+  checkout it is standing in.
+
+  Every check reads the machine: the branch Git reports inside the slot,
+  the branches the repository carries, and the name recorded in the task
+  store UZE writes outside every checkout. Screen text appears only as
+  `expect`, the gate that a gesture landed.
+
+world:
+  project: demo-app
+  manifest: |
+    worktrees:
+      target: main
+      completion: handoff
+      branch: conventional
+      slots: 3
+
+scenes:
+  - scene: an agent starts on a branch UZE generated, because nothing knows yet what the work is
+    when:
+      - open: "{uze}"
+        say: uze opens on the project
+        expect: demo-app
+        expect_timeout: 20
+        pause: 1.0
+      - click: "│"
+        say: open the new-agent picker from the tab strip
+        in: strip
+        occurrence: 2
+        offset: 2
+        expect: new agent
+      - click: " new agent "
+        say: pick Claude Code
+        in: pane
+        row_offset: 1
+        offset: 3
+        expect: Claude Code v
+        expect_timeout: 45
+        pause: 1.5
+    then:
+      - git: { branches: "agent/*", count: 1 }
+        about: the branch carries the generated identifier and nothing more
+      - tasks: { count: 1, states: [running] }
+        about: one task is recorded for it
+      - dir: "{project}/.worktrees/*"
+        count: 1
+        about: in a checkout of its own
+
+  - scene: the agent names the work, and both halves of the name land
+    when:
+      - shell: |
+          set -e
+          slot=$(ls -d {project}/.worktrees/*/ | head -1)
+          cd "$slot"
+          {uze} agent task name fix/branch-naming
+        say: the agent names its work from inside its own checkout
+      - wait: screen
+        until: "branch naming"
+        in: sidebar
+        timeout: 40
+        settle: 1.0
+        say: the workspace catches up with the name
+    then:
+      - cmd:
+          run: "sh -c 'git -C $(ls -d {project}/.worktrees/*/ | head -1) rev-parse --abbrev-ref HEAD'"
+          stdout_contains: "fix/branch-naming"
+        about: Git is where the rename actually happened
+      - git: { branches: "fix/*", count: 1 }
+        about: the repository carries the named branch
+      - git: { branches: "agent/*", count: 0 }
+        about: and no longer carries the generated one
+      - tasks: { newest_branch: "fix/branch-naming", newest_label: "branch naming" }
+        about: the record UZE keeps agrees, and the label is the subject alone
+      - dir: "{project}/.worktrees/*"
+        count: 1
+        about: the slot directory keeps its own name — only the branch moved
+
+  - scene: a second name is refused, because the first one is somebody's
+    when:
+      - shell: |
+          set -e
+          slot=$(ls -d {project}/.worktrees/*/ | head -1)
+          cd "$slot"
+          {uze} agent task name fix/second-thoughts || true
+        say: the agent tries to rename its own work again
+    then:
+      - cmd:
+          run: "sh -c 'git -C $(ls -d {project}/.worktrees/*/ | head -1) rev-parse --abbrev-ref HEAD'"
+          stdout_contains: "fix/branch-naming"
+        about: the first name stands, in Git
+      - tasks: { newest_branch: "fix/branch-naming" }
+        about: and in the record
+      - git: { branches: "fix/second-thoughts", count: 0 }
+        about: the refused name was never created
+
+  - scene: the operator renames by hand, and that name is respected too
+    when:
+      - shell: |
+          set -e
+          slot=$(ls -d {project}/.worktrees/*/ | head -1)
+          git -C "$slot" branch --move fix/renamed-by-hand
+          printf 'pub fn named() {}\n' > "$slot/src/named.rs"
+          git -C "$slot" add -A
+          git -C "$slot" commit -qm 'fix(ui): rename by hand'
+        say: the operator renames the branch in the checkout, then the agent commits
+      - wait: screen
+        until: "renamed by hand"
+        in: sidebar
+        timeout: 40
+        settle: 1.0
+        say: the workspace reads the branch the checkout is actually on
+    then:
+      - tasks: { newest_branch: "fix/renamed-by-hand", newest_label: "renamed by hand" }
+        about: |
+          the checkout's HEAD is the truth about the branch — a rename made
+          outside UZE reaches the record rather than leaving it pointed at a
+          ref that no longer exists
+      - tasks: { any_state: ready }
+        about: |
+          and readiness still sees the commit: the defect this closes made a
+          renamed branch count zero commits and never offer delivery
+      - git: { in: "{project}", dirty: false }
+        about: with the operator's own checkout untouched throughout

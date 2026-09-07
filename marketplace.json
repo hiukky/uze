@@ -9,7 +9,11 @@
       "name": "uze",
       "source": "./plugins/uze",
       "description": "UZE's own agentic context orchestrator: makes a project's instructions context (AGENTS.md and its harness bridges) portable.",
-      "keywords": ["context", "agents-md", "portability"]
+      "keywords": [
+        "context",
+        "agents-md",
+        "portability"
+      ]
     }
   ]
 }

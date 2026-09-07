@@ -395,10 +395,27 @@ properties):
   hooks/plugins/order.
 - **Machine and project scope are independent**: `uze setup`, `uze doctor`,
   `uze theme`, `uze market …` and `uze plugin …` are machine-scoped
-  (`~/.uze`); `uze <plugin>@<market>`, `uze install`, `uze remove`,
-  `uze status` and `uze context inspect|plan|reconcile` are project-scoped
-  (`agents.yaml`, `agents.lock`, `AGENTS.md`). Neither touches the other's
-  state — see `docs/adr/019-explicit-project-machine-boundary-in-cli-command-grammar.md`.
+  (`~/.uze`); `uze <plugin>@<market>`, `uze install` (aliased `uze i`),
+  `uze remove`, `uze status`, `uze context inspect|plan|reconcile` and
+  `uze agent …` are project-scoped (`agents.yaml`, `agents.lock`,
+  `AGENTS.md`). Neither touches the other's state — see
+  `docs/adr/019-explicit-project-machine-boundary-in-cli-command-grammar.md`.
+  `uze install` converges the manifest in both directions — a plugin dropped
+  from `agents.yaml` leaves `agents.lock`, while the Store and every harness
+  keep it, because other projects share those and taking it off the machine
+  is `uze plugin remove` — and leaves the project context reconciled, so
+  declaring an environment and projecting it are one command rather than
+  two.
+- **`uze agent …` is an audience, not a category**: its reader is an agent
+  UZE launched, not a person, so it is hidden from `uze --help` and
+  documented in the region UZE projects into `AGENTS.md` — each audience
+  reads one surface. `uze agent task name <type>/<subject>` is how work
+  acquires the branch a reviewer sees and the label an operator reads; the
+  vocabulary it is judged against is `worktrees.branch` in `agents.yaml`.
+  Work that reaches its first commit still unnamed is named from that
+  commit's subject, judged against the same vocabulary — a Git fact read on
+  the evaluation pass, never a harness feature. A name anybody chose is
+  never replaced.
 - **`agents.yaml` is authored, `agents.lock` is derived**: the manifest holds
   what the project declared (marketplaces, plugins, the `worktrees:` policy);
   the lock holds only what resolving it produced — a commit per marketplace and
@@ -444,12 +461,13 @@ trait proven by conformance tests across all four harnesses, rather than
 split into per-capability traits (`PackageDelivery`, `SkillDelivery`, …) —
 that fragmentation has been considered and rejected absent a concrete
 implementation problem forcing it.
-<!-- uze:begin project:worktree-policy/5208b9eb546b6ef0 -->
+<!-- uze:begin project:worktree-policy/70f66a2d11ff6434 -->
 ## Concurrent work isolation
 
 - Every agent UZE launches works in a checkout of its own under `.worktrees/<id>`, on branch `agent/<id>`. If your working directory is inside `.worktrees/`, you are already isolated: do not create another worktree, and do not switch branches.
 - Commit your work on your own branch, as you go. Never commit to, merge into, rebase, or reset the target branch: delivery is UZE's — UZE rebases your branch onto the target, runs the project's checks and publishes it, then asks you to open the request for it; commit on your branch and stop until it does.
 - If UZE tells you a rebase is paused in your checkout, resolve the conflicts preserving the intent of your change, run `git rebase --continue`, run the project's checks, and end your turn.
+- Name the work before your first commit: `uze agent task name <type>/<subject>`. Types this project accepts: `feat|fix|docs|refactor|perf|test|build|ci|chore|style|revert`. The subject is one or two words naming the intention, not a description of the task — `fix/branch-naming`, not `fix/correct-the-problem-with-agent-branch-names`. If you do not, UZE names it from your first commit's subject, which is a worse name than the one you would have chosen. Either way your branch is renamed, so ask Git for its name rather than remembering it; a name you or the operator already chose is never replaced.
 - Before spawning parallel subagents that write files, give each its own checkout so they cannot collide:
 
 ```bash
@@ -457,4 +475,4 @@ git worktree add -b agent/<topic> "$(git rev-parse --path-format=absolute --git-
 ```
 
 - The path above is resolved against the *primary* checkout on purpose — a path relative to your own would nest one worktree inside another.
-<!-- uze:end project:worktree-policy/5208b9eb546b6ef0 -->
+<!-- uze:end project:worktree-policy/70f66a2d11ff6434 -->

@@ -169,8 +169,24 @@ impl Workspace<'_> {
             .inspect(root)
             .ok()
             .map(|status| status.portability);
+        // What `agents.yaml` asks for that the rest has not caught up to.
+        // The client shows it and offers the action; it never applies it —
+        // opening the client must write nothing into a repository somebody
+        // is only looking at, and a helpful write is still a write.
+        let drift = self
+            .0
+            .project()
+            .plan(root)
+            .map(drift_of)
+            .unwrap_or_default();
+        let environment = if environment == ProjectEnvironmentState::Ready && !drift.is_clear() {
+            ProjectEnvironmentState::InstallRequired
+        } else {
+            environment
+        };
         ProjectOverview {
             environment,
+            drift,
             memory: derive_memory(agents_md, portability.as_ref()),
             declared_plugins: declared,
             installed_plugins: installed,
@@ -228,6 +244,18 @@ pub struct OverviewWorkspaceSummary {
     pub marketplace: Option<OverviewMarketplace>,
 }
 
+/// The plan's answer, as the overview carries it. Read from the same plan
+/// `uze status` reads, so the two surfaces cannot disagree about what is
+/// owed.
+fn drift_of(plan: crate::application::ProjectEnvironmentPlan) -> EnvironmentDrift {
+    EnvironmentDrift {
+        unresolved: plan.unresolved,
+        surplus: plan.surplus,
+        missing: Vec::new(),
+        stale_projection: plan.stale_projection.is_some(),
+    }
+}
+
 /// The user-facing state of the project half — derived here, rendered
 /// verbatim by the TUI. `Ready` means: `agents.lock` exists and parses,
 /// and every plugin it declares is installed in the Store. It deliberately
@@ -236,6 +264,9 @@ pub struct OverviewWorkspaceSummary {
 #[derive(Clone, Debug, Serialize)]
 pub struct ProjectOverview {
     pub environment: ProjectEnvironmentState,
+    /// What the manifest asks for that the lock, the Store or the
+    /// projection has not caught up to.
+    pub drift: EnvironmentDrift,
     pub memory: MemoryState,
     /// Plugins declared by `agents.lock` (0 when there is no valid lock).
     pub declared_plugins: usize,
@@ -367,7 +398,11 @@ mod tests {
     /// Writes the `agents.yaml` the lock's entries were resolved from — the
     /// declaration side of the same fixture.
     fn declare(root: &Path, lock: &uze_core::project_lock::ProjectLock) {
-        let mut text = String::from("worktrees: {}\n");
+        // Deliberately no `worktrees:` block: declaring one asks for the
+        // policy to be projected into `AGENTS.md`, and these fixtures are
+        // about the plugin half. A project that declares a policy and has
+        // not projected it is drifted, which is a different fixture.
+        let mut text = String::new();
         let declarable: Vec<&String> = lock
             .marketplaces
             .keys()

@@ -364,11 +364,17 @@ pub(crate) fn dispatch(
                             InstallReport::NoChanges => {
                                 "Project environment already up to date".to_owned()
                             }
-                            InstallReport::Installed { plugins } => format!(
-                                "Installed {} plugin{}",
-                                plugins.len(),
-                                if plugins.len() == 1 { "" } else { "s" }
-                            ),
+                            InstallReport::Installed {
+                                plugins,
+                                reconciled,
+                                ..
+                            } => match (plugins.len(), reconciled) {
+                                (0, _) => "Project context reconciled".to_owned(),
+                                (count, _) => format!(
+                                    "Installed {count} plugin{}",
+                                    if count == 1 { "" } else { "s" }
+                                ),
+                            },
                         })
                 },
             );

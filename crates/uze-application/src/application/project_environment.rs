@@ -113,21 +113,19 @@ impl Project<'_> {
     #[tracing::instrument(name = "project.plan", skip_all, fields(root = %root.display()), err)]
     pub fn plan(&self, root: &Path) -> Result<ProjectEnvironmentPlan> {
         let env = self.environment(root)?;
-        let lock = match env.lock {
-            Some(lock) => lock,
-            None => {
-                return Ok(ProjectEnvironmentPlan {
-                    dependencies: Vec::new(),
-                    installed: Vec::new(),
-                    missing: Vec::new(),
-                    trust_required: Vec::new(),
-                    delivery_changes: Vec::new(),
-                    conflicts: Vec::new(),
-                    offline_unavailable: Vec::new(),
-                    has_changes: false,
-                });
-            }
-        };
+        let canonical = env.canonical.clone();
+        // The manifest is the head of the chain, not the lock. A plan
+        // founded on `agents.lock` cannot see the edit a person just made
+        // to `agents.yaml`, which is the most common reason to ask for one
+        // at all. Both documents are read; nothing is resolved.
+        let manifest = manifest::load(&canonical)?.unwrap_or_default();
+        let lock = env.lock.unwrap_or_default();
+        let unresolved: Vec<String> = project_lock::stale_against(&manifest, &lock)
+            .into_iter()
+            .map(|stale| stale.plugin)
+            .collect();
+        let surplus = project_lock::surplus_against(&manifest, &lock);
+        let stale_projection = self.stale_projection(&canonical);
 
         let installed_ids = self.installed_plugin_ids();
         let dependencies: Vec<LockedPlugin> = lock.plugins.values().cloned().collect();
@@ -156,17 +154,48 @@ impl Project<'_> {
         let offline_unavailable = Vec::new();
         let conflicts = Vec::new();
 
-        let has_changes = !missing.is_empty();
+        let has_changes = !missing.is_empty()
+            || !unresolved.is_empty()
+            || !surplus.is_empty()
+            || stale_projection.is_some();
 
         Ok(ProjectEnvironmentPlan {
             dependencies,
             installed,
             missing,
+            unresolved,
+            surplus,
+            stale_projection,
             trust_required,
             delivery_changes,
             conflicts,
             offline_unavailable,
             has_changes,
+        })
+    }
+
+    /// Whether the projected worktree-policy region has fallen behind the
+    /// policy the manifest declares, and what the two say.
+    ///
+    /// One string comparison, and no harness is asked anything: the region
+    /// carries `WorktreePolicy::region_identity()`, a digest of the exact
+    /// bytes it should hold, so "has the projection caught up" is answered
+    /// by the identity already written into `AGENTS.md`.
+    fn stale_projection(&self, canonical: &Path) -> Option<StaleProjection> {
+        // Only a *declared* policy is owed a projection: an undeclared one
+        // projects nothing, so it can never be behind. Same gate the
+        // context service uses to decide whether the region exists at all.
+        let policy = manifest::load(canonical).ok()??.worktrees?;
+        let wanted = policy.region_identity();
+        let agents_md = canonical.join(uze_core::project_context::AGENTS_MD_FILE_NAME);
+        let found = uze_core::text_region::region_identities_present(&agents_md)
+            .into_iter()
+            .find(|identity| uze_core::worktree::WorktreePolicy::owns_region(identity));
+        // A missing region is as behind as a stale one: the policy is
+        // declared and the agents are reading nothing at all.
+        (found.as_deref() != Some(wanted.as_str())).then(|| StaleProjection {
+            declared: policy.completion.abi_name().to_owned(),
+            projected_identity: found.unwrap_or_else(|| "none".to_owned()),
         })
     }
 
@@ -459,11 +488,44 @@ impl Project<'_> {
             installed_plugins.push(name);
         }
 
-        if installed_plugins.is_empty() {
+        // Convergence, third: what the manifest no longer declares.
+        //
+        // Nothing is asked and nothing on this machine is touched. The lock
+        // is derived — regenerable from the manifest, and losing an entry
+        // loses nothing a person did not just delete themselves — so making
+        // it agree with what the project declared is the least destructive
+        // thing this command does, not the most. What *would* be
+        // destructive is taking the package off the machine or out of a
+        // harness, and that is `uze plugin remove`'s to do: other projects
+        // share the Store, and ADR-019 keeps project scope out of it.
+        let mut removed_plugins = Vec::new();
+        let surplus = project_lock::surplus_against(&manifest, &lock);
+        if !surplus.is_empty() {
+            drop(_mutation);
+            for plugin in &surplus {
+                self.remove(plugin, &canonical)?;
+                removed_plugins.push(plugin.clone());
+            }
+        }
+
+        // Installing changes what this project's packages contribute to
+        // `AGENTS.md`, and a policy edit changes what the projected region
+        // should say. Leaving either to a second command is how a policy
+        // stayed in force for UZE and not for the agents reading the file.
+        let reconciled = if installed_plugins.is_empty() && removed_plugins.is_empty() {
+            self.stale_projection(&canonical).is_some()
+                && self.0.context().reconcile(&canonical).is_ok()
+        } else {
+            self.0.context().reconcile(&canonical).is_ok()
+        };
+
+        if installed_plugins.is_empty() && removed_plugins.is_empty() && !reconciled {
             return Ok(InstallReport::NoChanges);
         }
         Ok(InstallReport::Installed {
             plugins: installed_plugins,
+            removed: removed_plugins,
+            reconciled,
         })
     }
 
@@ -665,11 +727,28 @@ pub struct ProjectEnvironmentPlan {
     pub dependencies: Vec<LockedPlugin>,
     pub installed: Vec<String>, // Package IDs
     pub missing: Vec<LockedPlugin>,
+    /// Declared in `agents.yaml`, and the lock does not answer for it.
+    pub unresolved: Vec<String>,
+    /// In the lock, and the manifest no longer declares it.
+    pub surplus: Vec<String>,
+    /// The projected instruction region has fallen behind the policy.
+    pub stale_projection: Option<StaleProjection>,
     pub trust_required: Vec<trust::TrustRequest>,
     pub delivery_changes: Vec<PublicationOutcome>,
     pub conflicts: Vec<String>,
     pub offline_unavailable: Vec<String>,
     pub has_changes: bool,
+}
+
+/// The projected policy region is behind what the manifest declares:
+/// UZE itself acts on the live policy, but the agents that must honor it
+/// read the projected text, so this is a policy only half in force.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct StaleProjection {
+    /// The completion behavior `agents.yaml` declares today.
+    pub declared: String,
+    /// The identity the region in `AGENTS.md` still carries.
+    pub projected_identity: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -683,11 +762,19 @@ pub enum RemoveProjectPluginReport {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "outcome", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum InstallReport {
-    /// Every locked plugin was already installed; nothing to do.
+    /// The declared environment, the lock and the machine already agreed,
+    /// and the projection was current; nothing to do.
     NoChanges,
-    /// At least one previously-missing locked plugin was acquired and
-    /// installed.
-    Installed { plugins: Vec<String> },
+    /// The project's environment moved: plugins resolved or reproduced,
+    /// plugins the manifest no longer declares removed, and the project
+    /// context left reconciled.
+    Installed {
+        plugins: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        removed: Vec<String>,
+        #[serde(default)]
+        reconciled: bool,
+    },
 }
 
 /// Read by both the project environment and the workspace overview, so it

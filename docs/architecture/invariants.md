@@ -1163,3 +1163,49 @@ and set aside for a reason rather than forgotten.
 | marketplace federation | one official marketplace; combining several is unproven need |
 | Git sparse checkout for marketplace sources | the `marketplace.json` contract is shaped to allow acquiring only a resolved plugin's subtree later; not implemented |
 | reverse/foreign harness-format import | the acquisition contract is canonical `plugin.json` only (M2); a foreign-format importer (`ClaudePluginImporter`) existed as dead, unreachable code and was removed (ADR-005) — foreign import staying structurally separate from harness delivery is still the intended shape if it returns, but nothing is retained in production speculatively |
+
+### Work that reaches a commit unnamed is named from that commit
+
+Naming has an automatic half, and it is a Git fact read on the evaluation
+pass that already runs — no harness is asked anything, so it behaves the
+same on all four and on the next one, and it covers every completion
+behaviour rather than only the one that publishes. It applies at `Ready`
+and nowhere else, and a derived name the project's vocabulary would refuse
+from an agent is never written on its behalf.
+
+> `uze-application::…::derived_naming_tests::the_first_commit_names_work_nobody_named`
+> `uze-application::…::derived_naming_tests::a_commit_outside_the_vocabulary_leaves_the_generated_name`
+
+### A name nobody generated is never overwritten
+
+`agent/` is UZE's own branch namespace: a branch inside it is still UZE's to
+name, and putting a name outside it is what naming does. So "outside the
+prefix" and "somebody chose this" are the same fact, and every mechanism that
+could rename — the agent's own command, the publish-time fallback — asks that
+one predicate rather than inventing a second notion of "unnamed". Only one
+automatic rename can ever happen to a task.
+
+> `uze-core::project::task::naming_tests::only_a_branch_outside_uzes_namespace_reads_as_named`
+> `uze-application::…::naming_tests::a_second_name_is_refused_and_the_first_one_stands`
+
+### The checkout's HEAD is the truth about a task's branch
+
+`task.branch` is a cache of a Git fact, re-read on every evaluation. A branch
+renamed outside UZE reaches the sidebar, delivery and sync — and, more
+importantly, never leaves UZE asking Git about a ref that no longer exists,
+where `commits_ahead` answers `0` and a task with work reads as having none.
+
+> `uze-application::…::naming_tests::a_branch_renamed_by_hand_is_adopted_and_still_reaches_ready`
+
+### Drift along the environment chain is reported, never applied on its own
+
+Declared (`agents.yaml`) → locked (`agents.lock`) → installed (the Store) →
+delivered (the projected region) is compared from the manifest down, and the
+comparison is two file reads and a set difference — no acquisition, no
+network. Converging a removal edits the lock and nothing on the machine:
+the Store keeps the package and every harness keeps reading it, because
+other projects share both and machine scope is `uze plugin remove`'s.
+
+> `tests/workspace/consumer.rs::drift::install_converges_the_lock_and_leaves_the_machine_alone`
+> `tests/workspace/consumer.rs::drift::a_policy_change_reads_as_a_stale_projection_until_install_clears_it`
+

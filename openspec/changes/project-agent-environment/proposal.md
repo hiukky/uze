@@ -32,6 +32,20 @@ Result: **Same project. Same agent environment. Any supported harness.**
 - **Application API** — `project_environment()`, `plan_project_environment()`, `add_project_plugin()`, `remove_project_plugin()`, `install_project_environment()`
 - **Error variants** — `UnsupportedLockVersion`, `MalformedLock`, `MarketplaceSourceConflict`, `MarketplaceMismatch`
 - **Dependency** — `noyalib` (maintained YAML, replacing deprecated `serde_yaml`)
+- **Drift over the whole chain** (added 2026-09-07) — declared
+  (`agents.yaml`) → locked (`agents.lock`) → installed (Store) →
+  delivered (projected region + bridges) is reported as a normal state.
+  `plan` is re-founded on the manifest instead of the lock, and `status`
+  says what it finds
+- **`uze install` converges removals** — a plugin the manifest no longer
+  declares is removed and detached, confirmed first and inspected before
+  detaching, so the manifest is declarative in both directions
+- **`uze install` reconciles the project context** when it finishes, and
+  answers to `uze i` — declaring an environment and projecting it stop
+  being two commands
+- **The client reports drift and offers the action**, never applies it:
+  opening the client still writes nothing into a repository somebody is
+  only looking at
 
 ## Capabilities
 
