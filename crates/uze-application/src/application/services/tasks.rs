@@ -495,6 +495,7 @@ impl Workspace<'_> {
         let vocabulary = repository.policy.branch.clone();
         let names_work = vocabulary.names_work();
         let owners = slot_owners(&repository.store);
+        let completion = repository.policy.completion;
         for task in &mut repository.store.tasks {
             // A task that ended is still looked at while it owns its
             // slot: the agent that delivered usually keeps working in the
@@ -568,6 +569,16 @@ impl Workspace<'_> {
                 && checkout::rename_branch(&primary, &task.branch.clone(), &derived).is_ok()
             {
                 task.take_name(derived);
+            }
+            // The other half of what a delivery would do, learned the
+            // same way readiness is: an agent told to push and open the
+            // request itself is the one case UZE's own records can never
+            // cover, and until this ran the button went on offering to
+            // publish a branch the forge already had a request open for.
+            // Only where a request is what completion means — a project
+            // that merges or hands off never asks the remote anything.
+            if completion == CompletionBehavior::Pr {
+                landing::observe_request(&primary, task);
             }
             // Following a moved target costs a clean task nothing and a
             // dirty one its work in progress, which `refresh` refuses.
@@ -964,6 +975,10 @@ pub struct TaskView {
     pub completion: CompletionBehavior,
     /// Commits the branch has beyond its base — what a delivery would land.
     pub ahead: usize,
+    /// The name the branch is published under on the remote, once it is
+    /// there. Read from the repository's remote-tracking refs, so a
+    /// branch its own agent pushed reads as published exactly like one
+    /// UZE pushed.
     pub published_as: Option<String>,
     /// The request open on the forge for the published branch, once there
     /// is one: what turns the delivery button from an errand into a sync.
@@ -979,6 +994,18 @@ pub struct TaskView {
 
 impl TaskView {
     fn from_task(primary: &Path, task: &Task, completion: CompletionBehavior) -> Self {
+        // What the remote holds, not what UZE remembers having sent: a
+        // push the agent made is a push, and a view built from UZE's own
+        // record of its own deliveries goes on offering to send commits
+        // the request already carries.
+        //
+        // Only where the completion publishes. A branch on the remote is
+        // no part of what a merge or a handoff would do, and counting a
+        // merge's commits against the remote would report a task as
+        // delivered the moment its agent pushed it.
+        let published = (completion == CompletionBehavior::Pr)
+            .then(|| landing::publication(primary, task))
+            .flatten();
         Self {
             id: task.id.as_str().to_owned(),
             label: task.label.clone(),
@@ -992,12 +1019,11 @@ impl TaskView {
             state: TaskStateView::from(&task.state),
             completion,
             ahead: checkout::commits_ahead(primary, &task.base_commit, &task.branch),
-            published_as: task.published_as.clone(),
+            published_as: published.as_ref().map(|published| published.branch.clone()),
             published_request: task.published_request,
-            unsynced: task
-                .published_tip
-                .as_deref()
-                .map(|tip| checkout::commits_ahead(primary, tip, &task.branch)),
+            unsynced: published
+                .as_ref()
+                .map(|published| checkout::commits_ahead(primary, &published.tip, &task.branch)),
             created_at_unix: task.created_at_unix,
         }
     }
@@ -1612,6 +1638,14 @@ mod task_service_tests {
         repository.git_in(slot, &["commit", "-qm", file]);
     }
 
+    fn view_of(app: &UzeApplication, root: &Path, id: &str) -> TaskView {
+        app.workspace()
+            .tasks(root)
+            .into_iter()
+            .find(|task| task.id == id)
+            .expect("the task is recorded")
+    }
+
     fn state_of(app: &UzeApplication, root: &Path, id: &str) -> TaskStateView {
         app.workspace()
             .tasks(root)
@@ -1882,6 +1916,88 @@ mod task_service_tests {
             None,
             "the checked-out branch is not the target"
         );
+    }
+
+    /// The delivery button reads the remote, not UZE's memory of its own
+    /// pushes. An operator who asks the agent to commit, push and open the
+    /// request itself has done everything a delivery would have done, and
+    /// the button has to say so — it used to go on offering to publish a
+    /// branch that was already on the remote with a request open for it.
+    #[test]
+    fn an_agents_own_push_and_request_are_what_the_delivery_view_reports() {
+        let repository = repository("svc-agent-publish");
+        declare(
+            &repository,
+            "  completion: pr
+",
+        );
+        let root = repository.root().to_path_buf();
+        let remote = uze_testkit::temp::scratch("svc-agent-publish-remote").join("origin.git");
+        repository.git(&["init", "--quiet", "--bare", remote.to_str().unwrap()]);
+        repository.git(&["remote", "add", "origin", remote.to_str().unwrap()]);
+        repository.git(&["push", "--quiet", "origin", "HEAD"]);
+
+        let app = application("svc-agent-publish-home");
+        let (id, slot) = launched(&app, &root);
+        agent_commits(&repository, &slot, "a.rs", "");
+        app.workspace().evaluate_tasks(&root, &[]);
+        let before = view_of(&app, &root, &id);
+        assert_eq!(before.published_as, None);
+        assert_eq!(before.unsynced, None, "nothing is on the remote yet");
+
+        // The agent does both halves itself.
+        repository.git_in(&slot, &["push", "--quiet", "origin", "HEAD"]);
+        let tip = repository.git_in(&slot, &["rev-parse", "HEAD"]);
+        repository.git(&[
+            "push",
+            "--quiet",
+            "origin",
+            &format!("{}:refs/pull/12/head", tip.trim()),
+        ]);
+        app.workspace().evaluate_tasks(&root, &[]);
+
+        let synced = view_of(&app, &root, &id);
+        assert_eq!(synced.published_as.as_deref(), Some(synced.branch.as_str()));
+        assert_eq!(synced.unsynced, Some(0), "nothing left to send");
+        assert_eq!(
+            synced.published_request,
+            Some(12),
+            "the request the agent opened is this branch's request"
+        );
+
+        agent_commits(&repository, &slot, "b.rs", "");
+        app.workspace().evaluate_tasks(&root, &[]);
+        assert_eq!(
+            view_of(&app, &root, &id).unsynced,
+            Some(1),
+            "and a commit made after that push is one commit to sync"
+        );
+    }
+
+    /// A merge lands on the target, and a branch sitting on the remote is
+    /// no part of that. Reading publication for it would have called the
+    /// task synced the moment its agent pushed — before the one thing the
+    /// completion actually does had happened at all.
+    #[test]
+    fn a_merge_project_never_measures_its_work_against_the_remote() {
+        let repository = repository("svc-merge-remote");
+        declare(&repository, "  completion: merge\n");
+        let root = repository.root().to_path_buf();
+        let remote = uze_testkit::temp::scratch("svc-merge-remote-origin").join("origin.git");
+        repository.git(&["init", "--quiet", "--bare", remote.to_str().unwrap()]);
+        repository.git(&["remote", "add", "origin", remote.to_str().unwrap()]);
+        repository.git(&["push", "--quiet", "origin", "HEAD"]);
+
+        let app = application("svc-merge-remote-home");
+        let (id, slot) = launched(&app, &root);
+        agent_commits(&repository, &slot, "a.rs", "");
+        repository.git_in(&slot, &["push", "--quiet", "origin", "HEAD"]);
+        app.workspace().evaluate_tasks(&root, &[]);
+
+        let view = view_of(&app, &root, &id);
+        assert_eq!(view.published_as, None);
+        assert_eq!(view.unsynced, None, "the merge has not happened");
+        assert_eq!(view.ahead, 1, "and that is what it would land");
     }
 
     #[test]

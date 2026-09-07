@@ -137,9 +137,14 @@ pub struct Task {
     pub branch: String,
     pub checkout: Option<CheckoutId>,
     pub state: TaskState,
-    /// Frozen once the branch has left the machine.
-    pub pushed: bool,
-    /// The readable name the branch was published under, once it was.
+    /// The readable name UZE published the branch under, when that is not
+    /// the branch's own name. The one half of publication that Git cannot
+    /// be asked for: an unnamed task's branch leaves under a name derived
+    /// for it, and nothing on the machine ties the two together but this.
+    /// Everything else about publication — whether the branch is on the
+    /// remote at all, and what the remote holds — is read from the
+    /// repository's remote-tracking refs, so a push somebody else made
+    /// counts exactly as much as one UZE made.
     #[serde(default)]
     pub published_as: Option<String>,
     /// The number of the request open on the forge for the published
@@ -147,12 +152,12 @@ pub struct Task {
     /// readiness fact, never announced by the agent that opened it.
     #[serde(default)]
     pub published_request: Option<u32>,
-    /// The branch's tip as the remote last received it. What a sync would
-    /// send is measured against this and never against the target: the
-    /// request already carries what was pushed, however far the branch
-    /// still is from the target it will land in.
+    /// When the remote was last asked whether a request exists for this
+    /// branch, so the question is asked on a clock instead of on every
+    /// evaluation: it is the one publication fact that costs a network
+    /// round trip, and it stops being asked the moment it is answered.
     #[serde(default)]
-    pub published_tip: Option<String>,
+    pub request_asked_at_unix: Option<u64>,
     pub created_at_unix: u64,
 }
 
@@ -197,16 +202,20 @@ impl Task {
             branch,
             checkout: None,
             state: TaskState::Running,
-            pushed: false,
             published_as: None,
             published_request: None,
-            published_tip: None,
-            created_at_unix: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|elapsed| elapsed.as_secs())
-                .unwrap_or_default(),
+            request_asked_at_unix: None,
+            created_at_unix: now_unix(),
         }
     }
+}
+
+/// Seconds since the epoch — how every time this record keeps is written.
+pub fn now_unix() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or_default()
 }
 
 /// The first non-empty line of `prompt`, lower-cased, non-alphanumerics

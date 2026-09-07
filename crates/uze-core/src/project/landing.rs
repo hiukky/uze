@@ -162,6 +162,78 @@ pub fn readiness(primary: &Path, task: &Task) -> Readiness {
     }
 }
 
+/// What the remote holds for a task's branch.
+///
+/// Publication is a Git fact, exactly like readiness. `git push` writes
+/// `refs/remotes/origin/<name>` whoever ran it and from whichever
+/// checkout, so a branch its own agent pushed by hand is as published as
+/// one UZE pushed, and commits the agent added to an open request are as
+/// synced. Reading UZE's record of its own pushes instead made every
+/// surface report UZE's history rather than the remote's state — a
+/// button offering to send what the remote already had.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Publication {
+    /// The name the branch is published under on the remote.
+    pub branch: String,
+    /// The commit the remote-tracking ref points at.
+    pub tip: String,
+}
+
+/// How long the remote may go unasked about a request that does not exist
+/// yet. The branch is pushed and the agent opens the request moments
+/// later, so the answer changes on a human's clock, not a machine's — and
+/// this is the only publication question that leaves the machine.
+const REQUEST_INTERVAL: Duration = Duration::from_secs(60);
+
+/// What the remote holds for this task's branch, or `None` when the
+/// branch is not on the remote at all.
+///
+/// The name UZE published under is tried first and the branch's own name
+/// second: an unnamed task leaves under a derived name that nothing but
+/// [`Task::published_as`] ties back to it, while a task whose agent
+/// pushed on its own is on the remote under the only name it has.
+pub fn publication(primary: &Path, task: &Task) -> Option<Publication> {
+    task.published_as
+        .iter()
+        .chain(std::iter::once(&task.branch))
+        .find_map(|branch| {
+            let tip = checkout::tip_of(primary, &format!("refs/remotes/{REMOTE}/{branch}"));
+            (!tip.is_empty()).then(|| Publication {
+                branch: branch.clone(),
+                tip,
+            })
+        })
+}
+
+/// Asks the remote whether a request is open for this task's published
+/// branch, and records the number when one is.
+///
+/// Called on the evaluation pass rather than only from [`publish`],
+/// because the request is not always UZE's doing: an agent told to push
+/// and open the request itself leaves a forge that UZE would otherwise
+/// never learn about, and the button would go on offering to publish a
+/// branch that already has a request open. Gated three ways so the round
+/// trip stays rare — a published branch, no number yet, and at most one
+/// question per [`REQUEST_INTERVAL`] — and it stops for good the moment
+/// it is answered.
+pub fn observe_request(primary: &Path, task: &mut Task) {
+    if task.published_request.is_some() {
+        return;
+    }
+    let now = crate::task::now_unix();
+    let asked_recently = task
+        .request_asked_at_unix
+        .is_some_and(|asked| now.saturating_sub(asked) < REQUEST_INTERVAL.as_secs());
+    if asked_recently {
+        return;
+    }
+    let Some(published) = publication(primary, task) else {
+        return;
+    };
+    task.request_asked_at_unix = Some(now);
+    task.published_request = discover_request(primary, &published.tip);
+}
+
 fn effective_base(primary: &Path, task: &Task) -> String {
     let local_tip = checkout::tip_of(primary, &task.target);
     if !local_tip.is_empty()
@@ -631,12 +703,22 @@ fn shorten(slug: &str) -> String {
 /// half that is not portable, since every forge opens a request its own
 /// way, while a push is a push.
 fn publish(primary: &Path, task: &mut Task) -> Result<Delivered, DeliveryFailure> {
-    let name = task
-        .published_as
-        .clone()
+    let published = publication(primary, task);
+    let name = published
+        .as_ref()
+        .map(|published| published.branch.clone())
+        .or_else(|| task.published_as.clone())
         .unwrap_or_else(|| readable_branch_name(primary, task));
     let refspec = format!("{}:refs/heads/{name}", task.branch);
-    let push = if task.pushed {
+    // A branch already on the remote is one a delivery has since rebased,
+    // so its history no longer descends from what the remote holds and a
+    // plain push is refused. Whether it is there is asked of Git rather
+    // than remembered: an agent that pushed the branch itself left UZE no
+    // record to remember, and the refusal landed on the operator as a
+    // failed delivery. `--force-with-lease` reads the same
+    // remote-tracking ref this did, so the two agree on what is being
+    // overwritten.
+    let push = if published.is_some() {
         vec![
             "push",
             "--quiet",
@@ -648,11 +730,10 @@ fn publish(primary: &Path, task: &mut Task) -> Result<Delivered, DeliveryFailure
         vec!["push", "--quiet", REMOTE, refspec.as_str()]
     };
     git(primary, &push).map_err(DeliveryFailure::Git)?;
-    task.pushed = true;
     task.published_as = Some(name.clone());
-    task.published_tip = Some(checkout::tip_of(primary, &task.branch));
     if task.published_request.is_none() {
-        task.published_request = discover_request(primary, task);
+        task.published_request =
+            discover_request(primary, &checkout::tip_of(primary, &task.branch));
     }
     match task.published_request {
         Some(request) => Ok(Delivered::Published {
@@ -679,8 +760,7 @@ fn publish(primary: &Path, task: &mut Task) -> Result<Delivered, DeliveryFailure
 /// `None` is the ordinary answer the first time — no request exists yet —
 /// and stays the answer on a forge that publishes no such refs, where the
 /// branch is still pushed and the sync still works, only unnumbered.
-fn discover_request(primary: &Path, task: &Task) -> Option<u32> {
-    let tip = checkout::tip_of(primary, &task.branch);
+fn discover_request(primary: &Path, tip: &str) -> Option<u32> {
     if tip.is_empty() {
         return None;
     }
@@ -1371,7 +1451,11 @@ mod tests {
             instruction.contains("fix/stop-the-redirect-loop") && instruction.contains(TARGET),
             "the agent is told which branch and which target: {instruction}"
         );
-        assert!(task.pushed);
+        assert_eq!(
+            publication(primary, &task).map(|published| published.branch),
+            Some("fix/stop-the-redirect-loop".to_owned()),
+            "the branch is on the remote, and that is read from Git"
+        );
         assert_eq!(task.published_request, None);
         assert_eq!(
             task.published_as.as_deref(),
@@ -1412,8 +1496,8 @@ mod tests {
         );
         assert_eq!(task.published_request, Some(11));
         assert_eq!(
-            task.published_tip.as_deref(),
-            Some(tip_of(primary, &task.branch).as_str()),
+            publication(primary, &task).map(|published| published.tip),
+            Some(tip_of(primary, &task.branch)),
             "what the request carries, so a surface can tell a sync that \
              would send something from one that would send nothing"
         );
@@ -1467,6 +1551,124 @@ mod tests {
         );
     }
 
+    /// The whole point of reading publication from Git: an agent told to
+    /// push and open the request itself does everything UZE's `publish`
+    /// would have done, and nothing about that reaches UZE's records. Read
+    /// from the record, the branch looked unpublished and the button went
+    /// on offering to send commits the remote already had.
+    #[test]
+    fn a_branch_its_own_agent_pushed_is_published_and_in_sync() {
+        let (repository, _other) = published("landing-agent-push");
+        let primary = repository.root();
+        let mut store = TaskStore::default();
+        let task = launch(&repository, &mut store, "agent push");
+        agent_commits(&repository, &task, "a.rs", "");
+        assert_eq!(
+            publication(primary, &task),
+            None,
+            "nothing is on the remote yet"
+        );
+
+        let slot = slot_path(primary, &task).unwrap();
+        repository.git_in(&slot, &["push", "--quiet", REMOTE, "HEAD"]);
+
+        let published = publication(primary, &task).expect("the agent's own push is a push");
+        assert_eq!(published.branch, task.branch);
+        assert_eq!(published.tip, tip_of(primary, &task.branch));
+        assert_eq!(
+            commits_ahead(primary, &published.tip, &task.branch),
+            0,
+            "nothing is left to sync"
+        );
+
+        agent_commits(&repository, &task, "b.rs", "");
+        assert_eq!(
+            commits_ahead(
+                primary,
+                &publication(primary, &task).unwrap().tip,
+                &task.branch
+            ),
+            1,
+            "and a commit made after the push is one commit to sync"
+        );
+    }
+
+    /// The other half the agent can do alone. UZE learns the number from
+    /// the remote on the pass that already runs, so a request opened
+    /// outside a delivery is still the request this branch has.
+    #[test]
+    fn a_request_the_agent_opened_is_discovered_on_the_evaluation_pass() {
+        let (repository, _other) = published("landing-agent-request");
+        let primary = repository.root();
+        let mut store = TaskStore::default();
+        let mut task = launch(&repository, &mut store, "agent request");
+        agent_commits(&repository, &task, "a.rs", "");
+
+        observe_request(primary, &mut task);
+        assert_eq!(
+            task.published_request, None,
+            "an unpublished branch is never asked about"
+        );
+        assert_eq!(
+            task.request_asked_at_unix, None,
+            "and the round trip is not spent"
+        );
+
+        let slot = slot_path(primary, &task).unwrap();
+        repository.git_in(&slot, &["push", "--quiet", REMOTE, "HEAD"]);
+        let tip = tip_of(primary, &task.branch);
+        repository.git(&[
+            "push",
+            "--quiet",
+            REMOTE,
+            &format!("{tip}:refs/merge-requests/7/head"),
+        ]);
+
+        observe_request(primary, &mut task);
+        assert_eq!(task.published_request, Some(7));
+        assert!(task.request_asked_at_unix.is_some());
+    }
+
+    /// The question that leaves the machine is asked on a clock, and stops
+    /// being asked at all once it has an answer.
+    #[test]
+    fn the_remote_is_asked_about_a_missing_request_at_most_once_a_minute() {
+        let (repository, _other) = published("landing-request-clock");
+        let primary = repository.root();
+        let mut store = TaskStore::default();
+        let mut task = launch(&repository, &mut store, "request clock");
+        agent_commits(&repository, &task, "a.rs", "");
+        let slot = slot_path(primary, &task).unwrap();
+        repository.git_in(&slot, &["push", "--quiet", REMOTE, "HEAD"]);
+
+        observe_request(primary, &mut task);
+        assert_eq!(task.published_request, None, "no request is open");
+        let asked = task.request_asked_at_unix.expect("the remote was asked");
+
+        // The request appears, but the minute has not passed.
+        let tip = tip_of(primary, &task.branch);
+        repository.git(&[
+            "push",
+            "--quiet",
+            REMOTE,
+            &format!("{tip}:refs/pull/9/head"),
+        ]);
+        observe_request(primary, &mut task);
+        assert_eq!(task.published_request, None);
+        assert_eq!(task.request_asked_at_unix, Some(asked));
+
+        task.request_asked_at_unix = Some(asked - REQUEST_INTERVAL.as_secs());
+        observe_request(primary, &mut task);
+        assert_eq!(task.published_request, Some(9));
+
+        // Answered, and never asked again: the number does not change.
+        repository.git(&["push", "--quiet", REMOTE, ":refs/pull/9/head"]);
+        task.request_asked_at_unix = None;
+        observe_request(primary, &mut task);
+        assert_eq!(task.published_request, Some(9));
+        assert_eq!(task.request_asked_at_unix, None, "nothing was asked");
+    }
+
     #[test]
     fn pr_without_a_remote_is_refused_before_anything_moves() {
         let repository = repository("landing-pr-no-remote");
@@ -1482,6 +1684,6 @@ mod tests {
             deliver(primary, &mut task, &policy),
             Err(DeliveryFailure::NoRemote)
         );
-        assert!(!task.pushed);
+        assert_eq!(publication(primary, &task), None);
     }
 }
