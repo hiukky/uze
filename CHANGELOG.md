@@ -4,6 +4,21 @@ All notable changes to UZE are documented here, generated from Conventional
 Commits by `git-cliff` (`make changelog`). Until v1, UZE ships only SemVer
 pre-releases — see `docs/versioning.md`.
 
+## [0.0.0-alpha.3](https://github.com/hiukky/uze/compare/v0.0.0-alpha.2...v0.0.0-alpha.3) - 2026-09-07
+
+### Features
+
+- **journeys:** Perform a user's flow, then check the machine it left behind ([#29](https://github.com/hiukky/uze/pull/29)) ([29363f8](https://github.com/hiukky/uze/commit/29363f8bd6e9756e90be980f6e43413ce2eb6259))
+- **marketplace:** A marketplace is a git repository, local or remote ([#28](https://github.com/hiukky/uze/pull/28)) [**breaking**] ([db42e8c](https://github.com/hiukky/uze/commit/db42e8cd8931cc9167fa4d48704701beaf02398e))
+- **cli:** Ask, instead of acting on a decision nobody made ([#30](https://github.com/hiukky/uze/pull/30)) ([494df79](https://github.com/hiukky/uze/commit/494df792efde1824dbe0e79429461f6344e11b3e))
+- **ui:** Say profiles is beta on the row that opens it ([#32](https://github.com/hiukky/uze/pull/32)) ([e8e6e48](https://github.com/hiukky/uze/commit/e8e6e48faf1f5acb940eed26d3fdb3aa25b23294))
+- **workspace:** An agent that comes back comes back to its conversation ([#33](https://github.com/hiukky/uze/pull/33)) ([f96159b](https://github.com/hiukky/uze/commit/f96159b3bf0657e0486c7fe8c39a78516c81d34d))
+
+### Fixes
+
+- **workspace:** Put the caption's gold on the agent, not on the branch ([#27](https://github.com/hiukky/uze/pull/27)) ([f16317e](https://github.com/hiukky/uze/commit/f16317ed7a3a35008b061db82a171cfd24ae1531))
+- **workspace:** A squash merge is a delivery, and an agent starts where the team is ([#31](https://github.com/hiukky/uze/pull/31)) ([189db64](https://github.com/hiukky/uze/commit/189db645e15008ea0d1561cdae55d63959e41ea4))
+
 ## [0.0.0-alpha.2](https://github.com/hiukky/uze/compare/v0.0.0-alpha.1...v0.0.0-alpha.2) - 2026-09-06
 
 ### Features
