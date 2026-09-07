@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use uze_core::{
-    Result, UzeError, checkout,
+    Result, UzeError, checkout, conversation,
     landing::{self, Delivered, DeliveryFailure, Readiness},
     manifest, prompt_history, sidebar_layout,
     task::{self, Base, Task, TaskId, TaskState, TaskStore},
@@ -45,16 +45,75 @@ impl Workspace<'_> {
         self.0
             .integrations
             .iter()
-            .map(|integration| AgentIdentity {
-                binary: integration
+            .map(|integration| {
+                let binary = integration
                     .aliases()
                     .first()
                     .copied()
-                    .unwrap_or(integration.id()),
-                integration: integration.id(),
-                display_name: integration.display_name(),
+                    .unwrap_or(integration.id());
+                let (launch, continuity_gap) = self.launcher(integration.as_ref(), binary);
+                AgentIdentity {
+                    binary,
+                    integration: integration.id(),
+                    display_name: integration.display_name(),
+                    launch,
+                    continuity_gap,
+                }
             })
             .collect()
+    }
+
+    /// What to launch an agent of `integration` by, and what that costs.
+    ///
+    /// UZE's own launcher is what decides, per launch, whether an agent
+    /// resumes its task's conversation or starts one, so naming it here by
+    /// path is what makes continuity independent of the operator's `PATH`.
+    /// It is never created on their behalf: the launcher's presence is the
+    /// operator's own opt-in, and resurrecting one they removed would
+    /// override a decision they made. Without it the harness still starts —
+    /// on its plain name, with no conversation carried over, and the reason
+    /// said rather than silently missing.
+    fn launcher(
+        &self,
+        integration: &dyn uze_core::integration::IntegrationPort,
+        binary: &str,
+    ) -> (PathBuf, Option<String>) {
+        let bare = PathBuf::from(binary);
+        if integration.session_continuity() == uze_core::integration::SessionContinuity::Unsupported
+        {
+            return (
+                bare,
+                Some("this harness offers no way to continue a conversation".to_owned()),
+            );
+        }
+        let launcher = self.0.home.shims_dir().join(integration.shim_name());
+        if launcher.exists() {
+            return (launcher, None);
+        }
+        (
+            bare,
+            Some(
+                "UZE's launcher is not installed for this harness, so its conversation is not \
+                 carried over"
+                    .to_owned(),
+            ),
+        )
+    }
+
+    /// Writes back which conversation the agent in `cwd` is actually in.
+    ///
+    /// Answers whether anything changed. Runs off whatever thread the
+    /// caller gives it — one of these asks a harness about its own
+    /// records, which can mean spawning it — and is silent about every
+    /// way of having nothing to say.
+    pub fn refresh_conversation(&self, integration: &str, cwd: &Path) -> bool {
+        self.0
+            .integrations
+            .iter()
+            .find(|candidate| candidate.id() == integration)
+            .is_some_and(|integration| {
+                uze_core::continuity::refresh(&self.0.home, cwd, integration.as_ref())
+            })
     }
 
     /// Recent prompts submitted into the agent tabs of `root`'s workspace.
@@ -576,6 +635,12 @@ impl Workspace<'_> {
             .store
             .tasks
             .retain(|recorded| recorded.id.as_str() != task_id);
+        // The one place a task stops existing, and therefore the one place
+        // its conversations stop being reachable. Finishing is deliberately
+        // not such a place: an integrated task whose agent kept working is
+        // revived by reconciliation, and it would come back without the
+        // conversation it never left.
+        conversation::forget(&self.0.home, &repository.primary, &task.id);
         task::save(&self.0.home, &repository.primary, &repository.store)
     }
 }

@@ -65,14 +65,18 @@ mod workspace_tests {
         PaneDamage, PaneId, RenderCell, Session, SpaceId, Tab, TabId, TerminalColor, WorkspaceId,
     };
 
-    const IDENTITIES: [AgentIdentity; 1] = [AgentIdentity {
-        binary: "agent",
-        integration: "agent",
-        display_name: "Agent",
-    }];
+    fn identities_fixture() -> Vec<AgentIdentity> {
+        vec![AgentIdentity {
+            binary: "agent",
+            integration: "agent",
+            display_name: "Agent",
+            launch: std::path::PathBuf::from("agent"),
+            continuity_gap: None,
+        }]
+    }
 
     /// A one-tab session whose only tab `agent_identity_for_tab` resolves
-    /// to [`IDENTITIES`], matched on the tab label the way a tab created
+    /// to the fixture identity, matched on the tab label the way a tab created
     /// before generic agent labels is.
     fn agent_session() -> WorkspaceModel {
         let mut session = Session::new(WorkspaceId("workspace".into()), "/tmp".into(), 80, 24);
@@ -131,7 +135,11 @@ mod workspace_tests {
     /// one repaint whose bytes reached the client in pieces.
     fn animate(model: &mut WorkspaceModel, pane: PaneId, start: Instant) {
         for step in 0..=AGENT_BUSY_REPAINTS as u64 {
-            model.note_agent_output(pane, &IDENTITIES, start + Duration::from_millis(120 * step));
+            model.note_agent_output(
+                pane,
+                &identities_fixture(),
+                start + Duration::from_millis(120 * step),
+            );
         }
     }
 
@@ -158,7 +166,7 @@ mod workspace_tests {
                     frame,
                     frame.area(),
                     &model,
-                    &IDENTITIES,
+                    &identities_fixture(),
                     &mut hits,
                     &mut FrameMetrics::default(),
                 )
@@ -220,7 +228,9 @@ mod workspace_tests {
         let mut terminal = Terminal::new(TestBackend::new(80, 3)).unwrap();
         let mut hits = Vec::new();
         terminal
-            .draw(|frame| render_tab_strip(frame, frame.area(), model, &IDENTITIES, &mut hits))
+            .draw(|frame| {
+                render_tab_strip(frame, frame.area(), model, &identities_fixture(), &mut hits)
+            })
             .unwrap();
         let buffer = terminal.backend().buffer().clone();
         let rows = (0..buffer.area.height)
@@ -241,7 +251,9 @@ mod workspace_tests {
         let mut terminal = Terminal::new(TestBackend::new(80, 3)).unwrap();
         let mut hits = Vec::new();
         terminal
-            .draw(|frame| render_tab_strip(frame, frame.area(), model, &IDENTITIES, &mut hits))
+            .draw(|frame| {
+                render_tab_strip(frame, frame.area(), model, &identities_fixture(), &mut hits)
+            })
             .unwrap();
         let buffer = terminal.backend().buffer().clone();
         (buffer[(rect.x + 1, rect.y)].fg, buffer[(rect.x, rect.y)].bg)
@@ -358,12 +370,12 @@ mod workspace_tests {
         let (mut model, first, _) = two_agents_with_shells();
         model.session.as_mut().expect("session").select_tab(first);
 
-        assert_eq!(next_shell_label(&model, &IDENTITIES), "shell 2");
+        assert_eq!(next_shell_label(&model, &identities_fixture()), "shell 2");
 
         let own = model.session.as_ref().expect("session").workspace.spaces[0].tabs[0].id;
         model.session.as_mut().expect("session").select_tab(own);
         assert_eq!(
-            next_shell_label(&model, &IDENTITIES),
+            next_shell_label(&model, &identities_fixture()),
             "shell 2",
             "the space's own group counts neither agent"
         );
@@ -379,14 +391,14 @@ mod workspace_tests {
 
         session.select_tab(first);
         assert_eq!(
-            space_own_tab(&session.workspace.spaces[0], &IDENTITIES),
+            space_own_tab(&session.workspace.spaces[0], &identities_fixture()),
             Some(own),
             "from an agent, back to the space's own shell"
         );
 
         session.select_tab(own);
         assert_eq!(
-            space_own_tab(&session.workspace.spaces[0], &IDENTITIES),
+            space_own_tab(&session.workspace.spaces[0], &identities_fixture()),
             Some(own),
             "and it stays where it already is"
         );
@@ -427,7 +439,7 @@ mod workspace_tests {
                 render::render(
                     frame,
                     model,
-                    &IDENTITIES,
+                    &identities_fixture(),
                     &mut hits,
                     &mut render::FrameMetrics::default(),
                 )
@@ -447,7 +459,7 @@ mod workspace_tests {
                 render::render(
                     frame,
                     model,
-                    &IDENTITIES,
+                    &identities_fixture(),
                     &mut Vec::new(),
                     &mut render::FrameMetrics::default(),
                 )
@@ -485,7 +497,7 @@ mod workspace_tests {
             .map(|(rect, _)| *rect)
             .expect("the agent's own sidebar row");
         assert_eq!(
-            tab_drag_group(&model, &IDENTITIES, &layout, sidebar_rect, first),
+            tab_drag_group(&model, &identities_fixture(), &layout, sidebar_rect, first),
             Some(TabDragGroup::Agents(space))
         );
 
@@ -499,13 +511,13 @@ mod workspace_tests {
             .map(|(rect, _)| *rect)
             .expect("the agent's own strip chip");
         assert_eq!(
-            tab_drag_group(&model, &IDENTITIES, &layout, strip_rect, first),
+            tab_drag_group(&model, &identities_fixture(), &layout, strip_rect, first),
             Some(TabDragGroup::Strip(space, Some(first))),
             "the very same tab, but its strip chip's rect names the strip's group"
         );
 
         assert_eq!(
-            tab_drag_group(&model, &IDENTITIES, &layout, layout.pane, first),
+            tab_drag_group(&model, &identities_fixture(), &layout, layout.pane, first),
             None,
             "the pane itself belongs to no drag group"
         );
@@ -518,8 +530,12 @@ mod workspace_tests {
         let space = model.session.as_ref().unwrap().workspace.selected_space;
         let layout = full_frame(&mut model);
 
-        let agents =
-            tab_drag_group_members(&model, &IDENTITIES, &layout, TabDragGroup::Agents(space));
+        let agents = tab_drag_group_members(
+            &model,
+            &identities_fixture(),
+            &layout,
+            TabDragGroup::Agents(space),
+        );
         assert_eq!(
             agents.iter().map(|(_, tab)| *tab).collect::<Vec<_>>(),
             vec![first, second],
@@ -528,7 +544,7 @@ mod workspace_tests {
 
         let strip = tab_drag_group_members(
             &model,
-            &IDENTITIES,
+            &identities_fixture(),
             &layout,
             TabDragGroup::Strip(space, Some(first)),
         );
@@ -571,7 +587,12 @@ mod workspace_tests {
         let layout = full_frame(&mut model);
         let dragged = agent_ids[0];
 
-        let all = tab_drag_group_members(&model, &IDENTITIES, &layout, TabDragGroup::Agents(space));
+        let all = tab_drag_group_members(
+            &model,
+            &identities_fixture(),
+            &layout,
+            TabDragGroup::Agents(space),
+        );
         let origin = all
             .iter()
             .find(|(_, tab)| *tab == dragged)
@@ -888,7 +909,13 @@ mod workspace_tests {
         let mut terminal = Terminal::new(TestBackend::new(80, 3)).unwrap();
         terminal
             .draw(|frame| {
-                render_tab_strip(frame, frame.area(), &model, &IDENTITIES, &mut Vec::new())
+                render_tab_strip(
+                    frame,
+                    frame.area(),
+                    &model,
+                    &identities_fixture(),
+                    &mut Vec::new(),
+                )
             })
             .unwrap();
         assert_eq!(
@@ -2616,7 +2643,16 @@ mod workspace_tests {
     ) -> ratatui::buffer::Buffer {
         let mut terminal = Terminal::new(TestBackend::new(40, 24)).unwrap();
         terminal
-            .draw(|frame| render_sidebar(frame, frame.area(), model, &IDENTITIES, hits, metrics))
+            .draw(|frame| {
+                render_sidebar(
+                    frame,
+                    frame.area(),
+                    model,
+                    &identities_fixture(),
+                    hits,
+                    metrics,
+                )
+            })
             .unwrap();
         terminal.backend().buffer().clone()
     }
@@ -2862,7 +2898,7 @@ mod workspace_tests {
             }
         }
 
-        let requests = adopt_agent_labels(&mut model, &IDENTITIES);
+        let requests = adopt_agent_labels(&mut model, &identities_fixture());
         assert_eq!(
             requests,
             vec![
@@ -2877,14 +2913,14 @@ mod workspace_tests {
             ]
         );
         assert!(
-            adopt_agent_labels(&mut model, &IDENTITIES).is_empty(),
+            adopt_agent_labels(&mut model, &identities_fixture()).is_empty(),
             "each tab is asked once"
         );
 
         let session = model.session.as_mut().unwrap();
         assert!(session.rename_tab(TabId(2), "agent 2".into()));
         assert!(session.rename_tab(TabId(4), "agent 3".into()));
-        assert!(adopt_agent_labels(&mut model, &IDENTITIES).is_empty());
+        assert!(adopt_agent_labels(&mut model, &identities_fixture()).is_empty());
         assert!(
             model.label_adoptions.is_empty(),
             "a confirmed rename leaves the ledger"
@@ -2898,7 +2934,7 @@ mod workspace_tests {
         let mut model = agent_session_in("/repo");
         let session = model.session.as_mut().unwrap();
         session.add_tab(SpaceId(1), "shell 2".into(), None, 80, 24, "/repo".into());
-        assert!(adopt_agent_labels(&mut model, &IDENTITIES).is_empty());
+        assert!(adopt_agent_labels(&mut model, &identities_fixture()).is_empty());
     }
 
     /// Every agent has a slot, so a slot is nothing to announce; the
@@ -3072,7 +3108,7 @@ mod workspace_tests {
             AgentTabStatus::Selected
         );
 
-        model.note_agent_prompt_submission(PaneId(1), &IDENTITIES, Some("hello"));
+        model.note_agent_prompt_submission(PaneId(1), &identities_fixture(), Some("hello"));
         assert_eq!(
             model.agent_tab_status(PaneId(1), true),
             AgentTabStatus::Working
@@ -3110,12 +3146,15 @@ mod workspace_tests {
     #[test]
     fn a_submitted_agent_prompt_works_until_its_pane_goes_quiet() {
         let mut model = agent_session();
-        model.note_agent_prompt_submission(PaneId(1), &IDENTITIES, Some("hello"));
+        model.note_agent_prompt_submission(PaneId(1), &identities_fixture(), Some("hello"));
         assert_eq!(
             model.agent_tab_status(PaneId(1), false),
             AgentTabStatus::Working
         );
-        assert!(workspace_has_active_agent_operation(&model, &IDENTITIES));
+        assert!(workspace_has_active_agent_operation(
+            &model,
+            &identities_fixture()
+        ));
 
         assert!(!model.expire_agent_activity(Instant::now() + Duration::from_secs(1)));
         assert_eq!(
@@ -3124,7 +3163,10 @@ mod workspace_tests {
         );
 
         assert!(model.expire_agent_activity(Instant::now() + Duration::from_secs(4)));
-        assert!(!workspace_has_active_agent_operation(&model, &IDENTITIES));
+        assert!(!workspace_has_active_agent_operation(
+            &model,
+            &identities_fixture()
+        ));
     }
 
     #[test]
@@ -3140,7 +3182,7 @@ mod workspace_tests {
             AgentTabStatus::Idle
         );
 
-        model.apply(painted(PaneId(1)), &IDENTITIES);
+        model.apply(painted(PaneId(1)), &identities_fixture());
         assert_eq!(
             model.agent_tab_status(PaneId(1), false),
             AgentTabStatus::Idle,
@@ -3164,7 +3206,7 @@ mod workspace_tests {
         for step in 0..4 * AGENT_BUSY_REPAINTS as u64 {
             model.note_agent_output(
                 PaneId(1),
-                &IDENTITIES,
+                &identities_fixture(),
                 start + Duration::from_millis(10 * step),
             );
         }
@@ -3185,7 +3227,7 @@ mod workspace_tests {
         for step in 0..10 {
             model.note_agent_output(
                 PaneId(1),
-                &IDENTITIES,
+                &identities_fixture(),
                 start + Duration::from_secs(2 * step),
             );
             assert_ne!(
@@ -3203,7 +3245,7 @@ mod workspace_tests {
         // open agent spin for a few seconds each time the workspace opened.
         let mut model = agent_session();
         for _ in 0..AGENT_BUSY_REPAINTS {
-            model.apply(repainted_whole_grid(PaneId(1)), &IDENTITIES);
+            model.apply(repainted_whole_grid(PaneId(1)), &identities_fixture());
         }
         assert_eq!(
             model.agent_tab_status(PaneId(1), false),
@@ -3218,7 +3260,7 @@ mod workspace_tests {
         // could put it there. A long tool call therefore left the rest of
         // the turn showing as finished.
         let mut model = agent_session();
-        model.note_agent_prompt_submission(PaneId(1), &IDENTITIES, Some("hello"));
+        model.note_agent_prompt_submission(PaneId(1), &identities_fixture(), Some("hello"));
         assert!(model.expire_agent_activity(Instant::now() + Duration::from_secs(4)));
         assert_ne!(
             model.agent_tab_status(PaneId(1), false),
@@ -3241,7 +3283,11 @@ mod workspace_tests {
         for step in 0..4 * AGENT_BUSY_REPAINTS as u64 {
             let typed = start + Duration::from_millis(120 * step);
             model.open_echo_window(PaneId(1), typed, AGENT_ECHO_GRACE);
-            model.note_agent_output(PaneId(1), &IDENTITIES, typed + Duration::from_millis(10));
+            model.note_agent_output(
+                PaneId(1),
+                &identities_fixture(),
+                typed + Duration::from_millis(10),
+            );
         }
         assert_eq!(
             model.agent_tab_status(PaneId(1), false),
@@ -3271,11 +3317,15 @@ mod workspace_tests {
         // working, so the turn still ends on its own quiet window.
         let mut model = agent_session();
         let start = Instant::now();
-        model.note_agent_prompt_submission(PaneId(1), &IDENTITIES, Some("hello"));
+        model.note_agent_prompt_submission(PaneId(1), &identities_fixture(), Some("hello"));
         for step in 0..4 * AGENT_BUSY_REPAINTS as u64 {
             let typed = start + Duration::from_millis(120 * step);
             model.open_echo_window(PaneId(1), typed, AGENT_ECHO_GRACE);
-            model.note_agent_output(PaneId(1), &IDENTITIES, typed + Duration::from_millis(10));
+            model.note_agent_output(
+                PaneId(1),
+                &identities_fixture(),
+                typed + Duration::from_millis(10),
+            );
         }
 
         assert!(model.expire_agent_activity(start + Duration::from_secs(4)));
@@ -3291,7 +3341,7 @@ mod workspace_tests {
         // still working, and must not be declared done on the strength of
         // when its prompt was submitted.
         let mut model = agent_session();
-        model.note_agent_prompt_submission(PaneId(1), &IDENTITIES, Some("hello"));
+        model.note_agent_prompt_submission(PaneId(1), &identities_fixture(), Some("hello"));
 
         let later = Instant::now() + Duration::from_secs(2);
         animate(&mut model, PaneId(1), later);
@@ -3313,7 +3363,7 @@ mod workspace_tests {
             )),
             ..WorkspaceModel::default()
         };
-        model.note_agent_prompt_submission(PaneId(1), &IDENTITIES, Some("hello"));
+        model.note_agent_prompt_submission(PaneId(1), &identities_fixture(), Some("hello"));
         animate(&mut model, PaneId(1), Instant::now());
         assert!(model.agent_activity.is_empty());
     }
@@ -3335,7 +3385,7 @@ mod workspace_tests {
             session: Some(session),
             ..WorkspaceModel::default()
         };
-        model.note_agent_prompt_submission(agent_pane, &IDENTITIES, Some("hello"));
+        model.note_agent_prompt_submission(agent_pane, &identities_fixture(), Some("hello"));
         assert!(model.expire_agent_activity(Instant::now() + Duration::from_secs(4)));
         assert_eq!(
             model.agent_tab_status(agent_pane, false),
@@ -3370,7 +3420,7 @@ mod workspace_tests {
             session: Some(session),
             ..WorkspaceModel::default()
         };
-        model.note_agent_prompt_submission(agent_pane, &IDENTITIES, Some("hello"));
+        model.note_agent_prompt_submission(agent_pane, &identities_fixture(), Some("hello"));
         assert!(model.expire_agent_activity(Instant::now() + Duration::from_secs(4)));
         assert_eq!(
             model.agent_tab_status(agent_pane, false),
@@ -3404,7 +3454,7 @@ mod workspace_tests {
             session: Some(session),
             ..WorkspaceModel::default()
         };
-        model.note_agent_prompt_submission(agent_pane, &IDENTITIES, Some("hello"));
+        model.note_agent_prompt_submission(agent_pane, &identities_fixture(), Some("hello"));
         model.note_pane_input(agent_pane);
 
         if let Some(session) = model.session.as_mut() {
@@ -3505,13 +3555,27 @@ mod workspace_tests {
                 binary: "claude",
                 integration: "claude-code",
                 display_name: "Claude Code",
+                launch: std::path::PathBuf::from("/uze/shims/claude"),
+                continuity_gap: None,
             },
             AgentIdentity {
                 binary: "codex",
                 integration: "codex",
                 display_name: "Codex",
+                launch: std::path::PathBuf::from("codex"),
+                continuity_gap: Some("no launcher".to_owned()),
             },
         ]
+    }
+
+    /// An agent launched through UZE's own launcher is still the same agent
+    /// on the tab: what a pane is recognized by is the process it is
+    /// running, which the launcher preserves, and never the path it was
+    /// started from.
+    #[test]
+    fn launching_through_the_launcher_leaves_the_pane_recognizable() {
+        let tab = tab_with("agent 1", "claude");
+        assert_eq!(agent_identity_for_tab(&identities(), &tab), Some("claude"));
     }
 
     fn tab_with(label: &str, process: &str) -> Tab {
@@ -3918,7 +3982,7 @@ mod workspace_tests {
                 model,
                 stream: client,
                 home,
-                identities: IDENTITIES.to_vec(),
+                identities: identities_fixture(),
                 answers: AttachAnswers {
                     support,
                     tasks,
@@ -3965,7 +4029,10 @@ mod workspace_tests {
         for tab in [shell, second] {
             let mut session = model.session.clone().expect("session");
             session.select_tab(tab);
-            model.apply(ClientEvent::SessionUpdated { session }, &IDENTITIES);
+            model.apply(
+                ClientEvent::SessionUpdated { session },
+                &identities_fixture(),
+            );
         }
 
         let mut driven = driven(model, &home);
@@ -4007,7 +4074,10 @@ mod workspace_tests {
             .id;
         let mut session = model.session.clone().expect("session");
         session.select_tab(shell);
-        model.apply(ClientEvent::SessionUpdated { session }, &IDENTITIES);
+        model.apply(
+            ClientEvent::SessionUpdated { session },
+            &identities_fixture(),
+        );
 
         let mut driven = driven(model, &home);
         driven.frame();

@@ -2,6 +2,7 @@
 
 import time
 
+from contract import continuity
 from contract.bindings import Bindings
 from contract.tui import Tui
 from shared.common import docker_base
@@ -11,9 +12,14 @@ from .scenarios import agy_setup
 
 class AntigravityBindings(Bindings):
     harness = "antigravity"
+    #: UZE installs this harness's launcher under the name people type.
+    launcher = "agy"
     launch = "exec agy"
     ready_markers = ("Antigravity CLI",)
     warmup = 3.0
+    #: An interrupt, then this harness's own exit verb when that was not
+    #: enough — `agy` treats a lone interrupt as "clear the line".
+    exit_keys = ("\x03", "/exit\r")
 
     def session(self, cfg, prov_ip):
         setup = agy_setup(cfg, prov_ip, include_mcp=True, final_cmd=self.launch)
@@ -28,6 +34,17 @@ class AntigravityBindings(Bindings):
             prelude=f"{prelude}\ncd {cwd}",
         )
         return Tui(cfg, docker_base(cfg, prov_ip, setup), "antigravity-isolation")
+
+    def relaunch_in(self, cfg, prov_ip, cwd, prelude):
+        """Two launches in one terminal, back to back."""
+        setup = agy_setup(
+            cfg,
+            prov_ip,
+            include_mcp=False,
+            final_cmd=continuity.relaunch_command(self.launcher_name()),
+            prelude=f"{prelude}\ncd {cwd}",
+        )
+        return Tui(cfg, docker_base(cfg, prov_ip, setup), "antigravity-continuity")
 
     def prepare(self, tui):
         """agy opens on a colour-scheme picker and a terms screen; the prompt

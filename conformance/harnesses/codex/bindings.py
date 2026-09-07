@@ -2,6 +2,7 @@
 
 import time
 
+from contract import continuity
 from contract.bindings import Bindings
 from contract.tui import Tui
 
@@ -15,6 +16,10 @@ class CodexBindings(Bindings):
     #: onboarding passes every check against a screen that accepts no
     #: input — which it did, once, here.
     ready_markers = ("Ask Codex to do anything",)
+    #: Codex answers the first interrupt by offering to take a second, and
+    #: a second sent before that offer is drawn is swallowed: measured, six
+    #: seconds apart it exits and half a second apart it never does.
+    exit_key_gap = 6.0
     warmup = 6.0
 
     def session(self, cfg, prov_ip):
@@ -23,6 +28,12 @@ class CodexBindings(Bindings):
     def session_in(self, cfg, prov_ip, cwd, prelude):
         final = f"{prelude}\ncd {cwd} && {self.launch}"
         return Tui(cfg, codex_container(cfg, prov_ip, final), "codex-isolation")
+
+    def relaunch_in(self, cfg, prov_ip, cwd, prelude):
+        """Two launches in one terminal, back to back."""
+        relaunch = continuity.relaunch_command(self.launcher_name())
+        final = f"{prelude}\ncd {cwd} && {relaunch}"
+        return Tui(cfg, codex_container(cfg, prov_ip, final), "codex-continuity")
 
     def prepare(self, tui):
         """Codex opens on an onboarding flow; the prompt only accepts input

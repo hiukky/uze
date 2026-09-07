@@ -38,6 +38,7 @@ mod mcp;
 mod plugin;
 mod preferences;
 mod provision;
+mod session;
 mod skills;
 
 pub use mcp::detach_mcp_entry;
@@ -115,6 +116,13 @@ impl CodexIntegration {
     /// entries are preserved.
     fn hooks_config_path(&self) -> PathBuf {
         self.command_home.join(".codex").join("hooks.json")
+    }
+
+    /// Where Codex files one rollout per conversation. Read only for the
+    /// `session_meta` line that names a conversation and the directory it
+    /// was started in — never for what was said in it.
+    fn sessions_dir(&self) -> PathBuf {
+        self.command_home.join(".codex").join("sessions")
     }
 
     /// Codex's own `config.toml` (`docs/config-file/config-basic`) — the
@@ -353,6 +361,32 @@ impl IntegrationPort for CodexIntegration {
 
     fn hook_capabilities(&self) -> uze_core::hook::HookCapabilities {
         hook_projection::codex_capabilities()
+    }
+
+    fn session_continuity(&self) -> uze_core::integration::SessionContinuity {
+        uze_core::integration::SessionContinuity::Observed
+    }
+
+    fn resume_session_args(
+        &self,
+        session: &uze_core::conversation::SessionId,
+    ) -> Vec<std::ffi::OsString> {
+        session::resume_args(session)
+    }
+
+    fn session_recorded_for(&self, cwd: &Path) -> Option<uze_core::conversation::SessionId> {
+        session::recorded_for(cwd)
+    }
+
+    fn observe_session(
+        &self,
+        ctx: &uze_core::integration::ObservationContext,
+    ) -> Option<uze_core::conversation::SessionId> {
+        session::observe(&self.sessions_dir(), ctx)
+    }
+
+    fn session_exists(&self, session: &uze_core::conversation::SessionId, _cwd: &Path) -> bool {
+        session::exists(&self.sessions_dir(), session)
     }
 
     fn detect(&self) -> HarnessDetection {

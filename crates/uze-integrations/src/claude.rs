@@ -42,6 +42,7 @@ mod plugin;
 mod preferences;
 mod provision;
 mod runtime;
+mod session;
 mod skills;
 
 pub use mcp::detach_mcp_entry;
@@ -88,6 +89,10 @@ pub struct ClaudeIntegration {
     /// reads (ADR-033): `<claude_home>/settings.json` — inside the Claude
     /// config directory, not the HOME root where `~/.claude.json` lives.
     hooks_config: std::path::PathBuf,
+    /// Where Claude Code keeps one transcript directory per working
+    /// directory. Read only to prove a recorded conversation still exists
+    /// and to notice the agent moving to another one — never for content.
+    transcripts_root: std::path::PathBuf,
     uze_home: UzeHome,
 }
 
@@ -102,6 +107,7 @@ impl ClaudeIntegration {
             agents_dir: claude_home.join("agents"),
             command_home,
             hooks_config: claude_home.join("settings.json"),
+            transcripts_root: claude_home.join("projects"),
             uze_home,
         }
     }
@@ -306,6 +312,39 @@ impl IntegrationPort for ClaudeIntegration {
         ctx: &RuntimeContext,
     ) -> uze_core::harness_runtime::HarnessRuntimeContribution {
         runtime::runtime_contribution(ctx)
+    }
+
+    fn session_continuity(&self) -> uze_core::integration::SessionContinuity {
+        uze_core::integration::SessionContinuity::Assigned
+    }
+
+    fn start_session_args(
+        &self,
+        session: &uze_core::conversation::SessionId,
+    ) -> Vec<std::ffi::OsString> {
+        session::start_args(session)
+    }
+
+    fn resume_session_args(
+        &self,
+        session: &uze_core::conversation::SessionId,
+    ) -> Vec<std::ffi::OsString> {
+        session::resume_args(session)
+    }
+
+    fn session_recorded_for(&self, cwd: &Path) -> Option<uze_core::conversation::SessionId> {
+        session::recorded_for(cwd)
+    }
+
+    fn observe_session(
+        &self,
+        ctx: &uze_core::integration::ObservationContext,
+    ) -> Option<uze_core::conversation::SessionId> {
+        session::observe(&self.transcripts_root, ctx)
+    }
+
+    fn session_exists(&self, session: &uze_core::conversation::SessionId, cwd: &Path) -> bool {
+        session::exists(&self.transcripts_root, cwd, session)
     }
 
     /// Pure check for status views: `claude_runtime_projection` writes its

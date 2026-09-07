@@ -4,7 +4,7 @@ import { InstallCommand } from '@/components/install-command';
 import { TrademarkNotice } from '@/components/trademark-notice';
 import matrix from '@/lib/harness-matrix.json';
 
-type Capability = 'context' | 'skills' | 'mcp' | 'agents' | 'hooks' | 'package';
+type Capability = 'context' | 'skills' | 'mcp' | 'agents' | 'hooks' | 'session' | 'package';
 
 const columns: [Capability, string][] = [
   ['context', 'AGENTS.md'],
@@ -12,6 +12,7 @@ const columns: [Capability, string][] = [
   ['mcp', 'MCP'],
   ['agents', 'Agents'],
   ['hooks', 'Hooks'],
+  ['session', 'Session'],
   ['package', 'Plugin'],
 ];
 

@@ -18,11 +18,20 @@ class Bindings:
     #: Registry id, matching the integration's own.
     harness = ""
 
+    #: The name UZE's launcher is installed under for this harness, when it
+    #: differs from the registry id (`shim_name()` on the integration).
+    launcher = ""
+
     #: The command run inside the container to start the TUI.
     launch = ""
 
     #: Text that proves the TUI is ready for input. Any one is enough.
     ready_markers = ()
+
+    #: The same, for a process that opened on a conversation instead of on
+    #: nothing. Empty means `ready_markers` say it for both — declare this
+    #: only where a resumed session genuinely shows something else.
+    rejoin_markers = ()
 
     #: Seconds to wait after `ready_markers` before typing. Prompts render
     #: before the surfaces behind them finish loading, and input sent into
@@ -48,6 +57,77 @@ class Bindings:
         """A live TUI started in `cwd` after `prelude` — a shell script the
         contract wrote to lay a scene down — has run in the container."""
         raise NotImplementedError
+
+    def launcher_name(self):
+        """The launcher's file name — the id unless the harness declares
+        another, the same rule the integration's own `shim_name` follows."""
+        return self.launcher or self.harness
+
+    def relaunch_in(self, cfg, prov_ip, cwd, prelude):
+        """A terminal in `cwd` that runs this harness, and then runs it
+        again when the first one ends — what the terminal runtime does when
+        it restores a workspace after a restart.
+
+        Both launches go through UZE's own launcher, because that is where
+        the resume-or-start decision is made, and the shell between them is
+        `continuity.relaunch_command`, so every vertical announces the first
+        process's exit the same way. A harness that cannot be driven this
+        way declines through `unsupported("relaunch_in")`.
+        """
+        raise NotImplementedError
+
+    #: What this harness is ended by, in the order a person would try:
+    #: an interrupt, then whatever it takes if the interrupt was not
+    #: enough. Data rather than a method, because the *pacing* is the
+    #: contract's — a key sent after the process already exited lands on
+    #: the shell, which at that moment is starting the next process, and
+    #: that is how an interrupt meant for the first one killed the second
+    #: before it drew a frame (measured on OpenCode, `experiments/
+    #: relaunch_probe`). The contract sends these one at a time and stops
+    #: at the one that worked, so a harness may list more than it needs.
+    exit_keys = ("\x03", "\x03")
+
+    #: Seconds between one exit key and the next. Per harness because the
+    #: harnesses want opposite things and both were measured: Claude's
+    #: "press it again to exit" *expires*, so a slow second interrupt is
+    #: read as another first one and it never leaves; Codex has to render
+    #: that offer before a second interrupt means anything, and a fast one
+    #: is swallowed. There is no value that suits both, which is why this
+    #: is not a constant in the contract.
+    exit_key_gap = 0.5
+
+    def rejoin(self, tui):
+        """What proves the *next* process reached its prompt.
+
+        Not `prepare`: that one drives a first run — the colour scheme, the
+        terms, the API key, the folder trust — and none of it happens
+        twice. A second process in the same home opens straight on the
+        prompt, so waiting again for a picker that will never come back
+        reads as a harness that never started, which is exactly how this
+        went red on three verticals while the fourth (whose `prepare`
+        happened to fall back to the prompt marker) went green.
+
+        Two things this does that the first launch never needs:
+
+        It accumulates. A screen read returns only what arrived since the
+        last one, and nobody is driving this screen into repainting the
+        way `prepare` drives the first.
+
+        It asks for a repaint when nothing came, and only then. A harness
+        relaunched into a terminal it did not start in paints its frame
+        once and then waits — measured on Codex 0.153.4
+        (`experiments/relaunch_probe`), which sat silent for two minutes
+        and rendered its whole prompt on a form feed. Sent only after the
+        plain wait failed, because a key sent at a harness that is already
+        fine is a key it has to do something with.
+        """
+        markers = list(self.rejoin_markers or self.ready_markers)
+        _, plain, matched = tui.wait_for(markers, tries=8, accumulate=True)
+        if not matched:
+            tui.child.send("\x0c")
+            _, plain, matched = tui.wait_for(markers, tries=8, accumulate=True)
+        tui.snapshot("rejoin", plain)
+        return plain, matched
 
     def skill_catalog(self, tui):
         """Opens this harness's Skill list and returns the screen text."""

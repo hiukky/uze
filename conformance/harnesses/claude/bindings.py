@@ -2,6 +2,7 @@
 
 import time
 
+from contract import continuity
 from contract.bindings import Bindings
 from contract.tui import Tui
 
@@ -20,6 +21,12 @@ class ClaudeBindings(Bindings):
     def session_in(self, cfg, prov_ip, cwd, prelude):
         final = f"{prelude}\ncd {cwd} && {self.launch}"
         return Tui(cfg, claude_container(cfg, prov_ip, final), "claude-isolation")
+
+    def relaunch_in(self, cfg, prov_ip, cwd, prelude):
+        """Two launches in one terminal, back to back."""
+        relaunch = continuity.relaunch_command(self.launcher_name())
+        final = f"{prelude}\ncd {cwd} && {relaunch}"
+        return Tui(cfg, claude_container(cfg, prov_ip, final), "claude-continuity")
 
     def prepare(self, tui):
         """Claude opens on a chain of first-run dialogs — welcome, security

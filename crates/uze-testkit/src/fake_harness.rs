@@ -64,6 +64,19 @@ pub enum Action {
     /// models only the first exits immediately when UZE launches it into a
     /// checkout, which is not what the real one does.
     InteractiveSession { banner: String },
+    /// A conversation the harness names on disk before holding the terminal:
+    /// `--session-id <id>` writes the transcript at
+    /// `<transcripts_root>/<cwd flattened>/<id>.jsonl`, `--resume <id>`
+    /// appends to the one already there.
+    ///
+    /// That file is the side effect UZE reads back — it is how a recorded
+    /// conversation is proved to still exist, and how an agent that moved to
+    /// another one is noticed — so a stand-in that only held the terminal
+    /// would make every resume look like a conversation that had vanished.
+    ConversationSession {
+        transcripts_root: PathBuf,
+        banner: String,
+    },
     /// Antigravity's stub-install lifecycle: `plugin install <root>`
     /// stages a byte copy under `dest/<basename>` and `plugin list`
     /// answers `{"imports":[{"name":...}]}` from persisted state.
@@ -289,20 +302,44 @@ fn emit_action(action: &Action) -> String {
             arg_index,
             arg_index
         ),
-        Action::InteractiveSession { banner } => format!(
-            "    printf '%s\\n' '{banner}'\n\
-             \x20   printf 'cwd %s\\n' \"$PWD\"\n\
-             \x20   while IFS= read -r line; do\n\
-             \x20     [ \"$line\" = '/exit' ] && exit 0\n\
-             \x20     printf '> %s\\n' \"$line\"\n\
-             \x20   done\n\
-             \x20   exit 0\n"
-        ),
+        Action::InteractiveSession { banner } => emit_interactive_session(banner),
+        Action::ConversationSession {
+            transcripts_root,
+            banner,
+        } => {
+            // Claude Code's own naming: one directory per working
+            // directory, every character that is not alphanumeric replaced
+            // by a hyphen, one `.jsonl` per conversation named by its id.
+            let mut block = format!(
+                "    transcripts='{}'\n\
+                 \x20   slug=$(printf '%s' \"$PWD\" | sed 's/[^A-Za-z0-9]/-/g')\n\
+                 \x20   mkdir -p \"$transcripts/$slug\"\n\
+                 \x20   printf '{{\"session\":\"%s\"}}\\n' \"$2\" >> \"$transcripts/$slug/$2.jsonl\"\n",
+                transcripts_root.display()
+            );
+            block.push_str(&emit_interactive_session(banner));
+            block
+        }
         Action::VendorMarketplace { state_dir, vendor } => {
             emit_vendor_marketplace(state_dir, *vendor)
         }
         Action::VendorAgy { state_dir, dest } => emit_vendor_agy(state_dir, dest),
     }
+}
+
+/// The banner and the read loop an interactive stand-in holds its terminal
+/// with. One copy: a session that also records its conversation differs
+/// only in what it does before the prompt appears.
+fn emit_interactive_session(banner: &str) -> String {
+    format!(
+        "    printf '%s\\n' '{banner}'\n\
+         \x20   printf 'cwd %s\\n' \"$PWD\"\n\
+         \x20   while IFS= read -r line; do\n\
+         \x20     [ \"$line\" = '/exit' ] && exit 0\n\
+         \x20     printf '> %s\\n' \"$line\"\n\
+         \x20   done\n\
+         \x20   exit 0\n"
+    )
 }
 
 /// Generates the Antigravity stub-install state-machine script.
@@ -591,15 +628,19 @@ impl Standard<'_> {
         };
         vec![
             self.interactive(
-                FakeHarness::new(self.bin_dir, "claude")
-                    .version_line("9.9.9 (Fake Claude)")
-                    .on_prefix(
-                        ["plugin"],
-                        Action::VendorMarketplace {
-                            state_dir: self.state_root.join("claude"),
-                            vendor: MarketplaceVendor::Claude,
-                        },
-                    ),
+                self.conversational(
+                    FakeHarness::new(self.bin_dir, "claude")
+                        .version_line("9.9.9 (Fake Claude)")
+                        .on_prefix(
+                            ["plugin"],
+                            Action::VendorMarketplace {
+                                state_dir: self.state_root.join("claude"),
+                                vendor: MarketplaceVendor::Claude,
+                            },
+                        ),
+                    self.home.join(".claude/projects"),
+                    "Claude Code v9.9.9 (fake)",
+                ),
                 session("Claude Code", "v9.9.9 (fake)"),
             )
             .build(),
@@ -652,5 +693,28 @@ impl Standard<'_> {
         } else {
             builder
         }
+    }
+
+    /// Attaches the two session arguments a harness that lets its
+    /// conversation be named answers to. Only where the set is interactive:
+    /// off it, nothing launches one of these into a pane, and a stand-in
+    /// that recorded a conversation nobody was in would be state with no
+    /// reader.
+    fn conversational(
+        &self,
+        builder: FakeHarnessBuilder,
+        transcripts_root: PathBuf,
+        banner: &str,
+    ) -> FakeHarnessBuilder {
+        if !self.interactive {
+            return builder;
+        }
+        let conversation = || Action::ConversationSession {
+            transcripts_root: transcripts_root.clone(),
+            banner: banner.to_owned(),
+        };
+        builder
+            .on_prefix(["--session-id"], conversation())
+            .on_prefix(["--resume"], conversation())
     }
 }

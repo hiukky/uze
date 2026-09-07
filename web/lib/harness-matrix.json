@@ -10,6 +10,7 @@
       "mcp": "native",
       "agents": "native",
       "hooks": "native",
+      "session": "native",
       "package": "native"
     },
     {
@@ -21,6 +22,7 @@
       "mcp": "native",
       "agents": "native",
       "hooks": "native",
+      "session": "native",
       "package": "native"
     },
     {
@@ -32,6 +34,7 @@
       "mcp": "native",
       "agents": "native",
       "hooks": "adapted",
+      "session": "native",
       "package": "none"
     },
     {
@@ -43,6 +46,7 @@
       "mcp": "native",
       "agents": "native",
       "hooks": "native",
+      "session": "native",
       "package": "native"
     }
   ],

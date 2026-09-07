@@ -322,6 +322,12 @@ impl Attach<'_> {
                 {
                     let label = next_agent_label(&self.model);
                     let command = option.command.clone();
+                    // Said before the tab opens, because it is a fact about
+                    // the agent being started rather than about the
+                    // placement it is being started into.
+                    if let Some(gap) = &option.continuity_gap {
+                        self.model.set_notice(format!("{label}: {gap}"));
+                    }
                     self.launch_agent(
                         label,
                         command,
@@ -1742,6 +1748,11 @@ impl Attach<'_> {
                 self.model
                     .schedule_evaluation(self.home, cwd, &self.answers.tasks);
             }
+            // On the same clock, and for every agent rather than the
+            // selected one: this is also where a launch left pending by a
+            // client that was not running is finally resolved, well before
+            // a relaunch needs the answer.
+            spawn_conversation_refresh(self.home, agent_contexts(&self.model, &self.identities));
         }
         // Work still in flight has no deadline: it is retired by the
         // outcome that replaces it, never by a clock that would leave the

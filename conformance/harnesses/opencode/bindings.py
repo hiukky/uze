@@ -2,6 +2,7 @@
 
 import time
 
+from contract import continuity
 from contract.bindings import Bindings
 from contract.tui import Tui
 
@@ -12,6 +13,16 @@ class OpenCodeBindings(Bindings):
     harness = "opencode"
     launch = "UZE_HOME=/usr/local/.uze PATH=/usr/local/.uze/shims:$PATH exec opencode --standalone"
     ready_markers = ("Ask anything",)
+    #: One interrupt ends it — measured (`experiments/relaunch_probe`). A
+    #: second would not be spare: the process is already gone by then, so
+    #: the shell has it, and the shell is starting the next process.
+    exit_keys = ("\x03",)
+    #: What a *resumed* session shows. `Ask anything` is the empty prompt's
+    #: placeholder, and a session opened with earlier turns in it has no
+    #: empty prompt to place a holder in — measured on beta-19192
+    #: (`experiments/relaunch_probe`): the second process rendered its
+    #: status bar and nothing else this vertical was looking for.
+    rejoin_markers = ("Build", "UZE Conformance Model")
     #: The prompt renders long before the skill and MCP surfaces finish
     #: loading, and input typed into that window is dropped. Measured, not
     #: guessed: 25s is what a working manual probe needed.
@@ -25,6 +36,43 @@ class OpenCodeBindings(Bindings):
     def session_in(self, cfg, prov_ip, cwd, prelude):
         final = f"{prelude}\ncd {cwd} && {self.launch}"
         return Tui(cfg, opencode_container(cfg, prov_ip, final), "opencode-isolation")
+
+    #: The `opencode` this scene's launches resolve to.
+    #:
+    #: Every other scene here launches `opencode --standalone`, because
+    #: this container has no background service for a TUI to attach to.
+    #: This one cannot: an argument on the command line is an argument the
+    #: *caller* composed, and that is precisely the case where UZE
+    #: contributes nothing — measured, the launch went bare and no
+    #: conversation was ever recorded. So the flag goes behind the
+    #: launcher rather than in front of it, where it is the container's
+    #: business and the launch stays bare.
+    #:
+    #: A subcommand is passed through untouched: UZE reads this harness's
+    #: session listing with `api GET /api/session`, and that one does want
+    #: the service every other process is talking to.
+    STANDALONE_WRAPPER = """
+mkdir -p /tmp/lab-bin
+cat > /tmp/lab-bin/opencode <<'WRAP_EOF'
+#!/bin/sh
+real=$(command -v opencode2)
+case "$1" in
+  ""|-*) exec "$real" --standalone "$@" ;;
+  *) exec "$real" "$@" ;;
+esac
+WRAP_EOF
+chmod +x /tmp/lab-bin/opencode
+export PATH=/tmp/lab-bin:$PATH
+"""
+
+    def relaunch_in(self, cfg, prov_ip, cwd, prelude):
+        """Two launches in one terminal, back to back, through the scene's
+        own launcher rather than the image's — the task record this contract
+        writes lives under the run's `UZE_HOME`, and the launcher has to read
+        the same one."""
+        relaunch = continuity.relaunch_command(self.launcher_name())
+        final = f"{prelude}\n{self.STANDALONE_WRAPPER}\ncd {cwd} && {relaunch}"
+        return Tui(cfg, opencode_container(cfg, prov_ip, final), "opencode-continuity")
 
     def skill_catalog(self, tui):
         time.sleep(self.warmup)

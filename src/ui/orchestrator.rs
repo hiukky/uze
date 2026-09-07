@@ -180,6 +180,32 @@ fn spawn_support_refresh(home: &UzeHome, key: SupportKey, sender: mpsc::Sender<S
     });
 }
 
+/// Writes back which conversation each live agent is actually in.
+///
+/// Fire-and-forget: the answer is state on disk that the next launch reads,
+/// so nothing comes back to the client and no key is reserved. It runs
+/// where the other unbounded reads run — a thread of its own — because one
+/// of these can spawn a harness to ask it about its own records.
+///
+/// This is what keeps a record true while an agent runs: a conversation
+/// cleared, forked or switched inside the process is a different identifier
+/// in the harness's records, and the launch that recorded the previous one
+/// is long over.
+fn spawn_conversation_refresh(home: &UzeHome, agents: Vec<(String, PathBuf)>) {
+    if agents.is_empty() {
+        return;
+    }
+    let home = home.clone();
+    thread::spawn(move || {
+        let Ok(app) = tui_application(home) else {
+            return;
+        };
+        for (integration, cwd) in agents {
+            app.workspace().refresh_conversation(&integration, &cwd);
+        }
+    });
+}
+
 /// How often every visible repository's tasks are re-read even when no
 /// pane went quiet — a task delivered from another client, a branch
 /// integrated by hand, a checkout removed.
@@ -994,11 +1020,15 @@ const TAB_DRAG_THRESHOLD: u16 = 2;
 /// single click.
 const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(400);
 
-/// One selectable row of the agent picker: what to show, and the `argv` to
-/// launch in the new pane if chosen.
+/// One selectable row of the agent picker: what to show, the `argv` to
+/// launch in the new pane if chosen, and what that launch will not be able
+/// to do.
 struct AgentOption {
     display_name: String,
     command: Vec<String>,
+    /// Said on the tab when the agent starts a conversation it will not be
+    /// able to continue.
+    continuity_gap: Option<String>,
 }
 
 /// Open state of the "+ new agent" popup (`WorkspaceHit::NewAgentMenu`) —
@@ -1096,14 +1126,16 @@ fn agent_identities(home: &UzeHome) -> Vec<AgentIdentity> {
         .unwrap_or_default()
 }
 
-/// The harnesses the agent picker offers — one row per
-/// [`AgentIdentity`], `command` set to launch that identity's `binary`.
+/// The harnesses the agent picker offers — one row per [`AgentIdentity`],
+/// `command` set to the program that identity says an agent of it is
+/// launched by.
 fn agent_options(home: &UzeHome) -> Vec<AgentOption> {
     agent_identities(home)
         .into_iter()
         .map(|identity| AgentOption {
             display_name: identity.display_name.to_owned(),
-            command: vec![identity.binary.to_owned()],
+            command: vec![identity.launch.to_string_lossy().into_owned()],
+            continuity_gap: identity.continuity_gap,
         })
         .collect()
 }
@@ -1284,6 +1316,31 @@ fn selected_agent_context(
         .map(|identity| identity.integration)?;
     let cwd = pane_in_layout(&tab.layout, tab.focus.pane)?.cwd.clone();
     Some((integration.to_owned(), cwd))
+}
+
+/// Every live agent pane as `(integration, directory)` — the same pair
+/// [`selected_agent_context`] resolves, for every tab rather than the
+/// selected one, since an agent nobody is looking at is exactly the one
+/// whose conversation would otherwise go unrecorded.
+fn agent_contexts(model: &WorkspaceModel, identities: &[AgentIdentity]) -> Vec<(String, PathBuf)> {
+    let Some(session) = model.session.as_ref() else {
+        return Vec::new();
+    };
+    session
+        .workspace
+        .spaces
+        .iter()
+        .flat_map(|space| space.tabs.iter())
+        .filter_map(|tab| {
+            let binary = agent_identity_for_tab(identities, tab)?;
+            let integration = identities
+                .iter()
+                .find(|identity| identity.binary == binary)
+                .map(|identity| identity.integration)?;
+            let cwd = pane_in_layout(&tab.layout, tab.focus.pane)?.cwd.clone();
+            Some((integration.to_owned(), cwd))
+        })
+        .collect()
 }
 
 /// A short message on screen, and — for one about a single task — enough

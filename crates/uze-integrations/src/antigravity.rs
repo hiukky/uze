@@ -85,6 +85,7 @@ mod mcp;
 mod plugin;
 mod preferences;
 mod provision;
+mod session;
 mod skills;
 
 use crate::hooks as hook_projection;
@@ -113,6 +114,9 @@ const INSTALLER_COMMAND: &str = "curl -fsSL https://antigravity.google/cli/insta
 
 #[derive(Clone)]
 pub struct AntigravityIntegration {
+    /// The CLI's own tree (`~/.gemini/antigravity-cli`), which carries the
+    /// directory → conversation index its `--continue` reads.
+    cli_root: PathBuf,
     /// CLI global skills root (`~/.gemini/antigravity-cli/skills`), where a
     /// UZE-managed reference is discovered natively.
     skills_dir: PathBuf,
@@ -139,6 +143,7 @@ impl AntigravityIntegration {
             .unwrap_or_else(|| agents_home.clone());
         let gemini_root = command_home.join(".gemini");
         Self {
+            cli_root: gemini_root.join("antigravity-cli"),
             skills_dir: gemini_root.join("antigravity-cli").join("skills"),
             agents_dir: gemini_root.join("antigravity-cli").join("agents"),
             plugins_dir: gemini_root.join("config").join("plugins"),
@@ -288,6 +293,32 @@ impl IntegrationPort for AntigravityIntegration {
 
     fn hook_capabilities(&self) -> uze_core::hook::HookCapabilities {
         hook_projection::antigravity_capabilities()
+    }
+
+    fn session_continuity(&self) -> uze_core::integration::SessionContinuity {
+        uze_core::integration::SessionContinuity::Observed
+    }
+
+    fn resume_session_args(
+        &self,
+        session: &uze_core::conversation::SessionId,
+    ) -> Vec<std::ffi::OsString> {
+        session::resume_args(session)
+    }
+
+    fn session_recorded_for(&self, cwd: &Path) -> Option<uze_core::conversation::SessionId> {
+        session::recorded_for(&self.cli_root, cwd)
+    }
+
+    fn observe_session(
+        &self,
+        ctx: &uze_core::integration::ObservationContext,
+    ) -> Option<uze_core::conversation::SessionId> {
+        session::observe(&self.cli_root, ctx)
+    }
+
+    fn session_exists(&self, session: &uze_core::conversation::SessionId, _cwd: &Path) -> bool {
+        session::exists(&self.cli_root, session)
     }
 
     fn detect(&self) -> HarnessDetection {
