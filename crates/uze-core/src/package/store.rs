@@ -514,12 +514,30 @@ fn assert_self_contained(root: &Path) -> Result<()> {
             path: directory.clone(),
             source,
         })?;
+        // Two names in one directory that a case-insensitive filesystem
+        // cannot tell apart. macOS and Windows are both such filesystems by
+        // default, and the copy below writes entry by entry, so the second
+        // of a colliding pair silently overwrites the first — deterministic
+        // by sort order, and therefore choosable. A package shipping both
+        // `SKILL.md` and `skill.md` reads as two files in review, in `git
+        // show`, and to this very walk, while exactly one lands and it is
+        // the one whose name sorts last. Refused before a byte is written,
+        // like every other rule here, and refused on Linux too: what is
+        // rejected must not depend on where the install happens to run.
+        let mut folded: BTreeMap<String, PathBuf> = BTreeMap::new();
         for entry in entries {
             let entry = entry.map_err(|source| UzeError::Read {
                 path: directory.clone(),
                 source,
             })?;
             let path = entry.path();
+            let folded_name = entry.file_name().to_string_lossy().to_lowercase();
+            if let Some(first) = folded.insert(folded_name, path.clone()) {
+                return Err(UzeError::PackageNameCollides {
+                    first,
+                    second: path,
+                });
+            }
             let metadata = fs::symlink_metadata(&path).map_err(|source| UzeError::Read {
                 path: path.clone(),
                 source,

@@ -79,6 +79,46 @@ fn an_absolute_symlink_escape_is_rejected() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Containment is about what a harness is later pointed at, and on a
+/// case-insensitive filesystem two names can point at one file. macOS and
+/// Windows are both such filesystems by default, and the Store copies entry
+/// by entry in sort order — so `SKILL.md` and `skill.md` read as two files
+/// in review, in `git show`, and to the containment walk itself, while
+/// exactly one is installed and the package chose which by naming it to
+/// sort last.
+///
+/// Refused here too, on a case-*sensitive* filesystem where both could
+/// coexist, because what a package is allowed to contain must not depend on
+/// where the install happens to run.
+#[test]
+fn two_names_one_case_insensitive_filesystem_cannot_separate_are_rejected() {
+    let root = temporary("case-collision");
+    let package = root.join("package");
+    package_at(&package);
+    let skill = package.join("skills/example");
+    fs::write(skill.join("SKILL.md"), b"# reviewed\n").unwrap();
+    fs::write(skill.join("skill.md"), b"# installed\n").unwrap();
+
+    let (home, result) = install(&root);
+    let message = match result {
+        Ok(_) => panic!("a package with a case-colliding pair was installed"),
+        Err(error) => error.to_string(),
+    };
+    assert!(
+        message.contains("case-insensitive"),
+        "the refusal must name why the pair is refused, got: {message}"
+    );
+    assert!(
+        !home
+            .plugins_dir()
+            .join("local/containment-fixture")
+            .exists(),
+        "a rejected package still left bytes in the store"
+    );
+
+    let _ = fs::remove_dir_all(root);
+}
+
 #[test]
 fn a_relative_parent_escape_is_rejected() {
     let root = temporary("relative");

@@ -146,11 +146,130 @@ likely.
 
 ---
 
+---
+
+## The codebase review
+
+Four audits ran in parallel — cross-platform readiness, architecture, security,
+performance. Everything below is a decision I took about *what to act on now*.
+The rule I applied: this branch adds a platform, so it fixes **live defects on
+platforms we now support** and **the boundaries that make the next platform a
+vertical**. Everything else is recorded, not done — a macOS branch that becomes
+a codebase-wide refactor is reviewable by nobody.
+
+### ⚑ Measured first: Windows is a vertical, not a rewrite
+
+`cargo check --target x86_64-pc-windows-msvc`, per crate:
+
+| clean | blocked |
+|---|---|
+| `uze-core`, `uze-git`, `uze-theme`, `uze-integrations`, `uze-application`, `uze-extensions` | `uze-terminal` (22), `uze-testkit` (5) |
+
+Six of nine compile today. The layering is paying for itself: the domain does
+not know what OS it is on. Windows is one vertical (Unix sockets, pty,
+permissions) plus a testkit fix.
+
+**Compiling is not working.** `0 errors` says nothing about `/bin/sh` at
+runtime or `0o755` modes. It is a floor, not a claim.
+
+### ⚑ Fixed here — four things
+
+**A live macOS bug this branch shipped exposure to.** `open_in_browser`
+(`src/ui/worker.rs`) tried `xdg-open`, `sensible-browser`, `explorer.exe` —
+none of which exist on macOS, and not `open`, which does. Every link the
+workspace offered died there unless `$BROWSER` was set. Written when Linux was
+the only reader; found by asking a second platform.
+
+**Path containment asked in a Unix dialect.** `normalize_declared_relative_path`
+is *the* shared safety predicate for manifest-declared paths, and both its
+tests were string surgery: `Path::is_absolute` needs a prefix *and* a root on
+Windows, so `\etc\passwd` is not absolute there — the exact regression the
+function was written to fix, returning through another door — and splitting on
+`/` never sees the `..` in `..\..\Windows`. Now asked of `Path::components()`.
+The Windows spellings are tested as strings, so they are checked without a
+Windows runner.
+
+**A case collision is a review-evasion primitive.** `copy_tree` wrote entry by
+entry in sort order with no collision check. On macOS and Windows — both
+case-insensitive by default — a package shipping `SKILL.md` *and* `skill.md`
+reads as two files in review, in `git show`, and to the containment walk
+itself, while exactly one installs and the package chose which by naming it to
+sort last. Refused now before a byte is written, and refused on Linux too:
+what a package may contain must not depend on where it is installed.
+
+**The `resume` bug, whose root cause was not what I twice said it was.** Fixed
+and explained in its own commit; the short version is that every question
+`spawn_task_evaluation` asks is about a *repository*, and it was asking three
+of them with a directory that had just been deleted.
+
+### ⚑ Recorded, not done — and why
+
+Each of these is real. None belongs in a branch about macOS.
+
+**Security — the hook wrapper drops the declared timeout.** `hooks.json`
+validates `timeout` into `1..=300`; the generated wrapper has no slot for it
+and no watchdog. A handler that blocks wedges the harness, and for a `deny`
+group that is a permanent block on every matched tool call. Its own docstring
+claims the opposite. *Not here* because the fix changes the wrapper ABI, its
+three goldens, and the Lab evidence — that is ADR-040's change, not this one.
+
+**Performance — every command pays for a full republish.** Measured: `uze
+theme list` is 184 ms with 20 plugins and scales linearly, because
+`ensure_default_plugins` republishes everything before `run()` dispatches. The
+`Budgeted` classification says these are "a small JSON read plus a directory
+listing"; the test guarding it times a fake in an empty home, so **all 15
+budgeted commands point at a test that cannot see the cost**. The guardrail is
+as wrong as the number. *Not here* because it touches install lifecycle, and
+because the honest fix is to make the budget test measure the real binary
+first — otherwise we would be fixing a number nobody is checking.
+
+**`hooks.rs` is 3396 lines and seven concerns**, and holds per-vendor
+knowledge that AGENTS.md places in the vertical. The seams are already drawn
+as banner comments. *Not here* — ~8 files, its own review.
+
+**`CapturingRunner` in `src/main.rs` reimplements the core process runner and
+drops the process-group kill**, so a timed-out installer's forked helpers
+survive — while the comment in core explains why that must not happen. Small
+fix, real consequence. *Not here* only because it is unrelated to platform;
+it should be next.
+
+**Two architecture rules are narrower than the doctrine they guard.** The
+colour rule forbids `Color::Rgb(` and misses two hard-coded `Color::Black` on
+themed backgrounds; the glyph rule scans `src/ui` and misses five chrome
+glyphs in `src/main.rs`. *Not here* — widening a rule turns violations red,
+and that is a change that deserves its own diff.
+
+**`uze-core` concern drift**: package discovery lives in `delivery/engine.rs`,
+so `package` depends on `delivery` to read its own bytes; and capability
+discovery is implemented twice with no test that the two agree.
+
+**Dishonest `not(unix)` stubs.** The honesty correlates with the return type,
+not with intent: where the signature returns `Result` the stub returns `Err`
+and is honest (all eight symlink helpers); where it returns a value the stub
+invents one — `try_lock → Ok(())` says two processes both hold the repository
+lock, `is_executable → true`, `local_day_start → UTC` called local. Exactly
+the `None`-means-unknown discipline this branch established, applied nowhere
+else. *Not here* because they are unreachable until `uze-terminal` builds on
+Windows — but they must be fixed **in the same change that makes it build**,
+or they go live all at once.
+
+### ⚑ Not doing: a macOS vertical for the Conformance Lab
+
+I raised this and then withdrew it. Its isolation is Docker's — `--network
+internal`, read-only root, dropped capabilities — and macOS runners have no
+Docker. More to the point, the question it would answer is already answered:
+all four harnesses read the same paths on macOS as on Linux (`~/.claude`,
+`~/.codex`, `~/.config/opencode`, `~/.gemini`), so the vendor-behaviour risk
+that justifies the Lab does not vary by platform here.
+
 ## Open, for you
 
-- **Remove `TEMPORARY-MACOS-ONLY`** (26 lines, 3 workflows) and let the full
-  gate run once before merge. Not done yet — it is what makes each iteration
-  ten minutes instead of a runner queue.
+- ~~Remove `TEMPORARY-MACOS-ONLY`~~ — **done**, 65 lines, after the first
+  fully green macOS run. The full gate runs on this push.
+- **Whether the four recorded items above become issues, one change, or a
+  milestone.** I would take the runner unification and the budget-test repair
+  first: both are small, and the second is what makes the performance number
+  worth measuring at all.
 - **`Journeys` as a required check** — see above.
 - **A real install on a Mac.** Nothing here has run on hardware anybody owns.
   It is the one gap CI cannot close and the reason the docs say
