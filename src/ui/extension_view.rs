@@ -139,13 +139,59 @@ pub(crate) fn scroll_target(
 /// Draws the overlay across the entire frame — every other row this frame
 /// would otherwise have drawn is skipped by the caller rather than drawn
 /// and covered.
+/// Where the navigator's list is scrolled to, which the host keeps
+/// because only the host knows how many rows fit (see
+/// [`Navigator::anchor`]). Handed into a frame and handed back settled:
+/// clamped to the rows that exist, and moved just far enough to show an
+/// anchor the extension has changed since the last frame.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct NavigatorScroll {
+    /// The first row shown.
+    pub(crate) first: usize,
+    /// The anchor the list was last scrolled to reveal, so the same
+    /// anchor asked for again does not pull the list back to it.
+    pub(crate) revealed: Option<usize>,
+}
+
+impl NavigatorScroll {
+    pub(crate) fn scrolled(self, direction: uze_extensions::view::ScrollDirection) -> Self {
+        use uze_extensions::view::ScrollDirection;
+        Self {
+            first: match direction {
+                ScrollDirection::Up => self.first.saturating_sub(1),
+                ScrollDirection::Down => self.first.saturating_add(1),
+            },
+            ..self
+        }
+    }
+
+    /// The scroll a list of `rows` rows in `visible` lines settles at.
+    fn settled(self, anchor: Option<usize>, rows: usize, visible: usize) -> Self {
+        let mut first = self.first.min(rows.saturating_sub(visible));
+        if anchor != self.revealed
+            && let Some(anchor) = anchor
+        {
+            if anchor < first {
+                first = anchor;
+            } else if anchor >= first + visible {
+                first = (anchor + 1).saturating_sub(visible);
+            }
+        }
+        Self {
+            first,
+            revealed: anchor,
+        }
+    }
+}
+
 pub(crate) fn render(
     frame: &mut ratatui::Frame<'_>,
     view: &View,
     area: Rect,
     navigator_width_override: Option<u16>,
+    navigator_scroll: NavigatorScroll,
     hits: &mut Vec<(Rect, ViewHit)>,
-) {
+) -> NavigatorScroll {
     frame.render_widget(Clear, area);
     frame.render_widget(
         Block::default()
@@ -183,9 +229,12 @@ pub(crate) fn render(
         ViewHit::ResizeNavigator,
     ));
 
-    if let Some(navigator) = &view.navigator {
-        render_navigator(frame, navigator_area, navigator, hits);
-    }
+    let settled = view
+        .navigator
+        .as_ref()
+        .map_or(navigator_scroll, |navigator| {
+            render_navigator(frame, navigator_area, navigator, navigator_scroll, hits)
+        });
     match &view.content {
         Content::Message { text, role } => frame.render_widget(
             Paragraph::new(TextSpan::styled(
@@ -201,14 +250,16 @@ pub(crate) fn render(
         } => render_lines(frame, content_area, heading, *scroll, lines),
     }
     render_footer(frame, footer, &view.footer_hint);
+    settled
 }
 
 fn render_navigator(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
     navigator: &Navigator,
+    scroll: NavigatorScroll,
     hits: &mut Vec<(Rect, ViewHit)>,
-) {
+) -> NavigatorScroll {
     let panel = Block::default()
         .borders(Borders::RIGHT)
         .border_style(theme::fg(Token::BorderDefault))
@@ -241,18 +292,36 @@ fn render_navigator(
         inner.height.saturating_sub(1),
     );
     let visible = list.height as usize;
-    let first = navigator.anchor.saturating_sub(visible.saturating_sub(1));
-    for (offset, row) in navigator.rows.iter().skip(first).take(visible).enumerate() {
+    let settled = scroll.settled(navigator.anchor, navigator.rows.len(), visible);
+    for (offset, row) in navigator
+        .rows
+        .iter()
+        .skip(settled.first)
+        .take(visible)
+        .enumerate()
+    {
         let rect = Rect::new(list.x, list.y + offset as u16, list.width, 1);
         match row {
-            NavigatorRow::Group { name, depth } => {
+            NavigatorRow::Group {
+                id,
+                name,
+                depth,
+                collapsed,
+            } => {
+                let fold = theme::glyph(if *collapsed {
+                    Symbol::ChevronCollapsed
+                } else {
+                    Symbol::ChevronExpanded
+                });
                 frame.render_widget(
                     Paragraph::new(Line::from(vec![
                         TextSpan::raw("  ".repeat(*depth)),
+                        TextSpan::styled(format!("{fold} "), theme::fg(Token::TextMuted)),
                         TextSpan::styled(name.clone(), theme::fg(Token::TextSecondary)),
                     ])),
                     rect,
                 );
+                hits.push((rect, ViewHit::ToggleGroup(*id)));
             }
             NavigatorRow::Item {
                 id,
@@ -284,6 +353,7 @@ fn render_navigator(
             }
         }
     }
+    settled
 }
 
 fn render_lines(
@@ -520,11 +590,13 @@ mod tests {
                 heading: "CHANGES".to_owned(),
                 badge: "2".to_owned(),
                 focused: true,
-                anchor: 1,
+                anchor: Some(1),
                 rows: vec![
                     NavigatorRow::Group {
+                        id: 0,
                         name: "src/".to_owned(),
                         depth: 0,
+                        collapsed: false,
                     },
                     NavigatorRow::Item {
                         id: 7,
@@ -558,7 +630,16 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(90, 14)).unwrap();
         let mut hits = Vec::new();
         terminal
-            .draw(|frame| render(frame, view, frame.area(), Some(24), &mut hits))
+            .draw(|frame| {
+                render(
+                    frame,
+                    view,
+                    frame.area(),
+                    Some(24),
+                    NavigatorScroll::default(),
+                    &mut hits,
+                );
+            })
             .unwrap();
         let buffer = terminal.backend().buffer().clone();
         let rows = (0..buffer.area.height)
@@ -605,7 +686,16 @@ mod tests {
     fn chrome_uses_the_hosts_palette_and_content_keeps_its_own() {
         let mut terminal = Terminal::new(TestBackend::new(90, 14)).unwrap();
         terminal
-            .draw(|frame| render(frame, &sample(), frame.area(), Some(24), &mut Vec::new()))
+            .draw(|frame| {
+                render(
+                    frame,
+                    &sample(),
+                    frame.area(),
+                    Some(24),
+                    NavigatorScroll::default(),
+                    &mut Vec::new(),
+                );
+            })
             .unwrap();
         let buffer = terminal.backend().buffer().clone();
         // By cell, never by byte offset: the border glyphs are multi-byte,
@@ -655,6 +745,110 @@ mod tests {
         };
         assert_eq!(line_height(&line, GUTTER_WIDTH + 4), 2);
         assert_eq!(line_height(&line, GUTTER_WIDTH + 8), 1);
+    }
+
+    /// A group folds from its own row, and says so with the same mark the
+    /// sidebar's sections use.
+    #[test]
+    fn a_group_row_is_a_fold_target() {
+        let mut view = sample();
+        if let Some(navigator) = view.navigator.as_mut()
+            && let NavigatorRow::Group { collapsed, .. } = &mut navigator.rows[0]
+        {
+            *collapsed = true;
+        }
+        let (rows, hits) = draw(&view);
+        let group_row = rows
+            .iter()
+            .position(|row: &String| row.contains("src/") && !row.contains("DIFF"))
+            .expect("the group is drawn") as u16;
+        let hit = hits
+            .iter()
+            .find(|(_, hit)| matches!(hit, ViewHit::ToggleGroup(0)))
+            .expect("the group folds by the id the extension gave it");
+        assert_eq!(hit.0.y, group_row);
+        assert!(
+            rows[group_row as usize].contains(&theme::glyph(Symbol::ChevronCollapsed)),
+            "{:?}",
+            rows[group_row as usize]
+        );
+    }
+
+    fn tall_navigator(anchor: Option<usize>) -> View {
+        View {
+            navigator: Some(Navigator {
+                anchor,
+                rows: (0..40)
+                    .map(|index| NavigatorRow::Item {
+                        id: index,
+                        name: format!("file-{index}.rs"),
+                        depth: 0,
+                        marker: Span::new("M", Role::Warning),
+                        selected: Some(index) == anchor,
+                    })
+                    .collect(),
+                ..sample().navigator.unwrap()
+            }),
+            ..sample()
+        }
+    }
+
+    fn drawn_with(view: &View, scroll: NavigatorScroll) -> (Vec<String>, NavigatorScroll) {
+        let mut terminal = Terminal::new(TestBackend::new(90, 14)).unwrap();
+        let mut settled = NavigatorScroll::default();
+        terminal
+            .draw(|frame| {
+                settled = render(frame, view, frame.area(), Some(24), scroll, &mut Vec::new());
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let rows = (0..buffer.area.height)
+            .map(|row| {
+                (0..buffer.area.width)
+                    .map(|column| buffer[(column, row)].symbol())
+                    .collect()
+            })
+            .collect();
+        (rows, settled)
+    }
+
+    /// The list scrolls where the wheel put it, and comes back to the
+    /// selection only when the selection moves — a wheel looking at rows
+    /// far from it is not pulled back every frame.
+    #[test]
+    fn the_list_follows_the_anchor_only_when_it_changes() {
+        let view = tall_navigator(Some(30));
+
+        let (rows, settled) = drawn_with(&view, NavigatorScroll::default());
+        assert!(
+            rows.iter().any(|row| row.contains("file-30.rs")),
+            "a new anchor is brought on screen: {rows:?}"
+        );
+        assert!(settled.first > 0);
+        assert_eq!(settled.revealed, Some(30));
+
+        let scrolled_away = NavigatorScroll {
+            first: 0,
+            ..settled
+        };
+        let (rows, settled) = drawn_with(&view, scrolled_away);
+        assert!(
+            rows.iter().any(|row| row.contains("file-0.rs")),
+            "the same anchor does not pull the list back: {rows:?}"
+        );
+        assert_eq!(settled.first, 0);
+
+        let (_, settled) = drawn_with(
+            &view,
+            NavigatorScroll {
+                first: 500,
+                ..settled
+            },
+        );
+        assert!(
+            settled.first < 40,
+            "held to the rows that exist, so the wheel back is not a long way: {settled:?}"
+        );
     }
 
     #[test]

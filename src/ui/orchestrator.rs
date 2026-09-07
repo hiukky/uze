@@ -7,6 +7,7 @@
 
 use super::tui_application;
 use crate::ui::extension_host::WorkspaceHost;
+use crate::ui::extension_view;
 use crate::ui::root_picker::RootPicker;
 use crate::ui::theme::{self, Symbol, Token};
 use crossterm::event::{
@@ -870,6 +871,9 @@ pub(crate) fn attach_workspace(
             attach.model.hits = hits;
             attach.model.tree_overflow = metrics.tree_overflow;
             attach.model.tree_scroll = attach.model.tree_scroll.min(metrics.tree_overflow);
+            if let Some(scroll) = metrics.git_tree_scroll {
+                attach.model.git_tree_scroll = scroll;
+            }
             attach.model.dirty = false;
         }
         if event::poll(POLL).map_err(io_error)?
@@ -1678,6 +1682,12 @@ struct WorkspaceModel {
     /// survives closing and reopening the overlay within the same
     /// session, the same way the sidebar's width survives switching tabs.
     git_tree_width: Option<u16>,
+    /// Where the Git changes list is scrolled to. The host's, not the
+    /// extension's, for the reason the width is: how far a list of rows
+    /// can scroll is a question about how many fit, and only the render
+    /// knows — which is also why a frame hands it back settled (see
+    /// `render::FrameMetrics`).
+    git_tree_scroll: extension_view::NavigatorScroll,
     dragging_git_tree: bool,
     /// An in-progress tab-reorder drag; `None` when no tab is being
     /// dragged. Client-local presentation state — nothing is sent to the
@@ -3544,6 +3554,7 @@ fn open_git_view(model: &mut WorkspaceModel) {
     let cwd = pane.cwd.clone();
     let display_root = crate::ui::display_project_path(&cwd);
     model.git_view = Some(git::GitView::opening(cwd, display_root));
+    model.git_tree_scroll = extension_view::NavigatorScroll::default();
     model.dirty = true;
 }
 
