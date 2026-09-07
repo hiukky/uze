@@ -66,7 +66,8 @@ it stops there. When it does not:
    - the annotated `v<v>` tag is created on the merge commit, which is the
      commit carrying version bump + changelog + lockfile — or reused, when
      an earlier attempt got that far before failing;
-   - the four Linux artifacts (`x86_64`/`aarch64` × `gnu`/`musl`) are built
+   - the six artifacts (Linux `x86_64`/`aarch64` × `gnu`/`musl`, and macOS
+     `x86_64`/`aarch64`) are built
      from that tag on native runners and published as
      `uze-<arch>-linux-<libc>.tar.gz` — the Rust target triple without its
      vendor field, because `unknown` is a triple saying there is no vendor

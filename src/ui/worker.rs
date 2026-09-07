@@ -774,10 +774,17 @@ fn open_in_browser(url: &str) -> Option<String> {
     // in a `%s` placeholder rather than as a trailing argument.
     let configured = std::env::var("BROWSER").unwrap_or_default();
     let preferred: Vec<&str> = configured.split(':').filter(|e| !e.is_empty()).collect();
-    for opener in preferred
-        .into_iter()
-        .chain(["xdg-open", "sensible-browser", "explorer.exe"])
-    {
+    // `open` first, and only on macOS: it is the one opener there, and the
+    // three below are all absent — so every link the workspace offered on a
+    // Mac died as "no browser to open it with" unless the operator had set
+    // `$BROWSER`. Written when Linux was the only reader, and found by
+    // asking a second platform.
+    let native: &[&str] = if cfg!(target_os = "macos") {
+        &["open"]
+    } else {
+        &["xdg-open", "sensible-browser", "explorer.exe"]
+    };
+    for opener in preferred.into_iter().chain(native.iter().copied()) {
         let mut words = opener.split_whitespace();
         let Some(program) = words.next() else {
             continue;

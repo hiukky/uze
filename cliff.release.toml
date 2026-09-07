@@ -88,9 +88,14 @@ curl -fsSL https://uze.hiukky.com/i | UZE_VERSION={{ version | trim_start_matche
 ```
 {% endif %}
 
-Linux only, on four targets: `x86_64`/`aarch64` × `gnu`/`musl`. The installer
-picks the one that matches the host, verifies its SHA-256 against
-`SHASUMS256.txt` and refuses to install on a mismatch.
+Six targets: Linux `x86_64`/`aarch64` × `gnu`/`musl`, and macOS
+`x86_64`/`aarch64`. The installer picks the one that matches the host,
+verifies its SHA-256 against `SHASUMS256.txt` and refuses to install on a
+mismatch.
+
+**macOS is experimental.** Built and tested on Apple Silicon CI. Not verified:
+a real install on a Mac, the `x86_64` build on an Intel machine, a terminal
+other than `tmux`.
 
 ## Verify
 
@@ -98,9 +103,13 @@ Every asset is checksummed and carries signed build provenance — which
 workflow built it, from which commit, on which runner:
 
 ```sh
-sha256sum --ignore-missing -c SHASUMS256.txt
+sha256sum --ignore-missing -c SHASUMS256.txt   # macOS: shasum -a 256 --ignore-missing -c
 gh attestation verify uze-x86_64-linux-gnu.tar.gz --repo hiukky/uze
 ```
+
+The macOS binaries are not notarized. `curl | sh` installs and runs them; a
+tarball fetched through a *browser* is quarantined by Gatekeeper — clear it
+with `xattr -d com.apple.quarantine uze`.
 
 `uze-sbom.cdx.json` is the CycloneDX bill of materials for the shipped binary,
 generated from this tag's own lockfile. Each tarball carries `LICENSE`,

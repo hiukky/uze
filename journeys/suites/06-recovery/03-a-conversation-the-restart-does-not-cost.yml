@@ -82,11 +82,23 @@ scenes:
       # `pgrep -f` reads the whole command line, and the command line of the
       # shell running these very words contains the pattern it is looking
       # for — a loop that kills its own shell before reaching the daemon.
+      #
+      # The environment of another process has no portable spelling: Linux
+      # keeps it in `/proc`, macOS answers through `ps -E`. Reading only
+      # `/proc` did not fail on a Mac — it matched nothing, killed nothing,
+      # and reported success, leaving the wait below to discover the daemon
+      # still running. Scoping by `HOME` rather than by the command line is
+      # deliberate: it reaches the panes too, which is what "the way a reboot
+      # does it" means.
       - shell: |
           for pid in $(pgrep -f '{uze}'); do
             [ "$pid" = "$$" ] && continue
-            tr '\0' '\n' < /proc/$pid/environ 2>/dev/null \
-              | grep -qx 'HOME={home}' && kill -9 "$pid"
+            if [ -r "/proc/$pid/environ" ]; then
+              inherited=$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null)
+            else
+              inherited=$(ps -Ewwo command= -p "$pid" 2>/dev/null | tr ' ' '\n')
+            fi
+            printf '%s\n' "$inherited" | grep -qx 'HOME={home}' && kill -9 "$pid"
           done
         say: kill everything holding this workspace, the way a reboot does it
         check: false

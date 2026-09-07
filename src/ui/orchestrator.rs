@@ -294,14 +294,28 @@ fn spawn_task_evaluation(
         // key, and the directory is then never evaluated again.
         let answered = tui_application(home).ok().and_then(|app| {
             let workspace = app.workspace();
+            // Every question here is about the *repository*, and `cwd` is
+            // only how the caller happened to name it — usually a pane's
+            // directory. Once that directory is removed it names nothing:
+            // `primary_of` asks Git and `evaluate_tasks` opens the
+            // repository, so both answered empty, and the client kept the
+            // task view it already had — one that still believed it had a
+            // checkout, which is the single thing the way back in is gated
+            // on. The slot key is the same repository, derived lexically
+            // before this thread started and already what every other
+            // lookup below asks with; the three that took `cwd` now take
+            // the repository too.
+            let primary = workspace
+                .primary_of(&cwd)
+                .or_else(|| uze_application::is_isolated_checkout(&cwd).then(|| key.clone()))?;
             Some(EvaluationAnswer {
-                primary: workspace.primary_of(&cwd)?,
                 branch: workspace.current_branch(&key),
                 target: workspace
                     .delivery_policy(&key)
                     .and_then(|policy| policy.target),
                 sync: workspace.target_upstream_sync(&key),
-                evaluation: workspace.evaluate_tasks(&cwd, &occupied),
+                evaluation: workspace.evaluate_tasks(&primary, &occupied),
+                primary,
             })
         });
         let _ = sender.send(TaskResolution { key, answered });
@@ -2386,16 +2400,34 @@ impl WorkspaceModel {
     /// rule `checkout::slot_state` reads occupancy by. Taking the first
     /// match instead handed a new agent the previous occupant's branch and
     /// its status mark.
+    /// The task standing in `cwd`'s slot, matched by the slot itself.
+    ///
+    /// `checkout_id` and not the resolved `checkout` path, because the
+    /// directory is exactly what can be missing when this is asked: a task
+    /// whose checkout was removed comes back from a re-read with
+    /// `checkout: None` and its slot still named, which is what that field
+    /// is for. Matching the path meant a pane stayed bound only if it had
+    /// been bound *before* the removal — which held on Linux, where a
+    /// removed cwd is renamed by `/proc` and the change drives a pass
+    /// through agent startup, and did not where the loss is noticed on a
+    /// clock. Unbound, the row says the checkout is gone and never offers
+    /// the way back in.
+    ///
+    /// The path stays as a fallback for a task recorded before slots were
+    /// named. Slots are reused, so several tasks can carry the same one:
+    /// the newest is the one standing there now.
     fn task_for_cwd(&self, cwd: &Path) -> Option<&TaskView> {
         let checkout = uze_application::isolated_checkout(cwd)?;
         self.tasks
             .get(checkout.primary)?
             .iter()
-            .filter(|task| {
-                task.checkout
+            .filter(|task| match task.checkout_id.as_deref() {
+                Some(slot) => slot == checkout.name,
+                None => task
+                    .checkout
                     .as_deref()
                     .and_then(Path::file_name)
-                    .is_some_and(|name| name == checkout.name)
+                    .is_some_and(|name| name == checkout.name),
             })
             .max_by_key(|task| task.created_at_unix)
     }

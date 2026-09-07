@@ -13,6 +13,16 @@ about: |
   again — with its branch as it stands, not re-cut from the target, which
   would silently throw away exactly what was being protected.
 
+  This is also the journey that holds the *detection* honest, and it took a
+  second platform to show why. Nothing announces a deleted directory. On
+  Linux the workspace was told by accident: `/proc` starts spelling a removed
+  cwd `<path> (deleted)`, the pane's reading therefore changed, and a changed
+  reading is what makes the server speak. Where a kernel has no such spelling
+  the reading simply stops resolving, nothing changes, no event is sent — and
+  the row went on offering a way into a directory that was gone. The answer
+  has to come from the disk on a clock, and a unit test cannot tell the two
+  apart, because on Linux both look the same.
+
 world:
   project: demo-app
   manifest: |
@@ -65,7 +75,12 @@ scenes:
       - wait: screen
         until: checkout removed
         in: sidebar
-        timeout: 40
+        # A removed checkout is one of the things `TASK_REFRESH` exists to
+        # notice (its doc comment says so), and that timer is 20 seconds.
+        # Forty was two of them, so a deletion landing just after a tick had
+        # to be caught by the very next one. Three intervals, so the wait is
+        # bounded by the cadence rather than racing it.
+        timeout: 70
         settle: 1.0
         say: the workspace says what happened instead of showing a broken row
     then:
@@ -85,6 +100,20 @@ scenes:
 
   - scene: resuming gives the task somewhere to stand, with its branch as it stands
     when:
+      # The row says `checkout removed` before it offers the way back in,
+      # and the gap between the two is a repository evaluation: noticing the
+      # loss is what schedules it, and only its answer strips the task of a
+      # checkout it no longer has — which is what `resume` is gated on.
+      # Waited for rather than assumed, because the two used to arrive
+      # together only by accident. On Linux the loss is noticed the instant
+      # `/proc` renames the cwd, so the evaluation had long since answered
+      # by the time anything looked; where the loss is noticed on a clock,
+      # the label and the request are the same moment.
+      - wait: screen
+        until: resume
+        in: sidebar
+        timeout: 30
+        say: the row offers the way back in, once the repository has answered
       - click: resume
         say: resume the task from its row
         in: sidebar

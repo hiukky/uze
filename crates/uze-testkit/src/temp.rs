@@ -15,7 +15,10 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{
+    Mutex, OnceLock,
+    atomic::{AtomicU64, Ordering},
+};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::env::ProcessEnvGuard;
@@ -25,11 +28,25 @@ use crate::env::ProcessEnvGuard;
 /// the filesystem ordering would still be racy without this).
 static CREATE_LOCK: Mutex<()> = Mutex::new(());
 
-fn nonce() -> u128 {
-    SystemTime::now()
+/// A value no other call in this process shares.
+///
+/// The clock alone does not promise that. `as_nanos` reports whatever
+/// resolution the platform's clock has, and macOS's is coarse enough that
+/// two tests starting together read the same instant — which handed both the
+/// same scratch directory. A counter is what makes two *calls* differ; the
+/// clock only makes two *runs* differ, which is the half that keeps a left
+/// directory from colliding with the next run.
+fn nonce() -> String {
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    let instant = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system clock before UNIX_EPOCH")
-        .as_nanos()
+        .as_nanos();
+    // Both halves, side by side rather than folded together: any arithmetic
+    // that mixes them into one number reintroduces the collision it was
+    // added to remove, for whichever pair happens to alias.
+    format!("{instant:x}{:x}", SEQUENCE.fetch_add(1, Ordering::Relaxed))
 }
 
 /// Subdirectories under the real `$HOME` that a test must never write to.
@@ -115,6 +132,16 @@ impl TempDir {
                 path.display()
             )
         });
+        // Canonicalized, because production code canonicalizes: a project
+        // root, a resolved marketplace path and a detected binary all come
+        // back through `canonicalize`, and a test comparing one against the
+        // path it handed in is comparing two spellings of the same
+        // directory. On Linux they are the same spelling and this is a
+        // no-op; on macOS the system temp dir is `/var/folders/...` and
+        // `/var` is a symlink to `/private/var`, so every such assertion
+        // fails on the prefix while pointing at identical-looking paths.
+        // Resolved once, here, rather than in each test that noticed.
+        let path = path.canonicalize().unwrap_or(path);
         assert_not_real_home(&path);
         TempDir { path, keep }
     }
@@ -186,6 +213,59 @@ impl HarnessHomes {
 /// [`TempDir`] (RAII) for new tests.
 pub fn scratch(label: &str) -> PathBuf {
     TempDir::new(label).keep().path().to_path_buf()
+}
+
+/// A scratch directory short enough that a Unix-domain socket can live under
+/// it.
+///
+/// `sockaddr_un.sun_path` is 104 bytes on macOS and 108 on Linux, and the
+/// *entire* path has to fit. [`scratch`] cannot promise that: it is rooted at
+/// the system temp directory, which on macOS is a per-user
+/// `/var/folders/<hash>/T` already ~50 characters long before a label, a pid
+/// and a nonce are added. A test that binds a socket there — or points
+/// `XDG_RUNTIME_DIR` at it and lets the runtime bind one — fails with
+/// `path must be shorter than SUN_LEN`, an error that names the limit and
+/// not the directory that broke it.
+///
+/// Rooted at `/tmp` instead, which is short on both platforms, and named as
+/// briefly as uniqueness allows. Same isolation guarantees as [`scratch`];
+/// the caller owns cleanup.
+pub fn socket_scratch(label: &str) -> PathBuf {
+    let _guard = CREATE_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    // Truncated, and the nonce is base-36: every character here is spent
+    // against a hard 104-byte budget, so the label identifies the test to a
+    // human reading `/tmp` and nothing more.
+    let short: String = label
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .take(8)
+        .collect();
+    let mut nonce = u128::from_str_radix(&nonce(), 16).unwrap_or_default();
+    let mut compact = String::new();
+    while nonce > 0 {
+        let digit = (nonce % 36) as u32;
+        compact.push(char::from_digit(digit, 36).expect("digit below 36"));
+        nonce /= 36;
+    }
+    let path = PathBuf::from("/tmp").join(format!(
+        "uze-{short}-{}-{}",
+        std::process::id(),
+        &compact[..compact.len().min(8)]
+    ));
+    std::fs::create_dir_all(&path).unwrap_or_else(|error| {
+        panic!(
+            "socket_scratch: failed to create {}: {error}",
+            path.display()
+        )
+    });
+    // Canonicalized for the same reason `TempDir` is: `/tmp` is a symlink to
+    // `/private/tmp` on macOS, and the kernel answers every question about a
+    // path with the real one.
+    let path = path.canonicalize().unwrap_or(path);
+    assert_not_real_home(&path);
+    path
 }
 
 /// `$PATH` with `dir` first and the ambient `PATH` kept as fallback — the

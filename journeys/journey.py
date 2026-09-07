@@ -31,6 +31,19 @@ from pathlib import Path
 
 import yaml
 
+# A run reports as it goes, and it has to report as it goes *wherever* it
+# runs. Python line-buffers stdout only when it is a terminal; into a pipe —
+# which is every CI log and every `| tee` — it switches to 8 KB blocks, so a
+# five-minute journey run shows nothing at all and then everything at once.
+# Watching a run is how you tell "slow" from "hung", and that distinction is
+# the whole reason the output is written a check at a time.
+#
+# Reconfigured here rather than passing `flush=True` at each call site: there
+# are fifteen of those and a sixteenth would silently not do it. (The same
+# lesson, from the other direction, is why `tests/scripts/installer-test.sh`
+# starts its helper server with `python3 -u`.)
+sys.stdout.reconfigure(line_buffering=True)
+
 REPO = Path(__file__).resolve().parent.parent
 
 # Outside the repository on purpose. UZE reads any path containing
@@ -38,7 +51,12 @@ REPO = Path(__file__).resolve().parent.parent
 # (`isolated_checkout` is lexical), so a world nested under a checkout of
 # this repo would open a space rooted at *this* repo rather than at the
 # fixture project.
-WORLDS = Path(os.environ.get("JOURNEY_WORLDS", "/tmp/uze-journeys"))
+# `realpath`, not just absolute: on macOS `/tmp` is a symlink to `/private/tmp`
+# and the kernel answers every question about a process with the real path, so
+# a world addressed through the symlink would never match the cwd `lsof`
+# reports and a `process: cwd:` check could not hold. Resolves to itself on
+# Linux, and leaves the not-yet-created tail alone on both.
+WORLDS = Path(os.path.realpath(os.environ.get("JOURNEY_WORLDS", "/tmp/uze-journeys")))
 EVIDENCE = Path(
     os.environ.get("JOURNEY_EVIDENCE", Path(__file__).resolve().parent / ".evidence")
 )
@@ -60,6 +78,84 @@ def say(message: str) -> None:
 def die(message: str, code: int = 1):
     print(f"journey: {message}", file=sys.stderr)
     raise SystemExit(code)
+
+
+# ── the process table ────────────────────────────────────────────────────
+#
+# A `then` check may ask whether something is still running, and scope the
+# question to this world — "is an agent still standing in that checkout".
+# Answering it means reading two facts about a process this script did not
+# start: what it inherited, and where it is standing. Linux keeps both in
+# `/proc`; macOS has neither and answers through `ps -E` and `lsof`.
+#
+# The rule these functions exist to enforce: **`None` is not "no"**. Reading
+# `/proc` on a machine that has none used to raise `OSError`, get caught, and
+# `continue` — so every process was skipped, nothing was ever found, and a
+# check asserting `alive: false` passed while observing exactly nothing. That
+# is the one failure this tier is built to prevent, reproduced by the runner
+# itself. A platform that cannot answer now says so and the run stops.
+
+
+def process_environ(pid: int | str) -> bytes | None:
+    """The environment `pid` was started with. `None` means *this platform
+    could not say* — never that the variable is absent."""
+    if sys.platform == "linux":
+        try:
+            return Path(f"/proc/{pid}/environ").read_bytes()
+        except OSError:
+            return b""
+    if sys.platform == "darwin":
+        # `ps -E` appends the environment to the command line. It answers for
+        # processes this user owns, which is every process a journey starts.
+        result = subprocess.run(
+            ["ps", "-Ewwo", "command=", "-p", str(pid)],
+            capture_output=True,
+        )
+        return result.stdout if result.returncode == 0 else b""
+    return None
+
+
+def process_cwd(pid: int | str) -> str | None:
+    """The directory `pid` is standing in, or `None` when unobservable."""
+    if sys.platform == "linux":
+        try:
+            return str(Path(f"/proc/{pid}/cwd").resolve())
+        except OSError:
+            return None
+    if sys.platform == "darwin":
+        result = subprocess.run(
+            ["lsof", "-a", "-d", "cwd", "-Fn", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+        )
+        for line in result.stdout.splitlines():
+            if line.startswith("n"):
+                return line[1:]
+        return None
+    return None
+
+
+def process_alive(pid: int) -> bool:
+    """Signal 0: the portable "does this pid exist" — `/proc/<pid>` is not."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # Alive, and owned by somebody else.
+        return True
+    return True
+
+
+def require_process_table() -> None:
+    """Refuses to run where a `process:` check could only ever answer "no"."""
+    if sys.platform not in ("linux", "darwin"):
+        die(
+            f"the process table cannot be read on {sys.platform}: a `process:` "
+            "check here would observe nothing and report 'not running'. Teach "
+            "`process_environ`/`process_cwd` this platform before running "
+            "journeys on it."
+        )
 
 
 # ── the world ────────────────────────────────────────────────────────────
@@ -101,7 +197,24 @@ class World:
             "uze_home": str(self.uze_home),
             "project": str(self.project),
             "repo": str(REPO),
+            "shell_rc": str(self.home / shell_rc_name()),
         }
+
+
+def shell_rc_name() -> str:
+    """The startup file the world's shell actually reads on this platform.
+
+    The world runs bash, and bash reads `.bashrc` for an interactive
+    non-login shell and `.bash_profile` for a login one. On Linux a terminal
+    opens the former; on macOS every terminal window is a login shell, so
+    that is the file UZE writes its `PATH` line into there — and a journey
+    asserting `.bashrc` on a Mac would be asserting the wrong file, not
+    finding a bug.
+
+    A journey says `{shell_rc}` and means "wherever this shell reads its
+    startup from", which is the claim it actually wants to make.
+    """
+    return ".bash_profile" if sys.platform == "darwin" else ".bashrc"
 
 
 def standin_binary() -> Path:
@@ -952,22 +1065,17 @@ class Checker:
         # checkout". Scoped to this world either way: a bare `pgrep` counts
         # the developer's own shells and every other world's.
         where = spec["process"].get("cwd")
+        require_process_table()
         found = []
         for pid in subprocess.run(
             ["pgrep", "-f", pattern], capture_output=True, text=True
         ).stdout.split():
-            try:
-                environ = Path(f"/proc/{pid}/environ").read_bytes()
-            except OSError:
-                continue
-            if f"HOME={self.world.home}".encode() not in environ:
+            environ = process_environ(pid)
+            if environ is None or f"HOME={self.world.home}".encode() not in environ:
                 continue
             if where:
-                try:
-                    cwd = str(Path(f"/proc/{pid}/cwd").resolve())
-                except OSError:
-                    continue
-                if where not in cwd:
+                cwd = process_cwd(pid)
+                if cwd is None or where not in cwd:
                     continue
                 found.append(f"{pid} in {cwd}")
             else:
@@ -1429,15 +1537,9 @@ def write_evidence(
         ["pgrep", "-a", "."], capture_output=True, text=True
     ).stdout.splitlines():
         number = line.split(" ", 1)[0]
-        try:
-            environ = Path(f"/proc/{number}/environ").read_bytes()
-        except OSError:
-            continue
-        if f"HOME={world.home}".encode() in environ:
-            where = Path(f"/proc/{number}/cwd")
-            processes.append(
-                f"{line}\n    cwd {where.resolve() if where.exists() else '?'}"
-            )
+        environ = process_environ(number)
+        if environ and f"HOME={world.home}".encode() in environ:
+            processes.append(f"{line}\n    cwd {process_cwd(number) or '?'}")
     (evidence / "processes.txt").write_text("\n".join(processes) + "\n")
 
 
@@ -1458,11 +1560,8 @@ def stop_world_servers(world: World) -> None:
     for pid in subprocess.run(
         ["pgrep", "-f", "uze"], capture_output=True, text=True
     ).stdout.split():
-        try:
-            environ = Path(f"/proc/{pid}/environ").read_bytes()
-        except OSError:
-            continue
-        if f"HOME={world.home}".encode() not in environ:
+        environ = process_environ(pid)
+        if not environ or f"HOME={world.home}".encode() not in environ:
             continue
         try:
             os.kill(int(pid), 15)
@@ -1475,7 +1574,7 @@ def stop_world_servers(world: World) -> None:
     # die — which shows up as a tab whose pane never paints.
     deadline = time.monotonic() + 10
     while stopped and time.monotonic() < deadline:
-        stopped = [pid for pid in stopped if Path(f"/proc/{pid}").exists()]
+        stopped = [pid for pid in stopped if process_alive(pid)]
         if stopped:
             time.sleep(0.2)
     if stopped:

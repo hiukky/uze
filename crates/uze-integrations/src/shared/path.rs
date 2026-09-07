@@ -21,7 +21,7 @@
 //! Antigravity's and Claude's/Codex's coverage functions that read a
 //! structural surface rather than a declared path never call this module.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// Normalizes one manifest-declared, package-relative path string.
 ///
@@ -33,13 +33,22 @@ use std::path::{Path, PathBuf};
 /// replaces.
 pub(crate) fn normalize_declared_relative_path(raw: &str) -> Option<PathBuf> {
     let trimmed = raw.trim().trim_start_matches("./").trim_end_matches('/');
-    if trimmed.is_empty() || trimmed == "." || Path::new(trimmed).is_absolute() {
+    if trimmed.is_empty() || trimmed == "." {
         return None;
     }
-    if trimmed.split('/').any(|component| component == "..") {
-        return None;
-    }
-    Some(PathBuf::from(trimmed))
+    // Asked of the path's own components, not of its text. Both string
+    // tests were Unix spellings of the question: `is_absolute` needs a
+    // prefix *and* a root on Windows, so `/etc/passwd` is not absolute
+    // there — the exact regression this function replaced, returning by
+    // another door — and splitting on `/` never sees the `..` in
+    // `..\..\Windows`. `Component` answers for the platform the code is
+    // running on, and rejecting `Prefix` and `RootDir` alongside
+    // `ParentDir` covers `C:\`, `C:foo` and `\\server\share` without
+    // naming any of them.
+    Path::new(trimmed)
+        .components()
+        .all(|component| matches!(component, Component::Normal(_) | Component::CurDir))
+        .then(|| PathBuf::from(trimmed))
 }
 
 #[cfg(test)]
@@ -52,6 +61,36 @@ mod normalize_declared_relative_path_tests {
     fn leading_slash_is_rejected_as_absolute_not_stripped_into_relative() {
         assert_eq!(normalize_declared_relative_path("/skills/foo"), None);
         assert_eq!(normalize_declared_relative_path("/etc/passwd"), None);
+    }
+
+    /// The Windows spellings of the same two attacks. They are strings, so
+    /// this test runs everywhere — but it only *fails* where the platform
+    /// reads them as paths, which is the point: the predicate has to be
+    /// right on the machine it runs on, and a Unix-only reading of "is
+    /// this absolute" silently accepts `\etc\passwd` there.
+    #[test]
+    #[cfg(windows)]
+    fn windows_spellings_of_absolute_and_escaping_are_rejected() {
+        assert_eq!(normalize_declared_relative_path(r"\etc\passwd"), None);
+        assert_eq!(
+            normalize_declared_relative_path(r"C:\Windows\System32"),
+            None
+        );
+        assert_eq!(normalize_declared_relative_path(r"C:skills"), None);
+        assert_eq!(normalize_declared_relative_path(r"..\..\Windows"), None);
+        assert_eq!(normalize_declared_relative_path(r"\\server\share\x"), None);
+    }
+
+    /// A backslash is a legal character in a Unix filename, so the same
+    /// strings must be accepted here — rejecting them everywhere would be
+    /// a different bug, and one a Windows-shaped fix invites.
+    #[test]
+    #[cfg(unix)]
+    fn a_backslash_is_an_ordinary_character_on_unix() {
+        assert_eq!(
+            normalize_declared_relative_path(r"skills\odd\name"),
+            Some(PathBuf::from(r"skills\odd\name"))
+        );
     }
 
     /// Whitespace padding must not defeat the absolute-path check either

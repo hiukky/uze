@@ -10,7 +10,7 @@ name: Release
 #
 # Merging is what publishes. Every push to `main` asks whether the version in
 # the tree has a release yet; when it does not, this workflow tags the commit
-# if needed, builds the four Linux artifacts on native runners, generates the
+# if needed, builds the six artifacts on native runners, generates the
 # SBOM, signs the provenance, and creates the GitHub Release with the
 # tarballs and SHASUMS256.txt that install.sh consumes — under notes written
 # by git-cliff from `cliff.release.toml`: what changed, who changed it, what
@@ -57,7 +57,7 @@ jobs:
   propose:
     name: Propose the release
     if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
       pull-requests: write
@@ -138,7 +138,7 @@ jobs:
           fi
           {
             printf '%s\n\n' "Version bump across every workspace crate, with the changelog for \`${tag}\` folded into the same commit."
-            printf '%s\n\n' "Merging this tags the merge commit \`${tag}\` and publishes the release: four Linux tarballs, the SBOM, signed provenance and SHASUMS256.txt."
+            printf '%s\n\n' "Merging this tags the merge commit \`${tag}\` and publishes the release: six tarballs (Linux gnu/musl, macOS), the SBOM, signed provenance and SHASUMS256.txt."
             printf '%s\n' "---"
             printf '%s\n\n' "Below is the release page this will publish, exactly as generated:"
             cat "$notes"
@@ -153,7 +153,7 @@ jobs:
   tag:
     name: Tag the release commit
     if: github.event_name == 'push'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.detect.outputs.version }}
       tag: ${{ steps.detect.outputs.tag }}
@@ -229,6 +229,22 @@ jobs:
           - target: aarch64-unknown-linux-musl
             platform: aarch64-linux-musl
             runner: ubuntu-24.04-arm
+          # Both Apple targets on one Apple Silicon runner. macOS ships a
+          # single SDK carrying both architectures, so `--target
+          # x86_64-apple-darwin` there is an ordinary cross-compile with no
+          # extra toolchain — which is what lets this cover Intel Macs
+          # without depending on an Intel runner label, a thing GitHub is in
+          # the middle of retiring.
+          #
+          # `apple` and `darwin` are two words for one fact and the asset
+          # name keeps neither: `<arch>-macos` is what the person choosing a
+          # download already calls it. No libc field, because a Mac has one.
+          - target: aarch64-apple-darwin
+            platform: aarch64-macos
+            runner: macos-15
+          - target: x86_64-apple-darwin
+            platform: x86_64-macos
+            runner: macos-15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -241,6 +257,9 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: release-${{ matrix.target }}
+      # Only Linux gets here: `endsWith(target, '-musl')` is false for both
+      # Apple targets, and macOS has no musl.
+      #
       # syntect pulls `onig_sys`, which compiles Oniguruma from C, so a musl
       # target needs a musl C toolchain — the gnu ones use the runner's own
       # gcc and were the two that passed. Only the compiler is installed
@@ -277,7 +296,7 @@ jobs:
   publish:
     name: Publish release
     needs: [tag, package]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
       # Signing the provenance: `id-token` mints the OIDC token that proves
@@ -286,7 +305,7 @@ jobs:
       attestations: write
     steps:
       # Checkout first, and only then the artifacts. `actions/checkout` cleans
-      # the workspace, so downloading before it deleted the four tarballs it
+      # the workspace, so downloading before it deleted the tarballs it
       # had just fetched — the publish failed on `dist/uze-*.tar.gz: No such
       # file or directory` after every target had built successfully.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

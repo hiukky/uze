@@ -23,10 +23,125 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
 
+# Every runner in this repository names its image, and none says
+# `ubuntu-latest` or `macos-latest`. Those labels move — GitHub repoints them
+# at the next release on a date nobody here picks — and when they do, every
+# workflow changes underfoot at once with no commit behind the change. This
+# repository already pins each action to a SHA, gitleaks to a version *and* a
+# checksum, and git-cliff and cargo-release to exact releases; the machine all
+# of that runs on was the one unpinned thing left. Moving to a new image is a
+# decision, so it should be a diff.
+#
+# ── The shape of this file ────────────────────────────────────────────
+#
+# Three stages, and only two edges that earn their keep.
+#
+#   1 · Verify   everything below, in parallel, at t=0
+#   2 · Prove    the E2E tiers, behind `lint` — 56 of the run's 62
+#                runner-minutes, all of which need the tree to compile
+#   3 · Close    `gate`, the one check branch protection has to know
+#
+# The temptation is six stages. It does not pay: under about ninety seconds
+# a gate costs more information than it saves time, and every job in stage 1
+# finishes inside two minutes. So stage 1 has no internal ordering at all —
+# a formatting slip and a failing test arrive together, which is what you
+# want from them. The edges that pay are the one before the expensive tier
+# and the one inside the Lab (`Image` → four verticals), and there are no
+# others.
+#
+# Journeys and Conformance are called from here rather than triggered beside
+# it, because `needs:` does not cross a workflow boundary and a tier that
+# cannot be gated is a tier that runs on a tree nobody has compiled. Being
+# called also nests them: GitHub renders `CI / Conformance / E2E - Claude`,
+# which is as close to a stage as the platform gets.
+
 jobs:
+  # ── What this change reaches ────────────────────────────────────────
+  #
+  # A path filter can only be written at the top of a workflow, and this gate
+  # needs a different one per tier — so the question moves here, where it is
+  # an output any job can read, and stays a diff instead of becoming a
+  # property of which file a job happens to live in.
+  #
+  # It also decides which platforms run. `macos.yml` used to be a separate
+  # workflow purely to carry its own `paths:`; folding it into the matrix
+  # below is what that file's own header asked for once a run settled green,
+  # and this is where the filter it was carrying ended up.
+  changes:
+    name: Changed surface
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      lab: ${{ steps.filter.outputs.lab }}
+      journeys: ${{ steps.filter.outputs.journeys }}
+      platforms: ${{ steps.filter.outputs.platforms }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # `git diff` against the pull request's base needs both commits.
+          fetch-depth: 0
+      - id: filter
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+
+          linux='{"platform":"linux","runner":"ubuntu-24.04","clippy":false}'
+          # Apple Silicon: the machine essentially every macOS developer
+          # actually has. An `x86_64-apple-darwin` entry belongs here as a
+          # third row once this one has a history of being green.
+          macos='{"platform":"macos","runner":"macos-15","clippy":true}'
+
+          # Anything that is not a pull request answers "everything". A push
+          # to `main` and the nightly are the record of whether that commit
+          # is green, and a partial record is not one.
+          if [ "${EVENT}" != "pull_request" ]; then
+            {
+              echo "lab=true"
+              echo "journeys=true"
+              echo "platforms=[${linux},${macos}]"
+            } >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          files="$(git diff --name-only "${BASE}" HEAD)"
+          echo "Changed files:"
+          printf '%s\n' "${files}" | sed 's/^/  /'
+
+          reaches() { printf '%s\n' "${files}" | grep -qE "$1"; }
+
+          # Anything reaching for `/proc`, a signal, a pty or a peer
+          # credential, plus whatever decides what gets linked in. A macOS
+          # runner is the most expensive minute this repository can spend.
+          platform_surface='^(crates/uze-core/src/machine/|crates/uze-terminal/|crates/uze-git/|journeys/|src/shim\.rs$|Cargo\.lock$|\.cargo/config\.toml$|\.github/(workflows/(ci|journeys)\.yml$|actions/journeys/))|(^|/)Cargo\.toml$'
+          # What is baked into the Lab image, or read by a vertical.
+          lab_surface='^(src/|crates/|tests/_fixtures/|plugins/|conformance/|marketplace\.json$|Cargo\.lock$|\.github/workflows/(ci|conformance)\.yml$)|(^|/)Cargo\.toml$'
+          # What a journey drives, or what it drives it with.
+          journeys_surface='^(src/|crates/|journeys/|Cargo\.lock$|\.github/(workflows/(ci|journeys)\.yml$|actions/journeys/))|(^|/)Cargo\.toml$'
+
+          platforms="[${linux}]"
+          if reaches "${platform_surface}"; then platforms="[${linux},${macos}]"; fi
+
+          {
+            echo "lab=$(reaches "${lab_surface}" && echo true || echo false)"
+            echo "journeys=$(reaches "${journeys_surface}" && echo true || echo false)"
+            echo "platforms=${platforms}"
+          } >> "${GITHUB_OUTPUT}"
+
+          echo "---"
+          cat "${GITHUB_OUTPUT}"
+
+  # ── Stage 1 · Is the code correct ───────────────────────────────────
+  #
+  # The questions asked of the Rust in this repository. No ordering between
+  # them on purpose: they all answer inside two minutes, and a run that
+  # reports a formatting slip *instead of* a failing test has told you half
+  # of what it knew.
+
   fmt:
     name: Format
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -36,9 +151,13 @@ jobs:
           components: rustfmt
       - run: cargo fmt --check
 
+  # The gate for stage 2. Not because linting is the important question, but
+  # because `clippy --all-targets` is the cheapest thing in this file that
+  # cannot pass on a tree that does not compile — and stage 2 spends 56
+  # runner-minutes on the assumption that it does.
   lint:
     name: Clippy
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -47,23 +166,146 @@ jobs:
           toolchain: stable
           components: clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          # Restore everywhere, save only from `main` — see `test` below.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo clippy --all-targets -- -D warnings
 
   test:
-    name: Test
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    name: Test (${{ matrix.platform }})
+    needs: changes
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      # The first run on a new platform is worth the complete list of what
+      # does not hold there, not the name of the first leg that stopped.
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.changes.outputs.platforms) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
         with:
           toolchain: stable
+          components: clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          # Shared with the journeys job, which builds this same workspace
+          # with this same toolchain: the two entries carried an identical
+          # content hash and half a gigabyte of duplicate dependency builds
+          # per branch.
+          shared-key: workspace-${{ matrix.platform }}
+          # Restore everywhere, save only from `main`. The repository sat at
+          # 9.91 GB of its 10 GB cache allowance, which means GitHub was
+          # evicting by LRU on every run, and a branch that writes its own
+          # 1.75 GB set evicts the entry the next branch was going to read.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # `.cargo/config.toml` pins `jobs = 2` as a courtesy to a 4-vCPU WSL
+      # box. A hosted macOS runner is not that box, and this leg is the
+      # slowest in stage 1.
+      #
+      # macOS only, deliberately: every green Linux run this repository has
+      # was measured at the repository default, and build parallelism is its
+      # own experiment — not something to change in passing while folding a
+      # platform in.
+      #
+      # An explicit count, because cargo has no spelling for "all of them":
+      # `CARGO_BUILD_JOBS=0` is not that, it is an error (`jobs may not be
+      # 0`) — and one that fails every cargo invocation in the job instantly,
+      # which is how it took the first run of the macOS workflow down.
+      - name: Use the whole runner
+        if: runner.os == 'macOS'
+        run: echo "CARGO_BUILD_JOBS=$(sysctl -n hw.logicalcpu)" >> "$GITHUB_ENV"
+      - name: Build the binary
+        run: cargo build --locked --bin uze
+      # Linking is not running. The smallest proof that the produced
+      # executable starts on this platform at all — which is a different
+      # claim from any test passing, and the one that was never made until a
+      # macOS runner made it.
+      - name: Run it
+        run: ./target/debug/uze --version
+      # `lint` above answers this for Linux and is the gate. Every other
+      # platform answers it here, where the toolchain is installed and the
+      # tree is already built — `cfg`-gated code is invisible to a Linux
+      # clippy, and it is exactly where a platform port goes wrong.
+      - name: Clippy
+        if: matrix.clippy
+        run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --workspace --no-fail-fast --locked
+
+  msrv:
+    name: MSRV
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # `rust-version` in Cargo.toml is a promise to anyone pinned to that
+      # release. Every other job runs `stable`, so without this one the
+      # promise is never tested and a newer language feature breaks it
+      # silently.
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
+        with:
+          toolchain: "1.97"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          key: msrv
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # `check`, not `test`: the question is whether the declared version can
+      # build the tree, and running the suite twice answers nothing new.
+      # `+1.97` explicitly: the action sets this toolchain as rustup's
+      # default, and `rust-toolchain.toml` outranks a default — without the
+      # `+` this job would quietly check the tree on stable and pass a
+      # promise it never tested. Matches `make msrv`.
+      - run: cargo +1.97 check --workspace --all-targets --locked
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-24.04
+    # LLVM instrumentation changes test timing and memory use. Keep this
+    # separate from ordinary tests so a concurrency regression cannot leave a
+    # runner wedged indefinitely — and out of the shared cache key below, so
+    # `-C instrument-coverage` artifacts never reach a job that is not
+    # instrumented.
+    timeout-minutes: 15
+    env:
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
+        with:
+          toolchain: stable
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8 # v2
+        with:
+          tool: cargo-llvm-cov
+      # `--skip` filters out tests that fail due to environment issues,
+      # not code regressions: `real_codex_dogfood_*` (codex CLI removed
+      # the `debug` subcommand), `foreground_status_reports_*` (shell
+      # detection varies at runtime), and `acquisition::*` (GPG agent
+      # signing timeout in a sandbox without a configured GPG key).
+      # Re-enable any of these when the environment supports them.
+      - run: cargo llvm-cov --workspace --summary-only --fail-under-lines 68 --fail-under-regions 69 -- --skip real_codex_dogfood --skip foreground_status_reports --skip acquisition
+      - run: cargo llvm-cov report --lcov --output-path lcov.info
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: lcov
+          path: lcov.info
+
+  # ── Stage 1 · Is it safe to ship what we link ───────────────────────
+  #
+  # A different question from correctness, and read by a different person:
+  # not whether the code works, but whether the tree may be published and
+  # what it drags in is known-good. Kept apart for that reason, not because
+  # the tools happen to differ.
 
   audit:
     name: Audit
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read
@@ -83,7 +325,7 @@ jobs:
 
   licences:
     name: Licences
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: read
@@ -93,6 +335,8 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # Its own job, not a step of Audit: this one answers whether the
       # project may ship what it links, which is a different question from
       # whether what it links has a known defect, and a red one here is
@@ -112,7 +356,7 @@ jobs:
 
   secrets:
     name: Secrets
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read
@@ -145,9 +389,15 @@ jobs:
       - name: Scan the full history
         run: ./gitleaks git --no-banner --redact=4 --config .gitleaks.toml
 
+  # ── Stage 1 · The parts that are not the binary ─────────────────────
+  #
+  # uze is more than a Rust binary — an installer a stranger pipes into a
+  # shell, a documentation site, and the Lab's own Python. Each was, at
+  # some point, shipped with nothing checking it.
+
   installer:
     name: Installer
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -158,49 +408,9 @@ jobs:
       - name: Exercise the installer offline
         run: sh tests/scripts/installer-test.sh
 
-  python:
-    name: Python
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Install ruff
-        uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8 # v2
-        with:
-          tool: ruff
-      - run: ruff format --check conformance/
-      - run: ruff check conformance/
-      - run: python3 -m pip install --user pexpect
-      - name: Conformance unit tests (no Docker, no harness)
-        run: for t in conformance/tests/test_*.py; do python3 "$t" || exit 1; done
-
-  msrv:
-    name: MSRV
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      # `rust-version` in Cargo.toml is a promise to anyone pinned to that
-      # release. Every other job runs `stable`, so without this one the
-      # promise is never tested and a newer language feature breaks it
-      # silently.
-      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
-        with:
-          toolchain: "1.97"
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          key: msrv
-      # `check`, not `test`: the question is whether the declared version can
-      # build the tree, and running the suite twice answers nothing new.
-      # `+1.97` explicitly: the action sets this toolchain as rustup's
-      # default, and `rust-toolchain.toml` outranks a default — without the
-      # `+` this job would quietly check the tree on stable and pass a
-      # promise it never tested. Matches `make msrv`.
-      - run: cargo +1.97 check --workspace --all-targets --locked
-
   web:
     name: Web
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     defaults:
       run:
@@ -216,37 +426,93 @@ jobs:
       - run: bun run types:check
       - run: bun run build
 
-  coverage:
-    name: Coverage
-    runs-on: ubuntu-latest
-    # LLVM instrumentation changes test timing and memory use. Keep this
-    # separate from ordinary tests so a concurrency regression cannot leave a
-    # runner wedged indefinitely.
+  python:
+    name: Python
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
-    env:
-      CARGO_BUILD_JOBS: 2
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
-        with:
-          toolchain: stable
-          components: llvm-tools-preview
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          cache-on-failure: true
-      - name: Install cargo-llvm-cov
+      - name: Install ruff
         uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8 # v2
         with:
-          tool: cargo-llvm-cov
-      # `--skip` filters out tests that fail due to environment issues,
-      # not code regressions: `real_codex_dogfood_*` (codex CLI removed
-      # the `debug` subcommand), `foreground_status_reports_*` (shell
-      # detection varies at runtime), and `acquisition::*` (GPG agent
-      # signing timeout in a sandbox without a configured GPG key).
-      # Re-enable any of these when the environment supports them.
-      - run: cargo llvm-cov --workspace --summary-only --fail-under-lines 68 --fail-under-regions 69 -- --skip real_codex_dogfood --skip foreground_status_reports --skip acquisition
-      - run: cargo llvm-cov report --lcov --output-path lcov.info
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: lcov
-          path: lcov.info
+          tool: ruff
+      - run: ruff format --check conformance/
+      - run: ruff check conformance/
+      - run: python3 -m pip install --user pexpect
+      - name: Conformance unit tests (no Docker, no harness)
+        run: for t in conformance/tests/test_*.py; do python3 "$t" || exit 1; done
+
+  # ── Stage 2 · Prove it against the real thing ───────────────────────
+  #
+  # Together these are 56 of this run's 62 runner-minutes, and every one of
+  # them assumes the tree compiles. `lint` answers that in about half a
+  # minute, so a pull request that does not compile now costs half a minute
+  # of the expensive tier instead of all of it.
+  #
+  # The nightly runs both on their own schedules, in their own files, so a
+  # scheduled run here would perform each of them twice.
+
+  journeys:
+    name: Journeys
+    needs: [changes, lint]
+    if: github.event_name != 'schedule' && needs.changes.outputs.journeys == 'true'
+    uses: ./.github/workflows/journeys.yml
+    with:
+      platforms: ${{ needs.changes.outputs.platforms }}
+    permissions:
+      contents: read
+
+  # Not behind `lint`, unlike the journeys: the Lab's own `Image` job builds
+  # `uze` from source, so it is already the compile gate for the four
+  # verticals it feeds, and putting a second one in front of it would only
+  # delay the longest job in the pipeline by the length of the shortest.
+  conformance:
+    name: Conformance
+    needs: changes
+    if: github.event_name != 'schedule' && needs.changes.outputs.lab == 'true'
+    uses: ./.github/workflows/conformance.yml
+    permissions:
+      contents: read
+
+  # ── Stage 3 · Close the run ─────────────────────────────────────────
+
+  # The single check branch protection has to know about.
+  #
+  # Eleven job names were listed there one by one, so adding a matrix leg —
+  # the Windows runner, the `x86_64-apple-darwin` entry `changes` already has
+  # a place for — meant editing repository settings, which is not a diff and
+  # which nobody reviews. Folding macOS in already breaks one of the eleven:
+  # `Test` is required, and is now `Test (linux)` and `Test (macos)`. This
+  # job is the only name that has to appear there again.
+  #
+  # `skipped` is not a failure, deliberately: it is what lets `changes` turn
+  # off an expensive tier without a documentation change sitting forever on a
+  # check that will never report.
+  gate:
+    name: Gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    if: always()
+    needs:
+      - changes
+      - fmt
+      - lint
+      - test
+      - msrv
+      - coverage
+      - audit
+      - licences
+      - secrets
+      - installer
+      - web
+      - python
+      - journeys
+      - conformance
+    steps:
+      - name: Every job either passed or was not needed
+        run: |
+          if ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}; then
+            echo "::error::a job in this run failed or was cancelled"
+            exit 1
+          fi
+          echo "the run is green"

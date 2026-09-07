@@ -56,6 +56,12 @@ pub enum UzeError {
     )]
     PackageEscapesRoot { link: PathBuf, target: PathBuf },
     #[error(
+        "package holds `{first}` and `{second}` in one directory, names a \
+         case-insensitive filesystem cannot tell apart; on macOS or Windows \
+         only one would be installed and the package decides which"
+    )]
+    PackageNameCollides { first: PathBuf, second: PathBuf },
+    #[error(
         "refusing a URL carrying inline credentials; UZE never stores a secret, \
          and authenticated Git is a separate mechanism"
     )]

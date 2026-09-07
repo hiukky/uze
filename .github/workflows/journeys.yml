@@ -1,35 +1,27 @@
 name: Journeys
 
 # A product journey performs a user's flow through the real CLI and the real
-# TUI, then checks the machine it left behind. Its own workflow, like the
-# Lab's — but on a very different budget: the Lab is ~34 runner-minutes of
-# vendor binaries, and a journey is ~30 seconds on top of a build CI already
-# pays for. That is why this gates a pull request rather than a release: the
-# regressions it catches arrive in ordinary pull requests touching `src/ui`,
-# and finding one at release time means bisecting a range instead of reading
-# a diff.
+# TUI, then checks the machine it left behind. Its own file, like the Lab's —
+# but on a very different budget: the Lab is ~34 runner-minutes of vendor
+# binaries, and a journey is ~4 minutes on top of a build CI already pays for.
+# That is why this gates a pull request rather than a release: the regressions
+# it catches arrive in ordinary pull requests touching `src/ui`, and finding
+# one at release time means bisecting a range instead of reading a diff.
+
 on:
-  push:
-    branches: [main]
-    # Repeated rather than anchored: GitHub Actions does not resolve YAML
-    # aliases, and a filter it silently ignores is a filter that does not
-    # filter. Keep the two lists identical.
-    paths:
-      - "src/**"
-      - "crates/**"
-      - "journeys/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - ".github/workflows/journeys.yml"
-  pull_request:
-    branches: [main]
-    paths:
-      - "src/**"
-      - "crates/**"
-      - "journeys/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - ".github/workflows/journeys.yml"
+  # `ci.yml` owns the pull-request trigger and hands down which platforms to
+  # perform on, so the gate is one graph with one `needs:` chain. Kept
+  # independently runnable for the nightly and for a hand-started run.
+  workflow_call:
+    inputs:
+      platforms:
+        description: >-
+          JSON array of `{platform, runner}` to perform the suite on. The
+          caller decides — it is the only place that knows whether this
+          change reaches anything platform-sensitive.
+        required: false
+        type: string
+        default: '[{"platform":"linux","runner":"ubuntu-24.04"}]'
   # Nightly runs everything, not just the gate tag, and records a cast.
   schedule:
     - cron: "0 4 * * *"
@@ -44,46 +36,78 @@ permissions:
 
 jobs:
   journeys:
-    name: Journeys
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # Named for its subject, not for the workflow around it: GitHub renders a
+    # check as `<workflow> / <job>`, and `Journeys / Journeys` said one thing
+    # twice. `E2E - UZE` sits beside the Lab's `E2E - Claude`, `E2E - Codex`
+    # and the rest, where the pair now reads as what each tier drives
+    # end to end — this one drives UZE, those drive a vendor's harness. The
+    # platform is in the name because the two runs prove different halves.
+    name: E2E - UZE (${{ matrix.platform }})
+    # Pinned images, never `-latest`. The journey drives a rendered screen, so
+    # the terminal is part of the contract — the tmux build, the locale and
+    # the unicode width tables decide where a glyph lands, and a moving
+    # runner label is free to change all three under a selector with no
+    # commit behind it. `ubuntu-24.04` is the same release
+    # `journeys/Dockerfile` states as its `FROM`: both pin the Ubuntu
+    # release, which is as far as either can pin.
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        # An event that is not a `workflow_call` — the nightly, a manual run —
+        # carries no inputs, and falls back to the platform every event runs.
+        include: ${{ fromJSON(inputs.platforms || '[{"platform":"linux","runner":"ubuntu-24.04"}]') }}
+    env:
+      # What the container image used to set. The frames are read as text, so
+      # the locale is part of what a selector matches, and it must be the same
+      # on both platforms or the two runs answer different questions.
+      LANG: C.UTF-8
+      TERM: xterm-256color
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          # The same key `ci.yml`'s `test` job writes. Both build this
+          # workspace with this toolchain and these flags — the two cache
+          # entries carried the same content hash and half a gigabyte of
+          # duplicate dependency builds per branch.
+          shared-key: workspace-${{ matrix.platform }}
+          # Restore everywhere, save only from `main`. The repository sat at
+          # 9.91 GB of its 10 GB cache allowance, which means GitHub was
+          # evicting by LRU on every run and a "warm cache" was a coin toss.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # `.cargo/config.toml` pins `jobs = 2` as a courtesy to a 4-vCPU WSL
+      # box. A hosted macOS runner is not that box, and this is the longest
+      # job in the gate. macOS only, for the reason `ci.yml`'s `test` job
+      # states: the Linux baseline is what every green run so far measured.
+      - name: Use the whole runner
+        if: runner.os == 'macOS'
+        run: echo "CARGO_BUILD_JOBS=$(sysctl -n hw.logicalcpu)" >> "$GITHUB_ENV"
 
-      # The journey drives a rendered screen, so the terminal is part of the
-      # contract: the pinned image is what keeps a runner-image bump from
-      # moving a glyph out from under a selector.
-      - name: Build the journey runtime image
-        run: docker build -f journeys/Dockerfile -t uze-journeys:ci journeys/
-
-      # Both binaries: the one under test, and the one that writes the
-      # harness stand-ins. They come from the same workspace on purpose —
-      # a second stand-in implementation is how two tiers come to disagree
-      # about what a harness does while both stay green.
-      - name: Build the binary under test, and the stand-in writer
-        run: cargo build --locked --bin uze && cargo build --locked -p uze-testkit --bin uze-fake-harness
-
-      # Cheap, and it fails on the two things a run would not reach: a
-      # gesture with no `expect`, and a `proves:` pointing at a page that
-      # moved.
-      - name: Validate the journeys
-        run: python3 journeys/journey.py validate journeys/suites
-
-      - name: Run the journeys
-        run: |
-          mkdir -p journeys/.evidence
-          docker run --rm --init \
-            --user "$(id -u):$(id -g)" -e HOME=/tmp/journey-home \
-            -v "$PWD/journeys:/journeys:ro" \
-            -v "$PWD/target/debug/uze:/usr/local/bin/uze:ro" \
-            -v "$PWD/target/debug/uze-fake-harness:/usr/local/bin/uze-fake-harness:ro" \
-            -v "$PWD/journeys/.evidence:/evidence" \
-            uze-journeys:ci run /journeys/suites \
-            ${{ github.event_name == 'schedule' && '--record' || '--tag gate' }}
+      # Run natively, on the runner itself. A hosted runner is already a
+      # disposable machine, and `journey.py` builds its own world under
+      # `JOURNEY_WORLDS` with a guard that refuses one overlapping a real
+      # home — so the container was never what isolated the run. What it
+      # pinned, `runs-on` above now pins directly, for free. macOS runners
+      # have no Docker at all, so this is also the only arrangement in which
+      # the two platforms perform the same suite the same way.
+      #
+      # The steps themselves live in a composite action: two platforms
+      # proving the same journeys must perform them the same way, and two
+      # copies of the same YAML is how that stops being true without anybody
+      # noticing.
+      #
+      # `journeys/Dockerfile` and `make journey-docker` stay for local use —
+      # running a journey on your own machine without letting it near your
+      # own tmux, HOME or terminal.
+      - uses: ./.github/actions/journeys
+        with:
+          # Nightly runs everything, not just the gate tag, and records a cast.
+          args: ${{ github.event_name == 'schedule' && '--record' || '--tag gate' }}
 
       # Named, because "No files were found" on the upload below is how a
       # failing run lost its own evidence once: the artifact is silent about
@@ -105,7 +129,7 @@ jobs:
         if: failure() || github.event_name == 'schedule'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: journey-evidence-${{ github.run_id }}
+          name: journey-evidence-${{ matrix.platform }}-${{ github.run_id }}
           path: journeys/.evidence/
           include-hidden-files: true
           retention-days: 14

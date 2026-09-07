@@ -47,7 +47,11 @@ scenes:
         say: open a second tab in the agent's space
         in: strip
         expect: shell 1
-        expect_timeout: 20
+        # What is waited on is the server allocating a pty and a shell
+        # reaching its prompt — the same work the gesture above budgets 45
+        # seconds for. It had 20, which held only because the machine that
+        # calibrated it was fast.
+        expect_timeout: 45
         pause: 2.0
     then:
       - dir: "{project}/.worktrees/*"

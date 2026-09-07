@@ -804,6 +804,27 @@ inside a client.
 
 > `tests/acceptance/engine.rs::two_clients_keep_their_own_focus_and_a_nested_launch_opens_a_space`
 
+### Every question the kernel answers is asked in one place
+
+Four facts about a process the runtime did not spawn — who is on the other
+end of a socket, what image a pid runs, where it is standing, what it
+inherited — come only from the kernel, and each platform exposes them
+differently (`/proc` on Linux, `libproc`/`sysctl` on macOS).
+`process_probe` holds every one of those readings; the decisions built on
+them are written once and run unchanged everywhere.
+
+The rule this enforces is that `None` means *unknown*, never *no*. A probe
+that cannot answer must not be read as a negative answer — the endpoint keeps
+the state it had rather than tearing down a healthy server, and a pane
+reports no foreground status rather than an invented one.
+
+Adding a platform means teaching `process_probe`, never widening a `cfg` at
+a call site.
+
+> `crates/uze-terminal/src/process_probe.rs::tests::the_platform_answers_about_this_process`
+> `crates/uze-terminal/src/process_probe.rs::tests::a_key_matches_only_itself`
+> `crates/uze-terminal/src/runtime.rs::foreground_status_prefers_the_shim_identity_over_a_version_named_comm`
+
 ---
 
 ## Agent session continuity (`add-agent-session-continuity`)

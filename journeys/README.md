@@ -206,11 +206,23 @@ locale, with the binary under test mounted in and named by `JOURNEY_UZE`.
 Building `uze` a second time inside an image would double the slowest step of
 the run for nothing — CI's cargo cache has already built it.
 
-What the image is actually for is pinning the terminal. A journey aims a
-click at a glyph on a rendered screen, so the tmux version, the locale and
-the unicode width tables are part of the contract, and they are exactly what
-a runner image is free to change under you. It runs as uid 1000 so the
-mounted evidence directory is writable without a flag at every call site.
+**This is for your machine, not for CI.** A journey drives tmux and writes a
+world; on your own laptop the container is what keeps it away from your tmux
+server, your `HOME` and your terminal. CI has nothing to protect — a hosted
+runner is already disposable, and `journey.py` builds its own world with a
+guard that refuses one overlapping a real home — so both CI jobs run the
+journeys natively.
+
+The pinning the image also gave is not lost. What it pins is the Ubuntu
+release, via its `FROM`; `runs-on: ubuntu-24.04` pins exactly the same thing
+and costs nothing, and `LANG`/`TERM` are set in the workflow. Neither pins a
+tmux *version* — `apt-get install tmux` on `ubuntu:24.04` takes whatever that
+release currently carries, the same as the runner does.
+
+There is a second reason CI runs natively: macOS runners have no Docker.
+A containerised Linux run and a native macOS run would be proving the same
+journeys two different ways, and a difference between them would be about
+the two runtimes rather than about the two platforms.
 
 Same journey, same numbers: 26.4s on the host, 26.7s in the container.
 
@@ -232,6 +244,15 @@ A run refuses to start if its sandbox could contain the developer's real
 stops every process its world started — the terminal server is a daemon by
 design, and waiting for it to actually exit is what keeps the next run from
 connecting to a socket that is about to die.
+
+A journey addresses the world through `{world}`, `{home}`, `{uze_home}`,
+`{project}`, `{repo}` and `{uze}` — plus `{shell_rc}`, which is the file the
+world's shell actually reads its startup from. That one is a placeholder
+rather than a path because the answer differs by platform: bash reads
+`.bashrc` for the interactive non-login shell a Linux terminal opens, and
+`.bash_profile` for the login shell every macOS terminal window is. A journey
+naming either directly would assert the wrong file on one of the two, and
+report a bug that is not there.
 
 ## Harness stand-ins
 

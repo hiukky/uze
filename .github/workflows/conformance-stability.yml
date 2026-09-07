@@ -23,9 +23,34 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # One image, four verticals — the same reason `conformance.yml` splits it
+  # out, doubled by the cadence here: this workflow built the image four
+  # times a night to run four matrix legs against what were, strictly, four
+  # different images. `uze setup` installs the harnesses channel-latest, and
+  # a promotion gate that asks whether a vertical is stable cannot have the
+  # ground move between the legs it is comparing.
+  image:
+    name: Image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Build the Lab harness image
+        run: docker build -f conformance/Dockerfile -t conformance-harness:latest .
+      - name: Hand it to the verticals
+        run: docker save conformance-harness:latest | zstd -T0 -3 -o /tmp/lab-image.tar.zst
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: lab-image-stability
+          path: /tmp/lab-image.tar.zst
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+
   conformance-stability:
     name: Stability - ${{ matrix.label }}
-    runs-on: ubuntu-latest
+    needs: image
+    runs-on: ubuntu-24.04
     timeout-minutes: 150
     strategy:
       fail-fast: false
@@ -41,8 +66,12 @@ jobs:
             label: OpenCode
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Build the Lab harness image
-        run: docker build -f conformance/Dockerfile -t conformance-harness:latest .
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: lab-image-stability
+          path: /tmp
+      - name: Load the Lab image
+        run: zstd -d -c /tmp/lab-image.tar.zst | docker load
       - name: Install Lab runner dependency
         run: python3 -m pip install --user pexpect
       # ADR-035 promotion gate: 3 consecutive clean runs per vertical.

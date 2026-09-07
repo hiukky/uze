@@ -365,13 +365,31 @@ fn emit_vendor_agy(state_dir: &Path, dest: &Path) -> String {
     block.push_str("        exit 0\n        ;;\n");
     block.push_str("      \"plugin uninstall\"*)\n");
     block.push_str("        id=\"$3\"\n");
-    block.push_str(
-        "        [ -n \"$id\" ] && sed -i \"\\|^$id$|d\" \"$state_dir/installed\" 2>/dev/null\n",
-    );
+    block.push_str(&drop_installed_id("id"));
     block.push_str("        rm -rf \"$dest/$id\"\n");
     block.push_str("        exit 0\n        ;;\n");
     block.push_str("    esac\n");
     block
+}
+
+/// Shell that removes the line holding `$<variable>` from the persisted
+/// list of installed ids.
+///
+/// `grep -vxF` rather than `sed -i`: BSD `sed` — which is macOS's `sed` —
+/// reads whatever follows `-i` as the backup suffix, so the GNU spelling
+/// silently consumes the script as a suffix and then treats the filename as
+/// the script. The stand-in would answer "still installed" forever, and the
+/// lifecycle tests would fail somewhere far from the cause. `-x -F` also
+/// removes the reason the `sed` form needed a `\|...|` delimiter at all: a
+/// package id containing `/` is a literal string here, never a pattern.
+fn drop_installed_id(variable: &str) -> String {
+    format!(
+        "        if [ -n \"${variable}\" ] && [ -f \"$state_dir/installed\" ]; then\n\
+         \x20         grep -vxF \"${variable}\" \"$state_dir/installed\" \
+         > \"$state_dir/installed.new\"\n\
+         \x20         mv \"$state_dir/installed.new\" \"$state_dir/installed\"\n\
+         \x20       fi\n"
+    )
 }
 
 /// Generates the vendored marketplace state-machine script for
@@ -429,7 +447,7 @@ fn emit_vendor_marketplace(state_dir: &Path, vendor: MarketplaceVendor) -> Strin
             block.push_str("        exit 0\n        ;;\n");
             block.push_str("      \"plugin uninstall\"*)\n");
             block.push_str("        sel=\"$3\"\n");
-            block.push_str("        [ -n \"$sel\" ] && sed -i \"\\|^$sel$|d\" \"$state_dir/installed\" 2>/dev/null\n");
+            block.push_str(&drop_installed_id("sel"));
             block.push_str("        exit 0\n        ;;\n");
         }
         MarketplaceVendor::Codex => {
@@ -477,7 +495,7 @@ fn emit_vendor_marketplace(state_dir: &Path, vendor: MarketplaceVendor) -> Strin
             block.push_str("        exit 0\n        ;;\n");
             block.push_str("      \"plugin remove\"*)\n");
             block.push_str("        sel=\"$3\"\n");
-            block.push_str("        [ -n \"$sel\" ] && sed -i \"\\|^$sel$|d\" \"$state_dir/installed\" 2>/dev/null\n");
+            block.push_str(&drop_installed_id("sel"));
             block.push_str("        exit 0\n        ;;\n");
         }
     }

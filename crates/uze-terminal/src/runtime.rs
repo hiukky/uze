@@ -24,7 +24,7 @@ use thiserror::Error;
 use crate::{
     CellAttributes, ClientEvent, ClientRequest, Cursor, MouseMode, OpenedSpace, PROTOCOL_VERSION,
     Palette, PaneDamage, PaneId, PaneSnapshot, RenderCell, Session, SpaceId, SpaceSeed, TabId,
-    TabSeed, TerminalColor, WorkspaceId,
+    TabSeed, TerminalColor, WorkspaceId, process_probe,
 };
 
 /// ADR-038: the endpoint is local and user-private; no network transport is
@@ -170,37 +170,73 @@ struct Endpoint {
     pid: PathBuf,
 }
 
+/// How long a Unix-domain socket path may be, with room to spare.
+///
+/// `sockaddr_un.sun_path` holds 104 bytes on macOS and 108 on Linux, and the
+/// whole path has to fit or `bind` fails with `SUN_LEN` — an error naming the
+/// limit and nothing about which directory exhausted it. The smaller of the
+/// two, less a little, is what [`Endpoint::global`] holds itself to, so the
+/// same directory is usable on either platform.
+const MAX_SOCKET_PATH: usize = 100;
+
 impl Endpoint {
     /// One endpoint per user — per `UZE_HOME`, which is what "user" means
     /// to UZE: a second home is a second world, with a server of its own.
+    ///
+    /// The directory is whichever of three candidates can hold the socket:
+    /// the runtime directory the session names, an owner-scoped directory in
+    /// the system temp dir, and `/tmp`. Two things disqualify one — being
+    /// unwritable, and being too long.
+    ///
+    /// Length matters more than it looks. `XDG_RUNTIME_DIR` is somebody
+    /// else's variable and can be arbitrarily deep, and the system temp dir
+    /// on macOS is a per-user `/var/folders/<hash>/T` that already spends
+    /// half the budget before UZE adds anything. Falling back does not
+    /// weaken isolation: the socket is named after a hash of `UZE_HOME`, so
+    /// two homes stay two endpoints wherever they land.
     fn global() -> Result<Self, RuntimeError> {
-        let preferred = env::var_os("XDG_RUNTIME_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(env::temp_dir)
-            .join("uze-runtime");
-        let runtime = match fs::create_dir_all(&preferred) {
-            Ok(()) => preferred,
-            // Sandboxed terminals can expose XDG_RUNTIME_DIR while denying
-            // writes below it. Fall back to an owner-scoped temp directory;
-            // the socket remains local and the directory is immediately
-            // restricted below.
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    io::ErrorKind::PermissionDenied | io::ErrorKind::ReadOnlyFilesystem
-                ) =>
-            {
-                let fallback =
-                    env::temp_dir().join(format!("uze-runtime-{}", unsafe { libc::getuid() }));
-                fs::create_dir_all(&fallback)?;
-                fallback
-            }
-            Err(error) => return Err(error.into()),
-        };
-        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700))?;
         let identity = identity_of(&uze_home_dir());
+        let named = |root: &Path| root.join(format!("uze-{identity}.sock"));
+        let owner = unsafe { libc::getuid() };
+
+        let candidates = [
+            env::var_os("XDG_RUNTIME_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(env::temp_dir)
+                .join("uze-runtime"),
+            env::temp_dir().join(format!("uze-runtime-{owner}")),
+            PathBuf::from("/tmp").join(format!("uze-runtime-{owner}")),
+        ];
+
+        let mut refused = None;
+        let runtime = candidates
+            .into_iter()
+            .find(|candidate| {
+                if named(candidate).as_os_str().len() > MAX_SOCKET_PATH {
+                    return false;
+                }
+                match fs::create_dir_all(candidate) {
+                    Ok(()) => true,
+                    // A sandboxed terminal can expose a runtime directory
+                    // while denying writes below it.
+                    Err(error) => {
+                        refused = Some(error);
+                        false
+                    }
+                }
+            })
+            .ok_or_else(|| {
+                refused.unwrap_or_else(|| {
+                    io::Error::other(
+                        "no runtime directory short enough for a socket path; \
+                         set XDG_RUNTIME_DIR to a shorter one",
+                    )
+                })
+            })?;
+
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700))?;
         Ok(Self {
-            socket: runtime.join(format!("uze-{identity}.sock")),
+            socket: named(&runtime),
             pid: runtime.join(format!("uze-{identity}.pid")),
         })
     }
@@ -421,43 +457,17 @@ fn probe_server(endpoint: &Endpoint) -> Probe {
 /// The pid listening on `socket`, given only when that process runs the
 /// same executable image as this one. The kernel stamps the peer's
 /// credentials onto the connection, so the pid is the listener's own and
-/// not something a connection could claim; `/proc/<pid>/exe` then names
-/// the image it is running, which stops resolving to this path once the
-/// binary is replaced underneath a live server (a `cargo install --force`
-/// mid-session).
-#[cfg(target_os = "linux")]
+/// not something a connection could claim; the image it is running then
+/// stops resolving to this path once the binary is replaced underneath a
+/// live server (a `cargo install --force` mid-session).
+///
+/// Both readings come from [`process_probe`], so the rule is written once
+/// and every platform that can answer it runs the same one.
 fn listener_running_this_executable(socket: &Path) -> Option<u32> {
-    use std::os::unix::io::AsRawFd;
-
     let stream = UnixStream::connect(socket).ok()?;
-    let mut peer = libc::ucred {
-        pid: 0,
-        uid: 0,
-        gid: 0,
-    };
-    let mut size = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
-    let asked = unsafe {
-        libc::getsockopt(
-            stream.as_raw_fd(),
-            libc::SOL_SOCKET,
-            libc::SO_PEERCRED,
-            (&raw mut peer).cast(),
-            &raw mut size,
-        )
-    };
-    if asked != 0 || peer.pid <= 0 {
-        return None;
-    }
+    let pid = process_probe::peer_pid(&stream)?;
     let mine = env::current_exe().ok()?;
-    (fs::read_link(format!("/proc/{}/exe", peer.pid)).ok()? == mine).then_some(peer.pid as u32)
-}
-
-/// Peer credentials are how the question above is asked, and this release
-/// ships Linux binaries only. Anywhere else the endpoint keeps the answer
-/// it had before it could be asked at all.
-#[cfg(not(target_os = "linux"))]
-fn listener_running_this_executable(_socket: &Path) -> Option<u32> {
-    None
+    (process_probe::executable_of(pid)? == mine).then_some(pid)
 }
 
 /// Records what the probe established, so the next attach reads the answer
@@ -1469,28 +1479,19 @@ impl PaneRuntime {
     }
 
     /// Best-effort `(cwd, process name)` for whatever is currently running
-    /// in the foreground of this pane — read straight from `/proc`, the
-    /// same source `tmux`'s `pane_current_command`/`pane_current_path` use.
-    /// `None` when the platform doesn't support it or the process just
-    /// exited between the group-leader lookup and the `/proc` read.
-    #[cfg(target_os = "linux")]
+    /// in the foreground of this pane — the same two facts `tmux` shows as
+    /// `pane_current_path`/`pane_current_command`, asked of the kernel
+    /// through [`process_probe`]. `None` when the platform cannot answer, or
+    /// when the process exited between the group-leader lookup and the read.
     fn foreground_status(&self) -> Option<(PathBuf, String)> {
         let pgid = self
             .master
             .lock()
             .expect("master poisoned")
             .process_group_leader()?;
-        let cwd = std::fs::read_link(format!("/proc/{pgid}/cwd")).ok()?;
-        let process = shim_launched_name(pgid).or_else(|| {
-            std::fs::read_to_string(format!("/proc/{pgid}/comm"))
-                .ok()
-                .map(|comm| comm.trim().to_owned())
-        })?;
+        let cwd = process_probe::current_directory_of(pgid)?;
+        let process = shim_launched_name(pgid).or_else(|| process_probe::command_name_of(pgid))?;
         Some((cwd, process))
-    }
-    #[cfg(not(target_os = "linux"))]
-    fn foreground_status(&self) -> Option<(PathBuf, String)> {
-        None
     }
 
     fn snapshot(&self) -> PaneSnapshot {
@@ -1560,14 +1561,8 @@ impl PaneRuntime {
 /// a person actually typed). `None` for anything not launched through the
 /// shim — a bypassed launch, a harness that isn't shimmed, or a plain
 /// shell — in which case `foreground_status` falls back to `comm`.
-#[cfg(target_os = "linux")]
 fn shim_launched_name(pgid: libc::pid_t) -> Option<String> {
-    let environ = std::fs::read(format!("/proc/{pgid}/environ")).ok()?;
-    environ
-        .split(|&byte| byte == 0)
-        .find_map(|entry| entry.strip_prefix(b"UZE_SHIM_NAME="))
-        .filter(|value| !value.is_empty())
-        .map(|value| String::from_utf8_lossy(value).into_owned())
+    process_probe::environment_value_of(pgid, "UZE_SHIM_NAME")
 }
 
 fn cell_coordinates(index: usize, columns: u16, cell: RenderCell) -> (u16, u16, RenderCell) {
@@ -1732,12 +1727,23 @@ fn identity_of(root: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        Compatibility, Endpoint, PaneRuntime, PersistedSpace, PersistedTab, PersistedWorkspace,
-        Probe, ReplySink, Selection, Server, heal_pid_file, identity_of, persisted_state_path,
-        probe_server, read_event, recorded_compatibility, relaunch_command_for_process,
-        replace_incompatible_server, send_request, server_protocol_version, snapshot, view_for,
+        Compatibility, Endpoint, MAX_SOCKET_PATH, PaneRuntime, PersistedSpace, PersistedTab,
+        PersistedWorkspace, Probe, ReplySink, Selection, Server, heal_pid_file, identity_of,
+        persisted_state_path, probe_server, read_event, recorded_compatibility,
+        relaunch_command_for_process, replace_incompatible_server, send_request,
+        server_protocol_version, snapshot, view_for,
     };
     use std::sync::{Arc, Mutex};
+
+    // Several tests below carry
+    // `#[cfg(any(target_os = "linux", target_os = "macos"))]`. That is not a
+    // list of platforms anybody chose; it is the set `process_probe` can
+    // answer on, and these are the tests that start a real server, read a
+    // real pane's foreground status, or relaunch a persisted one — all of
+    // which need the kernel to say where a process is standing and what it
+    // is running. On a platform where the probe returns `None` they would
+    // assert against an answer nothing can give. Widen the gate by teaching
+    // `process_probe` a new platform, never by widening it here.
 
     use crate::Palette;
 
@@ -1874,9 +1880,44 @@ mod tests {
     /// socket and given its file back, so the next attach reads the answer
     /// instead of asking again. Without this the endpoint's live owner is
     /// killed and whatever was running in its panes goes with it.
+    /// `XDG_RUNTIME_DIR` is somebody else's variable and can be arbitrarily
+    /// deep. A socket path that does not fit `sun_path` fails at `bind` with
+    /// an error naming the limit and not the directory — which reached a
+    /// user as `could not acquire package: terminal runtime I/O error: path
+    /// must be shorter than SUN_LEN`, from a command that has nothing to do
+    /// with sockets.
+    #[test]
+    fn a_runtime_directory_too_long_for_a_socket_is_stepped_over() {
+        let deep = uze_testkit::temp::socket_scratch("deep").join("a".repeat(120));
+        std::fs::create_dir_all(&deep).unwrap();
+        let mut env = uze_testkit::env::scope();
+        env.set("XDG_RUNTIME_DIR", &deep);
+
+        let endpoint = Endpoint::global().expect("a too-long runtime directory is not fatal");
+        assert!(
+            endpoint.socket.as_os_str().len() <= MAX_SOCKET_PATH,
+            "the chosen socket path must fit sun_path, got {} bytes: {}",
+            endpoint.socket.as_os_str().len(),
+            endpoint.socket.display()
+        );
+        assert!(
+            !endpoint.socket.starts_with(&deep),
+            "the directory that could not hold the socket must not have been chosen"
+        );
+        // Binding is the only real proof: the length rule exists to make this
+        // call succeed, so the test performs it rather than trusting the
+        // arithmetic.
+        let _ = std::fs::remove_file(&endpoint.socket);
+        let listener = std::os::unix::net::UnixListener::bind(&endpoint.socket)
+            .expect("the chosen path must actually bind");
+        drop(listener);
+        let _ = std::fs::remove_file(&endpoint.socket);
+        let _ = std::fs::remove_dir_all(&deep);
+    }
+
     #[test]
     fn a_server_of_this_build_is_adopted_when_its_pid_file_vanishes() {
-        let scratch = uze_testkit::temp::scratch("terminal-adopt-live-server");
+        let scratch = uze_testkit::temp::socket_scratch("adopt");
         std::fs::create_dir_all(&scratch).unwrap();
         let endpoint = Endpoint {
             socket: scratch.join("test.sock"),
@@ -2188,7 +2229,7 @@ mod tests {
         assert!(rendered.contains("uze-runtime-live"));
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn foreground_status_reports_the_spawned_shell_and_its_cwd() {
         // This is the *fallback* identity path: no shim identity present,
@@ -2203,9 +2244,16 @@ mod tests {
         let mut env = uze_testkit::env::scope();
         env.remove("UZE_SHIM_NAME");
         let (damage, _damage_events) = std::sync::mpsc::channel();
+        // Canonicalized, because the assertion below compares this against
+        // what the kernel reports, and the kernel answers with the real
+        // path: `/tmp` is a symlink to `/private/tmp` on macOS, so spawning
+        // in `/tmp` and expecting `/tmp` back never matches there.
+        let pane_cwd = PathBuf::from("/tmp")
+            .canonicalize()
+            .expect("the system temp directory must resolve");
         let pane = PaneRuntime::spawn(
             PaneId(11),
-            PathBuf::from("/tmp"),
+            pane_cwd.clone(),
             80,
             24,
             damage,
@@ -2229,7 +2277,6 @@ mod tests {
         // and is unaffected by a later `unsetenv`. Accepting the first
         // `Some` therefore made this assert against the developer's own
         // session at random.
-        let pane_cwd = PathBuf::from("/tmp");
         // Five seconds, not five hundred milliseconds: what is being waited
         // on is another process being scheduled and reaching `exec`, and the
         // assertion below is about *what* it reports, never about how fast.
@@ -2237,17 +2284,36 @@ mod tests {
         // ran out before the shell was up, turning a loaded runner into a
         // red build — which is why `make coverage` already skips this test
         // by name instead of trusting it.
+        //
+        // Waited on by *identity*, not by directory. The pane's child already
+        // stands in `pane_cwd` between `fork` and `exec` — that is when the
+        // cwd is set — while still carrying the name it forked from. A loop
+        // that stopped at the first matching directory therefore accepted a
+        // process mid-spawn and read this test binary's own name back out of
+        // it, which is exactly what a macOS runner caught. Waiting for the
+        // shell to have `exec`ed also promotes the directory from a filter to
+        // an assertion, which is what it should have been.
         let mut status = None;
+        let mut last_seen = None;
         for _ in 0..500 {
-            status = pane.foreground_status().filter(|(cwd, _)| *cwd == pane_cwd);
-            if status.is_some() {
+            let reading = pane.foreground_status();
+            if let Some((_, process)) = &reading
+                && *process == expected_name
+            {
+                status = reading;
                 break;
             }
+            last_seen = reading.or(last_seen);
             thread::sleep(Duration::from_millis(10));
         }
         pane.stop();
 
-        let (cwd, process) = status.expect("the spawned shell must own the PTY foreground group");
+        let (cwd, process) = status.unwrap_or_else(|| {
+            panic!(
+                "the spawned shell must own the PTY foreground group; \
+                 waited for {expected_name:?} and last saw {last_seen:?}"
+            )
+        });
         assert_eq!(cwd, pane_cwd);
         assert_eq!(process, expected_name);
     }
@@ -2261,7 +2327,7 @@ mod tests {
     /// `UZE_SHIM_NAME`, set by `src/shim.rs` right before it `exec`s into
     /// the real binary, must survive that and still be what
     /// `foreground_status` reports.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn foreground_status_prefers_the_shim_identity_over_a_version_named_comm() {
         let bin_dir = uze_testkit::temp::scratch("shim-identity-test");
@@ -2288,21 +2354,30 @@ mod tests {
         )
         .unwrap();
 
+        // Five seconds, and only a matching reading is kept — the same two
+        // properties as the sibling test above, and for the same two
+        // reasons: what is being waited on is another process reaching
+        // `exec`, and a reading taken before it does names the process this
+        // one forked from.
         let mut status = None;
-        for _ in 0..50 {
-            status = pane.foreground_status();
-            if status
-                .as_ref()
-                .is_some_and(|(_, process)| process == "claude")
+        let mut last_seen = None;
+        for _ in 0..500 {
+            let reading = pane.foreground_status();
+            if let Some((_, process)) = &reading
+                && process == "claude"
             {
+                status = reading;
                 break;
             }
+            last_seen = reading.or(last_seen);
             thread::sleep(Duration::from_millis(10));
         }
         pane.stop();
         let _ = std::fs::remove_dir_all(&bin_dir);
 
-        let (_, process) = status.expect("foreground process must be observable on Linux");
+        let (_, process) = status.unwrap_or_else(|| {
+            panic!("the shim identity must reach the foreground; last saw {last_seen:?}")
+        });
         assert_eq!(process, "claude");
     }
 
@@ -2314,10 +2389,10 @@ mod tests {
     /// workspace client detaches and attaches again on every Ctrl+O round
     /// trip to management, and an attach that named the launch directory
     /// every time reopened the space closed just before it.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn attaching_without_a_root_neither_creates_nor_reopens_a_space() {
-        let scratch = uze_testkit::temp::scratch("terminal-rootless-attach");
+        let scratch = uze_testkit::temp::socket_scratch("rootless");
         let uze_home = scratch.join("home");
         let project = scratch.join("project");
         let other = scratch.join("other");
@@ -2397,10 +2472,10 @@ mod tests {
     /// spaces and tabs a previous instance for this same `root` had, each
     /// tab's pane relaunched with whatever it was last spawned with —
     /// `None` for a plain shell, the recorded `argv` for an agent.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn a_restarted_server_relaunches_the_same_spaces_tabs_and_agent_commands() {
-        let scratch = uze_testkit::temp::scratch("terminal-persist");
+        let scratch = uze_testkit::temp::socket_scratch("persist");
         let uze_home = scratch.join("home");
         let project = scratch.join("project");
         let runtime_dir = scratch.join("runtime");
@@ -2458,10 +2533,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&scratch);
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn a_finished_direct_agent_is_replaced_by_a_shell_in_its_pane() {
-        let scratch = uze_testkit::temp::scratch("terminal-agent-exit");
+        let scratch = uze_testkit::temp::socket_scratch("agentexit");
         let uze_home = scratch.join("home");
         let project = scratch.join("project");
         let runtime_dir = scratch.join("runtime");
@@ -2481,7 +2556,14 @@ mod tests {
             24,
         );
         server
-            .spawn_pane(pane, Some(&["/bin/true".to_owned()]))
+            // `/bin/sh -c 'exit 0'`, not `/bin/true`: macOS keeps `true` in
+            // `/usr/bin` and has no `/bin/true` at all. `/bin/sh` is the one
+            // path POSIX actually promises, and what this needs is any
+            // process that exits at once.
+            .spawn_pane(
+                pane,
+                Some(&["/bin/sh".to_owned(), "-c".to_owned(), "exit 0".to_owned()]),
+            )
             .unwrap();
 
         for _ in 0..40 {
@@ -2528,10 +2610,10 @@ mod tests {
     /// `spawn_command` of its own), where someone then typed an agent
     /// straight into it — `update_pane_status` here stands in for the
     /// status ticker's own probe reporting that live.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn a_plain_shell_tab_running_a_recognized_process_relaunches_as_that_process() {
-        let scratch = uze_testkit::temp::scratch("terminal-persist-typed");
+        let scratch = uze_testkit::temp::socket_scratch("typed");
         let uze_home = scratch.join("home");
         let project = scratch.join("project");
         std::fs::create_dir_all(&project).unwrap();
@@ -2582,10 +2664,10 @@ mod tests {
     /// Which tab belongs with which has to survive the process, and a
     /// `TabId` does not — the snapshot names the agent by its position in
     /// the very list `Session::restore` rebuilds.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn the_snapshot_names_a_tabs_agent_by_position() {
-        let scratch = uze_testkit::temp::scratch("terminal-persist-agent");
+        let scratch = uze_testkit::temp::socket_scratch("persagent");
         let uze_home = scratch.join("home");
         let project = scratch.join("project");
         std::fs::create_dir_all(&project).unwrap();
@@ -2615,10 +2697,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&scratch);
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn a_persisted_command_that_no_longer_resolves_falls_back_to_a_plain_shell() {
-        let scratch = uze_testkit::temp::scratch("terminal-persist-stale");
+        let scratch = uze_testkit::temp::socket_scratch("perstale");
         let uze_home = scratch.join("home");
         let project = scratch.join("project");
         std::fs::create_dir_all(&project).unwrap();
