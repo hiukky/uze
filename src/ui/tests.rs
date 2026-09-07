@@ -12,8 +12,8 @@ use super::hint_spans;
 use super::hit::Hit;
 use super::management::{clip_line, render};
 use super::model::{
-    Focus, Overlay, PREFERENCE_ROW_COUNT, ProfilePanel, ROUTES, RefreshData, Route, TrustedRetry,
-    TuiModel,
+    Focus, Overlay, PREFERENCE_ROW_COUNT, ProfilePanel, ROUTES, RefreshData, Route, Status,
+    TrustedRetry, TuiModel,
 };
 use super::view::health::{Severity, actionable_alerts};
 use super::worker::{Intent, TrustGrant};
@@ -429,6 +429,82 @@ fn an_auto_updated_plugin_badges_until_the_plugins_screen_has_shown_it() {
         "a live badge survives a plain refresh"
     );
     assert!(!model.was_just_updated("one"));
+}
+
+#[test]
+fn a_return_visit_draws_what_the_last_one_resolved() {
+    let mut model = model_with_plugins(&["one", "two"]);
+    model.resolved_at = Some(std::time::Instant::now());
+    model.marketplace_selected = 1;
+    model.marketplace_drawer_open = false;
+    model.prompt_history = Vec::new();
+    // What one visit ends holding — including work it was in the middle
+    // of, which the next visit must not inherit.
+    model.status = Status::Working("Inspecting one…".to_owned());
+    model.overlay = Overlay::ConfirmRemove {
+        id: "one".to_owned(),
+        focus: 0,
+    };
+    model.focus = Focus::Overlay;
+    model.maintenance_in_flight = true;
+    model.inspection_in_flight = Some(Intent::InspectPlugin("one".to_owned()));
+    model.hits = vec![(Rect::new(0, 0, 1, 1), Hit::Route(Route::Plugins))];
+
+    let model = TuiModel::recall(Some(model.remember()));
+
+    assert_eq!(
+        model.plugins.len(),
+        2,
+        "the machine state the last visit resolved is still the truth about the machine"
+    );
+    assert!(
+        model.resolved_at.is_some(),
+        "and so is when it was resolved — the next visit decides on it"
+    );
+    assert_eq!(model.route, Route::Plugins);
+    assert_eq!(model.marketplace_selected, 1);
+    assert!(
+        !model.marketplace_drawer_open,
+        "a drawer stays as it was left"
+    );
+    assert!(matches!(model.status, Status::Idle));
+    assert!(matches!(model.overlay, Overlay::None));
+    assert_eq!(model.focus, Focus::Sidebar);
+    assert!(
+        !model.maintenance_in_flight && model.inspection_in_flight.is_none(),
+        "work in flight belonged to a visit that ended, and its channel with it"
+    );
+    assert!(model.hits.is_empty());
+}
+
+#[test]
+fn a_resolution_the_session_just_made_is_not_asked_for_again() {
+    use super::management::{RESOLUTION_STANDS_FOR, opening_re_resolves};
+    use std::time::Instant;
+
+    assert!(
+        opening_re_resolves(None),
+        "nothing resolved yet is not an answer to stand on"
+    );
+    assert!(
+        !opening_re_resolves(Some(Instant::now())),
+        "the session's own warm-up answered a moment ago; opening the screen shows it"
+    );
+    assert!(
+        opening_re_resolves(Some(Instant::now() - RESOLUTION_STANDS_FOR)),
+        "past the window, opening the screen is a claim about the machine now"
+    );
+}
+
+#[test]
+fn a_first_visit_starts_from_the_default_model() {
+    let model = TuiModel::recall(None);
+    assert!(model.plugins.is_empty());
+    assert_eq!(model.route, Route::Overview);
+    assert!(
+        model.marketplace_drawer_open && model.extension_drawer_open && model.harnesses_drawer_open,
+        "the drawers a screen opens with are stated once, by Default"
+    );
 }
 
 #[test]

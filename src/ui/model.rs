@@ -350,6 +350,12 @@ pub(crate) struct TuiModel {
 
     pub(crate) doctor: Option<DoctorReport>,
 
+    /// When the state above was last resolved, or `None` while the
+    /// session's first resolution is still on its way. Opening the
+    /// management client reads it to decide whether it is looking at an
+    /// answer or at nothing yet — see `management::RESOLUTION_STANDS_FOR`.
+    pub(crate) resolved_at: Option<Instant>,
+
     /// Plugins updated automatically this session, badged as "Updated" on
     /// the Plugins screen until [`UPDATE_BADGE_TTL`] after the operator has
     /// actually had that screen in front of them.
@@ -434,6 +440,7 @@ impl Default for TuiModel {
             profile_harness_defaulted: false,
             profile_apply_results: Vec::new(),
             doctor: None,
+            resolved_at: None,
             update_badges: Vec::new(),
             context_root: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             context_status: None,
@@ -456,7 +463,144 @@ impl Default for TuiModel {
     }
 }
 
+/// The fields of [`TuiModel`] that outlive one visit to the management
+/// client — the machine state it resolved and where in it the operator
+/// was. Everything not listed here belongs to one visit: the open
+/// overlay, the status line, work in flight, and per-frame transients
+/// such as hit rects and the spinner tick.
+///
+/// Management is entered and left every time the operator presses Ctrl+O,
+/// and rebuilding a default model each time meant an empty screen — no
+/// plugins, no harnesses — under a "Refreshing environment…" line, for as
+/// long as a full resolution took. What the last visit resolved is still
+/// the truth about the machine, so it is what the next one draws while a
+/// refresh confirms it behind the frame.
+pub(crate) struct Remembered {
+    plugins: Vec<PluginSummary>,
+    doctor: Option<DoctorReport>,
+    resolved_at: Option<Instant>,
+    marketplaces: Vec<MarketplaceSummary>,
+    marketplace_plugins: Vec<MarketplacePluginSummary>,
+    profiles: Vec<ProfileSummary>,
+    context_status: Option<ProjectContextStatus>,
+    context_plan: Option<ContextPlan>,
+    workspace: Option<OverviewWorkspaceSummary>,
+    prompt_history: Vec<uze_application::PromptEntry>,
+    update_badges: Vec<UpdateBadge>,
+    route: Route,
+    marketplace_selected: usize,
+    extensions_selected: usize,
+    harnesses_selected: usize,
+    profiles_selected: usize,
+    overview_prompt_selected: usize,
+    collapsed_marketplaces: BTreeSet<String>,
+    marketplace_drawer_open: bool,
+    extension_drawer_open: bool,
+    harnesses_drawer_open: bool,
+    marketplace_drawer_width: Option<u16>,
+    extension_drawer_width: Option<u16>,
+    harness_drawer_width: Option<u16>,
+    profile_columns_width: Option<u16>,
+}
+
 impl TuiModel {
+    /// A model opening the management client with what the previous visit
+    /// left behind. `None` is the first visit of the process, which starts
+    /// from the default model rather than from a second spelling of it
+    /// here — the drawers a screen opens with are stated once, in
+    /// `Default`.
+    pub(crate) fn recall(remembered: Option<Remembered>) -> Self {
+        let Some(remembered) = remembered else {
+            return Self::default();
+        };
+        let Remembered {
+            plugins,
+            doctor,
+            resolved_at,
+            marketplaces,
+            marketplace_plugins,
+            profiles,
+            context_status,
+            context_plan,
+            workspace,
+            prompt_history,
+            update_badges,
+            route,
+            marketplace_selected,
+            extensions_selected,
+            harnesses_selected,
+            profiles_selected,
+            overview_prompt_selected,
+            collapsed_marketplaces,
+            marketplace_drawer_open,
+            extension_drawer_open,
+            harnesses_drawer_open,
+            marketplace_drawer_width,
+            extension_drawer_width,
+            harness_drawer_width,
+            profile_columns_width,
+        } = remembered;
+        Self {
+            plugins,
+            doctor,
+            resolved_at,
+            marketplaces,
+            marketplace_plugins,
+            profiles,
+            context_status,
+            context_plan,
+            workspace,
+            prompt_history,
+            update_badges,
+            route,
+            marketplace_selected,
+            extensions_selected,
+            harnesses_selected,
+            profiles_selected,
+            overview_prompt_selected,
+            collapsed_marketplaces,
+            marketplace_drawer_open,
+            extension_drawer_open,
+            harnesses_drawer_open,
+            marketplace_drawer_width,
+            extension_drawer_width,
+            harness_drawer_width,
+            profile_columns_width,
+            ..Self::default()
+        }
+    }
+
+    /// What this visit leaves for the next one.
+    pub(crate) fn remember(self) -> Remembered {
+        Remembered {
+            plugins: self.plugins,
+            doctor: self.doctor,
+            resolved_at: self.resolved_at,
+            marketplaces: self.marketplaces,
+            marketplace_plugins: self.marketplace_plugins,
+            profiles: self.profiles,
+            context_status: self.context_status,
+            context_plan: self.context_plan,
+            workspace: self.workspace,
+            prompt_history: self.prompt_history,
+            update_badges: self.update_badges,
+            route: self.route,
+            marketplace_selected: self.marketplace_selected,
+            extensions_selected: self.extensions_selected,
+            harnesses_selected: self.harnesses_selected,
+            profiles_selected: self.profiles_selected,
+            overview_prompt_selected: self.overview_prompt_selected,
+            collapsed_marketplaces: self.collapsed_marketplaces,
+            marketplace_drawer_open: self.marketplace_drawer_open,
+            extension_drawer_open: self.extension_drawer_open,
+            harnesses_drawer_open: self.harnesses_drawer_open,
+            marketplace_drawer_width: self.marketplace_drawer_width,
+            extension_drawer_width: self.extension_drawer_width,
+            harness_drawer_width: self.harness_drawer_width,
+            profile_columns_width: self.profile_columns_width,
+        }
+    }
+
     pub(crate) fn expire_status(&mut self) {
         if self
             .status_expires_at
@@ -911,6 +1055,7 @@ impl TuiModel {
     pub(crate) fn refreshed(&mut self, data: RefreshData) {
         self.plugins = data.plugins;
         self.doctor = data.doctor;
+        self.resolved_at = Some(Instant::now());
         self.clamp_harness_selection();
         self.marketplace_plugins = data.marketplace_plugins;
         self.marketplaces = data.marketplaces;
