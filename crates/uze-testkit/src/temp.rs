@@ -115,6 +115,16 @@ impl TempDir {
                 path.display()
             )
         });
+        // Canonicalized, because production code canonicalizes: a project
+        // root, a resolved marketplace path and a detected binary all come
+        // back through `canonicalize`, and a test comparing one against the
+        // path it handed in is comparing two spellings of the same
+        // directory. On Linux they are the same spelling and this is a
+        // no-op; on macOS the system temp dir is `/var/folders/...` and
+        // `/var` is a symlink to `/private/var`, so every such assertion
+        // fails on the prefix while pointing at identical-looking paths.
+        // Resolved once, here, rather than in each test that noticed.
+        let path = path.canonicalize().unwrap_or(path);
         assert_not_real_home(&path);
         TempDir { path, keep }
     }
