@@ -24,7 +24,7 @@ use thiserror::Error;
 use crate::{
     CellAttributes, ClientEvent, ClientRequest, Cursor, MouseMode, OpenedSpace, PROTOCOL_VERSION,
     Palette, PaneDamage, PaneId, PaneSnapshot, RenderCell, Session, SpaceId, SpaceSeed, TabId,
-    TabSeed, TerminalColor, WorkspaceId,
+    TabSeed, TerminalColor, WorkspaceId, process_probe,
 };
 
 /// ADR-038: the endpoint is local and user-private; no network transport is
@@ -421,43 +421,17 @@ fn probe_server(endpoint: &Endpoint) -> Probe {
 /// The pid listening on `socket`, given only when that process runs the
 /// same executable image as this one. The kernel stamps the peer's
 /// credentials onto the connection, so the pid is the listener's own and
-/// not something a connection could claim; `/proc/<pid>/exe` then names
-/// the image it is running, which stops resolving to this path once the
-/// binary is replaced underneath a live server (a `cargo install --force`
-/// mid-session).
-#[cfg(target_os = "linux")]
+/// not something a connection could claim; the image it is running then
+/// stops resolving to this path once the binary is replaced underneath a
+/// live server (a `cargo install --force` mid-session).
+///
+/// Both readings come from [`process_probe`], so the rule is written once
+/// and every platform that can answer it runs the same one.
 fn listener_running_this_executable(socket: &Path) -> Option<u32> {
-    use std::os::unix::io::AsRawFd;
-
     let stream = UnixStream::connect(socket).ok()?;
-    let mut peer = libc::ucred {
-        pid: 0,
-        uid: 0,
-        gid: 0,
-    };
-    let mut size = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
-    let asked = unsafe {
-        libc::getsockopt(
-            stream.as_raw_fd(),
-            libc::SOL_SOCKET,
-            libc::SO_PEERCRED,
-            (&raw mut peer).cast(),
-            &raw mut size,
-        )
-    };
-    if asked != 0 || peer.pid <= 0 {
-        return None;
-    }
+    let pid = process_probe::peer_pid(&stream)?;
     let mine = env::current_exe().ok()?;
-    (fs::read_link(format!("/proc/{}/exe", peer.pid)).ok()? == mine).then_some(peer.pid as u32)
-}
-
-/// Peer credentials are how the question above is asked, and this release
-/// ships Linux binaries only. Anywhere else the endpoint keeps the answer
-/// it had before it could be asked at all.
-#[cfg(not(target_os = "linux"))]
-fn listener_running_this_executable(_socket: &Path) -> Option<u32> {
-    None
+    (process_probe::executable_of(pid)? == mine).then_some(pid)
 }
 
 /// Records what the probe established, so the next attach reads the answer
@@ -1469,28 +1443,19 @@ impl PaneRuntime {
     }
 
     /// Best-effort `(cwd, process name)` for whatever is currently running
-    /// in the foreground of this pane — read straight from `/proc`, the
-    /// same source `tmux`'s `pane_current_command`/`pane_current_path` use.
-    /// `None` when the platform doesn't support it or the process just
-    /// exited between the group-leader lookup and the `/proc` read.
-    #[cfg(target_os = "linux")]
+    /// in the foreground of this pane — the same two facts `tmux` shows as
+    /// `pane_current_path`/`pane_current_command`, asked of the kernel
+    /// through [`process_probe`]. `None` when the platform cannot answer, or
+    /// when the process exited between the group-leader lookup and the read.
     fn foreground_status(&self) -> Option<(PathBuf, String)> {
         let pgid = self
             .master
             .lock()
             .expect("master poisoned")
             .process_group_leader()?;
-        let cwd = std::fs::read_link(format!("/proc/{pgid}/cwd")).ok()?;
-        let process = shim_launched_name(pgid).or_else(|| {
-            std::fs::read_to_string(format!("/proc/{pgid}/comm"))
-                .ok()
-                .map(|comm| comm.trim().to_owned())
-        })?;
+        let cwd = process_probe::current_directory_of(pgid)?;
+        let process = shim_launched_name(pgid).or_else(|| process_probe::command_name_of(pgid))?;
         Some((cwd, process))
-    }
-    #[cfg(not(target_os = "linux"))]
-    fn foreground_status(&self) -> Option<(PathBuf, String)> {
-        None
     }
 
     fn snapshot(&self) -> PaneSnapshot {
@@ -1560,14 +1525,8 @@ impl PaneRuntime {
 /// a person actually typed). `None` for anything not launched through the
 /// shim — a bypassed launch, a harness that isn't shimmed, or a plain
 /// shell — in which case `foreground_status` falls back to `comm`.
-#[cfg(target_os = "linux")]
 fn shim_launched_name(pgid: libc::pid_t) -> Option<String> {
-    let environ = std::fs::read(format!("/proc/{pgid}/environ")).ok()?;
-    environ
-        .split(|&byte| byte == 0)
-        .find_map(|entry| entry.strip_prefix(b"UZE_SHIM_NAME="))
-        .filter(|value| !value.is_empty())
-        .map(|value| String::from_utf8_lossy(value).into_owned())
+    process_probe::environment_value_of(pgid, "UZE_SHIM_NAME")
 }
 
 fn cell_coordinates(index: usize, columns: u16, cell: RenderCell) -> (u16, u16, RenderCell) {
@@ -1738,6 +1697,16 @@ mod tests {
         replace_incompatible_server, send_request, server_protocol_version, snapshot, view_for,
     };
     use std::sync::{Arc, Mutex};
+
+    // Several tests below carry
+    // `#[cfg(any(target_os = "linux", target_os = "macos"))]`. That is not a
+    // list of platforms anybody chose; it is the set `process_probe` can
+    // answer on, and these are the tests that start a real server, read a
+    // real pane's foreground status, or relaunch a persisted one — all of
+    // which need the kernel to say where a process is standing and what it
+    // is running. On a platform where the probe returns `None` they would
+    // assert against an answer nothing can give. Widen the gate by teaching
+    // `process_probe` a new platform, never by widening it here.
 
     use crate::Palette;
 
@@ -2188,7 +2157,7 @@ mod tests {
         assert!(rendered.contains("uze-runtime-live"));
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn foreground_status_reports_the_spawned_shell_and_its_cwd() {
         // This is the *fallback* identity path: no shim identity present,
@@ -2261,7 +2230,7 @@ mod tests {
     /// `UZE_SHIM_NAME`, set by `src/shim.rs` right before it `exec`s into
     /// the real binary, must survive that and still be what
     /// `foreground_status` reports.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn foreground_status_prefers_the_shim_identity_over_a_version_named_comm() {
         let bin_dir = uze_testkit::temp::scratch("shim-identity-test");
@@ -2314,7 +2283,7 @@ mod tests {
     /// workspace client detaches and attaches again on every Ctrl+O round
     /// trip to management, and an attach that named the launch directory
     /// every time reopened the space closed just before it.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn attaching_without_a_root_neither_creates_nor_reopens_a_space() {
         let scratch = uze_testkit::temp::scratch("terminal-rootless-attach");
@@ -2397,7 +2366,7 @@ mod tests {
     /// spaces and tabs a previous instance for this same `root` had, each
     /// tab's pane relaunched with whatever it was last spawned with —
     /// `None` for a plain shell, the recorded `argv` for an agent.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn a_restarted_server_relaunches_the_same_spaces_tabs_and_agent_commands() {
         let scratch = uze_testkit::temp::scratch("terminal-persist");
@@ -2458,7 +2427,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&scratch);
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn a_finished_direct_agent_is_replaced_by_a_shell_in_its_pane() {
         let scratch = uze_testkit::temp::scratch("terminal-agent-exit");
@@ -2528,7 +2497,7 @@ mod tests {
     /// `spawn_command` of its own), where someone then typed an agent
     /// straight into it — `update_pane_status` here stands in for the
     /// status ticker's own probe reporting that live.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn a_plain_shell_tab_running_a_recognized_process_relaunches_as_that_process() {
         let scratch = uze_testkit::temp::scratch("terminal-persist-typed");
@@ -2582,7 +2551,7 @@ mod tests {
     /// Which tab belongs with which has to survive the process, and a
     /// `TabId` does not — the snapshot names the agent by its position in
     /// the very list `Session::restore` rebuilds.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn the_snapshot_names_a_tabs_agent_by_position() {
         let scratch = uze_testkit::temp::scratch("terminal-persist-agent");
@@ -2615,7 +2584,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&scratch);
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn a_persisted_command_that_no_longer_resolves_falls_back_to_a_plain_shell() {
         let scratch = uze_testkit::temp::scratch("terminal-persist-stale");

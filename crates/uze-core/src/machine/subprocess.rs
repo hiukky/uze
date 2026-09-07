@@ -109,6 +109,13 @@ pub fn kill_process_group(pid: u32) {
 
 /// Reads `/proc` directly (rather than shelling out to `ps --pgid`) to list
 /// every PID currently reporting `pgid` as its process group.
+///
+/// Empty on a platform without `/proc` — macOS included — and that is
+/// correct rather than merely tolerable: this sweep is the belt-and-braces
+/// pass for a descendant that left the group via `setsid`, added for a WSL2
+/// quirk. The two `kill(2)` calls above are what actually kill the group,
+/// and they are portable. A platform where the sweep finds nothing loses a
+/// backstop, not the kill.
 #[cfg(unix)]
 fn process_group_members(pgid: u32) -> Vec<u32> {
     let mut members = Vec::new();

@@ -4,6 +4,7 @@
 //! attach, render snapshots, and forward input; this keeps a pane alive when
 //! a client leaves the workspace.
 
+mod process_probe;
 mod protocol;
 mod runtime;
 mod state;

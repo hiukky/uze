@@ -35,6 +35,22 @@ pub struct ShellRcTarget {
     pub rc_file: PathBuf,
 }
 
+/// Which file bash actually reads, which is not the same question on both
+/// platforms.
+///
+/// Bash reads `~/.bashrc` for an interactive non-login shell and
+/// `~/.bash_profile` for a login one. On Linux a terminal window opens the
+/// former; on macOS every terminal window is a login shell, so a `PATH` line
+/// written to `.bashrc` there is a line the user never runs — the shims
+/// would simply not be found, with a file on disk saying they should be.
+///
+/// zsh needs no such split: it reads `.zshrc` for any interactive shell,
+/// login or not, which is why the zsh arm below names one file for both.
+#[cfg(target_os = "macos")]
+const BASH_RC_FILE: &str = ".bash_profile";
+#[cfg(not(target_os = "macos"))]
+const BASH_RC_FILE: &str = ".bashrc";
+
 /// Detects the user's shell from `$SHELL` and the conventional rc file for
 /// it under `home_dir`. `None` for anything not recognized (POSIX `sh`,
 /// `dash`, `csh`, `$SHELL` unset, …) — deliberately conservative, never
@@ -45,7 +61,7 @@ pub fn detect_shell_rc(home_dir: &Path) -> Option<ShellRcTarget> {
     match name {
         "bash" => Some(ShellRcTarget {
             kind: ShellKind::Bash,
-            rc_file: home_dir.join(".bashrc"),
+            rc_file: home_dir.join(BASH_RC_FILE),
         }),
         "zsh" => Some(ShellRcTarget {
             kind: ShellKind::Zsh,
@@ -257,22 +273,57 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[test]
-    fn unrecognized_shell_detects_to_none() {
-        struct ShellEnvGuard(Option<std::ffi::OsString>);
-        impl Drop for ShellEnvGuard {
-            fn drop(&mut self) {
-                // SAFETY: test-only; restores even on panic.
-                match self.0.clone() {
-                    Some(value) => unsafe { env::set_var("SHELL", value) },
-                    None => unsafe { env::remove_var("SHELL") },
-                }
+    /// Restores `$SHELL` on drop, so a test may set it and a panic still
+    /// leaves the process env as it found it.
+    struct ShellEnvGuard(Option<std::ffi::OsString>);
+
+    impl Drop for ShellEnvGuard {
+        fn drop(&mut self) {
+            // SAFETY: test-only; restores even on panic.
+            match self.0.clone() {
+                Some(value) => unsafe { env::set_var("SHELL", value) },
+                None => unsafe { env::remove_var("SHELL") },
             }
         }
+    }
+
+    #[test]
+    fn unrecognized_shell_detects_to_none() {
         let _guard = ShellEnvGuard(env::var_os("SHELL"));
         // SAFETY: test-only; the guard restores the previous value.
         unsafe { env::set_var("SHELL", "/bin/dash") };
         let result = detect_shell_rc(Path::new("/home/x"));
         assert_eq!(result, None);
+    }
+
+    /// The file bash is told to read has to be the file bash reads. On macOS
+    /// a terminal window is a login shell and never opens `.bashrc`, so
+    /// writing there would leave the shims unreachable behind a file that
+    /// says otherwise. Asserted per platform rather than skipped off Linux:
+    /// the whole point is that the two answers differ.
+    #[test]
+    fn bash_is_pointed_at_the_file_this_platform_actually_reads() {
+        let _guard = ShellEnvGuard(env::var_os("SHELL"));
+        // SAFETY: test-only; the guard restores the previous value.
+        unsafe { env::set_var("SHELL", "/bin/bash") };
+        let target = detect_shell_rc(Path::new("/home/x")).expect("bash is recognized");
+        let expected = if cfg!(target_os = "macos") {
+            "/home/x/.bash_profile"
+        } else {
+            "/home/x/.bashrc"
+        };
+        assert_eq!(target.rc_file, Path::new(expected));
+    }
+
+    /// zsh, by contrast, reads `.zshrc` for any interactive shell — login or
+    /// not — so it has one answer on every platform, and a change that gave
+    /// it two would be a mistake this catches.
+    #[test]
+    fn zsh_reads_the_same_file_everywhere() {
+        let _guard = ShellEnvGuard(env::var_os("SHELL"));
+        // SAFETY: test-only; the guard restores the previous value.
+        unsafe { env::set_var("SHELL", "/bin/zsh") };
+        let target = detect_shell_rc(Path::new("/home/x")).expect("zsh is recognized");
+        assert_eq!(target.rc_file, Path::new("/home/x/.zshrc"));
     }
 }

@@ -196,7 +196,13 @@ mod tests {
         assert_eq!(probe.output, ProcessOutput::Quiet);
     }
 
-    #[cfg(unix)]
+    /// Linux, not `unix`: the property under test is portable — `setsid`
+    /// versus the caller's group is set by the same code everywhere — but
+    /// *observing* it needs the child's pid and its process group, and the
+    /// runner does not hand back a pid. Both are read out of the process
+    /// table, and `/proc` is the Linux one. Reproving this on macOS means
+    /// reading the table through `sysctl(KERN_PROC)`, not relaxing the gate.
+    #[cfg(target_os = "linux")]
     mod process_group_tests {
         use super::*;
         use std::time::Instant;
