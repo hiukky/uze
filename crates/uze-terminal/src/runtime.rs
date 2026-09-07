@@ -2212,17 +2212,36 @@ mod tests {
         // ran out before the shell was up, turning a loaded runner into a
         // red build — which is why `make coverage` already skips this test
         // by name instead of trusting it.
+        //
+        // Waited on by *identity*, not by directory. The pane's child already
+        // stands in `pane_cwd` between `fork` and `exec` — that is when the
+        // cwd is set — while still carrying the name it forked from. A loop
+        // that stopped at the first matching directory therefore accepted a
+        // process mid-spawn and read this test binary's own name back out of
+        // it, which is exactly what a macOS runner caught. Waiting for the
+        // shell to have `exec`ed also promotes the directory from a filter to
+        // an assertion, which is what it should have been.
         let mut status = None;
+        let mut last_seen = None;
         for _ in 0..500 {
-            status = pane.foreground_status().filter(|(cwd, _)| *cwd == pane_cwd);
-            if status.is_some() {
+            let reading = pane.foreground_status();
+            if let Some((_, process)) = &reading
+                && *process == expected_name
+            {
+                status = reading;
                 break;
             }
+            last_seen = reading.or(last_seen);
             thread::sleep(Duration::from_millis(10));
         }
         pane.stop();
 
-        let (cwd, process) = status.expect("the spawned shell must own the PTY foreground group");
+        let (cwd, process) = status.unwrap_or_else(|| {
+            panic!(
+                "the spawned shell must own the PTY foreground group; \
+                 waited for {expected_name:?} and last saw {last_seen:?}"
+            )
+        });
         assert_eq!(cwd, pane_cwd);
         assert_eq!(process, expected_name);
     }
@@ -2263,21 +2282,30 @@ mod tests {
         )
         .unwrap();
 
+        // Five seconds, and only a matching reading is kept — the same two
+        // properties as the sibling test above, and for the same two
+        // reasons: what is being waited on is another process reaching
+        // `exec`, and a reading taken before it does names the process this
+        // one forked from.
         let mut status = None;
-        for _ in 0..50 {
-            status = pane.foreground_status();
-            if status
-                .as_ref()
-                .is_some_and(|(_, process)| process == "claude")
+        let mut last_seen = None;
+        for _ in 0..500 {
+            let reading = pane.foreground_status();
+            if let Some((_, process)) = &reading
+                && process == "claude"
             {
+                status = reading;
                 break;
             }
+            last_seen = reading.or(last_seen);
             thread::sleep(Duration::from_millis(10));
         }
         pane.stop();
         let _ = std::fs::remove_dir_all(&bin_dir);
 
-        let (_, process) = status.expect("foreground process must be observable on Linux");
+        let (_, process) = status.unwrap_or_else(|| {
+            panic!("the shim identity must reach the foreground; last saw {last_seen:?}")
+        });
         assert_eq!(process, "claude");
     }
 
