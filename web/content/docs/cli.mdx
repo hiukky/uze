@@ -6,8 +6,8 @@ description: Every command, grouped by project scope and machine scope
 # CLI reference
 
 Two scopes, and they never touch each other's state (ADR-019). Project commands
-read and write the current directory's `agents.lock` and its context files;
-machine commands read and write `~/.uze`.
+read and write the current directory's `agents.yaml`, `agents.lock` and context
+files; machine commands read and write `~/.uze`.
 
 ```bash
 uze                          # the agent workspace (TUI) — Ctrl+O switches to management
@@ -19,7 +19,7 @@ uze --version                # version
 
 ```bash
 uze <plugin>@<market>        # shorthand — add a plugin to this project
-uze install [path]           # install this project's environment from agents.lock
+uze install [path]           # resolve agents.yaml into agents.lock, then install it
 uze remove <plugin>          # remove a plugin from this project (never the machine Store)
 uze status [path]            # this project's environment readiness
 uze context inspect [path]   # what each harness currently sees of AGENTS.md — read-only
@@ -31,6 +31,12 @@ uze context reconcile [path] # compose AGENTS.md and reconcile the harness bridg
 path or Git URL is never accepted — a plugin is always resolved through a
 marketplace, even a one-plugin local one. The `@` is what makes the shorthand
 unambiguous: no built-in command name contains one.
+
+`uze install` runs two passes — **resolution** writes what `agents.yaml` declares
+into `agents.lock`, then **reproduction** installs what the lock records and the
+Store lacks. It also creates `agents.yaml` when the project has none, with every
+key commented out beside its default. Nothing that merely *reads* a project
+creates that file.
 
 | Flag | Where | Meaning |
 | --- | --- | --- |
@@ -45,7 +51,7 @@ uze setup <harness>...             # provision only these
 uze setup list                     # detected harnesses and their setup state
 uze setup inspect <harness>        # one harness's detection/setup/provisioning detail
 
-uze market add <source>            # register a marketplace (local path or https://…)
+uze market add <source>            # register a marketplace (a Git URL, or a local clone)
 uze market list                    # registered marketplaces
 uze market inspect <name>          # one marketplace's source and plugin count
 uze market remove <name>           # blocked while plugins from it are installed
@@ -59,6 +65,10 @@ uze plugin remove <plugin>            # remove from the Store (inspects before d
 uze doctor                         # diagnostics: store, harnesses, attachments, ledger
 ```
 
+A marketplace is a Git repository either way: a local path is where *this
+machine* reads that repository, and installing always clones it at a commit. See
+[`agents.yaml` & `agents.lock`](/docs/project-files#marketplaces).
+
 | Flag | Where | Meaning |
 | --- | --- | --- |
 | `--trust` | `plugin install`, `plugin update` | Authorize executable capabilities |
@@ -66,8 +76,8 @@ uze doctor                         # diagnostics: store, harnesses, attachments,
 | `--replace` | `plugin install` | Remove the other marketplace's plugin first (once safe to) and claim the name |
 | `--format json` | every `plugin` verb, `market list`, `market inspect`, `doctor` | Machine-readable output |
 
-`uze plugin install` never writes to a project's `agents.lock`, and
-`uze remove` never touches the Store. Each verb says which side it is on.
+`uze plugin install` never writes to a project's files, and `uze remove` never
+touches the Store. Each verb says which side it is on.
 
 ### Naming a harness
 
@@ -92,6 +102,17 @@ The label (`Claude Code`) is display-only — `--format json` always emits the i
 something structured accepts it; `market add`, `market remove` and `setup` report
 progress rather than a document, and don't.
 
+## Appearance
+
+```bash
+uze theme list       # what this machine can draw with, marking the active one
+uze theme use <id>   # draw in it from now on, in both the CLI and the TUI
+uze theme show [id]  # a theme's resolved colours and glyphs, and its warnings
+```
+
+Machine-level, and `--format json` on `list` and `show`. See
+[Theming](/docs/theming).
+
 ## Terminal session
 
 The workspace's panes belong to a local runtime server, so they outlive the
@@ -104,7 +125,8 @@ uze terminal stop     # stop this workspace's session and every process in it
 ```
 
 <Callout type="info">
-  The terminal runtime is experimental and is not listed in `uze --help` yet.
+  `terminal` and `theme` are not listed in `uze --help` yet — the terminal
+  runtime is experimental, and a theme is normally chosen from the TUI.
 </Callout>
 
 ## Performance contract
@@ -116,7 +138,7 @@ contract can't quietly rot. `uze doctor` inspects attachments through an on-disk
 cache and re-inspects only the anomalies live.
 
 <Cards>
-  <Card title="agents.lock reference" href="/docs/agents-lock" />
+  <Card title="agents.yaml & agents.lock" href="/docs/project-files" />
   <Card title="The agent workspace" href="/docs/workspace" />
   <Card title="Harness compatibility" href="/docs/harnesses" />
 </Cards>

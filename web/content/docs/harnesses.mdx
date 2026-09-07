@@ -13,7 +13,7 @@ Current matrix, derived from the integration implementations themselves.
 | Harness | AGENTS.md | Skill | User-only | MCP | Package | Agents | Hooks | Session | Shim |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | <a className="harness-table-cell" href="https://code.claude.com" target="_blank" rel="noreferrer noopener"><img src="/harnesses/claude-code.svg" alt="" className="harness-table-icon" />Claude Code</a> | 🟢 | 🟢 | 🟢 | 🟢 | 🟢 | 🟢 | 🟢 | 🟢 | 🧪 |
-| <a className="harness-table-cell" href="https://chatgpt.com/codex" target="_blank" rel="noreferrer noopener"><img src="/harnesses/codex.png" alt="" className="harness-table-icon" />Codex</a> | 🟢 | 🟢 | 🟢 | 🟢 | 🟢 | 🟢 | 🟢 | 🟢 | 🧪 |
+| <a className="harness-table-cell" href="https://chatgpt.com/codex" target="_blank" rel="noreferrer noopener"><img src="/harnesses/codex.svg" alt="" className="harness-table-icon" />Codex</a> | 🟢 | 🟢 | 🟢 | 🟢 | 🟢 | 🟢 | 🟢 | 🟢 | 🧪 |
 | <a className="harness-table-cell" href="https://opencode.ai" target="_blank" rel="noreferrer noopener"><img src="/harnesses/opencode.svg" alt="" className="harness-table-icon" />OpenCode</a> | 🟢 | 🟢 | 🟢 | 🟢 | ⚪ | 🟢 | 🟡 | 🟢 | 🧪 |
 | <a className="harness-table-cell" href="https://antigravity.google" target="_blank" rel="noreferrer noopener"><img src="/harnesses/antigravity.png" alt="" className="harness-table-icon" />Antigravity</a> | 🟢 | 🟢 | 🟢 | 🟢 | 🟢 | 🟢 | 🟢 | 🟢 | 🧪 |
 
@@ -39,11 +39,25 @@ Current matrix, derived from the integration implementations themselves.
 | Harness | `flow:commit` (default) | `workflow:review` (user-only) |
 | --- | --- | --- |
 | <a className="harness-table-cell" href="https://code.claude.com" target="_blank" rel="noreferrer noopener"><img src="/harnesses/claude-code.svg" alt="" className="harness-table-icon" />Claude Code</a> | `/flow:commit` | `/flow:review` |
-| <a className="harness-table-cell" href="https://chatgpt.com/codex" target="_blank" rel="noreferrer noopener"><img src="/harnesses/codex.png" alt="" className="harness-table-icon" />Codex</a> | `$flow:commit` | `$flow:review` |
-| <a className="harness-table-cell" href="https://opencode.ai" target="_blank" rel="noreferrer noopener"><img src="/harnesses/opencode.svg" alt="" className="harness-table-icon" />OpenCode</a> | `/flow:commit` | `/flow:review` |
+| <a className="harness-table-cell" href="https://chatgpt.com/codex" target="_blank" rel="noreferrer noopener"><img src="/harnesses/codex.svg" alt="" className="harness-table-icon" />Codex</a> | `$flow:commit` | `$flow:review` |
+| <a className="harness-table-cell" href="https://opencode.ai" target="_blank" rel="noreferrer noopener"><img src="/harnesses/opencode.svg" alt="" className="harness-table-icon" />OpenCode</a> | `@flow:commit` | `@flow:review` |
 | <a className="harness-table-cell" href="https://antigravity.google" target="_blank" rel="noreferrer noopener"><img src="/harnesses/antigravity.png" alt="" className="harness-table-icon" />Antigravity</a> | `/flow:commit` | `/flow:review` |
 
 {/* uze-matrix:end */}
+
+## Reading the columns
+
+| Column | The question it answers |
+| --- | --- |
+| **AGENTS.md** | Does the harness reach the project's context, natively or through the one bridge? |
+| **Skill** | Is a canonical Skill delivered with its semantics intact? |
+| **User-only** | Can a skill be marked *explicit action only*, so the model never auto-invokes it? |
+| **MCP** | Is an MCP server delivered through the harness's own mechanism? |
+| **Package** | Does the harness consume a plugin envelope at all, or only individual capabilities? |
+| **Agents** | Is a portable agent profile delivered to a native agent surface? |
+| **Hooks** | Does a portable hook reach the harness's own hook configuration? |
+| **Session** | Can uze put a relaunched agent back into the conversation it was in? |
+| **Shim** | Runtime context projection through the PATH shim — experimental everywhere. |
 
 ## Notes per harness
 
@@ -59,14 +73,21 @@ Each name links to that harness's own site; what follows is how uze delivers to 
   `hooks.json` command form.
 - **[OpenCode](https://opencode.ai)** — consumes no external plugin envelope: skills and agents are delivered natively,
   MCP through its global config, and hooks through an owned, regenerable plugin bridge, since no
-  declarative hook surface exists. Its binary is detected as `opencode`, with the legacy
-  `opencode2` alias still resolved.
+  declarative hook surface exists. A Skill is invoked as a **mention** (`@flow:commit`), not a
+  slash command — `slash: false` withholds one from the `/` catalog but a mention still expands
+  it, which is why a `user: false` policy is reported adapted rather than native. Its binary is
+  detected as `opencode`, with the legacy `opencode2` alias still resolved.
 - **[Antigravity](https://antigravity.google)** — the Google-family v0 harness (ADR-027): the canonical `plugin.json` *is* a
   valid plugin manifest, so envelope-less packages install straight from the Store. Non-default
   invocation policies are **adapted** — no explicit-only mechanism exists, so skills stay
   model-discoverable and slash-invocable. It carries the widest hook effect set of the four.
 
 ## Profiles
+
+<Callout type="warn">
+  Profiles are **beta** — the axes are settled, the per-harness translations are not.
+  The management TUI marks the screen accordingly.
+</Callout>
 
 Alongside packages, uze models user *intent* about how a harness behaves, and each integration
 translates it into that harness's own settings file. Three axes, deliberately small:

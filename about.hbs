@@ -14,27 +14,32 @@ executable, and nothing is modified beyond the recolour each entry records.
 
 | File | Source | Licence of the file | Modification |
 | --- | --- | --- | --- |
-| `web/public/harnesses/claude-code.svg` | [simple-icons](https://github.com/simple-icons/simple-icons), `icons/claudecode.svg` | CC0-1.0 | `fill="currentColor"` added so it takes the page's theme |
-| `web/public/harnesses/opencode.svg` | [simple-icons](https://github.com/simple-icons/simple-icons), `icons/opencode.svg` | CC0-1.0 | `fill="currentColor"` added so it takes the page's theme |
-| `web/public/harnesses/codex.png` | OpenAI's own favicon, 128×128, fetched from the vendor's site | No licence granted — see below | none |
+| `web/public/harnesses/claude-code.svg` | [simple-icons](https://github.com/simple-icons/simple-icons), `icons/claudecode.svg` | CC0-1.0 | `fill="#D97757"` added — Claude's own colour, so the mark reads on a light and a dark page alike |
+| `web/public/harnesses/codex.svg` | [simple-icons](https://github.com/simple-icons/simple-icons), `icons/openai.svg` | CC0-1.0 | `<title>` set to `Codex`; `fill="#1a1a1a"` added, which the site inverts for its dark theme |
+| `web/public/harnesses/opencode.svg` | [simple-icons](https://github.com/simple-icons/simple-icons), `icons/opencode.svg` | CC0-1.0 | `fill="#1a1a1a"` added, which the site inverts for its dark theme |
 | `web/public/harnesses/antigravity.png` | Google Antigravity's own favicon, 180×180, fetched from the vendor's site | No licence granted — see below | none |
 
-The two path strings also appear inline in `web/app/(home)/page.tsx`, which
+The three path strings also appear inline in `web/app/(home)/page.tsx`, which
 draws them as SVG rather than embedding a document: a second copy of the same
-artwork, under the same terms. Everywhere else the four files are referenced
-by URL — including `IntegrationPort::icon_path`, which each integration
-answers with the public path of its own mark.
+artwork, under the same terms. Everywhere else the files are referenced by
+URL — including `IntegrationPort::icon_path`, which each integration answers
+with the public path of its own mark.
+
+The marks are no longer left at `currentColor`: the compatibility matrix draws
+them through `<img>`, and an SVG loaded that way is its own document — it
+inherits no colour from the page, so `currentColor` resolved to black and the
+marks disappeared on a dark theme.
 
 **simple-icons is CC0-1.0, and its own disclaimer is the part that matters
 here:** the dedication covers the project's icon files, not the brands they
 depict. A CC0 file of someone's logo is still their logo.
 
-**The two favicons carry no licence grant at all.** They are used at their
+**The Antigravity favicon carries no licence grant at all.** It is used at its
 real brand colours to identify a product uze integrates with — nominative
-use, the same basis on which the names are used throughout — and the vendors
-retain every right in them. Neither vendor has reviewed, approved or endorsed
-this project. If either objects, the honest fix is to drop the mark, not to
-argue the point: `IntegrationPort::icon_path` returning `None` renders the
+use, the same basis on which the names are used throughout — and the vendor
+retains every right in it. No vendor named here has reviewed, approved or
+endorsed this project. If one objects, the honest fix is to drop the mark, not
+to argue the point: `IntegrationPort::icon_path` returning `None` renders the
 name alone, and the site handles that case already.
 
 ## Site assets

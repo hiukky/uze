@@ -50,7 +50,7 @@ pub const CLASSIFICATION: &[(&str, PerformanceClass)] = &[
     (
         "install",
         PerformanceClass::JustifiedSlow(
-            "reconstructs the project's agent environment from agents.lock, acquiring packages",
+            "reconstructs the project's agent environment from agents.yaml, acquiring packages",
         ),
     ),
     // Machine scope: theme. Every one of these is a small JSON read plus a

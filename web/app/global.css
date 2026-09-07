@@ -9,7 +9,10 @@
   accent doubling as the success/native/pass color everywhere. Structure
   comes from hairline dividers, never filled surface slabs or boxed panels.
   Light mode is the same system read in reverse (paper <-> ink swapped),
-  with the accent deepened enough to hold contrast on a light ground.
+  with the accent deepened enough to hold contrast on a light ground. Its
+  surface stays on the paper's own warm axis: the accent is the one green on a
+  light page, and a surface tinted toward it read as a cast over everything
+  rather than as a raised plane.
 */
 @theme {
   --font-sans: var(--font-body), ui-sans-serif, system-ui, sans-serif;
@@ -19,7 +22,7 @@
   --color-ink: #0a0c0d;
   --color-muted: #6b6864;
   --color-line: #ddd8cd;
-  --color-surface: #e5ece6;
+  --color-surface: #eae7de;
   --color-accent: #3d7a52;
 
   --color-fd-background: var(--color-paper);
@@ -126,4 +129,33 @@ html > body[data-scroll-locked] {
   height: 14px;
   border-radius: 2px;
   flex-shrink: 0;
+}
+
+/*
+  The sidebar's section labels come from meta.json's `---Label---` entries, and
+  fumadocs renders them at the same size and weight as the links below them —
+  darker, but otherwise identical, so the groups did not read as groups. Weight
+  is what separates a heading from an item here: size is already shared with the
+  page title above, and colour is already spent telling active from inactive.
+
+  `#nd-sidebar p` is the whole set and nothing else — every navigable entry in
+  that tree is an `<a>` or a folder `<button>`, so the separators are its only
+  paragraphs. Matching the fumadocs utility classes instead would break on the
+  next release.
+*/
+#nd-sidebar p {
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+/* The matrix draws each mark through <img>, and an SVG loaded that way is its
+   own document: it inherits no color from the page, so `currentColor` resolved
+   to black and the monochrome marks disappeared on a dark theme. Their files
+   carry one dark fill and the page flips them here — not a media query inside
+   the SVG, which would follow the OS and ignore the site's own theme toggle.
+   Only the two monochrome marks: Claude Code carries its brand orange and
+   Antigravity's favicon is full-color, and inverting either would be wrong. */
+.dark .harness-table-icon[src$='codex.svg'],
+.dark .harness-table-icon[src$='opencode.svg'] {
+  filter: invert(1);
 }

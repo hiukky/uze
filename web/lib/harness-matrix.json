@@ -15,7 +15,7 @@
     },
     {
       "name": "Codex",
-      "icon": "/harnesses/codex.png",
+      "icon": "/harnesses/codex.svg",
       "url": "https://chatgpt.com/codex",
       "context": "native",
       "skills": "native",

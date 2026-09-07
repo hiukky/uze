@@ -26,7 +26,13 @@ cargo llvm-cov --workspace --summary-only \
   -- --skip real_codex_dogfood --skip foreground_status_reports --skip acquisition
 ```
 
-## How the tests are organized
+## Three tiers, three questions
+
+| Tier | Proves | Against |
+| --- | --- | --- |
+| `tests/` | what the **domain** does | fake harnesses, deterministically |
+| `journeys/` | what **uze** does, end to end | the real CLI and TUI in a disposable world |
+| `conformance/` | what a **vendor harness** does | the real harness binary, offline |
 
 Integration suites live under `tests/`, one `main.rs` per domain (`cli/`,
 `memory/`, `packages/`, `workspace/`, `lifecycle/`, `projection/`,
@@ -37,6 +43,24 @@ Integration suites live under `tests/`, one `main.rs` per domain (`cli/`,
 Some of those tests are the architecture itself: the layering rules, the
 vendor-neutrality of core/application/CLI, and the workspace's
 never-block-on-Git rule all fail as ordinary test failures when broken.
+
+## Product journeys
+
+A journey performs a user's flow through the real CLI and the real TUI, then
+checks the **machine it left behind** — the filesystem, Git, the recorded task
+state, the process table. It never asks uze whether uze is happy, which is what
+catches "exited zero, reported the artifact, wrote nothing". Screen text is only
+ever a gate that a gesture landed, never an assertion.
+
+```bash
+python3 journeys/journey.py list journeys/suites              # what is proven, in order
+python3 journeys/journey.py run  journeys/suites --tag gate   # what a pull request runs
+python3 journeys/journey.py run  journeys/suites/04-workspace
+```
+
+Every run writes its evidence under `journeys/.evidence/`: per check, the
+question as written against the value found on the machine. `journeys/README.md`
+has the vocabulary and the rules that decide what a journey is.
 
 ## OpenSpec
 
@@ -72,13 +96,15 @@ everywhere.
 
 `install.sh` at the repository root is the official Linux installer: it downloads
 the prebuilt binary for the machine from GitHub Releases, verifies its SHA-256
-checksum, and installs into `$XDG_BIN_HOME` or `~/.local/bin` (ADR-034). Until
-the first release is published it detects that and prints build-from-source
-instructions instead of failing partway through a `curl` pipe.
+against `SHASUMS256.txt`, refuses on mismatch, and installs into `$XDG_BIN_HOME`
+or `~/.local/bin` (ADR-034). `make test-installer` exercises it, and gates CI.
 
-Versions come from one place — `[workspace.package].version` in the root
-`Cargo.toml`, inherited by every crate. `CHANGELOG.md` is generated from
-Conventional Commits with `git-cliff` (`make changelog`).
+A release enters `main` through a pull request like anything else: the **Release**
+workflow bumps the version, regenerates `CHANGELOG.md`, renders the release notes
+into the PR body, and publishes the four Linux artifacts, an SBOM and signed
+provenance on the merge. Versions come from one place —
+`[workspace.package].version` in the root `Cargo.toml`, inherited by every crate.
+`docs/versioning.md` is the full procedure.
 
 ## Marketplace
 

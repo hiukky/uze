@@ -43,7 +43,7 @@ directory you are in.
 | Mechanism | What it gives you |
 | --- | --- |
 | **Store** | Owns a package's bytes and is the single source of truth. It never writes anything a harness reads, and no integration writes back into it. |
-| **Marketplaces** | Register a Git repository or a local directory; `uze-official` is embedded in the binary. Plugins are always resolved through one. |
+| **Marketplaces** | A marketplace is a Git repository, remote or cloned locally; `uze-official` is embedded in the binary. A plugin is always resolved through one, pinned to a commit and verified by digest before it is ingested. |
 | **Receipts** | Every managed artifact — a symlink, a generated directory, a config entry, a bridge region — carries a typed receipt. Drift blocks a destructive change instead of authorizing it. |
 | **Trust** | An MCP command or a hook handler is execution you are being asked to authorize. uze lists every one before installing, and refuses rather than assuming yes when it cannot ask. |
 | **Maintenance** | `uze doctor` repairs the UZE-owned artifacts it can prove are safe to rebuild, and escalates only what needs your decision. |
@@ -58,6 +58,7 @@ directory you are in.
 | **Hooks** | One authored `hooks.json` and a shell-command ABI, so a hook works everywhere without a per-vendor runtime. |
 | **Instructions** | A package's own `AGENTS.md` is composed into the project's, one owned region per package. |
 | **Project context** | `AGENTS.md` is the baseline; `uze context inspect \| plan \| reconcile` keeps each harness's bridge in step. |
+| **Project environment** | `agents.yaml` declares what the project wants; `agents.lock` records what resolving it produced. `git clone && uze install` rebuilds it. |
 | **Profiles** | Autonomy, sandbox and model preferences translated into each harness's own settings, with the fidelity reported per axis. |
 
 ### Orchestration — the terminal
@@ -70,6 +71,7 @@ directory you are in.
 | **Task lifecycle** | Running, uncommitted, ready, conflicted, integrated, parked — read from Git, never announced by an agent. |
 | **Delivery** | Rebase onto the target inside the agent's own checkout, run the project's gate, then hand off, merge, or open a pull request. |
 | **Extensions** | Built-in TUI extensions, today a Git one: status badge, commit timeline, and a changes overlay with per-file diffs. |
+| **Themes** | Every colour and mark uze draws is named by meaning, so one theme file restyles the CLI, the TUI and what a pane is told the terminal looks like. |
 
 ### The guarantees around it
 
@@ -88,6 +90,9 @@ $ uze flow@my-marketplace  # add a plugin from a marketplace to this project
 $ uze context reconcile    # project context across every detected harness
 $ uze doctor               # diagnostics: store, harnesses, attachment health
 ```
+
+On another machine, `git clone && uze install` reproduces the same environment
+from the two committed files.
 
 Or run `uze` with no arguments for the workspace — your agents, side by side.
 

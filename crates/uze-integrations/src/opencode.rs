@@ -114,11 +114,19 @@ impl IntegrationPort for OpenCodeIntegration {
         "Open-source, model-agnostic coding agent CLI"
     }
 
+    /// A **mention**, not a slash command. V2's picker renders every
+    /// discovered Skill as `"@" + id` and `SessionPrompt.prepare` expands a
+    /// mentioned Skill's body into the user message; `slash: false` removes
+    /// one from the `/` catalog without removing this path, which is why
+    /// `invoke.user: false` is Adaptable here (see `skills.rs`). The Lab
+    /// types this exact form (`harnesses/opencode/bindings.py::invoke`).
     fn invocation_prefix(&self) -> &'static str {
-        "/"
+        "@"
     }
 
-    /// simple-icons' `opencode` mark (CC0-1.0), recolored to `currentColor`.
+    /// simple-icons' `opencode` mark (CC0-1.0). Monochrome, carrying one dark
+    /// fill that the docs site inverts for its dark theme — see `codex.rs` for
+    /// why `currentColor` cannot be used here.
     fn icon_path(&self) -> Option<&'static str> {
         Some("/harnesses/opencode.svg")
     }

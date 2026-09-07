@@ -1,6 +1,6 @@
 journey: work that fails the project's own checks never reaches the target branch
 tags: [gate, tui, delivery]
-proves: web/content/docs/agents-lock.mdx
+proves: web/content/docs/project-files.mdx
 about: |
   A project declares the checks its work must pass before landing. The value
   of that declaration is entirely in the failing case: a gate that only ever

@@ -11,8 +11,8 @@ uze doesn't invent a competing format for what already has one. It adopts
 AGENTS.md, Agent Skills, MCP, and Agent Plugins directly, and models only the
 confirmed gap standards leave uncovered — see
 [Standards, not another format](/docs/concepts/standards) for the full reasoning
-and where `agents.lock`, `marketplace.json`, and the canonical package envelope
-fit in.
+and where `agents.yaml`/`agents.lock`, `marketplace.json`, and the canonical
+package envelope fit in.
 
 ## Store, Engine, Router
 
@@ -97,14 +97,18 @@ Two scopes, and neither touches the other's state (ADR-019).
 
 | `~/.uze` (machine) | the project directory |
 | --- | --- |
-| `uze setup`, `uze doctor` | `uze status` |
+| `uze setup`, `uze doctor`, `uze theme` | `uze status` |
 | `uze market …`, `uze plugin …` | `uze <plugin>@<market>`, `uze install`, `uze remove` |
-| the Store and its receipt ledger | `agents.lock`, `AGENTS.md` and its bridges |
+| the Store and its receipt ledger | `agents.yaml`, `agents.lock`, `AGENTS.md` and its bridges |
 
-`uze plugin install` never writes to a project's `agents.lock`; `uze remove` never
-removes anything from the Store. `AGENTS.md` is the portable baseline for project
-context, and a generated bridge (e.g. `CLAUDE.md` with an `@AGENTS.md` import) is
-the only projection uze maintains — never outside its own managed regions.
+`uze plugin install` never writes to a project's files; `uze remove` never removes
+anything from the Store. The split runs through a marketplace too: where *this
+machine* reads one is machine state, while what the *project* depends on is the
+repository and the commit its lock records.
+
+`AGENTS.md` is the portable baseline for project context, and a generated bridge
+(e.g. `CLAUDE.md` with an `@AGENTS.md` import) is the only projection uze
+maintains — never outside its own managed regions.
 
 ## Preferences travel too
 

@@ -254,7 +254,11 @@ impl IntegrationPort for ClaudeIntegration {
         "/"
     }
 
-    /// simple-icons' `claudecode` mark (CC0-1.0), recolored to `currentColor`.
+    /// simple-icons' `claudecode` mark (CC0-1.0), filled with Claude's own
+    /// `#D97757`. Not `currentColor`: the docs matrix renders this through
+    /// `<img>`, and an SVG loaded that way is its own document — it inherits
+    /// no colour from the page, so `currentColor` resolved to black and the
+    /// mark vanished on a dark theme. A brand colour is legible on both.
     fn icon_path(&self) -> Option<&'static str> {
         Some("/harnesses/claude-code.svg")
     }

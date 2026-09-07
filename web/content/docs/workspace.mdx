@@ -42,25 +42,21 @@ exits.
 
 ## The conversation comes back too
 
-The server outlives its client, but not the machine. When it does go — a
-reboot, a logout, a process killed — the next `uze` brings the spaces, the
-tabs and the agents back, each one relaunched in the checkout it was working
-in. The conversation comes back with it: the agent picks up the session it
-was in, rather than starting a stranger in a directory full of half-done
-work.
+The server outlives its client, but not the machine. After a reboot, a logout or
+a killed process, the next `uze` brings the spaces, tabs and agents back — each
+relaunched in the checkout it was working in, and each resuming the session it
+was in rather than starting a stranger in a directory full of half-done work.
 
-uze decides this at the moment the process starts, in the shim that
-`uze setup <harness>` installs — the one thing on the path of a relaunch
-nobody asked for. So the shim's presence is what turns this on, and removing
-it turns it off; nothing recreates it behind your back. A conversation is
-remembered per task and per harness, in uze's own state and never inside a
-checkout, so resetting or deleting a checkout cannot take it, and a slot
-recycled for the next task starts that task fresh.
+The decision is made when the process starts, in the shim `uze setup <harness>`
+installs. The shim's presence is what turns this on and removing it turns it off;
+nothing recreates it behind your back. A conversation is remembered per task and
+per harness in uze's own state, never inside a checkout — so resetting or
+deleting a checkout cannot take it, and a recycled slot starts its next task
+fresh.
 
-Where it cannot be done — no shim for that harness, or a harness with no
-resume mechanism uze can drive — the agent still starts, and the tab says
-why instead of leaving you to notice. The
-[harness matrix](/docs/harnesses) has the per-harness column.
+Where it cannot be done — no shim, or no resume mechanism uze can drive — the
+agent still starts and the tab says why. The [harness matrix](/docs/harnesses)
+has the per-harness column.
 
 ## Shortcuts
 
@@ -104,10 +100,10 @@ cold build the way a fresh `git worktree` would.
 
 ### What the project declares
 
-One block in `agents.lock`, at the project root:
+One block in `agents.yaml`, at the project root, and it is the primary checkout
+that owns it — a worktree's own manifest is ignored:
 
 ```yaml
-version: 1
 worktrees:
   target: main             # branch finished work targets (default: the primary's branch)
   completion: handoff      # handoff | merge | pr
@@ -117,7 +113,9 @@ worktrees:
   slots: 3                 # cap on concurrent checkouts (default: peak concurrency)
 ```
 
-See the [`agents.lock` reference](/docs/agents-lock) for the rest of the file.
+`setup` and `gate` each take one command or a list run in order — the list is
+what makes a failure say which step failed. See the
+[`agents.yaml` reference](/docs/project-files#worktrees) for the rest.
 
 ## Readiness is read, not announced
 
@@ -171,14 +169,14 @@ each entry can be:
 
 ## Prompt history
 
-What you send to an agent tab is recorded per workspace, and the management
-view lists it — click an entry to jump back to the tab it was typed in.
+What you send to an agent tab is recorded per workspace, and the management view
+lists it — click an entry to jump back to the tab it was typed in.
 
-It is a convenience log, not a transcript. uze forwards keystrokes to a
+It is a convenience log, not a transcript: uze forwards keystrokes to a
 pseudoterminal whose contents it never interprets, so it cannot see what the
-agent's own line editor did with them: entries can be missing, and nothing
-treats the history as a complete record. The file is owner-only, and a
-workspace's history can be cleared outright.
+agent's own line editor did with them. Entries can be missing, and nothing treats
+the history as a complete record. The file is owner-only, and a workspace's
+history can be cleared outright.
 
 ## The Git extension
 
@@ -208,7 +206,7 @@ That projection is the only thing this feature writes into your project, and it
 lives in its own delimited region — see [Project context](/docs/concepts/context).
 
 <Cards>
-  <Card title="agents.lock reference" href="/docs/agents-lock" />
+  <Card title="agents.yaml & agents.lock" href="/docs/project-files" />
   <Card title="Project context" href="/docs/concepts/context" />
   <Card title="CLI reference" href="/docs/cli" />
 </Cards>

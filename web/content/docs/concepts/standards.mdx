@@ -74,17 +74,16 @@ machinery, and never claim a route is native without a passing real-harness scen
 
 Three uze-defined files exist, and each earns its place the same way: something no standard covers.
 
-- **`agents.lock`** (ADR-016) — no standard addresses reproducible agent-dependency resolution.
-  Small, deterministic YAML; reproducible identity is `source.url + resolved.revision`, never a
-  branch alias. `git clone && uze install` reconstructs the environment from the lock alone,
-  the same shape as any other ecosystem's dependency lock.
+- **`agents.yaml` + `agents.lock`** (ADR-016) — no standard addresses reproducible
+  agent-dependency resolution. The pair splits the two roles every other ecosystem's lock keeps
+  apart: `agents.yaml` holds what a person decided, `agents.lock` holds only what resolving it
+  produced — a commit and a digest — so it is generated, verifiable, reproducible offline and
+  safe to delete. `git clone && uze install` reconstructs the environment from the two.
+  See [the reference](/docs/project-files).
 - **`marketplace.json`** (ADR-032) — the uze marketplace registry manifest, distinct from
   vendor-owned catalogues like `.claude-plugin/marketplace.json` that integrations still generate
-  untouched. It was briefly renamed `agents.json` to match the `AGENTS.md`/`agents.lock`
-  naming family, then reverted: distribution discovery and project agent-environment files have
-  different owners and lifecycles, and `marketplace.json` is what the active marketplace
-  specification and the harnesses uze targets already call this file — a case of the "adopt the
-  standard's own convention" instinct correcting itself, not an exception to it.
+  untouched. It was briefly renamed `agents.json` and reverted: `marketplace.json` is what the
+  active marketplace specification and the harnesses uze targets already call this file.
 - **The canonical package envelope** — uze is **Plugin First, Capability Aware** (ADR-013): a
   preserved external package is the distribution unit, a capability is the compatibility unit.
   The Store never invents a UZE plugin format — it preserves whatever vendor envelope a package
@@ -94,11 +93,8 @@ Three uze-defined files exist, and each earns its place the same way: something 
   own `plugin.json` + `skills/` + `mcp.json` scope, extended only by the confirmed gap above.
 
 <Callout type="info">
-  Agent Plugins' authorship is genuinely unresolved in primary sources — AWS, Cursor, Microsoft,
-  OpenAI, Vercel, and Google are named co-authors on one pass; Anthropic's participation is
-  claimed by some sources and absent from others. uze doesn't take a side — it targets the
-  published v1.0 scope and reports what each harness actually does with it, not what the spec's
-  authorship implies it should do.
+  Agent Plugins' authorship is unresolved in primary sources. uze doesn't take a side — it targets
+  the published v1.0 scope and reports what each harness actually does with it.
 </Callout>
 
 ## Delivery still prefers native over generated over adapted

@@ -1,0 +1,179 @@
+---
+title: agents.yaml & agents.lock
+description: The file a project writes, the file uze derives from it, and what each one is allowed to say
+---
+
+# `agents.yaml` & `agents.lock`
+
+Two files at the project root, both committed, with one rule between them:
+
+| File | Written by | Holds |
+| --- | --- | --- |
+| **`agents.yaml`** | you | What the project *declares*: which marketplaces it draws from, which plugins it wants, what happens to an agent's finished work |
+| **`agents.lock`** | uze | What resolving those declarations *produced*: the commit each marketplace was read at, and a digest of the bytes that landed |
+
+The lock carries no intent, so deleting it loses nothing — `uze install`
+regenerates it. Deleting `agents.yaml` loses the project's decisions.
+
+`git clone && uze install` reconstructs the environment from the pair alone.
+
+## `agents.yaml`
+
+Created by `uze install` — an explicit act of setting a project up — with every
+key it understands written out and commented, so the vocabulary is discoverable
+by opening the file. Nothing that merely *reads* a project creates it.
+
+```yaml
+worktrees:
+  completion: pr
+
+marketplaces:
+  ai:
+    git: https://github.com/you/plugins
+    ref: main
+    plugins:
+      - review
+      - changelog
+```
+
+Every block is optional; a project declaring only an isolation policy is as
+valid as one declaring only plugins. Unknown keys are an **error**, not silence
+— a typo in a file a person wrote should not be read as a decision. Writing
+`revision:` here is refused by name: that belongs to the lock.
+
+uze patches this document in place, so a comment you wrote beside an unrelated
+entry survives `uze <plugin>@<market>`.
+
+### `worktrees`
+
+What this project does with the work of an agent uze placed in an isolated
+checkout — see [The agent workspace](/docs/workspace). The layout of those
+checkouts (`.worktrees/<id>`, branch `agent/<id>`) is fixed infrastructure and
+is deliberately *not* declared here.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `target` | the branch the primary checkout is on when the task is created | The branch finished work targets |
+| `completion` | `handoff` | `handoff` (leave the branch), `merge` (fast-forward the target), `pr` (push and open a request) |
+| `link` | none | Ignored files a fresh checkout links from the primary — `.env` and friends |
+| `setup` | none | Prepares a checkout, run in it after linking. A failure warns; it never blocks a launch |
+| `gate` | none | Run in the task's checkout on the rebased commits. A non-zero exit refuses delivery |
+| `slots` | peak concurrency | The most checkouts that may exist at once |
+
+`setup` and `gate` each take one command or a list run in order. Use the list
+when a failure should say *which* step failed:
+
+```yaml
+worktrees:
+  target: main
+  completion: pr
+  link: [.env, .env.local]
+  setup: pnpm install
+  gate:
+    - pnpm test
+    - pnpm lint
+  slots: 3
+```
+
+<Callout type="warn">
+  A `link` entry must be relative, stay inside the repository, **and be ignored
+  by it** — a tracked file linked into a checkout would land in the agent's
+  commits as a symlink. All three are checked when the file is read, not
+  silently dropped. The agent writes *through* a link into your primary
+  checkout, so only what it reads belongs there.
+</Callout>
+
+The policy lives here rather than in machine state because
+`uze context reconcile` projects it into the tracked `AGENTS.md`: anything
+resolved outside the project would rewrite a shared file to whichever machine
+ran the command. A worktree's own manifest is ignored for the same reason —
+the primary checkout owns the policy.
+
+### `marketplaces`
+
+Every marketplace the project draws from, keyed by the name you refer to it by,
+with what it takes from each. Exactly one source per marketplace:
+
+```yaml
+marketplaces:
+  ours:
+    git: https://github.com/acme/plugins
+    ref: main               # optional — branch, tag or sha; also the pin that moves
+    subdirectory: market    # optional
+    plugins: [review, changelog]
+  local:
+    path: ../marketplace
+    plugins: [bench-runner]
+```
+
+Plugins are bare names: the source above says where they come from, and `ref:`
+is what moves them.
+
+<Callout type="info">
+  **A marketplace is a Git repository**, whether you spell it as a URL or as a
+  directory on this machine. Not because Git is how the bytes travel — a
+  directory does that — but because a commit is the only thing that answers *are
+  these the bytes I installed?* and *is there something newer?* A `path:` is
+  therefore where **this machine** reads the repository; what the lock records
+  is its remote and a commit, which is what another machine can reproduce.
+</Callout>
+
+uze's own marketplace is not declared here. `uze-official` is built into the
+binary, its plugins are installed for every project, and an entry claiming that
+name is refused — the only thing it could express is shadowing the built-in one.
+
+## `agents.lock`
+
+Generated, never edited, and deleted outright when nothing is left to
+reproduce. It is spelled the way `agents.yaml` spells things, so a reader
+moving between the two files does not learn the same vocabulary twice:
+
+```yaml
+version: 1
+marketplaces:
+  ai:
+    git: git@github.com:you/ai.git
+    revision: 02d2c9831eb619821c574622a78bbc5f6189485a
+plugins:
+  git:
+    marketplace: ai
+    integrity: sha256:f429f157f7cec03d702f1749416ea59174b9af79c94fc281756467b0cb6b81cd
+```
+
+Resolution adds exactly two things to a declaration:
+
+- **`revision`** — the immutable commit the marketplace was read at. Non-optional
+  beside `git`, so "a marketplace with no pin" cannot be written down.
+  Reproduction reads *this*, never the declared `ref:`: a lock that re-resolved
+  `main` would install whatever had been pushed since.
+- **`integrity`** — SHA-256 over the bytes the Store ingested, verified on
+  install **before** ingest and before any harness sees anything. A mismatch
+  names both digests and installs nothing. A `path:` marketplace records none:
+  a digest of a directory somebody is editing would be wrong by the next
+  command, and a pin that is routinely wrong teaches people to ignore pins.
+
+Everything else in the file was already in the manifest, and is repeated only
+so the lock stands alone on a machine that has never read one. `version` stays
+at `1` while uze is pre-release — the number exists to tell apart shapes a
+*released* uze wrote.
+
+### Staleness is decidable offline
+
+Comparing the two files answers whether the lock still stands: no network, no
+re-resolution, so `uze status` works in a tunnel. A declaration is stale when
+the lock never resolved it, resolved it from a different marketplace, or the
+marketplace it comes from is declared differently now. A lock entry the manifest
+no longer declares is not staleness — it is a removal.
+
+## What these files are not
+
+They are **project scope**. Neither records what is installed on your machine —
+that lives in the Store under `~/.uze`, and `uze plugin install` never writes
+here. The two are independent by design (ADR-019); see
+[Machine scope vs project scope](/docs/concepts#machine-scope-vs-project-scope).
+
+<Cards>
+  <Card title="The agent workspace" href="/docs/workspace" />
+  <Card title="CLI reference" href="/docs/cli" />
+  <Card title="Creating a plugin" href="/docs/creating-a-plugin" />
+</Cards>

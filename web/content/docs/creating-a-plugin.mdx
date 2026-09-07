@@ -179,19 +179,24 @@ someone else's project file.
 
 ## Testing it locally
 
-There's no bare `uze add <path>` — a plugin is always resolved through a marketplace, even a
-one-plugin local one. Point uze at the directory that holds your `marketplace.json` (see
+A plugin is always resolved through a marketplace, even a one-plugin local one — there is no bare
+`uze add <path>`. Point uze at the repository holding your `marketplace.json` (see
 [below](#publishing-through-a-marketplace)), not at the plugin itself:
 
 ```bash
 $ uze market add ./my-marketplace
-$ uze my-plugin@my-marketplace          # add it to the current project (agents.lock)
+$ uze my-plugin@my-marketplace          # add it to the current project
 $ uze plugin inspect my-plugin          # capabilities + per-harness delivery, before or after install
 ```
 
-`plugin inspect` is read-only and safe to run repeatedly — it's the fastest way to see exactly
-what uze thinks your package contains and how each harness will receive it, before committing to
-an install.
+<Callout type="info">
+  A local marketplace is still a **Git repository**, and installing clones it at a commit rather
+  than reading your working tree. So `git commit` in the marketplace is what makes an edit
+  installable — which is also what lets a lock say which bytes it installed.
+</Callout>
+
+`plugin inspect` is read-only and safe to run repeatedly — the fastest way to see what uze thinks
+your package contains and how each harness will receive it, before committing to an install.
 
 ## Publishing through a marketplace
 
@@ -213,20 +218,19 @@ directory, listing one or more plugins by relative source:
 }
 ```
 
-This is the repo's own official marketplace manifest (`marketplace.json` at the repo root), shown
-verbatim — this repository *is* uze's own marketplace, `plugins/uze` included. Push it to a Git
-repo and anyone can consume it:
+This is the repo's own manifest shown verbatim — this repository *is* uze's official marketplace,
+`plugins/uze` included. Push it and anyone can consume it:
 
 ```bash
 $ uze market add https://github.com/you/my-marketplace
 $ uze my-plugin@my-marketplace
 ```
 
-`marketplace.json` was briefly named `agents.json` and reverted (ADR-032) — if you see
-that name in older material, it's the same manifest under its current, correct filename.
+`marketplace.json` was briefly named `agents.json` and reverted (ADR-032) — the same manifest
+under its current filename.
 
 <Cards>
   <Card title="Capabilities" href="/docs/concepts/capabilities" />
   <Card title="Harness compatibility" href="/docs/harnesses" />
-  <Card title="agents.lock reference" href="/docs/agents-lock" />
+  <Card title="agents.yaml & agents.lock" href="/docs/project-files" />
 </Cards>

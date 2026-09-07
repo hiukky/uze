@@ -62,7 +62,7 @@ invoke:
 |---|---|---|---|
 | Claude Code | `disable-model-invocation: true` | `user-invocable: false` | Native (both); explicit-envelope coverage requires the author's own marker (never rewritten) |
 | Codex | `agents/openai.yaml` → `policy.allow_implicit_invocation: false` | not expressible | Native (`model=false`); Degraded (`user=false`, stated honestly) |
-| OpenCode V2 | `metadata.opencode/autoinvoke: false` | `slash: false` | Native (both); vendor Command primitive never needed |
+| OpenCode V2 | `metadata.opencode/autoinvoke: false` | `slash: false` withholds it from the `/` catalog, but a mention (`@<label>`) still expands it | Native (`model=false`); Adapted (`user=false`, measured — half the policy is carried and the report says so) |
 | Antigravity | not expressible (skills stay model-discoverable) | not expressible (skills stay slash-invocable) | Adapted, with the degradation named in the plan evidence |
 
 A vendor Command may be generated *from* a canonical Skill when that is the

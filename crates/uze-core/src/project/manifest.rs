@@ -223,8 +223,9 @@ worktrees:
 # plugins are installed for every project, and neither is yours to declare
 # — `uze market` shows both, this file carries only what the project chose.
 #
-# `uze add` writes these entries and records what they resolved to in
-# agents.lock; `uze install` reproduces that lock on another machine.
+# `uze <plugin>@<market>` writes these entries and records what they
+# resolved to in agents.lock; `uze install` reproduces that lock on
+# another machine.
 # marketplaces:
 #   ours:
 #     git: https://github.com/acme/plugins
