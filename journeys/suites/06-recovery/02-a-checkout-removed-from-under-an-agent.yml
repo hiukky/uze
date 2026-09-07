@@ -100,6 +100,20 @@ scenes:
 
   - scene: resuming gives the task somewhere to stand, with its branch as it stands
     when:
+      # The row says `checkout removed` before it offers the way back in,
+      # and the gap between the two is a repository evaluation: noticing the
+      # loss is what schedules it, and only its answer strips the task of a
+      # checkout it no longer has — which is what `resume` is gated on.
+      # Waited for rather than assumed, because the two used to arrive
+      # together only by accident. On Linux the loss is noticed the instant
+      # `/proc` renames the cwd, so the evaluation had long since answered
+      # by the time anything looked; where the loss is noticed on a clock,
+      # the label and the request are the same moment.
+      - wait: screen
+        until: resume
+        in: sidebar
+        timeout: 30
+        say: the row offers the way back in, once the repository has answered
       - click: resume
         say: resume the task from its row
         in: sidebar
