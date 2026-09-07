@@ -170,37 +170,73 @@ struct Endpoint {
     pid: PathBuf,
 }
 
+/// How long a Unix-domain socket path may be, with room to spare.
+///
+/// `sockaddr_un.sun_path` holds 104 bytes on macOS and 108 on Linux, and the
+/// whole path has to fit or `bind` fails with `SUN_LEN` — an error naming the
+/// limit and nothing about which directory exhausted it. The smaller of the
+/// two, less a little, is what [`Endpoint::global`] holds itself to, so the
+/// same directory is usable on either platform.
+const MAX_SOCKET_PATH: usize = 100;
+
 impl Endpoint {
     /// One endpoint per user — per `UZE_HOME`, which is what "user" means
     /// to UZE: a second home is a second world, with a server of its own.
+    ///
+    /// The directory is whichever of three candidates can hold the socket:
+    /// the runtime directory the session names, an owner-scoped directory in
+    /// the system temp dir, and `/tmp`. Two things disqualify one — being
+    /// unwritable, and being too long.
+    ///
+    /// Length matters more than it looks. `XDG_RUNTIME_DIR` is somebody
+    /// else's variable and can be arbitrarily deep, and the system temp dir
+    /// on macOS is a per-user `/var/folders/<hash>/T` that already spends
+    /// half the budget before UZE adds anything. Falling back does not
+    /// weaken isolation: the socket is named after a hash of `UZE_HOME`, so
+    /// two homes stay two endpoints wherever they land.
     fn global() -> Result<Self, RuntimeError> {
-        let preferred = env::var_os("XDG_RUNTIME_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(env::temp_dir)
-            .join("uze-runtime");
-        let runtime = match fs::create_dir_all(&preferred) {
-            Ok(()) => preferred,
-            // Sandboxed terminals can expose XDG_RUNTIME_DIR while denying
-            // writes below it. Fall back to an owner-scoped temp directory;
-            // the socket remains local and the directory is immediately
-            // restricted below.
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    io::ErrorKind::PermissionDenied | io::ErrorKind::ReadOnlyFilesystem
-                ) =>
-            {
-                let fallback =
-                    env::temp_dir().join(format!("uze-runtime-{}", unsafe { libc::getuid() }));
-                fs::create_dir_all(&fallback)?;
-                fallback
-            }
-            Err(error) => return Err(error.into()),
-        };
-        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700))?;
         let identity = identity_of(&uze_home_dir());
+        let named = |root: &Path| root.join(format!("uze-{identity}.sock"));
+        let owner = unsafe { libc::getuid() };
+
+        let candidates = [
+            env::var_os("XDG_RUNTIME_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(env::temp_dir)
+                .join("uze-runtime"),
+            env::temp_dir().join(format!("uze-runtime-{owner}")),
+            PathBuf::from("/tmp").join(format!("uze-runtime-{owner}")),
+        ];
+
+        let mut refused = None;
+        let runtime = candidates
+            .into_iter()
+            .find(|candidate| {
+                if named(candidate).as_os_str().len() > MAX_SOCKET_PATH {
+                    return false;
+                }
+                match fs::create_dir_all(candidate) {
+                    Ok(()) => true,
+                    // A sandboxed terminal can expose a runtime directory
+                    // while denying writes below it.
+                    Err(error) => {
+                        refused = Some(error);
+                        false
+                    }
+                }
+            })
+            .ok_or_else(|| {
+                refused.unwrap_or_else(|| {
+                    io::Error::other(
+                        "no runtime directory short enough for a socket path; \
+                         set XDG_RUNTIME_DIR to a shorter one",
+                    )
+                })
+            })?;
+
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700))?;
         Ok(Self {
-            socket: runtime.join(format!("uze-{identity}.sock")),
+            socket: named(&runtime),
             pid: runtime.join(format!("uze-{identity}.pid")),
         })
     }
@@ -1691,10 +1727,11 @@ fn identity_of(root: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        Compatibility, Endpoint, PaneRuntime, PersistedSpace, PersistedTab, PersistedWorkspace,
-        Probe, ReplySink, Selection, Server, heal_pid_file, identity_of, persisted_state_path,
-        probe_server, read_event, recorded_compatibility, relaunch_command_for_process,
-        replace_incompatible_server, send_request, server_protocol_version, snapshot, view_for,
+        Compatibility, Endpoint, MAX_SOCKET_PATH, PaneRuntime, PersistedSpace, PersistedTab,
+        PersistedWorkspace, Probe, ReplySink, Selection, Server, heal_pid_file, identity_of,
+        persisted_state_path, probe_server, read_event, recorded_compatibility,
+        relaunch_command_for_process, replace_incompatible_server, send_request,
+        server_protocol_version, snapshot, view_for,
     };
     use std::sync::{Arc, Mutex};
 
@@ -1843,6 +1880,41 @@ mod tests {
     /// socket and given its file back, so the next attach reads the answer
     /// instead of asking again. Without this the endpoint's live owner is
     /// killed and whatever was running in its panes goes with it.
+    /// `XDG_RUNTIME_DIR` is somebody else's variable and can be arbitrarily
+    /// deep. A socket path that does not fit `sun_path` fails at `bind` with
+    /// an error naming the limit and not the directory — which reached a
+    /// user as `could not acquire package: terminal runtime I/O error: path
+    /// must be shorter than SUN_LEN`, from a command that has nothing to do
+    /// with sockets.
+    #[test]
+    fn a_runtime_directory_too_long_for_a_socket_is_stepped_over() {
+        let deep = uze_testkit::temp::socket_scratch("deep").join("a".repeat(120));
+        std::fs::create_dir_all(&deep).unwrap();
+        let mut env = uze_testkit::env::scope();
+        env.set("XDG_RUNTIME_DIR", &deep);
+
+        let endpoint = Endpoint::global().expect("a too-long runtime directory is not fatal");
+        assert!(
+            endpoint.socket.as_os_str().len() <= MAX_SOCKET_PATH,
+            "the chosen socket path must fit sun_path, got {} bytes: {}",
+            endpoint.socket.as_os_str().len(),
+            endpoint.socket.display()
+        );
+        assert!(
+            !endpoint.socket.starts_with(&deep),
+            "the directory that could not hold the socket must not have been chosen"
+        );
+        // Binding is the only real proof: the length rule exists to make this
+        // call succeed, so the test performs it rather than trusting the
+        // arithmetic.
+        let _ = std::fs::remove_file(&endpoint.socket);
+        let listener = std::os::unix::net::UnixListener::bind(&endpoint.socket)
+            .expect("the chosen path must actually bind");
+        drop(listener);
+        let _ = std::fs::remove_file(&endpoint.socket);
+        let _ = std::fs::remove_dir_all(&deep);
+    }
+
     #[test]
     fn a_server_of_this_build_is_adopted_when_its_pid_file_vanishes() {
         let scratch = uze_testkit::temp::socket_scratch("adopt");

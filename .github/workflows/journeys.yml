@@ -44,7 +44,12 @@ permissions:
 
 jobs:
   journeys:
-    name: Journeys
+    # Named for its subject, not for the workflow around it: GitHub renders a
+    # check as `<workflow> / <job>`, and `Journeys / Journeys` said one thing
+    # twice. `E2E - UZE` sits beside the Lab's `E2E - Claude`, `E2E - Codex`
+    # and the rest, where the pair now reads as what each tier drives
+    # end to end — this one drives UZE, those drive a vendor's harness.
+    name: E2E - UZE
     # Pinned, not `ubuntu-latest`. The journey drives a rendered screen, so
     # the terminal is part of the contract — the tmux build, the locale and
     # the unicode width tables decide where a glyph lands, and a moving

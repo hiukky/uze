@@ -104,7 +104,14 @@ scenes:
       - wait: screen
         until: "±"
         in: sidebar
-        timeout: 30
+        # The sidebar does not watch the checkout; it re-reads task state on
+        # a 20-second timer (`TASK_REFRESH` in src/ui/orchestrator.rs). A
+        # 30-second budget was one and a half of those, so an edit landing
+        # just after a tick had to be picked up by the very next one — on a
+        # runner slow enough to make the Git read itself take time, it was
+        # not. Three intervals, so the wait is bounded by the cadence rather
+        # than racing it.
+        timeout: 70
         say: the sidebar marks the agent as holding uncommitted work
     then:
       - tasks: { any_state: uncommitted }
