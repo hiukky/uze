@@ -13,6 +13,16 @@ about: |
   again — with its branch as it stands, not re-cut from the target, which
   would silently throw away exactly what was being protected.
 
+  This is also the journey that holds the *detection* honest, and it took a
+  second platform to show why. Nothing announces a deleted directory. On
+  Linux the workspace was told by accident: `/proc` starts spelling a removed
+  cwd `<path> (deleted)`, the pane's reading therefore changed, and a changed
+  reading is what makes the server speak. Where a kernel has no such spelling
+  the reading simply stops resolving, nothing changes, no event is sent — and
+  the row went on offering a way into a directory that was gone. The answer
+  has to come from the disk on a clock, and a unit test cannot tell the two
+  apart, because on Linux both look the same.
+
 world:
   project: demo-app
   manifest: |

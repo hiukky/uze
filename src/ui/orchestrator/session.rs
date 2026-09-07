@@ -1744,6 +1744,18 @@ impl Attach<'_> {
             .is_none_or(|last| last.elapsed() >= TASK_REFRESH)
         {
             self.model.last_task_refresh = Some(Instant::now());
+            // A checkout can be deleted with nothing to say so. Every other
+            // trigger for the occupancy pass is an event the server sends,
+            // and the server only speaks when a pane's cwd or process
+            // *changed* — which, when a checkout vanishes, happens only
+            // because Linux's `/proc` starts spelling the cwd
+            // `<path> (deleted)`. Where the platform has no such spelling
+            // the reading simply stops resolving, nothing changes, no event
+            // is sent, and the row keeps offering a way into a directory
+            // that is gone. Asked on this clock instead, so the answer comes
+            // from the disk rather than from a quirk of how one kernel
+            // renames what it lost.
+            self.model.occupancy_stale = true;
             if let Some(cwd) = selected_pane_cwd(&self.model) {
                 self.model
                     .schedule_evaluation(self.home, cwd, &self.answers.tasks);
