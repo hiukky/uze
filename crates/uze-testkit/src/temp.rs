@@ -15,7 +15,10 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{
+    Mutex, OnceLock,
+    atomic::{AtomicU64, Ordering},
+};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::env::ProcessEnvGuard;
@@ -25,11 +28,25 @@ use crate::env::ProcessEnvGuard;
 /// the filesystem ordering would still be racy without this).
 static CREATE_LOCK: Mutex<()> = Mutex::new(());
 
-fn nonce() -> u128 {
-    SystemTime::now()
+/// A value no other call in this process shares.
+///
+/// The clock alone does not promise that. `as_nanos` reports whatever
+/// resolution the platform's clock has, and macOS's is coarse enough that
+/// two tests starting together read the same instant — which handed both the
+/// same scratch directory. A counter is what makes two *calls* differ; the
+/// clock only makes two *runs* differ, which is the half that keeps a left
+/// directory from colliding with the next run.
+fn nonce() -> String {
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    let instant = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system clock before UNIX_EPOCH")
-        .as_nanos()
+        .as_nanos();
+    // Both halves, side by side rather than folded together: any arithmetic
+    // that mixes them into one number reintroduces the collision it was
+    // added to remove, for whichever pair happens to alias.
+    format!("{instant:x}{:x}", SEQUENCE.fetch_add(1, Ordering::Relaxed))
 }
 
 /// Subdirectories under the real `$HOME` that a test must never write to.
@@ -225,7 +242,7 @@ pub fn socket_scratch(label: &str) -> PathBuf {
         .filter(|c| c.is_ascii_alphanumeric())
         .take(8)
         .collect();
-    let mut nonce = nonce();
+    let mut nonce = u128::from_str_radix(&nonce(), 16).unwrap_or_default();
     let mut compact = String::new();
     while nonce > 0 {
         let digit = (nonce % 36) as u32;

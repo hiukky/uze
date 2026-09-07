@@ -419,16 +419,41 @@ pub fn acquire(source: &PackageSource) -> Result<MaterializedPackage> {
 /// A fresh directory UZE owns for one acquisition. Deliberately not
 /// `UzeHome::cache_dir()`: this is scratch that must not survive the
 /// operation, and a cache would be a second place packages live.
+/// A directory no other acquisition is using.
+///
+/// The clock alone does not say that. `as_nanos` reports whatever
+/// resolution the platform's clock has, and macOS's is coarse enough that
+/// two acquisitions starting together in one process read the same instant
+/// — which handed both the same directory, and `git clone` then failed
+/// mid-clone with `cannot copy … File exists`. A counter is what makes two
+/// calls differ; the clock only makes two *runs* differ.
+///
+/// `create_dir`, not `create_dir_all`: an existing directory here means the
+/// name was not unique after all, and that has to be an error rather than a
+/// silent share. It also refuses a directory an attacker pre-created in a
+/// world-writable temp dir, and `0o700` keeps package bytes unreadable
+/// while they are being checked.
 fn scratch_directory() -> Result<PathBuf> {
+    static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("system clock is after the epoch")
         .as_nanos();
-    let path = std::env::temp_dir().join(format!("uze-acquire-{}-{nonce}", std::process::id()));
-    fs::create_dir_all(&path).map_err(|source| UzeError::Write {
+    let sequence = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!(
+        "uze-acquire-{}-{nonce}-{sequence}",
+        std::process::id()
+    ));
+    fs::create_dir(&path).map_err(|source| UzeError::Write {
         path: path.clone(),
         source,
     })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o700));
+    }
     Ok(path)
 }
 
