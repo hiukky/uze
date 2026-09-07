@@ -71,6 +71,18 @@ pub trait Host {
     /// a state a view renders, never an error it propagates.
     fn read_file(&self, path: &std::path::Path) -> Option<String>;
 
+    /// How many lines a file has, counted the way [`str::lines`] counts
+    /// them. Separate from [`Host::read_file`] because the badge asks this
+    /// of every untracked file on a timer, and holding each one in memory
+    /// to count its newlines costs the size of the file for a number the
+    /// caller could have streamed. The default answers from the contents;
+    /// a host that can read without materialising them should say so.
+    fn count_lines(&self, path: &std::path::Path) -> u32 {
+        self.read_file(path)
+            .map(|contents| contents.lines().count() as u32)
+            .unwrap_or(0)
+    }
+
     /// The path as a person would recognise it — `~/relative/path` when it
     /// sits under their home directory.
     fn display_path(&self, path: &std::path::Path) -> String;
