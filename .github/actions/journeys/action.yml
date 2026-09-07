@@ -1,0 +1,59 @@
+name: Product journeys
+description: >-
+  Installs the journey runtime for whichever OS this runner is, builds the two
+  binaries a journey needs, and performs the suite.
+
+# One definition, used by every platform that runs journeys.
+#
+# The point of running the suite on more than one machine is that it performs
+# the *same* journeys the *same* way, so a difference in the result is a
+# difference between the platforms. Two copies of these steps in two workflows
+# is precisely how that stops being true — one gains a flag, the other does
+# not, and the two runs quietly answer different questions while both stay
+# green. The OS difference that genuinely exists is the package manager, and
+# it is here, in the open, rather than implied by which file you are reading.
+inputs:
+  args:
+    description: >-
+      What to hand `journey run` — `--tag gate` for the pull-request set,
+      `--record` for the nightly, which runs everything and records a cast.
+    required: false
+    default: "--tag gate"
+
+runs:
+  using: composite
+  steps:
+    # `tmux` because a journey drives a real terminal; `pyyaml` because the
+    # suites are YAML; `procps` for `pgrep`, which is how a `process:` check
+    # finds what it is asking about. macOS ships the last one.
+    - name: Install the journey runtime
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ "$RUNNER_OS" = "macOS" ]; then
+          brew install tmux
+          python3 -m pip install --break-system-packages pyyaml
+        else
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq tmux python3-yaml procps
+        fi
+
+    # Both binaries: the one under test, and the one that writes the harness
+    # stand-ins. They come from the same workspace on purpose — a second
+    # stand-in implementation is how two tiers come to disagree about what a
+    # harness does while both stay green.
+    - name: Build the binary under test, and the stand-in writer
+      shell: bash
+      run: |
+        cargo build --locked --bin uze
+        cargo build --locked -p uze-testkit --bin uze-fake-harness
+
+    # Cheap, and it fails on the two things a run would not reach: a gesture
+    # with no `expect`, and a `proves:` pointing at a page that moved.
+    - name: Validate the journeys
+      shell: bash
+      run: python3 journeys/journey.py validate journeys/suites
+
+    - name: Run the journeys
+      shell: bash
+      run: python3 journeys/journey.py run journeys/suites ${{ inputs.args }}

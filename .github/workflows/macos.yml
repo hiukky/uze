@@ -56,6 +56,12 @@ jobs:
     # together and tell you nothing about either.
     runs-on: macos-latest
     timeout-minutes: 45
+    env:
+      # The journeys read the rendered screen as text, so the locale is part
+      # of what a selector matches. Set here for the same reason the Linux
+      # job sets it: the shared action must find the same terminal on both.
+      LANG: C.UTF-8
+      TERM: xterm-256color
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
@@ -68,8 +74,13 @@ jobs:
       # `.cargo/config.toml` pins `jobs = 2` as a courtesy to a 4-vCPU WSL
       # box. A hosted macOS runner is not that box, and this job is already
       # the slowest one here.
+      #
+      # An explicit count, because cargo has no spelling for "all of them":
+      # `CARGO_BUILD_JOBS=0` is not that, it is an error (`jobs may not be
+      # 0`) — and one that fails every cargo invocation in the job instantly,
+      # which is how it took the first run of this workflow down.
       - name: Use the whole runner
-        run: echo "CARGO_BUILD_JOBS=0" >> "$GITHUB_ENV"
+        run: echo "CARGO_BUILD_JOBS=$(sysctl -n hw.logicalcpu)" >> "$GITHUB_ENV"
 
       # Every step runs even after an earlier one fails. This workflow exists
       # to produce evidence, and "clippy was unhappy" must not hide whether
@@ -104,22 +115,13 @@ jobs:
       # opposite: Apple's own tmux, locale and width tables are the thing
       # under test. The two runs prove different halves and neither replaces
       # the other.
-      - name: Install the journey runtime
+      #
+      # The same composite action the Linux job uses, so the two platforms
+      # cannot drift into performing the same journeys differently.
+      - uses: ./.github/actions/journeys
         if: ${{ !cancelled() }}
-        run: |
-          brew install tmux
-          python3 -m pip install --break-system-packages pyyaml
-      # The binary under test is already built above; this is the one that
-      # writes the harness stand-ins.
-      - name: Build the stand-in writer
-        if: ${{ !cancelled() }}
-        run: cargo build --locked -p uze-testkit --bin uze-fake-harness
-      - name: Validate the journeys
-        if: ${{ !cancelled() }}
-        run: python3 journeys/journey.py validate journeys/suites
-      - name: Run the journeys
-        if: ${{ !cancelled() }}
-        run: python3 journeys/journey.py run journeys/suites --tag gate
+        with:
+          args: "--tag gate"
       # What the run read off the machine. On macOS this is the first thing
       # anybody will want when a check fails, because nobody debugging it has
       # the machine in front of them.

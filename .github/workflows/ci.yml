@@ -23,10 +23,24 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
 
+# Every runner in this repository names its image, and none says
+# `ubuntu-latest`. That label moves — GitHub repoints it at the next LTS on a
+# date nobody here picks — and when it does, every workflow changes underfoot
+# at once with no commit behind the change. This repository already pins each
+# action to a SHA, gitleaks to a version *and* a checksum, and git-cliff and
+# cargo-release to exact releases; the machine all of that runs on was the one
+# unpinned thing left. Moving to a new image is a decision, so it should be a
+# diff.
+
 jobs:
+# ── Is the code correct ──────────────────────────────────────────────
+#
+# The questions asked of the Rust in this repository, cheapest first, so
+# a formatting slip is not reported after a fifteen-minute suite.
+
   fmt:
     name: Format
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -38,7 +52,7 @@ jobs:
 
   lint:
     name: Clippy
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -51,7 +65,7 @@ jobs:
 
   test:
     name: Test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -61,9 +75,75 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - run: cargo test --workspace --no-fail-fast --locked
 
+  msrv:
+    name: MSRV
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # `rust-version` in Cargo.toml is a promise to anyone pinned to that
+      # release. Every other job runs `stable`, so without this one the
+      # promise is never tested and a newer language feature breaks it
+      # silently.
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
+        with:
+          toolchain: "1.97"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          key: msrv
+      # `check`, not `test`: the question is whether the declared version can
+      # build the tree, and running the suite twice answers nothing new.
+      # `+1.97` explicitly: the action sets this toolchain as rustup's
+      # default, and `rust-toolchain.toml` outranks a default — without the
+      # `+` this job would quietly check the tree on stable and pass a
+      # promise it never tested. Matches `make msrv`.
+      - run: cargo +1.97 check --workspace --all-targets --locked
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-24.04
+    # LLVM instrumentation changes test timing and memory use. Keep this
+    # separate from ordinary tests so a concurrency regression cannot leave a
+    # runner wedged indefinitely.
+    timeout-minutes: 15
+    env:
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
+        with:
+          toolchain: stable
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          cache-on-failure: true
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8 # v2
+        with:
+          tool: cargo-llvm-cov
+      # `--skip` filters out tests that fail due to environment issues,
+      # not code regressions: `real_codex_dogfood_*` (codex CLI removed
+      # the `debug` subcommand), `foreground_status_reports_*` (shell
+      # detection varies at runtime), and `acquisition::*` (GPG agent
+      # signing timeout in a sandbox without a configured GPG key).
+      # Re-enable any of these when the environment supports them.
+      - run: cargo llvm-cov --workspace --summary-only --fail-under-lines 68 --fail-under-regions 69 -- --skip real_codex_dogfood --skip foreground_status_reports --skip acquisition
+      - run: cargo llvm-cov report --lcov --output-path lcov.info
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: lcov
+          path: lcov.info
+
+# ── Is it safe to ship what we link ───────────────────────────────────
+#
+# A different question from correctness, and read by a different person:
+# not whether the code works, but whether the tree may be published and
+# what it drags in is known-good. Kept apart for that reason, not because
+# the tools happen to differ.
+
   audit:
     name: Audit
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read
@@ -83,7 +163,7 @@ jobs:
 
   licences:
     name: Licences
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: read
@@ -112,7 +192,7 @@ jobs:
 
   secrets:
     name: Secrets
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read
@@ -145,9 +225,15 @@ jobs:
       - name: Scan the full history
         run: ./gitleaks git --no-banner --redact=4 --config .gitleaks.toml
 
+# ── The parts that are not the binary ─────────────────────────────────
+#
+# uze is more than a Rust binary — an installer a stranger pipes into a
+# shell, a documentation site, and the Lab's own Python. Each was, at
+# some point, shipped with nothing checking it.
+
   installer:
     name: Installer
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -158,49 +244,9 @@ jobs:
       - name: Exercise the installer offline
         run: sh tests/scripts/installer-test.sh
 
-  python:
-    name: Python
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Install ruff
-        uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8 # v2
-        with:
-          tool: ruff
-      - run: ruff format --check conformance/
-      - run: ruff check conformance/
-      - run: python3 -m pip install --user pexpect
-      - name: Conformance unit tests (no Docker, no harness)
-        run: for t in conformance/tests/test_*.py; do python3 "$t" || exit 1; done
-
-  msrv:
-    name: MSRV
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      # `rust-version` in Cargo.toml is a promise to anyone pinned to that
-      # release. Every other job runs `stable`, so without this one the
-      # promise is never tested and a newer language feature breaks it
-      # silently.
-      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
-        with:
-          toolchain: "1.97"
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          key: msrv
-      # `check`, not `test`: the question is whether the declared version can
-      # build the tree, and running the suite twice answers nothing new.
-      # `+1.97` explicitly: the action sets this toolchain as rustup's
-      # default, and `rust-toolchain.toml` outranks a default — without the
-      # `+` this job would quietly check the tree on stable and pass a
-      # promise it never tested. Matches `make msrv`.
-      - run: cargo +1.97 check --workspace --all-targets --locked
-
   web:
     name: Web
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     defaults:
       run:
@@ -216,37 +262,18 @@ jobs:
       - run: bun run types:check
       - run: bun run build
 
-  coverage:
-    name: Coverage
-    runs-on: ubuntu-latest
-    # LLVM instrumentation changes test timing and memory use. Keep this
-    # separate from ordinary tests so a concurrency regression cannot leave a
-    # runner wedged indefinitely.
+  python:
+    name: Python
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
-    env:
-      CARGO_BUILD_JOBS: 2
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
-        with:
-          toolchain: stable
-          components: llvm-tools-preview
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          cache-on-failure: true
-      - name: Install cargo-llvm-cov
+      - name: Install ruff
         uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8 # v2
         with:
-          tool: cargo-llvm-cov
-      # `--skip` filters out tests that fail due to environment issues,
-      # not code regressions: `real_codex_dogfood_*` (codex CLI removed
-      # the `debug` subcommand), `foreground_status_reports_*` (shell
-      # detection varies at runtime), and `acquisition::*` (GPG agent
-      # signing timeout in a sandbox without a configured GPG key).
-      # Re-enable any of these when the environment supports them.
-      - run: cargo llvm-cov --workspace --summary-only --fail-under-lines 68 --fail-under-regions 69 -- --skip real_codex_dogfood --skip foreground_status_reports --skip acquisition
-      - run: cargo llvm-cov report --lcov --output-path lcov.info
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: lcov
-          path: lcov.info
+          tool: ruff
+      - run: ruff format --check conformance/
+      - run: ruff check conformance/
+      - run: python3 -m pip install --user pexpect
+      - name: Conformance unit tests (no Docker, no harness)
+        run: for t in conformance/tests/test_*.py; do python3 "$t" || exit 1; done

@@ -72,35 +72,18 @@ jobs:
       # home — so the container was never what isolated the run. What it
       # pinned, `runs-on` above now pins directly, for free.
       #
-      # It also makes this job and the macOS one the same shape: macOS
-      # runners have no Docker, so a containerised Linux run and a native
-      # macOS run would be proving the same journeys two different ways.
+      # The steps themselves live in a composite action shared with the macOS
+      # job: two platforms proving the same journeys must perform them the
+      # same way, and two copies of the same YAML is how that stops being
+      # true without anybody noticing.
       #
       # `journeys/Dockerfile` and `make journey-docker` stay for local use —
       # running a journey on your own machine without letting it near your
       # own tmux, HOME or terminal.
-      - name: Install the journey runtime
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq tmux python3-yaml procps
-
-      # Both binaries: the one under test, and the one that writes the
-      # harness stand-ins. They come from the same workspace on purpose —
-      # a second stand-in implementation is how two tiers come to disagree
-      # about what a harness does while both stay green.
-      - name: Build the binary under test, and the stand-in writer
-        run: cargo build --locked --bin uze && cargo build --locked -p uze-testkit --bin uze-fake-harness
-
-      # Cheap, and it fails on the two things a run would not reach: a
-      # gesture with no `expect`, and a `proves:` pointing at a page that
-      # moved.
-      - name: Validate the journeys
-        run: python3 journeys/journey.py validate journeys/suites
-
-      - name: Run the journeys
-        run: |
-          python3 journeys/journey.py run journeys/suites \
-            ${{ github.event_name == 'schedule' && '--record' || '--tag gate' }}
+      - uses: ./.github/actions/journeys
+        with:
+          # Nightly runs everything, not just the gate tag, and records a cast.
+          args: ${{ github.event_name == 'schedule' && '--record' || '--tag gate' }}
 
       # Named, because "No files were found" on the upload below is how a
       # failing run lost its own evidence once: the artifact is silent about

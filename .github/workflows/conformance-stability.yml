@@ -25,7 +25,7 @@ env:
 jobs:
   conformance-stability:
     name: Stability - ${{ matrix.label }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 150
     strategy:
       fail-fast: false
