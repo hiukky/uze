@@ -22,7 +22,7 @@ official plugin today.
 ```bash
 cargo build --locked --bin uze                          # debug build
 cargo build --locked --release --bin uze                 # release build
-cargo install --path . --bin uze --locked --force         # install into ~/.cargo/bin (force-rebuild, no version bump)
+make install                                              # install into ~/.cargo/bin (force-rebuild, no version bump, --features telemetry)
 cargo run --quiet --bin uze -- --version
 
 cargo test --workspace --no-fail-fast                     # full workspace suite (default-members is the root crate only)
@@ -36,6 +36,9 @@ cargo llvm-cov --workspace --summary-only --fail-under-lines 68 --fail-under-reg
 
 cargo deny check                                           # licences, advisories, bans, sources (deny.toml); part of `make check`
 make attributions                                          # regenerate CREDITS.md (about.hbs + Cargo.lock); CI fails when it drifts
+
+UZE_LOG=info uze doctor                                    # spans and events as text (see docs/observability.md)
+make observe                                               # local Jaeger (UI :16686); then OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 cargo run --features telemetry --bin uze -- doctor
 ```
 
 `Makefile` wraps all of the above (`make build`, `make test`, `make check`,

@@ -238,6 +238,12 @@ fn assert_within_size_budget(root: &Path) -> Result<()> {
 /// - `protocol.file.allow=always`: needed so a local bare repository — the
 ///   only kind the deterministic tests use — remains reachable.
 fn run(arguments: &[&str], working_directory: Option<&Path>) -> Result<String> {
+    let span = tracing::info_span!(
+        "acquisition.git",
+        args = %arguments.join(" "),
+        exit = tracing::field::Empty
+    );
+    let _entered = span.enter();
     let mut command = Command::new("git");
     command
         .env_clear()
@@ -296,7 +302,9 @@ fn run(arguments: &[&str], working_directory: Option<&Path>) -> Result<String> {
     let (status, timed_out) = wait_with_timeout(&mut child, COMMAND_TIMEOUT).map_err(|error| {
         UzeError::AcquisitionFailed(format!("could not wait for `git`: {error}"))
     })?;
+    span.record("exit", status.code().unwrap_or(-1));
     if timed_out {
+        tracing::warn!("git timed out");
         return Err(timed_out_error());
     }
     // `git` itself exited, but the same reasoning as above applies once more

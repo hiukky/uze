@@ -198,6 +198,7 @@ impl UzeApplication {
         if let Some(cached) = self.detection_cache.get(id, &candidates) {
             return cached;
         }
+        let _span = tracing::info_span!("integration.detect", integration = id).entered();
         let live = integration.detect();
         self.detection_cache.put(id, &candidates, live.clone());
         live
@@ -228,6 +229,7 @@ impl UzeApplication {
     /// (`src/main.rs`) and `setup` call this explicitly; `add`/`remove` do
     /// not need to because `setup` already covers the attach path.
     pub fn ensure_default_plugins(&self) -> Result<bool> {
+        let _span = tracing::info_span!("bootstrap.ensure_default_plugins").entered();
         let mut installed_any = false;
         for &id in bootstrap::DEFAULT_PLUGIN_IDS {
             installed_any |= self.ensure_default_plugin_installed(id)?;
@@ -736,7 +738,14 @@ impl UzeApplication {
             .iter()
             .filter(|integration| requested.is_none_or(|id| integration.id() == id))
             .map(|integration| {
-                let provisioning = integration.provision(self.runner.as_ref())?;
+                let provisioning = {
+                    let _span = tracing::info_span!(
+                        "integration.provision",
+                        integration = integration.id()
+                    )
+                    .entered();
+                    integration.provision(self.runner.as_ref())?
+                };
                 state::record_provisioning(&self.home, integration.id(), &provisioning)?;
                 let configured = provisioning.status == ProvisionStatus::Verified;
                 if configured {
@@ -784,6 +793,9 @@ impl UzeApplication {
                 let detection = self.detect_cached(integration.as_ref());
                 let configured = detection.present;
                 if detection.present {
+                    let _span =
+                        tracing::debug_span!("integration.install", integration = integration.id())
+                            .entered();
                     integration.install(&self.home, &detection)?;
                 }
                 Ok(SetupResult {
@@ -1098,6 +1110,12 @@ impl UzeApplication {
                 {
                     Some(cached) => cached,
                     None => {
+                        let _span = tracing::info_span!(
+                            "integration.inspect",
+                            integration = %receipt.integration,
+                            receipt = %ledger_key
+                        )
+                        .entered();
                         let live = self
                             .integrations
                             .iter()
@@ -1129,4 +1147,8 @@ impl UzeApplication {
     }
 }
 #[cfg(test)]
+mod performance_tests;
+#[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tracing_tests;

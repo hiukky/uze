@@ -53,6 +53,9 @@ pub fn detect() -> Option<String> {
 /// plain launch of the real binary — see the inline handling below.
 pub fn run(shim_name: &str) -> ! {
     let original_args: Vec<OsString> = env::args_os().skip(1).collect();
+    let telemetry = uze::telemetry::init(uze::telemetry::Sink::Stderr);
+    let span = tracing::info_span!("shim", harness = shim_name);
+    let _entered = span.enter();
 
     let home = match UzeHome::from_env() {
         Ok(home) => home,
@@ -105,6 +108,7 @@ pub fn run(shim_name: &str) -> ! {
             &original_args,
             &HarnessRuntimeContribution::passthrough(),
             shim_name,
+            telemetry,
         );
     }
 
@@ -145,7 +149,13 @@ pub fn run(shim_name: &str) -> ! {
             .collect();
     }
 
-    exec_or_die(&executable, &original_args, &contribution, shim_name);
+    exec_or_die(
+        &executable,
+        &original_args,
+        &contribution,
+        shim_name,
+        telemetry,
+    );
 }
 
 /// Exact argv passthrough: `contribution.extra_args` are prepended before
@@ -169,6 +179,7 @@ fn exec_or_die(
     original_args: &[OsString],
     contribution: &HarnessRuntimeContribution,
     shim_name: &str,
+    telemetry: uze::telemetry::Telemetry,
 ) -> ! {
     let mut command = std::process::Command::new(executable);
     command.args(&contribution.extra_args);
@@ -177,6 +188,12 @@ fn exec_or_die(
     for (key, value) in &contribution.extra_env {
         command.env(key, value);
     }
+    // The harness inherits this launch's trace, and hands it on to the
+    // hooks it fires (`uze hook-exec` adopts it). Flushed here because
+    // `exec` never returns to drop anything.
+    uze::telemetry::inject_into(&mut command);
+    tracing::info!(executable = %executable.display(), "exec");
+    telemetry.finish();
     run_replacing_process(command, executable)
 }
 

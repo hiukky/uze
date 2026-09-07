@@ -71,8 +71,8 @@ accepts, which is why the table sums to more than the number of crates.
 
 | Licence | Crates |
 | --- | --- |
-| Apache License 2.0 (`Apache-2.0`) | 187 |
-| MIT License (`MIT`) | 60 |
+| Apache License 2.0 (`Apache-2.0`) | 188 |
+| MIT License (`MIT`) | 65 |
 | Unicode License v3 (`Unicode-3.0`) | 1 |
 | zlib License (`Zlib`) | 1 |
 
@@ -189,12 +189,14 @@ accepts, which is why the table sums to more than the number of crates.
 | `lock_api` | 0.4.14 | MIT OR Apache-2.0 |
 | `log` | 0.4.34 | MIT OR Apache-2.0 |
 | `lru` | 0.18.4 | MIT |
+| `matchers` | 0.2.0 | MIT |
 | `memchr` | 2.8.3 | Unlicense OR MIT |
 | `miniz_oxide` | 0.9.1 | MIT OR Zlib OR Apache-2.0 |
 | `mio` | 1.2.3 | MIT |
 | `miow` | 0.6.1 | MIT OR Apache-2.0 |
 | `nix` | 0.28.0 | MIT |
 | `noyalib` | 0.0.33 | MIT OR Apache-2.0 |
+| `nu-ansi-term` | 0.50.3 | MIT |
 | `num-conv` | 0.2.2 | MIT OR Apache-2.0 |
 | `num-traits` | 0.2.19 | MIT OR Apache-2.0 |
 | `num_threads` | 0.1.7 | MIT OR Apache-2.0 |
@@ -245,6 +247,7 @@ accepts, which is why the table sums to more than the number of crates.
 | `serde_json` | 1.0.151 | MIT OR Apache-2.0 |
 | `serial2` | 0.2.38 | BSD-2-Clause OR Apache-2.0 |
 | `sha2` | 0.10.9 | MIT OR Apache-2.0 |
+| `sharded-slab` | 0.1.7 | MIT |
 | `shared_library` | 0.1.9 | Apache-2.0 OR MIT |
 | `shell-words` | 1.1.1 | MIT OR Apache-2.0 |
 | `shlex` | 2.0.1 | MIT OR Apache-2.0 |
@@ -267,6 +270,7 @@ accepts, which is why the table sums to more than the number of crates.
 | `thiserror` | 2.0.20 | MIT OR Apache-2.0 |
 | `thiserror-impl` | 1.0.69 | MIT OR Apache-2.0 |
 | `thiserror-impl` | 2.0.20 | MIT OR Apache-2.0 |
+| `thread_local` | 1.1.10 | MIT OR Apache-2.0 |
 | `time` | 0.3.55 | MIT OR Apache-2.0 |
 | `time-core` | 0.1.9 | MIT OR Apache-2.0 |
 | `tokio` | 1.53.1 | MIT |
@@ -279,6 +283,8 @@ accepts, which is why the table sums to more than the number of crates.
 | `tracing` | 0.1.44 | MIT |
 | `tracing-attributes` | 0.1.31 | MIT |
 | `tracing-core` | 0.1.36 | MIT |
+| `tracing-log` | 0.2.0 | MIT |
+| `tracing-subscriber` | 0.3.23 | MIT |
 | `typenum` | 1.20.1 | MIT OR Apache-2.0 |
 | `unicode-ident` | 1.0.24 | (MIT OR Apache-2.0) AND Unicode-3.0 |
 | `unicode-segmentation` | 1.13.3 | MIT OR Apache-2.0 |

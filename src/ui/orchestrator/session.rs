@@ -83,6 +83,15 @@ pub(super) struct Attach<'a> {
 impl Attach<'_> {
     /// Routes one event to the half of the client that owns it.
     pub(super) fn handle(&mut self, event: Event, viewport: &Viewport) -> Flow {
+        let _span = tracing::debug_span!(
+            "tui.event",
+            kind = match &event {
+                Event::Key(_) => "key",
+                Event::Mouse(_) => "mouse",
+                _ => "other",
+            }
+        )
+        .entered();
         match event {
             Event::Key(key) => self.key(key, viewport),
             Event::Paste(text) => self.paste(text),

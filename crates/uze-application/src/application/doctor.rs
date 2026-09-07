@@ -22,6 +22,7 @@ impl Health<'_> {
     /// The only slow path is a cold cache (one vendor-CLI probe per
     /// receipt), which is exactly the honest cost of the first evidence —
     /// paid once per TTL window, not on every screen.
+    #[tracing::instrument(name = "health.report", skip_all)]
     pub fn report(&self) -> DoctorReport {
         let maintenance = self.maintain();
         let mut report = self.doctor_shell();
@@ -199,6 +200,7 @@ impl Health<'_> {
             .collect()
     }
 
+    #[tracing::instrument(name = "health.harnesses", skip_all)]
     pub fn harnesses(&self) -> Vec<HarnessHealth> {
         self.harness_health()
     }
@@ -207,6 +209,7 @@ impl Health<'_> {
     /// people actually type (`claude`), or the display label doctor shows
     /// back (`Claude Code`) — the same names `uze setup` accepts plus what
     /// `uze doctor`/the TUI print.
+    #[tracing::instrument(name = "health.harness", skip_all, fields(name = %name), err)]
     pub fn harness(&self, name: &str) -> Result<HarnessHealth> {
         let id = self
             .0
@@ -230,6 +233,7 @@ impl Health<'_> {
     /// Code`), for text renders whose read models carry only the stable id.
     /// An id that belongs to no registered integration renders as itself —
     /// a label lookup must never fail a display.
+    #[tracing::instrument(name = "health.integration_label", skip_all, fields(integration = %integration))]
     pub fn integration_label(&self, integration: &str) -> String {
         self.0
             .integrations
@@ -241,6 +245,7 @@ impl Health<'_> {
             )
     }
 
+    #[tracing::instrument(name = "health.status", skip_all, fields(project_root = %project_root.display()), err)]
     pub fn status(&self, project_root: &std::path::Path) -> Result<StatusReport> {
         let context = self.0.context().inspect(project_root)?;
         let installed = self.0.store.package_ids()?.len();

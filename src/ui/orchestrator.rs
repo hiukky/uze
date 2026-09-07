@@ -165,7 +165,10 @@ struct SupportResolution {
 /// one that would have happened wherever `uze` itself was started.
 fn spawn_support_refresh(home: &UzeHome, key: SupportKey, sender: mpsc::Sender<SupportResolution>) {
     let support_home = home.clone();
+    let parent = tracing::Span::current();
     thread::spawn(move || {
+        let _parent = parent.enter();
+        let _span = tracing::info_span!("tui.support_refresh").entered();
         let support = super::tui_application(support_home).ok().and_then(|app| {
             let context = app.workspace().agent_context_for(&key.0, &key.1).ok()?;
             let health = app.health().harness(&key.0).ok()?;
@@ -197,7 +200,10 @@ fn spawn_conversation_refresh(home: &UzeHome, agents: Vec<(String, PathBuf)>) {
         return;
     }
     let home = home.clone();
+    let parent = tracing::Span::current();
     thread::spawn(move || {
+        let _parent = parent.enter();
+        let _span = tracing::info_span!("tui.conversation_refresh").entered();
         let Ok(app) = tui_application(home) else {
             return;
         };
@@ -289,7 +295,10 @@ fn spawn_task_evaluation(
     sender: mpsc::Sender<TaskResolution>,
 ) {
     let home = home.clone();
+    let parent = tracing::Span::current();
     thread::spawn(move || {
+        let _parent = parent.enter();
+        let _span = tracing::info_span!("tui.task_evaluation").entered();
         // Every path out of here answers, including the ones that found
         // nothing: a request that returns in silence never releases its
         // key, and the directory is then never evaluated again.
@@ -331,7 +340,10 @@ fn spawn_delivery(
     sender: mpsc::Sender<DeliveryResolution>,
 ) {
     let home = home.clone();
+    let parent = tracing::Span::current();
     thread::spawn(move || {
+        let _parent = parent.enter();
+        let _span = tracing::info_span!("tui.delivery").entered();
         let Ok(app) = tui_application(home) else {
             return;
         };
@@ -406,7 +418,10 @@ fn spawn_git_read(
     history: bool,
     sender: mpsc::Sender<GitResolution>,
 ) {
+    let parent = tracing::Span::current();
     thread::spawn(move || {
+        let _parent = parent.enter();
+        let _span = tracing::info_span!("tui.git_read").entered();
         let summary = git::change_summary(&WorkspaceHost, &cwd);
         let answer = if history {
             GitAnswer::Full {
@@ -439,7 +454,10 @@ fn spawn_commit_detail(
     target: Option<String>,
     sender: mpsc::Sender<CommitDetailResolution>,
 ) {
+    let parent = tracing::Span::current();
     thread::spawn(move || {
+        let _parent = parent.enter();
+        let _span = tracing::info_span!("tui.commit_detail").entered();
         let detail = git::commit_detail(&WorkspaceHost, &cwd, &hash);
         let _ = sender.send(CommitDetailResolution {
             hash,
@@ -487,7 +505,10 @@ fn spawn_agent_placement(
     sender: mpsc::Sender<PlacementResolution>,
 ) {
     let home = home.clone();
+    let parent = tracing::Span::current();
     thread::spawn(move || {
+        let _parent = parent.enter();
+        let _span = tracing::info_span!("tui.agent_placement").entered();
         // Answered on every path, including the one that could not even
         // build an application: the request holds the only reservation
         // there is, and a silent return would leave this client unable to
@@ -541,7 +562,10 @@ fn spawn_occupancy_reconcile(
     sender: mpsc::Sender<OccupancyResolution>,
 ) {
     let home = home.clone();
+    let parent = tracing::Span::current();
     thread::spawn(move || {
+        let _parent = parent.enter();
+        let _span = tracing::info_span!("tui.occupancy_reconcile").entered();
         let reconciliation = tui_application(home)
             .map(|app| {
                 // Shares this pass rather than earning a thread of its own:
@@ -574,7 +598,10 @@ fn spawn_git_view_reload(
     placement: git::ViewPlacement,
     sender: mpsc::Sender<GitViewResolution>,
 ) {
+    let parent = tracing::Span::current();
     thread::spawn(move || {
+        let _parent = parent.enter();
+        let _span = tracing::info_span!("tui.git_view_reload").entered();
         let view = git::GitView::reload(&WorkspaceHost, root.clone(), placement.clone());
         let _ = sender.send(GitViewResolution {
             root,
@@ -673,7 +700,9 @@ pub(crate) fn attach_workspace(
     send_request(&mut stream, &ClientRequest::SetPalette(active_palette()))
         .map_err(runtime_error)?;
     let (events, receiver) = mpsc::channel();
+    let parent = tracing::Span::current();
     thread::spawn(move || {
+        let _parent = parent.enter();
         let mut reader = BufReader::new(read_stream);
         while let Ok(Some(event)) = read_event(&mut reader) {
             if events.send(event).is_err() {
@@ -687,9 +716,12 @@ pub(crate) fn attach_workspace(
     // thread ends when `model` drops its sender at the end of this attach.
     let (prompt_recorder, recorded_prompts) =
         mpsc::channel::<(PathBuf, uze_application::PromptOrigin, String)>();
+    let parent = tracing::Span::current();
     thread::spawn({
         let home = home.clone();
         move || {
+            let _parent = parent.enter();
+            let _span = tracing::info_span!("tui.attach_workspace").entered();
             while let Ok((root, origin, prompt)) = recorded_prompts.recv() {
                 let _ = tui_application(home.clone())
                     .and_then(|app| app.workspace().record_prompt(&root, &origin, &prompt));
@@ -702,10 +734,13 @@ pub(crate) fn attach_workspace(
     // included, from the copy it was handed: that section cannot change
     // while this mode has the screen, so the copy is exact.
     let (layout_recorder, remembered_layouts) = mpsc::channel::<WorkspaceShape>();
+    let parent = tracing::Span::current();
     thread::spawn({
         let home = home.clone();
         let mut layout = layout.clone();
         move || {
+            let _parent = parent.enter();
+            let _span = tracing::info_span!("tui.attach_workspace").entered();
             while let Ok(shape) = remembered_layouts.recv() {
                 shape.apply_to(&mut layout);
                 let _ = tui_application(home.clone())

@@ -29,6 +29,7 @@ impl Workspace<'_> {
     /// One repository is one terminal server, and this is the answer both
     /// the server key and the prompt history are keyed on — resolved once,
     /// here, rather than twice at two call sites.
+    #[tracing::instrument(name = "workspace.root", skip_all, fields(cwd = %cwd.display()))]
     pub fn root(&self, cwd: &Path) -> PathBuf {
         workspace::workspace_root_or_self(cwd)
     }
@@ -36,11 +37,13 @@ impl Workspace<'_> {
     /// The isolated checkout a path sits in, or `None` when it is not
     /// isolated. Lexical against the fixed layout: a display asks this of
     /// every open tab on every frame.
+    #[tracing::instrument(name = "workspace.isolated_checkout", skip_all)]
     pub fn isolated_checkout<'a>(&self, path: &'a Path) -> Option<worktree::IsolatedCheckout<'a>> {
         worktree::isolated_checkout(path)
     }
 
     /// The harnesses this installation can recognize, as descriptors.
+    #[tracing::instrument(name = "workspace.agent_identities", skip_all)]
     pub fn agent_identities(&self) -> Vec<AgentIdentity> {
         self.0
             .integrations
@@ -106,6 +109,7 @@ impl Workspace<'_> {
     /// caller gives it — one of these asks a harness about its own
     /// records, which can mean spawning it — and is silent about every
     /// way of having nothing to say.
+    #[tracing::instrument(name = "workspace.refresh_conversation", skip_all, fields(integration = %integration, cwd = %cwd.display()))]
     pub fn refresh_conversation(&self, integration: &str, cwd: &Path) -> bool {
         self.0
             .integrations
@@ -117,6 +121,7 @@ impl Workspace<'_> {
     }
 
     /// Recent prompts submitted into the agent tabs of `root`'s workspace.
+    #[tracing::instrument(name = "workspace.prompt_history", skip_all, fields(root = %root.display(), limit))]
     pub fn prompt_history(&self, root: &Path, limit: usize) -> Vec<prompt_history::PromptEntry> {
         prompt_history::list_for_workspace(&self.0.home, root, limit)
     }
@@ -124,6 +129,7 @@ impl Workspace<'_> {
     /// Records one prompt submitted into an agent tab of `root`'s
     /// workspace. Best-effort by construction: an empty prompt is ignored
     /// rather than refused.
+    #[tracing::instrument(name = "workspace.record_prompt", skip_all, fields(root = %root.display(), prompt = %prompt), err)]
     pub fn record_prompt(
         &self,
         root: &Path,
@@ -134,6 +140,7 @@ impl Workspace<'_> {
     }
 
     /// Forgets every prompt recorded for `root`'s workspace.
+    #[tracing::instrument(name = "workspace.clear_prompt_history", skip_all, fields(root = %root.display()), err)]
     pub fn clear_prompt_history(&self, root: &Path) -> Result<()> {
         prompt_history::clear(&self.0.home, root)
     }
@@ -141,11 +148,13 @@ impl Workspace<'_> {
     /// What the TUI was last left looking like, in both of its modes.
     /// Best-effort: unreadable state answers with the defaults rather
     /// than failing.
+    #[tracing::instrument(name = "workspace.client_layout", skip_all)]
     pub fn client_layout(&self) -> client_layout::ClientLayout {
         client_layout::load(&self.0.home)
     }
 
     /// Remembers the TUI's shape for the next run.
+    #[tracing::instrument(name = "workspace.save_client_layout", skip_all, err)]
     pub fn save_client_layout(&self, layout: &client_layout::ClientLayout) -> Result<()> {
         client_layout::save(&self.0.home, layout)
     }
@@ -161,6 +170,7 @@ impl Workspace<'_> {
     /// isolation is impossible — no repository, no branch, no commit to
     /// branch from, Git refusing — the agent starts in place and the
     /// placement says why, so the tab can.
+    #[tracing::instrument(name = "workspace.place_new_agent", skip_all, fields(pane_cwd = %pane_cwd.display()))]
     pub fn place_new_agent(&self, pane_cwd: &Path, occupied: &[PathBuf]) -> AgentPlacement {
         let Some(primary) = worktree::primary_checkout(pane_cwd) else {
             return AgentPlacement::unisolated(pane_cwd, "not inside a Git working tree");
@@ -227,6 +237,7 @@ impl Workspace<'_> {
     /// where its branch stands. The task is live again in the slot this
     /// acquires; `occupied` is what [`Self::place_new_agent`] takes. A
     /// task that still has its checkout is answered with that checkout.
+    #[tracing::instrument(name = "workspace.resume_task", skip_all, fields(cwd = %cwd.display(), task_id = %task_id), err)]
     pub fn resume_task(
         &self,
         cwd: &Path,
@@ -300,6 +311,7 @@ impl Workspace<'_> {
 
     /// The primary checkout `cwd` belongs to — the key every task view
     /// hangs off — or `None` outside a Git working tree.
+    #[tracing::instrument(name = "workspace.primary_of", skip_all, fields(cwd = %cwd.display()))]
     pub fn primary_of(&self, cwd: &Path) -> Option<PathBuf> {
         worktree::primary_checkout(cwd)
     }
@@ -307,6 +319,7 @@ impl Workspace<'_> {
     /// The branch checked out where `cwd` sits — what an agent working
     /// outside any slot is on — or `None` for a detached `HEAD` or no
     /// repository at all.
+    #[tracing::instrument(name = "workspace.current_branch", skip_all, fields(cwd = %cwd.display()))]
     pub fn current_branch(&self, cwd: &Path) -> Option<String> {
         checkout::current_branch(cwd)
     }
@@ -317,6 +330,7 @@ impl Workspace<'_> {
     /// and without an upstream to measure against: an agent on a branch
     /// of its own reaches the remote through the target, so the target
     /// is the one branch whose sync with it is worth a caption.
+    #[tracing::instrument(name = "workspace.target_upstream_sync", skip_all, fields(cwd = %cwd.display()))]
     pub fn target_upstream_sync(&self, cwd: &Path) -> Option<UpstreamSync> {
         let repository = self.repository(cwd)?;
         if checkout::current_branch(cwd)? != repository.target() {
@@ -330,6 +344,7 @@ impl Workspace<'_> {
     }
 
     /// Every task recorded for `cwd`'s repository, as last evaluated.
+    #[tracing::instrument(name = "workspace.tasks", skip_all, fields(cwd = %cwd.display()))]
     pub fn tasks(&self, cwd: &Path) -> Vec<TaskView> {
         self.repository(cwd)
             .map(|repository| repository.views())
@@ -343,6 +358,7 @@ impl Workspace<'_> {
     /// *tracked* file — the one the whole team reads — and the projected
     /// `AGENTS.md` still needs `uze context reconcile` to follow it, so a
     /// click that silently did both would be a click nobody could predict.
+    #[tracing::instrument(name = "workspace.completion_change_consequence", skip_all, fields(cwd = %cwd.display()))]
     pub fn completion_change_consequence(&self, cwd: &Path) -> Option<PolicyWriteConsequence> {
         let repository = self.repository(cwd)?;
         let manifest = manifest::manifest_path_for(&repository.primary);
@@ -360,6 +376,7 @@ impl Workspace<'_> {
     /// The policy is the primary checkout's, always: an isolated checkout
     /// declaring one of its own would be a per-worktree policy, which
     /// there is deliberately none of.
+    #[tracing::instrument(name = "workspace.set_completion", skip_all, fields(cwd = %cwd.display()), err)]
     pub fn set_completion(&self, cwd: &Path, behavior: CompletionBehavior) -> Result<bool> {
         // `MissingPath` is what resolving a project root already answers
         // with when there is nothing to resolve; a policy is a repository's,
@@ -371,6 +388,7 @@ impl Workspace<'_> {
         manifest::set_completion(&primary, behavior)
     }
 
+    #[tracing::instrument(name = "workspace.delivery_policy", skip_all, fields(cwd = %cwd.display()))]
     pub fn delivery_policy(&self, cwd: &Path) -> Option<DeliveryPolicyView> {
         let repository = self.repository(cwd)?;
         let declared = manifest::load(&repository.primary)
@@ -398,6 +416,7 @@ impl Workspace<'_> {
     /// sidebar shows after an agent's pane goes quiet — and lets a clean,
     /// live task follow a target that moved. A conflict that produces
     /// returns to the owning agent as a notice for its pane.
+    #[tracing::instrument(name = "workspace.evaluate_tasks", skip_all, fields(cwd = %cwd.display()))]
     pub fn evaluate_tasks(&self, cwd: &Path, occupied: &[PathBuf]) -> Evaluation {
         let Some(mut repository) = self.repository(cwd) else {
             return Evaluation::default();
@@ -477,6 +496,7 @@ impl Workspace<'_> {
 
     /// Delivers one task the way the project's completion says, one task
     /// at a time under the repository write lock.
+    #[tracing::instrument(name = "workspace.deliver_task", skip_all, fields(cwd = %cwd.display(), task_id = %task_id))]
     pub fn deliver_task(&self, cwd: &Path, task_id: &str) -> Option<DeliveryReport> {
         let mut repository = self.repository(cwd)?;
         let report = repository.deliver(task_id)?;
@@ -485,6 +505,7 @@ impl Workspace<'_> {
     }
 
     /// Delivers every ready task, oldest first; the second sees the first.
+    #[tracing::instrument(name = "workspace.deliver_ready", skip_all, fields(cwd = %cwd.display()))]
     pub fn deliver_ready(&self, cwd: &Path) -> Vec<DeliveryReport> {
         let Some(mut repository) = self.repository(cwd) else {
             return Vec::new();
@@ -523,6 +544,7 @@ impl Workspace<'_> {
     /// the collection that acts on it; and only the removals that cannot
     /// lose work are ever taken. A caller that got any of that wrong would
     /// hand one agent's slot to another.
+    #[tracing::instrument(name = "workspace.reconcile_occupancy", skip_all)]
     pub fn reconcile_occupancy(&self, look_in: &[PathBuf], held: &[PathBuf]) -> Reconciliation {
         let mut reconciliation = Reconciliation::default();
         let mut seen = BTreeSet::new();
@@ -554,6 +576,7 @@ impl Workspace<'_> {
     /// work. Delivery is not the only way a task ends — most end by the
     /// operator closing the tab — and a slot nobody ever released is a slot
     /// no new agent can reuse.
+    #[tracing::instrument(name = "workspace.release_abandoned_tasks", skip_all, fields(cwd = %cwd.display()))]
     pub fn release_abandoned_tasks(&self, cwd: &Path, occupied: &[PathBuf]) -> Vec<ReleasedTask> {
         let Some(mut repository) = self.repository(cwd) else {
             return Vec::new();
@@ -589,6 +612,7 @@ impl Workspace<'_> {
     /// has touched in a fortnight — its branch kept. Nothing holding work
     /// is ever touched here, and nothing a live pane sits in (`occupied`);
     /// that is the operator's alone.
+    #[tracing::instrument(name = "workspace.collect_slot_garbage", skip_all, fields(cwd = %cwd.display()))]
     pub fn collect_slot_garbage(&self, cwd: &Path, occupied: &[PathBuf]) -> Vec<String> {
         let Some(repository) = self.repository(cwd) else {
             return Vec::new();
@@ -610,6 +634,7 @@ impl Workspace<'_> {
 
     /// The operator declares a handed-off task done: its slot is free and
     /// its branch stays.
+    #[tracing::instrument(name = "workspace.finish_task", skip_all, fields(cwd = %cwd.display(), task_id = %task_id), err)]
     pub fn finish_task(&self, cwd: &Path, task_id: &str) -> Result<()> {
         let mut repository = self
             .repository(cwd)
@@ -623,6 +648,7 @@ impl Workspace<'_> {
 
     /// The one path that deletes work, taken only by the operator on a
     /// named task: the checkout and the branch go, the record goes with them.
+    #[tracing::instrument(name = "workspace.discard_task", skip_all, fields(cwd = %cwd.display(), task_id = %task_id), err)]
     pub fn discard_task(&self, cwd: &Path, task_id: &str) -> Result<()> {
         let mut repository = self
             .repository(cwd)

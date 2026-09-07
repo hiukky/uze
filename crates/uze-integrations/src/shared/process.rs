@@ -61,6 +61,13 @@ fn capture_with_timeout<S: AsRef<OsStr>>(
     args: &[S],
     timeout: Duration,
 ) -> io::Result<Output> {
+    let span = tracing::info_span!(
+        "vendor.cli",
+        program = %program.display(),
+        args = %args.iter().map(|arg| arg.as_ref().to_string_lossy().into_owned()).collect::<Vec<_>>().join(" "),
+        exit = tracing::field::Empty
+    );
+    let _entered = span.enter();
     let mut command = Command::new(program);
     command
         .env("HOME", home)
@@ -100,7 +107,9 @@ fn capture_with_timeout<S: AsRef<OsStr>>(
         let _ = stderr_tx.send(read_bounded(&mut stderr, VENDOR_OUTPUT_CAP));
     });
     let (status, timed_out) = wait_with_timeout(&mut child, timeout)?;
+    span.record("exit", status.code().unwrap_or(-1));
     if timed_out {
+        tracing::warn!("vendor cli timed out");
         // The group was already killed; the reader threads exit once the
         // now-closed pipes hit EOF and are never waited on here.
         return Err(timeout_error());

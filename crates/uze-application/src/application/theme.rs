@@ -25,6 +25,7 @@ impl Themes<'_> {
     /// Every theme this machine can load: the ones UZE carries, then the
     /// ones the operator wrote. A file that shadows a built-in's name wins,
     /// the way a local override should — and is listed once, as theirs.
+    #[tracing::instrument(name = "themes.list", skip_all, err)]
     pub fn list(&self, builtin: &[&str]) -> Result<Vec<ThemeSummary>> {
         let active = self.active()?;
         let written = theme_state::available(&self.0.home)?;
@@ -50,12 +51,14 @@ impl Themes<'_> {
     }
 
     /// The selected theme's id, or `None` while the operator has not chosen.
+    #[tracing::instrument(name = "themes.active", skip_all, err)]
     pub fn active(&self) -> Result<Option<String>> {
         theme_state::active(&self.0.home)
     }
 
     /// The file a written theme lives in, or `None` when the id names a
     /// built-in (or nothing at all).
+    #[tracing::instrument(name = "themes.path_of", skip_all, fields(id = %id), err)]
     pub fn path_of(&self, id: &str) -> Result<Option<std::path::PathBuf>> {
         Ok(theme_state::available(&self.0.home)?
             .into_iter()
@@ -66,6 +69,7 @@ impl Themes<'_> {
     /// Records the selection. Does not validate that the id names anything:
     /// only the design system can say whether a theme resolves, and it says
     /// so by loading it.
+    #[tracing::instrument(name = "themes.select", skip_all, fields(id = %id), err)]
     pub fn select(&self, id: &str) -> Result<()> {
         theme_state::set_active(&self.0.home, id)
     }

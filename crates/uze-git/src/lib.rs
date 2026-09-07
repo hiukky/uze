@@ -164,7 +164,19 @@ fn base_command(root: &Path, args: &[&str]) -> Command {
 }
 
 fn run(mut command: Command) -> Result<Output, SpawnError> {
-    let output = command.output().map_err(describe_spawn_failure)?;
+    let arguments = command
+        .get_args()
+        .map(|argument| argument.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let span = tracing::info_span!("git", args = %arguments, exit = tracing::field::Empty);
+    let _entered = span.enter();
+    let output = command.output().map_err(|error| {
+        let failure = describe_spawn_failure(error);
+        tracing::warn!(error = %failure.0, "git could not be run");
+        failure
+    })?;
+    span.record("exit", output.status.code().unwrap_or(-1));
     Ok(Output {
         code: output.status.code(),
         stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
@@ -184,6 +196,73 @@ fn describe_spawn_failure(error: io::Error) -> SpawnError {
 mod tests {
     use super::*;
     use std::{path::PathBuf, time::Instant};
+
+    /// The spans this crate opens, with the `exit` each recorded.
+    #[derive(Clone, Default)]
+    struct Recorded(std::sync::Arc<std::sync::Mutex<Vec<(String, Option<i64>)>>>);
+
+    impl<S> tracing_subscriber::Layer<S> for Recorded
+    where
+        S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+    {
+        fn on_new_span(
+            &self,
+            attrs: &tracing::span::Attributes<'_>,
+            _id: &tracing::span::Id,
+            _context: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            self.0
+                .lock()
+                .unwrap()
+                .push((attrs.metadata().name().to_owned(), None));
+        }
+
+        fn on_record(
+            &self,
+            _id: &tracing::span::Id,
+            values: &tracing::span::Record<'_>,
+            _context: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            let mut exit = ExitCode(None);
+            values.record(&mut exit);
+            if let Some(code) = exit.0
+                && let Some(last) = self.0.lock().unwrap().last_mut()
+            {
+                last.1 = Some(code);
+            }
+        }
+    }
+
+    struct ExitCode(Option<i64>);
+
+    impl tracing::field::Visit for ExitCode {
+        fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
+            if field.name() == "exit" {
+                self.0 = Some(value);
+            }
+        }
+
+        fn record_debug(&mut self, _field: &tracing::field::Field, _value: &dyn std::fmt::Debug) {}
+    }
+
+    #[test]
+    fn every_invocation_is_a_span_with_its_exit_code() {
+        use tracing_subscriber::layer::SubscriberExt;
+        let _env = uze_testkit::env::scope();
+        let root = repository("git-span");
+        let recorded = Recorded::default();
+        let subscriber = tracing_subscriber::registry().with(recorded.clone());
+        tracing::subscriber::with_default(subscriber, || {
+            read(&root, &["rev-parse", "--verify", "HEAD"]).unwrap();
+            read(&root, &["rev-parse", "--verify", "no-such-ref"]).unwrap();
+        });
+        let spans = recorded.0.lock().unwrap().clone();
+        assert_eq!(
+            spans,
+            vec![("git".to_owned(), Some(0)), ("git".to_owned(), Some(128))],
+            "one span per invocation, each with Git's exit code"
+        );
+    }
 
     /// Every test here spawns Git, which resolves through the process-global
     /// `PATH` — including the one test that empties it. Reading ambient env

@@ -9,6 +9,9 @@ authors.workspace = true
 publish = false
 
 [dependencies]
+# Spans on every process this crate runs; a no-op until the binary
+# subscribes (see `src/telemetry.rs`).
+tracing = "0.1"
 uze-core = { path = "../uze-core" }
 serde_json = "1"
 toml_edit = "0.25.13"

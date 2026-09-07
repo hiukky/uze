@@ -162,6 +162,7 @@ impl Hooks<'_> {
     /// belongs here rather than in the CLI: the only part of it that is
     /// presentation is reading stdin and writing stdout, which is exactly
     /// what the caller is left holding.
+    #[tracing::instrument(name = "hooks.dispatch", skip_all, fields(adapter_id = %adapter_id, plugin_root = %plugin_root.display()), err)]
     pub fn dispatch(
         &self,
         adapter_id: &str,

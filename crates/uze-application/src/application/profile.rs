@@ -32,9 +32,14 @@ pub struct ProfileApplyResult {
 }
 
 impl Profiles<'_> {
+    #[tracing::instrument(name = "profiles.list", skip_all, err)]
     pub fn list(&self) -> Result<Vec<ProfileSummary>> {
-        let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
-        profile_state::ensure_default(&self.0.home)?;
+        // A listing writes only on a home that has no profile yet; on every
+        // other read the mutation lock would be taken for nothing.
+        if profile_state::load(&self.0.home)?.is_empty() {
+            let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
+            profile_state::ensure_default(&self.0.home)?;
+        }
         let active = profile_state::active(&self.0.home)?;
         Ok(profile_state::load(&self.0.home)?
             .into_values()
@@ -47,10 +52,12 @@ impl Profiles<'_> {
             .collect())
     }
 
+    #[tracing::instrument(name = "profiles.get", skip_all, fields(id = %id), err)]
     pub fn get(&self, id: &str) -> Result<Option<profile_state::ProfileRecord>> {
         profile_state::get(&self.0.home, id)
     }
 
+    #[tracing::instrument(name = "profiles.create", skip_all, fields(id = %id), err)]
     pub fn create(
         &self,
         id: &str,
@@ -68,17 +75,20 @@ impl Profiles<'_> {
         Ok(())
     }
 
+    #[tracing::instrument(name = "profiles.update_preferences", skip_all, fields(id = %id), err)]
     pub fn update_preferences(&self, id: &str, preferences: Preferences) -> Result<()> {
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
         profile_state::update_preferences(&self.0.home, id, preferences)
     }
 
+    #[tracing::instrument(name = "profiles.delete", skip_all, fields(id = %id), err)]
     pub fn delete(&self, id: &str) -> Result<()> {
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
         profile_state::ensure_default(&self.0.home)?;
         profile_state::delete(&self.0.home, id)
     }
 
+    #[tracing::instrument(name = "profiles.set_active", skip_all, fields(id = %id), err)]
     pub fn set_active(&self, id: &str) -> Result<()> {
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
         profile_state::set_active(&self.0.home, id)
@@ -89,6 +99,7 @@ impl Profiles<'_> {
     /// registered adapter for the id) never aborts the rest — it becomes a
     /// `Failed` result for that harness alone, matching `setup()`'s
     /// per-harness partial-failure isolation.
+    #[tracing::instrument(name = "profiles.apply", skip_all, fields(id = %id), err)]
     pub fn apply(&self, id: &str, harness_ids: &[String]) -> Result<Vec<ProfileApplyResult>> {
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
         let record = profile_state::get(&self.0.home, id)?

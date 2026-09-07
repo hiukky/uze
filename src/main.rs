@@ -552,6 +552,56 @@ fn print_command_help(title: &str, description: &str, usage: &str, commands: &[(
 
 fn run(cli: Cli) -> Result<()> {
     let home = UzeHome::from_env()?;
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    // The TUI owns the terminal, so its trace goes to a file; everything
+    // else may write to stderr like any other diagnostic.
+    let opens_the_tui = cli.command.is_none()
+        && std::env::var_os("UZE_PANE").is_none()
+        && std::io::stdout().is_terminal()
+        && std::io::stdin().is_terminal();
+    let sink = if opens_the_tui {
+        uze::telemetry::Sink::File(home.state_dir().join("logs").join("uze.log"))
+    } else {
+        uze::telemetry::Sink::Stderr
+    };
+    let _telemetry = uze::telemetry::init(sink);
+    let span = uze::telemetry::command_span(&leaf_command_of(&argv), &argv);
+    // A `uze` started by a harness the shim launched — a hook it fired, or
+    // an agent running `uze` itself — continues the launch's trace.
+    uze::telemetry::adopt_parent_from_env(&span);
+    let _entered = span.enter();
+    let result = dispatch(cli, home);
+    if let Err(error) = &result {
+        tracing::error!(error = %error, "command failed");
+    }
+    result
+}
+
+/// The leaf command path `argv` names, spelled the way a person types it
+/// (`context inspect`); the first argument when it names no subcommand
+/// (a `plugin@marketplace` shorthand), and `tui` when there is none.
+/// Parsed again from the grammar rather than derived from `Cli`'s
+/// variants, so a renamed subcommand renames its span with it.
+fn leaf_command_of(argv: &[String]) -> String {
+    let parsed = Cli::command()
+        .try_get_matches_from(std::iter::once("uze".to_owned()).chain(argv.iter().cloned()))
+        .ok();
+    let mut path = Vec::new();
+    let mut current = parsed.as_ref();
+    while let Some((name, matches)) = current.and_then(clap::ArgMatches::subcommand) {
+        path.push(name.to_owned());
+        current = Some(matches);
+    }
+    if !path.is_empty() {
+        return path.join(" ");
+    }
+    argv.iter()
+        .find(|argument| !argument.starts_with('-'))
+        .cloned()
+        .unwrap_or_else(|| "tui".to_owned())
+}
+
+fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
     // Before anything is drawn or printed, so the CLI's first line and the
     // TUI's first frame are already in the operator's theme. A theme that
     // will not load reports itself here and is otherwise ignored — see

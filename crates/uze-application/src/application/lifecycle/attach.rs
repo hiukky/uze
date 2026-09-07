@@ -52,6 +52,12 @@ impl UzeApplication {
         package: &StoredPackage,
         integration: &dyn IntegrationPort,
     ) -> Result<()> {
+        let _span = tracing::info_span!(
+            "integration.attach",
+            integration = integration.id(),
+            package = %package.id.as_str()
+        )
+        .entered();
         let environment = self.engine().compose(std::slice::from_ref(&package.id))?;
         let resources: Vec<_> = environment.resources.iter().collect();
         let mut provided = BTreeSet::new();

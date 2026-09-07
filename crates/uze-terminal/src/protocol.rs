@@ -184,6 +184,30 @@ pub enum ClientRequest {
     Stop,
 }
 
+impl ClientRequest {
+    /// The request's name, for the span the server opens around it.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Attach { .. } => "attach",
+            Self::Detach => "detach",
+            Self::SetPalette(_) => "set_palette",
+            Self::Input { .. } => "input",
+            Self::Scroll { .. } => "scroll",
+            Self::Resize { .. } => "resize",
+            Self::CreateTab { .. } => "create_tab",
+            Self::SelectTab { .. } => "select_tab",
+            Self::CloseTab { .. } => "close_tab",
+            Self::RenameTab { .. } => "rename_tab",
+            Self::ReorderTab { .. } => "reorder_tab",
+            Self::CreateSpace { .. } => "create_space",
+            Self::SelectSpace { .. } => "select_space",
+            Self::CloseSpace { .. } => "close_space",
+            Self::RenameSpace { .. } => "rename_space",
+            Self::Stop => "stop",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ClientEvent {
     Attached {

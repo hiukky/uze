@@ -9,9 +9,15 @@ authors.workspace = true
 publish = false
 
 [dependencies]
+# Spans on every process this crate runs; a no-op until the binary
+# subscribes (see `src/telemetry.rs`).
+tracing = "0.1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [dev-dependencies]
+# A capturing subscriber, for the tests that assert on the spans a call
+# produces.
+tracing-subscriber = "0.3"
 uze-testkit = { path = "../uze-testkit" }
