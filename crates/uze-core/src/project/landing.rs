@@ -522,26 +522,57 @@ pub fn gate_failure_message(task: &Task, command: &str, output: &str) -> String 
 /// keeps the project's prefix. This is the net under every other
 /// mechanism, not the mechanism: a named task never reaches it.
 pub fn readable_branch_name(primary: &Path, task: &Task) -> String {
-    let Some(subject) = first_commit_subject(primary, task) else {
-        return format!("{}{}", crate::worktree::BRANCH_PREFIX, task.id.as_str());
+    let fallback = || format!("{}{}", crate::worktree::BRANCH_PREFIX, task.id.as_str());
+    let Some((kind, subject)) = commit_derived_halves(primary, task) else {
+        return fallback();
     };
+    match kind {
+        Some(kind) => format!("{kind}/{subject}"),
+        None => format!("{}{subject}", crate::worktree::BRANCH_PREFIX),
+    }
+}
+
+/// The name the work would take from its own first commit, judged against
+/// what the project accepts — `None` when nothing usable can be derived.
+///
+/// This is the automatic half of naming, and it is deliberately the
+/// *later* half: it runs once the work has a commit, because until then
+/// there is nothing to name it after. The agent naming its own work
+/// arrives earlier and therefore wins, which is the whole of the
+/// precedence rule — no ladder, no overwriting.
+///
+/// Judged rather than trusted: a derived name that the declared vocabulary
+/// would refuse from an agent is not one UZE may write behind its back, so
+/// a project whose types the commit does not match keeps the generated
+/// name and says nothing.
+pub fn derived_name(
+    primary: &Path,
+    task: &Task,
+    vocabulary: &crate::worktree::BranchVocabulary,
+) -> Option<String> {
+    let (kind, subject) = commit_derived_halves(primary, task)?;
+    let proposed = match kind {
+        Some(kind) => format!("{kind}/{subject}"),
+        None => subject,
+    };
+    vocabulary.accept(&proposed).ok()
+}
+
+/// The type and subject the branch's first commit yields, if any. A
+/// Conventional Commits subject gives up its type (`feat(ui): one layout
+/// file` -> `feat` + `one-layout-file`); anything else yields a subject
+/// alone.
+fn commit_derived_halves(primary: &Path, task: &Task) -> Option<(Option<String>, String)> {
+    let subject = first_commit_subject(primary, task)?;
     let (kind, rest) = match subject.split_once(':') {
         Some((head, rest)) if !head.contains(' ') => {
             let kind = head.split('(').next().unwrap_or(head).trim_end_matches('!');
-            (slug(kind), rest)
+            (Some(slug(kind)).filter(|kind| !kind.is_empty()), rest)
         }
-        _ => (String::new(), subject.as_str()),
+        _ => (None, subject.as_str()),
     };
-    let subject = slug(rest);
-    let subject = shorten(&subject);
-    if subject.is_empty() {
-        return format!("{}{}", crate::worktree::BRANCH_PREFIX, task.id.as_str());
-    }
-    if kind.is_empty() {
-        format!("{}{subject}", crate::worktree::BRANCH_PREFIX)
-    } else {
-        format!("{kind}/{subject}")
-    }
+    let subject = shorten(&slug(rest));
+    (!subject.is_empty()).then_some((kind, subject))
 }
 
 /// The subject of the oldest commit the branch carries beyond its base.

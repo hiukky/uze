@@ -255,16 +255,11 @@ fn status_meets_the_budget() {
     world.within_budget("status", |app| app.health().status(&world.project));
 }
 
-/// The agent's own surface, on the read path a hook takes before every
-/// commit. `naming_owed` is what the guard asks; `name_task` is the write
-/// beside it, and both answer from the project's own files plus one Git
-/// call.
+/// The agent's own surface: the read path a naming call takes before its
+/// one ref rename, answered from the project's own files plus one Git call.
 #[test]
 fn the_agent_surface_meets_the_budget() {
     let world = World::build("budget-agent-surface");
-    world.within_budget("agent task guard", |app| {
-        app.workspace().naming_owed(&world.project)
-    });
     world.within_budget("agent task name", |app| {
         // Refused (this is the primary checkout, which owns no task), which
         // is the same read path a successful naming takes before its one

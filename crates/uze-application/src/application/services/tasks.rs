@@ -355,41 +355,6 @@ impl Workspace<'_> {
         Ok(named)
     }
 
-    /// Whether the work in `cwd` still has to be named before it may be
-    /// committed, and the words to say if so.
-    ///
-    /// The whole question in one place, because a hook handler is the
-    /// worst possible host for it: it answers "does this project name its
-    /// work", "is this an agent's checkout", and "is this task still
-    /// generated" — three facts a shell script would have to re-derive
-    /// from files it should not be reading.
-    #[tracing::instrument(name = "workspace.naming_owed", skip_all, fields(cwd = %cwd.display()))]
-    pub fn naming_owed(&self, cwd: &Path) -> Option<String> {
-        let mut repository = self.repository(cwd)?;
-        if !repository.policy.branch.names_work() {
-            return None;
-        }
-        let checkout_id = worktree::isolated_checkout(cwd)
-            .map(|isolated| checkout::CheckoutId::adopted(isolated.name))?;
-        let target = repository.target();
-        checkout::reconcile(&repository.primary, &mut repository.store, &target);
-        let task = repository
-            .store
-            .tasks
-            .iter()
-            .filter(|task| task.checkout.as_ref() == Some(&checkout_id))
-            .max_by_key(|task| task.created_at_unix)?;
-        if task.is_named() {
-            return None;
-        }
-        Some(format!(
-            "Name this work before committing it: `uze agent task name <type>/<subject>`. \
-             Types this project accepts: `{types}`. The subject is one or two words naming the \
-             intention — `fix/branch-naming`, not a description of the task.",
-            types = repository.policy.branch.spelled()
-        ))
-    }
-
     /// The project's declared policy, or the defaults when its manifest
     /// declares none. Read from the primary checkout on purpose: a worktree
     /// never declares a policy of its own, and nothing machine-scoped
@@ -527,6 +492,8 @@ impl Workspace<'_> {
         checkout::reconcile(&repository.primary, &mut repository.store, &target);
         let mut notices = Vec::new();
         let primary = repository.primary.clone();
+        let vocabulary = repository.policy.branch.clone();
+        let names_work = vocabulary.names_work();
         let owners = slot_owners(&repository.store);
         for task in &mut repository.store.tasks {
             // A task that ended is still looked at while it owns its
@@ -581,6 +548,26 @@ impl Workspace<'_> {
                         task.state = TaskState::Ready;
                     }
                 }
+            }
+            // The work has a commit and still carries the name UZE
+            // generated for it: name it from what the agent wrote. This is
+            // the automatic half, and it deliberately runs *late* — until
+            // there is a commit there is nothing to name the work after,
+            // and the agent naming it deliberately arrives earlier and
+            // therefore wins. `Ready` is the safe moment by construction:
+            // commits ahead, a clean tree, no rebase in progress.
+            //
+            // Nothing about this reaches a harness. It is a Git fact read
+            // on a pass that already runs, which is why it works on every
+            // harness and on the next one.
+            if names_work
+                && task.state == TaskState::Ready
+                && !task.is_named()
+                && let Some(derived) = landing::derived_name(&primary, task, &vocabulary)
+                && !checkout::branch_exists(&primary, &derived)
+                && checkout::rename_branch(&primary, &task.branch.clone(), &derived).is_ok()
+            {
+                task.take_name(derived);
             }
             // Following a moved target costs a clean task nothing and a
             // dirty one its work in progress, which `refresh` refuses.
@@ -2158,40 +2145,174 @@ mod naming_tests {
             "a hand-renamed branch still reaches ready"
         );
     }
+}
 
-    /// The guard the hook asks. It answers for the three facts a shell
-    /// script would otherwise have to re-derive.
-    #[test]
-    fn the_guard_owes_a_name_only_where_one_is_owed() {
-        let (app, repository) = naming_project("naming-guard");
-        let root = repository.root().to_path_buf();
-        let checkout = placed(&app, &root);
+/// The automatic half: work that nobody named takes its name from its own
+/// first commit, on the evaluation pass that already runs.
+///
+/// No harness is asked anything and no hook is delivered, which is why
+/// this works on all four and on the next one.
+#[cfg(test)]
+mod derived_naming_tests {
+    use super::*;
+    use uze_core::UzeHome;
 
-        let owed = app.workspace().naming_owed(&checkout);
-        assert!(
-            owed.as_deref()
-                .is_some_and(|reason| reason.contains("uze agent task name")),
-            "{owed:?}"
-        );
-        assert!(
-            app.workspace().naming_owed(&root).is_none(),
-            "the operator's own checkout is never the subject"
-        );
+    fn project(label: &str, policy: &str) -> (UzeApplication, uze_testkit::git::Repository) {
+        let repository = uze_testkit::git::Repository::new(label);
+        repository.commit_file(".gitignore", ".env\n");
+        std::fs::write(
+            repository.root().join("agents.yaml"),
+            format!("worktrees:\n{policy}"),
+        )
+        .unwrap();
+        (
+            UzeApplication::new(UzeHome::at(uze_testkit::temp::scratch(label)), Vec::new()),
+            repository,
+        )
+    }
 
+    fn placed(app: &UzeApplication, root: &Path) -> PathBuf {
+        match app.workspace().place_new_agent(root, &[]).isolation {
+            Isolation::Slot { .. } => {}
+            Isolation::Unisolated { reason } => panic!("{reason}"),
+        }
         app.workspace()
-            .name_task(&checkout, "fix/named-now")
-            .unwrap();
-        assert!(
-            app.workspace().naming_owed(&checkout).is_none(),
-            "named work owes nothing"
-        );
+            .tasks(root)
+            .last()
+            .and_then(|task| task.checkout.clone())
+            .expect("the placed agent has a checkout")
+    }
+
+    fn commits(repository: &uze_testkit::git::Repository, checkout: &Path, subject: &str) {
+        std::fs::write(checkout.join("work.rs"), subject).unwrap();
+        repository.git_in(checkout, &["add", "-A"]);
+        repository.git_in(checkout, &["commit", "-qm", subject]);
     }
 
     #[test]
-    fn a_project_that_names_nothing_owes_nothing() {
-        let repository = repository("naming-guard-undeclared");
-        let app = application("naming-guard-undeclared");
-        let checkout = placed(&app, repository.root());
-        assert!(app.workspace().naming_owed(&checkout).is_none());
+    fn the_first_commit_names_work_nobody_named() {
+        let (app, repository) = project("derive-basic", "  branch: conventional\n");
+        let root = repository.root().to_path_buf();
+        let checkout = placed(&app, &root);
+        commits(&repository, &checkout, "feat(api): answer ping with pong");
+
+        let evaluation = app.workspace().evaluate_tasks(&root, &[checkout.clone()]);
+
+        let task = evaluation.tasks.last().unwrap();
+        assert_eq!(task.branch, "feat/answer-ping-with-pong");
+        assert_eq!(task.label, "answer ping with pong");
+        assert_eq!(
+            checkout::current_branch(&checkout).as_deref(),
+            Some("feat/answer-ping-with-pong"),
+            "Git is where the rename happened"
+        );
+        assert_eq!(
+            task.state,
+            TaskStateView::Ready,
+            "and it is still deliverable"
+        );
+    }
+
+    /// The agent's own name arrives earlier and therefore wins — the whole
+    /// of the precedence rule, with no ladder to fall down.
+    #[test]
+    fn a_name_the_agent_chose_is_never_replaced_by_the_derivation() {
+        let (app, repository) = project("derive-vs-chosen", "  branch: conventional\n");
+        let root = repository.root().to_path_buf();
+        let checkout = placed(&app, &root);
+        app.workspace()
+            .name_task(&checkout, "fix/chosen-first")
+            .unwrap();
+        commits(&repository, &checkout, "feat(api): answer ping with pong");
+
+        let evaluation = app.workspace().evaluate_tasks(&root, &[checkout.clone()]);
+
+        assert_eq!(evaluation.tasks.last().unwrap().branch, "fix/chosen-first");
+        assert_eq!(
+            checkout::current_branch(&checkout).as_deref(),
+            Some("fix/chosen-first")
+        );
+    }
+
+    /// A derived name the project would have refused from an agent is not
+    /// one UZE may write behind its back.
+    #[test]
+    fn a_commit_outside_the_vocabulary_leaves_the_generated_name() {
+        let (app, repository) = project("derive-refused", "  branch: [ui, fix]\n");
+        let root = repository.root().to_path_buf();
+        let checkout = placed(&app, &root);
+        commits(&repository, &checkout, "feat(api): answer ping with pong");
+
+        let evaluation = app.workspace().evaluate_tasks(&root, &[checkout.clone()]);
+
+        assert!(
+            evaluation
+                .tasks
+                .last()
+                .unwrap()
+                .branch
+                .starts_with("agent/"),
+            "a type this project does not accept names nothing"
+        );
+    }
+
+    /// A project that declares no vocabulary keeps exactly the behaviour it
+    /// had before any of this existed.
+    #[test]
+    fn a_project_that_names_nothing_is_left_alone() {
+        let (app, repository) = project("derive-undeclared", "  completion: handoff\n");
+        let root = repository.root().to_path_buf();
+        let checkout = placed(&app, &root);
+        commits(&repository, &checkout, "feat(api): answer ping with pong");
+
+        let evaluation = app.workspace().evaluate_tasks(&root, &[checkout.clone()]);
+
+        assert!(
+            evaluation
+                .tasks
+                .last()
+                .unwrap()
+                .branch
+                .starts_with("agent/")
+        );
+    }
+
+    /// Uncommitted work is not `Ready`, and naming a branch under an agent
+    /// mid-edit is exactly what the `Ready` gate exists to avoid.
+    #[test]
+    fn a_dirty_checkout_is_not_named() {
+        let (app, repository) = project("derive-dirty", "  branch: conventional\n");
+        let root = repository.root().to_path_buf();
+        let checkout = placed(&app, &root);
+        commits(&repository, &checkout, "feat(api): answer ping with pong");
+        std::fs::write(checkout.join("later.rs"), "in progress").unwrap();
+
+        let evaluation = app.workspace().evaluate_tasks(&root, &[checkout.clone()]);
+
+        let task = evaluation.tasks.last().unwrap();
+        assert_eq!(task.state, TaskStateView::Uncommitted);
+        assert!(task.branch.starts_with("agent/"));
+    }
+
+    /// A name already taken is left alone rather than disambiguated —
+    /// silently, because nobody asked for this rename.
+    #[test]
+    fn a_colliding_derived_name_leaves_the_branch_as_it_was() {
+        let (app, repository) = project("derive-collision", "  branch: conventional\n");
+        let root = repository.root().to_path_buf();
+        repository.git(&["branch", "feat/answer-ping-with-pong"]);
+        let checkout = placed(&app, &root);
+        commits(&repository, &checkout, "feat(api): answer ping with pong");
+
+        let evaluation = app.workspace().evaluate_tasks(&root, &[checkout.clone()]);
+
+        assert!(
+            evaluation
+                .tasks
+                .last()
+                .unwrap()
+                .branch
+                .starts_with("agent/")
+        );
     }
 }

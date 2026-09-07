@@ -160,9 +160,6 @@ enum AgentTaskAction {
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
-    /// Hook handler: refuses a commit from work nobody has named yet.
-    /// Exits `3` with the reason on stderr, per the portable Hook ABI.
-    Guard,
 }
 
 #[derive(Debug, Subcommand)]
@@ -2262,13 +2259,6 @@ fn run_agent(app: &UzeApplication, action: AgentAction) -> Result<()> {
                     named.branch
                 ),
                 OutputFormat::Json => print_json(&NamedTaskReport::from(&named)),
-            }
-        }
-        AgentTaskAction::Guard => {
-            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-            if let Some(reason) = app.workspace().naming_owed(&cwd) {
-                eprintln!("{reason}");
-                std::process::exit(uze_application::DENY_EXIT_CODE);
             }
         }
     }

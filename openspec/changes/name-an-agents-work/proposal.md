@@ -49,9 +49,9 @@ task `Running` forever and never offering delivery.
   Claude, Codex and Antigravity honor the denial; OpenCode claims only
   `observe`/`allow`, so it degrades to the projected instruction and the
   downgrade is recorded rather than hidden (ADR-033)
-- **A safety net at publish** — a task still unnamed when its branch is
-  published is named from its first commit's subject, so no pull request
-  ever carries a generated identifier
+- **A safety net at publish** — a project that declares no vocabulary names
+  nothing, so its branch is still published under a name derived from the
+  first commit rather than under the generated identifier
 
 ## Capabilities
 
@@ -80,8 +80,6 @@ task `Running` forever and never offering delivery.
   classify in `command_performance.rs`
 - **TUI** — the sidebar reads the adopted branch; the task label follows the
   name; the existing rename gesture gains the branch
-- **Package** — a new official plugin, `plugins/uze-naming`, carrying the
-  hook and its handler; one entry in `marketplace.json`
 - **Docs** — the projected `AGENTS.md` region gains the naming clause;
   `docs/architecture/invariants.md` gains first-writer-wins
 - **Depends on** — `project-agent-environment` §12: a policy that does not

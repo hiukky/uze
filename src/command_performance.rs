@@ -49,10 +49,6 @@ pub const CLASSIFICATION: &[(&str, PerformanceClass)] = &[
     // and performs one Git ref rename. An agent waiting on this is an
     // agent not working.
     ("agent task name", PerformanceClass::Budgeted),
-    // The hook handler's own question, asked before every commit an agent
-    // makes. The one command whose caller is a tool call the model is
-    // waiting on, so the budget matters more here than anywhere.
-    ("agent task guard", PerformanceClass::Budgeted),
     ("context inspect", PerformanceClass::Budgeted),
     ("context plan", PerformanceClass::Budgeted),
     ("context reconcile", PerformanceClass::Budgeted),
@@ -148,10 +144,6 @@ pub const BUDGETED_COMMAND_TESTS: &[(&str, &str)] = &[
     ),
     (
         "agent task name",
-        "uze_application::application::performance_tests::the_agent_surface_meets_the_budget",
-    ),
-    (
-        "agent task guard",
         "uze_application::application::performance_tests::the_agent_surface_meets_the_budget",
     ),
     (

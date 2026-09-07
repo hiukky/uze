@@ -2,13 +2,13 @@ journey: work nobody named still reaches the remote under a readable name
 tags: [gate, tui, delivery]
 proves: web/content/docs/workspace.mdx
 about: |
-  Naming is instructed and enforced, and neither is a guarantee: a harness
-  that cannot express a denial leaves the instruction as the only thing
-  carrying it. So the last step has an answer of its own — a branch nobody
-  named is published under a name derived from its first commit, and never
-  under the generated identifier.
+  Instructing an agent is not the same as it happening. So naming has an
+  automatic half: work that reaches its first commit still carrying the
+  name UZE generated takes its name from that commit instead — on the
+  evaluation pass that already runs, asking no harness anything.
 
-  The claim is read off the remote with Git, not off UZE's delivery report.
+  The last claim is read off the remote with Git, not off UZE's delivery
+  report.
   A separate file from the naming journey on purpose: a different world
   (this one has a remote), a different claim, and a run stops at the first
   failure — claims that share a file share a fate.
@@ -59,10 +59,14 @@ scenes:
         settle: 1.0
         say: the workspace offers the ending this project declared
     then:
-      - git: { branches: "agent/*", count: 1 }
-        about: the local branch is still the generated identifier
+      - tasks: { newest_branch: "feat/answer-ping-with-pong" }
+        about: |
+          nobody named it, so UZE named it from the commit the agent wrote —
+          the one place the intent was already written down
+      - git: { branches: "agent/*", count: 0 }
+        about: and the generated identifier is gone from the repository
       - tasks: { any_state: ready }
-        about: and the work is deliverable
+        about: with the work still deliverable
 
   - scene: publishing gives it a name the reviewer can read
     when:

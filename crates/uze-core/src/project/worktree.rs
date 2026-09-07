@@ -433,12 +433,13 @@ impl WorktreePolicy {
             return String::new();
         }
         format!(
-            "- Before your first commit, name the work: `uze agent task name \
-             <type>/<subject>`. Types this project accepts: `{types}`. The subject is one or \
-             two words naming the intention, not a description of the task — `fix/branch-naming`, \
-             not `fix/correct-the-problem-with-agent-branch-names`. Your branch is renamed when \
-             you do, so ask Git for its name rather than remembering it; a name you or the \
-             operator already chose is never replaced.\n",
+            "- Name the work before your first commit: `uze agent task name <type>/<subject>`. \
+             Types this project accepts: `{types}`. The subject is one or two words naming the \
+             intention, not a description of the task — `fix/branch-naming`, not \
+             `fix/correct-the-problem-with-agent-branch-names`. If you do not, UZE names it from \
+             your first commit's subject, which is a worse name than the one you would have \
+             chosen. Either way your branch is renamed, so ask Git for its name rather than \
+             remembering it; a name you or the operator already chose is never replaced.\n",
             types = self.branch.spelled()
         )
     }

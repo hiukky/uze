@@ -1164,6 +1164,18 @@ and set aside for a reason rather than forgotten.
 | Git sparse checkout for marketplace sources | the `marketplace.json` contract is shaped to allow acquiring only a resolved plugin's subtree later; not implemented |
 | reverse/foreign harness-format import | the acquisition contract is canonical `plugin.json` only (M2); a foreign-format importer (`ClaudePluginImporter`) existed as dead, unreachable code and was removed (ADR-005) — foreign import staying structurally separate from harness delivery is still the intended shape if it returns, but nothing is retained in production speculatively |
 
+### Work that reaches a commit unnamed is named from that commit
+
+Naming has an automatic half, and it is a Git fact read on the evaluation
+pass that already runs — no harness is asked anything, so it behaves the
+same on all four and on the next one, and it covers every completion
+behaviour rather than only the one that publishes. It applies at `Ready`
+and nowhere else, and a derived name the project's vocabulary would refuse
+from an agent is never written on its behalf.
+
+> `uze-application::…::derived_naming_tests::the_first_commit_names_work_nobody_named`
+> `uze-application::…::derived_naming_tests::a_commit_outside_the_vocabulary_leaves_the_generated_name`
+
 ### A name nobody generated is never overwritten
 
 `agent/` is UZE's own branch namespace: a branch inside it is still UZE's to

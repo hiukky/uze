@@ -24,8 +24,8 @@ pub use uze_core::{
     client_layout::{ClientLayout, ManagementLayout, SidebarLayout, WorkspaceLayout},
     context::PlannedAction,
     hook::{
-        CommandHandlerType, CommandHook, DEFAULT_TIMEOUT_SECONDS, DENY_EXIT_CODE, HookEffect,
-        HookEvent, HookNativeOutput,
+        CommandHandlerType, CommandHook, DEFAULT_TIMEOUT_SECONDS, HookEffect, HookEvent,
+        HookNativeOutput,
     },
     integration::{AttachmentState, PublicationStatus},
     naming::{

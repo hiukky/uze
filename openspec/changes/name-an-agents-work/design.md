@@ -109,29 +109,38 @@ means formatting, not visual design, and a team wanting `ui` should declare
 `ui` rather than mislabel work as `style`. Presets are named lists; the
 validation is identical either way.
 
-### 5. Enforcement is `PreToolUse`/`deny`, and its coverage is stated
+### 5. The automatic half is a Git fact, not a harness feature
 
-Coverage was read off the capability profiles rather than assumed: Claude,
-Codex and Antigravity claim `deny` on `PreToolUse`; OpenCode claims
-`observe`/`allow` only. The hook is therefore enforcement on three harnesses
-and instruction on the fourth, and ADR-033 already requires that the
-downgrade be recorded rather than presented as coverage.
+The design carried a `PreToolUse` `deny` here, and building it produced
+three findings that removed it — kept in the record because the reasoning
+is the useful part:
 
-**It ships as its own plugin.** A Hook is an executable capability
-(`trust.rs`), so installing one is a trust decision. `plugins/uze` is
-installed on every machine by UZE's own bootstrap, and putting an
-executable capability there would mean every machine authorizing one
-without being asked — which the bootstrap proved by refusing to install it.
-Enforcement is something a project asks for (`uze uze-naming@uze-official`),
-and asking is where the trust prompt belongs.
+*It could not cover the four.* OpenCode claims `observe`/`allow` only, and
+`assess` routes an unpreservable `deny` as `Unsupported` rather than
+degrading it. So the mechanism chosen to answer "it has to work always"
+was the one part of the design that could not.
 
-The deny reason is the teaching surface: it names the command and the
-project's vocabulary, so an agent that has not read the projected region
-still learns what to do at the moment it matters.
+*It cost a trust decision.* A Hook is an executable capability, and the
+default plugin is bootstrapped onto every machine with `NoTrustAuthority`
+— the bootstrap refuses the package outright (`TRUST_REQUIRED`). Shipping
+it as a second plugin made enforcement an install and a prompt, for a
+guarantee that held on three harnesses out of four.
 
-The handler scopes itself — it fires only inside an isolated checkout whose
-task is unnamed — so the operator's own commits in the primary checkout are
-never touched.
+*Its handler depended on `uze`.* ADR-040 took the binary off the hook
+execution path deliberately, and the handler put it back — a plugin whose
+bytes only work where UZE is installed is not a portable package.
+
+**Chosen instead: derive at the first commit, on the evaluation pass that
+already runs.** It is a Git fact, so it holds on every harness and on the
+next one; it needs no plugin, no trust and no ABI; and it covers every
+completion behaviour, where the publish-time fallback only ever covered
+`pr` — which was the actual hole. The model still authors the name: it
+wrote the commit message.
+
+What it gives up is deliberateness — `feat/answer-ping-with-pong` instead
+of the two words an agent would have chosen — which is exactly why the
+projected clause says so, and why `uze agent task name` arriving first
+wins.
 
 ### 6. The publish-time fallback stays, demoted
 

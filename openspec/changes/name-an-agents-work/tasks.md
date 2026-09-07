@@ -58,30 +58,41 @@
   vocabulary in force and the exact command form. This is the only feedback
   channel a denied agent has.
 
-## 5. Enforcement, and its honest coverage
+## 5. The automatic half (replaces enforcement by hook)
 
-- [x] 5.1 A new official plugin, `plugins/uze-naming`: one `PreToolUse`
-  group, effect `deny`, matched to the commit-shaped tool call, with a
-  handler that exits `DENY_EXIT_CODE` when the task owning its checkout is
-  unnamed. **Its own plugin, not `plugins/uze`** — a Hook is an executable
-  capability, and the default plugin is bootstrapped onto every machine, so
-  shipping one there means every machine authorizing one without being
-  asked. The bootstrap proved it by refusing to install the package at all.
-- [x] 5.2 *(built differently from the plan)* The handler shells out to
-  `uze agent task guard` rather than reading recorded state itself. The
-  plan wanted no subprocess; what it did not account for is that the
-  question is three facts — does this project name its work, is this an
-  agent's checkout, is this task still generated — and a POSIX `sh` script
-  answering them would re-derive all three from files it has no business
-  parsing, wrongly and differently per harness. The subprocess is the
-  smaller risk, and it is guarded: no `uze` on `PATH` exits `0`, so the
-  guard fails **open**. A guard that blocks work because UZE moved is worse
-  than a guard that misses a commit.
-- [x] 5.3 It scopes itself to an isolated checkout: the operator's own
-  commits in the primary are never the subject.
-- [x] 5.4 Coverage is recorded, not claimed: Claude, Codex and Antigravity
-  honor `deny` on `PreToolUse`; OpenCode claims `observe`/`allow` only, so
-  it degrades to the projected instruction with the reason stated (ADR-033).
+Planned as a `PreToolUse` `deny` shipped in a plugin. Built, and then
+removed, for three reasons found by building it — each recorded here
+rather than in a commit nobody reads:
+
+- **It could not cover the four.** OpenCode claims `observe`/`allow` only,
+  and `assess` routes an unpreservable `deny` as `Unsupported` rather than
+  degrading it — correctly, since a denial that became an observation would
+  be worse than none. The mechanism proposed to answer "funcione sempre"
+  did not.
+- **It cost a trust decision.** A Hook is an executable capability, and the
+  default plugin is bootstrapped onto every machine with `NoTrustAuthority`
+  — measured: `TRUST_REQUIRED` refuses the package outright. Shipping it
+  separately made enforcement a second install and a prompt.
+- **Its handler depended on `uze`.** ADR-040 removed the binary from the
+  hook execution path deliberately; the handler put it back. Removable in
+  principle — the namespace predicate is answerable from Git alone — but
+  the dependency should never have been written.
+
+- [x] 5.1 `landing::derived_name` — the branch's first commit subject,
+  split into a Conventional type and a subject, **judged against the
+  project's vocabulary**. A derived name the project would refuse from an
+  agent is not one UZE may write behind its back.
+- [x] 5.2 `evaluate_tasks` applies it at `Ready` and nowhere else: commits
+  ahead, a clean tree, no rebase in progress. Naming a branch under an
+  agent mid-edit is what that gate exists to avoid.
+- [x] 5.3 The agent's own name arrives earlier and therefore wins. There is
+  no ladder and nothing overwrites: `is_named` is asked once, in one place.
+- [x] 5.4 A derived name that collides with an existing branch leaves the
+  branch as it was, silently — nobody asked for this rename, so it cannot
+  be worth an error.
+- [x] 5.5 The projected clause says the automatic half exists and that it
+  produces a worse name than a deliberate one, so an agent has a reason to
+  name its own work rather than a rule it is told to follow.
 
 ## 6. The fallback nothing should need
 
@@ -134,10 +145,11 @@ flow at L3.5 — and each catches a different way of being wrong.
   derived from its first commit; a published branch is never renamed again;
   `prune_integrated_branches` collects a renamed, integrated branch that no
   longer carries the `agent/` prefix.
-- [x] 8.6 **L1 — the hook** (`tests/integrations/`): the group is emitted
-  for the three harnesses that honor `deny` and recorded as degraded for the
-  one that does not; the handler denies an unnamed task and allows a named
-  one; it stays silent outside an isolated checkout.
+- [x] 8.6 **L1 — the automatic half** (`uze-application`): a first commit
+  names unnamed work; a name the agent chose is never replaced; a commit
+  outside the vocabulary names nothing; a project declaring no vocabulary is
+  left alone; a dirty checkout is not named; a colliding name leaves the
+  branch as it was.
 - [~] 8.7 **L0 — projection** (`uze-core`, not `tests/projection/`): the
   projected region carries the declared vocabulary, and changing the
   vocabulary changes the region's identity — both written. The third claim,

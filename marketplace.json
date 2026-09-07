@@ -14,16 +14,6 @@
         "agents-md",
         "portability"
       ]
-    },
-    {
-      "name": "uze-naming",
-      "source": "./plugins/uze-naming",
-      "description": "Refuses an agent's first commit while its work has no name, against the branch vocabulary the project declares.",
-      "keywords": [
-        "worktrees",
-        "branches",
-        "hooks"
-      ]
     }
   ]
 }

@@ -410,6 +410,10 @@ properties):
   reads one surface. `uze agent task name <type>/<subject>` is how work
   acquires the branch a reviewer sees and the label an operator reads; the
   vocabulary it is judged against is `worktrees.branch` in `agents.yaml`.
+  Work that reaches its first commit still unnamed is named from that
+  commit's subject, judged against the same vocabulary — a Git fact read on
+  the evaluation pass, never a harness feature. A name anybody chose is
+  never replaced.
 - **`agents.yaml` is authored, `agents.lock` is derived**: the manifest holds
   what the project declared (marketplaces, plugins, the `worktrees:` policy);
   the lock holds only what resolving it produced — a commit per marketplace and

@@ -118,27 +118,36 @@ UZE asking Git about a branch that no longer exists.
 - **WHEN** a task's checkout is mid-rebase and on no branch
 - **THEN** the recorded branch is left as it was
 
-### Requirement: Naming is enforced where the harness can enforce it
-The system SHALL refuse an agent's first commit while its task is still
-unnamed, through the portable Hook capability, and the refusal SHALL carry
-the command that resolves it. Where a harness cannot express a denial, the
-delivery SHALL degrade to the projected instruction and the degradation
-SHALL be recorded, never presented as enforcement.
+### Requirement: Work that reaches a commit unnamed is named from that commit
+When a task's branch first carries a commit and the work still has the
+name the system generated, the system SHALL name it from that commit's
+subject, judged against the project's declared vocabulary. It SHALL do so
+without asking any harness anything, so the behaviour is identical on
+every harness. It SHALL NOT do so while the checkout is dirty or a rebase
+is in progress.
 
-#### Scenario: An unnamed task's commit is refused
-- **WHEN** an agent attempts its first commit with its task still unnamed,
-  on a harness that honors a denial
-- **THEN** the commit is refused and the reason names the command and the
-  project's vocabulary
+#### Scenario: The first commit names the work
+- **WHEN** an agent commits `feat(api): answer ping with pong` on a task
+  nobody named, in a project whose vocabulary accepts `feat`
+- **THEN** the branch and the label take that name
 
-#### Scenario: A named task commits freely
-- **WHEN** the same agent commits after naming its work
-- **THEN** nothing is refused
+#### Scenario: A name the agent chose arrives first and wins
+- **WHEN** the same task was named by its agent before the commit
+- **THEN** the chosen name stands and nothing is renamed
 
-#### Scenario: A harness without denial is honest about it
-- **WHEN** the hook is delivered to a harness that claims no denying effect
-- **THEN** the route is recorded as degraded with the reason, and the
-  projected instruction is what carries the expectation
+#### Scenario: A derived name the project would refuse is not written
+- **WHEN** the commit's type is not in the project's declared vocabulary
+- **THEN** the work keeps the generated name, because a name UZE may not
+  accept from an agent is not one it may write on its own
+
+#### Scenario: Work in progress is left alone
+- **WHEN** the checkout has uncommitted changes, or a rebase is paused
+- **THEN** nothing is renamed
+
+#### Scenario: A colliding derived name changes nothing
+- **WHEN** the derived name already exists as a branch
+- **THEN** the work keeps the generated name, and no error is raised —
+  nobody asked for this rename
 
 ### Requirement: A published branch never carries a generated identifier
 When a task's branch is published and it was never named, the system SHALL
