@@ -93,25 +93,9 @@ Six targets: Linux `x86_64`/`aarch64` × `gnu`/`musl`, and macOS
 verifies its SHA-256 against `SHASUMS256.txt` and refuses to install on a
 mismatch.
 
-### macOS is experimental
-
-Linux is what uze has been run on. macOS support is new, and what backs it is
-CI: on every change, an Apple Silicon runner builds uze, runs the full test
-suite and performs the product journeys — the flows a person actually goes
-through — against the machine they leave behind. That found and fixed several
-real defects, and it is a stronger claim than "it compiles".
-
-It is not the same claim as Linux, and these are the specific gaps:
-
-- **No released binary has been installed on a Mac.** The installer's macOS
-  path is proven against a synthetic fixture, not against this release.
-- **The `x86_64` build is never executed.** It is cross-compiled on Apple
-  Silicon, and no Intel machine runs it before it ships.
-- **The terminal workspace is exercised under `tmux` in CI**, not under
-  Terminal.app, iTerm or Ghostty.
-- **The binaries are not notarized** (see below).
-
-Report anything that misbehaves — on macOS that is data nobody else has yet.
+**macOS is experimental.** Built and tested on Apple Silicon CI. Not verified:
+a real install on a Mac, the `x86_64` build on an Intel machine, a terminal
+other than `tmux`.
 
 ## Verify
 
@@ -123,10 +107,9 @@ sha256sum --ignore-missing -c SHASUMS256.txt   # macOS: shasum -a 256 --ignore-m
 gh attestation verify uze-x86_64-linux-gnu.tar.gz --repo hiukky/uze
 ```
 
-The macOS binaries are not notarized — signing them needs an Apple
-Developer account, which this project does not have. `curl | sh` installs and
-runs them; a tarball downloaded through a *browser* is quarantined by
-Gatekeeper, and `xattr -d com.apple.quarantine uze` clears it.
+The macOS binaries are not notarized. `curl | sh` installs and runs them; a
+tarball fetched through a *browser* is quarantined by Gatekeeper — clear it
+with `xattr -d com.apple.quarantine uze`.
 
 `uze-sbom.cdx.json` is the CycloneDX bill of materials for the shipped binary,
 generated from this tag's own lockfile. Each tarball carries `LICENSE`,

@@ -10,10 +10,8 @@ description: Where uze is going — from alpha to ecosystem
 **Alpha.** APIs, schemas, and harness integration behavior may change while the
 cross-harness model is validated. Linux and macOS releases are published on
 GitHub and installed by `curl -fsSL https://uze.hiukky.com/i | sh`; every
-version until v1 is an explicit pre-release. **macOS is experimental** — it is
-built, tested and put through the product journeys on every change, but Linux
-is the platform uze has actually been run on ([what that leaves
-uncovered](/docs/getting-started)).
+version until v1 is an explicit pre-release. [macOS is
+experimental](/docs/getting-started).
 
 ## Working today
 
@@ -48,9 +46,8 @@ uncovered](/docs/getting-started)).
 - **Security & trust** — beyond today's executable-capability boundary.
 - **Runtime context projection** — the PATH shim that reaches a harness without
   writing into the project is still experimental.
-- **macOS out of experimental** — the gaps CI cannot close: a real install on
-  a Mac, an Intel machine that runs the Intel build, and a terminal that is
-  not `tmux`.
+- **macOS out of experimental** — a real install on a Mac, an Intel machine
+  that runs the Intel build, a terminal that is not `tmux`.
 - **Windows releases** — Linux and macOS ship today (ADR-034).
 - **Migration tooling and ecosystem expansion.**
 
