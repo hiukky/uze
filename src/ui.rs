@@ -102,22 +102,21 @@ fn tui_application(home: UzeHome) -> Result<UzeApplication> {
 /// production application composition root as the CLI.
 pub fn run(home: UzeHome) -> Result<()> {
     let mut terminal = TerminalSession::start()?;
-    // The sidebar as this user last left it — read once, here, because
-    // both modes share the column and neither owns it (see
-    // `uze_application::SidebarLayout`).
-    let stored = tui_application(home.clone())
-        .map(|app| app.workspace().sidebar_layout())
+    // The client's shape as this user last left it — read once, here,
+    // and owned by neither mode: both draw the same sidebar column, and a
+    // fold, a drag or a screen chosen in one must still be there when
+    // Ctrl+O switches to the other, not reset back to the defaults every
+    // round trip (see `uze_application::ClientLayout`). Each mode writes
+    // its own section back on the way out, so what the file gets is
+    // always the live shape of both.
+    let mut layout = tui_application(home.clone())
+        .map(|app| app.workspace().client_layout())
         .unwrap_or_default();
-    // Shared across both modes for the whole run() call, not owned by
-    // either model: a drag in one sidebar must still be there — same
-    // width — when Ctrl+O switches to the other, not reset back to the
-    // responsive default every round trip.
-    let mut sidebar_width: Option<u16> = stored.width;
-    // Likewise what the workspace client resolved for itself — the
-    // sidebar's tasks, branches and agent statuses among them — which each
-    // attach takes over from the last instead of deriving again in front
-    // of the user (see `orchestrator::WorkspaceMemory`).
-    let mut workspace_memory = orchestrator::WorkspaceMemory::restored(stored);
+    // What the workspace client resolved for itself — the sidebar's
+    // tasks, branches and agent statuses among them — which each attach
+    // takes over from the last instead of deriving again in front of the
+    // user (see `orchestrator::WorkspaceMemory`).
+    let mut workspace_memory = orchestrator::WorkspaceMemory::default();
     // The management client's own half of the same idea, started here
     // rather than on the first Ctrl+O into it: the machine resolves on a
     // thread while the workspace attaches, so that screen is already
@@ -137,7 +136,7 @@ pub fn run(home: UzeHome) -> Result<()> {
         match orchestrator::attach_workspace(
             &mut terminal,
             &root,
-            &mut sidebar_width,
+            &mut layout,
             &mut workspace_memory,
             &home,
             pending_tab.take(),
@@ -149,14 +148,13 @@ pub fn run(home: UzeHome) -> Result<()> {
                 let exit = management::run_management(
                     &mut terminal,
                     home.clone(),
-                    &mut sidebar_width,
+                    &mut layout,
                     &mut management_memory,
                 )?;
                 // The workspace client writes its own changes as they
-                // happen; management has no such sink, so a drag there is
-                // kept on the way out of it — the one moment this side
-                // holds both halves of the layout.
-                remember_sidebar(&home, workspace_memory.sidebar_layout(sidebar_width));
+                // happen; management has no such sink, so its screen and
+                // drawers are kept on the way out of it.
+                remember_layout(&home, &layout);
                 match exit {
                     management::ManagementExit::Quit => return Ok(()),
                     management::ManagementExit::Workspace => {}
@@ -169,11 +167,11 @@ pub fn run(home: UzeHome) -> Result<()> {
     }
 }
 
-/// Keeps the sidebar's shape for the next run. Best-effort: a layout that
+/// Keeps the client's shape for the next run. Best-effort: a layout that
 /// cannot be written is a preference lost, never a session lost.
-fn remember_sidebar(home: &UzeHome, layout: uze_application::SidebarLayout) {
+fn remember_layout(home: &UzeHome, layout: &uze_application::ClientLayout) {
     let _ =
-        tui_application(home.clone()).and_then(|app| app.workspace().save_sidebar_layout(&layout));
+        tui_application(home.clone()).and_then(|app| app.workspace().save_client_layout(layout));
 }
 
 // --- Terminal lifecycle ------------------------------------------------------

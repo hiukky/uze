@@ -18,6 +18,7 @@ pub use application::services::{
 pub use uze_core::{
     ExposureMechanism, ExposurePlan, PackageExposurePlan, Result, UzeError, UzeHome,
     capability::CapabilityKind,
+    client_layout::{ClientLayout, ManagementLayout, SidebarLayout, WorkspaceLayout},
     context::PlannedAction,
     hook::{
         CommandHandlerType, CommandHook, DEFAULT_TIMEOUT_SECONDS, HookEffect, HookEvent,
@@ -34,7 +35,6 @@ pub use uze_core::{
     provisioning::{ProcessOutput, ProcessResult, ProcessRunner, ProcessSpec, SystemProcessRunner},
     router::CompatibilityRoute,
     router::HarnessCapabilities,
-    sidebar_layout::SidebarLayout,
     trust::{AlwaysTrust, NoTrustAuthority, TrustAuthority, TrustOutcome, TrustRequest},
     workspace::workspace_root_or_self,
     worktree::{CompletionBehavior, IsolatedCheckout, isolated_checkout},

@@ -11,9 +11,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use uze_core::{
-    Result, UzeError, checkout, conversation,
+    Result, UzeError, checkout, client_layout, conversation,
     landing::{self, Delivered, DeliveryFailure, Readiness},
-    manifest, prompt_history, sidebar_layout,
+    manifest, prompt_history,
     task::{self, Base, Task, TaskId, TaskState, TaskStore},
     workspace,
     worktree::{self, CompletionBehavior, WorktreePolicy},
@@ -138,15 +138,16 @@ impl Workspace<'_> {
         prompt_history::clear(&self.0.home, root)
     }
 
-    /// What the client's sidebar was last left looking like. Best-effort:
-    /// unreadable state answers with the defaults rather than failing.
-    pub fn sidebar_layout(&self) -> sidebar_layout::SidebarLayout {
-        sidebar_layout::load(&self.0.home)
+    /// What the TUI was last left looking like, in both of its modes.
+    /// Best-effort: unreadable state answers with the defaults rather
+    /// than failing.
+    pub fn client_layout(&self) -> client_layout::ClientLayout {
+        client_layout::load(&self.0.home)
     }
 
-    /// Remembers the sidebar's shape for the next run.
-    pub fn save_sidebar_layout(&self, layout: &sidebar_layout::SidebarLayout) -> Result<()> {
-        sidebar_layout::save(&self.0.home, layout)
+    /// Remembers the TUI's shape for the next run.
+    pub fn save_client_layout(&self, layout: &client_layout::ClientLayout) -> Result<()> {
+        client_layout::save(&self.0.home, layout)
     }
 
     /// Where a newly created agent starts, decided before its harness does.

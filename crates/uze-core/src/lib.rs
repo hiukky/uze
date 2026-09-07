@@ -51,10 +51,10 @@ pub mod profile_state;
 /// than filed under a concern it does not belong to.
 pub mod prompt_history;
 
-/// What the workspace client's sidebar keeps between runs. Here for the
-/// same reason [`prompt_history`] is: UZE-owned state under `UzeHome`,
-/// read by the one client that draws it.
-pub mod sidebar_layout;
+/// What the TUI keeps of its own shape between runs. Here for the same
+/// reason [`prompt_history`] is: UZE-owned state under `UzeHome`, read by
+/// the one client that draws it.
+pub mod client_layout;
 
 /// Which theme is active, and which theme files exist. Only the selection —
 /// what a theme *is* belongs to the design system, which this crate does
