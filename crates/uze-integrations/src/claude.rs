@@ -51,8 +51,9 @@ use crate::hooks as hook_projection;
 use crate::shared::process::run_quiet;
 use generate::{
     GENERATED_MARKETPLACE_NAME, GENERATED_PLUGIN_KIND, generatable, generated_catalogue_matches,
-    generated_exact_coverage, generated_package_receipt, generated_root,
-    materialize_generated_package, remove_generated_package_by_id, write_generated_catalogue,
+    generated_exact_coverage, generated_package_receipt, generated_packages_present,
+    generated_root, materialize_generated_package, remove_generated_package_by_id,
+    write_generated_catalogue,
 };
 use mcp::attach_mcp_entry;
 use plugin::{
@@ -516,7 +517,9 @@ impl IntegrationPort for ClaudeIntegration {
         if let Err(reason) = explicit_published {
             return PublicationStatus::Unpublished(reason);
         }
-        if !generated_catalogue_matches(&self.uze_home, packages) {
+        if !generated_catalogue_matches(&self.uze_home, packages)
+            || !generated_packages_present(&self.uze_home, packages)
+        {
             return PublicationStatus::Unpublished(
                 "the generated Claude marketplace does not match the installed package set; re-run `uze setup claude`"
                     .to_owned(),

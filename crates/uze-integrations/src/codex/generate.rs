@@ -516,6 +516,18 @@ pub(super) fn write_generated_catalogue(
     )
 }
 
+/// Whether every package the generated catalogue names still has its
+/// envelope on disk. The catalogue matching is not enough on its own once
+/// republishing is gated on it: a hand-removed envelope would otherwise
+/// stay missing until something else rewrote the view.
+pub(super) fn generated_packages_present(uze_home: &UzeHome, packages: &[StoredPackage]) -> bool {
+    generated_publishable(packages).into_iter().all(|package| {
+        generated_package_dir_for_id(uze_home, package.id.as_str())
+            .join(".codex-plugin/plugin.json")
+            .is_file()
+    })
+}
+
 pub(super) fn generated_catalogue_matches(uze_home: &UzeHome, packages: &[StoredPackage]) -> bool {
     let catalogue_path = generated_root(uze_home).join(".agents/plugins/marketplace.json");
     let expected = generated_catalogue_document(packages);

@@ -484,42 +484,21 @@ pub(crate) fn recent_prompts(home: UzeHome, context_root: &std::path::Path) -> V
 
 fn load_refresh_data(home: UzeHome, context_root: &std::path::Path) -> Result<RefreshData> {
     let app = tui_application(home)?;
-    let mut plugins = app.plugins().list()?;
+    let snapshot = app.machine_snapshot(context_root, PROMPT_HISTORY_LIMIT)?;
+    let mut plugins = snapshot.plugins;
     // Official plugins always lead the list — a stable sort keeps every
     // other ordering (whatever `list_plugins` returns) untouched within
     // each of the two groups.
     plugins.sort_by_key(|plugin| !plugin.source.starts_with("embedded:"));
-    // Full health on every refresh: the inspection cache makes the
-    // per-receipt vendor probing milliseconds in steady state, so every
-    // screen sees real attachment state (never a masked "unknown").
-    let doctor = app.health().report();
-    let marketplaces = app.marketplace().list()?;
-    let marketplace_plugins = app.marketplace().plugins()?;
-    let profiles = app.profiles().list()?;
-    // Workspace detection first, then context at the detected root: callers
-    // deep inside a subdirectory get the workspace's own AGENTS.md/bridge
-    // state, not a cwd-scoped one that misses it. Best-effort — a summary
-    // is always producible, but a refresh must not fail over it.
-    let workspace = app.workspace().summary(context_root).ok();
-    let status_root = workspace
-        .as_ref()
-        .map(|workspace| workspace.root.as_path())
-        .unwrap_or(context_root);
-    let context_status = app.context().inspect(status_root).ok();
-    // Same root the workspace client records against, so a uze launched
-    // from a subdirectory still reads back its own history.
-    let prompt_history = app
-        .workspace()
-        .prompt_history(status_root, PROMPT_HISTORY_LIMIT);
     Ok(RefreshData {
         plugins,
-        doctor: Some(doctor),
-        marketplace_plugins,
-        marketplaces,
-        profiles,
-        context_status,
-        workspace,
-        prompt_history,
+        doctor: Some(snapshot.doctor),
+        marketplace_plugins: snapshot.marketplace_plugins,
+        marketplaces: snapshot.marketplaces,
+        profiles: snapshot.profiles,
+        context_status: snapshot.context_status,
+        workspace: snapshot.workspace,
+        prompt_history: snapshot.prompt_history,
         // Only `spawn_startup` ever fills this in; an ordinary refresh
         // reports no auto-updates rather than re-raising old badges.
         auto_updated: Vec::new(),

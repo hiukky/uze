@@ -36,6 +36,67 @@ use uze_core::{
 
 use super::{services::Workspace, *};
 
+/// Everything the management screens show, read in one pass: the machine
+/// (plugins, health, marketplaces, profiles) and the project the session
+/// was opened in (workspace, context, prompt history). One read model so
+/// the TUI composes nothing of its own, and so the whole of what a
+/// refresh costs is one call a budget test can time.
+#[derive(Debug)]
+pub struct MachineSnapshot {
+    pub plugins: Vec<PluginSummary>,
+    pub doctor: DoctorReport,
+    pub marketplaces: Vec<MarketplaceSummary>,
+    pub marketplace_plugins: Vec<MarketplacePluginSummary>,
+    pub profiles: Vec<ProfileSummary>,
+    /// The root the workspace-scoped halves were read at — the detected
+    /// workspace's, so a session opened in a subdirectory reads its own
+    /// project's context and history, not a cwd-scoped miss.
+    pub root: PathBuf,
+    pub workspace: Option<OverviewWorkspaceSummary>,
+    pub context_status: Option<ProjectContextStatus>,
+    pub prompt_history: Vec<uze_core::prompt_history::PromptEntry>,
+}
+
+impl UzeApplication {
+    /// The management screens' read model, for a session opened at
+    /// `context_root`. The workspace and context halves are best-effort:
+    /// a snapshot is always producible, and one screen's miss must not
+    /// empty the others.
+    pub fn machine_snapshot(
+        &self,
+        context_root: &Path,
+        prompt_limit: usize,
+    ) -> Result<MachineSnapshot> {
+        let _span = tracing::info_span!("snapshot.machine").entered();
+        let plugins = self.plugins().list()?;
+        // Full health on every refresh: the inspection cache makes the
+        // per-receipt vendor probing milliseconds in steady state, so every
+        // screen sees real attachment state (never a masked "unknown").
+        let doctor = self.health().report();
+        let marketplaces = self.marketplace().list()?;
+        let marketplace_plugins = self.marketplace().plugins()?;
+        let profiles = self.profiles().list()?;
+        let workspace = self.workspace().summary(context_root).ok();
+        let root = workspace
+            .as_ref()
+            .map(|workspace| workspace.root.clone())
+            .unwrap_or_else(|| context_root.to_path_buf());
+        let context_status = self.context().inspect(&root).ok();
+        let prompt_history = self.workspace().prompt_history(&root, prompt_limit);
+        Ok(MachineSnapshot {
+            plugins,
+            doctor,
+            marketplaces,
+            marketplace_plugins,
+            profiles,
+            root,
+            workspace,
+            context_status,
+            prompt_history,
+        })
+    }
+}
+
 impl Workspace<'_> {
     /// What kind of UZE workspace `cwd` is inside, and the semantic state
     /// of its project/marketplace halves. Total for workspace-shaped
@@ -43,6 +104,7 @@ impl Workspace<'_> {
     /// state (`Invalid`/`InvalidManifest`), never an error — the Overview
     /// exists to show exactly that, not to refuse to run because of it.
     /// The only `Err` is an unresolvable cwd.
+    #[tracing::instrument(name = "workspace.summary", skip_all, fields(cwd = %cwd.display()), err)]
     pub fn summary(&self, cwd: &Path) -> Result<OverviewWorkspaceSummary> {
         let resolved = workspace::resolve_workspace(cwd)?;
         let root = resolved.root.clone();

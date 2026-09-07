@@ -69,7 +69,7 @@ pub fn forget_receipt(home: &UzeHome, key: &str) -> Result<()> {
 
 /// Operational facts about one harness's machine-level UZE integration.
 /// Deliberately excludes anything resembling a harness credential.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct IntegrationRecord {
     pub harness: String,
     pub version: Option<String>,
@@ -107,6 +107,11 @@ pub fn is_installed(home: &UzeHome, harness: &str) -> bool {
 pub fn record(home: &UzeHome, entry: IntegrationRecord) -> Result<()> {
     home.ensure_layout()?;
     let mut registry = load_registry(home)?;
+    // Every command records each detected harness on its way in; an
+    // unchanged record must cost a read, not a synced rewrite of the file.
+    if registry.integrations.get(&entry.harness) == Some(&entry) {
+        return Ok(());
+    }
     registry.integrations.insert(entry.harness.clone(), entry);
     save_registry(home, &registry)
 }

@@ -74,8 +74,72 @@ pub fn materialize(plugin_name: &str) -> Result<MaterializedPackage> {
 /// directory tree file-for-file, not a fixed list of known filenames — so
 /// it needs no per-plugin knowledge either.
 pub fn has_update(plugin_name: &str, stored_root: &Path) -> Result<bool> {
-    let current = materialize(plugin_name)?;
-    Ok(!trees_match(current.root(), stored_root)?)
+    let current = embedded_plugin_files(plugin_name)?;
+    let stored = collect_files(stored_root)?;
+    Ok(current.len() != stored.len()
+        || current
+            .iter()
+            .any(|(relative, bytes)| stored.get(relative).map(Vec::as_slice) != Some(*bytes)))
+}
+
+/// The snapshot's files under `plugin_name`'s manifest entry, keyed by
+/// their path relative to the plugin root — read straight from the
+/// binary. Extracting the snapshot to disk to answer this was several
+/// directory writes per screen, for a comparison that needs no directory.
+fn embedded_plugin_files(plugin_name: &str) -> Result<BTreeMap<PathBuf, &'static [u8]>> {
+    let manifest = embedded_manifest()?;
+    let entry = manifest
+        .plugins
+        .iter()
+        .find(|entry| entry.name == plugin_name)
+        .ok_or_else(|| UzeError::UnknownPackage(plugin_name.to_owned()))?;
+    let prefix = contained_relative_path(&entry.source)?;
+    Ok(EMBEDDED_MARKETPLACE_FILES
+        .iter()
+        .filter_map(|(relative, bytes)| {
+            Path::new(relative)
+                .strip_prefix(&prefix)
+                .ok()
+                .map(|within| (within.to_path_buf(), *bytes))
+        })
+        .collect())
+}
+
+/// A manifest `source` as a path inside the snapshot: `./plugins/uze` is
+/// `plugins/uze`, and anything that would climb out of the snapshot is
+/// refused — the same containment `resolve_plugin_source` holds a
+/// marketplace directory to, for a root that is never on disk.
+fn contained_relative_path(source: &str) -> Result<PathBuf> {
+    let mut contained = PathBuf::new();
+    for component in Path::new(source).components() {
+        match component {
+            std::path::Component::Normal(part) => contained.push(part),
+            std::path::Component::CurDir => {}
+            _ => {
+                return Err(UzeError::UnsafePathReference {
+                    path: PathBuf::from("embedded:uze-official"),
+                    reference: source.to_owned(),
+                });
+            }
+        }
+    }
+    Ok(contained)
+}
+
+/// The snapshot's own `marketplace.json`, parsed from the binary.
+fn embedded_manifest() -> Result<marketplace::MarketplaceManifest> {
+    let bytes = EMBEDDED_MARKETPLACE_FILES
+        .iter()
+        .find(|(relative, _)| {
+            Path::new(relative) == Path::new(uze_core::workspace::MARKETPLACE_MANIFEST_NAME)
+        })
+        .map(|(_, bytes)| *bytes)
+        .ok_or_else(|| {
+            UzeError::MissingManifest(PathBuf::from(
+                uze_core::workspace::MARKETPLACE_MANIFEST_NAME,
+            ))
+        })?;
+    marketplace::parse_manifest(bytes)
 }
 
 /// The official embedded marketplace as it describes itself — a pure,
@@ -94,8 +158,7 @@ pub struct OfficialCatalog {
 }
 
 pub fn entries() -> Result<OfficialCatalog> {
-    let (root, manifest) = extract_and_parse()?;
-    let _ = fs::remove_dir_all(&root);
+    let manifest = embedded_manifest()?;
     Ok(OfficialCatalog {
         name: manifest.name,
         homepage: manifest.owner.and_then(|owner| owner.url),
@@ -140,15 +203,6 @@ fn extract_embedded_snapshot() -> Result<PathBuf> {
         })?;
     }
     Ok(scratch)
-}
-
-/// Whether every file under `a` exists with identical bytes under `b` and
-/// vice versa. No knowledge of what the files are — just a directory-tree
-/// equality check, so a new plugin file needs no update here.
-fn trees_match(a: &Path, b: &Path) -> Result<bool> {
-    let a_files = collect_files(a)?;
-    let b_files = collect_files(b)?;
-    Ok(a_files == b_files)
 }
 
 fn collect_files(root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>> {

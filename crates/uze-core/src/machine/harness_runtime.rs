@@ -91,9 +91,8 @@ impl HarnessRuntimeContribution {
 /// `exec` of the bare name) when this returns `None`: that would re-enter
 /// PATH search and could resolve straight back to the shim.
 pub fn resolve_real_executable(names: &[&str], shims_dir: &Path) -> Option<PathBuf> {
-    let path_var = std::env::var_os("PATH")?;
     let canonical_shims_dir = shims_dir.canonicalize().ok();
-    for dir in std::env::split_paths(&path_var) {
+    for dir in harness_search_path() {
         // Canonicalizing is a filesystem round trip per `PATH` entry, and
         // on a WSL `PATH` carrying Windows directories each one crosses a
         // network filesystem. Only an entry that could *be* the shims
@@ -117,6 +116,76 @@ pub fn resolve_real_executable(names: &[&str], shims_dir: &Path) -> Option<PathB
         }
     }
     None
+}
+
+/// The `PATH` entries a harness executable is looked for in, in order.
+///
+/// Every entry as spelled, except those on a filesystem this machine
+/// reaches over a network protocol — `9p`, which is how a Windows drive
+/// appears inside WSL. A harness UZE integrates is a program of this
+/// machine, with its state under `$HOME`; an executable on a mounted
+/// Windows drive is the Windows install of a tool, not a harness here.
+/// Probing such an entry is a round trip of about two milliseconds, and a
+/// `PATH` inherited from Windows carries a dozen of them, so every name
+/// that was not installed cost every command the whole walk.
+pub fn harness_search_path() -> Vec<PathBuf> {
+    let Some(path) = std::env::var_os("PATH") else {
+        return Vec::new();
+    };
+    let remote = network_mount_points();
+    std::env::split_paths(&path)
+        .filter(|dir| !remote.iter().any(|mount| dir.starts_with(mount)))
+        .collect()
+}
+
+/// Mount points of the filesystems reached over a network protocol, read
+/// once per process from the kernel's mount table. Empty where there is
+/// no such table.
+fn network_mount_points() -> &'static [PathBuf] {
+    static MOUNTS: std::sync::OnceLock<Vec<PathBuf>> = std::sync::OnceLock::new();
+    MOUNTS.get_or_init(|| {
+        fs::read_to_string("/proc/self/mounts")
+            .map(|table| network_mount_points_in(&table))
+            .unwrap_or_default()
+    })
+}
+
+/// Parses a `/proc/self/mounts` table (`source mountpoint fstype …`, one
+/// mount per line, spaces in a path escaped as octal `\040`).
+fn network_mount_points_in(table: &str) -> Vec<PathBuf> {
+    const NETWORK_FILESYSTEMS: &[&str] = &["9p"];
+    table
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split(' ');
+            let _source = fields.next()?;
+            let mount_point = fields.next()?;
+            let filesystem = fields.next()?;
+            NETWORK_FILESYSTEMS
+                .contains(&filesystem)
+                .then(|| PathBuf::from(unescape_mount_field(mount_point)))
+        })
+        .collect()
+}
+
+fn unescape_mount_field(field: &str) -> String {
+    let mut out = String::with_capacity(field.len());
+    let mut characters = field.chars().peekable();
+    while let Some(character) = characters.next() {
+        if character != '\\' {
+            out.push(character);
+            continue;
+        }
+        let digits: String = characters.by_ref().take(3).collect();
+        match u8::from_str_radix(&digits, 8) {
+            Ok(byte) => out.push(byte as char),
+            Err(_) => {
+                out.push('\\');
+                out.push_str(&digits);
+            }
+        }
+    }
+    out
 }
 
 /// Shared by the PATH walks in this module and in `detection_cache` — the
@@ -326,6 +395,18 @@ mod tests {
         assert_eq!(
             resolved,
             real_bin_dir.join("claude").canonicalize().unwrap()
+        );
+    }
+
+    #[test]
+    fn a_windows_drive_mounted_into_wsl_is_not_where_a_harness_is_looked_for() {
+        let table = "/dev/sdd / ext4 rw,relatime 0 0\n\
+                     C:\\134 /mnt/c 9p rw,noatime,aname=drvfs;path=C:\\ 0 0\n\
+                     D:\\134 /mnt/my\\040drive 9p rw 0 0\n\
+                     tmpfs /run tmpfs rw 0 0\n";
+        assert_eq!(
+            network_mount_points_in(table),
+            vec![PathBuf::from("/mnt/c"), PathBuf::from("/mnt/my drive")]
         );
     }
 

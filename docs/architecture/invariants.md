@@ -307,8 +307,16 @@ declarations; it invokes nothing.
 
 ### Cache is not required for correctness
 
-`~/.uze/cache` is reserved and unwritten. Deleting it cannot affect an
-installed package because nothing installed depends on it.
+`~/.uze/cache` holds three caches, each reconstructable from a live read:
+harness detection (`harness_detection.json`), attachment inspection
+(`inspection.json`) and the catalogue of every marketplace registered by
+URL (`marketplaces/<name>/`). Deleting the directory costs one probe, one
+inspection or one clone; nothing installed depends on it, and no mutating
+path trusts it — removal planning re-inspects live, and a mutation
+invalidates the entries it touched.
+
+> `crates/uze-application/src/application/marketplace_catalogue.rs::tests::a_stored_catalogue_answers_without_the_source_being_reachable`
+> `crates/uze-application/src/application/doctor.rs::tests::installation_invalidates_the_inspection_cache`
 
 ---
 

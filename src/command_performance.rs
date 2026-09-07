@@ -21,12 +21,12 @@ use crate::Cli;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PerformanceClass {
     /// Must complete in low milliseconds once its cache is warm, with no
-    /// manual action required — see `specs/cli-performance/spec.md`. Every
-    /// command in this class routes through `UzeApplication::detect_cached`
-    /// (directly or via `ensure_default_plugins`/`prepare_detected_
-    /// integrations`), which is what
-    /// `uze_application::application::tests::
-    /// cache_warm_detect_cached_meets_the_performance_budget` measures.
+    /// manual action required — see `specs/cli-performance/spec.md`. Each
+    /// command in this class has a test in
+    /// `uze_application::application::performance_tests` that times the
+    /// application call it dispatches to, on a fresh application, in a
+    /// world where a live probe or a clone would be visible; the mapping
+    /// is `BUDGETED_COMMAND_TESTS`.
     Budgeted,
     /// Exempt from the budget for a stated, reviewable reason — normally a
     /// genuine network or vendor-installer operation UZE does not control
@@ -128,33 +128,34 @@ pub const CLASSIFICATION: &[(&str, PerformanceClass)] = &[
 ///
 /// Kept as a plain list here — rather than trying to introspect the test
 /// binary from `src/main.rs`, which cannot see `uze-application`'s test
-/// module — cross-checked by that module's own test names, so a
-/// `Budgeted` entry added here without updating that list is caught by a
-/// mismatch, not silently trusted.
+/// module — and cross-checked against that module's source by
+/// `tests::every_named_performance_test_exists`, so a name that drifts
+/// from the test it points at fails by name rather than pointing at
+/// nothing.
 pub const BUDGETED_COMMAND_TESTS: &[(&str, &str)] = &[
     (
         "remove",
-        "uze_application::application::tests::cache_warm_detect_cached_meets_the_performance_budget",
+        "uze_application::application::performance_tests::removals_meet_the_budget",
     ),
     (
         "status",
-        "uze_application::application::tests::cache_warm_detect_cached_meets_the_performance_budget",
+        "uze_application::application::performance_tests::status_meets_the_budget",
     ),
     (
         "doctor",
-        "uze_application::application::tests::cache_warm_detect_cached_meets_the_performance_budget",
+        "uze_application::application::performance_tests::doctor_meets_the_budget",
     ),
     (
         "context inspect",
-        "uze_application::application::tests::cache_warm_detect_cached_meets_the_performance_budget",
+        "uze_application::application::performance_tests::context_reads_and_reconcile_meet_the_budget",
     ),
     (
         "context plan",
-        "uze_application::application::tests::cache_warm_detect_cached_meets_the_performance_budget",
+        "uze_application::application::performance_tests::context_reads_and_reconcile_meet_the_budget",
     ),
     (
         "context reconcile",
-        "uze_application::application::tests::cache_warm_detect_cached_meets_the_performance_budget",
+        "uze_application::application::performance_tests::context_reads_and_reconcile_meet_the_budget",
     ),
     (
         "theme list",
@@ -170,27 +171,27 @@ pub const BUDGETED_COMMAND_TESTS: &[(&str, &str)] = &[
     ),
     (
         "market list",
-        "uze_application::application::tests::cache_warm_detect_cached_meets_the_performance_budget",
+        "uze_application::application::performance_tests::market_list_and_inspect_meet_the_budget_without_the_repository",
     ),
     (
         "market remove",
-        "uze_application::application::tests::cache_warm_detect_cached_meets_the_performance_budget",
+        "uze_application::application::performance_tests::removals_meet_the_budget",
     ),
     (
         "market inspect",
-        "uze_application::application::tests::cache_warm_detect_cached_meets_the_performance_budget",
+        "uze_application::application::performance_tests::market_list_and_inspect_meet_the_budget_without_the_repository",
     ),
     (
         "plugin list",
-        "uze_application::application::tests::cache_warm_detect_cached_meets_the_performance_budget",
+        "uze_application::application::performance_tests::plugin_list_and_inspect_meet_the_budget",
     ),
     (
         "plugin inspect",
-        "uze_application::application::tests::cache_warm_detect_cached_meets_the_performance_budget",
+        "uze_application::application::performance_tests::plugin_list_and_inspect_meet_the_budget",
     ),
     (
         "plugin remove",
-        "uze_application::application::tests::cache_warm_detect_cached_meets_the_performance_budget",
+        "uze_application::application::performance_tests::removals_meet_the_budget",
     ),
 ];
 
@@ -291,6 +292,32 @@ mod tests {
             "BUDGETED_COMMAND_TESTS has entries for commands not classified Budgeted \
              in CLASSIFICATION: {untracked:?}"
         );
+    }
+
+    /// A name in `BUDGETED_COMMAND_TESTS` is a claim that a test exists;
+    /// this reads the module the name points into and finds the function,
+    /// so a renamed or deleted test fails here by name instead of leaving
+    /// the classification pointing at nothing.
+    #[test]
+    fn every_named_performance_test_exists() {
+        let application_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("crates/uze-application/src/application");
+        for (command, test) in BUDGETED_COMMAND_TESTS {
+            let path = test
+                .strip_prefix("uze_application::application::")
+                .unwrap_or_else(|| {
+                    panic!("{command}: {test} is not under uze_application::application")
+                });
+            let mut segments = path.split("::");
+            let module = segments.next().expect("a module segment");
+            let function = segments.last().expect("a function segment");
+            let source = std::fs::read_to_string(application_src.join(format!("{module}.rs")))
+                .unwrap_or_else(|error| panic!("{command}: cannot read module {module}: {error}"));
+            assert!(
+                source.contains(&format!("fn {function}(")),
+                "{command}: BUDGETED_COMMAND_TESTS names {test}, but {module}.rs has no fn {function}"
+            );
+        }
     }
 
     #[test]

@@ -14,23 +14,39 @@ impl Marketplace<'_> {
     /// when it was already registered from the exact same source
     /// (idempotent no-op — see `state::marketplace_add`). A different
     /// source under the same name is a `MarketplaceConflict` error.
+    ///
+    /// Registering a Git source again is also how its cached catalogue is
+    /// refreshed on demand: the clone made here to learn the marketplace's
+    /// name is what the catalogue cache keeps, so the listing that follows
+    /// does not pay it a second time.
+    #[tracing::instrument(name = "marketplace.add", skip_all, fields(source_str = %source_str), err)]
     pub fn add(&self, source_str: &str) -> Result<bool> {
         let source = UzeApplication::parse_marketplace_source(source_str)?;
-        let (_checkout, manifest) = UzeApplication::load_marketplace_manifest(&source)?;
+        let (checkout, manifest) = UzeApplication::load_marketplace_manifest(&source)?;
         let name = manifest.name.clone();
         if name == "uze-official" {
             return Err(UzeError::ReservedMarketplace(name));
         }
-        uze_core::state::marketplace_add(&self.0.home, &name, source)
+        let added = uze_core::state::marketplace_add(&self.0.home, &name, source.clone())?;
+        if matches!(source, PackageSource::Git { .. }) {
+            self.0
+                .marketplace_catalogues
+                .store_from(&name, &source, checkout.root())?;
+        }
+        Ok(added)
     }
 
+    #[tracing::instrument(name = "marketplace.remove", skip_all, fields(name = %name), err)]
     pub fn remove(&self, name: &str) -> Result<()> {
         if name == "uze-official" {
             return Err(UzeError::ReservedMarketplace(name.to_owned()));
         }
-        uze_core::state::marketplace_remove(&self.0.home, name)
+        uze_core::state::marketplace_remove(&self.0.home, name)?;
+        self.0.marketplace_catalogues.invalidate(name);
+        Ok(())
     }
 
+    #[tracing::instrument(name = "marketplace.list", skip_all, err)]
     pub fn list(&self) -> Result<Vec<MarketplaceSummary>> {
         let mut out = Vec::new();
         let official = bootstrap::entries()?;
@@ -41,17 +57,21 @@ impl Marketplace<'_> {
             plugin_count: official.plugins.len(),
         });
         for (name, record) in uze_core::state::marketplace_list(&self.0.home)? {
-            let manifest = UzeApplication::load_marketplace_manifest(&record.source).ok();
+            let manifest = self
+                .0
+                .catalogue(&name, &record.source)
+                .ok()
+                .map(|catalogue| catalogue.manifest);
             let plugin_count = manifest
                 .as_ref()
-                .map_or(0, |(_, manifest)| manifest.plugins.len());
+                .map_or(0, |manifest| manifest.plugins.len());
             // What the marketplace says about itself first; its registered
             // source only when that is a URL a browser can open. A local
             // path is where the manifest was read from, not somewhere to
             // send a reader.
             let source = record.source.display();
             let homepage = manifest
-                .and_then(|(_, manifest)| manifest.owner.and_then(|owner| owner.url))
+                .and_then(|manifest| manifest.owner.and_then(|owner| owner.url))
                 .or_else(|| source.starts_with("http").then(|| source.clone()));
             out.push(MarketplaceSummary {
                 name: name.clone(),
@@ -68,6 +88,7 @@ impl Marketplace<'_> {
     /// (`inspect_marketplace_plugin`). Filters the same per-entry
     /// computation `marketplace_list` already does down to one named entry;
     /// no new state or invariant.
+    #[tracing::instrument(name = "marketplace.inspect", skip_all, fields(name = %name), err)]
     pub fn inspect(&self, name: &str) -> Result<MarketplaceSummary> {
         self.list()?
             .into_iter()
@@ -75,6 +96,7 @@ impl Marketplace<'_> {
             .ok_or_else(|| UzeError::UnknownPackage(format!("marketplace `{name}` not found")))
     }
 
+    #[tracing::instrument(name = "marketplace.install_plugin", skip_all, fields(spec = %spec), err)]
     pub fn install_plugin(
         &self,
         spec: &str,
@@ -86,6 +108,7 @@ impl Marketplace<'_> {
     /// `plugin_install`, with an explicit answer for a bare-plugin-name
     /// collision with an already-active, differently-marketplaced package
     /// (ADR-038) — see `add_plugin_resolving`.
+    #[tracing::instrument(name = "marketplace.install_plugin_resolving", skip_all, fields(spec = %spec), err)]
     pub fn install_plugin_resolving(
         &self,
         spec: &str,
@@ -126,6 +149,7 @@ impl Marketplace<'_> {
     /// marketplace whose manifest can no longer be read (moved/deleted
     /// source) is skipped rather than failing the whole listing, mirroring
     /// `marketplace_list`'s own `plugin_count: 0` fallback.
+    #[tracing::instrument(name = "marketplace.plugins", skip_all, err)]
     pub fn plugins(&self) -> Result<Vec<MarketplacePluginSummary>> {
         let installed_packages = self.0.installed_packages();
         let installed: std::collections::BTreeMap<&str, &StoredPackage> = installed_packages
@@ -157,11 +181,10 @@ impl Marketplace<'_> {
         }));
 
         for (name, record) in uze_core::state::marketplace_list(&self.0.home)? {
-            let Ok((_, manifest)) = UzeApplication::load_marketplace_manifest(&record.source)
-            else {
+            let Ok(catalogue) = self.0.catalogue(&name, &record.source) else {
                 continue;
             };
-            out.extend(manifest.plugins.into_iter().map(|entry| {
+            out.extend(catalogue.manifest.plugins.into_iter().map(|entry| {
                 let installed_package = installed.get(format!("{}@{name}", entry.name).as_str());
                 MarketplacePluginSummary {
                     marketplace: name.clone(),
@@ -180,6 +203,7 @@ impl Marketplace<'_> {
         Ok(out)
     }
 
+    #[tracing::instrument(name = "marketplace.inspect_plugin", skip_all, fields(marketplace = %marketplace, name = %name), err)]
     pub fn inspect_plugin(&self, marketplace: &str, name: &str) -> Result<MarketplacePluginDetail> {
         let summary = self
             .plugins()?
@@ -189,11 +213,27 @@ impl Marketplace<'_> {
         let materialized = if marketplace == "uze-official" {
             bootstrap::materialize(name)?
         } else {
+            // Read from the catalogue's own checkout: what is on offer is a
+            // question about the catalogue, and it is answered without a
+            // clone, the way the listing above was. Installing is what
+            // clones at a commit.
             let record =
                 uze_core::state::marketplace_get(&self.0.home, marketplace)?.ok_or_else(|| {
                     UzeError::UnknownPackage(format!("marketplace `{marketplace}` not found"))
                 })?;
-            UzeApplication::materialize_marketplace_plugin(&record.source, name)?
+            let catalogue = self.0.catalogue(marketplace, &record.source)?;
+            let plugin_root = uze_core::acquisition::marketplace::resolve_plugin_source(
+                &catalogue.manifest,
+                name,
+                &catalogue.root,
+            )?;
+            uze_core::MaterializedPackage::borrowed(
+                plugin_root.clone(),
+                uze_core::Provenance {
+                    requested: record.source,
+                    resolved: uze_core::ResolvedSource::Local { path: plugin_root },
+                },
+            )
         };
         let inspected = uze_core::acquisition::inspect_capabilities(&materialized)?;
         Ok(MarketplacePluginDetail {
@@ -210,6 +250,7 @@ impl Marketplace<'_> {
         })
     }
 
+    #[tracing::instrument(name = "marketplace.install_from", skip_all, fields(name = %name), err)]
     pub fn install_from(
         &self,
         name: &str,
@@ -220,6 +261,7 @@ impl Marketplace<'_> {
 
     /// `install_from_marketplace`, with an explicit answer for a
     /// bare-plugin-name collision (ADR-038) — see `add_plugin_resolving`.
+    #[tracing::instrument(name = "marketplace.install_from_resolving", skip_all, fields(name = %name), err)]
     pub fn install_from_resolving(
         &self,
         name: &str,

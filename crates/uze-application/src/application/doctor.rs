@@ -557,22 +557,41 @@ mod tests {
 }
 
 impl UzeApplication {
+    /// Whether the harness's shim is what `PATH` resolves its name to.
+    ///
+    /// The walk stops at the shims directory: what comes after it cannot
+    /// shadow the shim, so the only entries worth a probe are the ones
+    /// ahead of it — normally none, since setup puts it first. Before this
+    /// stopped there, a harness with no shim installed had every `PATH`
+    /// entry probed on every doctor report.
     pub(super) fn runtime_shim_is_active(&self, integration: &dyn IntegrationPort) -> bool {
         if !integration.supports_runtime_integration() {
             return true;
         }
-        let expected = self.home.shims_dir().join(integration.shim_name());
-        std::env::var_os("PATH")
-            .and_then(|path| {
-                std::env::split_paths(&path)
-                    .map(|directory| directory.join(integration.shim_name()))
-                    .find(|candidate| candidate.is_file())
-            })
-            // Canonicalized comparison: a PATH entry that reaches the shim
-            // through a symlinked directory (or a shim file that is itself
-            // a symlink into the UZE install — the normal `~/.uze/shims`
-            // case) must count as active, not merely byte-equal paths.
-            .is_some_and(|resolved| resolved.canonicalize().ok() == expected.canonicalize().ok())
+        let shims_dir = self.home.shims_dir();
+        let canonical_shims_dir = shims_dir.canonicalize().ok();
+        let shim_name = integration.shim_name();
+        for directory in uze_core::harness_runtime::harness_search_path() {
+            // Canonicalized comparison, but only for an entry that could be
+            // the shims directory: a `PATH` entry reaching it through a
+            // symlinked directory must count, and canonicalizing every
+            // other entry is a filesystem round trip apiece.
+            let could_be_shims = directory == shims_dir
+                || (directory.file_name().is_some()
+                    && directory.file_name() == shims_dir.file_name());
+            let is_shims_dir = could_be_shims
+                && match (directory.canonicalize().ok(), &canonical_shims_dir) {
+                    (Some(a), Some(b)) => &a == b,
+                    _ => directory == shims_dir,
+                };
+            if is_shims_dir {
+                return shims_dir.join(shim_name).is_file();
+            }
+            if directory.join(shim_name).is_file() {
+                return false;
+            }
+        }
+        false
     }
 }
 

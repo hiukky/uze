@@ -44,6 +44,7 @@ mod inspection_cache;
 mod lifecycle;
 mod maintenance;
 mod marketplace;
+mod marketplace_catalogue;
 mod overview;
 mod profile;
 mod project_environment;
@@ -65,7 +66,7 @@ pub use project_environment::{
 // Re-export overview read models for TUI/CLI access.
 pub use maintenance::{MaintenanceOutcome, MaintenanceReport};
 pub use overview::{
-    MarketplaceState, MemoryState, OverviewMarketplace, OverviewWorkspaceSummary,
+    MachineSnapshot, MarketplaceState, MemoryState, OverviewMarketplace, OverviewWorkspaceSummary,
     ProjectEnvironmentState, ProjectOverview,
 };
 pub use uze_core::workspace::WorkspaceKind;
@@ -110,6 +111,7 @@ pub struct UzeApplication {
     runner: Box<dyn ProcessRunner>,
     detection_cache: DetectionCache,
     inspection_cache: crate::application::inspection_cache::InspectionCache,
+    marketplace_catalogues: marketplace_catalogue::MarketplaceCatalogues,
 }
 
 impl UzeApplication {
@@ -173,6 +175,7 @@ impl UzeApplication {
             store: UzeStore::new(home.clone()),
             detection_cache: DetectionCache::new(&home),
             inspection_cache: inspection_cache::InspectionCache::new(&home),
+            marketplace_catalogues: marketplace_catalogue::MarketplaceCatalogues::new(&home),
             home,
             integrations,
             preference_adapters,
@@ -243,12 +246,16 @@ impl UzeApplication {
         // Derived views refresh before attachment, same ordering `add_plugin`
         // already relies on (`install_materialized`): a Generated Native
         // Package's own catalogue (e.g. Claude's `generated/.claude-plugin/
-        // marketplace.json`) is written by `republish_all`, and native
+        // marketplace.json`) is written by republishing, and native
         // delivery below reads that view. Attaching first on a fresh/
         // catalogue-less `UZE_HOME` made the vendor CLI's own `marketplace
         // add` fail outright (`Marketplace file not found at .../
-        // marketplace.json`) — real-host dogfood caught this.
-        let _ = self.republish_all();
+        // marketplace.json`) — real-host dogfood caught this. Only a view
+        // that no longer matches the installed set is rewritten: this runs
+        // before every command, and rewriting four catalogues (each a
+        // synced atomic write) to say what they already said was most of
+        // what a read-only command cost.
+        self.republish_unpublished();
         let installed_ids: BTreeSet<&str> = bootstrap::DEFAULT_PLUGIN_IDS.iter().copied().collect();
         for package_id in self.store.package_ids().unwrap_or_default() {
             if !installed_ids.contains(package_id.as_str()) {
@@ -917,12 +924,45 @@ impl UzeApplication {
             .iter()
             .map(|integration| PublicationOutcome {
                 integration: integration.id().to_owned(),
-                error: integration
-                    .republish_packages(&packages)
-                    .err()
-                    .map(|error| error.to_string()),
+                error: {
+                    let _span = tracing::info_span!(
+                        "integration.republish",
+                        integration = integration.id()
+                    )
+                    .entered();
+                    integration
+                        .republish_packages(&packages)
+                        .err()
+                        .map(|error| error.to_string())
+                },
             })
             .collect()
+    }
+
+    /// `republish_all`, for the integrations whose derived view no longer
+    /// matches the installed package set. Failures are dropped: this is
+    /// the best-effort bootstrap path, and `doctor` reports an unpublished
+    /// view on its own.
+    fn republish_unpublished(&self) {
+        let packages = self.installed_packages();
+        for integration in &self.integrations {
+            if let PublicationStatus::Unpublished(_) = integration.publication(&packages) {
+                let _span =
+                    tracing::info_span!("integration.republish", integration = integration.id())
+                        .entered();
+                let _ = integration.republish_packages(&packages);
+            }
+        }
+    }
+
+    /// What the marketplace registered as `name` at `source` offers, from
+    /// the catalogue cache (see `marketplace_catalogue`).
+    pub(crate) fn catalogue(
+        &self,
+        name: &str,
+        source: &PackageSource,
+    ) -> Result<marketplace_catalogue::Catalogue> {
+        self.marketplace_catalogues.read(name, source)
     }
 
     pub(crate) fn installed_packages(&self) -> Vec<StoredPackage> {
