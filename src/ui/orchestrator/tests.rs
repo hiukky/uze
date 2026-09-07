@@ -1386,6 +1386,48 @@ mod workspace_tests {
         );
     }
 
+    /// The pane is bound to its task through the *slot* the task was given,
+    /// not through the directory that slot names — because by the time
+    /// anybody asks, the directory can be gone.
+    ///
+    /// A task whose checkout was removed comes back from a re-read with
+    /// `checkout: None` and its `checkout_id` intact, which is what that
+    /// field is for. Matching on the resolved path instead meant a pane
+    /// only stayed bound if it had been bound *before* the removal — true
+    /// on Linux, where `/proc` renames a removed cwd and the resulting
+    /// change drives a pass on every keystroke of agent startup, and not
+    /// true where the loss is noticed on a clock. Unbound, the row says
+    /// `checkout removed` and never offers the way back in.
+    #[test]
+    fn a_pane_binds_to_its_task_through_the_slot_even_after_the_directory_is_gone() {
+        let mut model = agent_session_in("/repo/.worktrees/ai");
+        let pane = model.session.as_ref().unwrap().workspace.spaces[0].tabs[0]
+            .focus
+            .pane;
+        model
+            .pane_checkouts
+            .insert(pane, PathBuf::from("/repo/.worktrees/ai"));
+
+        // What a re-read answers once the directory is gone: the slot is
+        // still named, the path no longer resolves.
+        let mut orphaned = task_in("/repo/.worktrees/ai", "fix-auth", TaskStateView::Running, 1);
+        orphaned.checkout = None;
+        model.tasks.insert(PathBuf::from("/repo"), vec![orphaned]);
+
+        model.bind_pane_tasks();
+        assert_eq!(
+            model.pane_tasks.get(&pane).map(String::as_str),
+            Some("t1"),
+            "the slot the task was given is what ties the pane to it"
+        );
+
+        model.lost_checkouts.insert(pane);
+        assert!(
+            model.lost_task(pane).is_some(),
+            "and so the row can offer the way back in"
+        );
+    }
+
     /// The task is usually not known on the tick the pane appears; it is
     /// bound when the evaluation that names it lands.
     #[test]
