@@ -299,10 +299,14 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn capture_collects_output_and_status_of_a_successful_vendor() {
+        // `/bin/sh -c`, not `/bin/printf`: macOS keeps `printf` under
+        // `/usr/bin` and ships no `/bin/printf`. `/bin/sh` is the one path
+        // POSIX promises, and it prints without a trailing newline just the
+        // same — which is what the byte-exact assertion below needs.
         let output = capture_with_timeout(
-            Path::new("/bin/printf"),
+            Path::new("/bin/sh"),
             Path::new("/tmp"),
-            &["hello"],
+            &["-c", "printf hello"],
             Duration::from_secs(10),
         )
         .unwrap();

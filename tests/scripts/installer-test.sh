@@ -3,8 +3,9 @@
 #
 # Serves synthetic release artifacts (fake `uze` binaries, real SHA-256
 # sums, corrupt checksums) over localhost HTTP and exercises the installer:
-# glibc and musl detection, pinned versions, checksum-mismatch refusal,
-# and unsupported platform fail-closed paths. Zero network access required.
+# glibc and musl detection, macOS on both architectures, pinned versions,
+# checksum-mismatch refusal, and unsupported platform fail-closed paths.
+# Zero network access required.
 #
 # Usage: sh tests/scripts/installer-test.sh
 
@@ -53,6 +54,8 @@ mk_tarball() { # $1=dest dir  $2=platform  $3=fake bin dir
 # shellcheck disable=SC2035
 mk_sums() { (cd "$1" && sha256sum *.tar.gz > SHASUMS256.txt); }
 
+make_fake_bin "$work/macos-arm/fake-bin" "9.9.9-macos-arm"
+make_fake_bin "$work/macos-intel/fake-bin" "9.9.9-macos-intel"
 make_fake_bin "$work/glibc/fake-bin" "9.9.9-glibc"
 make_fake_bin "$work/musl/fake-bin" "9.9.9-musl"
 make_fake_bin "$work/pinned/fake-bin" "9.9.9-pinned"
@@ -62,6 +65,8 @@ mk_tarball "$latest" x86_64-linux-gnu "$work/glibc/fake-bin"
 mk_tarball "$latest" x86_64-linux-musl "$work/musl/fake-bin"
 mk_tarball "$pinned" x86_64-linux-gnu "$work/pinned/fake-bin"
 mk_tarball "$bad" x86_64-linux-gnu "$work/corrupt/fake-bin"
+mk_tarball "$latest" aarch64-macos "$work/macos-arm/fake-bin"
+mk_tarball "$latest" x86_64-macos "$work/macos-intel/fake-bin"
 mk_sums "$latest"
 mk_sums "$pinned"
 mk_sums "$bad"
@@ -196,15 +201,38 @@ fi
 grep -q "unsupported architecture: mips" "$work/out5.log"
 check "unsupported architecture is diagnosed" $?
 
-# Unsupported OS fails closed.
-fake_uname "$work/os-bin" "Darwin" "x86_64"
-if run_installer "$work/out6.log" UZE_BASE_URL="$base" UZE_BIN_DIR="$work/bin6" \
+# macOS, both architectures. `uname -m` says `arm64` on Apple Silicon where
+# the asset says `aarch64`, and that mapping is the whole reason to assert
+# the installed binary rather than the exit code: picking the wrong asset
+# still exits zero right up until the download 404s.
+fake_uname "$work/mac-arm-bin" "Darwin" "arm64"
+run_installer "$work/out6.log" UZE_BASE_URL="$base" UZE_BIN_DIR="$work/bin6" \
+  PATH="$work/mac-arm-bin:$PATH"
+check "macOS on Apple Silicon installs" $?
+"$work/bin6/uze" --version | grep -q "9.9.9-macos-arm"
+check "macOS on Apple Silicon resolved aarch64-macos" $?
+
+fake_uname "$work/mac-intel-bin" "Darwin" "x86_64"
+run_installer "$work/out7.log" UZE_BASE_URL="$base" UZE_BIN_DIR="$work/bin7" \
+  PATH="$work/mac-intel-bin:$PATH"
+check "macOS on Intel installs" $?
+"$work/bin7/uze" --version | grep -q "9.9.9-macos-intel"
+check "macOS on Intel resolved x86_64-macos" $?
+
+# macOS names no libc. A `-linux-` asset reaching a Mac would mean the
+# platform string was assembled from the wrong branch.
+grep -q "uze-x86_64-macos.tar.gz" "$work/out7.log"
+check "macOS asks for a macOS asset, with no libc field" $?
+
+# An OS that genuinely has no build still fails closed, before downloading.
+fake_uname "$work/os-bin" "FreeBSD" "x86_64"
+if run_installer "$work/out8.log" UZE_BASE_URL="$base" UZE_BIN_DIR="$work/bin8" \
   PATH="$work/os-bin:$PATH"; then
   check "unsupported OS is refused" 1
 else
   check "unsupported OS is refused" 0
 fi
-grep -q "unsupported OS: Darwin" "$work/out6.log"
+grep -q "unsupported OS: FreeBSD" "$work/out8.log"
 check "unsupported OS is diagnosed" $?
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

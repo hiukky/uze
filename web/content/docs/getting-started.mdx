@@ -19,7 +19,23 @@ description: Install uze, provision your harnesses, share one project context, a
     release, `UZE_BIN_DIR` changes where it lands.
   </Tab>
   <Tab value="macOS">
-    Planned, not yet supported — see the **Source** tab.
+    ```bash
+    curl -fsSL https://uze.hiukky.com/i | sh
+    ```
+
+    The same command: the installer reads `uname` and picks the macOS asset for
+    Apple Silicon or Intel, verifying its SHA-256 the same way.
+
+    <Callout type="warn">
+      The macOS binaries are not notarized. Installing through the command above
+      works. A tarball downloaded through a **browser** is quarantined by
+      Gatekeeper instead — clear it with
+      `xattr -d com.apple.quarantine uze`.
+    </Callout>
+
+    The terminal workspace reads what is running in a pane through
+    `libproc`/`sysctl` rather than `/proc`; everything else is the same binary
+    it is on Linux.
   </Tab>
   <Tab value="Windows">
     Planned, not yet supported — see the **Source** tab.

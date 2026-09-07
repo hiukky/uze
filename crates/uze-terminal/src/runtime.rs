@@ -1845,7 +1845,7 @@ mod tests {
     /// killed and whatever was running in its panes goes with it.
     #[test]
     fn a_server_of_this_build_is_adopted_when_its_pid_file_vanishes() {
-        let scratch = uze_testkit::temp::scratch("terminal-adopt-live-server");
+        let scratch = uze_testkit::temp::socket_scratch("adopt");
         std::fs::create_dir_all(&scratch).unwrap();
         let endpoint = Endpoint {
             socket: scratch.join("test.sock"),
@@ -2172,9 +2172,16 @@ mod tests {
         let mut env = uze_testkit::env::scope();
         env.remove("UZE_SHIM_NAME");
         let (damage, _damage_events) = std::sync::mpsc::channel();
+        // Canonicalized, because the assertion below compares this against
+        // what the kernel reports, and the kernel answers with the real
+        // path: `/tmp` is a symlink to `/private/tmp` on macOS, so spawning
+        // in `/tmp` and expecting `/tmp` back never matches there.
+        let pane_cwd = PathBuf::from("/tmp")
+            .canonicalize()
+            .expect("the system temp directory must resolve");
         let pane = PaneRuntime::spawn(
             PaneId(11),
-            PathBuf::from("/tmp"),
+            pane_cwd.clone(),
             80,
             24,
             damage,
@@ -2198,7 +2205,6 @@ mod tests {
         // and is unaffected by a later `unsetenv`. Accepting the first
         // `Some` therefore made this assert against the developer's own
         // session at random.
-        let pane_cwd = PathBuf::from("/tmp");
         // Five seconds, not five hundred milliseconds: what is being waited
         // on is another process being scheduled and reaching `exec`, and the
         // assertion below is about *what* it reports, never about how fast.
@@ -2286,7 +2292,7 @@ mod tests {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn attaching_without_a_root_neither_creates_nor_reopens_a_space() {
-        let scratch = uze_testkit::temp::scratch("terminal-rootless-attach");
+        let scratch = uze_testkit::temp::socket_scratch("rootless");
         let uze_home = scratch.join("home");
         let project = scratch.join("project");
         let other = scratch.join("other");
@@ -2369,7 +2375,7 @@ mod tests {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn a_restarted_server_relaunches_the_same_spaces_tabs_and_agent_commands() {
-        let scratch = uze_testkit::temp::scratch("terminal-persist");
+        let scratch = uze_testkit::temp::socket_scratch("persist");
         let uze_home = scratch.join("home");
         let project = scratch.join("project");
         let runtime_dir = scratch.join("runtime");
@@ -2430,7 +2436,7 @@ mod tests {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn a_finished_direct_agent_is_replaced_by_a_shell_in_its_pane() {
-        let scratch = uze_testkit::temp::scratch("terminal-agent-exit");
+        let scratch = uze_testkit::temp::socket_scratch("agentexit");
         let uze_home = scratch.join("home");
         let project = scratch.join("project");
         let runtime_dir = scratch.join("runtime");
@@ -2450,7 +2456,14 @@ mod tests {
             24,
         );
         server
-            .spawn_pane(pane, Some(&["/bin/true".to_owned()]))
+            // `/bin/sh -c 'exit 0'`, not `/bin/true`: macOS keeps `true` in
+            // `/usr/bin` and has no `/bin/true` at all. `/bin/sh` is the one
+            // path POSIX actually promises, and what this needs is any
+            // process that exits at once.
+            .spawn_pane(
+                pane,
+                Some(&["/bin/sh".to_owned(), "-c".to_owned(), "exit 0".to_owned()]),
+            )
             .unwrap();
 
         for _ in 0..40 {
@@ -2500,7 +2513,7 @@ mod tests {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn a_plain_shell_tab_running_a_recognized_process_relaunches_as_that_process() {
-        let scratch = uze_testkit::temp::scratch("terminal-persist-typed");
+        let scratch = uze_testkit::temp::socket_scratch("typed");
         let uze_home = scratch.join("home");
         let project = scratch.join("project");
         std::fs::create_dir_all(&project).unwrap();
@@ -2554,7 +2567,7 @@ mod tests {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn the_snapshot_names_a_tabs_agent_by_position() {
-        let scratch = uze_testkit::temp::scratch("terminal-persist-agent");
+        let scratch = uze_testkit::temp::socket_scratch("persagent");
         let uze_home = scratch.join("home");
         let project = scratch.join("project");
         std::fs::create_dir_all(&project).unwrap();
@@ -2587,7 +2600,7 @@ mod tests {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn a_persisted_command_that_no_longer_resolves_falls_back_to_a_plain_shell() {
-        let scratch = uze_testkit::temp::scratch("terminal-persist-stale");
+        let scratch = uze_testkit::temp::socket_scratch("perstale");
         let uze_home = scratch.join("home");
         let project = scratch.join("project");
         std::fs::create_dir_all(&project).unwrap();

@@ -286,7 +286,13 @@ mod tests {
 
     #[test]
     fn wait_with_timeout_returns_promptly_for_a_fast_child() {
-        let mut child = Command::new("/bin/true").spawn().unwrap();
+        // `/bin/sh -c 'exit 0'`, not `/bin/true`: macOS keeps `true` under
+        // `/usr/bin` and ships no `/bin/true`. `/bin/sh` is the one path
+        // POSIX promises, and any process that exits at once will do.
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "exit 0"])
+            .spawn()
+            .unwrap();
         let (status, timed_out) = wait_with_timeout(&mut child, Duration::from_secs(5)).unwrap();
         assert!(!timed_out);
         assert!(status.success());

@@ -198,6 +198,59 @@ pub fn scratch(label: &str) -> PathBuf {
     TempDir::new(label).keep().path().to_path_buf()
 }
 
+/// A scratch directory short enough that a Unix-domain socket can live under
+/// it.
+///
+/// `sockaddr_un.sun_path` is 104 bytes on macOS and 108 on Linux, and the
+/// *entire* path has to fit. [`scratch`] cannot promise that: it is rooted at
+/// the system temp directory, which on macOS is a per-user
+/// `/var/folders/<hash>/T` already ~50 characters long before a label, a pid
+/// and a nonce are added. A test that binds a socket there — or points
+/// `XDG_RUNTIME_DIR` at it and lets the runtime bind one — fails with
+/// `path must be shorter than SUN_LEN`, an error that names the limit and
+/// not the directory that broke it.
+///
+/// Rooted at `/tmp` instead, which is short on both platforms, and named as
+/// briefly as uniqueness allows. Same isolation guarantees as [`scratch`];
+/// the caller owns cleanup.
+pub fn socket_scratch(label: &str) -> PathBuf {
+    let _guard = CREATE_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    // Truncated, and the nonce is base-36: every character here is spent
+    // against a hard 104-byte budget, so the label identifies the test to a
+    // human reading `/tmp` and nothing more.
+    let short: String = label
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .take(8)
+        .collect();
+    let mut nonce = nonce();
+    let mut compact = String::new();
+    while nonce > 0 {
+        let digit = (nonce % 36) as u32;
+        compact.push(char::from_digit(digit, 36).expect("digit below 36"));
+        nonce /= 36;
+    }
+    let path = PathBuf::from("/tmp").join(format!(
+        "uze-{short}-{}-{}",
+        std::process::id(),
+        &compact[..compact.len().min(8)]
+    ));
+    std::fs::create_dir_all(&path).unwrap_or_else(|error| {
+        panic!(
+            "socket_scratch: failed to create {}: {error}",
+            path.display()
+        )
+    });
+    // Canonicalized for the same reason `TempDir` is: `/tmp` is a symlink to
+    // `/private/tmp` on macOS, and the kernel answers every question about a
+    // path with the real one.
+    let path = path.canonicalize().unwrap_or(path);
+    assert_not_real_home(&path);
+    path
+}
+
 /// `$PATH` with `dir` first and the ambient `PATH` kept as fallback — the
 /// shape tests used to hand-roll (`format!("{}:{}", fake_bin.display(),
 /// env::var("PATH")...)`), without the panic on a missing ambient PATH and

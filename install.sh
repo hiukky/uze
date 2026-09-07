@@ -1,11 +1,11 @@
 #!/bin/sh
-# uze — official Linux installer.
+# uze — official installer.
 #
 #   curl -fsSL https://uze.hiukky.com/i | sh
 #
 # Downloads the prebuilt `uze` binary for this machine from GitHub
 # Releases, verifies its SHA-256 checksum, and installs it into the user
-# binary directory. Pure POSIX sh; Linux (x86_64 / aarch64) only for now.
+# binary directory. Pure POSIX sh; Linux and macOS, x86_64 and aarch64.
 #
 # Environment overrides:
 #   UZE_VERSION   Pin a release (e.g. 0.0.0-alpha.1); default: latest.
@@ -154,13 +154,29 @@ need() {
 }
 
 # --- prerequisites -----------------------------------------------------------
-[ "$(uname -s)" = "Linux" ] ||
-  die "unsupported OS: $(uname -s) (uze currently installs on Linux only)"
+os="$(uname -s)"
+case "$os" in
+  Linux | Darwin) ;;
+  *) die "unsupported OS: $os (uze installs on Linux and macOS)" ;;
+esac
 need curl
 need tar
-need sha256sum
 need mktemp
 need install
+
+# SHA-256 has two spellings and this script needs whichever one is here:
+# `sha256sum` is GNU coreutils and is not on a stock macOS, which ships
+# `shasum` instead. Resolved once, into a function, so the verification step
+# below reads the same on both — and refused up front rather than at the
+# point of use, because the failure to avoid is one that lands *after* the
+# archive is already downloaded.
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256() { sha256sum "$1"; }
+elif command -v shasum >/dev/null 2>&1; then
+  sha256() { shasum -a 256 "$1"; }
+else
+  die "missing required command: sha256sum or shasum"
+fi
 
 # --- platform -----------------------------------------------------------------
 arch="$(uname -m)"
@@ -170,17 +186,26 @@ case "$arch" in
   *) die "unsupported architecture: $arch (supported: x86_64, aarch64)" ;;
 esac
 
-libc="gnu"
-if command -v ldd >/dev/null 2>&1 && ldd --version 2>&1 | grep -qi musl; then
-  libc="musl"
+# The asset is named after the Rust target triple with the parts that say
+# nothing removed. On Linux the vendor is `unknown` — a triple's way of
+# saying there is no vendor — and dropping it leaves `<arch>-linux-<libc>`,
+# the Debian multiarch triplet, which answers the two questions the choice
+# turns on. On macOS the same rule leaves `<arch>-macos`: `apple` and
+# `darwin` are two words for one fact, and macOS is the one a person reading
+# a download list already knows. There is no libc axis to state — a Mac has
+# exactly one.
+#
+# `release.yml` builds the assets under these names and this derives them
+# from `uname`. The two must not drift.
+if [ "$os" = "Darwin" ]; then
+  platform="${target_arch}-macos"
+else
+  libc="gnu"
+  if command -v ldd >/dev/null 2>&1 && ldd --version 2>&1 | grep -qi musl; then
+    libc="musl"
+  fi
+  platform="${target_arch}-linux-${libc}"
 fi
-
-# The asset is named after the Rust target triple with its vendor field
-# dropped: `unknown` is what a triple says when there is no vendor, and a
-# download named after nothing is a download the reader has to decode before
-# trusting. What remains — `<arch>-linux-<libc>` — is the Debian multiarch
-# triplet, and it still answers the only two questions the choice turns on.
-platform="${target_arch}-linux-${libc}"
 archive="uze-${platform}.tar.gz"
 
 # --- workspace ----------------------------------------------------------------
@@ -229,7 +254,7 @@ verify() {
     echo "no checksum entry for ${archive} in SHASUMS256.txt" >&2
     return 1
   }
-  actual="$(sha256sum "${tmpdir}/${archive}" | cut -d' ' -f1)"
+  actual="$(sha256 "${tmpdir}/${archive}" | cut -d' ' -f1)"
   [ "$actual" = "$expected" ] || {
     echo "checksum mismatch for ${archive} (expected ${expected}, got ${actual})" >&2
     return 1
