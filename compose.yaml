@@ -1,0 +1,14 @@
+# The local Jaeger behind `make observe`. Nothing builds or ships from
+# here: the OTLP exporter only exists behind the `telemetry` cargo
+# feature, which the release matrix does not enable.
+name: uze-observe
+
+services:
+  jaeger:
+    image: jaegertracing/jaeger:2.14.0
+    restart: unless-stopped
+    ports:
+      # Bound to the loopback: a dev trace carries the argument line and
+      # the paths of whatever was run, and belongs on this machine only.
+      - "127.0.0.1:16686:16686"
+      - "127.0.0.1:4318:4318"

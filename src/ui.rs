@@ -101,6 +101,8 @@ fn tui_application(home: UzeHome) -> Result<UzeApplication> {
 /// Runs the TUI. `home` is passed to workers, which construct the same
 /// production application composition root as the CLI.
 pub fn run(home: UzeHome) -> Result<()> {
+    let session = tracing::info_span!("tui.session");
+    let _entered = session.enter();
     let mut terminal = TerminalSession::start()?;
     // The client's shape as this user last left it — read once, here,
     // and owned by neither mode: both draw the same sidebar column, and a

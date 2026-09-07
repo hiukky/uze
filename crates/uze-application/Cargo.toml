@@ -13,7 +13,13 @@ uze-core = { path = "../uze-core" }
 uze-integrations = { path = "../uze-integrations" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Already in the tree through `rmcp`; spans on the read paths and the
+# bootstrap are no-ops until a subscriber is installed.
+tracing = "0.1"
 
 [dev-dependencies]
+# A capturing subscriber, for the tests that assert on the spans a call
+# produces.
+tracing-subscriber = "0.3"
 serde_json = "1"
 uze-testkit = { path = "../uze-testkit" }

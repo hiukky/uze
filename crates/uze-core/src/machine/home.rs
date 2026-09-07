@@ -158,6 +158,15 @@ impl UzeHome {
         self.cache_dir().join("inspection.json")
     }
 
+    /// Cross-invocation cache of registered marketplaces' catalogues (see
+    /// `application::marketplace_catalogue`): one checkout per Git
+    /// marketplace, so listing what it offers reads a directory instead of
+    /// cloning a remote. Reconstructable from the registered source at any
+    /// time — never authoritative, hence under `cache_dir()`.
+    pub fn marketplace_cache_dir(&self) -> PathBuf {
+        self.cache_dir().join("marketplaces")
+    }
+
     /// The runtime tree, whose two tenants have opposite lifetimes and are
     /// therefore kept in named siblings rather than interleaved by
     /// integration: `projects/` outlives every invocation and dies with the

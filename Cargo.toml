@@ -70,6 +70,29 @@ rmcp = { version = "3", features = ["server", "transport-io", "macros"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std"] }
 schemars = "1"
 
+# Spans around each command and each TUI worker; already in the tree
+# through `rmcp`, and a no-op until a subscriber is installed. The text
+# subscriber (`UZE_LOG`) is always compiled; the OTLP exporter is the
+# `telemetry` feature, which the release matrix does not enable — see
+# `src/telemetry.rs` and `docs/observability.md`.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+opentelemetry = { version = "0.32", optional = true }
+opentelemetry_sdk = { version = "0.32", optional = true }
+opentelemetry-otlp = { version = "0.32", optional = true, default-features = false, features = ["trace", "http-proto", "reqwest-blocking-client"] }
+tracing-opentelemetry = { version = "0.33", optional = true }
+
+[features]
+# Export every span over OTLP/HTTP to `OTEL_EXPORTER_OTLP_ENDPOINT`
+# (`make observe` starts a Jaeger that listens). Sixty-odd pure-Rust
+# crates, wanted on a developer's machine and nowhere else.
+telemetry = [
+  "dep:opentelemetry",
+  "dep:opentelemetry_sdk",
+  "dep:opentelemetry-otlp",
+  "dep:tracing-opentelemetry",
+]
+
 [dev-dependencies]
 # Shared test infrastructure (TestEnvironment, FakeHarness, fixtures,
 # scenario builder) — see crates/uze-testkit and tests/README.md.

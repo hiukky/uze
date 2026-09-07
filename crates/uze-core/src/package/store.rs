@@ -204,6 +204,7 @@ impl UzeStore {
     /// and is compared only through `Provenance::same_origin` — this module
     /// never reads a field of it or matches a source mechanism.
     pub fn ingest(&self, package: &MaterializedPackage) -> Result<StoredPackage> {
+        let _span = tracing::info_span!("store.ingest", root = %package.root().display()).entered();
         self.ingest_from_marketplace(package, "local")
     }
 

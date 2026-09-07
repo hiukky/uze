@@ -17,6 +17,7 @@ use super::*;
 use super::{INSTRUCTION_BRIDGE_CONTENT, INSTRUCTION_BRIDGE_IDENTITY};
 
 impl Context<'_> {
+    #[tracing::instrument(name = "context.inspect", skip_all, fields(project_root = %project_root.display()), err)]
     pub fn inspect(&self, project_root: &std::path::Path) -> Result<ProjectContextStatus> {
         if !project_root.is_dir() {
             return Err(UzeError::NotDirectory(project_root.to_path_buf()));
@@ -151,6 +152,7 @@ impl Context<'_> {
         })
     }
 
+    #[tracing::instrument(name = "context.plan", skip_all, fields(project_root = %project_root.display()), err)]
     pub fn plan(&self, project_root: &std::path::Path) -> Result<ContextPlan> {
         if !project_root.is_dir() {
             return Err(UzeError::NotDirectory(project_root.to_path_buf()));
@@ -220,6 +222,7 @@ impl Context<'_> {
         })
     }
 
+    #[tracing::instrument(name = "context.reconcile", skip_all, fields(project_root = %project_root.display()), err)]
     pub fn reconcile(&self, project_root: &std::path::Path) -> Result<ContextReconciliationReport> {
         if !project_root.is_dir() {
             return Err(UzeError::NotDirectory(project_root.to_path_buf()));

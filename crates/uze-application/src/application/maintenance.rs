@@ -90,6 +90,7 @@ impl Health<'_> {
     /// Takes no mutation lock: it touches nothing the Store, the ledger or
     /// any receipt describes, and a projection it raced would be rebuilt by
     /// its own next launch.
+    #[tracing::instrument(name = "health.prune_runtime_projections", skip_all)]
     pub fn prune_runtime_projections(&self) -> Vec<String> {
         harness_runtime::prune_projections(&self.0.home)
     }
@@ -97,6 +98,7 @@ impl Health<'_> {
     /// Bounded, local maintenance used by health presenters. It only repairs
     /// receipt-proven missing artifacts and stale derived views. Every other
     /// state remains evidence for a person to decide on.
+    #[tracing::instrument(name = "health.maintain", skip_all)]
     pub fn maintain(&self) -> MaintenanceReport {
         let Ok(_mutation) = MutationLock::acquire(&self.0.home) else {
             return MaintenanceReport {

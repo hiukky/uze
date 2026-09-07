@@ -307,8 +307,16 @@ declarations; it invokes nothing.
 
 ### Cache is not required for correctness
 
-`~/.uze/cache` is reserved and unwritten. Deleting it cannot affect an
-installed package because nothing installed depends on it.
+`~/.uze/cache` holds three caches, each reconstructable from a live read:
+harness detection (`harness_detection.json`), attachment inspection
+(`inspection.json`) and the catalogue of every marketplace registered by
+URL (`marketplaces/<name>/`). Deleting the directory costs one probe, one
+inspection or one clone; nothing installed depends on it, and no mutating
+path trusts it — removal planning re-inspects live, and a mutation
+invalidates the entries it touched.
+
+> `crates/uze-application/src/application/marketplace_catalogue.rs::tests::a_stored_catalogue_answers_without_the_source_being_reachable`
+> `crates/uze-application/src/application/doctor.rs::tests::installation_invalidates_the_inspection_cache`
 
 ---
 
@@ -1042,6 +1050,60 @@ no longer exists fails by name. Verified by adding each in turn and
 watching the test refuse.
 
 > `src/command_performance.rs::every_cli_command_is_classified`
+> `src/command_performance.rs::every_named_performance_test_exists`
+
+### Every budgeted path is timed on its own, in a world where a probe shows
+
+Each `Budgeted` command's application call is timed on a fresh
+application — no in-process memo, only what is on disk — against a
+harness that sleeps half a second per detection probe and a marketplace
+whose repository was deleted after registration. The ceiling is 25 ms,
+best of three, in a debug build: half of what the spec promises a person
+on a release build, set where a regression shows. The bootstrap that
+precedes every command is held to the same ceiling and to a second claim
+a clock cannot make: run warm, it leaves every file under `UZE_HOME` as it
+found it.
+
+> `crates/uze-application/src/application/performance_tests.rs`
+> `tests/cli/budget.rs::a_warm_read_only_command_writes_nothing_under_uze_home`
+
+### A marketplace listing never clones
+
+What a marketplace registered by URL offers is answered from a cached
+checkout, filled by the clone `market add` already makes and refilled at
+most once an hour; the repository can be unreachable, or gone, and the
+listing, the plugin picker and a plugin's inspection still answer. A
+local marketplace is read where it is, every time.
+
+> `tests/cli/budget.rs::a_marketplace_registered_by_url_is_listed_without_its_repository`
+> `crates/uze-application/src/application/performance_tests.rs::market_list_and_inspect_meet_the_budget_without_the_repository`
+> `crates/uze-application/src/application/marketplace_catalogue.rs::tests::a_local_marketplace_is_read_where_it_is`
+
+### Every action is one trace, and every entry point is a span
+
+A command, a key in the TUI and a shim launch each open a root span;
+every public method of an application service opens one under it, named
+for what the person asked, with the id or path it acts on and the error
+when it fails; every process UZE runs — Git, a clone, a vendor CLI, a
+provisioning installer, a hook handler — is a span with how it ended. A
+TUI worker thread enters the span that started it, so what a key caused
+stays under the key. Held by a scan, not by memory: an entry point added
+without `#[tracing::instrument]` fails by name.
+
+> `tests/architecture/instrumentation.rs::every_application_entry_point_is_a_span`
+> `crates/uze-application/src/application/tracing_tests.rs::a_service_call_is_one_span_tree`
+> `crates/uze-git/src/lib.rs::tests::every_invocation_is_a_span_with_its_exit_code`
+
+### A harness lives on this machine's filesystems
+
+Resolving a harness executable — for detection, its fingerprint, the
+runtime shim and the check that the shim is first — skips `PATH` entries
+on a `9p` mount, the filesystem a Windows drive is inside WSL. A stat
+there is a network round trip, a `PATH` inherited from Windows carries a
+dozen of them, and a harness UZE integrates keeps its state under `$HOME`
+on this side.
+
+> `crates/uze-core/src/machine/harness_runtime.rs::tests::a_windows_drive_mounted_into_wsl_is_not_where_a_harness_is_looked_for`
 
 ## Harness conformance (`assert-one-capability-contract`)
 

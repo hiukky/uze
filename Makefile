@@ -25,8 +25,13 @@ changelog: ## Regenerate CHANGELOG.md from Conventional Commits (git-cliff; see 
 release-notes: ## Preview the GitHub Release page for the latest tag (cliff.release.toml); set GITHUB_TOKEN for contributor handles.
 	git-cliff --config cliff.release.toml --latest
 
-install: ## Force-rebuild (no version bump) and install/replace `uze` in Cargo's configured binary directory.
-	$(CARGO) install --path . --bin uze --locked $(INSTALL_ARGS)
+# `--features telemetry` sits outside INSTALL_ARGS on purpose: a local
+# install is a developer's own binary, and one built without the exporter
+# ignores OTEL_EXPORTER_OTLP_ENDPOINT in silence — nothing reports that
+# the traces are going nowhere. Release binaries stay lean; release.yml
+# passes no features.
+install: ## Force-rebuild (no version bump) and install/replace `uze`, with the OTLP exporter compiled in.
+	$(CARGO) install --path . --bin uze --locked --features telemetry $(INSTALL_ARGS)
 
 wsl-lab: ## Build the release here and deploy binary + playground plugin into the WSL distro named Lab.
 	./playground/install-wsl-distro.sh Lab
@@ -52,6 +57,17 @@ harness-test: ## L2 probes that need real vendor binaries (skip cleanly when abs
 
 harness-matrix: ## Regenerate the docs harness matrix (used by lefthook's --check).
 	$(CARGO) run --quiet --bin uze-harness-matrix
+
+observe: ## Start the local Jaeger (UI on :16686, OTLP on :4318) and print the endpoint to trace against.
+	@docker compose up -d
+	@echo "Jaeger UI:  http://localhost:16686"
+	@echo "Trace with: OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 cargo run --features telemetry --bin uze -- <command>"
+
+observe-stop: ## Stop the local Jaeger and drop what it collected.
+	@docker compose down
+
+test-telemetry: ## Run the telemetry module's own tests with the OTLP exporter compiled in.
+	cargo test --features telemetry --lib telemetry
 
 fmt: ## Check formatting (cargo fmt --check).
 	$(CARGO) fmt --check
@@ -96,7 +112,7 @@ coverage: ## Run workspace tests with LLVM coverage (skips env-failing tests).
 	cargo llvm-cov --workspace --summary-only --fail-under-lines 68 --fail-under-regions 69 -- --skip real_codex_dogfood --skip foreground_status_reports --skip acquisition
 	cargo llvm-cov report --lcov --output-path lcov.info
 
-check: fmt lint deny test python-fmt python-lint ## Local proxy for the CI gate; also cargo-release's pre-release-hook.
+check: fmt lint deny test test-telemetry python-fmt python-lint ## Local proxy for the CI gate; also cargo-release's pre-release-hook.
 
 # GitHub publishes no offline runner (`actions/runner` is for self-hosted and
 # is still driven by GitHub), so the honest local mirror is the commands

@@ -11,6 +11,7 @@ use super::super::services::Plugins;
 use super::super::*;
 
 impl Plugins<'_> {
+    #[tracing::instrument(name = "plugins.update", skip_all, fields(id = %id), err)]
     pub fn update(&self, id: &str, authority: &dyn TrustAuthority) -> Result<UpdatePluginReport> {
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
         let installed = self.0.package_by_name(id)?;
@@ -95,6 +96,7 @@ impl Plugins<'_> {
     /// This is not called from the CLI dispatch path: `ensure_default_plugins`
     /// runs before every command, read-only ones included, and a diagnostic
     /// must not rewrite plugin content. Interactive surfaces call this.
+    #[tracing::instrument(name = "plugins.auto_update", skip_all)]
     pub fn auto_update(&self) -> Vec<AutoUpdateOutcome> {
         let pending: Vec<String> = self
             .0

@@ -28,6 +28,7 @@ impl Plugins<'_> {
         }
     }
 
+    #[tracing::instrument(name = "plugins.add", skip_all, err)]
     pub fn add(
         &self,
         source: PackageSource,
@@ -40,6 +41,7 @@ impl Plugins<'_> {
     /// package's bare plugin name is already active under a different
     /// marketplace (ADR-038) — the CLI/TUI's interactive `--alias`/
     /// `--replace` entry point. Plain `add_plugin` refuses without asking.
+    #[tracing::instrument(name = "plugins.add_resolving", skip_all, err)]
     pub fn add_resolving(
         &self,
         source: PackageSource,

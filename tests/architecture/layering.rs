@@ -520,7 +520,7 @@ fn test_module_declarations(path: &std::path::Path) -> Vec<PathBuf> {
     declared
 }
 
-fn strip_test_modules(contents: &str) -> String {
+pub(crate) fn strip_test_modules(contents: &str) -> String {
     let mut out = Vec::new();
     let mut lines = contents.lines().peekable();
     while let Some(line) = lines.next() {

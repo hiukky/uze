@@ -77,6 +77,14 @@ pub struct SystemProcessRunner;
 
 impl ProcessRunner for SystemProcessRunner {
     fn run(&self, spec: &ProcessSpec) -> Result<ProcessResult> {
+        let span = tracing::info_span!(
+            "process.run",
+            program = %spec.program,
+            args = %spec.arguments.join(" "),
+            success = tracing::field::Empty,
+            timed_out = tracing::field::Empty
+        );
+        let _entered = span.enter();
         let mut command = Command::new(&spec.program);
         command.args(&spec.arguments).stdin(Stdio::null());
         match spec.output {
@@ -111,6 +119,8 @@ impl ProcessRunner for SystemProcessRunner {
                 program: spec.program.clone(),
                 source,
             })?;
+        span.record("success", status.success() && !timed_out);
+        span.record("timed_out", timed_out);
         Ok(ProcessResult {
             success: status.success() && !timed_out,
             timed_out,

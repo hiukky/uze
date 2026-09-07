@@ -15,6 +15,9 @@ use std::{
 use crate::{Result, UzeError, home::UzeHome};
 
 pub fn write_atomic(path: &Path, payload: &[u8]) -> Result<()> {
+    let _span =
+        tracing::debug_span!("persistence.write", path = %path.display(), bytes = payload.len())
+            .entered();
     let parent = path.parent().expect("UZE state paths have a parent");
     fs::create_dir_all(parent).map_err(|source| UzeError::Write {
         path: parent.to_path_buf(),
@@ -105,8 +108,11 @@ impl MutationLock {
         let path = home.state_dir().join("mutation.lock");
         match OpenOptions::new().create_new(true).write(true).open(&path) {
             Ok(mut file) => {
+                // The lock is the file's existence, taken atomically by
+                // `create_new`; the pid inside is a courtesy to whoever
+                // finds a stale one, not something worth an fsync on
+                // every mutation and every maintenance pass.
                 let _ = writeln!(file, "pid={}", std::process::id());
-                let _ = file.sync_all();
                 Ok(Self { path })
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {

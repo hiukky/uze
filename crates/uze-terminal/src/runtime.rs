@@ -46,6 +46,7 @@ pub enum RuntimeError {
 /// persisted yet. The caller then sends `Attach` naming the root it wants a
 /// space for.
 pub fn attach(root: &Path, _columns: u16, _rows: u16) -> Result<UnixStream, RuntimeError> {
+    let _span = tracing::info_span!("terminal.attach", root = %root.display()).entered();
     let endpoint = Endpoint::global()?;
     // A server left running from a previous build (e.g. a `cargo install
     // --force` while it was still up) is *alive*, so the connect below
@@ -92,6 +93,7 @@ pub fn socket_path(_root: &Path) -> Result<PathBuf, RuntimeError> {
 /// it opens a space in the one it is already in and leaves. An error when
 /// no server is running.
 pub fn open_space(root: &Path) -> Result<String, RuntimeError> {
+    let _span = tracing::info_span!("terminal.open_space", root = %root.display()).entered();
     let endpoint = Endpoint::global()?;
     let mut stream = UnixStream::connect(&endpoint.socket)
         .map_err(|_| RuntimeError::Protocol("no running uze to open a space in".into()))?;
@@ -120,6 +122,7 @@ pub fn open_space(root: &Path) -> Result<String, RuntimeError> {
 }
 
 pub fn stop(_root: &Path) -> Result<(), RuntimeError> {
+    let _span = tracing::info_span!("terminal.stop", root = %_root.display()).entered();
     let endpoint = Endpoint::global()?;
     let mut stream = UnixStream::connect(&endpoint.socket)?;
     write_message(&mut stream, &ClientRequest::Stop)?;
@@ -135,6 +138,7 @@ pub fn stop(_root: &Path) -> Result<(), RuntimeError> {
 /// Serves the user's one workspace. `root` roots the first space when
 /// nothing is persisted yet, and is otherwise ignored.
 pub fn serve(root: PathBuf) -> Result<(), RuntimeError> {
+    let _span = tracing::info_span!("terminal.serve", root = %root.display()).entered();
     let endpoint = Endpoint::global()?;
     recover_stale_endpoint(&endpoint)?;
     let listener = UnixListener::bind(&endpoint.socket)?;
@@ -698,6 +702,7 @@ impl Server {
     }
 
     fn handle_client(self: Arc<Self>, stream: UnixStream) {
+        let _span = tracing::info_span!("terminal.client").entered();
         let reader_stream = match stream.try_clone() {
             Ok(value) => value,
             Err(_) => return,
@@ -765,6 +770,11 @@ impl Server {
         };
 
         while let Ok(Some(request)) = read_message::<_, ClientRequest>(&mut reader) {
+            // A keystroke is a request too, and there are thousands: debug
+            // level, so a trace of the server is what a person did to it
+            // unless they asked for every byte.
+            let _span =
+                tracing::debug_span!("terminal.request", kind = request.kind(), client).entered();
             match request {
                 ClientRequest::Detach => {
                     let _ = events.send(ClientEvent::Detached);

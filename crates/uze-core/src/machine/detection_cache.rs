@@ -174,14 +174,29 @@ impl DetectionCache {
             return Some(detection.clone());
         }
         let on_disk = OnDiskCache::load(&self.path);
-        let entry = on_disk.entries.get(integration_id)?;
+        let Some(entry) = on_disk.entries.get(integration_id) else {
+            tracing::debug!(
+                integration = integration_id,
+                "detection cache miss: never probed"
+            );
+            return None;
+        };
         let age_nanos = now_unix_nanos().saturating_sub(entry.cached_at_unix_nanos);
         if age_nanos >= MAX_AGE.as_nanos() {
+            tracing::debug!(
+                integration = integration_id,
+                "detection cache miss: expired"
+            );
             return None;
         }
         if entry.fingerprint != Fingerprint::resolve(program_candidates, &self.shims_dir) {
+            tracing::debug!(
+                integration = integration_id,
+                "detection cache miss: executable changed"
+            );
             return None;
         }
+        tracing::debug!(integration = integration_id, "detection cache hit");
         self.memo
             .borrow_mut()
             .insert(integration_id, entry.detection.clone());

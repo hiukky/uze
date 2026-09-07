@@ -628,6 +628,13 @@ fn run_handler(
     effect: HookEffect,
 ) -> Result<HandlerResult> {
     let command = expand_plugin_root(&handler.command, package_root);
+    let span = tracing::info_span!(
+        "hook.handler",
+        command = %command,
+        effect = ?effect,
+        exit = tracing::field::Empty
+    );
+    let _entered = span.enter();
     // The system shell is resolved without relying on `PATH`: other
     // components mutate `PATH` under their own guards, and a hook payload
     // must never be undeliverable just because a sibling test or a shim
@@ -688,6 +695,7 @@ fn run_handler(
         String::from_utf8_lossy(&bytes).trim().to_owned()
     };
 
+    span.record("exit", status.code().unwrap_or(-1));
     let mut decision = None;
     let mut reason = None;
     let failure = if timed_out {

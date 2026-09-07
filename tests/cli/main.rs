@@ -3,5 +3,6 @@
 //! commands. Project-scoped CLI semantics live in `workspace/` and
 //! `acceptance/`.
 
+mod budget;
 mod grammar;
 mod machine;

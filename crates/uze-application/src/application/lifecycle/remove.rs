@@ -16,6 +16,7 @@ use super::super::services::Plugins;
 use super::super::*;
 
 impl Plugins<'_> {
+    #[tracing::instrument(name = "plugins.remove", skip_all, fields(id = %id), err)]
     pub fn remove(&self, id: &str) -> Result<RemovePluginReport> {
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
         // Removal changes vendor-visible state; cached inspection verdicts

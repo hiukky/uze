@@ -88,6 +88,38 @@ pub(crate) enum Intent {
     },
 }
 
+impl Intent {
+    /// The name a trace shows for this intent.
+    pub(crate) fn name(&self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Quit => "quit",
+            Self::SwitchToWorkspace => "switch_to_workspace",
+            Self::SwitchToWorkspaceTab(_) => "switch_to_workspace_tab",
+            Self::ClearPromptHistory => "clear_prompt_history",
+            Self::OpenThemePicker => "open_theme_picker",
+            Self::SelectTheme(_) => "select_theme",
+            Self::Refresh => "refresh",
+            Self::InspectPlugin(_) => "inspect_plugin",
+            Self::InspectMarketplacePlugin { .. } => "inspect_marketplace_plugin",
+            Self::Remove(_) => "remove",
+            Self::Update(..) => "update",
+            Self::Install { .. } => "install",
+            Self::Setup(_) => "setup",
+            Self::AddMarketplace(_) => "add_marketplace",
+            Self::OpenLink(_) => "open_link",
+            Self::ContextAnalyze(_) => "context_analyze",
+            Self::ContextApply(_) => "context_apply",
+            Self::InstallProjectEnvironment(_) => "install_project_environment",
+            Self::CreateProfile(_) => "create_profile",
+            Self::DeleteProfile(_) => "delete_profile",
+            Self::SetActiveProfile(_) => "set_active_profile",
+            Self::UpdatePreferences { .. } => "update_preferences",
+            Self::ApplyProfile { .. } => "apply_profile",
+        }
+    }
+}
+
 pub(crate) enum WorkerResult {
     Refreshed(std::result::Result<RefreshData, String>),
     PluginInspected(std::result::Result<uze_application::application::PluginInspection, String>),
@@ -114,6 +146,9 @@ pub(crate) fn dispatch(
     if intent != Intent::None {
         model.status_expires_at = None;
     }
+    // The key or click's span: every worker it starts captures this as its
+    // parent, so a refresh's spans belong to the press that asked for it.
+    let _span = tracing::info_span!("tui.intent", intent = intent.name()).entered();
     match intent {
         Intent::None
         | Intent::Quit
@@ -170,7 +205,10 @@ pub(crate) fn dispatch(
             model.inspection_in_flight = Some(Intent::InspectPlugin(id.clone()));
             model.status = Status::Working(format!("Inspecting {id}…"));
             let (home, sender) = (home.clone(), sender.clone());
+            let parent = tracing::Span::current();
             thread::spawn(move || {
+                let _parent = parent.enter();
+                let _span = tracing::info_span!("tui.worker").entered();
                 let result = tui_application(home)
                     .and_then(|app| app.plugins().inspect(&id))
                     .map_err(|error| error.to_string());
@@ -184,7 +222,10 @@ pub(crate) fn dispatch(
             });
             model.status = Status::Working(format!("Inspecting {name}…"));
             let (home, sender) = (home.clone(), sender.clone());
+            let parent = tracing::Span::current();
             thread::spawn(move || {
+                let _parent = parent.enter();
+                let _span = tracing::info_span!("tui.worker").entered();
                 let result = tui_application(home)
                     .and_then(|app| app.marketplace().inspect_plugin(&marketplace, &name))
                     .map_err(|error| error.to_string());
@@ -294,7 +335,10 @@ pub(crate) fn dispatch(
         Intent::ContextAnalyze(root) => {
             model.status = Status::Working("Analyzing project context…".to_owned());
             let (home, sender) = (home.clone(), sender.clone());
+            let parent = tracing::Span::current();
             thread::spawn(move || {
+                let _parent = parent.enter();
+                let _span = tracing::info_span!("tui.worker").entered();
                 let result = tui_application(home).and_then(|app| {
                     let status = app.context().inspect(&root)?;
                     let plan = app.context().plan(&root)?;
@@ -332,7 +376,10 @@ pub(crate) fn dispatch(
         Intent::ContextApply(root) => {
             model.status = Status::Working("Applying context reconciliation…".to_owned());
             let (home, sender) = (home.clone(), sender.clone());
+            let parent = tracing::Span::current();
             thread::spawn(move || {
+                let _parent = parent.enter();
+                let _span = tracing::info_span!("tui.worker").entered();
                 let result = tui_application(home)
                     .and_then(|app| app.context().reconcile(&root))
                     .map(|report| ("Context reconciled".to_owned(), report))
@@ -380,7 +427,10 @@ pub(crate) fn dispatch(
         }
         Intent::UpdatePreferences { id, preferences } => {
             let home = home.clone();
+            let parent = tracing::Span::current();
             thread::spawn(move || {
+                let _parent = parent.enter();
+                let _span = tracing::info_span!("tui.worker").entered();
                 if let Ok(app) = tui_application(home) {
                     let _ = app.profiles().update_preferences(&id, preferences);
                 }
@@ -390,7 +440,10 @@ pub(crate) fn dispatch(
             model.status = Status::Working(format!("Applying \"{id}\"…"));
             let (home, sender, context_root) =
                 (home.clone(), sender.clone(), model.context_root.clone());
+            let parent = tracing::Span::current();
             thread::spawn(move || {
+                let _parent = parent.enter();
+                let _span = tracing::info_span!("tui.worker").entered();
                 let result = tui_application(home.clone())
                     .and_then(|app| {
                         app.profiles().set_active(&id)?;
@@ -409,7 +462,10 @@ pub(crate) fn dispatch(
 }
 
 pub(crate) fn spawn_refresh(home: UzeHome, sender: Sender<WorkerResult>, context_root: PathBuf) {
+    let parent = tracing::Span::current();
     thread::spawn(move || {
+        let _parent = parent.enter();
+        let _span = tracing::info_span!("tui.refresh").entered();
         let result = load_refresh_data(home, &context_root).map_err(|error| error.to_string());
         let _ = sender.send(WorkerResult::Refreshed(result));
     });
@@ -429,7 +485,10 @@ pub(crate) fn spawn_refresh(home: UzeHome, sender: Sender<WorkerResult>, context
 /// subsequent refresh (`Intent::Refresh`) goes through `spawn_refresh` and
 /// is coalesced while a worker is in flight.
 pub(crate) fn spawn_startup(home: UzeHome, sender: Sender<WorkerResult>, context_root: PathBuf) {
+    let parent = tracing::Span::current();
     thread::spawn(move || {
+        let _parent = parent.enter();
+        let _span = tracing::info_span!("tui.startup").entered();
         let mut applied = Vec::new();
         if let Ok(app) = tui_application(home.clone()) {
             let _ = app.ensure_default_plugins();
@@ -484,42 +543,21 @@ pub(crate) fn recent_prompts(home: UzeHome, context_root: &std::path::Path) -> V
 
 fn load_refresh_data(home: UzeHome, context_root: &std::path::Path) -> Result<RefreshData> {
     let app = tui_application(home)?;
-    let mut plugins = app.plugins().list()?;
+    let snapshot = app.machine_snapshot(context_root, PROMPT_HISTORY_LIMIT)?;
+    let mut plugins = snapshot.plugins;
     // Official plugins always lead the list — a stable sort keeps every
     // other ordering (whatever `list_plugins` returns) untouched within
     // each of the two groups.
     plugins.sort_by_key(|plugin| !plugin.source.starts_with("embedded:"));
-    // Full health on every refresh: the inspection cache makes the
-    // per-receipt vendor probing milliseconds in steady state, so every
-    // screen sees real attachment state (never a masked "unknown").
-    let doctor = app.health().report();
-    let marketplaces = app.marketplace().list()?;
-    let marketplace_plugins = app.marketplace().plugins()?;
-    let profiles = app.profiles().list()?;
-    // Workspace detection first, then context at the detected root: callers
-    // deep inside a subdirectory get the workspace's own AGENTS.md/bridge
-    // state, not a cwd-scoped one that misses it. Best-effort — a summary
-    // is always producible, but a refresh must not fail over it.
-    let workspace = app.workspace().summary(context_root).ok();
-    let status_root = workspace
-        .as_ref()
-        .map(|workspace| workspace.root.as_path())
-        .unwrap_or(context_root);
-    let context_status = app.context().inspect(status_root).ok();
-    // Same root the workspace client records against, so a uze launched
-    // from a subdirectory still reads back its own history.
-    let prompt_history = app
-        .workspace()
-        .prompt_history(status_root, PROMPT_HISTORY_LIMIT);
     Ok(RefreshData {
         plugins,
-        doctor: Some(doctor),
-        marketplace_plugins,
-        marketplaces,
-        profiles,
-        context_status,
-        workspace,
-        prompt_history,
+        doctor: Some(snapshot.doctor),
+        marketplace_plugins: snapshot.marketplace_plugins,
+        marketplaces: snapshot.marketplaces,
+        profiles: snapshot.profiles,
+        context_status: snapshot.context_status,
+        workspace: snapshot.workspace,
+        prompt_history: snapshot.prompt_history,
         // Only `spawn_startup` ever fills this in; an ordinary refresh
         // reports no auto-updates rather than re-raising old badges.
         auto_updated: Vec::new(),
@@ -532,7 +570,10 @@ fn spawn_mutation(
     context_root: PathBuf,
     operation: impl FnOnce(&UzeApplication) -> Result<String> + Send + 'static,
 ) {
+    let parent = tracing::Span::current();
     thread::spawn(move || {
+        let _parent = parent.enter();
+        let _span = tracing::info_span!("tui.mutation").entered();
         let result = tui_application(home.clone()).and_then(|app| {
             let message = operation(&app)?;
             let data = load_refresh_data(home, &context_root)?;
@@ -561,7 +602,10 @@ fn spawn_trust_sensitive(
     + 'static,
     retry: TrustedRetry,
 ) {
+    let parent = tracing::Span::current();
     thread::spawn(move || {
+        let _parent = parent.enter();
+        let _span = tracing::info_span!("tui.trust_sensitive").entered();
         let outcome = tui_application(home.clone()).and_then(|app| {
             let result = match grant {
                 TrustGrant::Ask => operation(&app, &uze_application::NoTrustAuthority),
@@ -807,7 +851,9 @@ fn open_in_browser(url: &str) -> Option<String> {
             // A launcher hands the URL over and exits at once; nobody is
             // waiting on it, so reap it off-thread rather than leaving a
             // zombie behind for as long as the TUI runs.
+            let parent = tracing::Span::current();
             thread::spawn(move || {
+                let _parent = parent.enter();
                 let _ = child.wait();
             });
             return Some(program.to_owned());

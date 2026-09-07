@@ -98,6 +98,7 @@ impl Workspace<'_> {
     /// typically — never a pre-resolved root: resolving it here is the
     /// point, so two callers looking at the same directory can never
     /// disagree about which project it belongs to.
+    #[tracing::instrument(name = "workspace.agent_context", skip_all, fields(cwd = %cwd.display()))]
     pub fn agent_context(&self, cwd: &Path) -> Vec<AgentContextStatus> {
         let context = project_context::resolve(cwd);
         self.0
@@ -110,6 +111,7 @@ impl Workspace<'_> {
     /// The single-harness slice of [`UzeApplication::agent_context`] — what
     /// an agent pane running one known harness needs, without paying for
     /// the others.
+    #[tracing::instrument(name = "workspace.agent_context_for", skip_all, fields(integration_id = %integration_id, cwd = %cwd.display()), err)]
     pub fn agent_context_for(
         &self,
         integration_id: &str,

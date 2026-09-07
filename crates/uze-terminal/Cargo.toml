@@ -9,6 +9,9 @@ authors.workspace = true
 publish = false
 
 [dependencies]
+# Spans on every process this crate runs; a no-op until the binary
+# subscribes (see `src/telemetry.rs`).
+tracing = "0.1"
 alacritty_terminal = "0.26"
 portable-pty = "0.9"
 libc = "0.2"

@@ -67,6 +67,7 @@ impl MarketplaceRequest {
 
 impl Project<'_> {
     /// Read-only: observes the project's current state (lock + diagnostics).
+    #[tracing::instrument(name = "project.environment", skip_all, fields(root = %root.display()), err)]
     pub fn environment(&self, root: &Path) -> Result<ProjectEnvironment> {
         let canonical = project_root::resolve_project_root(root)?;
         let _lock_path = project_lock::lock_path_for(&canonical);
@@ -109,6 +110,7 @@ impl Project<'_> {
     /// installing it — a real feature this pass does not implement. Left
     /// as future work rather than reported as done; see
     /// `openspec/changes/project-agent-environment/tasks.md`.
+    #[tracing::instrument(name = "project.plan", skip_all, fields(root = %root.display()), err)]
     pub fn plan(&self, root: &Path) -> Result<ProjectEnvironmentPlan> {
         let env = self.environment(root)?;
         let lock = match env.lock {
@@ -228,6 +230,7 @@ impl Project<'_> {
     }
 
     /// Adds a plugin to the project lock and ensures it's in the Store.
+    #[tracing::instrument(name = "project.add", skip_all, fields(plugin = %plugin, marketplace = %marketplace, root = %root.display()), err)]
     pub fn add(
         &self,
         plugin: &str,
@@ -304,6 +307,7 @@ impl Project<'_> {
     /// Removes a plugin's declaration and the entry it resolved to. The
     /// Store keeps the bytes: another project may want them, and this
     /// command is about what *this* project declares.
+    #[tracing::instrument(name = "project.remove", skip_all, fields(plugin = %plugin, root = %root.display()), err)]
     pub fn remove(&self, plugin: &str, root: &Path) -> Result<RemoveProjectPluginReport> {
         let canonical = project_root::resolve_project_root(root)?;
         let undeclared = manifest::undeclare_plugin(&canonical, plugin)?;
@@ -361,6 +365,7 @@ impl Project<'_> {
     /// rolled back on a later failure, matching `add_project_plugin`'s own
     /// no-transaction model (the Store has no all-or-nothing multi-package
     /// primitive to build one on).
+    #[tracing::instrument(name = "project.install", skip_all, fields(root = %root.display()), err)]
     pub fn install(&self, root: &Path, authority: &dyn TrustAuthority) -> Result<InstallReport> {
         let canonical = project_root::resolve_project_root(root)?;
         // `install` is an explicit act of setting this project up, so it is
@@ -601,6 +606,7 @@ impl Project<'_> {
     /// is `Malformed` rather than failing `status` itself, since `status`
     /// is meant to diagnose exactly this kind of problem, not refuse to
     /// run because of it.
+    #[tracing::instrument(name = "project.lock_status", skip_all, fields(root = %root.display()))]
     pub fn lock_status(&self, root: &Path) -> ProjectLockStatus {
         let canonical = match project_root::resolve_project_root(root) {
             Ok(canonical) => canonical,

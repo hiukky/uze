@@ -44,6 +44,7 @@ mod inspection_cache;
 mod lifecycle;
 mod maintenance;
 mod marketplace;
+mod marketplace_catalogue;
 mod overview;
 mod profile;
 mod project_environment;
@@ -65,7 +66,7 @@ pub use project_environment::{
 // Re-export overview read models for TUI/CLI access.
 pub use maintenance::{MaintenanceOutcome, MaintenanceReport};
 pub use overview::{
-    MarketplaceState, MemoryState, OverviewMarketplace, OverviewWorkspaceSummary,
+    MachineSnapshot, MarketplaceState, MemoryState, OverviewMarketplace, OverviewWorkspaceSummary,
     ProjectEnvironmentState, ProjectOverview,
 };
 pub use uze_core::workspace::WorkspaceKind;
@@ -110,6 +111,7 @@ pub struct UzeApplication {
     runner: Box<dyn ProcessRunner>,
     detection_cache: DetectionCache,
     inspection_cache: crate::application::inspection_cache::InspectionCache,
+    marketplace_catalogues: marketplace_catalogue::MarketplaceCatalogues,
 }
 
 impl UzeApplication {
@@ -173,6 +175,7 @@ impl UzeApplication {
             store: UzeStore::new(home.clone()),
             detection_cache: DetectionCache::new(&home),
             inspection_cache: inspection_cache::InspectionCache::new(&home),
+            marketplace_catalogues: marketplace_catalogue::MarketplaceCatalogues::new(&home),
             home,
             integrations,
             preference_adapters,
@@ -195,6 +198,7 @@ impl UzeApplication {
         if let Some(cached) = self.detection_cache.get(id, &candidates) {
             return cached;
         }
+        let _span = tracing::info_span!("integration.detect", integration = id).entered();
         let live = integration.detect();
         self.detection_cache.put(id, &candidates, live.clone());
         live
@@ -225,6 +229,7 @@ impl UzeApplication {
     /// (`src/main.rs`) and `setup` call this explicitly; `add`/`remove` do
     /// not need to because `setup` already covers the attach path.
     pub fn ensure_default_plugins(&self) -> Result<bool> {
+        let _span = tracing::info_span!("bootstrap.ensure_default_plugins").entered();
         let mut installed_any = false;
         for &id in bootstrap::DEFAULT_PLUGIN_IDS {
             installed_any |= self.ensure_default_plugin_installed(id)?;
@@ -243,12 +248,16 @@ impl UzeApplication {
         // Derived views refresh before attachment, same ordering `add_plugin`
         // already relies on (`install_materialized`): a Generated Native
         // Package's own catalogue (e.g. Claude's `generated/.claude-plugin/
-        // marketplace.json`) is written by `republish_all`, and native
+        // marketplace.json`) is written by republishing, and native
         // delivery below reads that view. Attaching first on a fresh/
         // catalogue-less `UZE_HOME` made the vendor CLI's own `marketplace
         // add` fail outright (`Marketplace file not found at .../
-        // marketplace.json`) — real-host dogfood caught this.
-        let _ = self.republish_all();
+        // marketplace.json`) — real-host dogfood caught this. Only a view
+        // that no longer matches the installed set is rewritten: this runs
+        // before every command, and rewriting four catalogues (each a
+        // synced atomic write) to say what they already said was most of
+        // what a read-only command cost.
+        self.republish_unpublished();
         let installed_ids: BTreeSet<&str> = bootstrap::DEFAULT_PLUGIN_IDS.iter().copied().collect();
         for package_id in self.store.package_ids().unwrap_or_default() {
             if !installed_ids.contains(package_id.as_str()) {
@@ -729,7 +738,14 @@ impl UzeApplication {
             .iter()
             .filter(|integration| requested.is_none_or(|id| integration.id() == id))
             .map(|integration| {
-                let provisioning = integration.provision(self.runner.as_ref())?;
+                let provisioning = {
+                    let _span = tracing::info_span!(
+                        "integration.provision",
+                        integration = integration.id()
+                    )
+                    .entered();
+                    integration.provision(self.runner.as_ref())?
+                };
                 state::record_provisioning(&self.home, integration.id(), &provisioning)?;
                 let configured = provisioning.status == ProvisionStatus::Verified;
                 if configured {
@@ -777,6 +793,9 @@ impl UzeApplication {
                 let detection = self.detect_cached(integration.as_ref());
                 let configured = detection.present;
                 if detection.present {
+                    let _span =
+                        tracing::debug_span!("integration.install", integration = integration.id())
+                            .entered();
                     integration.install(&self.home, &detection)?;
                 }
                 Ok(SetupResult {
@@ -917,12 +936,45 @@ impl UzeApplication {
             .iter()
             .map(|integration| PublicationOutcome {
                 integration: integration.id().to_owned(),
-                error: integration
-                    .republish_packages(&packages)
-                    .err()
-                    .map(|error| error.to_string()),
+                error: {
+                    let _span = tracing::info_span!(
+                        "integration.republish",
+                        integration = integration.id()
+                    )
+                    .entered();
+                    integration
+                        .republish_packages(&packages)
+                        .err()
+                        .map(|error| error.to_string())
+                },
             })
             .collect()
+    }
+
+    /// `republish_all`, for the integrations whose derived view no longer
+    /// matches the installed package set. Failures are dropped: this is
+    /// the best-effort bootstrap path, and `doctor` reports an unpublished
+    /// view on its own.
+    fn republish_unpublished(&self) {
+        let packages = self.installed_packages();
+        for integration in &self.integrations {
+            if let PublicationStatus::Unpublished(_) = integration.publication(&packages) {
+                let _span =
+                    tracing::info_span!("integration.republish", integration = integration.id())
+                        .entered();
+                let _ = integration.republish_packages(&packages);
+            }
+        }
+    }
+
+    /// What the marketplace registered as `name` at `source` offers, from
+    /// the catalogue cache (see `marketplace_catalogue`).
+    pub(crate) fn catalogue(
+        &self,
+        name: &str,
+        source: &PackageSource,
+    ) -> Result<marketplace_catalogue::Catalogue> {
+        self.marketplace_catalogues.read(name, source)
     }
 
     pub(crate) fn installed_packages(&self) -> Vec<StoredPackage> {
@@ -1058,6 +1110,12 @@ impl UzeApplication {
                 {
                     Some(cached) => cached,
                     None => {
+                        let _span = tracing::info_span!(
+                            "integration.inspect",
+                            integration = %receipt.integration,
+                            receipt = %ledger_key
+                        )
+                        .entered();
                         let live = self
                             .integrations
                             .iter()
@@ -1089,4 +1147,8 @@ impl UzeApplication {
     }
 }
 #[cfg(test)]
+mod performance_tests;
+#[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tracing_tests;

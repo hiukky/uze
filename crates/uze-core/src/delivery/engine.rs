@@ -42,6 +42,7 @@ impl UzeEngine {
     /// conformance tests. It is not a separate product concept: callers that
     /// have a project should use `compose_project`.
     pub fn compose(&self, packages: &[PackageId]) -> Result<EffectiveEnvironment> {
+        let _span = tracing::debug_span!("engine.compose", packages = packages.len()).entered();
         let resources = self.package_resources(packages)?;
         Ok(EffectiveEnvironment {
             root: self.store.home().root().to_path_buf(),

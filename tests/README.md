@@ -45,7 +45,7 @@ Rules:
 
 ```
 tests/
-├── cli/             CLI layer: grammar (ADR-019), machine-scoped commands
+├── cli/             CLI layer: grammar (ADR-019), machine-scoped commands, budget (what a warm command leaves behind)
 ├── memory/          what UZE sees: context inspection, reconciliation, projections
 ├── packages/        acquisition, containment, Store/Engine, canonical model
 ├── workspace/       agents.lock consumer, marketplace (incl. malformed), root resolution
