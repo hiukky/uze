@@ -107,6 +107,7 @@ that owns it — a worktree's own manifest is ignored:
 worktrees:
   target: main             # branch finished work targets (default: the primary's branch)
   completion: handoff      # handoff | merge | pr
+  branch: conventional     # the vocabulary an agent's own name for its work is judged against
   link: [.env, .env.local] # ignored files a fresh slot links from the primary
   setup: pnpm install      # prepares a slot after linking; a failure warns, never blocks
   gate: cargo test         # run on the rebased commits; non-zero refuses delivery
@@ -116,6 +117,60 @@ worktrees:
 `setup` and `gate` each take one command or a list run in order — the list is
 what makes a failure say which step failed. See the
 [`agents.yaml` reference](/docs/project-files#worktrees) for the rest.
+
+## The agent names its work
+
+`agent/<id>` tells a reviewer nothing, and nothing uze knows at launch can do
+better — the work has not been decided yet. The party that knows what it is,
+is the agent doing it, so the agent says so, as its **first action**, before
+it reads a file or plans anything:
+
+```bash
+uze agent task name fix/branch-naming
+```
+
+The branch becomes `fix/branch-naming` and the label beside it in the sidebar
+reads `branch naming`: one name, authored once, for the two people who read it
+— the reviewer meeting the pull request, and you reading three agents in a
+strip. There is no identifier argument, so the task named is always the one
+whose checkout the command ran in and no agent can rename another's work.
+
+The moment is half the rule. A name states an *intention*, which the agent
+holds from the request you gave it; nothing it reads afterwards makes the name
+easier to choose, while any later moment is one it meets with work already
+under way and weighs against the work. So it is the first thing the
+"Concurrent work isolation" section projected into your `AGENTS.md` asks for.
+
+Two mechanisms catch what that misses, and neither asks a harness for
+anything:
+
+- **Work that reaches a commit still unnamed** is named from that commit's
+  subject, on the pass that already evaluates the task — judged against the
+  same vocabulary. It reads `feat/answer-ping-with-pong` where an agent would
+  have chosen two words, which is exactly what the projected instruction warns
+  it will.
+- **A published branch never carries the identifier.** A task nobody named at
+  all is pushed under a name derived from its first commit.
+
+**A name nobody generated is never overwritten.** Rename a branch by hand with
+`git branch -m` and uze adopts it at the next evaluation — the sidebar,
+delivery and the sync count all read the new one — and nothing automatic
+renames it again.
+
+### The vocabulary is yours to close
+
+A proposed name has to be validated, and only a closed set can be. `branch:`
+takes a preset — `conventional`, `gitflow`, `flat` — or your own list of
+types, which is the answer when a preset almost fits: a team that wants `ui`
+declares `ui` rather than mislabelling the work as `style`.
+
+```yaml
+worktrees:
+  branch: [feat, fix, docs, ui]
+```
+
+Undeclared, it is `agent`: work is not named, the branch stays the generated
+identifier, and everything above is off.
 
 ## Readiness is read, not announced
 

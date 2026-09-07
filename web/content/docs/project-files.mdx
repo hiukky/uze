@@ -55,6 +55,7 @@ is deliberately *not* declared here.
 | --- | --- | --- |
 | `target` | the branch the primary checkout is on when the task is created | The branch finished work targets |
 | `completion` | `handoff` | `handoff` (leave the branch), `merge` (fast-forward the target), `pr` (push and open a request) |
+| `branch` | `agent` | The vocabulary an agent's own name for its work is judged against: a preset (`conventional`, `gitflow`, `flat`, `agent`) or your own list of types. `agent` names no work |
 | `link` | none | Ignored files a fresh checkout links from the primary — `.env` and friends |
 | `setup` | none | Prepares a checkout, run in it after linking. A failure warns; it never blocks a launch |
 | `gate` | none | Run in the task's checkout on the rebased commits. A non-zero exit refuses delivery |
@@ -67,6 +68,7 @@ when a failure should say *which* step failed:
 worktrees:
   target: main
   completion: pr
+  branch: conventional
   link: [.env, .env.local]
   setup: pnpm install
   gate:

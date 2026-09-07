@@ -33,8 +33,10 @@ are already load-bearing elsewhere in the codebase:
   to stop producing.
 - A general agent-facing RPC. `uze agent` gains exactly the verbs a
   workflow step needs; a namespace is not an invitation to fill it.
-- Naming a task before it exists. There is nothing to name at launch, which
-  is why launch is not where naming happens.
+- Naming a task before it exists. There is nothing to name at launch:
+  UZE places a checkout, and only the agent's first turn carries the
+  request that says what the work is. The moment is the agent's first
+  action, which is the earliest moment there is — not launch.
 
 ## Decisions
 
@@ -59,11 +61,39 @@ would then work only where all four harnesses have both.
 who **may** invoke, never that anything **will**; on Antigravity neither
 switch exists at all. A Skill is a suggestion gated on discovery.
 
-**Chosen: a command the agent runs, enforced by a hook and instructed by the
-projected region.** The command is the mechanism, the projected text is how
-the agent learns it, and the hook is how it stops being optional.
+**Chosen: a command the agent runs, instructed by the projected region.**
+The command is the mechanism and the projected text is how the agent learns
+it; §2 is when it is asked for, and §6 is what became of the hook that was
+going to make it non-optional.
 
-### 2. `uze agent` is an audience, not a category
+### 2. The moment is the first action, not the first commit
+
+A surface nothing calls names nothing, so the moment matters as much as the
+command. The first commit was the obvious moment and the wrong one: by then
+the agent is mid-task, the instruction competes with work already under
+way, and a moment an agent reaches while busy is a moment it skips.
+
+The first action is the moment where the cost is lowest and the
+information is already there. A name states an *intention*, and the
+intention is the one thing an agent holds before it has read anything — it
+came with the request. Nothing it learns afterwards makes `fix/branch-naming`
+easier to choose; what it learns afterwards is how to *do* the work, which
+the subject deliberately does not describe.
+
+Two consequences follow, and both are why this is a design decision rather
+than a wording change. The clause is projected **first** — the region's
+bullets are read in order, and an instruction placed after three rules
+about commits and rebases reads as something to do later. And naming now
+happens before the branch has a commit of its own, which is exactly the
+state `name_task` is cheapest in: nothing to rename around, no readiness to
+disturb, no published branch to freeze.
+
+What it gives up is a name chosen with full knowledge of the change. That
+is the trade first-writer-wins already priced: the operator renames, and
+nothing overwrites the correction — while the automatic half (§6) stays as
+the answer for work that reaches a commit having ignored all of this.
+
+### 3. `uze agent` is an audience, not a category
 
 ADR-019 gave the grammar one axis: root is project-scoped, `market`/`plugin`
 are machine-scoped. `uze agent` adds a second axis — who reads the command —
@@ -81,7 +111,7 @@ leaves the agent's commands in the person's list) and putting the verb at
 the root (the most-typed command in the flow becomes indistinguishable from
 the person's commands).
 
-### 3. First-writer-wins, which removes a rule rather than adding one
+### 4. First-writer-wins, which removes a rule rather than adding one
 
 A name that exists is never a candidate for renaming. The predicate is one
 comparison for the branch (`task.branch == task.id.branch()`) and the
@@ -95,7 +125,7 @@ manual rename automatically protects it, because the adopted branch is no
 longer the generated one. Reflecting a rename and refusing to overwrite it
 stop being two mechanisms.
 
-### 4. The vocabulary is closed, and the project closes it
+### 5. The vocabulary is closed, and the project closes it
 
 A proposed name must be validated, and only a closed set is validatable —
 which is the whole point, since the name comes from a model. `conventional`
@@ -109,7 +139,7 @@ means formatting, not visual design, and a team wanting `ui` should declare
 `ui` rather than mislabel work as `style`. Presets are named lists; the
 validation is identical either way.
 
-### 5. The automatic half is a Git fact, not a harness feature
+### 6. The automatic half is a Git fact, not a harness feature
 
 The design carried a `PreToolUse` `deny` here, and building it produced
 three findings that removed it — kept in the record because the reasoning
@@ -142,7 +172,7 @@ of the two words an agent would have chosen — which is exactly why the
 projected clause says so, and why `uze agent task name` arriving first
 wins.
 
-### 6. The publish-time fallback stays, demoted
+### 7. The publish-time fallback stays, demoted
 
 `readable_branch_name` exists and is the right shape; what was wrong was its
 input (a label that is always the identifier). Re-sourced from the first
