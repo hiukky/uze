@@ -13,6 +13,7 @@ use std::{
     ffi::OsString,
     fs,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -155,11 +156,7 @@ fn project_resource_projection(
     // launch drops `--add-dir` along with `AGENTS.md`. `rename` replaces
     // the previous link atomically and both writers converge on the same
     // target either way. Same nonce pattern `write_atomic` uses.
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system clock after epoch")
-        .as_nanos();
-    let temporary = parent.join(format!(".{}.{}.{nonce}.tmp", resource, std::process::id()));
+    let temporary = temporary_projection_path(parent, resource);
     symlink_dir(&project_source, &temporary).inspect_err(|_| {
         let _ = fs::remove_file(&temporary);
     })?;
@@ -168,6 +165,39 @@ fn project_resource_projection(
         return Err(error.to_string());
     }
     Ok(())
+}
+
+/// A name no other attempt can be using — `write_atomic`'s pattern, and
+/// its sequence with it.
+///
+/// The pid and the clock separate processes. They do not separate two
+/// threads of *one* process: a support refresh racing a launch, or the
+/// eight racers in this module's own test, read the same nanosecond on a
+/// clock whose resolution is coarser than Linux's and land on the same
+/// name. The loser of `symlink` then fails with `EEXIST` and the whole
+/// contribution degrades to passthrough — which is the failure the
+/// temp-and-rename dance above exists to prevent, reappearing one path
+/// later. A process-wide sequence is what actually makes the name unique.
+fn temporary_projection_path(parent: &Path, resource: &str) -> PathBuf {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock after epoch")
+        .as_nanos();
+    attempt_path(parent, resource, nonce)
+}
+
+/// Split from the clock so the property can be asserted without one: the
+/// bug was two threads reading the *same* nanosecond, and a test that lets
+/// the clock advance cannot reproduce it on a platform whose clock is fine.
+fn attempt_path(parent: &Path, resource: &str, nonce: u128) -> PathBuf {
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    parent.join(format!(
+        ".{}.{}.{nonce}.{}.tmp",
+        resource,
+        std::process::id(),
+        SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ))
 }
 
 #[cfg(unix)]
@@ -536,6 +566,50 @@ mod runtime_projection_tests {
         assert!(integration.runtime_contribution(&ctx).is_passthrough());
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The clock does not separate two threads of one process, and the
+    /// projection's whole EEXIST defence rests on the temporary name being
+    /// unique. `concurrent_projection_calls_never_degrade_to_passthrough`
+    /// below can only catch a collision it happens to hit — it did, once,
+    /// on a macOS runner and never on Linux, because the resolution of
+    /// `SystemTime::now` is what decided. So this asks with the clock held
+    /// still, which is the condition itself rather than a machine that
+    /// tends to produce it.
+    #[test]
+    fn two_threads_never_choose_the_same_temporary_name() {
+        let parent = std::path::Path::new("/does-not-need-to-exist");
+        let threads = 16;
+        let each = 64;
+        let barrier = std::sync::Barrier::new(threads);
+        let names: Vec<PathBuf> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..threads)
+                .map(|_| {
+                    scope.spawn(|| {
+                        barrier.wait();
+                        // One frozen nonce for every caller: the worst
+                        // case the clock can produce, and the one macOS
+                        // actually produced.
+                        (0..each)
+                            .map(|_| super::attempt_path(parent, "skills", 1_700_000_000))
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .flat_map(|handle| handle.join().unwrap())
+                .collect()
+        });
+
+        let distinct: std::collections::BTreeSet<&PathBuf> = names.iter().collect();
+        assert_eq!(
+            distinct.len(),
+            names.len(),
+            "every attempt must get a name of its own; {} of {} were duplicates",
+            names.len() - distinct.len(),
+            names.len()
+        );
     }
 
     #[test]
