@@ -19,6 +19,14 @@ description: Install uze, provision your harnesses, share one project context, a
     release, `UZE_BIN_DIR` changes where it lands.
   </Tab>
   <Tab value="macOS">
+    <Callout type="warn">
+      **Experimental.** Linux is what uze has been run on; macOS support is
+      new. Every change is built, tested and put through the product journeys
+      on an Apple Silicon runner — which is a stronger claim than "it
+      compiles", and found several real defects — but it is not the same
+      claim as Linux. What is *not* covered is listed below.
+    </Callout>
+
     ```bash
     curl -fsSL https://uze.hiukky.com/i | sh
     ```
@@ -26,16 +34,29 @@ description: Install uze, provision your harnesses, share one project context, a
     The same command: the installer reads `uname` and picks the macOS asset for
     Apple Silicon or Intel, verifying its SHA-256 the same way.
 
+    **What CI does not cover**
+
+    - No released binary has been installed on a Mac — the installer's macOS
+      path is proven against a synthetic fixture, not against a real release.
+    - The `x86_64` build is cross-compiled on Apple Silicon and never executed
+      before it ships.
+    - The terminal workspace is exercised under `tmux` in CI, not under
+      Terminal.app, iTerm or Ghostty.
+
     <Callout type="warn">
-      The macOS binaries are not notarized. Installing through the command above
-      works. A tarball downloaded through a **browser** is quarantined by
-      Gatekeeper instead — clear it with
+      The macOS binaries are not notarized — signing them needs an Apple
+      Developer account, which this project does not have. Installing through
+      the command above works. A tarball downloaded through a **browser** is
+      quarantined by Gatekeeper instead — clear it with
       `xattr -d com.apple.quarantine uze`.
     </Callout>
 
     The terminal workspace reads what is running in a pane through
     `libproc`/`sysctl` rather than `/proc`; everything else is the same binary
     it is on Linux.
+
+    If something misbehaves, [say so](https://github.com/hiukky/uze/issues) —
+    on macOS that is data nobody else has yet.
   </Tab>
   <Tab value="Windows">
     Planned, not yet supported — see the **Source** tab.
