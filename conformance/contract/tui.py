@@ -65,19 +65,45 @@ class Tui:
     def submit(self):
         self.child.send("\r")
 
-    def collect(self, reads=8, gap=1.5, size=400_000):
-        """Accumulates several reads into one plain-text view.
+    def collect(self, reads=8, gap=1.5, size=400_000, quiet_for=4.0):
+        """Accumulates reads into one plain-text view, stopping when the
+        turn goes quiet.
 
         One read is not a screen: a TUI repaints by region, so a name can
         arrive split across frames. Matching a single read is how a check
-        starts depending on timing.
+        starts depending on timing — which is why this accumulates.
+
+        But a fixed count of paced reads is not a quiescence test either.
+        It sleeps `reads x gap` whether the turn settled in the first
+        second or is still streaming at the last, and it can just as easily
+        return mid-stream: the old loop stopped at eight reads regardless of
+        what the harness was doing. ADR-035 requires an absence assertion to
+        evaluate "after the turn settles and the TUI goes quiet" — settling
+        is a condition, so measure it. Keep reading while bytes arrive, stop
+        once nothing has arrived for `quiet_for`, and keep `reads x gap` as
+        the ceiling it always was.
+
+        Strictly more evidence than the loop it replaces: silence here is
+        observed, where before it was assumed after a fixed nap.
         """
         raw = ""
-        for _ in range(reads):
-            time.sleep(gap)
+        deadline = time.monotonic() + reads * gap
+        last_byte = time.monotonic()
+        while time.monotonic() < deadline:
             try:
-                raw += self.child.read_nonblocking(size=size, timeout=3)
+                chunk = self.child.read_nonblocking(size=size, timeout=gap)
+            except pexpect.EOF:
+                # The harness exited. `read_nonblocking` raises this without
+                # waiting out its timeout, so treating it as "nothing yet"
+                # would spin hot until `quiet_for`. A dead child is as quiet
+                # as a turn ever gets.
+                break
             except Exception:
+                chunk = ""
+            if chunk:
+                raw += chunk
+                last_byte = time.monotonic()
+            elif time.monotonic() - last_byte >= quiet_for:
                 break
         return ansi_strip(raw)
 

@@ -1103,13 +1103,44 @@ def render_screen(text, columns=240, rows=200):
     return "\n".join("".join(line).rstrip() for line in grid).strip("\n")
 
 
-def make_screen(child):
+def make_screen(child, settle=0.6):
     def screen(wait=2.2):
-        time.sleep(wait)
+        """One screen: everything the harness wrote, up to `wait` seconds.
+
+        `read_nonblocking` already blocks until the first byte arrives, so
+        it is the wait. The `time.sleep(wait)` that used to precede it was
+        paid whether or not the harness had anything to say — a floor under
+        every read in the Lab, including the ones whose content was already
+        on screen.
+
+        What that sleep was actually buying is the *rest* of a repaint: a
+        TUI writes one frame in several writes, and returning on the first
+        byte hands back half a screen. So block for the first byte, then
+        drain what follows until the writes stop for `settle` or `wait`
+        runs out. `wait` stays exactly what it was — a ceiling instead of a
+        floor.
+
+        `settle` is deliberately generous. A caller that does not
+        `accumulate` matches only the latest screen, so a frame split across
+        two of these calls is a marker that exists and is never seen —
+        the flake this tier can least afford. 0.6s of complete silence from
+        a containerised TUI is a finished frame; shaving it further would buy
+        a fraction of a second per read and pay for it in a check that fails
+        once a fortnight.
+        """
+        deadline = time.monotonic() + wait
         try:
             t = child.read_nonblocking(size=250000, timeout=6)
         except Exception:
             t = ""
+        while t and time.monotonic() < deadline:
+            try:
+                more = child.read_nonblocking(size=250000, timeout=settle)
+            except Exception:
+                break
+            if not more:
+                break
+            t += more
         p = ansi_strip(t)
         return t, p
 
