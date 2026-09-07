@@ -65,17 +65,47 @@ change is archived — so it is reversed by a new change,
 
 ### ⚑ Keep the Conformance Lab on Docker and on Linux
 
-I raised "build the Lab image once instead of four times" and then withdrew
-it after measuring: the four matrix legs start in the same second, so the
-14 minutes are runner-minutes, not wall clock — and on a public repository
-those are free. Building once would *reduce* runner-minutes and *increase*
-the time you wait.
+Unchanged. Docker there is the experiment, not the packaging: `--network
+internal`, read-only root, `cap_drop ALL`, rootless, tmpfs-only writes are
+what make "real harness binary, synthetic provider, zero Internet, zero
+tokens" a claim rather than a hope. macOS runners have no Docker, so the Lab
+stays a Linux tier.
 
-The two ways to make the build itself faster both cost something real:
-caching the layer would freeze `uze setup` at a stale harness version and
-silently break the channel-latest policy the nightly depends on; moving the
-`cargo build` to the host would break `make lab-image` on macOS — the exact
-developers this branch is for.
+### ⚑ Build the Lab image once — reversing a decision taken earlier on this branch
+
+Earlier on this branch I raised "build the image once instead of four times"
+and **withdrew it** after measuring, with this reasoning: the four legs start
+in the same second, so the 14 minutes are runner-minutes rather than wall
+clock, and on a public repository those are free. Building once would reduce
+runner-minutes and increase the time you wait.
+
+That cost analysis is correct, and it is not the reason this is now split
+out. The argument it missed is about evidence, not minutes.
+
+The Dockerfile provisions the harnesses with `uze setup`, whose policy is
+channel-latest — `conformance.yml`'s own header says a vertical "goes red on
+a vendor release with no commit of ours behind it". Four independent builds
+are four independent installs. A vendor publishing during a run leaves the
+Claude leg testing one version and the Codex leg another, and a matrix whose
+legs stand on different ground cannot be read: a difference between two legs
+has to be a difference between two harnesses.
+
+So: one `Image` job, `docker save | zstd`, an artifact, four `docker load`.
+
+- **Channel-latest is preserved.** The image is still built fresh on every
+  run — it is built *once* per run, not cached across runs. The layer-cache
+  idea I rejected earlier (it would freeze `uze setup` at a stale version) is
+  still rejected, for the same reason.
+- **The cost is what I measured then**: about +40s of wall clock on the
+  longest leg, for the `docker load` that did not exist before. In exchange,
+  −8.6 runner-minutes per run and four legs of one world.
+- **It applies twice.** `conformance-stability.yml` did the same thing three
+  times a night, and it is the promotion gate — the one place where "is this
+  vertical stable" is being asked, and the least defensible place for the
+  ground to move between legs.
+
+Reversing this is deleting the `Image` job and putting the `docker build`
+step back into the matrix.
 
 ### ⚑ Pin every runner image
 
@@ -84,28 +114,77 @@ LTS on a date nobody here picks. Every action is already SHA-pinned, gitleaks
 version *and* checksum, git-cliff and cargo-release to exact releases. The
 machine all of that runs on was the one unpinned thing.
 
+`macos-latest` escaped the first pass — the only unpinned runner left, on the
+one platform this branch is about. It is `macos-15` now in the gate and in
+`release.yml`'s two Apple packaging legs, which is what "both Apple targets
+on one Apple Silicon runner" was already assuming without saying.
+
 Moving to a new image is now a diff.
 
-### ⚑ Group `ci.yml`, without renaming anything
+### ⚑ Three stages, and only two edges
 
-Eleven jobs in a flat list answering three questions. Reordered and grouped:
-is the code correct · is it safe to ship what we link · the parts that are
-not the binary.
+Eleven jobs in a flat list answering three questions, and six workflows with
+no `needs:` between them anywhere. The grouping is now real rather than
+comments: stage 1 verifies, stage 2 proves, stage 3 closes.
 
-Order and comments only. **Every job name is a required status check on
-`main`**, so renaming would break the merge button for everyone until the
-protection was updated in the same window. If you want grouped *names*
-(`code / Test`), that is a coordinated change, not a drive-by.
+The temptation is six stages. It does not pay — under about ninety seconds a
+gate costs more information than it saves time, and every stage 1 job answers
+inside two minutes, so stage 1 keeps no internal ordering at all. Two edges
+earn their keep: `lint` before the journeys tier, and `Image` before the four
+verticals.
 
-### ⚑ `Journeys` is not a required check, and its own header says it gates
+Journeys and Conformance become `workflow_call` and are invoked from
+`ci.yml`, because `needs:` does not cross a workflow boundary. Both keep
+their own `schedule:` and `workflow_dispatch:`, so the nightly is unchanged;
+`ci.yml` skips the two calls on a schedule event so nothing runs twice.
 
-`journeys.yml` says "That is why this gates a pull request rather than a
-release". It does not — the required checks are the eleven `ci.yml` jobs
-only. Conformance is not required either.
+### ⚑ One `gate`, so branch protection stops naming jobs
 
-**Not changed**, because branch protection is yours. Either `Journeys`
-becomes required, or the comment stops claiming it. I recommend the former:
-it is 3m47s, vendor-independent, and already path-filtered.
+Eleven job names were listed one by one as required checks on `main`. I said
+earlier on this branch that renaming a job "would break the merge button
+until the protection was updated in the same window" — which is exactly what
+folding macOS in does to `Test`, now `Test (linux)` and `Test (macos)`.
+
+Rather than swap eleven names for twelve, `gate` is a job that needs every
+other one and fails if any reports `failure` or `cancelled`. `skipped` passes
+on purpose: that is what lets `changes` turn off an expensive tier without a
+documentation change waiting forever on a check that will never report.
+
+**This needs one action from you, and the pull request cannot merge without
+it**: replace the eleven required contexts with the single context `gate`.
+
+    gh api -X PATCH repos/hiukky/uze/branches/main/protection/required_status_checks \
+      -F strict=true -f 'contexts[]=gate'
+
+It also settles the older question of whether `Journeys` should be required.
+It now is — through `gate`, along with Conformance, without either becoming
+a name in repository settings that has to be maintained by hand.
+
+### ⚑ A `changes` job instead of four `paths:` blocks
+
+`paths:` can only be written at the top of a workflow, which is the only
+reason `macos.yml` was a separate file. Folding it into a matrix needs the
+filter to survive as data, so it moves into a job whose outputs the
+consumers read — including the platform matrix itself, built as JSON.
+
+Written with `git diff` and `grep -E` rather than `dorny/paths-filter`: it is
+about twenty auditable lines, and this repository's rule for adding a
+dependency is to ask whether the standard tools can do the job first.
+
+### ⚑ Restore the cache everywhere, save only from `main`
+
+The repository sat at **9.91 GB of its 10 GB** Actions cache allowance, which
+means GitHub was evicting by LRU on every run — a "warm cache" was a coin
+toss, and a branch writing its own 1.75 GB set evicted what the next branch
+was about to read. `save-if: github.ref == 'refs/heads/main'` everywhere in
+the gate.
+
+`test` and the journeys job also now share one key: they build the same
+workspace with the same toolchain and their two entries carried an identical
+content hash (`6ff13d87`), 239 MB and 260 MB, per branch.
+
+`release.yml` is deliberately left writing its caches: it runs rarely, and a
+cold release build is a real cost on an operation somebody is waiting on.
 
 ---
 
@@ -270,7 +349,12 @@ that justifies the Lab does not vary by platform here.
   milestone.** I would take the runner unification and the budget-test repair
   first: both are small, and the second is what makes the performance number
   worth measuring at all.
-- **`Journeys` as a required check** — see above.
+- **Swap the eleven required contexts for `gate`.** This is the one thing
+  that blocks the merge: `Test` is a required check and is now
+  `Test (linux)` / `Test (macos)`, so the old name will never report again.
+  The command is in "One `gate`" above. It also settles `Journeys` and
+  Conformance, which become required through `gate` without either being a
+  name anybody maintains by hand.
 - **A real install on a Mac.** Nothing here has run on hardware anybody owns.
   It is the one gap CI cannot close and the reason the docs say
   *experimental*.

@@ -3,40 +3,21 @@ name: Conformance
 # The Harness Conformance Lab: the real harness binaries against a synthetic
 # provider, in a disposable Docker network with no Internet and no tokens.
 #
-# Its own workflow, and not part of CI, for one reason: at ~34 runner-minutes
-# it is 89% of what an event costs, and it can only be affected by the code
-# that is baked into the Lab image. A documentation or web change ran the
-# whole matrix and could only ever fail it for reasons of its own — which is
-# exactly what happened to #11, red on a vertical it did not touch.
+# Its own file, and called by `ci.yml` rather than triggered beside it: at
+# ~34 runner-minutes it is the most expensive thing this repository can spend
+# an event on, and it can only be affected by the code that is baked into the
+# Lab image. A documentation or web change ran the whole matrix and could only
+# ever fail it for reasons of its own — which is exactly what happened to #11,
+# red on a vertical it did not touch. The filter that decides whether to spend
+# it now lives in `ci.yml`'s `changes` job, because a path filter can only be
+# written at the top of a workflow and the gate needs one per tier.
 
 on:
-  push:
-    branches: [main]
-    # Repeated rather than anchored: GitHub Actions does not resolve YAML
-    # aliases, and a filter it silently ignores is a filter that does not
-    # filter. Keep the two lists identical.
-    paths:
-      - "src/**"
-      - "crates/**"
-      - "tests/_fixtures/**"
-      - "plugins/**"
-      - "marketplace.json"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "conformance/**"
-      - ".github/workflows/conformance.yml"
-  pull_request:
-    branches: [main]
-    paths:
-      - "src/**"
-      - "crates/**"
-      - "tests/_fixtures/**"
-      - "plugins/**"
-      - "marketplace.json"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "conformance/**"
-      - ".github/workflows/conformance.yml"
+  # `ci.yml` is the entry point for a push and a pull request: `needs:` does
+  # not cross a workflow boundary, so a Lab that gates on anything — its own
+  # image, the rest of the gate — has to be reachable from the same graph.
+  # Kept independently runnable for the nightly and for a hand-started run.
+  workflow_call:
   # Nightly runs regardless of what changed: the harnesses install
   # channel-latest, so a vertical goes red on a vendor release with no commit
   # of ours behind it.
@@ -55,8 +36,51 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # One image, four verticals.
+  #
+  # Each leg built its own until now. That cost four times the runner minutes
+  # — 14m27s of a 62m pull request, measured — but the reason it moved is not
+  # the bill. The Dockerfile provisions the harnesses with `uze setup`, whose
+  # policy is channel-latest; four independent builds are four independent
+  # installs, so a vendor publishing mid-run left the matrix comparing four
+  # different worlds. A difference between two legs has to be a difference
+  # between two harnesses, and it cannot be that while each leg builds its
+  # own ground.
+  #
+  # This job is also the Lab's own compile gate: the image builds `uze` from
+  # source, so a tree that does not compile stops here, in about two minutes,
+  # and the four expensive legs never start.
+  image:
+    name: Image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # The Lab image bakes the real harness binaries (channel-latest),
+      # the `uze` binary and the fixture tree; `lab.py` runs each vertical
+      # against it in a disposable `--internal` network — zero Internet,
+      # zero tokens.
+      - name: Build the Lab harness image
+        run: docker build -f conformance/Dockerfile -t conformance-harness:latest .
+      # zstd, not the artifact action's own gzip: the image is measured in
+      # gigabytes, `-T0 -3` saturates the runner's cores for a ratio gzip
+      # reaches at several times the wall clock, and `compression-level: 0`
+      # below stops the upload from trying to compress it a second time.
+      - name: Hand it to the verticals
+        run: docker save conformance-harness:latest | zstd -T0 -3 -o /tmp/lab-image.tar.zst
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: lab-image
+          path: /tmp/lab-image.tar.zst
+          compression-level: 0
+          # A build product for the legs of this run, not evidence. Evidence
+          # is what each vertical uploads below, at 90 days.
+          retention-days: 1
+          if-no-files-found: error
+
   conformance:
     name: E2E - ${{ matrix.label }}
+    needs: image
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     strategy:
@@ -73,12 +97,15 @@ jobs:
             label: OpenCode
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      # The Lab image bakes the real harness binaries (channel-latest),
-      # the `uze` binary and the fixture tree; `lab.py` runs each vertical
-      # against it in a disposable `--internal` network — zero Internet,
-      # zero tokens.
-      - name: Build the Lab harness image
-        run: docker build -f conformance/Dockerfile -t conformance-harness:latest .
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: lab-image
+          path: /tmp
+      # The one thing every leg must agree on. `docker load` prints the image
+      # it restored; keep it in the log, because "which image did this leg
+      # actually run" is the first question a divergent result raises.
+      - name: Load the Lab image
+        run: zstd -d -c /tmp/lab-image.tar.zst | docker load
       - name: Install Lab runner dependency
         run: python3 -m pip install --user pexpect
       - name: Run the ${{ matrix.harness }} vertical

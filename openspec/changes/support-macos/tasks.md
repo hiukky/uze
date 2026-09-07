@@ -40,8 +40,11 @@
 - [x] 4.1 `.github/workflows/macos.yml`: build, run, clippy, test, journeys.
 - [x] 4.2 Path-filtered on pull requests; every step runs even after a
       failure, and the suite is `--no-fail-fast`.
-- [ ] 4.3 Fold into `ci.yml` as a runner matrix and delete the workflow —
-      once it has been green long enough to be believed.
+- [x] 4.3 Fold into `ci.yml` as a runner matrix and delete the workflow —
+      done once the first run settled green (7m03s, everything passed).
+      `Test` and `E2E - UZE` carry a `platform` axis; the path filter the
+      workflow was carrying moved to `ci.yml`'s `changes` job, which is
+      also where a Windows row will go.
 
 ## 5. Ship it
 

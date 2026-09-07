@@ -241,10 +241,10 @@ jobs:
           # download already calls it. No libc field, because a Mac has one.
           - target: aarch64-apple-darwin
             platform: aarch64-macos
-            runner: macos-latest
+            runner: macos-15
           - target: x86_64-apple-darwin
             platform: x86_64-macos
-            runner: macos-latest
+            runner: macos-15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
