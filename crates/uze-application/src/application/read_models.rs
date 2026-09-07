@@ -434,8 +434,8 @@ pub struct HarnessContextStatus {
 
 /// The smallest classification that separates "context exists at all" from
 /// "context reaches every harness that could use it" — deliberately not a
-/// larger taxonomy. See `docs/capabilities/context-manager.md` Fase 3 for
-/// why each variant exists and what evidence justified it.
+/// larger taxonomy. See `docs/capabilities/context-manager.md` ("Portability")
+/// for why each variant exists and what evidence justified it.
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "portability", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Portability {

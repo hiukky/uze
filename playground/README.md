@@ -12,8 +12,15 @@ make wsl-lab
 
 # In Lab
 uze setup opencode
-uze add ~/uze-playground/default-plugin
+uze plugin list
 ```
+
+> **Not installable as-is.** A plugin is only ever resolved through a
+> marketplace, and a marketplace is a Git repository — so the deployed
+> `default-plugin/` directory cannot be installed until the playground ships a
+> `marketplace.json` and the deploy script leaves a repository behind. Until
+> then the deployment is useful for inspecting the package layout, not for
+> `uze market add` / `uze <plugin>@<market>`.
 
 The deployed path is intentionally owned by this helper. On subsequent
 deployments it is refreshed only when its `.playground-managed` marker is

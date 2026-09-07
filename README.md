@@ -31,8 +31,9 @@ curl -fsSL https://uze.hiukky.com/i | sh
 - [x] Harness management · Skills & MCP portability · Project context · Marketplace · TUI
 - [x] Agent & hook portability · Native package delivery
 - [x] Profiles · Environment maintenance · Terminal workspace with isolated agents
-- [ ] Requirements & dependencies · Security & trust
-- [ ] Packaged releases · Runtime context projection · Migration tooling · Ecosystem expansion
+- [x] Reproducible project environments · Theming · Linux releases
+- [ ] Requirements & dependencies · Update detection · Security & trust
+- [ ] macOS & Windows releases · Runtime context projection · Migration tooling · Ecosystem expansion
 
 ---
 

@@ -94,6 +94,10 @@ the local proxy. Specifically:
   `make attributions`; CI fails when it drifts from `Cargo.lock`. Edit
   `about.hbs`, never the file.
 - Coverage does not drop below the thresholds in `ci.yml`.
+- The gate journeys pass
+  (`python3 journeys/journey.py run journeys/suites --tag gate`) for a change
+  that touches a user-facing flow. A journey checks the machine the flow left
+  behind, never UZE's own report.
 - The conformance verticals (`make lab-run`) pass for every harness a
   change touches. A harness that cannot deliver part of a contract
   declares it through `bindings.unsupported` with a reason; it never
@@ -108,8 +112,11 @@ the local proxy. Specifically:
   `sanctioned` to make it pass.
 - `unsafe` needs a `// SAFETY:` comment stating the invariant, and a
   reviewer will check it.
-- No new external dependency without a stated reason in the pull
-  request. A dependency that becomes part of a public contract or a
+- No new external dependency without a stated reason in the pull request.
+  Choose by **provenance**, not by whichever crate name matched the search —
+  `AGENTS.md`'s "Dependencies" section is the bar, and the pull request answers
+  its four questions (who publishes it, whether it compiles C, `cargo deny`,
+  transitive weight). A dependency that becomes part of a public contract or a
   long-term boundary gets an ADR at archive time.
 - The project is pre-1.0 and ships **no compatibility layers**. Stale
   state is fixed by cleaning data, not by permanent migration code.
@@ -124,6 +131,10 @@ the local proxy. Specifically:
 - Put the test where `tests/README.md` says it belongs (L0 unit through
   L4 conformance). Do not add a new top-level test binary when a domain
   suite already exists.
+- A user-facing *flow* — something a person performs through the CLI or the TUI
+  — belongs in `journeys/` as well, where the claim is checked against the
+  filesystem, Git and the process table rather than against UZE's own output.
+  `journeys/README.md` has the rules that decide what a journey is.
 - Tests run in an isolated `TestEnvironment` from `uze-testkit`. A test
   that reads the developer's real `~/.uze`, `$HOME` or `PATH` is
   rejected.

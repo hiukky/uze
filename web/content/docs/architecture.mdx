@@ -18,10 +18,12 @@ graph TD
     INTEG["uze-integrations<br/>Claude Code · Codex · OpenCode · Antigravity"]
     TERM["uze-terminal<br/>local terminal runtime"]
     GIT["uze-git<br/>the one transport to the Git binary"]
+    THEME["uze-theme<br/>the design vocabulary: tokens, symbols, resolver"]
 
     CLI --> EXT
     CLI --> APP
     CLI --> TERM
+    CLI --> THEME
     APP --> CORE
     INTEG --> CORE
     CORE --> GIT
@@ -51,6 +53,13 @@ graph TD
 - **`uze-terminal`** — the local terminal runtime: a server owning the
   pseudoterminals and a versioned client protocol, so a pane survives the client
   leaving (ADR-038). It depends on nothing else in the workspace.
+- **`uze-theme`** — the design vocabulary: colour `Token`s, named `Symbol`s, the
+  theme file schema, and the resolver that completes a partial theme from the
+  built-in default. A leaf crate that resolves no path, reads no environment and
+  names no rendering library, so every consumer adapts its `Rgb` to what it draws
+  with. **Nothing outside `src/ui/theme.rs` may name a colour value or write a
+  chrome glyph inline** — two architecture rules fail the build over it. See
+  [Theming](/docs/theming).
 - **`uze-extensions`** — built-in TUI extensions. An extension answers with a
   view or a section and **never draws**: the host owns rendering, geometry,
   hit-testing and the palette, and every other capability (running Git, reading a
@@ -73,9 +82,11 @@ part; everything else is where to look.
 | `crates/uze-extensions` | Built-in TUI extensions |
 | `crates/uze-terminal` | The local terminal runtime |
 | `crates/uze-git` | The one transport to the Git binary |
+| `crates/uze-theme` | Colour tokens, symbols, and the theme resolver |
 | `crates/uze-testkit` | Shared test infrastructure |
 | `src/` | The CLI, the TUI, and the runtime PATH shim |
 | `tests/` | Integration suites, L0–L4 (see `tests/README.md`) |
+| `journeys/` | Product journeys — a user's flow, checked against the machine it left behind |
 | `conformance/` | The Harness Conformance Lab |
 | `docs/adr/` | Numbered decision records |
 | `docs/architecture/` | The invariants that hold today, each tied to its test |

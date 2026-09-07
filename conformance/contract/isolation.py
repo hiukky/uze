@@ -58,7 +58,7 @@ cat > AGENTS.md <<'UZE_EOF'
 UZE_EOF
 printf '@AGENTS.md\\n' > CLAUDE.md
 printf '@AGENTS.md\\n' > GEMINI.md
-printf 'version: 1\\nworktrees:\\n  completion: handoff\\n' > agents.lock
+printf 'worktrees:\\n  completion: handoff\\n' > agents.yaml
 git add . && git commit -q -m init
 git worktree add -q -b agent/t0lab .worktrees/t0lab HEAD
 printf '/.worktrees/\\n' >> .git/info/exclude

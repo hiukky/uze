@@ -13,9 +13,10 @@ description: Install uze, provision your harnesses, share one project context, a
     curl -fsSL https://uze.hiukky.com/i | sh
     ```
 
-    Prebuilt binary for `x86_64`/`aarch64`, glibc or musl auto-detected; verifies a
-    SHA-256 checksum before installing into `~/.local/bin` (or `$XDG_BIN_HOME`)
-    — ADR-034.
+    Prebuilt binary for `x86_64`/`aarch64`, glibc or musl auto-detected. It
+    verifies a SHA-256 checksum before installing into `~/.local/bin` (or
+    `$XDG_BIN_HOME`) and refuses on mismatch — ADR-034. `UZE_VERSION` pins a
+    release, `UZE_BIN_DIR` changes where it lands.
   </Tab>
   <Tab value="macOS">
     Planned, not yet supported — see the **Source** tab.
@@ -34,10 +35,9 @@ description: Install uze, provision your harnesses, share one project context, a
   </Tab>
 </Tabs>
 
-<Callout type="warn">
-  No release is published yet, so the installer says so and prints
-  build-from-source instructions instead of failing partway through the pipe.
-</Callout>
+Every release until v1 is an alpha. Each one ships four Linux tarballs, a
+CycloneDX SBOM, `SHASUMS256.txt` and signed provenance you can check with
+`gh attestation verify <file> --repo hiukky/uze`.
 
 ## Provision your harnesses
 
@@ -48,7 +48,6 @@ repackaged binary (ADR-010).
 ```bash
 $ uze setup
 ▸ Provisioning 4 harness(es) through official routes…
-(installer output is buffered per harness — see $UZE_HOME/state/logs/setup-<harness>.log; use --verbose to stream)
 ✓ [1/4] claude-code: ready (update; version 2.1.260)
   ↳ shim: ~/.uze/shims/claude
 ✓ [2/4] codex: ready (update; version 0.152.1)
@@ -62,18 +61,15 @@ $ uze setup
 ```
 
 The word in parentheses is what setup did: `install` where the binary was
-absent, `update` where it was already there. Each `↳ shim` line is the
-[runtime PATH shim](/docs/harnesses#the-runtime-path-shim) for that harness;
-if setup had to add `$UZE_HOME/shims` to your shell profile, it prints the
-command to reload it.
+absent, `update` where it was already there. Installer output is buffered per
+harness (`$UZE_HOME/state/logs/setup-<harness>.log`; `--verbose` streams it).
+Each `↳ shim` line is the [runtime PATH shim](/docs/harnesses#the-runtime-path-shim)
+for that harness — the thing that also brings an agent back to its conversation
+after a reboot.
 
-A harness that could not be provisioned is a failure, not a warning — setup
-exits non-zero and names it, so an image build or a bootstrap script never
-reads "all ready" over a missing binary.
-
-It is idempotent — running it again refreshes recorded facts instead of
-duplicating state. Target one harness with `uze setup <name>`, and read state
-without changing anything:
+A harness that could not be provisioned is a failure, not a warning: setup exits
+non-zero and names it, so an image build never reads "all ready" over a missing
+binary. It is idempotent, and reading state changes nothing:
 
 ```bash
 $ uze setup list                 # detected harnesses and their setup state
@@ -85,18 +81,20 @@ label (`Claude Code`).
 
 ## Add a plugin
 
-A plugin always comes from a marketplace. `uze-official` is embedded in the
-binary and needs no registration; add your own with `uze market add`.
+A plugin always comes from a marketplace — a Git repository holding a
+`marketplace.json`, whether you spell it as a URL or as a clone on this machine.
+`uze-official` is embedded in the binary and needs no registration.
 
 ```bash
-$ uze market add ./my-marketplace          # a local directory, or an https:// Git URL
+$ uze market add https://github.com/you/marketplace   # or a local clone
 $ uze market list
-$ uze flow@my-marketplace                  # add it to this project (writes agents.lock)
+$ uze flow@my-marketplace                             # add it to this project
 ```
 
-The `<plugin>@<market>` shorthand is **project scope** — it records the plugin in
-`agents.lock`. To install into the machine Store without touching any project,
-use `uze plugin install flow@my-marketplace`. Neither implies the other.
+The `<plugin>@<market>` shorthand is **project scope**: it declares the plugin in
+`agents.yaml` and records what it resolved to in `agents.lock`. To install into
+the machine Store without touching any project, use
+`uze plugin install flow@my-marketplace`. Neither implies the other.
 
 ```bash
 $ uze plugin inspect flow    # capabilities, and how each harness will receive them
@@ -132,9 +130,9 @@ $ uze doctor     # store, harness detection, attachment health, receipt ledger
 $ uze status     # how this project's environment and context reach each harness
 ```
 
-`doctor` is a report, not a chore list: it repairs the deterministic,
-UZE-owned artifacts it can prove are safe to rebuild, and escalates only what
-genuinely needs your decision.
+`doctor` is a report, not a chore list: it repairs the deterministic, uze-owned
+artifacts it can prove are safe to rebuild, and escalates only what genuinely
+needs your decision.
 
 ## Run agents side by side
 
@@ -155,8 +153,10 @@ Plugins, Extensions, Integrations, Profiles — and back.
 
 ## A fresh clone
 
-`agents.lock` is committed with the project, so a new machine reconstructs the
-same environment from it alone:
+`agents.yaml` and `agents.lock` are committed with the project, so a new machine
+reconstructs the same environment from the pair alone — at the same commits, with
+each package's bytes verified against the recorded digest before anything is
+installed:
 
 ```bash
 $ git clone …

@@ -8,8 +8,9 @@ description: Where uze is going — from alpha to ecosystem
 ## Status
 
 **Alpha.** APIs, schemas, and harness integration behavior may change while the
-cross-harness model is validated. No packaged release has shipped yet — building
-from source is the way in today.
+cross-harness model is validated. Linux releases are published on GitHub and
+installed by `curl -fsSL https://uze.hiukky.com/i | sh`; every version until v1
+is an explicit pre-release.
 
 ## Working today
 
@@ -22,24 +23,29 @@ from source is the way in today.
   deterministically generated one where it doesn't.
 - **Project context** — `AGENTS.md` as the baseline, with the one bridge that
   needs maintaining, in regions uze owns and nothing else.
-- **Marketplaces and `agents.lock`** — reproducible project environments from a
-  committed lock file.
-- **Profiles** — autonomy, sandbox and model preferences translated into each
-  harness's own settings, with the fidelity reported per axis.
-- **Environment maintenance** — `doctor` repairs the UZE-owned artifacts it can
+- **Reproducible project environments** — `agents.yaml` declares, `agents.lock`
+  pins each marketplace to a commit and each package to a digest, and
+  `git clone && uze install` rebuilds both.
+- **Profiles** *(beta)* — autonomy, sandbox and model preferences translated into
+  each harness's own settings, with the fidelity reported per axis.
+- **Environment maintenance** — `doctor` repairs the uze-owned artifacts it can
   prove are safe to rebuild, and escalates only real decisions.
 - **The terminal workspace** — persistent panes, parallel agents in isolated
-  checkouts, readiness read from Git, and explicit delivery.
+  checkouts, readiness read from Git, explicit delivery, and a conversation that
+  survives a reboot.
+- **Theming** — one file restyles the CLI, the TUI, and what a pane is told the
+  terminal looks like.
 
 ## In progress
 
 - **Requirements & dependencies** — what a plugin needs from its host, declared
   and checked before install.
+- **Update detection** — the lock records what a marketplace resolved to; telling
+  you something newer exists needs a fetch policy that nothing has decided yet.
 - **Security & trust** — beyond today's executable-capability boundary.
 - **Runtime context projection** — the PATH shim that reaches a harness without
   writing into the project is still experimental.
-- **Packaged releases** — GitHub Releases for Linux first (ADR-034); macOS and
-  Windows after.
+- **macOS and Windows releases** — Linux shipped first (ADR-034).
 - **Migration tooling and ecosystem expansion.**
 
 ## Planned harnesses

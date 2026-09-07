@@ -39,7 +39,7 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Install this project's environment from agents.lock
+    /// Resolve agents.yaml into agents.lock, then install what it records
     Install {
         path: Option<PathBuf>,
         /// Authorize executable capabilities
@@ -368,7 +368,7 @@ fn print_help(topic: HelpTopic) {
         HelpTopic::Root => print_root_help(),
         HelpTopic::Install => print_command_help(
             "UZE install",
-            "Install this project's environment from agents.lock.",
+            "Resolve agents.yaml into agents.lock, then install what it records.",
             "uze install [path] [--trust]",
             &[],
         ),
@@ -456,7 +456,7 @@ fn print_root_help() {
         vec![
             vec![
                 progress::accent("install"),
-                "Install this project's environment from agents.lock".to_owned(),
+                "Install this project's environment from agents.yaml".to_owned(),
             ],
             vec![
                 progress::accent("remove"),

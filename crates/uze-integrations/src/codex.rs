@@ -315,11 +315,15 @@ impl IntegrationPort for CodexIntegration {
     }
 
     /// Codex has no distinct mark of its own (no logo/icon file anywhere in
-    /// openai/codex, only a README splash banner) — this is OpenAI's own
-    /// mark, fetched directly from openai.com's favicon, not a third
-    /// party's redistribution.
+    /// openai/codex, only a README splash banner), so this is OpenAI's mark —
+    /// simple-icons' `openai` path (CC0-1.0), replacing the vendor favicon
+    /// whose white plate showed as a square on a dark page. It carries one
+    /// dark fill rather than `currentColor`, because the docs matrix draws it
+    /// through `<img>`: an SVG loaded that way is its own document and
+    /// inherits no colour from the page. `global.css` inverts it for the dark
+    /// theme.
     fn icon_path(&self) -> Option<&'static str> {
-        Some("/harnesses/codex.png")
+        Some("/harnesses/codex.svg")
     }
 
     fn homepage(&self) -> Option<&'static str> {

@@ -106,6 +106,9 @@ scenes:
       - shell: "{uze} status"
         say: ask a project with no lock how it stands
     then:
+      - file: "{project}/agents.yaml"
+        exists: false
+        about: reading a project never creates the manifest; only `uze install` does
       - file: "{project}/agents.lock"
         exists: false
       - file: "{project}/AGENTS.md"

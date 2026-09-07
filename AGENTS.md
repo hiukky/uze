@@ -390,10 +390,18 @@ properties):
   the generated Antigravity plugin, the owned OpenCode bridge) is
   receipt-owned, content-identity inspected, and never touches foreign
   hooks/plugins/order.
-- **Package vs. project context are independent**: `uze add`/`remove`/
-  `update`/`market`/`plugin`/`harness` are machine-scoped (`~/.uze`);
-  `uze context inspect|plan|reconcile` are project-scoped. Neither touches
-  the other's state — see `docs/adr/019-explicit-project-machine-boundary-in-cli-command-grammar.md`.
+- **Machine and project scope are independent**: `uze setup`, `uze doctor`,
+  `uze theme`, `uze market …` and `uze plugin …` are machine-scoped
+  (`~/.uze`); `uze <plugin>@<market>`, `uze install`, `uze remove`,
+  `uze status` and `uze context inspect|plan|reconcile` are project-scoped
+  (`agents.yaml`, `agents.lock`, `AGENTS.md`). Neither touches the other's
+  state — see `docs/adr/019-explicit-project-machine-boundary-in-cli-command-grammar.md`.
+- **`agents.yaml` is authored, `agents.lock` is derived**: the manifest holds
+  what the project declared (marketplaces, plugins, the `worktrees:` policy);
+  the lock holds only what resolving it produced — a commit per marketplace and
+  a digest per package — so it is regenerated, never repaired, and deleting it
+  loses nothing. A marketplace is a Git repository whether it is spelled as a
+  URL or as a local path.
 - **Native > Generated Native > Safe Adaptation > Unsupported** delivery
   precedence per capability per harness. "Native" means the harness offers
   an officially supported mechanism preserving canonical semantics — not
