@@ -711,7 +711,7 @@ pub(super) fn render_sidebar(
                 ];
                 if let Some((mark, hue)) = model
                     .tab_task(tab.id)
-                    .and_then(|task| task_mark(&task.state))
+                    .and_then(|task| task_mark(&model.drawn_state(task)))
                 {
                     push_trailing_mark(&mut spans, hits, label_rect, &mark, hue);
                 }
@@ -1311,6 +1311,12 @@ pub(super) fn task_mark(state: &TaskStateView) -> Option<(String, Color)> {
         TaskStateView::Running | TaskStateView::Closed => return None,
         TaskStateView::Uncommitted => (Symbol::PlusMinus, theme::color(Token::StateInfo)),
         TaskStateView::Ready => (Symbol::ArrowShift, theme::color(Token::Accent)),
+        // The one mark that points away from UZE, because the work does:
+        // it is on the forge, and what happens to it next happens there.
+        // Muted for the same reason the button is — nothing is being asked
+        // of the operator — and deliberately not `Integrated`'s arrow,
+        // which claims the work is in the target.
+        TaskStateView::Published => (Symbol::ArrowExternal, theme::color(Token::StatePublished)),
         TaskStateView::Integrating => (Symbol::Ellipsis, theme::color(Token::StateInFlight)),
         // Split, where one warning mark used to cover both: a paused rebase
         // wants your hands in the slot, a failed gate wants the code fixed —
@@ -1392,9 +1398,14 @@ pub(super) fn render_status_catalog(
             "commits ahead on a clean tree — deliverable",
         ),
         (
+            TaskStateView::Published,
+            "published",
+            "on the remote, level with it — with its reviewer",
+        ),
+        (
             TaskStateView::Integrating,
             "delivering",
-            "delivery in progress",
+            "the rebase, the gate and the push, in flight",
         ),
         (
             TaskStateView::Conflicted { files: Vec::new() },
@@ -1714,22 +1725,22 @@ fn draw_chip(frame: &mut ratatui::Frame<'_>, rect: Rect, text: &str, hue: Color,
 /// to fast-forward the target under you, open a pull request, or do
 /// nothing to anything but the branch — the one question an operator has
 /// before pressing it (see [`delivery_ending`]).
-fn deliver_button(task: &TaskView) -> Option<(String, Color, bool)> {
-    match &task.state {
-        TaskStateView::Ready => Some(match task.unsynced {
-            // Level with what was published: pressing sends nothing new,
-            // so the button reports the sync instead of counting commits
-            // the request already carries. It stays pressable — the target
-            // moves, and a re-sync is how the branch follows it.
-            Some(0) => (
-                format!(
-                    "{} {}",
-                    theme::glyph(Symbol::MarkOfficial),
-                    delivery_ending(task)
-                ),
-                theme::color(Token::TextMuted),
-                true,
+fn deliver_button(task: &TaskView, state: &TaskStateView) -> Option<(String, Color, bool)> {
+    match state {
+        // Level with what was published: pressing sends nothing new, so
+        // the button reports the sync instead of counting commits the
+        // request already carries. It stays pressable — the target moves,
+        // and a re-sync is how the branch follows it.
+        TaskStateView::Published => Some((
+            format!(
+                "{} {}",
+                theme::glyph(Symbol::MarkOfficial),
+                delivery_ending(task)
             ),
+            theme::color(Token::TextMuted),
+            true,
+        )),
+        TaskStateView::Ready => Some(match task.unsynced {
             // What a press would send, which is not how far the branch is
             // from the target: that distance is the merge's question and
             // stays open until the request lands.
@@ -1822,14 +1833,19 @@ pub(super) fn render_preserved(
     }
     for (index, (_, task)) in preserved.iter().enumerate() {
         let selected = index == overlay.selected;
-        let (mark, hue) = task_mark(&task.state)
+        let state = model.drawn_state(task);
+        let (mark, hue) = task_mark(&state)
             .unwrap_or_else(|| (theme::glyph(Symbol::MarkDot), theme::color(Token::TextDim)));
-        let what = match &task.state {
+        let what = match &state {
             TaskStateView::Ready => format!(
                 "{} commit{}, not delivered",
                 task.ahead,
                 if task.ahead == 1 { "" } else { "s" }
             ),
+            TaskStateView::Published => match task.published_request {
+                Some(request) => format!("pushed to #{request}"),
+                None => "pushed, no request open".to_owned(),
+            },
             TaskStateView::Parked if task.checkout.is_none() => format!(
                 "checkout removed, {} commit{} kept",
                 task.ahead,
@@ -2228,7 +2244,7 @@ pub(super) fn render_tab_strip(
     // to find again.
     if let Some(tab) = model.selected_tab()
         && let Some(task) = model.tab_task(tab)
-        && let Some((text, hue, clickable)) = deliver_button(task)
+        && let Some((text, hue, clickable)) = deliver_button(task, &model.drawn_state(task))
     {
         let rect = chip_rect(&text, trailing_right, inner.y);
         let hit = clickable.then_some(WorkspaceHit::Deliver(tab));

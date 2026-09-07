@@ -87,6 +87,11 @@ vocabulary! {
         /// Work that landed. Its own hue for the same reason: delivered work
         /// is not a badge.
         StateLanded = "state.landed",
+        /// Work that has left the machine and is with whoever reviews it.
+        /// Its own hue for the same reason as the two above — and a
+        /// deliberately quiet one, because unlike every other state a slot
+        /// can be in, this one asks nothing of the person reading it.
+        StatePublished = "state.published",
         /// The wash behind an added line in a diff.
         StateDiffAdded = "state.diff-added",
         /// The wash behind a removed line in a diff.

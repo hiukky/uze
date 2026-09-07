@@ -30,6 +30,7 @@
     "state.info": "#7d97c9",
     "state.in-flight": "#7dbec2",
     "state.landed": "#a38fc9",
+    "state.published": "#8a94a6",
     "state.diff-added": "@state.success/1a",
     "state.diff-removed": "@state.danger/1a",
 

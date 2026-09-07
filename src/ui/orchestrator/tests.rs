@@ -988,7 +988,7 @@ mod workspace_tests {
     /// already carried all six — a merge's question asked of a sync.
     #[test]
     fn a_branch_level_with_its_request_reports_the_sync_instead_of_a_count() {
-        let mut model = agent_with_task(TaskStateView::Ready, 6);
+        let mut model = agent_with_task(TaskStateView::Published, 6);
         for task in model.tasks.values_mut().flatten() {
             task.completion = CompletionBehavior::Pr;
             task.published_as = Some("fix-auth-redirect".into());
@@ -1011,11 +1011,76 @@ mod workspace_tests {
         // Two commits later the button counts those two, not the six the
         // request has carried since the last sync.
         for task in model.tasks.values_mut().flatten() {
+            task.state = TaskStateView::Ready;
             task.unsynced = Some(2);
         }
         let (behind_by_two, _) = tab_strip(&model);
         let behind_by_two = behind_by_two.join("\n");
         assert!(behind_by_two.contains("⇧2 #20"), "{behind_by_two}");
+    }
+
+    /// The sidebar and the header answer the same question, so they had
+    /// better answer it the same way. Reading only `Ready`, the row went
+    /// on wearing the "there is work to hand over" mark for the whole life
+    /// of an open request, one column away from a button that had already
+    /// stopped saying it.
+    #[test]
+    fn a_published_task_is_marked_as_gone_not_as_waiting_to_be_delivered() {
+        let mut model = agent_with_task(TaskStateView::Published, 6);
+        for task in model.tasks.values_mut().flatten() {
+            task.completion = CompletionBehavior::Pr;
+            task.published_request = Some(20);
+            task.unsynced = Some(0);
+        }
+        let rows = sidebar_rows(&model, &mut Vec::new());
+        let name_row = rows
+            .iter()
+            .find(|row| row.contains("Agent"))
+            .expect("the agent names its own row");
+        let (published, _) = task_mark(&TaskStateView::Published).expect("published is marked");
+        let (ready, _) = task_mark(&TaskStateView::Ready).expect("ready is marked");
+        assert!(
+            name_row.contains(&published) && !name_row.contains(&ready),
+            "the work is with its reviewer, not waiting on the operator: {name_row}"
+        );
+    }
+
+    /// The one state no evaluation can ever report: `Integrating` is set
+    /// in memory by `landing::deliver` and overwritten by the outcome
+    /// before the store is saved, so a surface reading only the record
+    /// showed `ready` for the whole delivery — a gate may take half an
+    /// hour. The client that started it is the party that knows.
+    #[test]
+    fn a_delivery_in_flight_is_drawn_from_the_client_that_started_it() {
+        let mut model = agent_with_task(TaskStateView::Ready, 3);
+        let task = model
+            .tasks
+            .values()
+            .flatten()
+            .next()
+            .expect("the fixture has a task")
+            .clone();
+        assert_eq!(model.drawn_state(&task), TaskStateView::Ready);
+
+        model.delivery_pending.insert(task.id.clone());
+        assert_eq!(model.drawn_state(&task), TaskStateView::Integrating);
+
+        let (delivering, _) = task_mark(&TaskStateView::Integrating).expect("delivering is marked");
+        let rows = sidebar_rows(&model, &mut Vec::new());
+        assert!(
+            rows.iter().any(|row| row.contains(&delivering)),
+            "the row says a delivery is running: {rows:?}"
+        );
+
+        let (strip, hits) = tab_strip(&model);
+        let strip = strip.join("\n");
+        assert!(strip.contains("delivering"), "{strip}");
+        assert!(
+            !hits
+                .iter()
+                .any(|(_, hit)| matches!(hit, WorkspaceHit::Deliver(_))),
+            "and it cannot be pressed again while it runs"
+        );
     }
 
     fn label_every_tab(model: &mut WorkspaceModel, label: &str) {
@@ -1249,6 +1314,7 @@ mod workspace_tests {
             TaskStateView::Running,
             TaskStateView::Uncommitted,
             TaskStateView::Ready,
+            TaskStateView::Published,
             TaskStateView::Integrating,
             TaskStateView::Conflicted {
                 files: vec![PathBuf::from("src/lib.rs")],
@@ -1723,6 +1789,7 @@ mod workspace_tests {
             "idle",
             "uncommitted",
             "ready",
+            "published",
             "delivering",
             "conflict",
             "checks failed",

@@ -1006,6 +1006,9 @@ impl TaskView {
         let published = (completion == CompletionBehavior::Pr)
             .then(|| landing::publication(primary, task))
             .flatten();
+        let unsynced = published
+            .as_ref()
+            .map(|published| checkout::commits_ahead(primary, &published.tip, &task.branch));
         Self {
             id: task.id.as_str().to_owned(),
             label: task.label.clone(),
@@ -1016,17 +1019,31 @@ impl TaskView {
                 .checkout
                 .as_ref()
                 .map(|checkout| checkout.as_str().to_owned()),
-            state: TaskStateView::from(&task.state),
+            state: publication_state(&task.state, unsynced),
             completion,
             ahead: checkout::commits_ahead(primary, &task.base_commit, &task.branch),
-            published_as: published.as_ref().map(|published| published.branch.clone()),
+            published_as: published.map(|published| published.branch),
             published_request: task.published_request,
-            unsynced: published
-                .as_ref()
-                .map(|published| checkout::commits_ahead(primary, &published.tip, &task.branch)),
+            unsynced,
             created_at_unix: task.created_at_unix,
         }
     }
+}
+
+/// The state a task reads as once what the remote holds is folded in.
+///
+/// `Ready` alone answers "the branch holds commits its base lacks", which
+/// stops being the interesting question the moment the branch is on the
+/// remote: from then on what every surface needs to say is whether
+/// anything is still waiting to be handed over. Only where the completion
+/// publishes — `published` is `None` everywhere else, and the record's own
+/// state stands.
+fn publication_state(state: &TaskState, unsynced: Option<usize>) -> TaskStateView {
+    let view = TaskStateView::from(state);
+    if view == TaskStateView::Ready && unsynced == Some(0) {
+        return TaskStateView::Published;
+    }
+    view
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1034,6 +1051,17 @@ pub enum TaskStateView {
     Running,
     Uncommitted,
     Ready,
+    /// The branch is on the remote and carries nothing the remote lacks:
+    /// the work is with whoever reviews it, not with the operator.
+    ///
+    /// A view of `Ready`, not a record of its own — `Ready` is still what
+    /// the branch holds, and pressing deliver still syncs it as the target
+    /// moves. It is a state here because "there is work to hand over" and
+    /// "the work is handed over" are the two things every surface has to
+    /// tell apart, and a surface that reads only `Ready` cannot: the
+    /// sidebar went on marking a task deliverable for the whole life of an
+    /// open request.
+    Published,
     Integrating,
     Conflicted {
         files: Vec<PathBuf>,
@@ -1047,8 +1075,11 @@ pub enum TaskStateView {
 
 impl TaskStateView {
     /// Whether delivery may be offered for a task in this state.
+    ///
+    /// `Published` included: the request is level with the branch, but the
+    /// target moves, and a re-sync is how the branch follows it.
     pub fn is_deliverable(&self) -> bool {
-        matches!(self, Self::Ready | Self::GateFailed)
+        matches!(self, Self::Ready | Self::Published | Self::GateFailed)
     }
 
     /// Why delivery is refused, for a state where it is — `None` for the
@@ -1064,7 +1095,7 @@ impl TaskStateView {
     /// tab already carry everything the sentence would repeat.
     pub fn undeliverable_reason(&self) -> Option<&'static str> {
         match self {
-            Self::Ready | Self::GateFailed => None,
+            Self::Ready | Self::Published | Self::GateFailed => None,
             Self::Running => Some("nothing committed"),
             Self::Uncommitted => Some("uncommitted changes"),
             Self::Conflicted { .. } => Some("rebase paused"),
@@ -1960,6 +1991,16 @@ mod task_service_tests {
         assert_eq!(synced.published_as.as_deref(), Some(synced.branch.as_str()));
         assert_eq!(synced.unsynced, Some(0), "nothing left to send");
         assert_eq!(
+            synced.state,
+            TaskStateView::Published,
+            "the work is with its reviewer, not waiting to be handed over"
+        );
+        assert_eq!(
+            synced.state.undeliverable_reason(),
+            None,
+            "and a re-sync still follows a target that moves"
+        );
+        assert_eq!(
             synced.published_request,
             Some(12),
             "the request the agent opened is this branch's request"
@@ -1967,10 +2008,16 @@ mod task_service_tests {
 
         agent_commits(&repository, &slot, "b.rs", "");
         app.workspace().evaluate_tasks(&root, &[]);
+        let behind = view_of(&app, &root, &id);
         assert_eq!(
-            view_of(&app, &root, &id).unsynced,
+            behind.unsynced,
             Some(1),
             "and a commit made after that push is one commit to sync"
+        );
+        assert_eq!(
+            behind.state,
+            TaskStateView::Ready,
+            "which puts the work back in the operator's hands"
         );
     }
 
@@ -1997,6 +2044,7 @@ mod task_service_tests {
         let view = view_of(&app, &root, &id);
         assert_eq!(view.published_as, None);
         assert_eq!(view.unsynced, None, "the merge has not happened");
+        assert_eq!(view.state, TaskStateView::Ready, "so it is still to do");
         assert_eq!(view.ahead, 1, "and that is what it would land");
     }
 
