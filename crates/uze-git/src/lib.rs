@@ -59,6 +59,7 @@ use std::{
 };
 
 mod lock;
+pub mod repository;
 
 /// How long a write waits for the lock before giving up. Long enough for a
 /// rebase or a fetch in another process, short enough that a hung holder

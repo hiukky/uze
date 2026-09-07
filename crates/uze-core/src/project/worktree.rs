@@ -270,16 +270,7 @@ impl WorktreePolicy {
 /// stable answer to "which repository is this", which is what the slot
 /// layout is scoped to.
 pub fn primary_checkout(cwd: &Path) -> Option<PathBuf> {
-    let common = PathBuf::from(
-        uze_git::read(
-            cwd,
-            &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-        )
-        .ok()?
-        .successful()
-        .ok()?
-        .trim(),
-    );
+    let common = uze_git::repository::common_dir(cwd).ok()?;
     // `<primary>/.git` for an ordinary checkout; a bare repository has no
     // working tree to seat anyone in.
     common

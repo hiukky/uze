@@ -11,6 +11,11 @@
 
 use std::path::Path;
 
+/// The one Git question this host answers from memory rather than by
+/// running Git. Spelled once, so the interception below and the reason for
+/// it cannot drift apart.
+const SHOW_TOPLEVEL_ARGS: [&str; 2] = ["rev-parse", "--show-toplevel"];
+
 /// The workspace client's grant. Zero-sized: the capabilities are the
 /// host's own, not per-extension state.
 pub(crate) struct WorkspaceHost;
@@ -22,6 +27,14 @@ impl uze_extensions::Host for WorkspaceHost {
     /// Exit `1` is an answer rather than a failure: `git diff` uses it for
     /// "there are differences", which is the ordinary case here.
     fn git(&self, root: &Path, args: &[&str]) -> Result<String, String> {
+        // "Which working tree is this" cannot change under a path that is
+        // still there, and the change badge asks it on every refresh — a
+        // quarter of the Git processes a session spawns were this one
+        // question. `uze-git` remembers it; everything else is asked of Git
+        // as written, because everything else can have changed since.
+        if args == [SHOW_TOPLEVEL_ARGS[0], SHOW_TOPLEVEL_ARGS[1]] {
+            return uze_git::repository::root(root).map(|found| format!("{}\n", found.display()));
+        }
         uze_git::read(root, args)
             .map_err(|error| error.to_string())?
             .or_exit(1)

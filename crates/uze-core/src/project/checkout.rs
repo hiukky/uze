@@ -845,14 +845,8 @@ fn modified_at(path: &Path) -> SystemTime {
 /// primary's status stays exactly what the operator left, and `git add -A`
 /// there never sweeps a slot in as an embedded repository. Idempotent.
 pub fn exclude_isolation_directory(primary: &Path) -> Result<(), AcquireError> {
-    let common = uze_git::read(
-        primary,
-        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-    )
-    .map_err(|error| AcquireError::Git(error.to_string()))?
-    .successful()
-    .map_err(AcquireError::Git)?;
-    let exclude = PathBuf::from(common.trim()).join("info").join("exclude");
+    let common = uze_git::repository::common_dir(primary).map_err(AcquireError::Git)?;
+    let exclude = common.join("info").join("exclude");
     let entry = format!("/{WORKTREES_DIRECTORY}/");
     let current = fs::read_to_string(&exclude).unwrap_or_default();
     if current.lines().any(|line| {
