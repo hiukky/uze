@@ -184,7 +184,24 @@ class World:
             "uze_home": str(self.uze_home),
             "project": str(self.project),
             "repo": str(REPO),
+            "shell_rc": str(self.home / shell_rc_name()),
         }
+
+
+def shell_rc_name() -> str:
+    """The startup file the world's shell actually reads on this platform.
+
+    The world runs bash, and bash reads `.bashrc` for an interactive
+    non-login shell and `.bash_profile` for a login one. On Linux a terminal
+    opens the former; on macOS every terminal window is a login shell, so
+    that is the file UZE writes its `PATH` line into there — and a journey
+    asserting `.bashrc` on a Mac would be asserting the wrong file, not
+    finding a bug.
+
+    A journey says `{shell_rc}` and means "wherever this shell reads its
+    startup from", which is the claim it actually wants to make.
+    """
+    return ".bash_profile" if sys.platform == "darwin" else ".bashrc"
 
 
 def standin_binary() -> Path:

@@ -245,6 +245,15 @@ stops every process its world started — the terminal server is a daemon by
 design, and waiting for it to actually exit is what keeps the next run from
 connecting to a socket that is about to die.
 
+A journey addresses the world through `{world}`, `{home}`, `{uze_home}`,
+`{project}`, `{repo}` and `{uze}` — plus `{shell_rc}`, which is the file the
+world's shell actually reads its startup from. That one is a placeholder
+rather than a path because the answer differs by platform: bash reads
+`.bashrc` for the interactive non-login shell a Linux terminal opens, and
+`.bash_profile` for the login shell every macOS terminal window is. A journey
+naming either directly would assert the wrong file on one of the two, and
+report a bug that is not there.
+
 ## Harness stand-ins
 
 A stand-in is a shell script named after the harness binary, because

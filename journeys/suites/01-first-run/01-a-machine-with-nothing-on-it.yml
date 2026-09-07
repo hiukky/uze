@@ -97,7 +97,7 @@ scenes:
       - link: "{uze_home}/shims/*"
         resolves_to: uze
         about: each shim is a symlink to UZE's own binary, not a copy of a vendor's
-      - file: "{home}/.bashrc"
+      - file: "{shell_rc}"
         contains: "{uze_home}/shims"
         about: and the shim directory is what was added to the shell's PATH
 
