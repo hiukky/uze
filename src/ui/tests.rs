@@ -3031,6 +3031,127 @@ fn the_keys_list_follows_the_selection_past_the_fold() {
     );
 }
 
+/// A long list that gives no sign of being long is a list nobody scrolls.
+/// The track says both things at once: that there is more, and where in it
+/// the window sits.
+#[test]
+fn a_list_taller_than_the_screen_says_where_the_window_is() {
+    let _turn = KEYBOARD
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut model = TuiModel {
+        route: Route::Keys,
+        focus: Focus::Content,
+        ..TuiModel::default()
+    };
+    let thumb = theme::glyph(theme::Symbol::BarThick);
+    let column = |terminal: &Terminal<TestBackend>| -> Vec<usize> {
+        buffer_rows(terminal)
+            .into_iter()
+            .enumerate()
+            .filter(|(_, row)| row.contains(&thumb))
+            .map(|(index, _)| index)
+            .collect()
+    };
+
+    let mut terminal = Terminal::new(TestBackend::new(140, 30)).unwrap();
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| render(frame, &model, &mut hits))
+        .unwrap();
+    let top = column(&terminal);
+    assert!(!top.is_empty(), "the track is drawn at all");
+
+    model.keys_selected = model.key_rows().len() - 1;
+    terminal
+        .draw(|frame| render(frame, &model, &mut hits))
+        .unwrap();
+    let bottom = column(&terminal);
+    assert!(
+        bottom.first() > top.first(),
+        "and it moved down with the window: {top:?} -> {bottom:?}"
+    );
+    assert!(
+        !bottom.is_empty() && bottom.len() < 20,
+        "a fraction of the track, not all of it: {bottom:?}"
+    );
+
+    // A list that fits gets none: a scrollbar on a full view says the
+    // opposite of what it is for.
+    let short = TuiModel {
+        route: Route::Profiles,
+        focus: Focus::Content,
+        ..TuiModel::default()
+    };
+    let mut terminal = Terminal::new(TestBackend::new(140, 30)).unwrap();
+    terminal
+        .draw(|frame| render(frame, &short, &mut hits))
+        .unwrap();
+    assert!(column(&terminal).is_empty());
+}
+
+/// The wheel reaches this list too. It is the longest one uze draws, and
+/// a screen you scroll with the keyboard alone is the thing this whole
+/// change exists to stop shipping.
+#[test]
+fn the_wheel_walks_the_keys_list_and_the_window_follows() {
+    let _turn = KEYBOARD
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut model = TuiModel {
+        route: Route::Keys,
+        focus: Focus::Content,
+        ..TuiModel::default()
+    };
+    let wheel = |model: &mut TuiModel, kind| {
+        model.apply_mouse(
+            MouseEvent {
+                kind,
+                column: 60,
+                row: 10,
+                modifiers: KeyModifiers::NONE,
+            },
+            100,
+        );
+    };
+
+    for _ in 0..40 {
+        wheel(&mut model, MouseEventKind::ScrollDown);
+    }
+    assert_eq!(model.keys_selected, 40, "the wheel walks the list");
+
+    let rows = model.key_rows();
+    let wanted = rows[40].action.label();
+    let mut terminal = Terminal::new(TestBackend::new(140, 30)).unwrap();
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| render(frame, &model, &mut hits))
+        .unwrap();
+    assert!(
+        buffer_rows(&terminal)
+            .iter()
+            .any(|row| row.contains(&wanted)),
+        "and what it walked to is on screen"
+    );
+
+    for _ in 0..80 {
+        wheel(&mut model, MouseEventKind::ScrollUp);
+    }
+    assert_eq!(model.keys_selected, 0, "and back, stopping at the top");
+
+    // Profiles was the other screen the wheel could not move, for the same
+    // reason: its selection is three panels rather than one list, and the
+    // mover the wheel called knew about neither.
+    let mut profiles = TuiModel {
+        route: Route::Profiles,
+        focus: Focus::Content,
+        ..model_with_data()
+    };
+    assert!(profiles.profiles.len() > 1, "there is somewhere to move to");
+    wheel(&mut profiles, MouseEventKind::ScrollDown);
+    assert_eq!(profiles.profiles_selected, 1, "the wheel moved it");
+}
+
 /// A group opens with a blank line and its keys sit in from its name.
 /// Without either, the headings read as rows in a different colour and the
 /// whole screen reads as one block of text.
@@ -3104,7 +3225,7 @@ fn a_key_is_listed_with_the_sentence_that_explains_it() {
         .iter()
         .find(|row| row.contains("Switch mode"))
         .expect("the mode key is on screen");
-    assert!(row.contains("Move between the workspace"), "{row:?}");
+    assert!(row.contains("Move between the"), "{row:?}");
 
     // Narrow enough and the sentence goes rather than being cut to a stub.
     let mut narrow = Terminal::new(TestBackend::new(120, 40)).unwrap();

@@ -100,7 +100,30 @@ pub(crate) fn render_keys(
         // — the selection walked off the bottom and nothing followed it.
         // It stays at the top until the selection passes the middle, so
         // reading down from the first row does not move the page.
+        // A column for the track, but only when there is more list than
+        // screen: a scrollbar on a list that fits says the opposite of
+        // what it is for.
+        let track_width = theme::width(Symbol::BarThick)
+            .max(theme::width(Symbol::BarThin))
+            .max(1);
         let height = usize::from(list_area.height);
+        let track = (entries.len() > height).then(|| {
+            Rect::new(
+                list_area.right().saturating_sub(track_width),
+                list_area.y,
+                track_width,
+                list_area.height,
+            )
+        });
+        let list_area = match track {
+            Some(_) => Rect::new(
+                list_area.x,
+                list_area.y,
+                list_area.width.saturating_sub(track_width + 1),
+                list_area.height,
+            ),
+            None => list_area,
+        };
         let anchor = entries
             .iter()
             .position(
@@ -141,6 +164,10 @@ pub(crate) fn render_keys(
                     hits.push((rect, Hit::KeyRow(*index)));
                 }
             }
+        }
+
+        if let Some(track) = track {
+            render_track(frame, track, first, height, entries.len());
         }
     }
 
@@ -265,6 +292,50 @@ struct Columns {
     label: usize,
     yours: Option<usize>,
     width: u16,
+}
+
+/// Where in the list the window sits, as a bar down the right edge.
+///
+/// Not a control — it is drawn, never hit — because the wheel and the
+/// arrow keys already move the window and a third way to do it would be
+/// three things to keep agreeing. What it answers is the question a long
+/// list cannot answer by itself: whether there is more, and how much.
+fn render_track(
+    frame: &mut ratatui::Frame<'_>,
+    track: Rect,
+    first: usize,
+    shown: usize,
+    total: usize,
+) {
+    let height = usize::from(track.height);
+    if height == 0 || total == 0 {
+        return;
+    }
+    // The thumb is the visible fraction, floored at one row so it never
+    // vanishes on a list long enough to make the fraction round to
+    // nothing — which is exactly the list that most needs it.
+    let thumb = (shown * height / total).clamp(1, height);
+    let travel = height - thumb;
+    let span = total.saturating_sub(shown);
+    let top = (first * travel).checked_div(span).unwrap_or(0);
+    for row in 0..height {
+        let here = row >= top && row < top + thumb;
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                theme::glyph(if here {
+                    Symbol::BarThick
+                } else {
+                    Symbol::BarThin
+                }),
+                theme::fg(if here {
+                    Token::BorderDefault
+                } else {
+                    Token::BorderFaint
+                }),
+            )),
+            Rect::new(track.x, track.y + row as u16, track.width, 1),
+        );
+    }
 }
 
 fn mark(selected: bool) -> Symbol {

@@ -117,7 +117,10 @@ macro_rules! actions {
                 match self {
                     $(Action::$variant => $description.to_owned(),)*
                     Action::SelectTab(index) => {
-                        format!("Select the {index}th tab on the strip")
+                        format!(
+                            "Select tab {index} on the strip: the agent in front of \
+                             you and the shells opened alongside it"
+                        )
                     }
                 }
             }

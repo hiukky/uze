@@ -574,41 +574,19 @@ impl TuiModel {
                 self.dragging_panel = None;
                 Intent::None
             }
-            MouseEventKind::ScrollDown
-                if self.overlay == Overlay::None
-                    && self.route == Route::Overview
-                    && !self.prompt_history.is_empty() =>
-            {
-                self.focus = Focus::Content;
-                self.move_prompt_selection(1);
-                Intent::None
-            }
-            MouseEventKind::ScrollUp
-                if self.overlay == Overlay::None
-                    && self.route == Route::Overview
-                    && !self.prompt_history.is_empty() =>
-            {
-                self.focus = Focus::Content;
-                self.move_prompt_selection(-1);
-                Intent::None
-            }
+            // The wheel walks whatever the arrow keys walk. It used to
+            // call a narrower mover that knew only three of the screens,
+            // so on Keys — by far the longest list uze draws — and on
+            // Profiles the wheel did nothing at all, and the only way down
+            // the page was the keyboard. Which is the shape of thing this
+            // whole mechanism exists to stop shipping.
             MouseEventKind::ScrollDown if self.overlay == Overlay::None => {
                 self.focus = Focus::Content;
-                self.move_selection(1);
-                if self.route == Route::Plugins {
-                    self.marketplace_inspect_intent()
-                } else {
-                    Intent::None
-                }
+                self.move_by(1)
             }
             MouseEventKind::ScrollUp if self.overlay == Overlay::None => {
                 self.focus = Focus::Content;
-                self.move_selection(-1);
-                if self.route == Route::Plugins {
-                    self.marketplace_inspect_intent()
-                } else {
-                    Intent::None
-                }
+                self.move_by(-1)
             }
             MouseEventKind::Moved if self.overlay == Overlay::None => {
                 // One read of the hit list answers every hover the chrome
