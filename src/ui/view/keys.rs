@@ -168,6 +168,7 @@ pub(crate) fn render_keys(
 
         if let Some(track) = track {
             render_track(frame, track, first, height, entries.len());
+            hits.push((track, Hit::KeysTrack(track)));
         }
     }
 
@@ -221,17 +222,21 @@ fn row_line(model: &TuiModel, row: &KeyRow, index: usize, columns: Columns) -> L
     }
     let label_text = row.action.label();
     // Indented under the heading, which is what makes a heading read as
-    // one rather than as another row in a different colour.
+    // one rather than as another row in a different colour. The marker's
+    // column is reserved on every row and carried on one — the shape the
+    // Overview's own list uses, where a bullet against every entry was
+    // texture the eye had to look past to find the one that mattered.
+    let marker = if selected {
+        Span::styled(
+            format!("{} ", theme::glyph(Symbol::Prompt)),
+            theme::fg(Token::Accent),
+        )
+    } else {
+        Span::raw(" ".repeat(marker_width()))
+    };
     let mut spans = vec![
         Span::raw(INDENT),
-        Span::styled(
-            format!("{} ", theme::glyph(mark(selected))),
-            theme::fg(if selected {
-                Token::Accent
-            } else {
-                Token::TextDim
-            }),
-        ),
+        marker,
         Span::styled(key, theme::fg_bold(key_colour)),
         Span::styled(GUTTER, theme::fg(Token::TextDim)),
         Span::styled(
@@ -239,12 +244,7 @@ fn row_line(model: &TuiModel, row: &KeyRow, index: usize, columns: Columns) -> L
             label,
         ),
     ];
-    let used = INDENT.len()
-        + usize::from(theme::width(mark(selected)))
-        + 1
-        + key_width
-        + GUTTER.len()
-        + columns.label;
+    let used = INDENT.len() + marker_width() + key_width + GUTTER.len() + columns.label;
     let room = usize::from(columns.width)
         .saturating_sub(used + GUTTER.len() + columns.yours.unwrap_or(0) + INDENT.len());
     // A sentence only when there is room for one worth reading — half of
@@ -273,6 +273,20 @@ fn row_line(model: &TuiModel, row: &KeyRow, index: usize, columns: Columns) -> L
             theme::fg(Token::StateInfo),
         ));
     }
+    // The selected row is a filled band the width of the list, not a
+    // brighter word inside it — the same treatment every other list in
+    // this mode gives its selection, and the reason one is findable
+    // without reading it.
+    if selected {
+        for span in &mut spans {
+            span.style = span.style.bg(theme::color(Token::SurfaceSelected));
+        }
+        let drawn: usize = spans.iter().map(|span| span.width()).sum();
+        spans.push(Span::styled(
+            " ".repeat(usize::from(columns.width).saturating_sub(drawn)),
+            theme::bg(Token::SurfaceSelected),
+        ));
+    }
     Line::from(spans)
 }
 
@@ -296,10 +310,15 @@ struct Columns {
 
 /// Where in the list the window sits, as a bar down the right edge.
 ///
-/// Not a control — it is drawn, never hit — because the wheel and the
-/// arrow keys already move the window and a third way to do it would be
-/// three things to keep agreeing. What it answers is the question a long
-/// list cannot answer by itself: whether there is more, and how much.
+/// It answers the question a long list cannot answer by itself — whether
+/// there is more, and how much — and it takes the answer back: a click
+/// jumps there and a drag keeps jumping, which is the gesture anyone who
+/// has seen a scrollbar tries first. Drawing something that looks like a
+/// control and does nothing is worse than not drawing it.
+///
+/// It moves the selection rather than a scroll offset of its own, because
+/// the window is derived from the selection — so there is no second notion
+/// of where the page is that could disagree with the first.
 fn render_track(
     frame: &mut ratatui::Frame<'_>,
     track: Rect,
@@ -338,12 +357,11 @@ fn render_track(
     }
 }
 
-fn mark(selected: bool) -> Symbol {
-    if selected {
-        Symbol::StatusSelected
-    } else {
-        Symbol::MarkDot
-    }
+/// The marker column: the glyph plus the space after it. Reserved on every
+/// row, so a selection changes what is in the column and never where the
+/// keys after it start.
+fn marker_width() -> usize {
+    usize::from(theme::width(Symbol::Prompt)) + 1
 }
 
 fn render_filter_box(frame: &mut ratatui::Frame<'_>, area: Rect, model: &TuiModel) {

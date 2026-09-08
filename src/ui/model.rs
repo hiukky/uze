@@ -492,6 +492,10 @@ pub(crate) struct TuiModel {
     pub(crate) harness_drawer_width: Option<u16>,
     pub(crate) profile_columns_width: Option<u16>,
     pub(crate) dragging_panel: Option<ResizablePanel>,
+    /// The Keys list's scroll track while it is being dragged, kept from
+    /// the mousedown that armed it so every following drag maps against
+    /// the geometry the gesture started on.
+    pub(crate) dragging_keys_track: Option<Rect>,
 }
 
 impl Default for TuiModel {
@@ -562,6 +566,7 @@ impl Default for TuiModel {
             harness_drawer_width: layout.harness_drawer_width,
             profile_columns_width: layout.profile_columns_width,
             dragging_panel: None,
+            dragging_keys_track: None,
         }
     }
 }
@@ -1039,6 +1044,26 @@ impl TuiModel {
     /// terminal cannot send, and one that already means something else in
     /// the same keyboard. A screen that let you lock yourself out would be
     /// worse than one that had no rebinding at all.
+    /// Where in the Keys list a point on its scroll track lands.
+    ///
+    /// The track is a picture of the whole list, so a position on it is a
+    /// position in the list — the top row is the first key, the bottom row
+    /// the last. The window itself is derived from the selection rather
+    /// than stored, so moving the selection is how the track moves the
+    /// page; there is no second notion of "where the page is" that could
+    /// disagree with the first.
+    pub(crate) fn scroll_keys_to(&mut self, track: Rect, row: u16) {
+        let last = self.key_rows().len().saturating_sub(1);
+        let travel = usize::from(track.height.saturating_sub(1));
+        if travel == 0 {
+            return;
+        }
+        let offset = usize::from(row.saturating_sub(track.y)).min(travel);
+        self.keys_selected = offset * last / travel;
+        self.keys_capture = false;
+        self.keys_problem = None;
+    }
+
     pub(crate) fn capture_chord(&mut self, chord: uze_keys::Chord) -> super::worker::Intent {
         let Some(row) = self.selected_key_row() else {
             self.keys_capture = false;

@@ -539,6 +539,12 @@ impl TuiModel {
                 }
                 Intent::None
             }
+            MouseEventKind::Drag(MouseButton::Left)
+                if let Some(track) = self.dragging_keys_track =>
+            {
+                self.scroll_keys_to(track, event.row);
+                Intent::None
+            }
             MouseEventKind::Drag(MouseButton::Left) if self.dragging_panel.is_some() => {
                 let sidebar_width = self
                     .sidebar_width
@@ -587,6 +593,7 @@ impl TuiModel {
             MouseEventKind::Up(MouseButton::Left) => {
                 self.dragging_sidebar = false;
                 self.dragging_panel = None;
+                self.dragging_keys_track = None;
                 Intent::None
             }
             // The wheel walks whatever the arrow keys walk. It used to

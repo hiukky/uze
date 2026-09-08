@@ -60,6 +60,13 @@ pub(crate) enum Hit {
     OfferedAction(uze_keys::Action),
     /// One line of the Keys screen.
     KeyRow(usize),
+    /// The Keys list's scroll track, carrying its own rectangle: a click
+    /// anywhere on it jumps there, and a drag keeps jumping while the
+    /// button is held. The rect travels with the hit because the drag has
+    /// to keep mapping rows to positions after the frame that drew it,
+    /// and re-deriving that geometry from the model is how a drag comes to
+    /// fight the mouse instead of tracking it.
+    KeysTrack(Rect),
     /// The Keys screen's "change this key" target — the next keystroke
     /// becomes the binding.
     CaptureKey,
@@ -292,6 +299,12 @@ impl TuiModel {
             // the guarded arms above already answered.
             Hit::RowMenuEntry(_) | Hit::ActionIndexEntry(_) => Intent::None,
             Hit::OfferedAction(action) => self.act(action),
+            Hit::KeysTrack(track) => {
+                self.dragging_keys_track = Some(track);
+                self.focus = Focus::Content;
+                self.scroll_keys_to(track, row);
+                Intent::None
+            }
             Hit::KeyRow(index) => {
                 self.keys_selected = index;
                 self.keys_capture = false;

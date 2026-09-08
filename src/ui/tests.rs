@@ -3077,6 +3077,121 @@ fn ctrl_and_an_arrow_walks_the_screens_from_wherever_you_are() {
     assert_eq!(model.focus, Focus::Content);
 }
 
+/// The selected key is a filled band the width of the list, the way every
+/// other list in this mode marks its selection — not a brighter word
+/// inside a row that otherwise looks like all the others.
+#[test]
+fn the_selected_key_is_a_band_across_the_list() {
+    let _turn = KEYBOARD
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut model = TuiModel {
+        route: Route::Keys,
+        focus: Focus::Content,
+        ..TuiModel::default()
+    };
+    model.keys_selected = 2;
+    let mut terminal = Terminal::new(TestBackend::new(140, 30)).unwrap();
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| render(frame, &model, &mut hits))
+        .unwrap();
+
+    let (rect, _) = hits
+        .iter()
+        .find(|(_, hit)| *hit == Hit::KeyRow(2))
+        .expect("the selected key was drawn");
+    let buffer = terminal.backend().buffer();
+    let filled = (rect.x..rect.right())
+        .filter(|column| {
+            theme::token_of(buffer[(*column, rect.y)].bg) == Some(Token::SurfaceSelected)
+        })
+        .count();
+    assert_eq!(
+        filled,
+        usize::from(rect.width),
+        "every column of the row, not only the words on it"
+    );
+
+    let above = hits
+        .iter()
+        .find(|(_, hit)| *hit == Hit::KeyRow(1))
+        .expect("its neighbour was drawn too")
+        .0;
+    assert_ne!(
+        theme::token_of(buffer[(above.x, above.y)].bg),
+        Some(Token::SurfaceSelected),
+        "and only that row"
+    );
+}
+
+/// The track looks like a scrollbar, so it answers like one: a click jumps
+/// there and a drag keeps jumping. Something drawn as a control that does
+/// nothing is worse than not drawing it.
+#[test]
+fn the_track_can_be_dragged() {
+    let _turn = KEYBOARD
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut model = TuiModel {
+        route: Route::Keys,
+        focus: Focus::Content,
+        ..TuiModel::default()
+    };
+    let mut terminal = Terminal::new(TestBackend::new(140, 30)).unwrap();
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| render(frame, &model, &mut hits))
+        .unwrap();
+    model.hits = hits;
+    let track = model
+        .hits
+        .iter()
+        .find_map(|(rect, hit)| matches!(hit, Hit::KeysTrack(_)).then_some(*rect))
+        .expect("the track is a target");
+
+    // The bottom of the track is the bottom of the list, whatever it is.
+    let last = model.key_rows().len() - 1;
+    model.click(track.x, track.bottom() - 1);
+    assert_eq!(model.keys_selected, last);
+
+    // And it keeps answering while the button is held, without the row
+    // under the pointer having to be a target of its own.
+    let drag = |model: &mut TuiModel, row| {
+        model.apply_mouse(
+            MouseEvent {
+                kind: MouseEventKind::Drag(MouseButton::Left),
+                column: track.x,
+                row,
+                modifiers: KeyModifiers::NONE,
+            },
+            140,
+        );
+    };
+    drag(&mut model, track.y);
+    assert_eq!(model.keys_selected, 0, "back to the top");
+    drag(&mut model, track.y + track.height / 2);
+    assert!(
+        model.keys_selected > 0 && model.keys_selected < last,
+        "and to the middle: {}",
+        model.keys_selected
+    );
+
+    // Releasing ends the gesture — a later move must not still scroll.
+    model.apply_mouse(
+        MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: track.x,
+            row: track.y,
+            modifiers: KeyModifiers::NONE,
+        },
+        140,
+    );
+    let settled = model.keys_selected;
+    drag(&mut model, track.bottom() - 1);
+    assert_eq!(model.keys_selected, settled, "the drag was let go of");
+}
+
 /// A long list that gives no sign of being long is a list nobody scrolls.
 /// The track says both things at once: that there is more, and where in it
 /// the window sits.
@@ -3235,13 +3350,16 @@ fn a_group_of_keys_is_set_apart_from_the_one_above_it() {
         "a blank line opens it: {:?}",
         drawn[heading - 1]
     );
-    // The mark that opens a key's row, not its text: the text is past a
-    // key column that would make any row look indented.
+    // Where the row's own content begins, measured from the column the
+    // heading begins at — not from any one glyph, since the marker column
+    // is blank on every row but the selected one.
+    let inset = drawn[heading + 1]
+        .chars()
+        .skip(name)
+        .take_while(|glyph| *glyph == ' ')
+        .count();
     assert!(
-        column_of(
-            &drawn[heading + 1],
-            &crate::ui::theme::glyph(crate::ui::theme::Symbol::MarkDot)
-        ) > name,
+        inset > 0,
         "and its keys sit in from it: {:?} / {:?}",
         drawn[heading],
         drawn[heading + 1]
