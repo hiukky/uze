@@ -108,6 +108,11 @@ vocabulary! {
         MarkDot = "mark.dot",
         /// Multiplication/removal in a count or a label, not a button.
         MarkCross = "mark.cross",
+        /// The way to everything this screen can do, and the keys that
+        /// reach it. A mark rather than the word "help" because it is the
+        /// one control on screen whose meaning every reader already has,
+        /// and spelling it out spends the width of a label on it.
+        MarkHelp = "mark.help",
         /// Something new is created here.
         MarkSparkle = "mark.sparkle",
         /// Selectable, currently off.

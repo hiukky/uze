@@ -1504,6 +1504,42 @@ fn attachment_health_is_never_unknown_after_a_refresh() {
     );
 }
 
+/// The way into the index is a mark, and only the mark: it is the one
+/// control on screen whose meaning every reader already has, and the word
+/// beside it spent the width of a label saying it again. The footer's
+/// hints stop naming the same surface for the same reason.
+#[test]
+fn the_way_into_the_index_is_a_mark_and_is_named_once() {
+    let model = model_with_plugins(&["flow"]);
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| render(frame, &model, &mut hits))
+        .unwrap();
+    let footer = buffer_rows(&terminal)
+        .into_iter()
+        .rfind(|row| !row.trim().is_empty())
+        .expect("the footer is the last row with anything on it");
+    let mark = theme::glyph(theme::Symbol::MarkHelp);
+    assert!(
+        footer.contains(&mark),
+        "the mark is on the footer: {footer:?}"
+    );
+    assert!(
+        !footer.to_lowercase().contains("everything you can do"),
+        "and the hints no longer name what the mark already offers: {footer:?}"
+    );
+
+    let (rect, _) = hits
+        .iter()
+        .find(|(_, hit)| *hit == Hit::OfferedAction(uze_keys::Action::OpenActionIndex))
+        .expect("and it is a target, not decoration");
+    let mut model = model;
+    model.hits = hits.clone();
+    model.click(rect.x, rect.y);
+    assert!(matches!(model.overlay, Overlay::ActionIndex { .. }));
+}
+
 /// A hint names a key and what it does, and it asks the keymap for both.
 /// The strings this replaced were typed by hand — which is how the help
 /// overlay came to omit nine of the keys it was supposed to document.
@@ -2946,6 +2982,141 @@ fn the_keys_screen_rebinds_from_a_click_and_a_keystroke() {
             .any(|row| row.action == uze_keys::Action::NewShellTab && row.custom())
     );
     uze_keys::set_active(uze_keys::default_keymap().clone());
+}
+
+/// The list is long — a row per surface an action can be reached from —
+/// so the window follows the selection. It did not, and every key past the
+/// first screenful was invisible and unreachable at the same time.
+#[test]
+fn the_keys_list_follows_the_selection_past_the_fold() {
+    let _turn = KEYBOARD
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut model = TuiModel {
+        route: Route::Keys,
+        focus: Focus::Content,
+        ..TuiModel::default()
+    };
+    let rows = model.key_rows();
+    assert!(
+        rows.len() > 60,
+        "the premise: this list is far taller than any terminal"
+    );
+    let last = rows.len() - 1;
+    model.keys_selected = last;
+    let wanted = rows[last].action.label();
+
+    let mut terminal = Terminal::new(TestBackend::new(140, 30)).unwrap();
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| render(frame, &model, &mut hits))
+        .unwrap();
+    let drawn = buffer_rows(&terminal);
+    assert!(
+        drawn.iter().any(|row| row.contains(&wanted)),
+        "the last key is on screen: {wanted}"
+    );
+    assert!(
+        hits.iter()
+            .any(|(_, hit)| *hit == crate::ui::hit::Hit::KeyRow(last)),
+        "and it is a target, so the mouse reaches it too"
+    );
+    // The heading it belongs under travels with it — a key on screen under
+    // no group is a key you cannot place.
+    assert!(
+        drawn
+            .iter()
+            .any(|row| row.contains(&rows[last].scope.heading().to_uppercase())),
+        "{drawn:#?}"
+    );
+}
+
+/// A group opens with a blank line and its keys sit in from its name.
+/// Without either, the headings read as rows in a different colour and the
+/// whole screen reads as one block of text.
+#[test]
+fn a_group_of_keys_is_set_apart_from_the_one_above_it() {
+    let _turn = KEYBOARD
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let model = TuiModel {
+        route: Route::Keys,
+        focus: Focus::Content,
+        ..TuiModel::default()
+    };
+    let mut terminal = Terminal::new(TestBackend::new(140, 40)).unwrap();
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| render(frame, &model, &mut hits))
+        .unwrap();
+    let drawn = buffer_rows(&terminal);
+    // Columns rather than byte offsets: these rows carry the sidebar's own
+    // glyphs, and half of them are more than one byte wide.
+    let column_of = |row: &str, needle: &str| {
+        row.find(needle)
+            .map(|byte| row[..byte].chars().count())
+            .unwrap_or_else(|| panic!("{needle} is not on {row:?}"))
+    };
+    let heading = drawn
+        .iter()
+        .position(|row| row.contains("MANAGEMENT"))
+        .expect("the second group is on screen");
+    let name = column_of(&drawn[heading], "MANAGEMENT");
+    let above: String = drawn[heading - 1].chars().skip(name).take(20).collect();
+    assert!(
+        above.trim().is_empty(),
+        "a blank line opens it: {:?}",
+        drawn[heading - 1]
+    );
+    // The mark that opens a key's row, not its text: the text is past a
+    // key column that would make any row look indented.
+    assert!(
+        column_of(
+            &drawn[heading + 1],
+            &crate::ui::theme::glyph(crate::ui::theme::Symbol::MarkDot)
+        ) > name,
+        "and its keys sit in from it: {:?} / {:?}",
+        drawn[heading],
+        drawn[heading + 1]
+    );
+}
+
+/// The list says what each action does, not only what it is called. The
+/// sentence lived in the drawer alone, which made the list a column of
+/// labels you had to open one at a time to read.
+#[test]
+fn a_key_is_listed_with_the_sentence_that_explains_it() {
+    let _turn = KEYBOARD
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let model = TuiModel {
+        route: Route::Keys,
+        focus: Focus::Content,
+        ..TuiModel::default()
+    };
+    let mut terminal = Terminal::new(TestBackend::new(160, 40)).unwrap();
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| render(frame, &model, &mut hits))
+        .unwrap();
+    let drawn = buffer_rows(&terminal);
+    let row = drawn
+        .iter()
+        .find(|row| row.contains("Switch mode"))
+        .expect("the mode key is on screen");
+    assert!(row.contains("Move between the workspace"), "{row:?}");
+
+    // Narrow enough and the sentence goes rather than being cut to a stub.
+    let mut narrow = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    let mut hits = Vec::new();
+    narrow
+        .draw(|frame| render(frame, &model, &mut hits))
+        .unwrap();
+    let row = buffer_rows(&narrow)
+        .into_iter()
+        .find(|row| row.contains("Switch mode"))
+        .expect("the mode key is still on screen");
+    assert!(!row.contains("Move between"), "{row:?}");
 }
 
 /// Everything that could be wrong with a key is said before anything is

@@ -682,21 +682,22 @@ fn render_footer(
     frame.render_widget(block, area);
 
     let version = format!("v{}", env!("CARGO_PKG_VERSION"));
-    // A button for the one surface that lists everything, so the keyboard
-    // is an accelerator rather than the way in. It sits where the eye
-    // already goes for chrome, and it is the same surface `F1` opens.
-    let help = format!("{} help", theme::glyph(theme::Symbol::Menu));
+    // A button for the surface that lists everything, so the keyboard is
+    // an accelerator rather than the way in — a mark, because "help" is
+    // the one label nobody needs to read. In this mode the mark is also
+    // the key, which is the whole reason `?` opens it here.
+    let help = theme::glyph(theme::Symbol::MarkHelp);
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
             Constraint::Min(10),
-            Constraint::Length(help.chars().count() as u16 + 2),
+            Constraint::Length(theme::width(theme::Symbol::MarkHelp) + 3),
             Constraint::Length(version.len() as u16),
         ])
         .split(inner);
     frame.render_widget(
         Paragraph::new(Span::styled(help, theme::fg(Token::Accent)))
-            .alignment(ratatui::layout::Alignment::Right),
+            .alignment(ratatui::layout::Alignment::Center),
         columns[1],
     );
     hits.push((
@@ -758,15 +759,16 @@ pub(crate) fn clip_line(line: &mut Line<'static>, max: usize) {
 /// them agree with the dispatcher, and nothing could.
 fn hint_line(model: &TuiModel) -> Line<'static> {
     let scopes = model.scopes();
-    let mut actions: Vec<uze_keys::Action> = model
+    let actions: Vec<uze_keys::Action> = model
         .action_index_rows(&scopes, "")
         .into_iter()
         .filter(|(action, chord)| chord.is_some() && *action != uze_keys::Action::OpenActionIndex)
         .map(|(action, _)| action)
         .take(FOOTER_HINTS)
         .collect();
-    // Last, and always: the one surface that lists the rest.
-    actions.push(uze_keys::Action::OpenActionIndex);
+    // The index is not among them: it has a button of its own at the other
+    // end of this row, and the button is the mark that opens it. Naming it
+    // twice on one line spends the width of a hint on a repetition.
     crate::ui::hint_for(&scopes, &actions)
 }
 

@@ -63,30 +63,84 @@ pub(crate) fn render_keys(
             .max()
             .unwrap_or(0)
             .max(6);
-        let mut y = list_area.y;
+        // Three columns rather than two words and an empty half-screen:
+        // what the key is, what it is called, and the sentence that says
+        // what it does. The sentence was only in the drawer, which made
+        // the list a set of labels you had to open one at a time to read.
+        let label_width = rows
+            .iter()
+            .map(|row| row.action.label().chars().count())
+            .max()
+            .unwrap_or(0);
+        // The badge's column is reserved for the whole list or for none of
+        // it, so the sentences end where each other ends.
+        let yours_width = rows.iter().any(KeyRow::custom).then_some(YOURS_COLUMN);
+        // The list laid out before any of it is drawn, because both the
+        // spacing and the scroll are properties of the whole thing: a
+        // group opens with a blank line, and the window has to be able to
+        // count entries it is about to skip.
+        let mut entries: Vec<Entry> = Vec::new();
         let mut heading = None;
         for (index, row) in rows.iter().enumerate() {
-            if y >= list_area.bottom() {
-                break;
-            }
             if heading != Some(row.scope) {
                 heading = Some(row.scope);
-                frame.render_widget(
+                // A heading pressed against the previous group's last key
+                // belongs to neither of them.
+                if !entries.is_empty() {
+                    entries.push(Entry::Gap);
+                }
+                entries.push(Entry::Heading(row.scope));
+            }
+            entries.push(Entry::Row(index, *row));
+        }
+
+        // The window follows the selection rather than being scrolled on
+        // its own: this list is long enough that everything past the first
+        // screenful used to be invisible and unreachable at the same time
+        // — the selection walked off the bottom and nothing followed it.
+        // It stays at the top until the selection passes the middle, so
+        // reading down from the first row does not move the page.
+        let height = usize::from(list_area.height);
+        let anchor = entries
+            .iter()
+            .position(
+                |entry| matches!(entry, Entry::Row(index, _) if *index == model.keys_selected),
+            )
+            .unwrap_or(0);
+        let first = anchor
+            .saturating_sub(height.saturating_sub(1) / 2)
+            .min(entries.len().saturating_sub(height));
+
+        for (offset, entry) in entries.iter().skip(first).take(height).enumerate() {
+            let y = list_area.y + offset as u16;
+            match entry {
+                Entry::Gap => {}
+                Entry::Heading(scope) => frame.render_widget(
                     Paragraph::new(Span::styled(
-                        row.scope.heading().to_uppercase(),
+                        scope.heading().to_uppercase(),
                         theme::fg_bold(Token::TextMuted),
                     )),
                     Rect::new(list_area.x, y, list_area.width, 1),
-                );
-                y += 1;
-                if y >= list_area.bottom() {
-                    break;
+                ),
+                Entry::Row(index, row) => {
+                    let rect = Rect::new(list_area.x, y, list_area.width, 1);
+                    frame.render_widget(
+                        Paragraph::new(row_line(
+                            model,
+                            row,
+                            *index,
+                            Columns {
+                                key: key_width,
+                                label: label_width,
+                                yours: yours_width,
+                                width: list_area.width,
+                            },
+                        )),
+                        rect,
+                    );
+                    hits.push((rect, Hit::KeyRow(*index)));
                 }
             }
-            let rect = Rect::new(list_area.x, y, list_area.width, 1);
-            frame.render_widget(Paragraph::new(row_line(model, row, index, key_width)), rect);
-            hits.push((rect, Hit::KeyRow(index)));
-            y += 1;
         }
     }
 
@@ -95,11 +149,22 @@ pub(crate) fn render_keys(
     }
 }
 
+/// A line of the list, before it is a line on screen: the blank that opens
+/// a group, the group's own name, or one key under it. Laying the list out
+/// as entries first is what lets the window skip whole groups without
+/// having to redraw them to find out how tall they were.
+enum Entry {
+    Gap,
+    Heading(uze_keys::Scope),
+    Row(usize, KeyRow),
+}
+
 /// One line: the key, what it does, and whether it is the operator's own
 /// choice. An unbound action reads as unbound rather than as blank — the
 /// difference between "no key" and "I have not scrolled to it" matters on
 /// a screen whose whole subject is keys.
-fn row_line(model: &TuiModel, row: &KeyRow, index: usize, key_width: usize) -> Line<'static> {
+fn row_line(model: &TuiModel, row: &KeyRow, index: usize, columns: Columns) -> Line<'static> {
+    let key_width = columns.key;
     let selected = index == model.keys_selected;
     let capturing = selected && model.keys_capture;
     let key = if capturing {
@@ -127,7 +192,11 @@ fn row_line(model: &TuiModel, row: &KeyRow, index: usize, key_width: usize) -> L
     if selected {
         label = label.add_modifier(Modifier::BOLD);
     }
+    let label_text = row.action.label();
+    // Indented under the heading, which is what makes a heading read as
+    // one rather than as another row in a different colour.
     let mut spans = vec![
+        Span::raw(INDENT),
         Span::styled(
             format!("{} ", theme::glyph(mark(selected))),
             theme::fg(if selected {
@@ -137,13 +206,65 @@ fn row_line(model: &TuiModel, row: &KeyRow, index: usize, key_width: usize) -> L
             }),
         ),
         Span::styled(key, theme::fg_bold(key_colour)),
-        Span::styled("  ", theme::fg(Token::TextDim)),
-        Span::styled(row.action.label(), label),
+        Span::styled(GUTTER, theme::fg(Token::TextDim)),
+        Span::styled(
+            format!("{label_text:<width$}", width = columns.label),
+            label,
+        ),
     ];
-    if row.custom() {
-        spans.push(Span::styled("  yours", theme::fg(Token::StateInfo)));
+    let used = INDENT.len()
+        + usize::from(theme::width(mark(selected)))
+        + 1
+        + key_width
+        + GUTTER.len()
+        + columns.label;
+    let room = usize::from(columns.width)
+        .saturating_sub(used + GUTTER.len() + columns.yours.unwrap_or(0) + INDENT.len());
+    // A sentence only when there is room for one worth reading — half of
+    // one, clipped at some arbitrary column, says less than the label
+    // already did.
+    if room >= 24 {
+        let mut sentence = Line::from(Span::styled(
+            row.action.description(),
+            theme::fg(Token::TextMuted),
+        ));
+        crate::ui::management::clip_line(&mut sentence, room);
+        spans.push(Span::styled(GUTTER, theme::fg(Token::TextDim)));
+        spans.extend(sentence.spans);
+    }
+    if let Some(reserved) = columns.yours {
+        // Pinned to its own column rather than trailing whatever the row
+        // happened to end with: a column that starts wherever the last
+        // word ended is not one.
+        let drawn: usize = spans.iter().map(|span| span.width()).sum();
+        let pad = usize::from(columns.width)
+            .saturating_sub(drawn + reserved + INDENT.len())
+            .max(1);
+        spans.push(Span::raw(" ".repeat(pad)));
+        spans.push(Span::styled(
+            if row.custom() { "yours" } else { "     " },
+            theme::fg(Token::StateInfo),
+        ));
     }
     Line::from(spans)
+}
+
+/// How far a key sits in from its group's name, and how far each column
+/// sits from the one before it. Both were one space narrower, which read
+/// as one block of text rather than as columns.
+const INDENT: &str = "  ";
+const GUTTER: &str = "   ";
+/// What the "yours" badge occupies when any row in the list carries one.
+const YOURS_COLUMN: usize = 5;
+
+/// Where each of a row's columns ends. Measured once for the whole list —
+/// a column measured per row is not a column.
+#[derive(Clone, Copy)]
+struct Columns {
+    key: usize,
+    label: usize,
+    yours: Option<usize>,
+    width: u16,
 }
 
 fn mark(selected: bool) -> Symbol {

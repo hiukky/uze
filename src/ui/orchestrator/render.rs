@@ -2340,7 +2340,7 @@ pub(super) fn render_tab_strip(
     // mode can do. In the workspace the keyboard mostly belongs to the
     // program in the pane, so the way in has to be something you can see.
     {
-        let text = format!("{} help", theme::glyph(Symbol::Menu));
+        let text = theme::glyph(Symbol::MarkHelp);
         let rect = chip_rect(&text, trailing_right, inner.y);
         draw_chip(
             frame,
