@@ -48,9 +48,9 @@ mod workspace_tests {
             render_preserved, render_sidebar, render_status_catalog, render_tab_strip, task_mark,
             timeline_height,
         },
-        scroll_timeline, scroll_tree, selected_pane_cwd, space_own_tab, sync_slot_occupancy,
-        tab_drag_group, tab_drag_group_members, tab_needs_replacement_shell, toggle_timeline,
-        workspace_has_active_agent_operation,
+        scroll_timeline, scroll_tree, selected_pane_cwd, space_context_agent, space_own_tab,
+        strip_tabs, sync_slot_occupancy, tab_drag_group, tab_drag_group_members,
+        tab_needs_replacement_shell, toggle_timeline, workspace_has_active_agent_operation,
     };
     use crossterm::event::{MouseButton, MouseEventKind};
     use ratatui::layout::Rect;
@@ -324,6 +324,41 @@ mod workspace_tests {
         let strip = rows.join(" ");
         assert!(strip.contains("Agent two shell"), "{strip}");
         assert!(!strip.contains("Agent one"), "{strip}");
+    }
+
+    /// A tab number means "that chip", so it is counted along the strip —
+    /// which is contextual — and never along the space's own tab list.
+    ///
+    /// The list held every agent in the space and both their shells, so a
+    /// number walked past the chips on screen and landed on another
+    /// agent: a gesture that only ever meant "the second one here" changed
+    /// which agent the workspace was about. One list now answers for both
+    /// the chips and the numbers, which is the only way they can agree.
+    #[test]
+    fn a_tab_number_counts_along_the_strip_and_not_past_it() {
+        let (mut model, first, second) = two_agents_with_shells();
+        model.session.as_mut().expect("session").select_tab(second);
+        let identities = identities_fixture();
+        let session = model.session.as_ref().expect("session");
+        let space = session.selected_space();
+        let strip = strip_tabs(space, space_context_agent(space, &identities), &identities);
+
+        assert_eq!(strip.len(), 2, "the agent in front, and its own shell");
+        assert_eq!(strip[0].id, second, "the agent leads its own strip");
+        assert_ne!(
+            strip[1].id, first,
+            "and the other agent is not on it at any position"
+        );
+
+        assert!(
+            space.tabs.len() > strip.len(),
+            "the space holds more than the strip shows — the bootstrap \
+             shell and the other agent's context"
+        );
+        assert_ne!(
+            space.tabs[1].id, strip[1].id,
+            "so counting along the space would land somewhere no chip is"
+        );
     }
 
     /// Selecting one of an agent's shells keeps the strip on that agent —

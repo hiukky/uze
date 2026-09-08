@@ -2097,13 +2097,7 @@ pub(super) fn render_tab_strip(
     // A `None` context is the space's own — its bootstrap shell and
     // anything opened with no agent selected.
     let context = context_agent(model, identities);
-    let strip: Vec<&Tab> = context
-        .and_then(|agent| space.tabs.iter().find(|tab| tab.id == agent))
-        .into_iter()
-        .chain(space.tabs.iter().filter(|tab| {
-            agent_identity_for_tab(identities, tab).is_none() && tab.agent == context
-        }))
-        .collect();
+    let strip = strip_tabs(space, context, identities);
     // Closability is a per-space rule (the server refuses to remove a
     // space's only tab — see `Session::remove_tab`), so it's judged
     // against every tab in the selected space, not just the ones this

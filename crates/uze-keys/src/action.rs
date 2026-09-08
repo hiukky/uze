@@ -44,9 +44,11 @@ macro_rules! actions {
         #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
         pub enum Action {
             $($variant,)*
-            /// Select the nth tab of the current space. One action per
-            /// position rather than one action carrying a number, because
-            /// the keymap binds positions, not a counter.
+            /// Select the nth tab on the strip — the agent in front of
+            /// the person and the shells opened alongside it, which is
+            /// what the numbers on screen are counted along. One action
+            /// per position rather than one action carrying a number,
+            /// because the keymap binds positions, not a counter.
             SelectTab(u8),
         }
 
@@ -115,7 +117,7 @@ macro_rules! actions {
                 match self {
                     $(Action::$variant => $description.to_owned(),)*
                     Action::SelectTab(index) => {
-                        format!("Select the {index}th tab of the current space")
+                        format!("Select the {index}th tab on the strip")
                     }
                 }
             }

@@ -2954,6 +2954,29 @@ fn space_context_agent(space: &Space, identities: &[AgentIdentity]) -> Option<Ta
         .map(|tab| tab.id)
 }
 
+/// The tabs the strip shows, in the order it draws them: the agent the
+/// space is currently about, then the shells opened alongside it.
+///
+/// One function because two lists that must agree are one list. The strip
+/// is what a person counts chips along, so anything that answers "the
+/// third tab" has to count the same things in the same order — indexing
+/// the space's own `tabs` instead counts tabs nobody can see and lands on
+/// another agent's, which changes what the workspace is about from a
+/// gesture that only ever meant "that chip".
+fn strip_tabs<'a>(
+    space: &'a Space,
+    context: Option<TabId>,
+    identities: &[AgentIdentity],
+) -> Vec<&'a Tab> {
+    context
+        .and_then(|agent| space.tabs.iter().find(|tab| tab.id == agent))
+        .into_iter()
+        .chain(space.tabs.iter().filter(|tab| {
+            agent_identity_for_tab(identities, tab).is_none() && tab.agent == context
+        }))
+        .collect()
+}
+
 /// Which drag-reorder group `hit_rect` (a `WorkspaceHit::SelectTab(tab)`
 /// rect) belongs to, if any — `Agents` for a sidebar row, keyed by `tab`'s
 /// own space (found by searching, same as every other tab lookup in this

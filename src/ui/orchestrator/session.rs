@@ -310,13 +310,20 @@ impl Attach<'_> {
             Action::PreviousAgent => self.step_agent(-1, columns, rows),
             Action::SelectTab(position) => {
                 let index = usize::from(position).saturating_sub(1);
-                if let Some(tab) = self
-                    .model
-                    .session
-                    .as_ref()
-                    .and_then(|session| session.selected_space().tabs.get(index))
-                    .map(|tab| tab.id)
-                {
+                // Counted along the strip, which is what the number on
+                // screen belongs to — the agent in front of the person and
+                // the shells opened alongside it. The space's own tab list
+                // holds every other agent's too, and walking that one made
+                // a number that meant "the third chip" land somewhere no
+                // chip was, changing which agent the workspace was about.
+                let identities = &self.identities;
+                if let Some(tab) = self.model.session.as_ref().and_then(|session| {
+                    let space = session.selected_space();
+                    let context = space_context_agent(space, identities);
+                    strip_tabs(space, context, identities)
+                        .get(index)
+                        .map(|tab| tab.id)
+                }) {
                     self.land_on_tab(tab, columns, rows);
                 }
             }
