@@ -4,6 +4,31 @@ All notable changes to UZE are documented here, generated from Conventional
 Commits by `git-cliff` (`make changelog`). Until v1, UZE ships only SemVer
 pre-releases — see `docs/versioning.md`.
 
+## [0.0.0-alpha.4](https://github.com/hiukky/uze/compare/v0.0.0-alpha.3...v0.0.0-alpha.4) - 2026-09-08
+
+### Features
+
+- **ui:** One layout file for both modes, and the changes list scrolls and folds ([#39](https://github.com/hiukky/uze/pull/39)) ([0761f70](https://github.com/hiukky/uze/commit/0761f7044787b7e2694ef5f3c83b60728c7722d3))
+- Hold the read paths to a budget, and trace every action to its end ([#40](https://github.com/hiukky/uze/pull/40)) ([7fa6555](https://github.com/hiukky/uze/commit/7fa6555b6ccd12dc4553df21ff996131014f16b7))
+- Name the work an agent does, and make agents.yaml declarative both ways ([#43](https://github.com/hiukky/uze/pull/43)) ([4c1d6fa](https://github.com/hiukky/uze/commit/4c1d6fadddb2cf62a69ebdfcfb810d0b52ffcc3d))
+- Ask for the work's name at the agent's first action, not its first commit ([#45](https://github.com/hiukky/uze/pull/45)) ([9471449](https://github.com/hiukky/uze/commit/94714491a6125c503b9cfe4b8fc19ba1596fbbf7))
+
+### Fixes
+
+- **ui:** Management keeps what it resolved, and resolves it at launch ([#36](https://github.com/hiukky/uze/pull/36)) ([607610f](https://github.com/hiukky/uze/commit/607610f2bc1611a383806c7cbbb8045d93c0af3f))
+- Make uze hold on macOS, and prove it on a macOS runner ([#35](https://github.com/hiukky/uze/pull/35)) ([3dacd42](https://github.com/hiukky/uze/commit/3dacd423c7d71a06ba0e5774aa487a9705fe84b3))
+- **claude:** Two threads projecting at once never pick the same temp name ([#42](https://github.com/hiukky/uze/pull/42)) ([38a4080](https://github.com/hiukky/uze/commit/38a408087775f350972998fe96dcdf46e9d87831))
+- **workspace:** Read publication from the remote, not from UZE's own records ([#44](https://github.com/hiukky/uze/pull/44)) ([be64456](https://github.com/hiukky/uze/commit/be64456130fe48326ca0c631ed26c70e8a3a3fed))
+
+### Performance
+
+- Stop asking Git what cannot have changed, and fix what the change badge reports ([#41](https://github.com/hiukky/uze/pull/41)) ([adf40d2](https://github.com/hiukky/uze/commit/adf40d294dddea4041474f7e5164d4ed1245745f))
+
+### Documentation
+
+- Catch up to agents.yaml, correct the matrix, and make the marks visible ([#37](https://github.com/hiukky/uze/pull/37)) ([2a0127d](https://github.com/hiukky/uze/commit/2a0127db1e15e8dc1ce8274d8f328e034e0619a3))
+- Say what ships today, and link where a reader can actually go ([#38](https://github.com/hiukky/uze/pull/38)) ([b63d4d4](https://github.com/hiukky/uze/commit/b63d4d476c7da9ebf078befd8773e4b1ccf78178))
+
 ## [0.0.0-alpha.3](https://github.com/hiukky/uze/compare/v0.0.0-alpha.2...v0.0.0-alpha.3) - 2026-09-07
 
 ### Features
