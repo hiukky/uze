@@ -2757,8 +2757,13 @@ mod workspace_tests {
             .expect("and so is the history");
         assert_eq!(
             timeline,
-            steps + 1 + render::FIRST_STEPS.len(),
-            "the steps came between them: {rows:?}"
+            steps + 1 + render::FIRST_STEPS.len() + 1,
+            "the steps came between them, with a blank row closing them off \
+             so the last one does not sit against the next header: {rows:?}"
+        );
+        assert!(
+            inside(&rows[timeline - 1]).trim().is_empty(),
+            "and that row is blank: {rows:?}"
         );
         assert_eq!(timeline, rows.len() - 1, "{rows:?}");
     }

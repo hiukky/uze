@@ -207,7 +207,8 @@ fn bind(scope: Scope, chord: &str, action: Action) -> Binding {
 ///
 /// 1. **In management, uze owns the keyboard**, so an action may hold a
 ///    bare letter — and a letter names one action, everywhere. `r` removes
-///    and nothing else; refreshing is `g`.
+///    and nothing else; a bare letter always acts on the row you are on,
+///    which is why refreshing carries a modifier instead.
 /// 2. **In the workspace, uze is a guest.** Every bare key belongs to the
 ///    program in the pane, and every chord uze takes is one an agent's
 ///    input loses. Function keys and modified navigation keys are the
@@ -220,9 +221,13 @@ fn bind(scope: Scope, chord: &str, action: Action) -> Binding {
 fn default_bindings() -> Vec<Binding> {
     let mut bindings = vec![
         // --- Everywhere -------------------------------------------------
-        // F1, because in the workspace `?` belongs to whatever the agent is
-        // typing into, and a function key is the one register a terminal
-        // program almost never claims.
+        // F1, and only F1: in the workspace `?` belongs to whatever the
+        // agent is typing into, and a function key is the one register a
+        // terminal program almost never claims. Management had a `?` of
+        // its own for a while, which meant the way to help was a different
+        // key depending on which mode you were in — and since a surface
+        // prints the innermost chord it finds, the one key that works in
+        // both was the one never shown.
         bind(Scope::Global, "f1", Action::OpenActionIndex),
         bind(Scope::Global, "ctrl+o", Action::SwitchMode),
         bind(Scope::Global, "ctrl+q", Action::Quit),
@@ -252,7 +257,6 @@ fn default_bindings() -> Vec<Binding> {
         bind(Scope::Management, "f5", Action::Refresh),
         bind(Scope::Management, "/", Action::StartFilter),
         bind(Scope::Management, "t", Action::OpenThemePicker),
-        bind(Scope::Management, "?", Action::OpenActionIndex),
         // The row's own actions, the keyboard's way of clicking its `⋯`.
         bind(Scope::Management, ".", Action::OpenRowActions),
         bind(Scope::Management, "m", Action::AddMarketplace),

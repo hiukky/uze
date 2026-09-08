@@ -72,6 +72,35 @@ knowing a letter.
 - **THEN** every step of it — finding, filtering, selecting, acting,
   confirming — has a target, including the search field
 
+### Requirement: A surface never hides what it offers
+A list taller than its window SHALL be walkable to its end by every gesture
+that walks it, and SHALL say where in it the window sits. A surface that
+answers for the whole screen SHALL make that visible rather than leaving
+the screen behind it looking as live as it was a frame earlier.
+
+#### Scenario: A list longer than the screen can still be reached
+- **WHEN** a list has more rows than the column it is drawn in
+- **THEN** the window follows the selection, so no row is out of view and
+  unreachable at the same time
+- **AND** the heading a row belongs under travels with it
+
+#### Scenario: Every gesture that walks a list walks the same list
+- **WHEN** the wheel is turned over a list
+- **THEN** it moves what the arrow keys move, on every screen that has a
+  list at all
+
+#### Scenario: A long list says how long it is
+- **WHEN** a list does not fit its window
+- **THEN** it shows where in the whole the window sits, and that indicator
+  answers a click and a drag rather than being decoration
+- **AND** a list that fits shows none
+
+#### Scenario: A modal is visibly modal
+- **WHEN** a surface is open that nothing behind it will answer until it is
+  dealt with
+- **THEN** the screen behind it recedes, so the depth is visible rather
+  than asserted by a border
+
 ### Requirement: One index of everything, reachable by key and by button
 The system SHALL provide one surface listing every action live in the
 current context, with each action's own chord, filterable, and performable

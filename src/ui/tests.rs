@@ -676,25 +676,31 @@ fn click_outside_overlay_dismisses_without_confirming() {
     assert_eq!(model.overlay, Overlay::None);
 }
 
-/// The index opens on `?` and on F1, and neither is written down
-/// anywhere: both come from the keymap, which is also where the index
-/// reads the keys it prints.
+/// One key opens the index, and it is the same key in both modes. It used
+/// to be F1 in the workspace and `?` here — and since a surface prints the
+/// innermost chord it can find, the key that worked in both was the one
+/// never shown.
 #[test]
-fn the_index_opens_and_closes() {
-    for opener in [
-        KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE),
-        KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE),
-    ] {
-        let mut model = TuiModel::default();
-        model.apply_key(opener);
-        assert!(
-            matches!(model.overlay, Overlay::ActionIndex { .. }),
-            "{opener:?} did not open the index: {:?}",
-            model.overlay
-        );
-        model.apply_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-        assert_eq!(model.overlay, Overlay::None);
-    }
+fn the_index_opens_and_closes_on_the_one_key_both_modes_share() {
+    let mut model = TuiModel::default();
+    model.apply_key(KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE));
+    assert!(
+        matches!(model.overlay, Overlay::ActionIndex { .. }),
+        "{:?}",
+        model.overlay
+    );
+    model.apply_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert_eq!(model.overlay, Overlay::None);
+
+    // And it is what management advertises, rather than a second key of
+    // its own that the workspace would not answer.
+    assert_eq!(
+        uze_keys::active().chord_for(
+            uze_keys::Action::OpenActionIndex,
+            &[uze_keys::Scope::Global, uze_keys::Scope::Management],
+        ),
+        uze_keys::Chord::parse("f1").ok()
+    );
 }
 
 /// Nothing the index prints is written down: the words come from the

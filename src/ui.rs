@@ -809,7 +809,12 @@ impl FirstSteps<'_> {
         if self.collapsed {
             1
         } else {
-            1 + self.steps.len() as u16
+            // The trailing row is blank on purpose: open, the last step
+            // would otherwise sit against the next section's header with
+            // nothing saying where one ends and the other begins. The
+            // section renderer simply runs out of rows before it reaches
+            // it, so no one has to draw the gap.
+            1 + self.steps.len() as u16 + 1
         }
     }
 
