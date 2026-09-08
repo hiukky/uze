@@ -8,9 +8,11 @@ about: |
   ships with stopped working.
 
   The check is the process table, because a shell tab is a real process in
-  a real directory: pressing the rebound key opens one, and pressing the
-  default no longer does. UZE's own report of what it did is never what
-  proves it.
+  a real directory. What it is asked is whether the *set* changed — the
+  default key leaves it alone, the rebound key adds to it — rather than how
+  many processes there are: a login shell forks a child on some hosts, so
+  one tab is one process on Linux and two on macOS, and a count would be
+  asserting the host rather than the keyboard.
 
 world:
   project: demo-app
@@ -31,23 +33,25 @@ scenes:
       - file: "{uze_home}/keys.json"
         exists: true
         about: the keyboard is a file the machine keeps, not a screen's memory
-      - process: { matching: bash, cwd: "{project}", alive: true, count: 1 }
-        about: one shell — the one the workspace opened with
+      - process: { matching: bash, cwd: "{project}", alive: true }
+        about: a real shell is running — the one the workspace opened with
+      - capture: { name: shells, processes: { matching: bash, cwd: "{project}" } }
+        about: what the machine holds before either key is pressed
 
   - scene: the key uze ships with no longer opens a shell
     when:
       - key: "C-t"
         say: press the default, which this keyboard gave away
-        pause: 1.5
+        pause: 2.5
     then:
-      - process: { matching: bash, cwd: "{project}", alive: true, count: 1 }
+      - process: { matching: bash, cwd: "{project}", same_as: shells }
         about: nothing opened — declaring an action replaces its keys rather than adding to them
 
   - scene: the key the operator chose does
     when:
       - key: "F4"
         say: press the rebound key
-        pause: 2.0
+        pause: 3.0
     then:
-      - process: { matching: bash, cwd: "{project}", alive: true, count: 2 }
-        about: a second shell exists, opened by a key nothing in the binary names
+      - process: { matching: bash, cwd: "{project}", more_than: shells }
+        about: a shell exists that did not before, opened by a key nothing in the binary names
