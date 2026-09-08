@@ -3031,6 +3031,52 @@ fn the_keys_list_follows_the_selection_past_the_fold() {
     );
 }
 
+/// Moving between screens used to cost a detour: `left` to put the focus
+/// back on the sidebar, then the arrows, then `right` to get into the
+/// screen you chose. Three gestures for one intention, and nothing on
+/// screen saying which half of it had the keyboard.
+///
+/// The sidebar is a vertical list of screens exactly as the workspace's is
+/// a vertical list of spaces, so the same chord walks it — and it lands in
+/// the screen, because choosing one is wanting to be on it.
+#[test]
+fn ctrl_and_an_arrow_walks_the_screens_from_wherever_you_are() {
+    let mut model = TuiModel {
+        route: Route::Overview,
+        focus: Focus::Content,
+        ..model_with_data()
+    };
+    let step =
+        |model: &mut TuiModel, code| model.apply_key(KeyEvent::new(code, KeyModifiers::CONTROL));
+
+    assert_eq!(step(&mut model, KeyCode::Down), Intent::None);
+    assert_eq!(model.route, Route::Plugins);
+    assert_eq!(
+        model.focus,
+        Focus::Content,
+        "and the keyboard is in the screen, not on its name"
+    );
+    step(&mut model, KeyCode::Up);
+    assert_eq!(model.route, Route::Overview);
+    step(&mut model, KeyCode::Up);
+    assert_eq!(
+        model.route,
+        *ROUTES.last().expect("there are screens"),
+        "it wraps, the way the sidebar's own arrows always have"
+    );
+
+    // From the sidebar too — the point is that it does not matter where
+    // the focus was.
+    let mut model = TuiModel {
+        route: Route::Overview,
+        focus: Focus::Sidebar,
+        ..model_with_data()
+    };
+    step(&mut model, KeyCode::Down);
+    assert_eq!(model.route, Route::Plugins);
+    assert_eq!(model.focus, Focus::Content);
+}
+
 /// A long list that gives no sign of being long is a list nobody scrolls.
 /// The track says both things at once: that there is more, and where in it
 /// the window sits.

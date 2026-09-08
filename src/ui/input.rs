@@ -133,6 +133,12 @@ impl TuiModel {
             Action::SelectPrevious => self.move_by(-1),
             Action::FocusNext => self.cycle_focus(true),
             Action::FocusPrevious => self.cycle_focus(false),
+            // Walking the sidebar without being in it — the same gesture
+            // the workspace uses for its own vertical list. It lands in
+            // the screen rather than on its name, because choosing a
+            // screen is wanting to be on it.
+            Action::NextScreen => self.step_route(1),
+            Action::PreviousScreen => self.step_route(-1),
             Action::FocusSidebar => {
                 self.focus = Focus::Sidebar;
                 Intent::None
@@ -372,6 +378,15 @@ impl TuiModel {
             None if delta > 0 => reachable[0],
             None => reachable[reachable.len() - 1],
         });
+    }
+
+    /// One screen along the sidebar, wrapping, wherever the focus was.
+    fn step_route(&mut self, delta: isize) -> Intent {
+        let count = ROUTES.len();
+        let step = if delta > 0 { 1 } else { count - 1 };
+        self.set_route(ROUTES[(self.route.index() + step) % count]);
+        self.focus = Focus::Content;
+        Intent::None
     }
 
     /// Where the selection goes, which depends on what the screen is a

@@ -162,6 +162,10 @@ actions! {
         "Erase", "Delete the character before the cursor";
 
     // --- Management, screen-wide ----------------------------------------
+    NextScreen => "next-screen", Mode::Management, false,
+        "Next screen", "Move to the next screen in the sidebar, from wherever you are";
+    PreviousScreen => "previous-screen", Mode::Management, false,
+        "Previous screen", "Move to the previous screen in the sidebar, from wherever you are";
     FocusSidebar => "focus-sidebar", Mode::Management, false,
         "Back to the sidebar", "Move focus from the content back to the route list";
     FocusContent => "focus-content", Mode::Management, false,

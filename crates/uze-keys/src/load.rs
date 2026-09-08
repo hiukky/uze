@@ -235,6 +235,12 @@ fn default_bindings() -> Vec<Binding> {
         bind(Scope::Management, "shift+tab", Action::FocusPrevious),
         bind(Scope::Management, "enter", Action::Activate),
         bind(Scope::Management, "esc", Action::Dismiss),
+        // The sidebar is vertical and holds the screens, exactly as the
+        // workspace's sidebar is vertical and holds the spaces — so the
+        // same chord walks both, from anywhere, without first having to
+        // put the focus back on the list.
+        bind(Scope::Management, "ctrl+down", Action::NextScreen),
+        bind(Scope::Management, "ctrl+up", Action::PreviousScreen),
         bind(Scope::Management, "left", Action::FocusSidebar),
         bind(Scope::Management, "h", Action::FocusSidebar),
         bind(Scope::Management, "right", Action::FocusContent),
