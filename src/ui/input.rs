@@ -102,6 +102,11 @@ impl TuiModel {
     /// Performs one action. Every arm is a meaning, so this reads as what
     /// the product does rather than as what a keyboard is wired to.
     pub(crate) fn act(&mut self, action: Action) -> Intent {
+        // Every action this client performs passes through here, whichever
+        // way it was reached — a key, a row's menu, the index, a button —
+        // so this is the one place the first-steps list can learn what has
+        // been done without every call site remembering to tell it.
+        self.note_step(action);
         if self.overlay != Overlay::None {
             return self.overlay_action(action);
         }

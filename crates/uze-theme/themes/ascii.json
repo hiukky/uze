@@ -9,6 +9,7 @@
     "mark.unsupported": "-",
     "mark.attention": "!",
     "mark.close": "x",
+    "mark.done": "v",
     "mark.dot": "-",
     "mark.cross": "x",
     "mark.sparkle": "+",

@@ -60,6 +60,7 @@
     "mark.close": "✕",
     "mark.dot": "•",
     "mark.cross": "×",
+    "mark.done": "✓",
     "mark.help": "?",
     "mark.sparkle": "✦",
     "mark.toggle-off": "○",

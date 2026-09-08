@@ -108,7 +108,8 @@ pub(crate) fn run_management(
         // this mode or the workspace's — so switching modes never resets
         // it back to the responsive default.
         sidebar_width: layout.sidebar.width,
-        quick_actions_closed: layout.sidebar.quick_actions_closed,
+        first_steps_collapsed: layout.first_steps.collapsed,
+        steps_taken: layout.first_steps.taken.clone(),
         // Asked of the terminal once, at startup: whether a chord can
         // reach uze at all is a property of the host, and the Keys screen
         // says so rather than letting a binding look alive and do nothing.
@@ -190,7 +191,8 @@ pub(crate) fn run_management(
     // Ctrl+O switch to the workspace picks up a drag made here at once,
     // and the next run opens on the screen this visit left.
     layout.sidebar.width = model.sidebar_width;
-    layout.sidebar.quick_actions_closed = model.quick_actions_closed;
+    layout.first_steps.collapsed = model.first_steps_collapsed;
+    layout.first_steps.taken = model.steps_taken.clone();
     layout.management = model.management_layout();
     memory.in_flight = model.maintenance_in_flight;
     memory.remembered = Some(model.remember());
@@ -378,18 +380,22 @@ fn route_subtitle(route: Route) -> &'static str {
     }
 }
 
-/// The chrome at the foot of the sidebar: everything uze can do, how it
-/// looks, and the way out. None of the three belongs to a screen, which is
-/// why none of them is a route and why they are drawn quietly.
-/// Named from the mode rather than from what is open: the key beside an
-/// entry must not change because a dialog is up.
-const QUICK_SCOPES: &[uze_keys::Scope] = &[uze_keys::Scope::Global, uze_keys::Scope::Management];
-
-const QUICK_ACTIONS: [uze_keys::Action; 3] = [
-    uze_keys::Action::OpenActionIndex,
+/// What is worth trying once on this side of the product: asking a row
+/// what can be done to it, narrowing a list, making it look the way you
+/// want, and the surface that lists the rest. Each is a gesture nobody
+/// discovers by staring at a screen, and none of them destroys anything,
+/// so a list that invites them costs the reader nothing.
+pub(crate) const FIRST_STEPS: [uze_keys::Action; 4] = [
+    uze_keys::Action::OpenRowActions,
+    uze_keys::Action::StartFilter,
     uze_keys::Action::OpenThemePicker,
-    uze_keys::Action::Quit,
+    uze_keys::Action::OpenActionIndex,
 ];
+
+/// Named from the mode rather than from what is open: the key beside a
+/// step must not change because a dialog is up.
+pub(crate) const FIRST_STEP_SCOPES: &[uze_keys::Scope] =
+    &[uze_keys::Scope::Global, uze_keys::Scope::Management];
 
 /// The badge beside a nav row: how many of the things that screen is
 /// about there are, for the screens that are an inventory of something.
@@ -462,19 +468,29 @@ fn render_sidebar(
     // The quick strip takes its rows out of the column before anything
     // else is laid out — pinned to the foot means the routes above cannot
     // grow over it.
-    let strip = (!model.quick_actions_closed)
-        .then(|| super::quick_actions_rect(inner, QUICK_ACTIONS.len()))
-        .flatten();
+    let steps = model.first_steps();
+    let strip = steps.rect(inner);
     if let Some(rect) = strip {
-        let drawn = super::render_quick_actions(frame, rect, QUICK_SCOPES, &QUICK_ACTIONS);
-        // The close mark shares a row with the first entry, and this
-        // client answers a click with the *first* rect that contains it —
-        // so the mark goes in ahead of the rows it sits on.
-        if let Some(rect) = drawn.close {
-            hits.push((rect, Hit::CloseQuickActions));
-        }
-        for (rect, action) in drawn.entries {
-            hits.push((rect, Hit::OfferedAction(action)));
+        let mut section_hits = Vec::new();
+        super::extension_view::render_section(
+            frame,
+            &steps.section(),
+            &mut super::Rows::over(rect),
+            false,
+            &mut section_hits,
+        );
+        for (rect, hit) in section_hits {
+            match hit {
+                uze_extensions::view::ViewHit::ToggleSection => {
+                    hits.push((rect, Hit::ToggleFirstSteps))
+                }
+                uze_extensions::view::ViewHit::SelectItem(index) => {
+                    if let Some(action) = FIRST_STEPS.get(index) {
+                        hits.push((rect, Hit::OfferedAction(*action)));
+                    }
+                }
+                _ => {}
+            }
         }
     }
 

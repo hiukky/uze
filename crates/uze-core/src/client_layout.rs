@@ -37,6 +37,27 @@ pub struct ClientLayout {
     pub sidebar: SidebarLayout,
     pub workspace: WorkspaceLayout,
     pub management: ManagementLayout,
+    pub first_steps: FirstStepsLayout,
+}
+
+/// What the operator has already done once, and whether they still want to
+/// be shown what they have not.
+///
+/// Progress rather than shape, and here anyway: it is the same kind of
+/// thing — machine-scoped, personal, best-effort, and worth nothing to
+/// anyone but the client that wrote it. A section of its own because it is
+/// one list drawn at the foot of both sidebars, so a step taken in one mode
+/// is taken in the other.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default)]
+pub struct FirstStepsLayout {
+    /// Folded to its header. Open on a first run, because a list of what
+    /// to try is worth nothing to the person who has not seen it yet.
+    pub collapsed: bool,
+    /// The steps already taken, by the client's own name for each. A name
+    /// the client no longer recognises is simply a step that is no longer
+    /// listed, so nothing has to be cleaned up when the list changes.
+    pub taken: BTreeSet<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -45,11 +66,6 @@ pub struct SidebarLayout {
     /// The columns the sidebar was dragged to; `None` leaves the width to
     /// the client's responsive default.
     pub width: Option<u16>,
-    /// Whether the strip of quick actions at the foot of the column is
-    /// closed. Shared like the width, and for the same reason: it is one
-    /// strip drawn in both modes, so dismissing it in one and meeting it
-    /// again in the other would be the product forgetting.
-    pub quick_actions_closed: bool,
 }
 
 /// What the workspace client — the terminal side, with its spaces and
@@ -133,7 +149,10 @@ pub fn save(home: &UzeHome, layout: &ClientLayout) -> Result<()> {
 mod tests {
     use std::collections::BTreeSet;
 
-    use super::{ClientLayout, ManagementLayout, SidebarLayout, WorkspaceLayout, load, save};
+    use super::{
+        ClientLayout, FirstStepsLayout, ManagementLayout, SidebarLayout, WorkspaceLayout, load,
+        save,
+    };
     use crate::home::UzeHome;
 
     fn temp_home(label: &str) -> UzeHome {
@@ -160,10 +179,7 @@ mod tests {
     fn what_was_saved_is_what_the_next_run_reads() {
         let home = temp_home("round-trip");
         let layout = ClientLayout {
-            sidebar: SidebarLayout {
-                width: Some(34),
-                quick_actions_closed: true,
-            },
+            sidebar: SidebarLayout { width: Some(34) },
             workspace: WorkspaceLayout {
                 timeline_collapsed: false,
                 timeline_rows: Some(6),
@@ -174,6 +190,10 @@ mod tests {
                 harness_drawer_width: Some(40),
                 collapsed_marketplaces: BTreeSet::from(["uze-official".to_owned()]),
                 ..ManagementLayout::default()
+            },
+            first_steps: FirstStepsLayout {
+                collapsed: true,
+                taken: BTreeSet::from(["open-action-index".to_owned()]),
             },
         };
 

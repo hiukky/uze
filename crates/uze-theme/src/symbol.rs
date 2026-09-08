@@ -108,6 +108,10 @@ vocabulary! {
         MarkDot = "mark.dot",
         /// Multiplication/removal in a count or a label, not a button.
         MarkCross = "mark.cross",
+        /// Something the reader has already done once. Its own meaning
+        /// rather than a status or a badge: what it marks is a step in a
+        /// list of steps, not the standing of the thing beside it.
+        MarkDone = "mark.done",
         /// The way to everything this screen can do, and the keys that
         /// reach it. A mark rather than the word "help" because it is the
         /// one control on screen whose meaning every reader already has,

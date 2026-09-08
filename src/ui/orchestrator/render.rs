@@ -578,19 +578,14 @@ pub(super) fn render_sidebar(
     // being pushed up the column ahead of it: the chrome is the layer
     // underneath, and the history is what expands over it.
     let folded = timeline.map_or(0, |_| 1);
-    let strip = (!model.quick_actions_closed)
-        .then(|| {
-            crate::ui::quick_actions_rect(
-                Rect::new(
-                    inner.x,
-                    inner.y,
-                    inner.width,
-                    inner.height.saturating_sub(folded),
-                ),
-                QUICK_ACTIONS.len(),
-            )
-        })
-        .flatten()
+    let steps = model.first_steps();
+    let strip = steps
+        .rect(Rect::new(
+            inner.x,
+            inner.y,
+            inner.width,
+            inner.height.saturating_sub(folded),
+        ))
         .filter(|rect| rect.bottom() <= column_bottom - reserved);
 
     rows.bottom = strip.map_or(column_bottom - reserved, |rect| rect.y);
@@ -934,14 +929,24 @@ pub(super) fn render_sidebar(
     }
 
     if let Some(rect) = strip {
-        let drawn = crate::ui::render_quick_actions(frame, rect, QUICK_SCOPES, &QUICK_ACTIONS);
-        for (rect, action) in drawn.entries {
-            hits.push((rect, WorkspaceHit::QuickAction(action)));
-        }
-        // Last, because this client answers a click with the *last* rect
-        // that contains it, and the mark shares a row with the first entry.
-        if let Some(rect) = drawn.close {
-            hits.push((rect, WorkspaceHit::CloseQuickActions));
+        let mut section_hits = Vec::new();
+        crate::ui::extension_view::render_section(
+            frame,
+            &steps.section(),
+            &mut Rows::over(rect),
+            false,
+            &mut section_hits,
+        );
+        for (rect, hit) in section_hits {
+            match hit {
+                ViewHit::ToggleSection => hits.push((rect, WorkspaceHit::ToggleFirstSteps)),
+                ViewHit::SelectItem(index) => {
+                    if let Some(action) = FIRST_STEPS.get(index) {
+                        hits.push((rect, WorkspaceHit::QuickAction(*action)));
+                    }
+                }
+                _ => {}
+            }
         }
     }
 
@@ -978,20 +983,24 @@ fn tree_rows(session: &Session, identities: &[AgentIdentity]) -> u16 {
         .sum()
 }
 
-/// The chrome at the foot of the sidebar: everything this mode can do, the
-/// work no live tab is in front of, and the way out. None of the three
-/// belongs to a space or a tab, which is why none of them is in the tree
-/// and why they are drawn quietly. Preserved work had no control at all
-/// before this — it was the one gap the affordance table was naming.
-/// Named from the mode rather than from what is open: the key beside an
-/// entry must not change because an overlay is up.
-const QUICK_SCOPES: &[uze_keys::Scope] = &[uze_keys::Scope::Global, uze_keys::Scope::Workspace];
-
-pub(super) const QUICK_ACTIONS: [Action; 3] = [
-    Action::OpenActionIndex,
+/// What is worth trying once on this side of the product: putting an agent
+/// to work, moving between them, seeing what a change actually did, finding
+/// the work no live tab is in front of, and the surface that lists the
+/// rest. Each is a gesture nobody discovers by staring at a screen, and
+/// none of them destroys anything, so a list that invites them costs the
+/// reader nothing.
+pub(super) const FIRST_STEPS: [Action; 5] = [
+    Action::NewAgent,
+    Action::NextAgent,
+    Action::ToggleGitChanges,
     Action::TogglePreservedWork,
-    Action::Quit,
+    Action::OpenActionIndex,
 ];
+
+/// Named from the mode rather than from what is open: the key beside a
+/// step must not change because an overlay is up.
+pub(super) const FIRST_STEP_SCOPES: &[uze_keys::Scope] =
+    &[uze_keys::Scope::Global, uze_keys::Scope::Workspace];
 
 /// The rows the tree above the timeline keeps whatever the section is
 /// dragged to — a space header, an agent and its caption, and the blank

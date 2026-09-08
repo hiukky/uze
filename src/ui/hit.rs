@@ -72,8 +72,8 @@ pub(crate) enum Hit {
     CaptureKey,
     /// Put back what uze ships with, for the selected line.
     ResetKey,
-    /// The mark that dismisses the sidebar's quick strip.
-    CloseQuickActions,
+    /// The first-steps section's header, which folds it.
+    ToggleFirstSteps,
     /// A list's search field. It is drawn on three screens and, until
     /// this, clicking it did nothing at all.
     FocusFilter,
@@ -288,8 +288,8 @@ impl TuiModel {
             // Kept for the next run the way every other shape this
             // client remembers is: written once on the way out (see
             // `run_management`), never on the input path.
-            Hit::CloseQuickActions => {
-                self.quick_actions_closed = true;
+            Hit::ToggleFirstSteps => {
+                self.first_steps_collapsed = !self.first_steps_collapsed;
                 Intent::None
             }
             Hit::ResizeSidebar => {

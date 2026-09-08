@@ -684,116 +684,112 @@ impl Rows {
     }
 }
 
-/// The quiet strip of chrome at the foot of a sidebar.
+/// The list of things worth trying once, at the foot of a sidebar.
 ///
-/// Two or three low-emphasis entries: the way in to everything, whatever
-/// belongs to uze rather than to any one screen, and the way out. Quiet on
-/// purpose — it is where a reader looks when they do not know where to
-/// look, so it must never compete with the list above it. No rule over it
-/// and no weight in it: the blank row the list already ends on is enough
-/// to part them, and a bar across the column made a panel out of three
-/// lines of chrome.
+/// A section, in the same shape and drawn by the same renderer as the
+/// commit timeline beside it: a header that folds it, and a row per entry
+/// with a mark, a name and a value at the far edge. Reusing that rather
+/// than writing a second collapsible thing is the point — a sidebar with
+/// two kinds of section is a sidebar whose sections drift.
 ///
-/// Every word of it comes from the keymap, like every other hint: the
-/// label is the action's own and the key beside it is whatever is bound
-/// now, so a rebinding cannot leave a stale key printed here.
-///
-/// Returns where everything landed. Turning a rectangle into a hit is the
-/// one part the two clients cannot share, since each has its own hit type
-/// — and each resolves overlapping hits from its own end, which is why the
-/// close mark is handed back rather than pushed here.
-pub(crate) fn render_quick_actions(
-    frame: &mut ratatui::Frame<'_>,
-    area: Rect,
-    scopes: &[uze_keys::Scope],
-    actions: &[uze_keys::Action],
-) -> QuickActions {
-    let mut landed = QuickActions::default();
-    let mut rows = Rows::over(area);
-    let keymap = uze_keys::active();
-    for (index, action) in actions.iter().enumerate() {
-        let Some(rect) = rows.next(1) else { break };
-        let text = Rect::new(
-            rect.x,
-            rect.y,
-            rect.width.saturating_sub(TRAILING_PAD),
-            rect.height,
-        );
-        // The way to dismiss the strip rides on its first row rather than
-        // taking a row of its own: a control for hiding three lines should
-        // not cost a fourth.
-        let close = index == 0;
-        let mark = theme::glyph(Symbol::MarkClose);
-        let reserved = if close {
-            usize::from(theme::width(Symbol::MarkClose)) + 1
-        } else {
-            0
-        };
-        let mut line = Line::from(Span::styled(action.label(), theme::fg(Token::TextDim)));
-        // The key only when it fits beside the label rather than instead
-        // of it: a strip this quiet is a place to click, and the key is
-        // the thing it also happens to teach.
-        if let Some(chord) = keymap.chord_for(*action, scopes) {
-            let key = chord.to_string();
-            let room = usize::from(text.width).saturating_sub(reserved);
-            let used = action.label().chars().count() + key.chars().count() + 2;
-            if used <= room {
-                line.spans.push(Span::raw(" ".repeat(room - used + 2)));
-                line.spans
-                    .push(Span::styled(key, theme::fg(Token::TextFaint)));
-            }
+/// Every word of it comes from the keymap: the label is the action's own
+/// and the key beside it is whatever is bound now, so a rebinding cannot
+/// leave a stale key printed here. What it adds is the only thing the
+/// keymap cannot know — whether the operator has ever done it.
+pub(crate) struct FirstSteps<'a> {
+    pub(crate) steps: &'a [uze_keys::Action],
+    /// The steps already taken, by action name.
+    pub(crate) taken: &'a std::collections::BTreeSet<String>,
+    pub(crate) collapsed: bool,
+    /// Which keyboard the keys beside the steps are read from. Named from
+    /// the mode rather than from what is open, so a dialog cannot change
+    /// the key printed here.
+    pub(crate) scopes: &'a [uze_keys::Scope],
+}
+
+impl FirstSteps<'_> {
+    /// The heading, in the section vocabulary the timeline already speaks.
+    pub(crate) fn section(&self) -> uze_extensions::view::Section {
+        use uze_extensions::view::{Role, SectionRow, Span as ViewSpan};
+
+        let keymap = uze_keys::active();
+        let done = self.done();
+        uze_extensions::view::Section {
+            title: "first steps".to_owned(),
+            caption: ViewSpan::new(format!("{done} of {}", self.steps.len()), Role::Faint),
+            collapsed: self.collapsed,
+            // Nothing to drag: the list is as long as it is, and a handle
+            // that can only ever be dropped in one place is a control that
+            // does nothing.
+            resizable: false,
+            scroll: 0,
+            rows: self
+                .steps
+                .iter()
+                .map(|action| SectionRow {
+                    marker: ViewSpan::new(
+                        if self.is_taken(*action) {
+                            theme::glyph(Symbol::MarkDone)
+                        } else {
+                            " ".repeat(theme::width(Symbol::MarkDone) as usize)
+                        },
+                        Role::Success,
+                    ),
+                    name: ViewSpan::new(
+                        action.label(),
+                        if self.is_taken(*action) {
+                            Role::Dim
+                        } else {
+                            Role::Default
+                        },
+                    ),
+                    trailing: ViewSpan::new(
+                        keymap
+                            .chord_for(*action, self.scopes)
+                            .map(|chord| chord.to_string())
+                            .unwrap_or_default(),
+                        Role::Faint,
+                    ),
+                })
+                .collect(),
         }
-        management::clip_line(&mut line, text.width as usize - reserved);
-        frame.render_widget(
-            Paragraph::new(line),
-            Rect::new(text.x, text.y, text.width - reserved as u16, text.height),
-        );
-        if close {
-            let rect = Rect::new(
-                text.right() - theme::width(Symbol::MarkClose),
-                text.y,
-                theme::width(Symbol::MarkClose),
-                1,
-            );
-            frame.render_widget(
-                Paragraph::new(Span::styled(mark, theme::fg(Token::TextFaint))),
-                rect,
-            );
-            landed.close = Some(rect);
-        }
-        landed.entries.push((rect, *action));
     }
-    landed
-}
 
-/// Where [`render_quick_actions`] put everything.
-#[derive(Default)]
-pub(crate) struct QuickActions {
-    pub(crate) entries: Vec<(Rect, uze_keys::Action)>,
-    /// The mark that closes the strip, if it fitted.
-    pub(crate) close: Option<Rect>,
-}
+    pub(crate) fn is_taken(&self, action: uze_keys::Action) -> bool {
+        self.taken.contains(&action.name())
+    }
 
-/// How tall [`render_quick_actions`] comes out for `count` entries: one row
-/// each and nothing else. Measured rather than drawn, because a sidebar
-/// has to know where the strip starts before it lays out what sits above
-/// it.
-pub(crate) const fn quick_actions_height(count: usize) -> u16 {
-    count as u16
-}
+    fn done(&self) -> usize {
+        self.steps
+            .iter()
+            .filter(|action| self.is_taken(**action))
+            .count()
+    }
 
-/// Where the strip goes at the foot of `column`, or nothing when the
-/// column cannot spare the rows.
-///
-/// The headroom is the point: a sidebar that is mostly its own footer is
-/// worse than one with no footer, so on a column too short for both the
-/// list wins and the strip's entries stay reachable through the index and
-/// their keys.
-pub(crate) fn quick_actions_rect(column: Rect, count: usize) -> Option<Rect> {
-    const HEADROOM: u16 = 6;
-    let height = quick_actions_height(count);
-    (column.height >= height + HEADROOM)
-        .then(|| Rect::new(column.x, column.bottom() - height, column.width, height))
+    /// The rows the section comes to. Both sidebars have to know this
+    /// before they lay out what sits above it — a strip pinned to the foot
+    /// that the list above could grow over would be pinned to nothing.
+    pub(crate) fn height(&self) -> u16 {
+        if self.collapsed {
+            1
+        } else {
+            1 + self.steps.len() as u16
+        }
+    }
+
+    /// Where the section goes at the foot of `column`, or nothing when the
+    /// column cannot spare the rows.
+    ///
+    /// The headroom is the point: a sidebar that is mostly its own footer
+    /// is worse than one with no footer, so on a column too short for both
+    /// the list wins and the steps stay reachable by their own keys and
+    /// through the index.
+    pub(crate) fn rect(&self, column: Rect) -> Option<Rect> {
+        const HEADROOM: u16 = 5;
+        let height = self.height();
+        (column.height >= height + HEADROOM)
+            .then(|| Rect::new(column.x, column.bottom() - height, column.width, height))
+    }
 }
 
 /// The gap a row keeps between its right-most content and the divider (or

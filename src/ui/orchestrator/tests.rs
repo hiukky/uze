@@ -2736,14 +2736,14 @@ mod workspace_tests {
             .iter()
             .position(|row| row.contains("timeline"))
             .expect("the folded header is at the foot");
-        for (offset, action) in render::QUICK_ACTIONS.iter().enumerate() {
+        for (offset, action) in render::FIRST_STEPS.iter().enumerate() {
             let (rect, _) = hits
                 .iter()
                 .find(|(_, hit)| *hit == WorkspaceHit::QuickAction(*action))
                 .unwrap_or_else(|| panic!("{action} is a target above the timeline"));
             assert_eq!(
                 usize::from(rect.y),
-                header - render::QUICK_ACTIONS.len() + offset,
+                header - render::FIRST_STEPS.len() + offset,
                 "the strip sits directly on the timeline, in order: {rows:?}"
             );
             assert!(
@@ -2771,43 +2771,73 @@ mod workspace_tests {
         );
     }
 
-    /// The mark on the strip's first row puts it away, and it stays away:
-    /// a dismissal the next run forgets is not one.
+    /// The header folds it, and it stays folded: a section that came back
+    /// open every run would be one nobody could put away.
     #[test]
-    fn the_strip_can_be_put_away() {
+    fn the_first_steps_section_folds_to_its_header() {
         let mut model = session_with_timeline(&["feat: one"]);
         model.timeline_collapsed = true;
         let mut hits = Vec::new();
-        sidebar_rows(&model, &mut hits);
-        let close = hits
-            .iter()
-            .find_map(|(rect, hit)| (*hit == WorkspaceHit::CloseQuickActions).then_some(*rect))
-            .expect("the strip carries its own way out");
-        let first = hits
-            .iter()
-            .find_map(|(rect, hit)| matches!(hit, WorkspaceHit::QuickAction(_)).then_some(*rect))
-            .expect("and its first entry");
-        assert_eq!(close.y, first.y, "the mark costs no row of its own");
-        model.hits = hits.clone();
+        let rows = sidebar_rows(&model, &mut hits);
+        assert!(
+            rows.iter().any(|row| row.contains("first steps")),
+            "{rows:?}"
+        );
         assert_eq!(
-            super::hit_at(&model, close.x, close.y),
-            Some(WorkspaceHit::CloseQuickActions),
-            "and the row underneath does not swallow it"
+            hits.iter()
+                .filter(|(_, hit)| matches!(hit, WorkspaceHit::QuickAction(_)))
+                .count(),
+            render::FIRST_STEPS.len(),
+            "every step is a target"
         );
 
-        model.quick_actions_closed = true;
+        model.first_steps_collapsed = true;
         let mut hits = Vec::new();
         let rows = sidebar_rows(&model, &mut hits);
+        assert!(
+            rows.iter().any(|row| row.contains("first steps")),
+            "the header stays: {rows:?}"
+        );
         assert!(
             !hits
                 .iter()
                 .any(|(_, hit)| matches!(hit, WorkspaceHit::QuickAction(_))),
-            "{rows:?}"
+            "and its steps are folded away: {rows:?}"
         );
         assert!(
-            model.shape().sidebar.quick_actions_closed,
+            model.shape().first_steps.collapsed,
             "and the shape this client hands back says so"
         );
+    }
+
+    /// A step is ticked once it has been taken, and the header counts them.
+    #[test]
+    fn a_step_taken_is_marked_and_counted() {
+        let mut model = session_with_timeline(&["feat: one"]);
+        model.timeline_collapsed = true;
+        model.steps_taken = [render::FIRST_STEPS[0].name()].into_iter().collect();
+        let rows = sidebar_rows(&model, &mut Vec::new());
+
+        let header = rows
+            .iter()
+            .find(|row| row.contains("first steps"))
+            .expect("the section names itself");
+        assert!(
+            header.contains(&format!("1 of {}", render::FIRST_STEPS.len())),
+            "{header:?}"
+        );
+
+        let tick = theme::glyph(theme::Symbol::MarkDone);
+        let taken = rows
+            .iter()
+            .find(|row| row.contains(&render::FIRST_STEPS[0].label()))
+            .expect("the step is listed");
+        assert!(taken.contains(&tick), "{taken:?}");
+        let untaken = rows
+            .iter()
+            .find(|row| row.contains(&render::FIRST_STEPS[1].label()))
+            .expect("and so is the next one");
+        assert!(!untaken.contains(&tick), "{untaken:?}");
     }
 
     /// The timeline keeps the foot of the column, under the spaces, with

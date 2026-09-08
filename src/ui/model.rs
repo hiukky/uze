@@ -496,11 +496,12 @@ pub(crate) struct TuiModel {
     /// the mousedown that armed it so every following drag maps against
     /// the geometry the gesture started on.
     pub(crate) dragging_keys_track: Option<Rect>,
-    /// Whether the sidebar's quick strip was dismissed. A preference, kept
-    /// in the shared `ClientLayout` rather than here alone: it is one strip
-    /// drawn in both modes, so closing it in one and meeting it again in
-    /// the other would be the product forgetting.
-    pub(crate) quick_actions_closed: bool,
+    /// Whether the sidebar's first-steps section is folded to its header.
+    pub(crate) first_steps_collapsed: bool,
+    /// The steps already taken, by action name — shared with the workspace
+    /// client through `ClientLayout`, because it is one list drawn at the
+    /// foot of both sidebars and a step taken in one mode is taken.
+    pub(crate) steps_taken: std::collections::BTreeSet<String>,
 }
 
 impl Default for TuiModel {
@@ -572,7 +573,8 @@ impl Default for TuiModel {
             profile_columns_width: layout.profile_columns_width,
             dragging_panel: None,
             dragging_keys_track: None,
-            quick_actions_closed: false,
+            first_steps_collapsed: false,
+            steps_taken: std::collections::BTreeSet::new(),
         }
     }
 }
@@ -1058,6 +1060,25 @@ impl TuiModel {
     /// than stored, so moving the selection is how the track moves the
     /// page; there is no second notion of "where the page is" that could
     /// disagree with the first.
+    /// The list at the foot of the sidebar, as it stands.
+    pub(crate) fn first_steps(&self) -> super::FirstSteps<'_> {
+        super::FirstSteps {
+            steps: &super::management::FIRST_STEPS,
+            taken: &self.steps_taken,
+            collapsed: self.first_steps_collapsed,
+            scopes: super::management::FIRST_STEP_SCOPES,
+        }
+    }
+
+    /// Records that a step was taken, whichever way it was reached. Called
+    /// from the one place every action passes through, so a step cannot be
+    /// performed without the list noticing.
+    pub(crate) fn note_step(&mut self, action: uze_keys::Action) {
+        if super::management::FIRST_STEPS.contains(&action) {
+            self.steps_taken.insert(action.name());
+        }
+    }
+
     pub(crate) fn scroll_keys_to(&mut self, track: Rect, row: u16) {
         let last = self.key_rows().len().saturating_sub(1);
         let travel = usize::from(track.height.saturating_sub(1));

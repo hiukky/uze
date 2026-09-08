@@ -784,7 +784,8 @@ pub(crate) fn attach_workspace(
         dirty: true,
         last_size: (columns, rows),
         sidebar_width: layout.sidebar.width,
-        quick_actions_closed: layout.sidebar.quick_actions_closed,
+        first_steps_collapsed: layout.first_steps.collapsed,
+        steps_taken: layout.first_steps.taken.clone(),
         timeline_collapsed: layout.workspace.timeline_collapsed,
         timeline_rows: layout.workspace.timeline_rows,
         prompt_recorder: Some(prompt_recorder),
@@ -961,16 +962,18 @@ pub(crate) fn attach_workspace(
 /// What this client owns of the shared layout: the column both modes
 /// draw, and its own section. Sent to the recorder thread on every
 /// change and handed back to `super::run` when the attach ends.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WorkspaceShape {
     pub(crate) sidebar: uze_application::SidebarLayout,
     pub(crate) workspace: uze_application::WorkspaceLayout,
+    pub(crate) first_steps: uze_application::FirstStepsLayout,
 }
 
 impl WorkspaceShape {
     fn apply_to(self, layout: &mut uze_application::ClientLayout) {
         layout.sidebar = self.sidebar;
         layout.workspace = self.workspace;
+        layout.first_steps = self.first_steps;
     }
 }
 
@@ -1035,8 +1038,8 @@ pub(super) enum WorkspaceHit {
     /// extension adds to that enum, not to this one.
     Extension(ExtensionHit),
     SwitchToManagement,
-    /// The mark that dismisses the sidebar's quick strip.
-    CloseQuickActions,
+    /// The first-steps section's header, which folds it.
+    ToggleFirstSteps,
     /// One entry of the sidebar's quick strip — performed exactly as the
     /// keyboard performs it, which is why it carries the action rather
     /// than naming a surface: a control that took its own path to the
@@ -1709,10 +1712,13 @@ struct WorkspaceModel {
     /// User-dragged sidebar width; `None` falls back to `sidebar_width_for`.
     /// Client-local presentation state — never sent to the server.
     sidebar_width: Option<u16>,
-    /// Whether the sidebar's quick strip was dismissed. Shared with the
-    /// management client through `ClientLayout`, like the width above it:
-    /// one strip drawn in both modes, closed once.
-    quick_actions_closed: bool,
+    /// Whether the sidebar's first-steps section is folded to its header.
+    first_steps_collapsed: bool,
+    /// The steps already taken, by action name — shared with the
+    /// management client through `ClientLayout`, because it is one list
+    /// drawn at the foot of both sidebars and a step taken in one mode is
+    /// taken.
+    steps_taken: std::collections::BTreeSet<String>,
     dragging_sidebar: bool,
     /// What's being renamed (a tab or a space) and its live edit buffer.
     /// While set, all keyboard input edits this instead of reaching the
@@ -2367,16 +2373,34 @@ impl WorkspaceModel {
         self.open_echo_window(pane, Instant::now(), AGENT_REDRAW_GRACE);
     }
 
+    /// The list at the foot of the sidebar, as it stands.
+    fn first_steps(&self) -> crate::ui::FirstSteps<'_> {
+        crate::ui::FirstSteps {
+            steps: &render::FIRST_STEPS,
+            taken: &self.steps_taken,
+            collapsed: self.first_steps_collapsed,
+            scopes: render::FIRST_STEP_SCOPES,
+        }
+    }
+
+    /// Records that a step was taken, whichever way it was reached.
+    fn note_step(&mut self, action: Action) -> bool {
+        render::FIRST_STEPS.contains(&action) && self.steps_taken.insert(action.name())
+    }
+
     /// What this client owns of the shared layout, as it stands.
     fn shape(&self) -> WorkspaceShape {
         WorkspaceShape {
             sidebar: uze_application::SidebarLayout {
                 width: self.sidebar_width,
-                quick_actions_closed: self.quick_actions_closed,
             },
             workspace: uze_application::WorkspaceLayout {
                 timeline_collapsed: self.timeline_collapsed,
                 timeline_rows: self.timeline_rows,
+            },
+            first_steps: uze_application::FirstStepsLayout {
+                collapsed: self.first_steps_collapsed,
+                taken: self.steps_taken.clone(),
             },
         }
     }

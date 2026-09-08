@@ -219,6 +219,13 @@ impl Attach<'_> {
     /// surface safe.
     fn act(&mut self, action: Action, viewport: &Viewport) -> Flow {
         let Viewport { columns, rows, .. } = *viewport;
+        // Every action this client performs passes through here, whichever
+        // way it was reached, so this is the one place the first-steps
+        // list can learn what has been done without every call site
+        // remembering to tell it.
+        if self.model.note_step(action) {
+            self.model.remember_sidebar();
+        }
         match action {
             Action::SwitchMode => {
                 let _ = send_request(&mut self.stream, &ClientRequest::Detach);
@@ -1489,8 +1496,8 @@ impl Attach<'_> {
         } = *viewport;
         match hit {
             WorkspaceHit::QuickAction(action) => return self.act(action, viewport),
-            WorkspaceHit::CloseQuickActions => {
-                self.model.quick_actions_closed = true;
+            WorkspaceHit::ToggleFirstSteps => {
+                self.model.first_steps_collapsed = !self.model.first_steps_collapsed;
                 self.model.remember_sidebar();
                 self.model.dirty = true;
             }

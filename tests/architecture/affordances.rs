@@ -44,7 +44,7 @@ fn affordances() -> BTreeMap<Action, Affordance> {
     // --- Everywhere -----------------------------------------------------
     put(
         Action::OpenActionIndex,
-        Control("the sidebar's quick strip, in both modes"),
+        Control("the first-steps section, at the foot of both sidebars"),
     );
     put(
         Action::SwitchMode,
@@ -150,7 +150,7 @@ fn affordances() -> BTreeMap<Action, Affordance> {
     );
     put(
         Action::TogglePreservedWork,
-        Control("the sidebar's quick strip"),
+        Control("the first-steps section"),
     );
     put(Action::ResumeTask, Control("its row in the preserved list"));
     put(Action::FinishTask, Control("its row in the preserved list"));

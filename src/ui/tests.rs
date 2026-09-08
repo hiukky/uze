@@ -1504,13 +1504,14 @@ fn attachment_health_is_never_unknown_after_a_refresh() {
     );
 }
 
-/// The chrome that belongs to uze rather than to a screen lives at the
-/// foot of the sidebar, quietly: the way into everything, how it looks,
-/// and the way out. One place, in the same place, on every screen — and
-/// the footer stops naming what the strip already offers.
+/// The foot of the sidebar carries a list of things worth trying once, in
+/// the same collapsible shape as the workspace's commit timeline: a header
+/// that folds it and says how far along you are, and a row per step with
+/// the key that reaches it and a mark once you have taken it.
 #[test]
-fn the_sidebars_foot_carries_the_chrome_that_belongs_to_no_screen() {
-    let model = model_with_plugins(&["flow"]);
+fn the_sidebars_foot_lists_the_first_steps_and_ticks_the_taken_ones() {
+    let mut model = model_with_plugins(&["flow"]);
+    model.steps_taken = [uze_keys::Action::StartFilter.name()].into_iter().collect();
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let mut hits = Vec::new();
     terminal
@@ -1518,72 +1519,75 @@ fn the_sidebars_foot_carries_the_chrome_that_belongs_to_no_screen() {
         .unwrap();
     let drawn = buffer_rows(&terminal);
 
-    for action in [
-        uze_keys::Action::OpenActionIndex,
-        uze_keys::Action::OpenThemePicker,
-        uze_keys::Action::Quit,
-    ] {
+    let header = drawn
+        .iter()
+        .find(|row| row.contains("first steps"))
+        .expect("the section names itself");
+    assert!(
+        header.contains(&format!(
+            "1 of {}",
+            crate::ui::management::FIRST_STEPS.len()
+        )),
+        "and how far along: {header:?}"
+    );
+
+    let tick = theme::glyph(theme::Symbol::MarkDone);
+    for action in crate::ui::management::FIRST_STEPS {
         let (rect, _) = hits
             .iter()
             .find(|(_, hit)| *hit == Hit::OfferedAction(action))
-            .unwrap_or_else(|| panic!("{action} is a target at the foot"));
-        assert!(
-            drawn[usize::from(rect.y)].contains(&action.label()),
-            "and named by its own label: {:?}",
-            drawn[usize::from(rect.y)]
-        );
-        assert!(
-            usize::from(rect.y) > drawn.len() - 6,
-            "at the foot of the column, not among the screens: {rect:?}"
+            .unwrap_or_else(|| panic!("{action} is a step you can click"));
+        let row = &drawn[usize::from(rect.y)];
+        assert!(row.contains(&action.label()), "{row:?}");
+        assert_eq!(
+            row.contains(&tick),
+            action == uze_keys::Action::StartFilter,
+            "only what has been done is ticked: {row:?}"
         );
     }
 
-    // The mark that puts it away rides on the first row rather than
-    // taking one of its own, and a click on it must reach the mark rather
-    // than the entry it sits on.
-    let (close, _) = hits
+    // Folding it leaves the header, and the header alone.
+    let (header, _) = hits
         .iter()
-        .find(|(_, hit)| *hit == Hit::CloseQuickActions)
-        .expect("the strip carries its own way out");
-    let (first, _) = hits
-        .iter()
-        .find(|(_, hit)| *hit == Hit::OfferedAction(uze_keys::Action::OpenActionIndex))
-        .expect("and its first entry");
-    assert_eq!(close.y, first.y, "the mark costs no row of its own");
-
-    let footer = drawn
-        .iter()
-        .rfind(|row| !row.trim().is_empty())
-        .expect("the footer is the last row with anything on it");
-    assert!(
-        !footer.to_lowercase().contains("everything you can do"),
-        "the footer no longer names what the strip offers: {footer:?}"
-    );
-
-    // And it performs, rather than merely being drawn.
-    let (rect, _) = hits
-        .iter()
-        .find(|(_, hit)| *hit == Hit::OfferedAction(uze_keys::Action::OpenActionIndex))
-        .expect("the way in is a target");
-    let mut model = model;
+        .find(|(_, hit)| *hit == Hit::ToggleFirstSteps)
+        .expect("the header folds it");
     model.hits = hits.clone();
-    model.click(rect.x, rect.y);
-    assert!(matches!(model.overlay, Overlay::ActionIndex { .. }));
-
-    // And it puts itself away: clicking the mark closes the strip, and the
-    // next frame draws none of it.
-    model.close_overlay();
-    model.click(close.x, close.y);
-    assert!(model.quick_actions_closed);
+    model.click(header.x, header.y);
+    assert!(model.first_steps_collapsed);
     let mut hits = Vec::new();
     terminal
         .draw(|frame| render(frame, &model, &mut hits))
         .unwrap();
     assert!(
-        !hits.iter().any(|(_, hit)| *hit == Hit::CloseQuickActions
-            || *hit == Hit::OfferedAction(uze_keys::Action::Quit)),
-        "the strip is gone once it is closed"
+        hits.iter().any(|(_, hit)| *hit == Hit::ToggleFirstSteps),
+        "the header stays"
     );
+    assert!(
+        !hits
+            .iter()
+            .any(|(_, hit)| *hit == Hit::OfferedAction(uze_keys::Action::OpenActionIndex)),
+        "and its steps are folded away"
+    );
+}
+
+/// A step is recorded wherever it was performed from — the key, a button,
+/// the index — because every action this client performs goes through one
+/// place, and that is where the list learns.
+#[test]
+fn taking_a_step_any_way_at_all_marks_it_taken() {
+    let mut model = model_with_plugins(&["flow"]);
+    assert!(model.steps_taken.is_empty());
+    model.act(uze_keys::Action::StartFilter);
+    assert!(
+        model
+            .steps_taken
+            .contains(&uze_keys::Action::StartFilter.name())
+    );
+
+    // And an action that is not a step leaves the list alone.
+    let before = model.steps_taken.clone();
+    model.act(uze_keys::Action::Refresh);
+    assert_eq!(model.steps_taken, before);
 }
 
 /// A hint names a key and what it does, and it asks the keymap for both.

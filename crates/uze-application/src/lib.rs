@@ -19,7 +19,9 @@ pub use application::services::{
 pub use uze_core::{
     ExposureMechanism, ExposurePlan, PackageExposurePlan, Result, UzeError, UzeHome,
     capability::CapabilityKind,
-    client_layout::{ClientLayout, ManagementLayout, SidebarLayout, WorkspaceLayout},
+    client_layout::{
+        ClientLayout, FirstStepsLayout, ManagementLayout, SidebarLayout, WorkspaceLayout,
+    },
     context::PlannedAction,
     hook::{
         CommandHandlerType, CommandHook, DEFAULT_TIMEOUT_SECONDS, HookEffect, HookEvent,
